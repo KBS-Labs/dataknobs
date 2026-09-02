@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.2.2 - 2026-09-02
+
+### Changed
+
+- **The pinned sibling versions move to the ones released today**:
+  `dataknobs-common` to 3.2.0 and `dataknobs-xization` to 2.2.1.
+  `dataknobs-structures` and `dataknobs-utils` are unchanged. No source change
+  here beyond `__version__`, and nothing a consumer of this package calls
+  behaves differently.
+
+  This package pins its siblings with `==` rather than `>=`, so its version
+  tracks theirs whether or not its own code moves — which is what most of its
+  releases have been. The pin is not cosmetic this time: `dataknobs-data`
+  0.11.0 requires `dataknobs-common>=3.2.0`, so a v0.2.1 still asking for
+  `dataknobs-common==3.1.0` cannot be resolved in an environment that also
+  holds a package from this release. Installing `dataknobs` alongside any
+  freshly released sibling needs this version.
+
 ## v0.2.1 - 2026-08-26
 
 ### Fixed

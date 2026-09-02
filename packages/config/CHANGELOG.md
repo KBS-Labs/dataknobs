@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.7.1 - 2026-09-02
+
 ### Changed
 
 - **`EnvironmentConfig` copies its hand-outs through

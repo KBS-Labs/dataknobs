@@ -5,6 +5,209 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-09-02
+
+Four changes run across the workspace in this release.
+
+**A callable object can be `async`, and almost nothing in the workspace asked.**
+`inspect.iscoroutinefunction` answers for *functions*, and reports a callable
+object whose `__call__` is an `async def` as synchronous — which is how anything
+stateful is written. `dataknobs-common` now exports `is_async_callable`, plus
+`run_callback` and `run_callback_off_loop`, which judge the *result* and so also
+catch a plain `def` returning a coroutine. Every dispatch that had answered the question for
+itself now routes through them: fourteen in `dataknobs-data`, nine modules in
+`dataknobs-fsm` spelling it five different ways, and `CallbackRegistry.fire` in
+common. Calling an async callable without awaiting raises nothing — the
+coroutine is truthy and non-`None` — so all of them failed in silence: a stream
+filter's predicate answered `True` unconditionally and stopped filtering, a
+transform yielded the coroutine as the transformed record, an arc condition
+never ran. On upgrade, an async callback that was silently doing nothing now
+runs, and on the paths that offload a synchronous one now runs on a **worker
+thread** rather than the loop thread.
+
+**One shape for turning text into vectors, and an identity that travels with
+them.** `dataknobs-data` declares `TextEmbedder` — batch-only, async-only,
+carrying `dimensions` and `model_id` — and `dataknobs-llm` ships
+`LLMProviderEmbedder` and `create_text_embedder` satisfying it. Eight
+incompatible spellings were in use in `data` alone, none matching what
+`AsyncLLMProvider.embed` returns, so every consumer wiring a provider to a
+vector path wrote its own adapter — differently at each of 25 call sites.
+`embedder=` now appears on the write paths and on the four classes that embed a
+corpus over time; the `EmbedFn` / `BatchEmbedFn` / `ClusterEmbedFn` aliases are
+**gone with no deprecation cycle**. What the protocol adds over a bare callable
+is the identity: `model_id` is the staleness key, named once rather than twice
+with nothing checking the two agreed. Its absence is a family of defects: vectors stored
+naming no model, a synchronizer comparing a field the embedder path never sets
+so swapping embedders left every old vector current forever, dedup scoring
+across two vector spaces and answering `unique`. In `dataknobs-llm`,
+`LLMConfig.dimensions` was read by one provider of five, so a config asking for
+512-dimensional vectors received 3072.
+
+**A registry gate that rejected the shape it exists to admit, and admitted the
+shape it exists to exclude.** `PluginRegistry.validate_type` promises that a
+structurally wrong backend is caught at registration rather than at use, and it
+held in neither direction. Given a Protocol carrying a property, `issubclass`
+refuses the whole call rather than the offending member, so the gate raised
+before judging anything — on the conforming class as readily as on a wrong one,
+which made the constraint strictly worse than its own absence. `dataknobs-llm`
+met this on its own documented extension point. In the other direction a
+`@runtime_checkable` check asks only whether a member is present, so a Protocol
+and its async twin satisfy each other and a registry gated on the synchronous
+half accepted an `async def` implementation — four such pairs ship here.
+Separately, the four factory-invocation sites each decided independently whether
+to await a factory's result: a synchronous `get()` handed back an un-awaited
+coroutine and *cached* it, so the first caller awaited it and every later one
+got the same exhausted object. All four now share one seam, and both gates one
+implementation.
+
+**A vector store says what it can do, rather than being asked to prove it by
+downcast.** `dataknobs-common` adds `Capability.VECTOR_PERSIST`,
+`VECTOR_INDEX_TUNING` and `VECTOR_DOCUMENT_API`, and `supports_capability`, the
+non-raising half of the guard pair. `VectorStore` implements
+`CapabilityContract`, and `save()`, `load()` and `create_index()` are declared
+on the abstraction so the answer can be acted on without an `isinstance`
+downcast. `VECTOR_PERSIST` is instance-scoped — only `MemoryVectorStore` and
+`FaissVectorStore` given a `persist_path` advertise it, and both now raise where
+they previously answered a request to persist with a successful-looking no-op.
+The case to look for is a `hasattr(store, "save")` probe: it now answers `True`
+for every backend, so a guard written that way stops guarding.
+
+### dataknobs-common [3.2.0]
+
+#### Added
+- `is_async_callable` — "will calling this produce an awaitable?", answered for callable objects and not only functions, as a `TypeGuard` so it narrows in the `True` branch. Two shapes the obvious implementation gets wrong are handled: a `functools.partial` around a callable object, whose `__call__` is a C dispatcher that answers about the wrong object, and a class, which is callable and returns an instance however its `__call__` is declared. Non-callables answer `False` rather than raising, because callers ask about arbitrary configured values
+- `run_callback` and `run_callback_off_loop` — call a consumer's callback and await it if it turned out to be awaitable, the second keeping a synchronous callback off the event loop via `asyncio.to_thread`. The pair states a choice that was previously left unmade: a thread hop costs real microseconds and moves the callback off the loop thread, which is right where the callback is the consumer's chance to *do* something and wrong for a predicate or a per-record transform. Extracted rather than invented — `CallbackRegistry.fire_async` had carried the judgement inline since it was written
+- `copy_structure` — the copy between `dict()` and `copy.deepcopy()`, rebuilding nested dicts and lists and passing every other value through. A shallow copy isolates one level, which is the gap a "returns a copy" docstring most often turns out to have; `deepcopy` closes it but overshoots, duplicating a connection pool or a lock and raising on anything unpicklable. Promoted from a private helper in `dataknobs-config`, which now imports it; the extraction surfaced a defect the private version's call sites never hit, since an `id()`-keyed memo can answer for an unrelated object once a source is freed
+- `PluginFactory[T]`, the exported alias for the three shapes a `PluginRegistry` accepts under a key. The awaitable arm is new to the declaration — the class had accepted it at runtime and documented registering it since it grew `get_async`, so the exclusion reported as a type error against the documented pattern's own tests
+- `Capability.VECTOR_PERSIST`, `VECTOR_INDEX_TUNING` and `VECTOR_DOCUMENT_API` with a `vector_storage` family, and `supports_capability(host, capability)` — the non-raising half of the guard pair, sharing one implementation with `require_capability` so the two cannot read a host differently. `host.supports(...)` raises `AttributeError` on an object that is not a contract host; `require_capability` already read that as "no", and a caller asking first had no way to get the same reading
+- `dk_daemon_thread_names()`, and bridges register their thread names
+
+#### Changed
+- `PluginRegistry.get()` and `get_async()` no longer re-wrap a `NotFoundError` or `OperationError` raised by the factory itself, matching what `create()` and `create_async()` have done since the class was generalized. The wrapper exists because a factory's failure text is a driver's or an SDK's and can carry the connection URL it was handed; that reason does not reach our own error types, whose text we wrote and already bounded. A composite factory that misses in a sub-registry now arrives as the `NotFoundError` itself, so a caller's `except NotFoundError` catches it
+- `lifecycle`'s teardown table scopes its blessing of `async def close()` to a collaborator whose shape the holder knows statically. It does not extend to one held in a heterogeneous registry, where the method's name is all the holder can route on and an `async def close()` is indistinguishable from a synchronous one until its coroutine has been discarded
+
+#### Fixed
+- `PluginRegistry`'s class-factory gate refused the implementation it exists to admit whenever `validate_type` was a Protocol carrying a property, raising `issubclass`'s own `TypeError` before any class was judged. Such a Protocol is now checked against its declared members — the same check `issubclass` performs for a method-only one, so a property-carrying Protocol and its method-only twin reach the same verdict on the same class. A Protocol never decorated `@runtime_checkable` is reported at registration naming the missing decorator, and both gates now share one implementation, so `set_default_factory` no longer rejects a class without naming it
+- `validate_type` admitted a Protocol's async twin, because a `@runtime_checkable` check asks only whether a member is present. Both checks now compare each declared member's async-ness against the candidate's and refuse a mismatch either way, naming the registry, the key and the member; properties are skipped, having no async-ness to disagree about. Asking inside the gate rather than renaming the colliding members reaches a twin pair a *consumer* defines, and leaves `isinstance` answering `True` both ways — that answer belongs to the language rather than to this registry
+- a synchronous `get()` or `create()` handed the caller an un-awaited coroutine when the factory was asynchronous, and `get()` cached it, so the first caller awaited it successfully and every later one received the same exhausted object and a bare `RuntimeError` naming neither the registry nor the key. The failure was inverted with respect to `validate_type` — a registry that gated raised cleanly and one that did not was silent, so the stricter configuration was the safer one by accident. Both now refuse an awaitable before anything is cached, naming the async method to call instead
+- `get_async()` did not await every awaitable, testing with `asyncio.iscoroutine` where `create_async()` used `inspect.isawaitable`, and its `except Exception` re-wrapped the type guard's own message — alone among the four entry points in saying nothing about what was wrong. The four now share one invocation seam, parameterised by the two things that genuinely differ: the call arity, and whether the caller can await
+- `run_callback` and `run_callback_off_loop` handed back an un-run async generator instead of refusing it, in all three spellings. `iscoroutinefunction` answers `False` for an async generator function so the synchronous arm merely *constructed* one without running a line of its body, and `isawaitable` answers `False` for the object, so the result-level net missed it too. Both now raise `TypeError` naming the shape: collecting a generator means choosing a policy that belongs to the surface which knows what the items are for
+- `CallbackRegistry.fire` refuses an async callback that is an object. It asked `iscoroutinefunction`, so such a callback was classified as synchronous and *called* rather than refused, producing a coroutine dropped on the floor — no exception, no callback, no trace
+- an unclosed `SyncLoopBridge` could not be reclaimed, reported, or collected. The loop thread's target was a bound method of the bridge, and `Thread` holds its target while the thread runs, so a bridge nobody closes was referenced by its own live thread — unreachable from any caller, alive in `threading._active`, holding its loop and that loop's self-pipe descriptors for the life of the process. None of it was observable, the thread being a daemon: a server building one bridge per tenant leaked a thread and two descriptors per tenant, silently. A bridge given the documented `thread_name=` was also invisible to the leaked-thread guard
+- `DataknobsError` documented its two context arguments as merged, and they are not — the constructor resolves `details or context or {}`, so a consumer following the docstring and passing halves of one dict to each would silently lose one. Behaviour is unchanged; only the claim about it was wrong
+
+### dataknobs-config [0.7.1]
+
+#### Changed
+- `EnvironmentConfig` copies its hand-outs through `dataknobs_common.copy_structure`, the private helper having become a public utility once a second package needed the same copy. Behaviour is unchanged except that the shared version keeps its memo's sources alive — a latent defect these call sites never triggered
+
+### dataknobs-xization [2.2.1]
+
+#### Changed
+- the documentation filenames are lower-hyphen, matching the workspace's one-document-one-name rule — a shared name is what lets one page be served from both the package tree and the documentation site with its links correct in each. The links that pointed at the old spellings are updated, and the ingestion index now distinguishes the reference from the consumer-facing guide rather than describing both the same way. No source change and no consumer-visible change: a maintenance release, cut so the workspace carries one version set
+
+### dataknobs-data [0.11.0]
+
+#### Added
+- `TextEmbedder` — the one shape for "turn text into vectors", batch-only, async-only, returning `list[list[float]]` and carrying `dimensions` and `model_id`. `dataknobs-llm` ships implementations; the protocol lives here because `data` cannot import `llm`
+- `embedder=` on the vector write paths and on `VectorTextSynchronizer`, `VectorMigration`, `IncrementalVectorizer` and `DedupChecker` — the classes that embed a corpus over time, where a caller holding an embedder had to unwrap it into a callable and throw away the identity travelling with it. Passing one defaults `model_name` to the embedder's `model_id`: the two were independent parameters, so nothing stopped a caller naming one model while embedding with another, and the name is the staleness key. `VectorTextSynchronizer` and `IncrementalVectorizer` now raise at construction given neither source or both, rather than failing after a query, a batch and a partial write
+- `SyncTextEmbedder` — how a synchronous site reaches an async embedder, owning one `SyncLoopBridge` so it is callable from plain sync code and from inside a running loop alike. The five synchronous signatures that already declare its shape are therefore unchanged; giving the protocol a synchronous twin so they could take one would restore the second shape it exists to remove
+- `CachedEmbedder` and the narrow `VectorCache` port it takes, keyed on `(model_id, text)`; `DeterministicEmbedder` in `dataknobs_data.testing`, stable across processes with distinct texts landing near-orthogonal so a *ranking* can be asserted; `default_model_name`, `embed_texts` / `embed_text` / `require_embedding_source`, `call_embedding_fn_batch`, `BatchVectors`, and `coerce_operator` / `coerce_sort_order`
+- `VectorStore` implements `CapabilityContract`, and `save()`, `load()` and `create_index()` are declared on it so a capability answer can be acted on without an `isinstance` downcast. New doc, `docs/vector-store-capabilities.md`, whose matrix is rebuilt from the classes by a test rather than maintained by hand
+- `SyncVectorOperationsMixin` and `AsyncVectorOperationsMixin`, one per lane, with `VectorOperationsMixin` remaining as a name for the async one
+
+#### Changed
+- **Breaking:** `save()` and `load()` raise `CapabilityNotSupportedError` instead of returning quietly when a store has no `persist_path`, leaving the caller with nothing on disk to restore from and no indication why. The `hasattr(store, "save")` probe is the case to look for and it does not announce itself: it now answers `True` for every backend, so a guard written that way stops guarding. Use `store.supports(Capability.VECTOR_PERSIST)`
+- **Breaking:** a `ClusterTopicIndex` that cannot run raises `StrategyUnavailable` rather than returning an empty topic list, which already means something else — the index ran and matched nothing — so a caller could not tell a misconfigured index from a vocabulary gap. The `TopicIndex` protocol was silent on the question, which is why its two implementations had each answered it independently
+- **Breaking:** `SyncDatabase.config` and `AsyncDatabase.config` are read-only properties. A writeable attribute on one base against a read-only property on the other is a combination no class can have, so a type checker held every migrated backend impossible and stopped checking from the construction branch onward. Reading is unchanged; assigning now raises
+- the vector-operations mixins take everything after `query_vector` by keyword in `vector_search`. The implementations did not agree on positional order, so a fourth positional argument already meant the metric on some backends and the filter on others; what changes is that a call written against the abstract declaration can no longer be written in the one form that was never portable
+- an unrecognized operator or sort-order string raises `ValueError`, `vector_search` names its field parameter `vector_field` on every backend, `update_vector` reports whether the write landed, and `VectorizationResult` carries `skipped` so `processed` counts only what was written
+- `BatchProcessor` runs a synchronous per-item callback on a worker thread, and `embedding_fn` is optional on `bulk_embed_and_store` where an `embedder` supplies the vectors
+
+#### Deprecated
+- `ConnectionPool` and `ConnectionPoolConfig` in `dataknobs_data.vector.optimizations`, in favour of `dataknobs_data.pooling.ConnectionPoolManager`. No backend ever used it and it is broken in ways not worth repairing in place: `acquire` awaits the caller's factory while holding a `threading.Lock`, so two coroutines acquiring from an empty pool deadlock the entire event loop — past the reach of any `asyncio.timeout`, since the loop thread is the thing blocked. Four of the five config fields are read nowhere and each now says so on itself; they stay, because removing one from a published dataclass breaks any caller passing it by keyword
+
+#### Fixed
+- fourteen dispatches called a consumer's callback without deciding whether the result needed awaiting. Three asked `iscoroutinefunction`, which reports a callable object as synchronous; the rest asked nothing at all, the commoner spelling and invisible to any check keyed on that predicate. Progress callbacks were dropped silently, `transform_fn` stored the coroutine as the migrated record, and `async_filter_stream`'s predicate answered `True` unconditionally because a coroutine is truthy. A guard now reads the AST of every `async def` here and fails on either shape, replacing a regex census that reported green over three unchecked dispatches in a file it was reading
+- semantic dedup could not tell "unrelated" from "different vector space". `DedupChecker.register` held an embedder carrying a `model_id` and recorded none of it, so after a model swap `check()` scored old vectors against new ones and answered `unique` with an empty `similar_items`. It fails **open** — duplicates are admitted, and an admitted duplicate is silent by construction. Disagreement is now reported on `DedupResult.mismatched_model_ids` rather than corrected: the scores are still the only answer available, but a caller can tell they are meaningless
+- two write paths stored vectors that named no model, permanently exempt from the model half of currency while four sibling writers recorded it. A digest answers whether the *text* changed and cannot answer whether the *model* did, since identical text through two models gives one digest and two incompatible vector spaces
+- `VectorTextSynchronizer` decided currency on `model_version` alone, which the embedder path never sets, so `model_name` was written by two sites and compared by none and swapping embedders left every old vector reported current forever. A stored `None` is still not a mismatch, so no corpus re-embeds on upgrade
+- `AsyncElasticsearchDatabase.bulk_embed_and_store` was a stub — a logged warning and `return []`, indistinguishable from "there were no records" — so a caller embedding a corpus got a successful-looking no-op and an empty index. Verified against a live cluster, including that the content digest survives the round trip
+- `VectorStore.search_similar_records` ran a synchronous `fetch_records` on the event loop, stalling every other task for the whole fan-out, once per search. The returned value was correct either way, which is why nothing caught it
+- `SyncTextEmbedder` blocks the caller's loop and now says so; `CachedEmbedder` no longer trusts the cache's batch length; a synchronous batch `embedding_fn` no longer runs on the event loop; and a plain `def` returning a coroutine now yields a vector rather than the coroutine
+- `IncrementalVectorizer.run_batch` can return, terminates on a record it declines to write, and does not count a failure as a win. `wait_for_completion` waits for the work: it polled `qsize()` and returned as soon as that was zero, which two states satisfy and neither means done — nothing enqueued *yet*, since `start()` creates the loader as a task, and everything in flight, since `qsize()` drops when a worker takes a record rather than when it has written it. Every wait in the class now races the work against shutdown instead of polling for it
+- `ChromaVectorStore.search_documents` accepts `include_timestamps`, which its two siblings gained and it did not — it is Chroma's alone, so it appears in no cross-backend parity fixture, which is how it kept the older signature while the methods around it moved
+- a sync backend's inherited vector methods run, `Operator.NOT_LIKE` is reachable from `Query.filter`, a `ComplexQuery` is answered by the file and S3 backends, a record read back carries the id it was read under, a record with no fields can be read back, and a JSON file whose top level is not a mapping no longer reads as an empty store
+- the other four copies of the text assembly — `VectorSyncMixin`, `BulkEmbedMixin`, `AsyncBulkEmbedMixin` and `IncrementalVectorizer` each rebuilt the embedder's input independently, three of them on a hardcoded separator, and the first three recorded no digest, without which the fields they write are unjudgeable by anything and count as current forever. `VectorSyncMixin.sync_vectors_with_text` additionally decided staleness by comparing the *set of source fields* and nothing else, so an edit to the text was invisible to it
+- the Elasticsearch and flat-file paths that dropped a vector field's metadata, and `ChangeTracker` and `VectorTextSynchronizer` no longer disagreeing about what changed
+
+#### Removed
+- **Breaking:** the `EmbedFn`, `BatchEmbedFn` and `ClusterEmbedFn` aliases in `dataknobs_data.sources`, replaced by `TextEmbedder` in one change with no deprecation cycle. They were three exported names for two types, and `EmbedFn` meant the batch shape imported from `sources` and the single-text shape by the same spelling inside `cluster_index.py`, so a consumer could not tell which they had from the name. With them go two parameter names: `embed_fn` is `embedder`, and `ClusterTopicIndex.build` takes a single `embedder` where it took a batch and a single-text callable that nothing stopped a caller pointing at different models
+- the `{vector_field}_content_hash` record-field comparison. Nothing in the library ever wrote that sibling field, so in production it compared `None` against a fresh digest and called every record stale; the only writers were two test fixtures, which is what made a dead branch look covered
+
+### dataknobs-llm [0.9.0]
+
+#### Added
+- `LLMProviderEmbedder` and `create_text_embedder` — an embedding provider presented as the `TextEmbedder` seam `dataknobs-data` declares, satisfying it structurally and importing it under `TYPE_CHECKING` alone, so nothing pulls `dataknobs_data.vector`, and numpy behind it, into an `llm` import. There is no conversion in it, and that absence is the seam's justification: what the adapter adds is the two things a bare provider cannot answer in the shape a *stored* vector needs — a settled `dimensions` and a stable `model_id` of `provider:model`. A declared width is checked against the first batch rather than trusted. No new config type: an embedder config *is* an `LLMConfig`
+
+#### Changed
+- `list_conversations` and `search_conversations` refuse a `sort_order` they do not recognise, and the `WizardStateSnapshot` deprecation names its versions
+
+#### Fixed
+- a stated embedding width was honoured by one provider of five and accepted-and-discarded by the rest, so a config asking `text-embedding-3-large` for 512-dimensional vectors received 3072 — valid vectors, six times wider than requested, at six times the storage and the price, with nothing raising at any layer. The first component to object was a vector store rejecting the write, and that message names the store rather than the misconfiguration. There is now one rule resolved on the base: the per-call keyword beats the config, and a width is forwarded only to a model that advertises accepting one
+- the FSM `LLMResource` no longer invents an embedding it could not compute. Its sync `embed()` routed to one of three per-provider methods and answered everything else with a constant vector of a plausible width — which a vector store accepts, indexes, and returns as a nearest neighbour to every query, with no component downstream positioned to notice. It also builds its provider once instead of per call, and uses the configured credentials and endpoint
+- the embedding cache served a vector of the wrong width on a hit, and `CAPABILITY_ORDER` silently dropped any `ModelCapability` missing from it
+- registering a `ModelMetadataSource` *class* in `model_metadata_sources` raised instead of registering it — the registry's own documented extension point, met on the obvious shape. Only the callable-factory route worked, and it is the only one this package's tests had exercised. Fixed in `dataknobs-common`'s `PluginRegistry`
+- `AsyncLLMProvider.stream_complete` is declared as what it returns, `VectorRetriever.index_documents` and `.retrieve` run, and `LLMWorkflow` builds an FSM again with a terminal end state
+
+### dataknobs-bots [0.13.0]
+
+#### Added
+- wizard arcs carry a name, and a transition record says which one fired. A stage may declare several transitions to the same target, and the compiled arcs were anonymous, so both siblings reported the same `"<source>-><target>"` string. The derived form extends the FSM's own fallback rather than replacing it, so a reader who knows the old string still reads the prefix and only the discriminator is new; it is persisted on `TransitionRecord.transition_name` and carried into `ExecutionRecord`, where the field has always existed with nothing to put in it. `DynaBot.get_wizard_transitions(conversation_id)` returns the records
+- `resolve_middleware_class` — validate a middleware spec without running its constructor. `resolve_middleware_from_spec` is now that function plus one `cls(**params)`, so a caller that checks with one and installs with the other applies the same rules at the same points. The check is inherently weaker than the build: a constructor that rejects its params is undetectable without running it, so a clean answer means *this spec is installable*, not *this bot will start*. Resolving a dotted path still imports its module, so the trusted-configuration rule governs this with more force rather than less
+- `SourceFactory` is `PluginFactory[GroundedSource]` rather than a hand-written copy of the registry's contract, which omitted the asynchronous arm — so this module's own asynchronous registration was the one call its own declaration refused
+- `WizardStateSnapshot` carries the current stage's configuration, and `BotTestHarness.get_transitions()` returns the same records for the harness
+
+#### Changed
+- a dead topic index is no longer reported as a corpus with nothing in it. `HeadingTreeIndex` returned `[]` in lazy mode with no `vector_query_fn` and swallowed everything its vector query raised, and the retrieval loop reads an empty topic index as a vocabulary gap — so a wiring fault silently rerouted the turn and logged the corpus as the cause. The results do not change, since `GroundedReasoning` takes the same fallback; the record does, to a WARNING naming the index and what it lacks
+- the `cluster` topic index is built with a `TextEmbedder`, a small adapter presenting the knowledge base's per-text `embed` as the batch shape rather than the index accommodating both arities. The calls stay sequential — a knowledge base's `embed` is usually a provider call behind a shared client, and firing a whole corpus at it concurrently is a rate-limit decision this adapter has no standing to make — so a cluster index behaves as before. Requires the `dataknobs-data` release above, since the parameter it replaces is gone there with no deprecation cycle
+- `DynaBotConfigSchema.validate` applies the `$resource` marker rule to the whole config file rather than its `bot:` section. The rule is a property of the config format rather than of any schema, and the component loop beside it visits registered names only, so a reference block under any other key was one nothing looked at
+
+#### Fixed
+- the wizard no longer reports the wrong arc when two transitions share a target, and `TransitionRecord.from_dict` no longer raises on a key it does not recognise
+- a snapshot's payloads are copied in depth, so writing through one cannot reach the wizard's own state; the same for its `suggestions`, roadmap and recorded transition data, and `DynaBot.get_wizard_state()` returns a dict the caller owns
+- a subflow arc's target was derived in two places, and stage metadata now records the compiled target beside the condition
+
+### dataknobs-fsm [0.5.0]
+
+#### Added
+- `AsyncClosable` and `AsyncCleanable`, `ResourceManager.unclosed_providers` — a mapping of provider name to the teardown failure that stranded it — and `SimpleFSM.get_state(name)`, the singular accessor its async sibling already had. One resource surface across `SimpleFSM`, `AdvancedFSM` and `AsyncSimpleFSM`
+
+#### Changed
+- one judgement about whether a callable is async, made in one place. Nine modules asked it for themselves in five spellings — bare `iscoroutinefunction`, that plus a check on `__call__`, a check on `type(f).__call__`, an `_is_async` attribute hint, and no check at all — and all now route through `dataknobs-common`. The repository-level adoption guard covers `packages/fsm/src` as a result, so a new dispatch that skips the judgement fails a test rather than reaching a consumer
+- **Breaking:** `register_provider` on a closed or closing `ResourceManager` raises where it previously returned. The provider it accepted was never torn down, so the call had no effect a caller could rely on beyond leaking the transport
+- a configuration key the schema does not declare now fails the load; `$include` and `$import` are stripped with a warning when the loader is not permitted to follow them; `StateSchema` is constructed from a JSON Schema mapping; and the database streaming classes take a sync database and say so
+- `IORouter.add_route` and `IOBuffer` accept async callbacks in their signatures, and `AsyncStreamContext.stream_async` and `StreamingFileProcessor` accept them too
+
+#### Fixed
+- the two halves of `ResourceManager` teardown disagreed about the registry they share, and a provider could be lost between them. `close()` iterates under the lock; `cleanup()` read the same dict unlocked and suspends three times holding nothing — so a provider registered mid-teardown arrived after the classification sweep, was never closed, was never recorded as a failure, and was removed by the clear that ends `cleanup()`, leaving the transport open with nothing naming it. A concurrent `unregister_provider` could abort the sweep outright. It now classifies a snapshot taken under the lock, rather than a wider critical section the re-entrant lock could not make safer
+- a provider whose teardown had to be awaited was torn down as though it did not. Teardown routes on the method's *name*, the only thing a registry of unrelated provider types can route on, and nothing held a provider to it: the contract declared no teardown method, and the base gives every provider a `close()`, so probing distinguished nothing. `AsyncDatabaseResourceAdapter` did not override `close()`, so a synchronous teardown released the handle list and never touched the database — no coroutine is created there, so nothing warned. `close()` also abandoned teardown at the first failure, and `cleanup()` could not name it
+- async callbacks that were silently doing nothing now run: an arc condition, sink, transform, validator, compensation action or wrapped operation whose coroutine was previously discarded is now awaited. An arc condition written as a callable object matched every record, an async record predicate admitted every record, `IORouter` used its route's `condition` and `transform` without awaiting them, `IOBuffer` lost its overflow when the handler was a callable object, and the resilience wrappers recorded outcomes for calls they never made
+- `ParallelIOExecutor` silently skipped every synchronous provider and ignored `max_workers`, which `__init__` stored and nothing read; a provider list holding both an async and a synchronous provider for one destination therefore now receives **two** writes where it previously received one, and `write_all` returns `None`, so nothing surfaces that
+- `IOBuffer` discarded the overflow when the handler failed, and `IOBuffer(max_size=1)` never drained and grew without bound
+- `AsyncStreamExecutor` credited records to a sink that never received them, `AsyncStreamContext.stream_async` reported success over writes that never happened, and both it and `AsyncBatchExecutor` stopped reporting progress partway
+- `StateDefinition.validate_data()` raised `TypeError` on every FSM built from configuration, `AsyncSimpleFSM.validate()` raised on an FSM with no start state and was documented as returning `bool`, and `StreamExecutor.create_multi_stage_pipeline` built a pipeline with no stages
+- `RecoveryStrategy.DEADLINE` could not run a synchronous function, and `FunctionWrapper` misread a `functools.partial` around an async callable
+- the data-mode documentation taught a configuration shape that is silently ignored, the Advanced API's `DataHandler` example could not be instantiated, and a state `schema` was documented as validating data on arrival
+
+#### Removed
+- **Breaking:** `AdvancedFSM.set_data_handler()`. It assigned `self._engine.data_handler`, a name the execution engine neither declares nor reads, so every handler passed to it was silently ignored — the call returned `None` and changed nothing. Calling it now raises `AttributeError`, which is the first diagnostic the method has ever given. Data handling is selected by **mode**: `data_mode.default` at the top level of a configuration, overridden per state by that state's own `data_mode`
+
+### dataknobs-legacy [0.2.2]
+
+#### Changed
+- the pinned sibling versions move to the ones released today — `dataknobs-common` to 3.2.0 and `dataknobs-xization` to 2.2.1, with `dataknobs-structures` and `dataknobs-utils` unchanged. This package pins with `==` rather than `>=`, so its version tracks its siblings' whether or not its own code moves, and no source changed here beyond `__version__`. The pin is not cosmetic this time: `dataknobs-data` 0.11.0 requires `dataknobs-common>=3.2.0`, so a v0.2.1 still asking for `dataknobs-common==3.1.0` cannot be resolved in an environment that also holds a package from this release
+
 ## Release - 2026-08-26
 
 Three changes run across the workspace in this release.

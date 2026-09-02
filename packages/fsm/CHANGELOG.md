@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.5.0 - 2026-09-02
+
 ### Removed
 
 - **`AdvancedFSM.set_data_handler()`.** It assigned `self._engine.data_handler`,
@@ -96,6 +98,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_fsm.core.state` and is exported from no `__init__`, so this
   reaches only code that imported it from the module path and constructed one
   by hand.
+
+- **`IORouter.add_route` and `IOBuffer` accept async callbacks in their
+  annotations, not merely in their behaviour.** `add_route`'s docstring
+  already said the condition and transform "may be sync or async" and
+  `IOBuffer`'s overflow handler already accepted either, while the published
+  signatures said `Callable[[Any], bool]` and
+  `Callable[[List[Any]], None]` — so a consumer passing the async callback the
+  code supports got a type error at their own call site.
+
+- **`IORouter.route` logs when a matched route's provider cannot be written
+  to.** The transformed value still joins the returned list, so a caller
+  reading the return value could not tell that nothing had been written.
+
+- **`AsyncStreamContext.stream_async` and `StreamingFileProcessor` accept
+  async callbacks in their annotations**, as `IORouter` and `IOBuffer` do
+  above, and for the same reason: the behaviour supports them and the
+  published signature did not.
+
+- **One judgement about whether a callable is async, made in one place.**
+  Nine modules asked it for themselves, in five spellings — bare
+  `iscoroutinefunction`, `iscoroutinefunction` plus a second check on
+  `__call__`, a check on `type(f).__call__`, an `_is_async` attribute hint,
+  and no check at all. All now route through
+  `dataknobs_common.callbacks.is_async_callable` or the two `run_callback`
+  helpers. The repository-level adoption guard covers `packages/fsm/src` as a
+  result, so a new dispatch that skips the judgement fails a test rather than
+  reaching a consumer.
+
+
+**Migrating.** Three consequences worth checking before upgrading:
+
+- A provider list holding **both** an async and a synchronous provider for the
+  same destination now receives **two** writes where it previously received
+  one, because the synchronous half was silently skipped. `write_all` returns
+  `None`, so nothing surfaces this.
+- A synchronous `overflow_handler`, provider write, sink, progress callback,
+  arc condition, transform, or validator now runs on a **worker thread**
+  rather than on the loop thread. One that touches state which is not
+  thread-safe, calls `loop.call_soon`, or uses `asyncio.Queue.put_nowait`
+  needs to say so itself. `asyncio.to_thread` copies the context, so a
+  callback that *sets* a contextvar no longer affects its caller.
+- **Async callbacks that were silently doing nothing now run.** An async arc
+  condition, sink, transform, validator, compensation action or wrapped
+  operation whose coroutine was previously discarded is now awaited. If a
+  pipeline was passing because its async condition matched everything, or
+  because its async transform was a no-op that left the data untouched, it
+  will now behave as written — which may be a change in output.
 
 ### Fixed
 
@@ -427,54 +476,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrent write — but it leaves `_providers` reachable only from the class
   that owns the lock, which is what makes that lock discipline checkable by
   reading one file.
-
-### Changed
-
-- **`IORouter.add_route` and `IOBuffer` accept async callbacks in their
-  annotations, not merely in their behaviour.** `add_route`'s docstring
-  already said the condition and transform "may be sync or async" and
-  `IOBuffer`'s overflow handler already accepted either, while the published
-  signatures said `Callable[[Any], bool]` and
-  `Callable[[List[Any]], None]` — so a consumer passing the async callback the
-  code supports got a type error at their own call site.
-
-- **`IORouter.route` logs when a matched route's provider cannot be written
-  to.** The transformed value still joins the returned list, so a caller
-  reading the return value could not tell that nothing had been written.
-
-- **`AsyncStreamContext.stream_async` and `StreamingFileProcessor` accept
-  async callbacks in their annotations**, as `IORouter` and `IOBuffer` do
-  above, and for the same reason: the behaviour supports them and the
-  published signature did not.
-
-- **One judgement about whether a callable is async, made in one place.**
-  Nine modules asked it for themselves, in five spellings — bare
-  `iscoroutinefunction`, `iscoroutinefunction` plus a second check on
-  `__call__`, a check on `type(f).__call__`, an `_is_async` attribute hint,
-  and no check at all. All now route through
-  `dataknobs_common.callbacks.is_async_callable` or the two `run_callback`
-  helpers. The repository-level adoption guard covers `packages/fsm/src` as a
-  result, so a new dispatch that skips the judgement fails a test rather than
-  reaching a consumer.
-
-**Migrating.** Three consequences worth checking before upgrading:
-
-- A provider list holding **both** an async and a synchronous provider for the
-  same destination now receives **two** writes where it previously received
-  one, because the synchronous half was silently skipped. `write_all` returns
-  `None`, so nothing surfaces this.
-- A synchronous `overflow_handler`, provider write, sink, progress callback,
-  arc condition, transform, or validator now runs on a **worker thread**
-  rather than on the loop thread. One that touches state which is not
-  thread-safe, calls `loop.call_soon`, or uses `asyncio.Queue.put_nowait`
-  needs to say so itself. `asyncio.to_thread` copies the context, so a
-  callback that *sets* a contextvar no longer affects its caller.
-- **Async callbacks that were silently doing nothing now run.** An async arc
-  condition, sink, transform, validator, compensation action or wrapped
-  operation whose coroutine was previously discarded is now awaited. If a
-  pipeline was passing because its async condition matched everything, or
-  because its async transform was a no-op that left the data untouched, it
-  will now behave as written — which may be a change in output.
 
 ## v0.4.2 - 2026-08-26
 

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.2.1 - 2026-09-02
+
+### Changed
+
+- **The documentation filenames are lower-hyphen**, matching the workspace's
+  one-document-one-name rule: `HTML_CONVERSION.md`, `INGESTION.md`,
+  `JSON_CHUNKING.md`, `MARKDOWN_CHUNKING.md`, `RAG_HEADING_ENRICHMENT.md` and
+  `RAG_QUALITY_FILTERING.md` are now `html-conversion.md`, `ingestion.md`,
+  `json-chunking.md`, `markdown-chunking.md`, `heading-enrichment.md` and
+  `quality-filtering.md`. A shared name is what lets one page be served from
+  both the package tree and the documentation site with its links correct in
+  each; the links that pointed at the old spellings are updated, and the
+  ingestion index now distinguishes the reference from the consumer-facing
+  guide rather than describing both the same way.
+
+  No source change and no consumer-visible change: this is a maintenance
+  release, cut so the workspace carries one version set rather than because
+  anything here behaves differently.
+
 ## v2.2.0 - 2026-08-26
 
 ### Changed
