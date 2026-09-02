@@ -51,8 +51,7 @@ def _run(body: str, *, block_fsm: bool = True) -> subprocess.CompletedProcess[st
 
 def _assert_ok(result: subprocess.CompletedProcess[str], what: str) -> None:
     assert result.returncode == 0, (
-        f"{what} failed without dataknobs-fsm.\n"
-        f"--- stderr ---\n{result.stderr}"
+        f"{what} failed without dataknobs-fsm.\n--- stderr ---\n{result.stderr}"
     )
 
 
