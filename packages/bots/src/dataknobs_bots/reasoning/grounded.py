@@ -1098,10 +1098,14 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
         "returned empty" about it names the wrong cause.
 
         The fallback itself is the same for both, which is why this
-        catches :class:`StrategyUnavailable` here rather than letting it
-        reach the per-source guard in :meth:`_execute_intent`: that
-        guard drops the source for the turn, which is right for an index
-        that *broke* and wrong for one that was never applicable.
+        catches :class:`StrategyUnavailable` here rather than letting
+        it reach the per-source guard in
+        :meth:`_retrieve_from_sources`: that guard drops the source for
+        the turn, which is right for an index that *broke* and wrong
+        for one that was never applicable.  The catch stays narrow for
+        the same reason --- widening it would give a broken index the
+        unavailable one's disposition, and silently fall back from a
+        failure nobody was told about.
 
         Args:
             source: The source whose index this is; also the fallback.

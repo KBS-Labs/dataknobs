@@ -12,7 +12,11 @@ Both used to arrive as an empty list, so both were logged as
 them. The operator's only signal that a source's whole retrieval strategy
 was dead pointed at the corpus instead of at the configuration.
 
-These pin the distinction from the consumer's side: the same fallback, two
+A third condition reaches neither: an index that *broke*. It must not fall
+back at all -- the loop's own guard drops such a source, with its cause --
+and that disposition survives only while the catch stays narrow.
+
+These pin the distinction from the consumer's side: one fallback, two
 records, and the unresolvable one says what is missing.
 """
 
@@ -184,3 +188,55 @@ async def test_a_cluster_index_over_a_kb_that_cannot_embed_names_the_cause(
     ]
     assert named, [(r.levelname, r.getMessage()) for r in caplog.records]
     assert "embedder" in named[0].getMessage()
+
+
+async def test_an_index_that_breaks_drops_the_source_instead_of_falling_back(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The third condition, and the reason the catch is narrow.
+
+    An index that *broke* is neither of the two above. It must not fall
+    back, because a fallback would serve the turn from a source whose
+    retrieval strategy just failed for an unknown reason and report
+    nothing wrong; the loop's own guard drops such a source, with its
+    cause, exactly as it does for a source that raises without an index.
+
+    That disposition is bought entirely by ``except StrategyUnavailable``
+    being narrow. Widening it to ``except Exception`` would turn every
+    broken index into a silent fallback --- the defect this whole change
+    removed, reintroduced one layer up. This is the test that fails if
+    someone does.
+    """
+
+    async def failing_seeds(
+        query: str,
+        top_k: int,
+        *,
+        filter_metadata: dict[str, Any] | None = None,
+    ) -> list[SourceResult]:
+        raise RuntimeError("vector store unreachable")
+
+    kb = _KnowledgeBase()
+    index = HeadingTreeIndex(
+        vector_query_fn=failing_seeds,
+        config=HeadingTreeConfig(entry_strategy="vector"),
+        source_name="docs",
+    )
+
+    with caplog.at_level(logging.DEBUG, logger=STRATEGY_LOGGER):
+        results = await _retrieve(index, kb)
+
+    assert "docs" not in results, "a source whose index broke was kept for the turn"
+    assert kb.queries == [], (
+        "the fallback ran for an index that broke, which is the "
+        "unavailable-index disposition applied to the wrong condition"
+    )
+
+    records = [r for r in caplog.records if r.name == STRATEGY_LOGGER]
+    assert not any("returned empty" in r.getMessage() for r in records), (
+        f"an index that broke was reported as one that found nothing: "
+        f"{[r.getMessage() for r in records]}"
+    )
+    dropped = [r for r in records if "skipping" in r.getMessage()]
+    assert dropped, [(r.levelname, r.getMessage()) for r in records]
+    assert dropped[0].exc_info is not None, "the source was dropped without its cause"
