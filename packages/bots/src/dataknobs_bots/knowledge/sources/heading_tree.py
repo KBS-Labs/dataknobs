@@ -28,7 +28,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from dataknobs_data.sources.base import RetrievalIntent, SourceResult
+from dataknobs_data.sources.base import (
+    RetrievalIntent,
+    SourceResult,
+    StrategyUnavailable,
+)
 from dataknobs_data.sources.topic_index import (
     HeadingMatchConfig,
     TopicNode,
@@ -331,8 +335,24 @@ class HeadingTreeIndex:
 
         In eager mode (constructed via :meth:`from_chunks`), steps 2-3
         use the pre-built tree and chunk lookup instead.
+
+        Raises:
+            StrategyUnavailable: this index is in lazy mode with no way
+                to fetch seeds, so it cannot run at all.  Checked up
+                front rather than at the seeding call, so the condition
+                is reported before any per-turn work.
+            Exception: whatever ``vector_query_fn`` raises, unchanged.
+                A store that cannot be reached is not a store with no
+                seeds in it, and the caller reads those two differently.
         """
         params = _resolve_params(self._config, intent)
+
+        # Lazy mode always seeds through the vector path regardless of
+        # entry_strategy -- _get_tree_and_chunks calls _fetch_vector_seeds
+        # unconditionally on that branch -- so one check covers all three
+        # strategies.
+        if self._prebuilt() is None:
+            self._require_vector_query_fn()
 
         logger.info(
             "HeadingTreeIndex resolving for source '%s': entry_strategy=%s, expansion_mode=%s",
@@ -464,6 +484,46 @@ class HeadingTreeIndex:
         return labels
 
     # ------------------------------------------------------------------
+    # Private: what this index needs before it can answer
+    # ------------------------------------------------------------------
+
+    def _prebuilt(self) -> tuple[dict[str, SourceResult], TopicNode] | None:
+        """The pre-built chunk pool and tree, or ``None`` if lazy.
+
+        The one place the mode is decided.  ``resolve`` needs the answer
+        to know whether ``vector_query_fn`` is required, and
+        ``_get_tree_and_chunks`` needs the state itself, so this hands
+        back the state rather than a boolean --- a predicate would leave
+        the caller to re-narrow two optionals the type checker cannot
+        narrow through a ``bool``.
+        """
+        if self._tree is not None and self._chunks_by_id is not None:
+            return self._chunks_by_id, self._tree
+        return None
+
+    def _require_vector_query_fn(self) -> VectorQueryFn:
+        """The seed-fetching callable, or say this index cannot resolve.
+
+        Raises rather than returning an empty result: a lazy index with
+        no way to fetch seeds cannot run at all, and answering ``[]``
+        would make it indistinguishable from one that ran and matched
+        nothing.  See
+        :meth:`~dataknobs_data.sources.topic_index.TopicIndex.resolve`
+        for the contract.
+
+        Only lazy mode needs it: an eager index built by
+        :meth:`from_chunks` has its tree already and never seeds.
+        """
+        if self._vector_query_fn is None:
+            raise StrategyUnavailable(
+                f"HeadingTreeIndex on source '{self._source_name}' is in lazy mode "
+                "with no vector_query_fn, so it cannot fetch the seed chunks it "
+                "builds a heading tree from. Pass vector_query_fn= at "
+                "construction, or build the index eagerly with from_chunks()."
+            )
+        return self._vector_query_fn
+
+    # ------------------------------------------------------------------
     # Private: per-turn tree and chunk pool
     # ------------------------------------------------------------------
 
@@ -479,9 +539,10 @@ class HeadingTreeIndex:
         In lazy mode, fetches seeds via vector search and builds
         a partial tree from their heading metadata.
         """
-        if self._tree is not None and self._chunks_by_id is not None:
+        prebuilt = self._prebuilt()
+        if prebuilt is not None:
             # Eager mode: use pre-built state
-            return self._chunks_by_id, self._tree
+            return prebuilt
 
         # Lazy mode: fetch seeds and build per-turn
         seed_results = await self._fetch_vector_seeds(
@@ -508,27 +569,29 @@ class HeadingTreeIndex:
         *,
         filter_metadata: dict[str, Any] | None = None,
     ) -> list[SourceResult]:
-        """Fetch seed results via vector search."""
-        if self._vector_query_fn is None:
-            logger.debug(
-                "No vector_query_fn configured for source '%s', cannot fetch seeds in lazy mode",
-                self._source_name,
-            )
-            return []
+        """Fetch seed results via vector search.
 
-        try:
-            results = await self._vector_query_fn(
-                query,
-                params.seed_max_results,
-                filter_metadata=filter_metadata,
-            )
-        except Exception:
-            logger.warning(
-                "Vector query failed for source '%s'",
-                self._source_name,
-                exc_info=True,
-            )
-            return []
+        The guard is unreachable once ``resolve`` has run --- it checks
+        the same invariant up front.  Kept because the type checker
+        cannot see that, and so that a future path reaching here without
+        going through ``resolve`` fails by name rather than as
+        ``'NoneType' object is not callable``.
+        """
+        vector_query_fn = self._require_vector_query_fn()
+
+        # This is the index's retrieval call, and it is not wrapped: a
+        # store that cannot be reached is not a store with no seeds in
+        # it, and returning an empty list here says the second. That
+        # answer is read, not just logged --- the grounded retrieval loop
+        # treats an empty topic index as a vocabulary gap and falls back
+        # to plain text retrieval, so absorbing this reroutes the turn
+        # and reports the wrong cause for it. The loop already drops a
+        # source that raises, with its cause.
+        results = await vector_query_fn(
+            query,
+            params.seed_max_results,
+            filter_metadata=filter_metadata,
+        )
 
         # Filter by score threshold
         return [r for r in results if r.relevance >= params.seed_score_threshold]

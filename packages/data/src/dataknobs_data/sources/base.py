@@ -22,6 +22,30 @@ from typing import Any
 
 
 # ------------------------------------------------------------------
+# Exceptions
+# ------------------------------------------------------------------
+
+
+class StrategyUnavailable(Exception):  # noqa: N818
+    """A strategy or index cannot operate in the current context.
+
+    Not an error -- it signals a caller with an alternative route to take
+    it. The result-processing chain tries the next strategy; the grounded
+    retrieval loop falls back to plain text retrieval. Distinct from
+    actual processing errors, which propagate normally.
+
+    A strategy that *can* run but *fails* raises a normal exception.
+    ``StrategyUnavailable`` means "I'm not applicable", not "I broke."
+
+    That distinction is what keeps a caller's fallback honest. Absorbing
+    the condition and answering with an empty result makes an object that
+    could not run indistinguishable from one that ran and found nothing,
+    so the caller takes its fallback for the wrong reason and reports the
+    wrong cause.
+    """
+
+
+# ------------------------------------------------------------------
 # Data types
 # ------------------------------------------------------------------
 

@@ -8,7 +8,11 @@ from typing import Any
 
 import pytest
 
-from dataknobs_data.sources.base import RetrievalIntent, SourceResult
+from dataknobs_data.sources.base import (
+    RetrievalIntent,
+    SourceResult,
+    StrategyUnavailable,
+)
 from dataknobs_data.sources.cluster_index import (
     DEFAULT_LABEL_MIN_WORD_LENGTH,
     DEFAULT_LABEL_TOP_TERMS,
@@ -302,16 +306,17 @@ class TestLazyConstruction:
         assert idx.cluster_info == []
 
     @pytest.mark.asyncio
-    async def test_lazy_no_embedder_returns_empty(self) -> None:
+    async def test_lazy_no_embedder_says_it_cannot_resolve(self) -> None:
+        """Not an empty result: empty means "ran, matched nothing"."""
         idx = ClusterTopicIndex()
-        results = await idx.resolve("test query")
-        assert results == []
+        with pytest.raises(StrategyUnavailable, match="no embedder"):
+            await idx.resolve("test query")
 
     @pytest.mark.asyncio
-    async def test_lazy_no_vector_fn_returns_empty(self) -> None:
+    async def test_lazy_no_vector_fn_says_it_cannot_resolve(self) -> None:
         idx = ClusterTopicIndex(embedder=_AUTH_EMBEDDER)
-        results = await idx.resolve("test query")
-        assert results == []
+        with pytest.raises(StrategyUnavailable, match="no vector_query_fn"):
+            await idx.resolve("test query")
 
     @pytest.mark.asyncio
     async def test_lazy_resolve_clusters_per_turn(self) -> None:
@@ -403,14 +408,19 @@ class TestResolve:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_no_embedder_returns_empty(self) -> None:
+    async def test_no_embedder_says_it_cannot_resolve(self) -> None:
+        """Eager too: the pre-built pool does not remove the need to embed.
+
+        The clusters are there, but the *query* still has to be embedded
+        to be matched against their centroids.
+        """
         idx = ClusterTopicIndex.from_chunks(
             _CHUNKS,
             _EMBEDDINGS,
             config=ClusterTopicConfig(cluster_threshold=0.5),
         )
-        results = await idx.resolve("test query")
-        assert results == []
+        with pytest.raises(StrategyUnavailable, match="no embedder"):
+            await idx.resolve("test query")
 
     @pytest.mark.asyncio
     async def test_top_k_caps_results(self) -> None:

@@ -46,27 +46,14 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from dataknobs_data.sources.base import RetrievalIntent, SourceResult
+from dataknobs_data.sources.base import (
+    RetrievalIntent,
+    SourceResult,
+    StrategyUnavailable,
+)
 from dataknobs_data.vector.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__)
-
-
-# ------------------------------------------------------------------
-# Exceptions
-# ------------------------------------------------------------------
-
-
-class StrategyUnavailable(Exception):  # noqa: N818
-    """A strategy cannot operate in the current context.
-
-    Not an error -- signals the strategy chain to try the next
-    alternative.  Distinct from actual processing errors, which
-    propagate normally.
-
-    A strategy that *can* run but *fails* raises a normal exception.
-    ``StrategyUnavailable`` means "I'm not applicable", not "I broke."
-    """
 
 
 # ------------------------------------------------------------------
@@ -1024,9 +1011,17 @@ def build_pipeline(config: dict[str, Any] | None) -> ResultPipeline | None:
 
 
 def _build_normalize_chain(
-    cfg: str | list[dict[str, Any]],
+    cfg: object,
 ) -> StrategyChain | CrossSourceNormalizer:
-    """Build normalization from config (shorthand or chain)."""
+    """Build normalization from config (shorthand or chain).
+
+    ``cfg`` is ``object`` rather than ``str | list[dict[str, Any]]``
+    because that is what the caller can actually supply: it reads
+    ``config.get("normalize_strategy")`` off an untrusted config dict,
+    so a YAML author can put an int or a mapping there. The two
+    ``isinstance`` checks are the validation, and the final return is
+    what a config that passed neither falls back to.
+    """
     if isinstance(cfg, str):
         return CrossSourceNormalizer(strategy=cfg)
 
@@ -1043,11 +1038,18 @@ def _build_normalize_chain(
 
 
 def _build_cluster_chain(
-    cfg: str | list[dict[str, Any]],
+    cfg: object,
     min_size: int,
     threshold: float,
 ) -> StrategyChain | ResultProcessor | None:
-    """Build clustering from config (shorthand or chain)."""
+    """Build clustering from config (shorthand or chain).
+
+    ``cfg`` is ``object`` for the same reason as
+    :func:`_build_normalize_chain`: the caller reads
+    ``config.get("cluster_strategy")`` off an untrusted config dict, so
+    the trailing ``return None`` is the live answer for a value that is
+    neither a name nor a list of them.
+    """
     if isinstance(cfg, str):
         return _make_clusterer(cfg, min_size, threshold)
 

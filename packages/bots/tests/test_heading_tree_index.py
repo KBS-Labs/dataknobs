@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from dataknobs_data.sources.base import RetrievalIntent, SourceResult
+from dataknobs_data.sources.base import (
+    RetrievalIntent,
+    SourceResult,
+    StrategyUnavailable,
+)
 from dataknobs_data.sources.topic_index import DEFAULT_HEADING_STOPWORDS
 
 from dataknobs_bots.knowledge.sources.heading_tree import (
@@ -249,13 +253,13 @@ class TestVectorStrategy:
         assert "csrf_mit" in ids
 
     @pytest.mark.asyncio
-    async def test_no_vector_fn_lazy_returns_empty(self) -> None:
-        """In lazy mode with no vector_query_fn, resolve returns empty."""
+    async def test_no_vector_fn_lazy_says_it_cannot_resolve(self) -> None:
+        """Not an empty result: empty means "ran, matched nothing"."""
         config = HeadingTreeConfig(entry_strategy="vector")
         index = HeadingTreeIndex(config=config)  # No vector_query_fn, lazy mode
 
-        results = await index.resolve("security")
-        assert results == []
+        with pytest.raises(StrategyUnavailable, match="no vector_query_fn"):
+            await index.resolve("security")
 
     @pytest.mark.asyncio
     async def test_no_vector_fn_eager_still_uses_tree(self) -> None:
@@ -343,12 +347,13 @@ class TestLazyMode:
         assert "csrf" in ids
 
     @pytest.mark.asyncio
-    async def test_lazy_no_vector_fn_returns_empty(self) -> None:
+    async def test_lazy_no_vector_fn_says_it_cannot_resolve(self) -> None:
+        """The "both" strategy is no exception: lazy mode always seeds."""
         config = HeadingTreeConfig(entry_strategy="both")
         index = HeadingTreeIndex(config=config)
 
-        results = await index.resolve("security")
-        assert results == []
+        with pytest.raises(StrategyUnavailable, match="no vector_query_fn"):
+            await index.resolve("security")
 
     @pytest.mark.asyncio
     async def test_lazy_no_heading_metadata_returns_empty(self) -> None:

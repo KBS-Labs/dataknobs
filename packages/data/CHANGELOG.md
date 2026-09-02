@@ -54,6 +54,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A topic index that cannot run says so, instead of answering with an empty
+  list.** `ClusterTopicIndex.resolve` returned `[]` when it had no embedder,
+  and its seed fetch returned `[]` when it had no `vector_query_fn`. An empty
+  list already means something else — the index ran and matched nothing — so a
+  caller could not tell a misconfigured index from a vocabulary gap. Both
+  conditions now raise `StrategyUnavailable`, whose message names the source
+  and which of the two things is missing.
+
+  The `TopicIndex` protocol was silent on the question, which is why its two
+  implementations had each answered it independently; `resolve()` now documents
+  the policy for both. Only lazy mode needs `vector_query_fn`, so an eagerly
+  built index still resolves without one, and an index built for inspection
+  alone — no embedder, read through `topics()` and `cluster_info` — is still a
+  valid thing to construct.
+
+  `StrategyUnavailable` moves from `sources.processing` to `sources.base`, the
+  module every user of it already imports. All three existing import paths
+  still resolve, including `from dataknobs_data.sources.processing import
+  StrategyUnavailable`.
+
 - **`VectorStore` is generic in its config type, so a backend reads its own
   config fields as the type it was built with.** Every backend already
   declared a leaf `CONFIG_CLS` and every instance already held the leaf
