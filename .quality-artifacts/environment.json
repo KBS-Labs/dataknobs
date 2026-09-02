@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-02T00:48:59Z",
+  "timestamp": "2026-09-02T01:58:53Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/vector-store-capability-declaration",
-  "git_commit": "133b21e924afefe9822053a10a4bd8b087ce9bf4",
+  "git_branch": "sbk/a-capability-you-can-call",
+  "git_commit": "222d480ea7b34af78adfcc5867e645b56dfffb24",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
