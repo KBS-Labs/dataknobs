@@ -306,7 +306,7 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 138 of the 142 are read only by
+#: Almost no package document is one of these. 139 of the 144 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so
@@ -315,7 +315,7 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: repair touching two packages' docs ran two full test suites and no guard that
 #: reads a link.
 #:
-#: The four below are the exception and they are a real one: each is read by a
+#: The five below are the exception and they are a real one: each is read by a
 #: test *in* the package, comparing a published table against the code it
 #: describes, so the document genuinely decides whether that suite passes. They
 #: keep scheduling their package, and package-hashes.py folds them into that
@@ -326,7 +326,7 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: from a path. What keeps the list honest is
 #: ``test_every_package_document_a_package_suite_reads_is_declared``, which finds
 #: them structurally — a ``Path(__file__)`` expression divided by ``"docs"`` —
-#: and fails on a fifth. A naive search for the string is not available: 192
+#: and fails on a sixth. A naive search for the string is not available: 192
 #: lines under ``packages/*/tests`` mention ``"docs"``, and all but these name a
 #: knowledge source or a RAG adapter.
 PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
@@ -334,6 +334,7 @@ PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     "packages/bots/docs/behavior-packs.md": "bots",
     "packages/common/docs/guides/packs.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
+    "packages/data/docs/vector-store-capabilities.md": "data",
 }
 
 

@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_common.locks import FileLock
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -174,6 +175,39 @@ escalates from here instead of settling for it.
 """
 
 
+class PathPersistedCapabilityMixin:
+    """Advertise :attr:`~dataknobs_common.Capability.VECTOR_PERSIST` when a
+    path is configured.
+
+    ``save()`` and ``load()`` on the two path-persisted backends return
+    early when ``persist_path`` is unset, so a store built without one
+    persists exactly as much as a server-backed store does: not at all.
+    Advertising the capability from a ``ClassVar`` would therefore claim a
+    guarantee the instance cannot keep, and the class-level answer is not
+    even wrong in a way a caller could route around — the methods are
+    there, they simply do nothing.
+
+    Both adopters compute the bit identically, which is why it is stated
+    here once rather than in each of them. A backend that persists by some
+    other means declares ``VECTOR_PERSIST`` in its own
+    ``SUPPORTED_CAPABILITIES`` and does not mix this in.
+
+    Mix in ahead of the store's other bases, so this
+    ``_compute_instance_capabilities`` wins over
+    :class:`~dataknobs_common.DynamicCapabilityMixin`'s default.
+    """
+
+    # Declared for the type checker; supplied by ``VectorStoreBase._setup``.
+    persist_path: Path | None
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]]
+
+    def _compute_instance_capabilities(self) -> frozenset[CapabilityLike]:
+        caps: set[CapabilityLike] = set(type(self).SUPPORTED_CAPABILITIES)
+        if self.persist_path is not None:
+            caps.add(Capability.VECTOR_PERSIST)
+        return frozenset(caps)
+
+
 class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
     """Base implementation with common functionality for all vector stores.
 
@@ -313,7 +347,8 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         norm = np.linalg.norm(vector)
         if norm == 0:
             return vector
-        return vector / norm
+        normalized: np.ndarray = vector / norm
+        return normalized
 
     def _calculate_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Calculate similarity between two vectors based on configured metric.
@@ -327,15 +362,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
         """
         import numpy as np
 
-        if self.metric == DistanceMetric.COSINE:
-            # Cosine similarity
-            norm1 = np.linalg.norm(vec1)
-            norm2 = np.linalg.norm(vec2)
-            if norm1 == 0 or norm2 == 0:
-                return 0.0
-            return float(np.dot(vec1, vec2) / (norm1 * norm2))
-
-        elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+        if self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
             # Convert distance to similarity
             distance = float(np.linalg.norm(vec1 - vec2))
             return 1.0 / (1.0 + distance)
@@ -345,17 +372,24 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
             return float(np.dot(vec1, vec2))
 
         elif self.metric == DistanceMetric.L1:
-            # Manhattan distance to similarity
-            distance = np.sum(np.abs(vec1 - vec2))
+            # Manhattan distance to similarity. ``float`` for the same
+            # reason its three sibling branches do it: ``np.sum`` returns a
+            # numpy scalar, and the method promises a Python float.
+            distance = float(np.sum(np.abs(vec1 - vec2)))
             return 1.0 / (1.0 + distance)
 
-        else:
-            # Default to cosine
-            norm1 = np.linalg.norm(vec1)
-            norm2 = np.linalg.norm(vec2)
-            if norm1 == 0 or norm2 == 0:
-                return 0.0
-            return float(np.dot(vec1, vec2) / (norm1 * norm2))
+        # Cosine, and the default for a metric with no branch of its own.
+        # This block used to appear twice --- once for ``COSINE`` and once
+        # as the fallback --- with the fallback unreachable, because the
+        # branches above cover every remaining member of the enum. One
+        # block serving both roles computes what both computed, and a
+        # member added to ``DistanceMetric`` without a branch here still
+        # lands on cosine exactly as it did before.
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
     def _convert_distance_to_score(self, distance: float) -> float:
         """Convert a distance to a similarity score based on metric.

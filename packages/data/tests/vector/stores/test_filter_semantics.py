@@ -29,76 +29,17 @@ backend.
 from __future__ import annotations
 
 import contextlib
-import logging
-import uuid
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import numpy as np
 import pytest
 import pytest_asyncio
-from dataknobs_common.testing import (
-    is_chromadb_available,
-    is_faiss_available,
-    is_package_available,
-    requires_real_postgres,
-)
 
 from dataknobs_data.vector.exceptions import VectorDomainScopeError
 from dataknobs_data.vector.stores.common import POST_FILTER_OVERFETCH
-from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
-if is_faiss_available():
-    from dataknobs_data.vector.stores.faiss import FaissVectorStore
-
-if is_chromadb_available():
-    from dataknobs_data.vector.stores.chroma import ChromaVectorStore
-
-if is_package_available("asyncpg"):
-    from dataknobs_data.vector.stores.pgvector import PgVectorStore
-
-
-logger = logging.getLogger(__name__)
-
-
-# requires_real_postgres is exactly the three terms this list assembled by
-# hand: a reachable server, TEST_POSTGRES=true, and asyncpg installed.
-_pgvector_marks = [requires_real_postgres]
-
-
-@pytest.fixture
-def pgvector_config(make_pgvector_test_table: Any) -> Iterator[dict[str, Any]]:
-    """Per-test pgvector config from the shared ``dataknobs-common``
-    fixture (pre-drop + teardown drop + pgvector-extension ensure live
-    there now). ``metric`` is preserved at ``cosine`` to keep behavior
-    byte-identical to the prior hand-rolled config.
-    """
-    gen = make_pgvector_test_table("test_filter_", dimensions=4)
-    cfg = next(gen)
-    cfg["metric"] = "cosine"
-    try:
-        yield cfg
-    finally:
-        gen.close()
-
-
-async def _teardown_backend(backend: str, store: Any) -> None:
-    """Drop the per-test Chroma collection created by a fixture.
-
-    pgvector tables are owned by the shared ``make_pgvector_test_table``
-    fixture (pre-drop + teardown drop), so only Chroma needs explicit
-    cleanup here. The Chroma failure is logged rather than swallowed so
-    an orphaned test collection becomes visible in pytest output.
-    """
-    if backend == "chroma":
-        try:
-            store.client.delete_collection(name=store.collection_name)
-        except Exception as exc:
-            logger.warning(
-                "Chroma teardown failed for collection %r: %s",
-                store.collection_name,
-                exc,
-            )
+from .conftest import backend_params, running_vector_store
 
 
 # Five seed records exercising every metadata shape used by the
@@ -138,51 +79,14 @@ FOUR_QUADRANT_CASES: list[tuple[dict[str, Any], set[str]]] = [
 CASE_IDS = [f"case{i + 1}" for i in range(len(FOUR_QUADRANT_CASES))]
 
 
-@pytest_asyncio.fixture(
-    params=[
-        pytest.param("memory", id="memory"),
-        pytest.param(
-            "faiss",
-            id="faiss",
-            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
-        ),
-        pytest.param(
-            "chroma",
-            id="chroma",
-            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
-        ),
-        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
-    ]
-)
-async def any_vector_store(
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[Any]:
+@pytest_asyncio.fixture(params=backend_params())
+async def any_vector_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """Yield a freshly-seeded VectorStore for each backend param."""
-    backend = request.param
-    store: Any
-    if backend == "memory":
-        store = MemoryVectorStore({"dimensions": 4})
-    elif backend == "faiss":
-        store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
-    elif backend == "chroma":
-        store = ChromaVectorStore(
-            {
-                "dimensions": 4,
-                "collection_name": f"test_filter_{uuid.uuid4().hex[:8]}",
-            }
-        )
-    elif backend == "pgvector":
-        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
-    else:
-        pytest.fail(f"Unknown backend param: {backend}")
-
-    await store.initialize()
-    try:
+    async with running_vector_store(
+        request.param, request, collection_prefix="test_filter_"
+    ) as store:
         await store.add_vectors(_seed_vectors(), ids=list(SEED_IDS), metadata=list(SEED_METADATA))
         yield store
-    finally:
-        await _teardown_backend(backend, store)
-        await store.close()
 
 
 @pytest.mark.asyncio
@@ -225,56 +129,18 @@ TYPE_SAFETY_METADATA: list[dict[str, Any]] = [
 ]
 
 
-@pytest_asyncio.fixture(
-    params=[
-        pytest.param("memory", id="memory"),
-        pytest.param(
-            "faiss",
-            id="faiss",
-            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
-        ),
-        pytest.param(
-            "chroma",
-            id="chroma",
-            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
-        ),
-        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
-    ]
-)
-async def type_safety_store(
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[Any]:
+@pytest_asyncio.fixture(params=backend_params())
+async def type_safety_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """Two-record store for type-roundtrip cases."""
-    backend = request.param
-    store: Any
-    if backend == "memory":
-        store = MemoryVectorStore({"dimensions": 4})
-    elif backend == "faiss":
-        store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
-    elif backend == "chroma":
-        store = ChromaVectorStore(
-            {
-                "dimensions": 4,
-                "collection_name": f"test_typesafe_{uuid.uuid4().hex[:8]}",
-            }
-        )
-    elif backend == "pgvector":
-        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
-    else:
-        pytest.fail(f"Unknown backend param: {backend}")
-
-    await store.initialize()
-    try:
-        vectors = np.eye(2, 4, dtype=np.float32)
+    async with running_vector_store(
+        request.param, request, collection_prefix="test_typesafe_"
+    ) as store:
         await store.add_vectors(
-            vectors,
+            np.eye(2, 4, dtype=np.float32),
             ids=list(TYPE_SAFETY_IDS),
             metadata=list(TYPE_SAFETY_METADATA),
         )
         yield store
-    finally:
-        await _teardown_backend(backend, store)
-        await store.close()
 
 
 @pytest.mark.asyncio
@@ -340,56 +206,18 @@ def _domain_scoped_metadata() -> list[dict[str, Any]]:
     ]
 
 
-@pytest_asyncio.fixture(
-    params=[
-        pytest.param("memory", id="memory"),
-        pytest.param(
-            "faiss",
-            id="faiss",
-            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
-        ),
-        pytest.param(
-            "chroma",
-            id="chroma",
-            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
-        ),
-        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
-    ]
-)
-async def domain_scoped_store(
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[Any]:
+@pytest_asyncio.fixture(params=backend_params())
+async def domain_scoped_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """Store configured with ``domain_id="t1"``, seeded across t1/t2."""
-    backend = request.param
-    store: Any
-    if backend == "memory":
-        store = MemoryVectorStore({"dimensions": 4, "domain_id": "t1"})
-    elif backend == "faiss":
-        store = FaissVectorStore({"dimensions": 4, "metric": "cosine", "domain_id": "t1"})
-    elif backend == "chroma":
-        store = ChromaVectorStore(
-            {
-                "dimensions": 4,
-                "domain_id": "t1",
-                "collection_name": f"test_domain_{uuid.uuid4().hex[:8]}",
-            }
-        )
-    elif backend == "pgvector":
-        store = PgVectorStore({**request.getfixturevalue("pgvector_config"), "domain_id": "t1"})
-    else:
-        pytest.fail(f"Unknown backend param: {backend}")
-
-    await store.initialize()
-    try:
+    async with running_vector_store(
+        request.param, request, collection_prefix="test_domain_", domain_id="t1"
+    ) as store:
         await store.add_vectors(
             _seed_vectors()[:3],
             ids=list(_DOMAIN_SCOPED_IDS),
             metadata=_domain_scoped_metadata(),
         )
         yield store
-    finally:
-        await _teardown_backend(backend, store)
-        await store.close()
 
 
 # NOTE on the asserted contract. A configured ``domain_id`` delivers
@@ -765,49 +593,18 @@ async def test_an_unscoped_store_still_writes_any_id(
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture(
-    params=[
-        pytest.param("memory", id="memory"),
-        pytest.param(
-            "faiss",
-            id="faiss",
-            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
-        ),
-        pytest.param(
-            "chroma",
-            id="chroma",
-            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
-        ),
-    ]
-)
+@pytest_asyncio.fixture(params=backend_params(without=("pgvector",)))
 async def multi_domain_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """Scoped to ``t1``, holding one row that belongs to ``t1`` and ``t2``."""
-    backend = request.param
-    store: Any
-    if backend == "memory":
-        store = MemoryVectorStore({"dimensions": 4, "domain_id": "t1"})
-    elif backend == "faiss":
-        store = FaissVectorStore({"dimensions": 4, "metric": "cosine", "domain_id": "t1"})
-    else:
-        store = ChromaVectorStore(
-            {
-                "dimensions": 4,
-                "domain_id": "t1",
-                "collection_name": f"test_multidomain_{uuid.uuid4().hex[:8]}",
-            }
-        )
-
-    await store.initialize()
-    try:
+    async with running_vector_store(
+        request.param, request, collection_prefix="test_multidomain_", domain_id="t1"
+    ) as store:
         await store.add_vectors(
             _seed_vectors()[:1],
             ids=["shared"],
             metadata=[{"domain_id": ["t1", "t2"], "k": "v"}],
         )
         yield store
-    finally:
-        await _teardown_backend(backend, store)
-        await store.close()
 
 
 @pytest.mark.asyncio
@@ -1096,52 +893,15 @@ def _topk_query() -> np.ndarray:
     return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
 
-@pytest_asyncio.fixture(
-    params=[
-        pytest.param("memory", id="memory"),
-        pytest.param(
-            "faiss",
-            id="faiss",
-            marks=pytest.mark.skipif(not is_faiss_available(), reason="faiss not installed"),
-        ),
-        pytest.param(
-            "chroma",
-            id="chroma",
-            marks=pytest.mark.skipif(not is_chromadb_available(), reason="chromadb not installed"),
-        ),
-        pytest.param("pgvector", id="pgvector", marks=_pgvector_marks),
-    ]
-)
-async def topk_store(
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[Any]:
+@pytest_asyncio.fixture(params=backend_params())
+async def topk_store(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """Store seeded with a corpus larger than the ``k`` used below."""
-    backend = request.param
-    store: Any
-    if backend == "memory":
-        store = MemoryVectorStore({"dimensions": 4})
-    elif backend == "faiss":
-        store = FaissVectorStore({"dimensions": 4, "metric": "cosine"})
-    elif backend == "chroma":
-        store = ChromaVectorStore(
-            {
-                "dimensions": 4,
-                "collection_name": f"test_topk_{uuid.uuid4().hex[:8]}",
-            }
-        )
-    elif backend == "pgvector":
-        store = PgVectorStore(request.getfixturevalue("pgvector_config"))
-    else:
-        pytest.fail(f"Unknown backend param: {backend}")
-
-    await store.initialize()
-    try:
+    async with running_vector_store(
+        request.param, request, collection_prefix="test_topk_"
+    ) as store:
         vectors, ids, metadata = _topk_corpus()
         await store.add_vectors(vectors, ids=ids, metadata=metadata)
         yield store
-    finally:
-        await _teardown_backend(backend, store)
-        await store.close()
 
 
 @pytest.mark.asyncio

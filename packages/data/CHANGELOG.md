@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **The vector stores advertise their capabilities.** `VectorStore` now
+  implements `CapabilityContract`, so a consumer holding the abstraction asks
+  `store.supports(Capability.VECTOR_PERSIST)` rather than reaching a
+  backend-only method through an `isinstance` downcast — which forfeits the
+  portability the abstraction exists for. `PgVectorStore` advertises
+  `VECTOR_INDEX_TUNING`; `MemoryVectorStore` and `FaissVectorStore` advertise
+  `VECTOR_PERSIST`, **per instance and only when a `persist_path` is
+  configured**, because `save()` and `load()` return early without one. A store
+  built without a path persists exactly as much as a server-backed store does,
+  and the methods being present is what makes getting this wrong dangerous: a
+  caller who checks by reading the class gets a silent no-op rather than an
+  error. New doc: `docs/vector-store-capabilities.md`, whose matrix is rebuilt
+  from the classes by a test rather than maintained by hand.
+
 ### Fixed
 
 - **`VectorStore.search_similar_records` ran a synchronous `fetch_records` on
