@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.11.0 - 2026-09-02
+
 ### Added
 
 - **The vector stores advertise their capabilities, and the guarded methods
@@ -30,104 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly as much as a server-backed store does. New doc:
   `docs/vector-store-capabilities.md`, whose matrix is rebuilt from the
   classes by a test rather than maintained by hand.
-
-### Fixed
-
-- **`ChromaVectorStore.search_documents` did not accept `include_timestamps`.**
-  Its two siblings, `search` and `get_vectors`, gained the parameter and this
-  one did not, so a caller asking a Chroma store for timestamped document hits
-  got `TypeError` on an unexpected keyword argument. `search_documents` is
-  Chroma's alone — no other backend embeds a query server-side — so it appears
-  in no cross-backend parity fixture, which is how it kept the older signature
-  while the methods around it moved. It now injects the configured timestamp
-  keys on the same terms as `search`, after the post-filter and only when
-  metadata was requested.
-
-- **`VectorStore.search_similar_records` ran a synchronous `fetch_records` on
-  the event loop.** The parameter's own docstring says "fetching by id is I/O,
-  so an async database's fetcher is the ordinary shape here", and the dispatch
-  used `run_callback` — the helper for a predicate or a per-record transform,
-  which runs a synchronous callable inline. A consumer whose fetcher is backed
-  by a `SyncDatabase` therefore stalled every other task on the loop for the
-  whole fan-out, once per search. It now goes through `run_callback_off_loop`.
-  The returned value was correct either way, which is why nothing caught it.
-
-### Changed
-
-- **A topic index that cannot run says so, instead of answering with an empty
-  list.** `ClusterTopicIndex.resolve` returned `[]` when it had no embedder,
-  and its seed fetch returned `[]` when it had no `vector_query_fn`. An empty
-  list already means something else — the index ran and matched nothing — so a
-  caller could not tell a misconfigured index from a vocabulary gap. Both
-  conditions now raise `StrategyUnavailable`, whose message names the source
-  and which of the two things is missing.
-
-  The `TopicIndex` protocol was silent on the question, which is why its two
-  implementations had each answered it independently; `resolve()` now documents
-  the policy for both. Only lazy mode needs `vector_query_fn`, so an eagerly
-  built index still resolves without one, and an index built for inspection
-  alone — no embedder, read through `topics()` and `cluster_info` — is still a
-  valid thing to construct.
-
-  `StrategyUnavailable` moves from `sources.processing` to `sources.base`, the
-  module every user of it already imports. All three existing import paths
-  still resolve, including `from dataknobs_data.sources.processing import
-  StrategyUnavailable`.
-
-- **`VectorStore` is generic in its config type, so a backend reads its own
-  config fields as the type it was built with.** Every backend already
-  declared a leaf `CONFIG_CLS` and every instance already held the leaf
-  object at runtime, but `VectorStoreBase` named `VectorStoreConfig` for the
-  whole family, so statically `store.config` was the shared base. Reading
-  `config.connection_string`, `config.collection_name` or `config.index_type`
-  off it was an attribute the declared type did not have — 17 such reads
-  across pgvector, Chroma and FAISS. Each backend now names its own config
-  (`PgVectorStore(VectorStore[PgVectorStoreConfig])`), which is what the
-  other thirty-odd `StructuredConfigConsumer` adopters in dataknobs already
-  did; the vector stores were the one family that pinned the base instead.
-
-  Nothing changes at runtime, and an unparameterized `VectorStore` annotation
-  — naming the family rather than one backend — behaves exactly as before.
-  A consumer writing an out-of-tree backend with its own config gets the same
-  typing by naming it: see *Adding a capability to a backend* in
-  `vector-store-capabilities.md`.
-
-- **BREAKING: `save()` and `load()` raise instead of returning quietly when a
-  store has no `persist_path`.** `MemoryVectorStore` and `FaissVectorStore`
-  previously answered a request to persist with a successful-looking no-op,
-  leaving the caller with nothing on disk to restore from and no indication
-  why. Both now raise `CapabilityNotSupportedError`, which is the same
-  response a server-backed backend gives and for the same reason — so
-  `store.supports(Capability.VECTOR_PERSIST)` is a single check covering
-  every way a store can decline. Gate on `persist_path` or on the capability
-  where a call was previously unconditional; `MemoryVectorStore.initialize()`
-  does the former, matching `FaissVectorStore.initialize()`, which already
-  did.
-
-  **A `hasattr(store, "save")` probe is the case to look for, and it does not
-  announce itself.** It used to be a serviceable proxy for "can this persist?",
-  because the method existed only on the backends that had one. Now that
-  `save` / `load` / `create_index` are declared on `VectorStore`, the probe
-  answers `True` for every backend, so a guard written that way *stops
-  guarding* and passes the call through to a store that will refuse it — a
-  silent no-op turning into a raise at the one site that thought it had
-  checked. Replace it with `store.supports(Capability.VECTOR_PERSIST)`.
-
-- **`VectorMigration`'s progress callback and `call_embedding_fn`'s dispatch
-  delegate instead of spelling the branch out.** Both hand-wrote a judgement
-  that `dataknobs_common.callbacks` now owns, and the copy in
-  `embedding_fn._await_or_offload` had already drifted from the shared one: it
-  asked `hasattr(result, "__await__")`, which answers `False` for a
-  generator-based coroutine that `inspect.isawaitable` accepts. The `timeout`
-  on `call_embedding_fn` keeps its deliberately narrow scope — a worker thread
-  stays unbounded, because `wait_for` cannot cancel one.
-
-**Migrating.** A synchronous `fetch_records` now runs on a worker thread
-rather than on the loop thread. One that touches state which is not
-thread-safe, or that relies on being on the loop thread, needs to say so
-itself.
-
-### Added
 
 - **`TextEmbedder`** in `dataknobs_data.vector` — the one shape for "turn text
   into vectors". Batch-only, async-only, returns `list[list[float]]`, and
@@ -243,182 +147,26 @@ itself.
   in. Exported because a backend or a consumer building a `Filter` by hand
   needs the same reading the fluent builder gets.
 
-### Deprecated
-
-- **`ConnectionPool` and `ConnectionPoolConfig`** in
-  `dataknobs_data.vector.optimizations`, in favour of
-  `dataknobs_data.pooling.ConnectionPoolManager`. Constructing one now emits a
-  `DeprecationWarning`. No backend has ever used it, and it is broken in ways
-  not worth repairing in place: `acquire` awaits the caller's `factory` while
-  holding a `threading.Lock`, so two coroutines acquiring concurrently from an
-  empty pool deadlock the **entire event loop** — and no `asyncio.timeout` or
-  `wait_for` can rescue that, because the loop thread is the thing blocked, so
-  the timer callback never runs. The tests here never caught it because their
-  factories return without ever suspending, which a factory that opens a
-  socket does not.
-
-  Four of the five `ConnectionPoolConfig` fields are read nowhere, and each now
-  says so on itself rather than reading as a knob: `connection_timeout` is
-  ignored by a wait loop that hardcodes 100 polls of 0.1s, `idle_timeout` and
-  `recycle_timeout` describe a liveness check `acquire` does not perform, and
-  `min_connections` describes pre-warming it does not do. The fields stay,
-  because removing one from a published dataclass breaks any caller passing it
-  by keyword.
-
-  `ConnectionPoolManager` holds one `asyncio.Lock` per event loop and is what
-  the Postgres, async-S3 and async-Elasticsearch backends actually use. It
-  pools *pools* rather than individual connections, delegating connection
-  liveness to the driver that owns it — which is why it never needed the check
-  the deprecated class left as a comment.
-
-### Changed
-
-- **`BatchProcessor` runs a synchronous per-item callback on a worker thread,
-  not on the event loop.** What a caller does in a "callback when item is
-  processed" is record the item somewhere, and that blocks; a blocking call
-  inside an `async def` stalls every other task on the loop for its duration.
-  Its sibling `ChangeTracker.process_batch` has always offloaded the same kind
-  of dispatch, so the two surfaces disagreed with neither of them saying which
-  was right. Both now go through
-  `dataknobs_common.callbacks.run_callback_off_loop` — the shape `ChangeTracker`
-  had hand-written, which is where that helper came from.
-
-  **This changes where a consumer's synchronous callback runs.** One that
-  touches state which is not thread-safe, or that relies on being on the loop
-  thread, needs to say so itself. Asynchronous callbacks are unaffected: they
-  are awaited directly, as before.
-
-- **Every `TextEmbedder` implementation now asserts its conformance where a
-  type checker reads it.** Nothing inherits the protocol — an adapter lives in
-  whichever package holds the thing it adapts, and two of the four are in
-  packages `data` cannot import — so "satisfies `TextEmbedder`" was a
-  docstring: true when written, free to stop being true when a signature
-  drifts, and nothing raising until a consumer's call failed somewhere naming
-  neither the class nor the protocol. `CachedEmbedder` and
-  `DeterministicEmbedder` carry a `TYPE_CHECKING`-only assertion, as do
-  `dataknobs-llm`'s `LLMProviderEmbedder` and `dataknobs-bots`' knowledge-base
-  adapter. It costs one type-check and no runtime import, and is stronger than
-  the `isinstance` the protocol already supported, which answers from member
-  names alone. The idiom is documented for consumers implementing their own.
-
-- **`embedding_fn` is optional on `VectorStore.bulk_embed_and_store`.** It was
-  a required positional parameter; it now defaults to `None`, because
-  `embedder=` is the other way of supplying the same thing and exactly one of
-  the two is required. Every existing positional call is unaffected. A call
-  passing neither still fails — but as a `ValueError` naming both parameters,
-  raised before the loop rather than by the loop's first iteration, so an empty
-  `texts` reports it too.
-
-- **Four "embedding function required" messages became one.**
-  `AsyncPostgresDatabase.bulk_embed_and_store`, `AsyncBulkEmbedMixin`,
-  `VectorMigration.add_vectors_to_existing` and
-  `VectorSyncMixin.sync_vectors_with_text` each phrased the same refusal
-  differently — `"embedding_fn is required for bulk_embed_and_store"`,
-  `"Embedding function required for adding vectors"`, `"Embedding function is
-  required for vector synchronization"`. All four now raise
-  `require_embedding_source`'s wording: ``"an embedder is required: pass
-  `embedder=` or `embedding_fn=`"``. Source-breaking only for a caller matching
-  on the old text. The **sync** `BulkEmbedMixin` keeps its original message,
-  deliberately: it takes no `embedder`, so a refusal naming one would send the
-  reader after a parameter that site does not have.
-
-- **`AsyncPostgresDatabase.bulk_embed_and_store` accepts a synchronous
-  `embedding_fn`.** It previously did `await embedding_fn(texts)`, so a plain
-  `def` raised `TypeError` there while working at every sibling site. It now
-  routes through the shared dispatch, which classifies the callable and
-  offloads a synchronous one with `asyncio.to_thread` rather than running it on
-  the event loop.
-
-- **An unrecognized operator or sort-order string now raises `ValueError`.**
-  `Query.filter` mapped an unknown operator to equality and `Query.sort_by`
-  mapped an unknown order to descending, neither raising, so a typo returned
-  the wrong rows rather than failing — no exception, no log line, and no
-  return value to check. Source-breaking for a caller passing a spelling that
-  names no operator; that caller was getting the wrong answer. Every spelling
-  that worked before still works, and more do: an operator's own value, that
-  value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
-
-- **`vector_search` names its field parameter `vector_field` on every
-  backend.** Four of the twelve implementations called it `field_name` —
-  `SyncSQLiteDatabase`, `SyncElasticsearchDatabase` and both Postgres classes,
-  with `AsyncSQLiteDatabase` disagreeing with its own sync sibling. Every
-  shipped example and every doc uses `vector_field=`, so the spelling this
-  package documents already raised `TypeError` on those four: through a direct
-  call, and through `hybrid_search`, which passes it by keyword. Both Postgres
-  classes also made it a required positional where the other ten default it; it
-  now defaults to `"embedding"` throughout. Source-breaking for a caller passing
-  `field_name=`, a spelling that appears in no documentation and no example.
-
-- **The vector-operations mixins take everything after `query_vector` by
-  keyword in `vector_search`.** The implementations do not agree on positional
-  order — most spell it `(..., k, filter, metric)` where the declaration says
-  `(..., k, metric, filter)` — so a fourth positional argument already meant
-  the metric on some backends and the filter on others. No concrete signature
-  changes and no runtime behaviour changes; what changes is that a call
-  written against the abstract declaration can no longer be written in the one
-  form that was never portable.
-
-- **`SyncDatabase.config` and `AsyncDatabase.config` are read-only
-  properties** rather than writeable attributes. This completes the migration
-  to typed configuration ("replacing dict-as-`self.config`"): every backend in
-  the package already exposes a typed `DatabaseConfig` through
-  `StructuredConfigConsumer`, and a writeable attribute on one base against a
-  read-only property on the other is a combination no class can have — so a
-  type checker held every migrated backend impossible and stopped checking
-  from the construction branch onward, which is the branch all of them run.
-  Reading `db.config` is unchanged; assigning to it now raises.
-
-- **`IncrementalVectorizer.run_batch` takes a `timeout`,** `limit` counts
-  records *attempted* rather than records that succeeded — a budget of
-  successes cannot be met by a corpus that fails to embed — and both the
-  budget and the returned `VectorizationResult` are measured from the call
-  rather than from the vectorizer's lifetime totals. `_stats` is never reset, so
-  a limit compared against it directly was a budget the *instance* had already
-  spent: the natural consumer shape, a loop of successive batches over one
-  corpus, stopped doing work after the first call while still returning a
-  plausible-looking total. See **Fixed**.
-
-- **`VectorizationResult` carries `skipped`**, and `processed` counts only
-  records for which a vector was written. A record the pipeline completes
-  without writing — empty assembled text, an embedding function that returned
-  `None`, a record already carrying a vector, or nothing stored under its id —
-  was counted as processed, so the result claimed more work than the database
-  could show. Distinct from `failed`, which counts records that raised. The new
-  field is defaulted, so a positional construction is unaffected, and
-  `get_stats()` reports the same three outcomes.
-
-- **`QueryBuilder.where` reads the operator vocabulary `Query.filter` reads.**
-  It built `Operator(operator)` directly, which accepts only an exact member
-  value, so `where("x", "==", 1)` raised where the identical
-  `filter("x", "==", 1)` succeeded — a third copy of the disagreement the
-  shared coercion was introduced to remove. Every alias the fluent builder
-  derives now works here too, and an unknown spelling raises the same message.
-
-- **`update_vector` reports whether the write landed.** It returned
-  `self.update(...) is not None`, and every backend's `update` returns `bool`,
-  so `False is not None` answered `True` for an update that did not happen.
-  Latent on the async lane; newly reachable on the five sync backends, whose
-  inherited copy raised before the split.
-
-- **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
-  `wait_for_completion(timeout=None) -> bool`.** The old parameter set how
-  often to poll a condition that no longer needs polling, and the method could
-  not report failure — a stalled worker hung the caller forever. Source-breaking
-  for a caller that passed `check_interval=`; the fix it is part of is in
-  **Fixed** below.
-
-- **`AsyncPostgresDatabase.bulk_embed_and_store` now behaves as the other async
-  backends' does**, being the same method rather than its own copy of it.
-  `vector_field` gained the default `"embedding"` the others have, and a
-  `field_separator` appeared beside it. Multiple text fields are assembled the
-  way the rest of the package assembles them: joined on that separator rather
-  than a hardcoded space, with empty values dropped rather than joined as blanks.
-  A record is updated when one is stored under its id and created otherwise,
-  where before it was updated whenever it merely carried a storage id — so a
-  record whose row had since been deleted took an update that silently wrote
-  nothing. See **Fixed** for the digest this consolidation was undertaken for.
-
 ### Fixed
+
+- **`ChromaVectorStore.search_documents` did not accept `include_timestamps`.**
+  Its two siblings, `search` and `get_vectors`, gained the parameter and this
+  one did not, so a caller asking a Chroma store for timestamped document hits
+  got `TypeError` on an unexpected keyword argument. `search_documents` is
+  Chroma's alone — no other backend embeds a query server-side — so it appears
+  in no cross-backend parity fixture, which is how it kept the older signature
+  while the methods around it moved. It now injects the configured timestamp
+  keys on the same terms as `search`, after the post-filter and only when
+  metadata was requested.
+
+- **`VectorStore.search_similar_records` ran a synchronous `fetch_records` on
+  the event loop.** The parameter's own docstring says "fetching by id is I/O,
+  so an async database's fetcher is the ordinary shape here", and the dispatch
+  used `run_callback` — the helper for a predicate or a per-record transform,
+  which runs a synchronous callable inline. A consumer whose fetcher is backed
+  by a `SyncDatabase` therefore stalled every other task on the loop for the
+  whole fan-out, once per search. It now goes through `run_callback_off_loop`.
+  The returned value was correct either way, which is why nothing caught it.
 
 - **Fourteen dispatches called a consumer's callback without deciding whether
   the result needed awaiting.** An async callable invoked without `await`
@@ -851,6 +599,255 @@ itself.
   generators and no call site in the workspace awaits it — every one consumes
   it directly — so the declaration was the thing that was wrong, and it
   reported every implementation as an incompatible override.
+
+### Changed
+
+- **A topic index that cannot run says so, instead of answering with an empty
+  list.** `ClusterTopicIndex.resolve` returned `[]` when it had no embedder,
+  and its seed fetch returned `[]` when it had no `vector_query_fn`. An empty
+  list already means something else — the index ran and matched nothing — so a
+  caller could not tell a misconfigured index from a vocabulary gap. Both
+  conditions now raise `StrategyUnavailable`, whose message names the source
+  and which of the two things is missing.
+
+  The `TopicIndex` protocol was silent on the question, which is why its two
+  implementations had each answered it independently; `resolve()` now documents
+  the policy for both. Only lazy mode needs `vector_query_fn`, so an eagerly
+  built index still resolves without one, and an index built for inspection
+  alone — no embedder, read through `topics()` and `cluster_info` — is still a
+  valid thing to construct.
+
+  `StrategyUnavailable` moves from `sources.processing` to `sources.base`, the
+  module every user of it already imports. All three existing import paths
+  still resolve, including `from dataknobs_data.sources.processing import
+  StrategyUnavailable`.
+
+- **`VectorStore` is generic in its config type, so a backend reads its own
+  config fields as the type it was built with.** Every backend already
+  declared a leaf `CONFIG_CLS` and every instance already held the leaf
+  object at runtime, but `VectorStoreBase` named `VectorStoreConfig` for the
+  whole family, so statically `store.config` was the shared base. Reading
+  `config.connection_string`, `config.collection_name` or `config.index_type`
+  off it was an attribute the declared type did not have — 17 such reads
+  across pgvector, Chroma and FAISS. Each backend now names its own config
+  (`PgVectorStore(VectorStore[PgVectorStoreConfig])`), which is what the
+  other thirty-odd `StructuredConfigConsumer` adopters in dataknobs already
+  did; the vector stores were the one family that pinned the base instead.
+
+  Nothing changes at runtime, and an unparameterized `VectorStore` annotation
+  — naming the family rather than one backend — behaves exactly as before.
+  A consumer writing an out-of-tree backend with its own config gets the same
+  typing by naming it: see *Adding a capability to a backend* in
+  `vector-store-capabilities.md`.
+
+- **BREAKING: `save()` and `load()` raise instead of returning quietly when a
+  store has no `persist_path`.** `MemoryVectorStore` and `FaissVectorStore`
+  previously answered a request to persist with a successful-looking no-op,
+  leaving the caller with nothing on disk to restore from and no indication
+  why. Both now raise `CapabilityNotSupportedError`, which is the same
+  response a server-backed backend gives and for the same reason — so
+  `store.supports(Capability.VECTOR_PERSIST)` is a single check covering
+  every way a store can decline. Gate on `persist_path` or on the capability
+  where a call was previously unconditional; `MemoryVectorStore.initialize()`
+  does the former, matching `FaissVectorStore.initialize()`, which already
+  did.
+
+  **A `hasattr(store, "save")` probe is the case to look for, and it does not
+  announce itself.** It used to be a serviceable proxy for "can this persist?",
+  because the method existed only on the backends that had one. Now that
+  `save` / `load` / `create_index` are declared on `VectorStore`, the probe
+  answers `True` for every backend, so a guard written that way *stops
+  guarding* and passes the call through to a store that will refuse it — a
+  silent no-op turning into a raise at the one site that thought it had
+  checked. Replace it with `store.supports(Capability.VECTOR_PERSIST)`.
+
+- **`VectorMigration`'s progress callback and `call_embedding_fn`'s dispatch
+  delegate instead of spelling the branch out.** Both hand-wrote a judgement
+  that `dataknobs_common.callbacks` now owns, and the copy in
+  `embedding_fn._await_or_offload` had already drifted from the shared one: it
+  asked `hasattr(result, "__await__")`, which answers `False` for a
+  generator-based coroutine that `inspect.isawaitable` accepts. The `timeout`
+  on `call_embedding_fn` keeps its deliberately narrow scope — a worker thread
+  stays unbounded, because `wait_for` cannot cancel one.
+
+- **`BatchProcessor` runs a synchronous per-item callback on a worker thread,
+  not on the event loop.** What a caller does in a "callback when item is
+  processed" is record the item somewhere, and that blocks; a blocking call
+  inside an `async def` stalls every other task on the loop for its duration.
+  Its sibling `ChangeTracker.process_batch` has always offloaded the same kind
+  of dispatch, so the two surfaces disagreed with neither of them saying which
+  was right. Both now go through
+  `dataknobs_common.callbacks.run_callback_off_loop` — the shape `ChangeTracker`
+  had hand-written, which is where that helper came from.
+
+  **This changes where a consumer's synchronous callback runs.** One that
+  touches state which is not thread-safe, or that relies on being on the loop
+  thread, needs to say so itself. Asynchronous callbacks are unaffected: they
+  are awaited directly, as before.
+
+- **Every `TextEmbedder` implementation now asserts its conformance where a
+  type checker reads it.** Nothing inherits the protocol — an adapter lives in
+  whichever package holds the thing it adapts, and two of the four are in
+  packages `data` cannot import — so "satisfies `TextEmbedder`" was a
+  docstring: true when written, free to stop being true when a signature
+  drifts, and nothing raising until a consumer's call failed somewhere naming
+  neither the class nor the protocol. `CachedEmbedder` and
+  `DeterministicEmbedder` carry a `TYPE_CHECKING`-only assertion, as do
+  `dataknobs-llm`'s `LLMProviderEmbedder` and `dataknobs-bots`' knowledge-base
+  adapter. It costs one type-check and no runtime import, and is stronger than
+  the `isinstance` the protocol already supported, which answers from member
+  names alone. The idiom is documented for consumers implementing their own.
+
+- **`embedding_fn` is optional on `VectorStore.bulk_embed_and_store`.** It was
+  a required positional parameter; it now defaults to `None`, because
+  `embedder=` is the other way of supplying the same thing and exactly one of
+  the two is required. Every existing positional call is unaffected. A call
+  passing neither still fails — but as a `ValueError` naming both parameters,
+  raised before the loop rather than by the loop's first iteration, so an empty
+  `texts` reports it too.
+
+- **Four "embedding function required" messages became one.**
+  `AsyncPostgresDatabase.bulk_embed_and_store`, `AsyncBulkEmbedMixin`,
+  `VectorMigration.add_vectors_to_existing` and
+  `VectorSyncMixin.sync_vectors_with_text` each phrased the same refusal
+  differently — `"embedding_fn is required for bulk_embed_and_store"`,
+  `"Embedding function required for adding vectors"`, `"Embedding function is
+  required for vector synchronization"`. All four now raise
+  `require_embedding_source`'s wording: ``"an embedder is required: pass
+  `embedder=` or `embedding_fn=`"``. Source-breaking only for a caller matching
+  on the old text. The **sync** `BulkEmbedMixin` keeps its original message,
+  deliberately: it takes no `embedder`, so a refusal naming one would send the
+  reader after a parameter that site does not have.
+
+- **`AsyncPostgresDatabase.bulk_embed_and_store` accepts a synchronous
+  `embedding_fn`.** It previously did `await embedding_fn(texts)`, so a plain
+  `def` raised `TypeError` there while working at every sibling site. It now
+  routes through the shared dispatch, which classifies the callable and
+  offloads a synchronous one with `asyncio.to_thread` rather than running it on
+  the event loop.
+
+- **An unrecognized operator or sort-order string now raises `ValueError`.**
+  `Query.filter` mapped an unknown operator to equality and `Query.sort_by`
+  mapped an unknown order to descending, neither raising, so a typo returned
+  the wrong rows rather than failing — no exception, no log line, and no
+  return value to check. Source-breaking for a caller passing a spelling that
+  names no operator; that caller was getting the wrong answer. Every spelling
+  that worked before still works, and more do: an operator's own value, that
+  value in any case with spaces for underscores (`"NOT BETWEEN"`), and `"=="`.
+
+- **`vector_search` names its field parameter `vector_field` on every
+  backend.** Four of the twelve implementations called it `field_name` —
+  `SyncSQLiteDatabase`, `SyncElasticsearchDatabase` and both Postgres classes,
+  with `AsyncSQLiteDatabase` disagreeing with its own sync sibling. Every
+  shipped example and every doc uses `vector_field=`, so the spelling this
+  package documents already raised `TypeError` on those four: through a direct
+  call, and through `hybrid_search`, which passes it by keyword. Both Postgres
+  classes also made it a required positional where the other ten default it; it
+  now defaults to `"embedding"` throughout. Source-breaking for a caller passing
+  `field_name=`, a spelling that appears in no documentation and no example.
+
+- **The vector-operations mixins take everything after `query_vector` by
+  keyword in `vector_search`.** The implementations do not agree on positional
+  order — most spell it `(..., k, filter, metric)` where the declaration says
+  `(..., k, metric, filter)` — so a fourth positional argument already meant
+  the metric on some backends and the filter on others. No concrete signature
+  changes and no runtime behaviour changes; what changes is that a call
+  written against the abstract declaration can no longer be written in the one
+  form that was never portable.
+
+- **`SyncDatabase.config` and `AsyncDatabase.config` are read-only
+  properties** rather than writeable attributes. This completes the migration
+  to typed configuration ("replacing dict-as-`self.config`"): every backend in
+  the package already exposes a typed `DatabaseConfig` through
+  `StructuredConfigConsumer`, and a writeable attribute on one base against a
+  read-only property on the other is a combination no class can have — so a
+  type checker held every migrated backend impossible and stopped checking
+  from the construction branch onward, which is the branch all of them run.
+  Reading `db.config` is unchanged; assigning to it now raises.
+
+- **`IncrementalVectorizer.run_batch` takes a `timeout`,** `limit` counts
+  records *attempted* rather than records that succeeded — a budget of
+  successes cannot be met by a corpus that fails to embed — and both the
+  budget and the returned `VectorizationResult` are measured from the call
+  rather than from the vectorizer's lifetime totals. `_stats` is never reset, so
+  a limit compared against it directly was a budget the *instance* had already
+  spent: the natural consumer shape, a loop of successive batches over one
+  corpus, stopped doing work after the first call while still returning a
+  plausible-looking total. See **Fixed**.
+
+- **`VectorizationResult` carries `skipped`**, and `processed` counts only
+  records for which a vector was written. A record the pipeline completes
+  without writing — empty assembled text, an embedding function that returned
+  `None`, a record already carrying a vector, or nothing stored under its id —
+  was counted as processed, so the result claimed more work than the database
+  could show. Distinct from `failed`, which counts records that raised. The new
+  field is defaulted, so a positional construction is unaffected, and
+  `get_stats()` reports the same three outcomes.
+
+- **`QueryBuilder.where` reads the operator vocabulary `Query.filter` reads.**
+  It built `Operator(operator)` directly, which accepts only an exact member
+  value, so `where("x", "==", 1)` raised where the identical
+  `filter("x", "==", 1)` succeeded — a third copy of the disagreement the
+  shared coercion was introduced to remove. Every alias the fluent builder
+  derives now works here too, and an unknown spelling raises the same message.
+
+- **`update_vector` reports whether the write landed.** It returned
+  `self.update(...) is not None`, and every backend's `update` returns `bool`,
+  so `False is not None` answered `True` for an update that did not happen.
+  Latent on the async lane; newly reachable on the five sync backends, whose
+  inherited copy raised before the split.
+
+- **`IncrementalVectorizer.wait_for_completion(check_interval=...)` is now
+  `wait_for_completion(timeout=None) -> bool`.** The old parameter set how
+  often to poll a condition that no longer needs polling, and the method could
+  not report failure — a stalled worker hung the caller forever. Source-breaking
+  for a caller that passed `check_interval=`; the fix it is part of is in
+  **Fixed** below.
+
+- **`AsyncPostgresDatabase.bulk_embed_and_store` now behaves as the other async
+  backends' does**, being the same method rather than its own copy of it.
+  `vector_field` gained the default `"embedding"` the others have, and a
+  `field_separator` appeared beside it. Multiple text fields are assembled the
+  way the rest of the package assembles them: joined on that separator rather
+  than a hardcoded space, with empty values dropped rather than joined as blanks.
+  A record is updated when one is stored under its id and created otherwise,
+  where before it was updated whenever it merely carried a storage id — so a
+  record whose row had since been deleted took an update that silently wrote
+  nothing. See **Fixed** for the digest this consolidation was undertaken for.
+
+
+**Migrating.** A synchronous `fetch_records` now runs on a worker thread
+rather than on the loop thread. One that touches state which is not
+thread-safe, or that relies on being on the loop thread, needs to say so
+itself.
+
+### Deprecated
+
+- **`ConnectionPool` and `ConnectionPoolConfig`** in
+  `dataknobs_data.vector.optimizations`, in favour of
+  `dataknobs_data.pooling.ConnectionPoolManager`. Constructing one now emits a
+  `DeprecationWarning`. No backend has ever used it, and it is broken in ways
+  not worth repairing in place: `acquire` awaits the caller's `factory` while
+  holding a `threading.Lock`, so two coroutines acquiring concurrently from an
+  empty pool deadlock the **entire event loop** — and no `asyncio.timeout` or
+  `wait_for` can rescue that, because the loop thread is the thing blocked, so
+  the timer callback never runs. The tests here never caught it because their
+  factories return without ever suspending, which a factory that opens a
+  socket does not.
+
+  Four of the five `ConnectionPoolConfig` fields are read nowhere, and each now
+  says so on itself rather than reading as a knob: `connection_timeout` is
+  ignored by a wait loop that hardcodes 100 polls of 0.1s, `idle_timeout` and
+  `recycle_timeout` describe a liveness check `acquire` does not perform, and
+  `min_connections` describes pre-warming it does not do. The fields stay,
+  because removing one from a published dataclass breaks any caller passing it
+  by keyword.
+
+  `ConnectionPoolManager` holds one `asyncio.Lock` per event loop and is what
+  the Postgres, async-S3 and async-Elasticsearch backends actually use. It
+  pools *pools* rather than individual connections, delegating connection
+  liveness to the driver that owns it — which is why it never needed the check
+  the deprecated class left as a comment.
 
 ### Removed
 

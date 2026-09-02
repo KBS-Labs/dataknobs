@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v3.2.0 - 2026-09-02
+
 ### Added
 
 - **`PluginFactory[T]`**, the exported alias for the three shapes a
@@ -44,6 +46,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an object; `require_capability` already tolerated it and read it as "no", and
   a caller asking first had no way to get that same reading. Where the host's
   type is known, `host.supports(...)` remains the direct form.
+
+- **`is_async_callable` — "will calling this produce an awaitable?", answered
+  for objects too.** `inspect.iscoroutinefunction` answers for *functions* and
+  reports a callable **object** whose `__call__` is an `async def` as
+  synchronous. That shape is not exotic; it is how anything stateful is
+  written — an embedder holding a model handle, a client holding a session, a
+  callback holding a counter — and every caller that branches on the answer
+  then does the synchronous thing to something asynchronous. Calling an async
+  callable without awaiting it raises nothing: it returns a coroutine object,
+  which is truthy, non-`None`, and quietly discarded.
+
+  Declared as a `TypeGuard`, so it narrows in the `True` branch and is a
+  drop-in for `asyncio.iscoroutinefunction` at a call site that awaits inside
+  it. Non-callables answer `False` rather than raising, because callers ask
+  about arbitrary configured values.
+
+  Two shapes the obvious implementation gets wrong are handled: a
+  `functools.partial` **around a callable object** (`partial.__call__` is a C
+  dispatcher, so asking it about the wrapped object answers about the wrong
+  object — binding arguments onto a stateful embedder is an ordinary thing to
+  do, and this is just the two supported shapes composed), and a **class**,
+  which is callable and returns an instance rather than an awaitable however
+  its `__call__` is declared.
+
+- **`run_callback` — call a consumer's callback and await it if it turned out
+  to be awaitable.** The counterpart to `is_async_callable`, and the one to
+  reach for unless the synchronous branch has to do something *other* than
+  call inline. The two answer the same question at different moments, and the
+  moment decides which is usable: a caller that *offloads* has to classify
+  before calling, because there is no offloading a call already made;
+  everyone else can judge the **result**, which is strictly more robust —
+  it also catches a plain `def` that returns a coroutine, which no amount of
+  inspecting the callable ever will.
+
+  Extracted rather than invented: `CallbackRegistry.fire_async` had carried
+  this exact three-line judgement inline since it was written, and it now
+  calls the helper. The absence of a shared spelling is why fourteen
+  dispatches in `dataknobs-data` each answered the question independently, and
+  eleven of them answered it wrong or not at all.
+
+- **`copy_structure` — the copy between `dict()` and `copy.deepcopy()`.** It
+  rebuilds nested dicts and lists and passes every other value through
+  unchanged, so mutating the result never reaches the source while the leaf
+  objects it holds are never duplicated.
+
+  Only `dict` and `list` are rebuilt. A `set` is the pass-through worth
+  naming, because it is the mutable one: `add()` on a set reachable from the
+  result reaches the source. Nothing nests below it — a set cannot hold a dict
+  or a list — but the set itself is shared.
+
+  A shallow copy isolates one level, which is the gap a "returns a copy"
+  docstring most often turns out to have: every nested container in the result
+  is still the source's own object. `copy.deepcopy` closes that gap but
+  overshoots — a structure assembled in Python may hold a connection pool, a
+  provider, or a lock, and duplicating one silently gives its owner a second;
+  a value that cannot be pickled raises out of what was meant to be an
+  ordinary read. It is also about twice the cost.
+
+  The optional `seen` memo makes a self-referential structure terminate rather
+  than raise `RecursionError`, and keeps a subtree shared between two keys
+  shared on the way out. Pass one memo across the several calls that build a
+  single hand-out; omit it otherwise.
+
+  Promoted from a private helper in `dataknobs-config`, which now imports it.
+  The extraction surfaced a defect the private version's call sites never hit:
+  the memo is keyed on `id()`, and an id is only unique among live objects, so
+  a source freed between two calls sharing one memo could have its id reused
+  and the memo would answer for an unrelated object. It now holds a reference
+  to every source it has seen, as `copy.deepcopy` does for the same reason.
+
+- **`run_callback_off_loop` — the same dispatch, with the synchronous branch
+  kept off the event loop.** `run_callback` runs a synchronous callback
+  inline, which is right for a predicate or a per-record transform and wrong
+  where the callback is the consumer's chance to *do* something: an I/O
+  provider's write, a buffer overflow flush, a per-batch completion hook. Such
+  a callback plausibly opens a file or a socket, and a blocking call inside an
+  `async def` stalls every other task on the loop for its duration. This one
+  awaits an async callable directly and hands a synchronous one to
+  `asyncio.to_thread`.
+
+  Extracted rather than invented: dispatches across `data` and `fsm` had each
+  hand-written the same predicate-plus-offload, and half of the sibling
+  dispatches beside them omitted the offload entirely — which is what a rule
+  spelled out at each site rather than named once produces. The pair now
+  states the choice, and it is a property of the surface: a thread hop costs
+  real microseconds, and the consumer's callback no longer runs on the loop
+  thread, so a callback touching state that is not thread-safe changes
+  meaning. Both are reasons to choose deliberately rather than to leave the
+  choice unmade.
+
+  **Convergence is under way rather than finished.** Every hand-written copy
+  in `data` and in `dataknobs_fsm.io` / `dataknobs_fsm.execution` now
+  delegates. Copies remain in `dataknobs_fsm.patterns`,
+  `dataknobs_fsm.functions`, `dataknobs_fsm.execution.async_engine` and in
+  `bots`, `llm` and `xization` — 28 sites asking the wrong predicate and 34
+  making no judgement at all. Each changes behaviour for a callable object
+  when it converts, so each needs its own proof; `tests/test_async_callable_adoption.py`
+  measures the remainder and scopes the guard to what has actually been
+  brought to zero.
+
+  It also catches the one shape `is_async_callable` cannot: a plain `def` that
+  returns a coroutine builds it on the worker thread without running any of
+  it, and the result is awaited here, on the loop.
+
+  `run_callback` and `run_callback_off_loop` are now re-exported from
+  `dataknobs_common` alongside `is_async_callable`, so the three are found
+  together.
 
 ### Changed
 
@@ -191,117 +300,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the surface that knows what the items are for. This follows
   `RetryExecutor.execute_sync`, which meets the same class of problem and
   rejects rather than guessing.
-
-### Added
-
-- **`is_async_callable` — "will calling this produce an awaitable?", answered
-  for objects too.** `inspect.iscoroutinefunction` answers for *functions* and
-  reports a callable **object** whose `__call__` is an `async def` as
-  synchronous. That shape is not exotic; it is how anything stateful is
-  written — an embedder holding a model handle, a client holding a session, a
-  callback holding a counter — and every caller that branches on the answer
-  then does the synchronous thing to something asynchronous. Calling an async
-  callable without awaiting it raises nothing: it returns a coroutine object,
-  which is truthy, non-`None`, and quietly discarded.
-
-  Declared as a `TypeGuard`, so it narrows in the `True` branch and is a
-  drop-in for `asyncio.iscoroutinefunction` at a call site that awaits inside
-  it. Non-callables answer `False` rather than raising, because callers ask
-  about arbitrary configured values.
-
-  Two shapes the obvious implementation gets wrong are handled: a
-  `functools.partial` **around a callable object** (`partial.__call__` is a C
-  dispatcher, so asking it about the wrapped object answers about the wrong
-  object — binding arguments onto a stateful embedder is an ordinary thing to
-  do, and this is just the two supported shapes composed), and a **class**,
-  which is callable and returns an instance rather than an awaitable however
-  its `__call__` is declared.
-
-- **`run_callback` — call a consumer's callback and await it if it turned out
-  to be awaitable.** The counterpart to `is_async_callable`, and the one to
-  reach for unless the synchronous branch has to do something *other* than
-  call inline. The two answer the same question at different moments, and the
-  moment decides which is usable: a caller that *offloads* has to classify
-  before calling, because there is no offloading a call already made;
-  everyone else can judge the **result**, which is strictly more robust —
-  it also catches a plain `def` that returns a coroutine, which no amount of
-  inspecting the callable ever will.
-
-  Extracted rather than invented: `CallbackRegistry.fire_async` had carried
-  this exact three-line judgement inline since it was written, and it now
-  calls the helper. The absence of a shared spelling is why fourteen
-  dispatches in `dataknobs-data` each answered the question independently, and
-  eleven of them answered it wrong or not at all.
-
-- **`copy_structure` — the copy between `dict()` and `copy.deepcopy()`.** It
-  rebuilds nested dicts and lists and passes every other value through
-  unchanged, so mutating the result never reaches the source while the leaf
-  objects it holds are never duplicated.
-
-  Only `dict` and `list` are rebuilt. A `set` is the pass-through worth
-  naming, because it is the mutable one: `add()` on a set reachable from the
-  result reaches the source. Nothing nests below it — a set cannot hold a dict
-  or a list — but the set itself is shared.
-
-  A shallow copy isolates one level, which is the gap a "returns a copy"
-  docstring most often turns out to have: every nested container in the result
-  is still the source's own object. `copy.deepcopy` closes that gap but
-  overshoots — a structure assembled in Python may hold a connection pool, a
-  provider, or a lock, and duplicating one silently gives its owner a second;
-  a value that cannot be pickled raises out of what was meant to be an
-  ordinary read. It is also about twice the cost.
-
-  The optional `seen` memo makes a self-referential structure terminate rather
-  than raise `RecursionError`, and keeps a subtree shared between two keys
-  shared on the way out. Pass one memo across the several calls that build a
-  single hand-out; omit it otherwise.
-
-  Promoted from a private helper in `dataknobs-config`, which now imports it.
-  The extraction surfaced a defect the private version's call sites never hit:
-  the memo is keyed on `id()`, and an id is only unique among live objects, so
-  a source freed between two calls sharing one memo could have its id reused
-  and the memo would answer for an unrelated object. It now holds a reference
-  to every source it has seen, as `copy.deepcopy` does for the same reason.
-
-- **`run_callback_off_loop` — the same dispatch, with the synchronous branch
-  kept off the event loop.** `run_callback` runs a synchronous callback
-  inline, which is right for a predicate or a per-record transform and wrong
-  where the callback is the consumer's chance to *do* something: an I/O
-  provider's write, a buffer overflow flush, a per-batch completion hook. Such
-  a callback plausibly opens a file or a socket, and a blocking call inside an
-  `async def` stalls every other task on the loop for its duration. This one
-  awaits an async callable directly and hands a synchronous one to
-  `asyncio.to_thread`.
-
-  Extracted rather than invented: dispatches across `data` and `fsm` had each
-  hand-written the same predicate-plus-offload, and half of the sibling
-  dispatches beside them omitted the offload entirely — which is what a rule
-  spelled out at each site rather than named once produces. The pair now
-  states the choice, and it is a property of the surface: a thread hop costs
-  real microseconds, and the consumer's callback no longer runs on the loop
-  thread, so a callback touching state that is not thread-safe changes
-  meaning. Both are reasons to choose deliberately rather than to leave the
-  choice unmade.
-
-  **Convergence is under way rather than finished.** Every hand-written copy
-  in `data` and in `dataknobs_fsm.io` / `dataknobs_fsm.execution` now
-  delegates. Copies remain in `dataknobs_fsm.patterns`,
-  `dataknobs_fsm.functions`, `dataknobs_fsm.execution.async_engine` and in
-  `bots`, `llm` and `xization` — 28 sites asking the wrong predicate and 34
-  making no judgement at all. Each changes behaviour for a callable object
-  when it converts, so each needs its own proof; `tests/test_async_callable_adoption.py`
-  measures the remainder and scopes the guard to what has actually been
-  brought to zero.
-
-  It also catches the one shape `is_async_callable` cannot: a plain `def` that
-  returns a coroutine builds it on the worker thread without running any of
-  it, and the result is awaited here, on the loop.
-
-  `run_callback` and `run_callback_off_loop` are now re-exported from
-  `dataknobs_common` alongside `is_async_callable`, so the three are found
-  together.
-
-### Fixed
 
 - **An unclosed `SyncLoopBridge` could not be reclaimed, reported, or
   collected.** The loop thread's target was a bound method of the bridge, and

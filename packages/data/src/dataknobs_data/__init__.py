@@ -164,7 +164,7 @@ from .user import (
     section_migrators,
 )
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 __all__ = [
     # Per-user state coordinator
