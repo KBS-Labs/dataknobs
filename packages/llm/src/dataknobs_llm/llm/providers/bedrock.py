@@ -1242,6 +1242,9 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         max_concurrency = self._embed_max_concurrency()
         requested = self._requested_embedding_dimensions(kwargs)
+        # Titan V2 takes a width; V1 and Cohere do not. Forward only what the
+        # model can be asked for -- the rest is caught on the way back out.
+        forwardable = self._forwardable_embedding_dimensions(kwargs)
         start = time.perf_counter()
         async with self._session.client(
             "bedrock-runtime",
@@ -1255,7 +1258,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     text_list,
                     self.config,
                     max_concurrency=max_concurrency,
-                    dimensions=requested,
+                    dimensions=forwardable,
                 )
             except Exception as exc:
                 self._raise_translated(exc)

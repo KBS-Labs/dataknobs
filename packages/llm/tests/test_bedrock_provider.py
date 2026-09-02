@@ -1019,3 +1019,82 @@ class TestNoBlocking:
             # build is what initialize() proves above.
             provider._session = _StubSession(client)
             await provider.complete("hello")
+
+
+class TestEmbedWidth:
+    """A width is forwarded only to a model that can be asked for one.
+
+    Titan's key in the model table is a family alias, so it covers both
+    Text Embeddings V2 -- which takes a ``dimensions`` field in the invoke
+    body -- and V1, whose width is fixed at 1536. Advertising the capability
+    for the alias tells a consumer following the documented pattern that V1's
+    width is selectable, and forwarding to V1 puts a field in the body its
+    endpoint does not define.
+    """
+
+    @pytest.mark.asyncio
+    async def test_v1_is_not_advertised_as_selectable(self) -> None:
+        provider = _stub_provider(
+            LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v1"),
+            _StubBedrockClient(invoke_payloads=[]),
+        )
+        caps = provider.get_capabilities()
+        assert ModelCapability.EMBEDDINGS in caps
+        assert ModelCapability.EMBEDDING_DIMENSIONS not in caps
+
+    @pytest.mark.asyncio
+    async def test_v2_is_advertised_as_selectable(self) -> None:
+        provider = _stub_provider(
+            LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0"),
+            _StubBedrockClient(invoke_payloads=[]),
+        )
+        assert ModelCapability.EMBEDDING_DIMENSIONS in provider.get_capabilities()
+
+    @pytest.mark.asyncio
+    async def test_v1_is_not_sent_a_width_it_cannot_take(self) -> None:
+        """The refusal comes from us, naming the model, not from a 400."""
+        client = _StubBedrockClient(invoke_payloads=[{"embedding": [0.1] * 1536}])
+        provider = _stub_provider(
+            LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v1"),
+            client,
+        )
+        with pytest.raises(ValueError, match="1536"):
+            await provider.embed("hello", dimensions=256)
+
+        body = json.loads(client.invoke_calls[0]["body"])
+        assert "dimensions" not in body
+
+    @pytest.mark.asyncio
+    async def test_v2_still_gets_the_width(self) -> None:
+        client = _StubBedrockClient(invoke_payloads=[{"embedding": [0.1] * 256}])
+        provider = _stub_provider(
+            LLMConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0"),
+            client,
+        )
+        await provider.embed("hello", dimensions=256)
+        assert json.loads(client.invoke_calls[0]["body"])["dimensions"] == 256
+
+    @pytest.mark.asyncio
+    async def test_a_call_keyword_beats_the_config(self) -> None:
+        client = _StubBedrockClient(invoke_payloads=[{"embedding": [0.1] * 256}])
+        provider = _stub_provider(
+            LLMConfig(
+                provider="bedrock",
+                model="amazon.titan-embed-text-v2:0",
+                dimensions=1024,
+            ),
+            client,
+        )
+        await provider.embed("hello", dimensions=256)
+        assert json.loads(client.invoke_calls[0]["body"])["dimensions"] == 256
+
+    @pytest.mark.asyncio
+    async def test_cohere_refuses_a_width_it_cannot_deliver(self) -> None:
+        """Cohere's width is fixed, so a stated width is checked, not sent."""
+        client = _StubBedrockClient(invoke_payloads=[{"embeddings": [[0.1] * 1024]}])
+        provider = _stub_provider(
+            LLMConfig(provider="bedrock", model="cohere.embed-english-v3"),
+            client,
+        )
+        with pytest.raises(ValueError, match="256"):
+            await provider.embed("hello", dimensions=256)

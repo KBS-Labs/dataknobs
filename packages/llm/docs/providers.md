@@ -198,13 +198,32 @@ if ModelCapability.EMBEDDING_DIMENSIONS in provider.get_capabilities():
 
 | The model | What a stated width does |
 |---|---|
-| accepts a width parameter (`text-embedding-3-*`, Titan V2) | forwarded to the API |
-| has a fixed width (`text-embedding-ada-002`, Ollama, HuggingFace, Cohere Embed) | checked against what came back; a mismatch raises `ValueError` naming the model, the width asked for and the width returned |
+| accepts a width parameter (`text-embedding-3-*`, Titan Text Embeddings V2) | forwarded to the API |
+| has a fixed width (`text-embedding-ada-002`, Titan V1, Ollama, HuggingFace, Cohere Embed) | checked against what came back; a mismatch raises `ValueError` naming the model, the width asked for and the width returned |
 
 Declaring the width a fixed-width model *does* produce is valid and silent —
 the rule is that a stated width is never ignored, not that one may not be
 stated. Stating nothing sends nothing and checks nothing, which matters for
 `text-embedding-ada-002`: it rejects the parameter outright.
+
+The two rows are one gate, not two implementations:
+`LLMProvider._forwardable_embedding_dimensions` hands a provider the width
+only when the model advertises the capability, so a width stated for a
+fixed-width model never reaches the wire. The refusal is then ours — naming
+the model, the width asked for and the width returned — rather than the
+vendor's own validation error about an unrecognised field. This is why
+`amazon.titan-embed` (the family alias, which an unrecognised Titan resolves
+to) does **not** advertise the capability while `amazon.titan-embed-text-v2`
+does: V1's width is fixed at 1536, and a wrong `yes` on the alias would be
+read as "selectable" before any call is made.
+
+**A cached vector is only reusable at the width it was made at.**
+`CachingEmbedProvider` keys on the model *qualified by the requested width*,
+because a model whose width is selectable answers a 256-wide request and a
+512-wide one differently — so `(model, text)` no longer identifies a vector.
+Stating no width is its own identity too, not a wildcard. Two identical
+requests are still one call to the inner provider; only a differing width is
+a different row.
 
 `EMBEDDING_DIMENSIONS` resolves from the bundled model tables and is
 config-overridable through `model_profile_overrides`, so a model released
@@ -213,8 +232,10 @@ after the table was written can be declared without waiting for a release.
 **Why this is not cosmetic.** The field was documented on `LLMConfig`, on
 `create_embedding_provider` and on `AsyncLLMProvider.embed`, and was read by
 one provider — Bedrock's Titan path. `EchoProvider` read a different key
-(`options["embedding_dim"]`), and OpenAI, Anthropic, Ollama and HuggingFace
-read neither. So a config asking `text-embedding-3-large` for 512 silently
+(`options["embedding_dim"]`), and OpenAI, Ollama and HuggingFace read
+neither. (Anthropic is absent from that list because it has no embedding
+endpoint at all -- its `embed` raises `NotImplementedError`, which is a
+refusal rather than a wrong width.) So a config asking `text-embedding-3-large` for 512 silently
 received 3072: valid vectors, six times wider than requested, at six times
 the storage and the price. Nothing raised at any layer; the first component
 to object was a vector store rejecting the write, and that message names the

@@ -1,8 +1,12 @@
 """Caching embedding provider that wraps any AsyncLLMProvider.
 
-Embeddings are deterministic: same (model, text) always produces the same
-vector. This module provides a wrapper that caches ``embed()`` results
-persistently, passing all other methods through to the inner provider.
+Embeddings are deterministic: the same text, embedded the same way, always
+produces the same vector. "The same way" is the model *and* the width it was
+asked for -- a model whose width is selectable answers a 256-wide request and
+a 512-wide one differently, so the width is part of a cached vector's
+identity, not a detail of the call. This module provides a wrapper that
+caches ``embed()`` results persistently, passing all other methods through to
+the inner provider.
 
 Cache backends:
     - ``MemoryEmbeddingCache``: In-memory dict — for testing.
@@ -45,8 +49,30 @@ def _cache_key(model: str, text: str) -> str:
     return hashlib.sha256(f"{model}\x00{text}".encode()).hexdigest()
 
 
+def _cache_identity(model: str, dimensions: int | None) -> str:
+    """The identity a cached vector may be reused under.
+
+    A vector is reusable for a later call only when that call would have
+    produced the same vector, and a stated width changes what the provider
+    produces -- so a width-qualified request is a different row rather than a
+    hit on the unqualified one. Stating no width is its own identity too, not
+    a wildcard: a caller who asks for nothing wants the model's native answer
+    and must not be served a row written under an explicit request.
+
+    Qualifying the identity here rather than adding a parameter to
+    :class:`EmbeddingCache` keeps every out-of-tree cache implementation
+    working unchanged, and makes the stored identity self-describing: a
+    persisted row records the width it was written at.
+    """
+    return model if dimensions is None else f"{model}@{dimensions}"
+
+
 class EmbeddingCache(ABC):
-    """Cache for embedding vectors, keyed by (model, text)."""
+    """Cache for embedding vectors, keyed by (identity, text).
+
+    *identity* is the model name, qualified by the requested width when the
+    call stated one -- see :func:`_cache_identity`.
+    """
 
     @abstractmethod
     async def get(self, model: str, text: str) -> list[float] | None:
@@ -274,7 +300,7 @@ class SqliteEmbeddingCache(EmbeddingCache):
         self._check_open()
         cursor = await self._conn.execute("SELECT COUNT(*) FROM embeddings")
         row = await cursor.fetchone()
-        return row[0]
+        return int(row[0])
 
 
 # ---------------------------------------------------------------------------
@@ -285,9 +311,10 @@ class SqliteEmbeddingCache(EmbeddingCache):
 class CachingEmbedProvider(AsyncLLMProvider):
     """Provider wrapper that caches ``embed()`` results persistently.
 
-    Embeddings are deterministic: same (model, text) produces the same
-    vector. This wrapper caches them once and reuses them across scenarios
-    and runs. ``complete()``, ``stream_complete()``, and ``function_call()``
+    Embeddings are deterministic: the same text embedded the same way
+    produces the same vector, where "the same way" includes the width the
+    call asked for. This wrapper caches them once, per width, and reuses
+    them across scenarios and runs. ``complete()``, ``stream_complete()``, and ``function_call()``
     pass through to the inner provider unchanged.
 
     **Lifecycle ownership:** When wrapping a pre-initialized provider (e.g.
@@ -333,7 +360,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
     # -- Config / capability forwarding ------------------------------------
 
     @property
-    def config(self) -> LLMConfig:  # type: ignore[override]
+    def config(self) -> LLMConfig:
         """Forward config from the inner provider.
 
         The getter always returns the inner provider's config. The setter
@@ -362,7 +389,13 @@ class CachingEmbedProvider(AsyncLLMProvider):
 
     # -- Lifecycle ---------------------------------------------------------
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize the inner provider (if not already) and the cache.
 
         Skips inner initialization when the inner provider is already
@@ -380,7 +413,13 @@ class CachingEmbedProvider(AsyncLLMProvider):
         await self._cache.initialize()
         self._is_initialized = True
 
-    async def close(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def close(self) -> None:  # type: ignore[override]
         """Close the cache, and the inner provider only if we own it.
 
         When the inner provider was already initialized before wrapping
@@ -417,7 +456,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
             messages, config_overrides=config_overrides, tools=tools, **kwargs
         )
 
-    async def stream_complete(  # type: ignore[override]
+    async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
@@ -454,9 +493,10 @@ class CachingEmbedProvider(AsyncLLMProvider):
         ``list[list[float]]``.
         """
         self._check_ready()
-        model = self.config.model
+        requested = self._requested_embedding_dimensions(kwargs)
+        model = _cache_identity(self.config.model, requested)
         single = isinstance(texts, str)
-        text_list = [texts] if single else list(texts)
+        text_list: list[str] = [texts] if isinstance(texts, str) else list(texts)
 
         # Batch cache lookup
         cached = await self._cache.get_batch(model, text_list)
@@ -489,11 +529,16 @@ class CachingEmbedProvider(AsyncLLMProvider):
             )
 
         logger.debug(
-            "Embedding cache: %d hits, %d misses (model=%s)",
+            "Embedding cache: %d hits, %d misses (identity=%s)",
             len(text_list) - len(misses),
             len(misses),
             model,
         )
+
+        # Hits skip the inner provider, so they skip the width check it runs.
+        # Checking here covers them, and covers a cache implementation that
+        # ignores the identity it was handed.
+        self._check_embedding_width(results, requested)
 
         return results[0] if single else results
 

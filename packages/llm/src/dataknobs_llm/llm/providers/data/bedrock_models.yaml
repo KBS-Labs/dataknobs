@@ -105,13 +105,21 @@ models:
     capabilities: [text_generation, chat, streaming]
     pricing: {input_per_mtok: 0.15, output_per_mtok: 0.2}
     available: true
-  # `embedding_dimensions`: Titan Text Embeddings V2 takes a `dimensions`
-  # field in the invoke body (256/512/1024). The key is a family alias, so
-  # it also covers V1, whose width is fixed at 1536 — declaring it there is
-  # the pre-existing behaviour (the body has always carried the field when
-  # configured) rather than a new claim, and a V1 answer of the wrong width
-  # is caught by the returned-width check.
+  # Two keys, because the width is selectable on one version and not the
+  # other. `match_family_key` takes the longest substring match, so a V2 id
+  # resolves to the V2 key and everything else in the family — V1, the image
+  # embedder, a bare `amazon.titan-embed` — falls back to the alias below.
+  # The alias must NOT claim `embedding_dimensions`: it is what an unknown
+  # member of the family resolves to, and a wrong `yes` there is read by a
+  # consumer as "this width is selectable" before any call is made.
   amazon.titan-embed:
+    context_window: 8192
+    capabilities: [embeddings]
+    pricing: {input_per_mtok: 0.02}
+    available: true
+
+  # V2 takes a `dimensions` field in the invoke body (256/512/1024).
+  amazon.titan-embed-text-v2:
     context_window: 8192
     capabilities: [embeddings, embedding_dimensions]
     pricing: {input_per_mtok: 0.02}

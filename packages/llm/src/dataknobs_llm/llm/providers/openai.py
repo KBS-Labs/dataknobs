@@ -732,10 +732,9 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         model = self.config.model or "text-embedding-ada-002"
         requested = self._requested_embedding_dimensions(kwargs)
         params: Dict[str, Any] = {"input": texts, "model": model}
-        if requested is not None and ModelCapability.EMBEDDING_DIMENSIONS in (
-            self.get_capabilities()
-        ):
-            params["dimensions"] = requested
+        forwardable = self._forwardable_embedding_dimensions(kwargs)
+        if forwardable is not None:
+            params["dimensions"] = forwardable
 
         response = await self._call_api(lambda: self._client.embeddings.create(**params))
 

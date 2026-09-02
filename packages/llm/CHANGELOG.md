@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the provider, and offered again as a per-call `dimensions=` keyword in
   `AsyncLLMProvider.embed`'s own docstring. One provider read it — Bedrock's
   Titan path. `EchoProvider` read a different key (`options["embedding_dim"]`),
-  and OpenAI, Anthropic, Ollama and HuggingFace read neither. The keyword was
-  accepted and discarded by all six.
+  and OpenAI, Ollama and HuggingFace read neither. The keyword was accepted
+  and discarded by all five. (Anthropic is not among them: it has no embedding
+  endpoint at all, and its `embed` raises.)
 
   So a config asking `text-embedding-3-large` for 512-dimensional vectors
   received 3072: valid vectors, six times wider than requested, at six times
@@ -32,10 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reads the per-call `dimensions=` keyword, else `LLMConfig.dimensions`. No
     provider decides precedence for itself; that is how three different
     readings of one field accumulated.
-  - **A model that accepts a width gets one.** OpenAI forwards `dimensions` to
-    `embeddings.create` for `text-embedding-3-*`; Bedrock's Titan body takes it
-    (and now takes the per-call keyword, which reading `config` directly had
-    made unreachable).
+  - **A model that accepts a width gets one — and only such a model.**
+    `LLMProvider._forwardable_embedding_dimensions` returns the requested width
+    only when the model advertises `EMBEDDING_DIMENSIONS`, so both forwarding
+    providers apply one gate rather than each writing its own. OpenAI forwards
+    `dimensions` to `embeddings.create` for `text-embedding-3-*`; Bedrock's
+    Titan body takes it (and now takes the per-call keyword, which reading
+    `config` directly had made unreachable). A width stated for a model that
+    cannot take one never reaches the wire, so the refusal is ours, naming the
+    model, rather than the vendor's own validation error.
   - **A model whose width is fixed is checked, not ignored.** Ollama's
     `/api/embeddings` and HuggingFace's feature-extraction endpoint have no
     width parameter, and `text-embedding-ada-002` rejects one.
@@ -50,8 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a vector column is created at a fixed width before the first vector exists,
   so the consumer choosing that width cannot afford to learn the answer by
   making a call. It resolves from the bundled model tables — declared for
-  `text-embedding-3-small` / `-3-large` and `amazon.titan-embed`, and pointedly
-  absent for `text-embedding-ada-002` — and is overridable through
+  `text-embedding-3-small` / `-3-large` and `amazon.titan-embed-text-v2`, and
+  pointedly absent for `text-embedding-ada-002` and for the `amazon.titan-embed`
+  family alias — Titan V1's width is fixed at 1536, and the alias is what an
+  unrecognised member of that family resolves to, so a `yes` there would be read
+  as "selectable" before any call is made — and is overridable through
   `model_profile_overrides`, so a model released after the table was written
   needs no release here.
 
@@ -72,6 +81,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sources returned it, and `get_capabilities()` answered `['embeddings']`.
   `test_capability_order_covers_the_enum` now fails when the tuple and the enum
   fall out of step.
+
+- **The embedding cache served a vector of the wrong width on a hit.**
+  `CachingEmbedProvider` was built on "same (model, text) always produces the
+  same vector", which the width rule above falsifies: for a model whose width
+  is selectable, `(model, text)` no longer determines the vector — `(model,
+  text, width)` does. A hit returns without consulting the inner provider and
+  therefore without the width check on the way out, so embedding a text at 512
+  and then asking for it at 256 returned the 512-wide vector, silently. A mixed
+  batch was worse: one text hit at the old width while its neighbour missed and
+  was embedded at the new one, returning a list whose members disagreed with
+  each other.
+
+  The cached identity is now the model qualified by the requested width, so a
+  differing width is a different row, and an unstated width is its own identity
+  rather than a wildcard. Qualifying at the call site rather than adding a
+  parameter to `EmbeddingCache` leaves every out-of-tree cache implementation
+  working unchanged, and makes a persisted row self-describing. Two identical
+  requests are still one inner call. The width check also runs on the way out
+  of the wrapper, which covers a cache implementation that ignores the identity
+  it was handed.
+
+  Rows written by an earlier version are keyed on the bare model name and are
+  no longer read. That is a one-time miss, not a loss: their width was never
+  recorded, so there was no way to tell which requests they could answer.
 
 - **`AsyncLLMProvider.stream_complete` is declared as what it returns.** It was
   `async def ... -> AsyncIterator[LLMStreamResponse]` with a `pass` body, which

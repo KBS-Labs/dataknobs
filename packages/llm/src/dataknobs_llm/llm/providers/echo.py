@@ -869,7 +869,8 @@ class EchoProvider(AsyncLLMProvider):
 
         self._embed_history.append({"texts": texts, "kwargs": kwargs})
 
-        width = self._requested_embedding_dimensions(kwargs) or self.embedding_dim
+        requested = self._requested_embedding_dimensions(kwargs)
+        width = self.embedding_dim if requested is None else requested
         if isinstance(texts, str):
             return self._generate_embedding(texts, width)
         else:

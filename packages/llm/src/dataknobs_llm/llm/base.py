@@ -1669,6 +1669,30 @@ class LLMProvider(ABC):
         configured = getattr(self.config, "dimensions", None)
         return int(configured) if configured is not None else None
 
+    def _forwardable_embedding_dimensions(
+        self, kwargs: Mapping[str, Any] | None = None
+    ) -> int | None:
+        """The requested width, but only if this model can be asked for one.
+
+        A provider that can forward a width still must not forward it to a
+        model whose width is fixed: the field is undefined for that endpoint,
+        so the caller gets the vendor's own validation error -- or, worse, a
+        silently ignored field and a vector of the wrong width. Returning
+        ``None`` sends nothing and leaves the answer to
+        :meth:`_check_embedding_width`, which refuses in our own words and
+        names the model.
+
+        This is the gate both forwarding providers apply, so it lives here
+        rather than being written out in each: a third provider that gains a
+        forwardable width inherits the same rule instead of a second one.
+        """
+        requested = self._requested_embedding_dimensions(kwargs)
+        if requested is None:
+            return None
+        if ModelCapability.EMBEDDING_DIMENSIONS not in self.get_capabilities():
+            return None
+        return requested
+
     def _check_embedding_width(
         self, vectors: Sequence[Sequence[float]], requested: int | None
     ) -> None:
@@ -2907,7 +2931,16 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
         Args:
             texts: Input text(s)
-            **kwargs: Additional parameters
+            **kwargs: Provider-specific parameters:
+                - model (str): Embedding model override
+                - dimensions (int): The width the vectors should be,
+                  overriding ``LLMConfig.dimensions`` for this call. Read
+                  through :meth:`LLMProvider._requested_embedding_dimensions`
+                  and checked with
+                  :meth:`LLMProvider._check_embedding_width`, exactly as on
+                  the async side -- both helpers are on the shared base, so a
+                  sync implementation honors or refuses a stated width by the
+                  same rule rather than by a second one.
 
         Returns:
             Embedding vector(s)
