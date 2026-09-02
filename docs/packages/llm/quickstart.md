@@ -21,6 +21,17 @@ pip install dataknobs-llm[anthropic]
 pip install dataknobs-llm[all]
 ```
 
+The FSM integration (`dataknobs_llm.fsm_integration` and
+`ConversationFlowAdapter`) needs a state-machine engine, which the base install
+deliberately leaves out:
+
+```bash
+pip install dataknobs-llm[fsm]
+```
+
+`[all]` includes it. Nothing else in this guide needs it — `ConversationManager`
+included.
+
 ## Basic Usage
 
 ### 1. Create an LLM Provider

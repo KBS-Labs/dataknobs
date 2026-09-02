@@ -170,11 +170,16 @@ dataknobs_llm/
 │   ├── context.py       # Wizard context injection
 │   └── observability.py # Tool execution tracking
 ├── testing.py           # Testing utilities for scripted responses
-└── fsm_integration/     # FSM integration
+└── fsm_integration/     # FSM integration (needs the `fsm` extra)
     ├── functions.py     # LLM functions for FSM
     ├── resources.py     # LLMResource, AsyncLLMResource (async with rate limiting)
     └── workflows.py     # Pre-built workflow patterns
 ```
+
+`fsm_integration`, and `ConversationFlowAdapter` in `conversations/flow`, are
+the only surfaces requiring a state-machine engine. Install
+`dataknobs-llm[fsm]` (or `[all]`) to use them; no other part of the package
+needs one, `ConversationManager` included.
 
 ## Documentation
 

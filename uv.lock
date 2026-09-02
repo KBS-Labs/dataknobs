@@ -1798,6 +1798,7 @@ dependencies = [
     { name = "dataknobs-common" },
     { name = "dataknobs-config" },
     { name = "dataknobs-data" },
+    { name = "dataknobs-structures" },
     { name = "dataknobs-utils" },
     { name = "jinja2" },
     { name = "pyyaml" },
@@ -1809,6 +1810,7 @@ all = [
     { name = "aiosqlite" },
     { name = "anthropic" },
     { name = "dataknobs-common", extra = ["aws"] },
+    { name = "dataknobs-fsm" },
     { name = "openai" },
     { name = "torch" },
     { name = "transformers" },
@@ -1822,6 +1824,9 @@ bedrock = [
 embeddings = [
     { name = "torch" },
     { name = "transformers" },
+]
+fsm = [
+    { name = "dataknobs-fsm" },
 ]
 huggingface = [
     { name = "aiohttp" },
@@ -1858,7 +1863,9 @@ requires-dist = [
     { name = "dataknobs-common", extras = ["aws"], marker = "extra == 'bedrock'", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", editable = "packages/data" },
-    { name = "dataknobs-llm", extras = ["openai", "anthropic", "bedrock", "ollama", "huggingface", "embeddings", "sqlite-cache"], marker = "extra == 'all'", editable = "packages/llm" },
+    { name = "dataknobs-fsm", marker = "extra == 'fsm'", editable = "packages/fsm" },
+    { name = "dataknobs-llm", extras = ["openai", "anthropic", "bedrock", "ollama", "huggingface", "embeddings", "sqlite-cache", "fsm"], marker = "extra == 'all'", editable = "packages/llm" },
+    { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
@@ -1866,7 +1873,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'embeddings'", specifier = ">=2.13.0" },
     { name = "transformers", marker = "extra == 'embeddings'", specifier = ">=5.5.0" },
 ]
-provides-extras = ["openai", "anthropic", "ollama", "huggingface", "embeddings", "sqlite-cache", "bedrock", "all"]
+provides-extras = ["openai", "anthropic", "ollama", "huggingface", "embeddings", "sqlite-cache", "fsm", "bedrock", "all"]
 
 [package.metadata.requires-dev]
 dev = [
