@@ -383,15 +383,15 @@ def _divided_constants(node: ast.BinOp) -> list[str]:
 def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     """The list that decides scheduling is checked against the tree, not trusted.
 
-    A package document belongs to no package's suite by default: 138 of the
-    142 here are read only by the workspace guards, and scheduling their
+    A package document belongs to no package's suite by default: 139 of the
+    144 here are read only by the workspace guards, and scheduling their
     package for one is what ran two full suites for a link repair. The other
-    four are read by a test *in* that package, so they do decide whether it
+    five are read by a test *in* that package, so they do decide whether it
     passes, and they have to keep scheduling and dirtying it.
 
     Which of the two a document is cannot be inferred from its path, so it is
     declared. This is the guard that stops the declaration from being a list
-    somebody remembered to update: a fifth such test fails here on arrival,
+    somebody remembered to update: a sixth such test fails here on arrival,
     naming itself, rather than being scheduled by nothing until it goes stale.
     """
     declared = _scopes.PACKAGE_TEST_DOC_INPUTS

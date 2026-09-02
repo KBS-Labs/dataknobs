@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from dataknobs_common.callbacks import run_callback_off_loop
+from dataknobs_common.capabilities import DynamicCapabilityMixin
 
 from ...fields import VectorField
 from ...records import Record
@@ -22,13 +23,38 @@ if TYPE_CHECKING:
     from ..embedding import TextEmbedder
 
 
-class VectorStore(ABC, VectorStoreBase):
+class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase):
     """Abstract base class for specialized vector stores.
 
     This provides a dedicated vector storage backend that can be used
     independently or alongside traditional databases. It inherits from
     VectorStoreBase which provides common configuration parsing and
     utility methods.
+
+    Capability advertisement:
+        The family speaks
+        :class:`~dataknobs_common.CapabilityContract`, so a consumer asks
+        ``store.supports(Capability.VECTOR_PERSIST)`` instead of holding
+        the backend matrix out-of-band or reaching a method by
+        ``isinstance``. Several of the family's public methods exist on
+        some backends and not others; a consumer that downcasts to reach
+        one has stopped being portable, which is what the abstraction was
+        for.
+
+        Support is advertised per **instance**, not per class, because at
+        least one of these capabilities is a property of configuration
+        rather than of type — see
+        :class:`~dataknobs_data.vector.stores.common.PathPersistedCapabilityMixin`.
+        A backend whose answer really is invariant declares a
+        ``SUPPORTED_CAPABILITIES`` ``ClassVar`` and inherits the default
+        computation.
+
+        ``CapabilityMixin`` does NOT auto-union across the MRO, so a
+        backend adding its own set writes
+        ``VectorStore.SUPPORTED_CAPABILITIES | {...}`` rather than a bare
+        literal, or it silently drops whatever the ABC declares. The set is
+        empty today; the union is written anyway so that adding to the ABC
+        later does not have to visit four backends to stay correct.
 
     Async transport contract:
         The async methods (``initialize``, ``add_vectors``, ``search``,
@@ -38,6 +64,26 @@ class VectorStore(ABC, VectorStoreBase):
         ``assert_no_blocking()`` proves it. See ``MemoryVectorStore.save``
         for the offloaded-persist reference.
     """
+
+    def _setup(self) -> None:
+        """Derive shared attributes, then arm the capability cache.
+
+        ``DynamicCapabilityMixin`` requires ``_init_capability_cache()``
+        exactly once per instance and the family constructs through
+        ``StructuredConfigConsumer``, which calls ``_setup`` rather than
+        an ``__init__`` the mixin could cooperate with. Doing it here —
+        on the class that mixes the contract in — means a new backend
+        inherits the arming by subclassing ``VectorStore``, and cannot
+        forget it.
+
+        Ordering: ``super()._setup()`` first, so ``persist_path`` and the
+        rest of the derived config exist before anything can query
+        capabilities. The computation itself is lazy, so a subclass whose
+        own ``_setup`` runs after this one still contributes to the
+        answer.
+        """
+        super()._setup()
+        self._init_capability_cache()
 
     @abstractmethod
     async def initialize(self) -> None:

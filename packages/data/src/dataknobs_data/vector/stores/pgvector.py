@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from dataknobs_common.capabilities import Capability
 from dataknobs_common.exceptions import ConfigurationError, ResourceError
 from dataknobs_utils.sql_utils import quote_ident
 
@@ -16,6 +17,8 @@ from .config import PgVectorStoreConfig
 
 if TYPE_CHECKING:
     from typing import ClassVar
+
+    from dataknobs_common.capabilities import CapabilityLike
 
     import numpy as np
 
@@ -136,6 +139,16 @@ class PgVectorStore(VectorStore):
     }
 
     CONFIG_CLS: ClassVar[type[PgVectorStoreConfig]] = PgVectorStoreConfig
+
+    # Invariant, so a ClassVar rather than the per-instance computation the
+    # persisted backends need: :meth:`create_index` is a real verb on every
+    # pgvector store. A store configured ``index_type: none`` still honours
+    # an explicit argument, so the capability does not depend on config the
+    # way ``VECTOR_PERSIST`` does. Union form deliberate --- ``CapabilityMixin``
+    # does not union across the MRO.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
+        VectorStore.SUPPORTED_CAPABILITIES | {Capability.VECTOR_INDEX_TUNING}
+    )
 
     def _setup(self) -> None:
         """Initialize pgvector-specific derived config and runtime state.

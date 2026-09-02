@@ -11,21 +11,35 @@ from uuid import uuid4
 import numpy as np
 
 from .base import VectorStore
+from .common import PathPersistedCapabilityMixin
 from .config import MemoryVectorStoreConfig
 
 if TYPE_CHECKING:
     from typing import ClassVar
 
+    from dataknobs_common.capabilities import CapabilityLike
 
-class MemoryVectorStore(VectorStore):
+
+class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore):
     """Simple in-memory vector store for testing and development.
 
     This implementation stores vectors in memory using numpy arrays
     and performs brute-force search. Suitable for small datasets
     and testing scenarios.
+
+    ``VECTOR_PERSIST`` is advertised only when a ``persist_path`` is
+    configured — :meth:`save` and :meth:`load` return early without one,
+    so the class having the methods is not the question a caller is
+    asking.
     """
 
     CONFIG_CLS: ClassVar[type[MemoryVectorStoreConfig]] = MemoryVectorStoreConfig
+
+    # Nothing invariant to add: this store's one capability is decided per
+    # instance by ``PathPersistedCapabilityMixin``. The union form is kept
+    # so that a later addition to the ABC's set is inherited rather than
+    # shadowed --- ``CapabilityMixin`` does not union across the MRO.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = VectorStore.SUPPORTED_CAPABILITIES
 
     def _setup(self) -> None:
         """Initialize in-memory runtime state."""

@@ -12,12 +12,15 @@ from uuid import uuid4
 
 from ..types import DistanceMetric
 from .base import VectorStore
+from .common import PathPersistedCapabilityMixin
 from .config import FaissVectorStoreConfig
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from typing import ClassVar
+
+    from dataknobs_common.capabilities import CapabilityLike
 
     import numpy as np
 
@@ -29,7 +32,7 @@ except ImportError:
     FAISS_AVAILABLE = False
 
 
-class FaissVectorStore(VectorStore):
+class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore):
     """Faiss-based vector store for efficient similarity search.
 
     Faiss is a library for efficient similarity search and clustering of dense vectors.
@@ -37,9 +40,19 @@ class FaissVectorStore(VectorStore):
     - Flat: Exact search, best for small datasets
     - IVF: Inverted file index, good for medium datasets
     - HNSW: Hierarchical navigable small world, good for large datasets
+
+    ``VECTOR_PERSIST`` is advertised only when a ``persist_path`` is
+    configured — :meth:`save` and :meth:`load` return early without one.
+    Note that the index type is chosen through config and cannot be
+    retuned afterwards, so this store does not advertise
+    ``VECTOR_INDEX_TUNING``: it has an index, not an index-tuning verb.
     """
 
     CONFIG_CLS: ClassVar[type[FaissVectorStoreConfig]] = FaissVectorStoreConfig
+
+    # Per-instance only; see ``PathPersistedCapabilityMixin``. Union form
+    # deliberate --- ``CapabilityMixin`` does not union across the MRO.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = VectorStore.SUPPORTED_CAPABILITIES
 
     def _setup(self) -> None:
         """Initialize Faiss-specific derived config and runtime state."""
@@ -67,8 +80,11 @@ class FaissVectorStore(VectorStore):
         # the way every helper that builds one already is: the concrete
         # class varies by index type and swaps under ``_build_deferred_ivf``.
         self.index: Any = None
-        self.id_map = {}  # Map from our IDs to Faiss internal indices
-        self.metadata_store = {}  # Store metadata separately
+        # Caller-facing id -> faiss internal index, and internal index ->
+        # metadata. The key spaces match ``timestamps`` below, which is
+        # what lets the shared helpers walk all three together.
+        self.id_map: dict[str, int] = {}
+        self.metadata_store: dict[int, dict[str, Any]] = {}
         # internal_id -> (created_at, updated_at). Aware UTC datetimes.
         # Keyed by internal id to match ``metadata_store`` so the
         # shared update_metadata_where helper, get_vectors, search,

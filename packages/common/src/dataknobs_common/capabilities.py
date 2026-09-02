@@ -92,6 +92,20 @@ class Capability(str, Enum):
     STATE_BRIDGE_INBOX_ONLY = "state_bridge_inbox_only"
     STATE_BRIDGE_BIDIRECTIONAL = "state_bridge_bidirectional"
 
+    # ---- Vector storage ----
+    # Snapshot the store to, and restore it from, a caller-named path.
+    # Instance-scoped rather than class-scoped: a store whose class has
+    # ``save``/``load`` still cannot persist without a configured path,
+    # and both in-tree implementations return early when it is unset.
+    # Advertise this through ``DynamicCapabilityMixin``, never a ClassVar.
+    VECTOR_PERSIST = "vector_persist"
+    # Build or rebuild a backend-native ANN index (HNSW, IVFFlat) with
+    # tuning parameters. Genuinely backend-specific: there is no analogue
+    # in a brute-force store, so this is one of the capabilities that
+    # closes by being *declared* rather than by being implemented
+    # everywhere.
+    VECTOR_INDEX_TUNING = "vector_index_tuning"
+
 
 CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
     {
@@ -136,6 +150,12 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
             {
                 Capability.STATE_BRIDGE_INBOX_ONLY,
                 Capability.STATE_BRIDGE_BIDIRECTIONAL,
+            }
+        ),
+        "vector_storage": frozenset(
+            {
+                Capability.VECTOR_PERSIST,
+                Capability.VECTOR_INDEX_TUNING,
             }
         ),
     }

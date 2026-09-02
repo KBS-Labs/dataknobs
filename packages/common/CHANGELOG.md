@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`Capability.VECTOR_PERSIST` and `Capability.VECTOR_INDEX_TUNING`,** with a
+  `vector_storage` family in `CAPABILITY_FAMILIES`. Both are for the vector
+  stores in `dataknobs-data`, whose family had no way to say which of its
+  public methods a given backend actually has. `VECTOR_PERSIST` carries a note
+  on the member itself that it is instance-scoped: a store can have `save()`
+  and `load()` and still not persist, so declaring it from a `ClassVar` claims
+  a guarantee the instance cannot keep.
+
 ### Changed
 
 - **`lifecycle`'s teardown table now scopes its blessing of `async def
