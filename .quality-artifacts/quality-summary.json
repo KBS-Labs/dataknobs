@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-02T14:46:01Z",
+  "timestamp": "2026-09-02T15:02:38Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "00c535937c0d021de79d37f59b5c6fd655c1079e97fbd457da2dcb2a18984822",
-    "common": "d9d4258ce2372edc693cc9ba36b3329a8102454fa18ac97fcc09eb72aaa95ecd",
+    "common": "1dcade7731fa3368c6858cb8f8b00961a60868c489ce360d4fa728ccdb85444b",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
     "data": "9979e455b1a89014467ae798015e7c13a0fc87d2fad4afad7321fe56c9f77ed9",
     "fsm": "cf80cbb63dfeb9efa2e96ab0069e51db8020c0b9ab5d73b34ab9fb438f4b69c6",
@@ -33,9 +33,9 @@
   "workspace_hashes": {
     "toolchain": "0fb983f88318648c256cf4b7829874713d5e884ce8b5a74a27812498b759a7b9",
     "workspace_tests": "bc62b46271f65b5fbf556f99a43578b46165a6f93feea5c1bb3042ebbbcefe46",
-    "docs": "ca05e16f03a5fc475d5879e5b628255fe9c768468009dd9a3fbc4186cf43728c"
+    "docs": "23a2d99ef4155c85cc251f454680c6d2657764cd669918c718e69077de9cfbc6"
   },
-  "total_seconds": 352,
+  "total_seconds": 349,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -53,14 +53,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 2
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 85
+      "duration_seconds": 84
     },
     "documentation": {
       "status": "pass",
@@ -87,14 +87,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 127,
-      "workspace_guards_seconds": 64
+      "duration_seconds": 126,
+      "workspace_guards_seconds": 62
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 103
+      "duration_seconds": 104
     }
   }
 }
