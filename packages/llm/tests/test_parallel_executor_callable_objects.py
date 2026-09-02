@@ -97,9 +97,7 @@ async def test_async_callable_object_runs_and_returns_its_value(
     executor = ParallelLLMExecutor(provider, max_concurrency=5)
     obj = AsyncCallableObject()
 
-    results = await executor.execute_mixed(
-        {"double": DeterministicTask(fn=obj, args=(21,))}
-    )
+    results = await executor.execute_mixed({"double": DeterministicTask(fn=obj, args=(21,))})
 
     assert results["double"].success is True
     assert _value_of(results["double"]) == 42
@@ -136,9 +134,7 @@ async def test_sync_callable_object_still_runs_off_the_loop(
     obj = SyncCallableObject()
     loop_thread = threading.current_thread().name
 
-    results = await executor.execute_mixed(
-        {"double": DeterministicTask(fn=obj, args=(21,))}
-    )
+    results = await executor.execute_mixed({"double": DeterministicTask(fn=obj, args=(21,))})
 
     assert results["double"].success is True
     assert _value_of(results["double"]) == 42
