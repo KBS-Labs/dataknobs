@@ -221,23 +221,6 @@ class TestAdaptTools:
             }
         ]
 
-    def test_raw_functions_to_toolspec(self) -> None:
-        adapter = BedrockConverseAdapter()
-        specs = adapter.adapt_raw_functions(
-            [
-                {
-                    "name": "lookup",
-                    "description": "look it up",
-                    "parameters": {"type": "object", "properties": {}},
-                }
-            ]
-        )
-        assert specs[0]["toolSpec"]["name"] == "lookup"
-        assert specs[0]["toolSpec"]["inputSchema"]["json"] == {
-            "type": "object",
-            "properties": {},
-        }
-
 
 class TestAdaptResponse:
     def test_text_and_usage(self) -> None:
@@ -837,48 +820,14 @@ class TestEmbedBoundary:
             await provider.embed("hello")
 
 
-class TestFunctionCallDeprecated:
-    @pytest.mark.asyncio
-    async def test_function_call_extracts_first_tool(self) -> None:
-        client = _StubBedrockClient(
-            converse_response={
-                "output": {
-                    "message": {
-                        "content": [
-                            {
-                                "toolUse": {
-                                    "toolUseId": "u1",
-                                    "name": "lookup",
-                                    "input": {"q": "x"},
-                                }
-                            }
-                        ]
-                    }
-                },
-                "stopReason": "tool_use",
-            }
-        )
-        provider = _stub_provider(
-            LLMConfig(
-                provider="bedrock",
-                model="anthropic.claude-3-haiku-20240307-v1:0",
-            ),
-            client,
-        )
-        with pytest.warns(DeprecationWarning):
-            response = await provider.function_call(
-                [LLMMessage(role="user", content="hi")],
-                [{"name": "lookup", "description": "d", "parameters": {}}],
-            )
-        assert response.function_call == {"name": "lookup", "arguments": {"q": "x"}}
-
+class TestTruncationSignal:
     @pytest.mark.asyncio
     async def test_truncated_tool_call_warns(self, caplog: pytest.LogCaptureFixture) -> None:
-        """A truncated tool-call turn on this path must fire the warning.
+        """A truncated tool-call turn must fire the shared warn hook.
 
-        Reproduce-first: FAILS when function_call() returns ``parsed`` directly
-        (flag survives but the shared warn hook never runs); passes once it
-        routes through ``_analyze_response`` like ``complete()``.
+        The adapter sets the flag; only routing the parse through
+        ``_analyze_response`` fires ``_warn_if_truncated``. This asserts the
+        buffered provider path does both.
         """
         client = _StubBedrockClient(
             converse_response={
@@ -906,14 +855,11 @@ class TestFunctionCallDeprecated:
             client,
         )
         with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.base"):
-            with pytest.warns(DeprecationWarning):
-                response = await provider.function_call(
-                    [LLMMessage(role="user", content="hi")],
-                    [{"name": "submit", "description": "d", "parameters": {}}],
-                )
+            response = await provider.complete([LLMMessage(role="user", content="hi")])
         assert response.truncated is True
         assert response.finish_reason == "length"
-        assert response.function_call == {"name": "submit", "arguments": {"q": "x"}}
+        assert response.tool_calls is not None
+        assert [tc.name for tc in response.tool_calls] == ["submit"]
         assert any(
             "mid tool-call" in r.getMessage() and r.levelno == logging.WARNING
             for r in caplog.records

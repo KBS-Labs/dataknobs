@@ -1,6 +1,7 @@
 """Tests for LLM package enhancements (clone, cost tracking, etc.)."""
 
 from dataknobs_llm.llm import LLMConfig, LLMResponse, CompletionMode
+from dataknobs_llm.llm.base import ToolCall
 from datetime import datetime
 
 
@@ -205,16 +206,17 @@ class TestLLMResponseFields:
         assert response.usage == {"total_tokens": 100}
         assert response.created_at == now
 
-    def test_response_with_function_call(self):
-        """Test response with function call."""
+    def test_response_with_tool_calls(self):
+        """Test response carrying the model's tool-call requests."""
         response = LLMResponse(
             content="",
             model="gpt-4",
-            function_call={"name": "get_weather", "arguments": '{"location": "San Francisco"}'},
+            tool_calls=[ToolCall(name="get_weather", parameters={"location": "San Francisco"})],
         )
 
-        assert response.function_call is not None
-        assert response.function_call["name"] == "get_weather"
+        assert response.tool_calls is not None
+        assert response.tool_calls[0].name == "get_weather"
+        assert response.tool_calls[0].parameters == {"location": "San Francisco"}
 
     def test_response_with_metadata(self):
         """Test response with metadata."""

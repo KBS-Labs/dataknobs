@@ -35,21 +35,11 @@ Example:
         async for chunk in llm.stream_complete("Write a story"):
             print(chunk.delta, end="", flush=True)
 
-        # Tool use (Claude 3+)
-        tools = [{
-            "name": "calculator",
-            "description": "Perform arithmetic",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "operation": {"type": "string"},
-                    "x": {"type": "number"},
-                    "y": {"type": "number"}
-                }
-            }
-        }]
-
-        response = await llm.function_call(messages, tools)
+        # Tool use (Claude 3+). Pass Tool objects; the adapter renders them
+        # into Anthropic's input_schema form.
+        response = await llm.complete(messages, tools=[calculator_tool])
+        for call in response.tool_calls or []:
+            print(call.name, call.parameters)
     ```
 
 See Also:
@@ -58,10 +48,8 @@ See Also:
 """
 
 import asyncio
-import json
 import logging
 import os
-import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from dataknobs_common.exceptions import ValidationError
@@ -597,8 +585,8 @@ class AnthropicAdapter(LLMAdapter):
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
         """Build Anthropic API parameters from config.
 
-        Shared by ``complete()``, ``stream_complete()``, and
-        ``function_call()`` to prevent parameter drift between methods.
+        Shared by ``complete()`` and ``stream_complete()`` to prevent
+        parameter drift between methods.
 
         Args:
             config: Standard LLMConfig.
@@ -636,38 +624,6 @@ class AnthropicAdapter(LLMAdapter):
                 "input_schema": tool.schema if hasattr(tool, "schema") else {},
             }
             for tool in tools
-        ]
-
-    def adapt_raw_functions(
-        self,
-        functions: list[Dict[str, Any]],
-    ) -> list[Dict[str, Any]]:
-        """Convert raw function dicts to Anthropic tools format.
-
-        Used by the deprecated ``function_call()`` method which receives
-        raw dicts rather than Tool objects.
-
-        Args:
-            functions: List of raw function definition dicts with
-                ``name``, ``description``, and ``parameters`` keys.
-
-        Returns:
-            List of Anthropic tool definitions.
-        """
-        return [
-            {
-                "name": func.get("name", ""),
-                "description": func.get("description", ""),
-                "input_schema": func.get(
-                    "parameters",
-                    {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                    },
-                ),
-            }
-            for func in functions
         ]
 
 
@@ -738,27 +694,23 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             f"Summarize this document:\n\n{long_text}"
         )
 
-        # Tool use / function calling (Claude 3+)
-        tools = [
-            {
-                "name": "web_search",
-                "description": "Search the web for information",
-                "input_schema": {
+        # Tool use (Claude 3+)
+        from dataknobs_llm import Tool
+
+        class WebSearchTool(Tool):
+            def __init__(self):
+                super().__init__("web_search", "Search the web")
+
+            @property
+            def schema(self):
+                return {
                     "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query"
-                        },
-                        "num_results": {
-                            "type": "integer",
-                            "description": "Number of results"
-                        }
-                    },
-                    "required": ["query"]
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
                 }
-            }
-        ]
+
+            async def execute(self, query: str):
+                return f"results for {query}"
 
         messages = [
             LLMMessage(
@@ -767,12 +719,10 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             )
         ]
 
-        response = await llm.function_call(messages, tools)
-        if response.function_call:
-            import json
-            tool_input = json.loads(response.function_call["arguments"])
-            print(f"Tool: {response.function_call['name']}")
-            print(f"Input: {tool_input}")
+        response = await llm.complete(messages, tools=[WebSearchTool()])
+        for call in response.tool_calls or []:
+            print(f"Tool: {call.name}")
+            print(f"Input: {call.parameters}")
         ```
 
     Args:
@@ -871,7 +821,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             ) from e
         # NOTE: initialize() deliberately does NO network I/O beyond building
         # the client. The per-model max_tokens ceilings are refreshed lazily at
-        # the first request boundary (complete/stream_complete/function_call all
+        # the first request boundary (complete and stream_complete both
         # call self._live_source.refresh_if_stale() before the clamp), so the
         # first completion already clamps against fresh data without initialize()
         # incurring a swallowed Models-API round-trip.
@@ -1019,7 +969,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """Build Anthropic API params with the family's request-shape rules applied.
 
         Single choke point over :meth:`AnthropicAdapter.adapt_config` shared by
-        ``complete``/``stream_complete``/``function_call``: delegates the
+        ``complete`` and ``stream_complete``: delegates the
         request-shaping front-half to the base
         :meth:`~dataknobs_llm.llm.base.LLMProvider._shape_request_params`
         (resolves constraints once, drops family-rejected sampling params and
@@ -1297,93 +1247,3 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
     ) -> Union[List[float], List[List[float]]]:
         """Anthropic doesn't provide embeddings."""
         raise NotImplementedError("Anthropic doesn't provide embedding models")
-
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling with native Anthropic tools API (Claude 3+)."""
-        warnings.warn(
-            "function_call() is deprecated, use complete(tools=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not self._is_initialized:
-            await self.initialize()
-
-        system_content, anthropic_messages = self.adapter.adapt_messages(
-            messages,
-            system_prompt=self.config.system_prompt,
-        )
-
-        # function_call() receives raw dicts, not Tool objects — delegate
-        # to the adapter's raw function converter.
-        tools = self.adapter.adapt_raw_functions(functions)
-
-        # Keep the per-model max_tokens ceiling fresh (TTL-gated) before the
-        # clamp — same choke point as complete()/stream_complete().
-        await self._live_source.refresh_if_stale()
-
-        try:
-            fc_kwargs = self._build_api_kwargs(self.config)
-            fc_kwargs["messages"] = anthropic_messages
-            fc_kwargs["tools"] = tools
-            if system_content:
-                fc_kwargs["system"] = system_content
-            # Route through the shared choke point so this path gets the same
-            # 400-retry recovery and vendor-error translation as
-            # complete()/stream_complete() — not a bare messages.create().
-            response = await self._create_message(fc_kwargs)
-
-            parsed = self.adapter.adapt_response(response)
-
-            # Surface the first tool call as the legacy function_call dict and
-            # route through the shared _analyze_response choke point, so this
-            # path preserves truncated / raw_finish_reason and fires the
-            # truncation warning — exactly like complete()/stream_complete().
-            # Rebuilding a fresh LLMResponse here would silently drop them.
-            return self._analyze_response(self._attach_legacy_function_call(parsed))
-
-        except ValidationError as e:
-            # A 400 (translated to ValidationError by _create_message) means the
-            # request was rejected — for older models that lack the native tools
-            # API, that is the "tools unsupported" signal, so fall back to
-            # prompt-based function calling. Rate-limit (429 → RateLimitError),
-            # auth (401/403 → OperationError), and any other translated error
-            # are NOT caught here: they propagate unchanged, so a rate-limited
-            # or unauthenticated call is never masked as a "tools failed"
-            # fallback that would issue a second call against the same endpoint.
-            logger.warning(
-                "Anthropic native tools unsupported (request rejected), falling "
-                "back to prompt-based function calling: %s",
-                e,
-            )
-
-            function_descriptions = "\n".join(
-                [f"- {f['name']}: {f['description']}" for f in functions]
-            )
-
-            system_prompt = f"""You have access to the following functions:
-{function_descriptions}
-
-When you need to call a function, respond with:
-FUNCTION_CALL: {{
-    "name": "function_name",
-    "arguments": {{...}}
-}}"""
-
-            messages_with_system = [LLMMessage(role="system", content=system_prompt)] + list(
-                messages
-            )
-
-            response = await self.complete(messages_with_system, **kwargs)
-
-            # Parse function call from response
-            if "FUNCTION_CALL:" in response.content:
-                try:
-                    func_json = response.content.split("FUNCTION_CALL:")[1].strip()
-                    function_call = json.loads(func_json)
-                    response.function_call = function_call
-                except (json.JSONDecodeError, IndexError):
-                    pass
-
-            return response

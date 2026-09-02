@@ -186,8 +186,10 @@ class ModelCapability(Enum):
                 print(chunk.delta, end="")
 
         if ModelCapability.FUNCTION_CALLING in capabilities:
-            # Use function calling
-            response = await llm.function_call(messages, functions)
+            # Pass Tool objects; the model's requests come back on tool_calls
+            response = await llm.complete(messages, tools=[search_tool])
+            for call in response.tool_calls or []:
+                print(call.name, call.parameters)
         ```
     """
 
@@ -496,7 +498,6 @@ class LLMResponse:
             set this consistently so a consumer can honor it without knowing
             each provider's stop-reason vocabulary.
         usage: Token usage stats (prompt_tokens, completion_tokens, total_tokens)
-        function_call: Function call data if model requested tool use
         metadata: Provider-specific metadata
         created_at: Response timestamp
         cost_usd: Estimated cost in USD for this request
@@ -537,8 +538,7 @@ class LLMResponse:
     finish_reason: str | None = None  # 'stop', 'length', 'function_call', 'tool_calls'
     truncated: bool = False  # provider cut generation off at the token budget
     usage: Dict[str, int] | None = None  # tokens used
-    function_call: Dict[str, Any] | None = None  # Legacy single function call
-    tool_calls: list["ToolCall"] | None = None  # List of tool calls (preferred)
+    tool_calls: list["ToolCall"] | None = None  # Tool calls the model requested
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -1877,23 +1877,6 @@ class LLMProvider(ABC):
                 response.model,
             )
 
-    @staticmethod
-    def _attach_legacy_function_call(response: "LLMResponse") -> "LLMResponse":
-        """Surface the first tool call as the legacy ``function_call`` dict.
-
-        Backward-compat shim for the deprecated :meth:`function_call` entry
-        point: the modern path returns ``tool_calls``, but legacy callers read
-        the single ``function_call`` dict. Providers whose ``function_call``
-        override needs this shape call it, then route the result through
-        :meth:`_analyze_response` — the shared post-processing choke point that
-        preserves ``truncated`` / ``metadata`` and fires
-        :meth:`_warn_if_truncated`. Mutates and returns ``response``.
-        """
-        if response.tool_calls:
-            tc = response.tool_calls[0]
-            response.function_call = {"name": tc.name, "arguments": tc.parameters}
-        return response
-
     @property
     def is_initialized(self) -> bool:
         """Check if provider is initialized."""
@@ -2536,125 +2519,6 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         pass
 
-    @abstractmethod
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling asynchronously.
-
-        .. deprecated::
-            Use ``complete(tools=...)`` instead. The ``function_call()`` method
-            will be removed in a future major version. All providers now support
-            the ``tools`` parameter on ``complete()`` for consistent tool
-            handling.
-
-        Enables the LLM to call external functions/tools. The model decides
-        which function to call based on the conversation context, and returns
-        the function name and arguments in a structured format.
-
-        Args:
-            messages: Conversation messages leading up to the function call
-            functions: List of function definitions in JSON Schema format.
-                Each function dict must have:
-                - name (str): Function name
-                - description (str): What the function does
-                - parameters (dict): JSON Schema for parameters
-            **kwargs: Provider-specific parameters:
-                - function_call (str|dict): 'auto', 'none', or specific function
-                - temperature (float): Sampling temperature
-                - max_tokens (int): Maximum response tokens
-
-        Returns:
-            LLMResponse with function_call field populated containing:
-            - name (str): Function to call
-            - arguments (str): JSON string of arguments
-
-        Raises:
-            ValueError: If functions format is invalid
-            ConnectionError: If API connection fails
-
-        Example:
-            ```python
-            from dataknobs_llm import create_llm_provider
-            from dataknobs_llm.llm.base import LLMMessage
-            import json
-
-            llm = create_llm_provider("openai", model="gpt-4")
-
-            # Define available functions
-            functions = [
-                {
-                    "name": "search_docs",
-                    "description": "Search documentation for information",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Max results"
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                },
-                {
-                    "name": "execute_code",
-                    "description": "Execute Python code",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string"}
-                        },
-                        "required": ["code"]
-                    }
-                }
-            ]
-
-            # Ask question that requires function
-            messages = [
-                LLMMessage(
-                    role="user",
-                    content="Search for information about async/await in Python"
-                )
-            ]
-
-            # Model decides to call function
-            response = await llm.function_call(messages, functions)
-
-            if response.function_call:
-                func_name = response.function_call["name"]
-                func_args = json.loads(response.function_call["arguments"])
-
-                print(f"Function: {func_name}")
-                print(f"Arguments: {func_args}")
-                # => Function: search_docs
-                # => Arguments: {'query': 'async/await Python', 'limit': 5}
-
-                # Execute function
-                results = search_docs(**func_args)
-
-                # Add function result to conversation
-                messages.append(LLMMessage(
-                    role="function",
-                    name=func_name,
-                    content=json.dumps(results)
-                ))
-
-                # Get final response
-                final = await llm.complete(messages)
-                print(final.content)
-            ```
-
-        See Also:
-            complete: Standard completion without functions
-            dataknobs_llm.tools: Tool abstraction framework
-        """
-        pass
-
     def __enter__(self) -> NoReturn:
         """Prevent sync context manager usage on async providers."""
         raise TypeError("Use 'async with' for AsyncLLMProvider, not 'with'")
@@ -2951,22 +2815,6 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
         Returns:
             Embedding vector(s)
-        """
-        pass
-
-    @abstractmethod
-    def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling synchronously.
-
-        Args:
-            messages: Conversation messages
-            functions: Available functions
-            **kwargs: Additional parameters
-
-        Returns:
-            Response with function call
         """
         pass
 

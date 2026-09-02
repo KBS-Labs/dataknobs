@@ -314,7 +314,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
     Embeddings are deterministic: the same text embedded the same way
     produces the same vector, where "the same way" includes the width the
     call asked for. This wrapper caches them once, per width, and reuses
-    them across scenarios and runs. ``complete()``, ``stream_complete()``, and ``function_call()``
+    them across scenarios and runs. ``complete()`` and ``stream_complete()``
     pass through to the inner provider unchanged.
 
     **Lifecycle ownership:** When wrapping a pre-initialized provider (e.g.
@@ -468,15 +468,6 @@ class CachingEmbedProvider(AsyncLLMProvider):
             messages, config_overrides=config_overrides, tools=tools, **kwargs
         ):
             yield chunk
-
-    async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Delegate to inner provider."""
-        return await self._inner.function_call(messages, functions, **kwargs)
 
     # -- Cached embed ------------------------------------------------------
 

@@ -433,26 +433,6 @@ class TestCachingEmbedProviderPassthrough:
             chunks.append(chunk)
         assert len(chunks) > 0
 
-    @pytest.mark.asyncio
-    async def test_function_call_passthrough(self):
-        """function_call() delegates to inner unchanged."""
-        import warnings
-
-        from dataknobs_llm import LLMMessage
-
-        inner = _create_echo_provider()
-        inner.set_responses(["fn result"])
-        cache = MemoryEmbeddingCache()
-        provider = CachingEmbedProvider(inner, cache)
-        await provider.initialize()
-
-        messages = [LLMMessage(role="user", content="test")]
-        functions = [{"name": "test_fn", "parameters": {}}]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            result = await provider.function_call(messages, functions)
-        assert result is not None
-
 
 # ---------------------------------------------------------------------------
 # CachingEmbedProvider — config/capabilities forwarding

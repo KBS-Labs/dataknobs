@@ -922,8 +922,8 @@ each provider adds only a small SDK-specific extractor — the Anthropic / OpenA
 `APIError` subtree, aiohttp's `ClientResponseError` for Ollama / HuggingFace, and
 botocore's nested `ClientError` status for Bedrock (whose throttling *codes*
 `ThrottlingException` / `TooManyRequestsException` also map to `429`). It covers
-every request entry point — `complete`, `stream_complete`, `embed`, and the
-deprecated `function_call`. For the streaming path a vendor error is translated
+every request entry point — `complete`, `stream_complete`, and `embed`.
+For the streaming path a vendor error is translated
 whether it surfaces at stream *creation* or partway through *iteration* (both
 run through the shared `_call_api` / `_iter_translated` choke points), so a
 mid-stream rate limit or dropped connection is a dataknobs exception too. A
@@ -971,10 +971,7 @@ As a safety net for a **model family the constraint table doesn't know yet**, th
 offending param is dropped, the request retried, a warning logged, and the
 discovery memoized for the process so subsequent requests to that model drop it
 up front (≤1 wasted round-trip per model). Declaring the param in `constraints`
-pre-empts even that first round-trip. (`function_call` still falls back to
-prompt-based function calling on a `400`, the "older model lacks the native
-tools API" signal, but a `429` / auth error propagates as its translated
-dataknobs exception instead of triggering a second API call.)
+pre-empts even that first round-trip.
 
 ## Response truncation signal
 
@@ -1121,7 +1118,7 @@ the other providers.
 | `stream_read_timeout` | Per-socket-read (inter-chunk) timeout for `stream_complete`, in seconds (default: boto's `60`s). See the timeout note below |
 | `guardrail_identifier` + `guardrail_version` | Applied to Converse requests when both are set (optional `guardrail_trace`) |
 
-The `complete()` / `function_call()` socket read timeout is `LLMConfig.timeout`
+The `complete()` socket read timeout is `LLMConfig.timeout`
 (default `60`s); retry and connection-pool tuning follow the shared
 `AwsSessionConfig` defaults. **Streaming is different:** botocore's
 `read_timeout` is a per-read (inter-chunk) timeout, and there is no

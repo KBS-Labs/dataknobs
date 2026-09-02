@@ -65,7 +65,6 @@ import asyncio
 import json
 import logging
 import time
-import warnings
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any, overload
 
@@ -374,32 +373,6 @@ class BedrockConverseAdapter(LLMAdapter):
                 }
             }
             for tool in tools
-        ]
-
-    def adapt_raw_functions(self, functions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Convert raw function dicts to Converse ``toolSpec`` entries.
-
-        Used by the deprecated :meth:`BedrockProvider.function_call` which
-        receives raw dicts rather than Tool objects.
-        """
-        return [
-            {
-                "toolSpec": {
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "inputSchema": {
-                        "json": func.get(
-                            "parameters",
-                            {
-                                "type": "object",
-                                "properties": {},
-                                "required": [],
-                            },
-                        )
-                    },
-                }
-            }
-            for func in functions
         ]
 
     def adapt_response(self, response: dict[str, Any], model: str | None = None) -> LLMResponse:
@@ -815,8 +788,8 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
     ) -> dict[str, Any]:
         """Build the shared ``converse`` / ``converse_stream`` request kwargs.
 
-        Shared by :meth:`complete`, :meth:`stream_complete`, and
-        :meth:`function_call` so the entry points differ only in ``converse`` vs
+        Shared by :meth:`complete` and :meth:`stream_complete` so the entry
+        points differ only in ``converse`` vs
         ``converse_stream`` and buffered-vs-streamed delivery (no parameter
         drift). Delegates the request-shaping front-half to the base
         :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
@@ -985,7 +958,7 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         :meth:`~..base.LLMProvider.get_pricing` →
         :class:`~..utils.CostCalculator` path. ``None`` when the model has no
         profile pricing or the response carries no usage. Shared by the
-        buffered (:meth:`complete` / :meth:`function_call`) and streaming
+        buffered (:meth:`complete`) and streaming
         (:meth:`stream_complete` final chunk) paths so cost is computed
         identically on both.
         """
@@ -1287,45 +1260,3 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             int,
         )
         return max(1, int(limit))
-
-    async def function_call(
-        self,
-        messages: list[LLMMessage],
-        functions: list[dict[str, Any]],
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Execute function calling via Converse tools (deprecated).
-
-        Retained for interface parity with the other providers. Prefer
-        ``complete(tools=...)``.
-        """
-        warnings.warn(
-            "function_call() is deprecated, use complete(tools=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not self._is_initialized:
-            await self.initialize()
-
-        runtime_config = self._get_runtime_config(None)
-        request = self._build_converse_request(messages, runtime_config, None, extra=kwargs)
-        request["toolConfig"] = {"tools": self.adapter.adapt_raw_functions(functions)}
-
-        async with self._session.client(
-            "bedrock-runtime",
-            **self._client_kwargs(read_timeout=runtime_config.timeout),
-        ) as client:
-            try:
-                response = await client.converse(**request)
-            except Exception as exc:
-                self._raise_translated(exc)
-
-        parsed = self.adapter.adapt_response(response, model=runtime_config.model)
-        # Stamp cost post-adapt from the resolved per-Mtok pricing, like complete().
-        parsed.cost_usd = self._cost_for(runtime_config.model, parsed.usage)
-
-        # Surface the first tool call as the legacy function_call dict and route
-        # through the shared _analyze_response choke point, so a truncated
-        # tool-call turn on this path fires the truncation warning — exactly
-        # like complete().
-        return self._analyze_response(self._attach_legacy_function_call(parsed))

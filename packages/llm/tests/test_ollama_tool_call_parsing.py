@@ -50,9 +50,7 @@ def _call(name: str, arguments: Any) -> dict[str, Any]:
 
 def test_string_arguments_are_parsed_into_a_dict() -> None:
     """A JSON-encoded ``arguments`` string becomes the mapping it encodes."""
-    parsed = OllamaAdapter().adapt_response(
-        _chat_response([_call("get_time", '{"tz": "UTC"}')])
-    )
+    parsed = OllamaAdapter().adapt_response(_chat_response([_call("get_time", '{"tz": "UTC"}')]))
 
     assert parsed.tool_calls is not None
     (call,) = parsed.tool_calls

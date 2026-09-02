@@ -578,8 +578,6 @@ def llm_response_to_dict(resp: LLMResponse) -> dict[str, Any]:
         d["truncated"] = True
     if resp.usage is not None:
         d["usage"] = resp.usage
-    if resp.function_call is not None:
-        d["function_call"] = resp.function_call
     if resp.tool_calls is not None:
         d["tool_calls"] = [tool_call_to_dict(tc) for tc in resp.tool_calls]
     if resp.metadata:
@@ -608,7 +606,6 @@ def llm_response_from_dict(d: dict[str, Any]) -> LLMResponse:
         finish_reason=d.get("finish_reason"),
         truncated=d.get("truncated", False),
         usage=d.get("usage"),
-        function_call=d.get("function_call"),
         tool_calls=tool_calls,
         metadata=d.get("metadata", {}),
         cost_usd=d.get("cost_usd"),
@@ -696,11 +693,11 @@ class CapturingProvider(AsyncLLMProvider):
 
     # -- Delegated lifecycle methods --
 
-    async def initialize(self) -> None:
+    async def initialize(self) -> None:  # type: ignore[override]
         """Delegate initialization to the wrapped provider."""
         await self._delegate.initialize()
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # type: ignore[override]
         """Delegate close to the wrapped provider."""
         await self._delegate.close()
 
@@ -835,32 +832,6 @@ class CapturingProvider(AsyncLLMProvider):
     ) -> Union[List[float], List[List[float]]]:
         """Delegate embedding to the wrapped provider (not captured)."""
         return await self._delegate.embed(texts, **kwargs)
-
-    async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Delegate function calling to the wrapped provider and capture the call."""
-        serialized_msgs = [llm_message_to_dict(m) for m in messages]
-
-        start = time.monotonic()
-        response = await self._delegate.function_call(messages, functions, **kwargs)
-        duration = time.monotonic() - start
-
-        self._captured_calls.append(
-            CapturedCall(
-                role=self._role,
-                messages=serialized_msgs,
-                response=llm_response_to_dict(response),
-                tools=functions,
-                duration_seconds=round(duration, 4),
-                call_index=len(self._captured_calls),
-            )
-        )
-
-        return response
 
 
 # =============================================================================

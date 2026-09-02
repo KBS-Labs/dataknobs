@@ -3,7 +3,6 @@
 import asyncio
 import os
 import re
-import warnings
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
@@ -445,17 +444,6 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
-
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """HuggingFace doesn't have native function calling."""
-        warnings.warn(
-            "function_call() is deprecated, use complete(tools=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        raise NotImplementedError("Function calling not supported for HuggingFace models")
 
     def _build_prompt(self, messages: List[LLMMessage]) -> str:
         """Build prompt from messages."""
