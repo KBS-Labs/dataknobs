@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The FSM `LLMResource` no longer invents an embedding it could not
+  compute.** Its sync `embed()` routed to one of three per-provider methods
+  and answered everything else with `[[0.1] * 768]` — a constant vector of a
+  plausible width. A wrong width is caught by a vector store on write; a
+  constant vector of the *right* width is accepted, indexed, and returned as a
+  nearest neighbour to every query, and no component downstream is positioned
+  to notice. `LLMResource("r", provider="anthropic", ...).embed(["x"])`
+  returned 768 floats of 0.1 for a provider whose own `embed` raises, and
+  `provider="echo"` — a working provider the FSM-side enum has no member for —
+  got the same treatment.
+
+  The OpenAI branch did not reach that fallback because it could not reach
+  anything: its first line was `from dataknobs_fsm.llm.base import LLMConfig`,
+  above the `try`, naming a module that stopped existing when LLM
+  functionality was consolidated into this package. Every OpenAI embedding
+  call through this class raised `ModuleNotFoundError`. The sibling
+  `_openai_complete` imported the moved path correctly, so the migration
+  missed exactly one line — and nothing noticed for as long as nothing called
+  it, which is the same reason all of the above survived: every test of this
+  class exercised `AsyncLLMResource`, which overrides `embed`.
+
+  `complete()` had the milder form of the same defect. The OpenAI and
+  Anthropic paths ended `except Exception as e: return {"choices": [{"text":
+  f"Error: {e!s}"}]}`, putting the failure in the field every caller reads as
+  the model's own words. Neither logged.
+
+  Both operations now delegate to the provider layer, and a provider that
+  cannot serve a request says so: failures raise `ResourceError` naming the
+  resource and the operation, with the provider's own exception on
+  `__cause__` — including the `NotImplementedError` from a provider with no
+  embeddings API. **This is a behaviour change for any caller that read a
+  failure out of the returned dict**; there is no longer a returned dict to
+  read it from.
+
+- **The `LLMResource` credentials and endpoint are the configured ones.** The
+  OpenAI and Anthropic paths built their own config from `kwargs` and then the
+  environment, so a resource constructed with an explicit `api_key` reported
+  `Error: OpenAI API key not provided`, and neither path passed `api_base` at
+  all — a resource pointed at a compatible gateway called the vendor's default
+  host instead. One `_provider_config()` now builds the config for every
+  operation from the resource itself, `dimensions` included, so the embedding
+  width rule reaches this class too.
+
+- **`LLMResource` builds its provider once instead of per call.** Seven
+  per-provider methods — three for embeddings, four for completions —
+  reimplemented what `create_llm_provider` already does: `urllib.request`
+  with no timeout on both Ollama paths, and a `from_pretrained` pair or a
+  fresh `pipeline` on every HuggingFace call. They are gone, and the class
+  now holds its providers across calls as `AsyncLLMResource` always has,
+  closing them in `close()`. `embed_model=` still selects an embedding model
+  per call, and gets a provider of its own to do it: `config_overrides` is a
+  completion-only parameter, so a model passed to `embed()` would have been
+  honoured in the signature and dropped in fact.
+
 - **A stated embedding width is honoured or refused, never ignored.**
   `LLMConfig.dimensions` was documented as the embedding dimensionality on
   `LLMConfig` itself, described by `create_embedding_provider` as forwarded to

@@ -15,6 +15,7 @@ from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMResponse
 from dataknobs_llm.llm.providers.echo import ErrorResponse
 from dataknobs_llm.testing import text_response
 from dataknobs_common.ratelimit import InMemoryRateLimiter
+from dataknobs_fsm.functions.base import ResourceError
 
 
 def test_resource_imports():
@@ -469,3 +470,238 @@ class TestAsyncLLMResourceLazyInit:
         assert isinstance(result, dict)
         assert "Hello from factory" in result["choices"][0]["text"]
         await resource.aclose()
+
+
+# ---------------------------------------------------------------------------
+# The sync LLMResource path.
+#
+# Everything above exercises AsyncLLMResource, which OVERRIDES embed() and
+# implements generate() separately -- so none of it reaches the sync class's
+# own complete() and embed(). These do.
+#
+# A closed port is used wherever a cell needs a provider call to fail without
+# a network: port 1 is privileged, so nothing is listening and the connection
+# is refused immediately. That is also what makes the endpoint assertion
+# below possible -- a call that fails *there* is a call that went there.
+# ---------------------------------------------------------------------------
+
+CLOSED_ENDPOINT = "http://127.0.0.1:1/v1"
+
+
+class TestSyncResourceEmbedDoesNotInvent:
+    """A vector the resource did not compute is not a vector it may return."""
+
+    def test_a_provider_that_cannot_embed_refuses(self):
+        """Anthropic has no embeddings API; the provider says so by raising.
+
+        The resource used to answer the same question with 768 floats of
+        0.1 -- a plausible-looking vector a store accepts, indexes, and
+        returns as a neighbour forever.
+        """
+        resource = LLMResource("r", provider="anthropic", model="claude-3-5-sonnet", api_key="k")
+
+        with pytest.raises(ResourceError) as excinfo:
+            resource.embed(["hello world"])
+
+        assert isinstance(excinfo.value.__cause__, NotImplementedError)
+
+    def test_a_provider_the_enum_does_not_know_is_still_delegated_to(self):
+        """``echo`` is a real provider that the FSM-side enum has no member for.
+
+        It degraded to ``LLMProvider.CUSTOM`` and fell to a fabricating
+        else-branch, so a working provider was invented over.
+        """
+        resource = LLMResource("r", provider="echo", model="embed-test")
+
+        vectors = resource.embed(["hello world"])
+
+        assert len(vectors) == 1
+        assert len(set(vectors[0])) > 1, "a constant vector is a fabricated one"
+
+    def test_two_texts_do_not_embed_identically(self):
+        """The sharpest tell of fabrication: every text got the same vector."""
+        resource = LLMResource("r", provider="echo", model="embed-test")
+
+        first, second = resource.embed(["alpha", "beta"])
+
+        assert first != second
+
+    def test_a_single_string_still_returns_a_list_of_vectors(self):
+        """The signature promises ``List[List[float]]`` for either input shape."""
+        resource = LLMResource("r", provider="echo", model="embed-test")
+
+        vectors = resource.embed("just one")
+
+        assert len(vectors) == 1
+        assert isinstance(vectors[0], list)
+        assert all(isinstance(value, float) for value in vectors[0])
+
+    def test_a_configured_width_reaches_the_provider(self):
+        """The width rule holds through this class too, or it holds nowhere."""
+        resource = LLMResource("r", provider="echo", model="embed-test", dimensions=16)
+
+        vectors = resource.embed(["hello world"])
+
+        assert len(vectors[0]) == 16
+
+    def test_the_openai_path_does_not_import_a_module_that_moved(self):
+        """``dataknobs_fsm.llm.base`` has not existed since the migration.
+
+        It was the first line of ``_openai_embed``, above the try, so every
+        OpenAI embed call through this class raised ``ModuleNotFoundError``
+        -- which nothing noticed, because nothing called it.
+        """
+        resource = LLMResource(
+            "r",
+            provider="openai",
+            model="text-embedding-3-large",
+            api_key="sk-configured",
+            endpoint=CLOSED_ENDPOINT,
+        )
+
+        with pytest.raises(ResourceError) as excinfo:
+            resource.embed(["hello world"])
+
+        assert not isinstance(excinfo.value.__cause__, ModuleNotFoundError)
+
+
+class TestSyncResourceCompleteDoesNotInvent:
+    """A failure is not a completion, and must not arrive in the text field."""
+
+    def test_a_failure_is_raised_not_returned_as_the_models_text(self):
+        """The swallow put its own error string where model output goes.
+
+        ``{"choices": [{"text": "Error: ..."}]}`` is indistinguishable from
+        a completion to every caller that reads ``choices[0]["text"]``.
+        """
+        resource = LLMResource(
+            "r",
+            provider="openai",
+            model="gpt-4",
+            api_key="sk-configured",
+            endpoint=CLOSED_ENDPOINT,
+        )
+
+        with pytest.raises(ResourceError):
+            resource.complete("Say hello")
+
+    def test_the_configured_credentials_are_the_ones_used(self):
+        """The method read ``kwargs`` then the environment, never the config.
+
+        A resource built with an explicit key reported 'API key not
+        provided' -- and reported it as the model's own words.
+        """
+        resource = LLMResource(
+            "r",
+            provider="openai",
+            model="gpt-4",
+            api_key="sk-configured",
+            endpoint=CLOSED_ENDPOINT,
+        )
+
+        with pytest.raises(ResourceError) as excinfo:
+            resource.complete("Say hello")
+
+        # Reaching the transport at all means the key was accepted upstream
+        # of it; failing on the key would mean it was never read.
+        assert "API key not provided" not in str(excinfo.value.__cause__)
+
+    def test_a_provider_the_enum_does_not_know_completes(self):
+        """``_custom_complete`` refused every provider outside the enum."""
+        resource = LLMResource("r", provider="echo", model="echo-test")
+
+        response = resource.complete("Say hello")
+
+        assert response["choices"][0]["text"]
+        assert response["choices"][0]["finish_reason"] != "error"
+
+    def test_an_unknown_provider_is_refused_by_both_operations(self):
+        """One name nothing can serve, and two operations that must agree.
+
+        They did not: ``complete`` raised and ``embed`` returned constants.
+        """
+        resource = LLMResource("r", provider="not-a-real-provider", model="m")
+
+        with pytest.raises(ResourceError):
+            resource.complete("Say hello")
+        with pytest.raises(ResourceError):
+            resource.embed(["hello world"])
+
+
+class TestSyncResourceDelegation:
+    """What the sync resource does with one provider it holds across calls."""
+
+    def test_a_session_naming_another_model_completes_with_it(self):
+        """One cached provider still serves a session that differs from it.
+
+        ``complete`` has a per-call config surface, so the model travels as
+        an override rather than as a second provider.
+        """
+        resource = LLMResource("r", provider="echo", model="echo-test")
+        session = resource.acquire(model="another-model")
+
+        try:
+            response = resource.complete("Say hello", session=session)
+            assert response["model"] == "another-model"
+        finally:
+            resource.release(session)
+            resource.close()
+
+    def test_a_named_embed_model_gets_a_provider_of_its_own(self):
+        """``embed`` has no per-call config surface, so the model needs one.
+
+        Asserted against the provider map rather than the vectors because a
+        provider that ignored the name would return the same vectors as one
+        that honoured it -- which is exactly how this went unnoticed
+        elsewhere.
+        """
+        resource = LLMResource("r", provider="echo", model="echo-test")
+
+        try:
+            resource.embed(["hello world"])
+            resource.embed(["hello world"], embed_model="other-embed")
+
+            assert sorted(resource._providers) == ["echo-test", "other-embed"]
+        finally:
+            resource.close()
+
+    def test_the_provider_is_built_once_and_reused(self):
+        """The HuggingFace path re-loaded a model per call because of this."""
+        resource = LLMResource("r", provider="echo", model="echo-test")
+
+        try:
+            resource.embed(["one"])
+            first = resource._providers["echo-test"]
+            resource.embed(["two"])
+            resource.complete("three")
+
+            assert resource._providers["echo-test"] is first
+        finally:
+            resource.close()
+
+    def test_close_releases_the_providers_it_built(self):
+        """Every provider in the map was built here, so every one is closed."""
+        resource = LLMResource("r", provider="echo", model="echo-test")
+        resource.embed(["hello world"])
+        assert resource._providers
+
+        resource.close()
+
+        assert not resource._providers
+
+
+class TestAsyncResourceInheritsTheSyncPath:
+    """``AsyncLLMResource`` overrides ``embed`` and ``generate`` -- not ``complete``.
+
+    So the sync ``complete`` is reachable on the async class, and the two
+    halves must not collide on the helpers it calls.
+    """
+
+    def test_the_inherited_sync_complete_still_works(self):
+        resource = AsyncLLMResource("r", provider="echo", model="echo-test")
+
+        try:
+            response = resource.complete("Say hello")
+            assert response["choices"][0]["text"]
+        finally:
+            resource.close()

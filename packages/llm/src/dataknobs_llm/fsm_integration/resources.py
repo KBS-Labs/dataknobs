@@ -6,15 +6,14 @@ consolidate all LLM functionality in the dataknobs-llm package.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field as dataclass_field
-from typing import Any, Dict, List, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Union, cast
 from enum import Enum
 
+from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
@@ -23,7 +22,23 @@ from dataknobs_fsm.resources.base import (
     ResourceStatus,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from dataknobs_llm.llm.base import AsyncLLMProvider
+    from dataknobs_llm.llm.providers.base import SyncProviderAdapter
+
 logger = logging.getLogger(__name__)
+
+
+def _as_vectors(result: Any) -> List[List[float]]:
+    """Normalize a provider's embed result to one vector per input text.
+
+    A provider handed a single string may answer with one flat vector rather
+    than a list holding one. Both classes here promise the nested shape, and
+    both used to unpack it themselves.
+    """
+    if result and isinstance(result[0], (int, float)):
+        return [cast("List[float]", result)]
+    return cast("List[List[float]]", result)
 
 
 class LLMProvider(Enum):
@@ -99,8 +114,8 @@ class LLMResource(BaseResourceProvider):
         model: str = "llama2",
         api_key: str | None = None,
         endpoint: str | None = None,
-        **config,
-    ):
+        **config: Any,
+    ) -> None:
         """Initialize LLM resource.
 
         Args:
@@ -113,14 +128,7 @@ class LLMResource(BaseResourceProvider):
         """
         super().__init__(name, config)
 
-        # Convert string to enum
-        if isinstance(provider, str):
-            try:
-                self.provider = LLMProvider(provider.lower())
-            except ValueError:
-                self.provider = LLMProvider.CUSTOM
-        else:
-            self.provider = provider
+        self._set_provider_identity(provider)
 
         self.model = model
         self.api_key = api_key
@@ -128,10 +136,31 @@ class LLMResource(BaseResourceProvider):
 
         # Initialize provider-specific clients
         self._client = None
+        self._providers: Dict[str, SyncProviderAdapter] = {}
         self._initialize_client()
 
-        self._sessions = {}
+        self._sessions: Dict[int, LLMSession] = {}
         self.status = ResourceStatus.IDLE
+
+    def _set_provider_identity(self, provider: Union[str, LLMProvider]) -> None:
+        """Record both spellings of the provider this resource speaks to.
+
+        The FSM-side enum is a subset of what ``create_llm_provider``
+        supports -- ``echo`` is a provider and not an enum member -- so the
+        raw string is kept beside the enum rather than collapsed into
+        ``CUSTOM``. Collapsing it is what sent a working provider to a
+        fabricating else-branch: the enum could not name it, so nothing
+        could delegate to it.
+        """
+        if isinstance(provider, str):
+            self._provider_name = provider.lower()
+            try:
+                self.provider = LLMProvider(self._provider_name)
+            except ValueError:
+                self.provider = LLMProvider.CUSTOM
+        else:
+            self.provider = provider
+            self._provider_name = provider.value
 
     def _get_default_endpoint(self) -> str | None:
         """Get default endpoint for provider.
@@ -194,7 +223,7 @@ class LLMResource(BaseResourceProvider):
                 operation="initialize",
             ) from e
 
-    def acquire(self, **kwargs) -> LLMSession:
+    def acquire(self, **kwargs: Any) -> LLMSession:
         """Acquire an LLM session.
 
         Args:
@@ -339,17 +368,152 @@ class LLMResource(BaseResourceProvider):
 
         return ResourceHealth.UNKNOWN
 
-    def complete(self, prompt: str, session: LLMSession | None = None, **kwargs) -> Dict[str, Any]:
+    def _provider_config(self, model: str) -> Any:
+        """Build the provider config this resource stands for.
+
+        One place, so ``complete`` and ``embed`` cannot disagree about which
+        credential, endpoint or width is in force. They did disagree: the
+        OpenAI methods read ``kwargs`` and then the environment, so a
+        resource built with an explicit ``api_key`` reported that no key was
+        provided, and a configured ``endpoint`` never reached the client at
+        all -- every call went to the vendor's default host.
+        """
+        from dataknobs_llm.llm.base import LLMConfig as ProviderLLMConfig
+
+        return ProviderLLMConfig(
+            provider=self._provider_name,
+            model=model,
+            api_key=self.api_key,
+            api_base=self.endpoint,
+            dimensions=self.config.get("dimensions"),
+        )
+
+    def _sync_provider(self, model: str | None = None) -> SyncProviderAdapter:
+        """The provider this resource delegates to, built once and reused.
+
+        ``AsyncLLMResource`` has held its provider across calls since it was
+        written. The sync half built a fresh one per call, which is why the
+        HuggingFace path re-loaded a tokenizer and a model every time it was
+        asked for a vector.
+
+        Keyed by model, which is almost always just this resource's own.
+        A caller naming a different embedding model gets a second provider
+        rather than a mutated first one, because ``embed`` has no per-call
+        config surface: ``config_overrides`` is a completion-only parameter
+        and every provider's ``embed`` reads ``self.config.model`` directly.
+        Passing a model somewhere it is *not* read from would honour it in
+        the signature and drop it in fact, which is the defect this class is
+        being repaired for.
+
+        Named apart from ``AsyncLLMResource._get_provider``, which is a
+        coroutine: ``AsyncLLMResource`` does not override ``complete``, so
+        the sync one runs on the async class too and would have resolved to
+        the override and awaited nothing.
+        """
+        key = model or self.model
+        provider = self._providers.get(key)
+        if provider is None:
+            from dataknobs_llm.llm.providers import create_llm_provider
+
+            try:
+                provider = create_llm_provider(self._provider_config(key), is_async=False)
+                provider.initialize()
+            except Exception as e:
+                raise self._operation_error(e, "initialize") from e
+            self._providers[key] = provider
+        return provider
+
+    def _operation_error(self, exc: Exception, operation: str) -> ResourceError:
+        """Name the resource and the operation; let ``__cause__`` carry the rest.
+
+        Bounded for the reason ``_initialize_client`` already records: an SDK
+        client reports a bad credential or an unreachable base URL by naming
+        it, and a message is not the place for either. The provider family
+        and the exception's class name are ours to say.
+        """
+        logger.error(
+            "LLM resource operation failed",
+            extra={
+                "resource": self.name,
+                "operation": operation,
+                "provider": self._provider_name,
+                "model": self.model,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return ResourceError(
+            f"{self._provider_name} {operation} failed ({type(exc).__name__})",
+            resource_name=self.name,
+            operation=operation,
+        )
+
+    def _session_overrides(
+        self, session: LLMSession, call_kwargs: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Per-call overrides, so one cached provider can serve every session.
+
+        A session may name a different model or sampling than the resource
+        was built with -- ``acquire()`` gives Ollama a temperature of its
+        own, for one. The provider is built once from the resource and told
+        the difference per call, which is the shape ``generate`` has always
+        used. Consumed keys are removed from ``call_kwargs`` in place so they
+        are not also forwarded as raw provider arguments.
+        """
+        overrides: Dict[str, Any] = {}
+        if session.model_name != self.model:
+            overrides["model"] = session.model_name
+        for key in ("temperature", "max_tokens", "top_p"):
+            value = call_kwargs.pop(key, getattr(session, key, None))
+            if value is not None:
+                overrides[key] = value
+        return overrides
+
+    @staticmethod
+    def _as_completion_dict(response: Any) -> Dict[str, Any]:
+        """The dict shape this resource's callers read.
+
+        Written out three times before this: once in each of the two
+        per-provider completions, and once in ``AsyncLLMResource.generate``,
+        which now calls this instead.
+        """
+        return {
+            "choices": [
+                {
+                    "text": response.content,
+                    "index": 0,
+                    "finish_reason": response.finish_reason or "stop",
+                }
+            ],
+            "model": response.model,
+            "usage": response.usage,
+        }
+
+    def complete(
+        self, prompt: str, session: LLMSession | None = None, **kwargs: Any
+    ) -> Dict[str, Any]:
         """Generate a completion for the given prompt.
 
         Args:
             prompt: Input prompt.
             session: Optional session to use.
-            **kwargs: Additional parameters.
+            **kwargs: ``temperature``, ``max_tokens`` and ``top_p`` override
+                the session's; anything else is forwarded to the provider.
+                Credentials are not read from here -- they come from the
+                resource, which is the only place that can hold them
+                consistently for both operations.
 
         Returns:
             Completion response with text and metadata.
+
+        Raises:
+            ResourceError: If the provider cannot serve the completion. The
+                provider's own exception travels on ``__cause__``. This used
+                to be returned instead, as ``{"choices": [{"text": "Error:
+                ..."}]}`` -- a failure in the field a caller reads as the
+                model's own words.
         """
+        from dataknobs_llm.llm.base import LLMMessage
+
         if session is None:
             session = self.acquire()
             should_release = True
@@ -357,238 +521,56 @@ class LLMResource(BaseResourceProvider):
             should_release = False
 
         try:
-            # Route to appropriate provider
-            if session.provider == LLMProvider.OLLAMA:
-                response = self._ollama_complete(session, prompt, **kwargs)
-            elif session.provider == LLMProvider.HUGGINGFACE:
-                response = self._huggingface_complete(session, prompt, **kwargs)
-            elif session.provider == LLMProvider.OPENAI:
-                response = self._openai_complete(session, prompt, **kwargs)
-            elif session.provider == LLMProvider.ANTHROPIC:
-                response = self._anthropic_complete(session, prompt, **kwargs)
-            else:
-                response = self._custom_complete(session, prompt, **kwargs)
+            provider = self._sync_provider()
+            call_kwargs = dict(kwargs)
+            overrides = self._session_overrides(session, call_kwargs)
 
-            # Record usage if available
-            if "usage" in response:
-                prompt_tokens = response["usage"].get("prompt_tokens", 0)
-                completion_tokens = response["usage"].get("completion_tokens", 0)
-                session.record_usage(prompt_tokens, completion_tokens)
+            try:
+                response = provider.complete(
+                    [LLMMessage(role="user", content=prompt)],
+                    config_overrides=overrides or None,
+                    **call_kwargs,
+                )
+            except Exception as e:
+                raise self._operation_error(e, "complete") from e
 
-            return response
+            if response.usage:
+                session.record_usage(
+                    response.usage.get("prompt_tokens", 0),
+                    response.usage.get("completion_tokens", 0),
+                )
+            return self._as_completion_dict(response)
 
         finally:
             if should_release:
                 self.release(session)
 
-    def _ollama_complete(self, session: LLMSession, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Ollama completion.
-
-        Args:
-            session: LLM session.
-            prompt: Input prompt.
-            **kwargs: Additional parameters.
-
-        Returns:
-            Completion response.
-        """
-        import urllib.request
-        import urllib.parse
-
-        data = {
-            "model": session.model_name,
-            "prompt": prompt,
-            "temperature": kwargs.get("temperature", session.temperature),
-            "max_tokens": kwargs.get("max_tokens", session.max_tokens),
-            "stream": False,
-        }
-
-        req = urllib.request.Request(
-            f"{session.endpoint}/api/generate",
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-
-        with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read())
-
-        return {
-            "choices": [
-                {
-                    "text": result.get("response", ""),
-                    "index": 0,
-                    "finish_reason": "stop" if result.get("done") else "length",
-                }
-            ],
-            "model": session.model_name,
-            "usage": {
-                "prompt_tokens": result.get("prompt_eval_count", 0),
-                "completion_tokens": result.get("eval_count", 0),
-                "total_tokens": result.get("prompt_eval_count", 0) + result.get("eval_count", 0),
-            },
-        }
-
-    def _huggingface_complete(self, session: LLMSession, prompt: str, **kwargs) -> Dict[str, Any]:
-        """HuggingFace local completion.
-
-        Args:
-            session: LLM session.
-            prompt: Input prompt.
-            **kwargs: Additional parameters.
-
-        Returns:
-            Completion response.
-        """
-        # This would use transformers library for local inference
-        # Placeholder for now
-        try:
-            from transformers import pipeline
-
-            # Lazy load the model
-            pipe = pipeline(
-                "text-generation",
-                model=session.model_name,
-                device=session.provider_config.get("device", "cpu"),
-            )
-
-            result = pipe(
-                prompt,
-                max_length=kwargs.get("max_tokens", session.max_tokens),
-                temperature=kwargs.get("temperature", session.temperature),
-                top_p=kwargs.get("top_p", session.top_p),
-            )
-
-            generated_text = result[0]["generated_text"]
-            # Remove the prompt from the output
-            if generated_text.startswith(prompt):
-                generated_text = generated_text[len(prompt) :]
-
-            return {
-                "choices": [{"text": generated_text, "index": 0, "finish_reason": "stop"}],
-                "model": session.model_name,
-            }
-
-        except ImportError as e:
-            raise ResourceError(
-                "HuggingFace transformers library not installed. "
-                "Install with: pip install transformers torch",
-                resource_name=self.name,
-                operation="complete",
-            ) from e
-
-    def _openai_complete(self, session: LLMSession, prompt: str, **kwargs) -> Dict[str, Any]:
-        """OpenAI completion using provider system."""
-        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
-        from dataknobs_llm.llm.providers import create_llm_provider as create_provider
-
-        # Create config from session
-        config = LLMConfig(
-            provider="openai",
-            model=session.model_name,
-            api_key=kwargs.get("api_key", os.getenv("OPENAI_API_KEY")),
-            temperature=kwargs.get("temperature", 0.7),
-            max_tokens=kwargs.get("max_tokens", 1000),
-        )
-
-        try:
-            # Create provider and execute
-            provider = create_provider(config, is_async=False)
-            provider.initialize()
-
-            # Convert prompt to message format
-            if isinstance(prompt, str):
-                messages = [LLMMessage(role="user", content=prompt)]
-            else:
-                messages = prompt  # type: ignore[unreachable]
-
-            response = provider.complete(messages, **kwargs)
-            provider.close()
-
-            # Convert to expected format
-            return {
-                "choices": [
-                    {
-                        "text": response.content,
-                        "index": 0,
-                        "finish_reason": response.finish_reason or "stop",
-                    }
-                ],
-                "model": response.model,
-                "usage": response.usage,
-            }
-        except Exception as e:
-            # Fallback to placeholder on error
-            return {
-                "choices": [{"text": f"Error: {e!s}", "index": 0, "finish_reason": "error"}],
-                "model": session.model_name,
-            }
-
-    def _anthropic_complete(self, session: LLMSession, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Anthropic completion using provider system."""
-        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
-        from dataknobs_llm.llm.providers import create_llm_provider as create_provider
-
-        # Create config from session
-        config = LLMConfig(
-            provider="anthropic",
-            model=session.model_name,
-            api_key=kwargs.get("api_key", os.getenv("ANTHROPIC_API_KEY")),
-            temperature=kwargs.get("temperature", 0.7),
-            max_tokens=kwargs.get("max_tokens", 1000),
-        )
-
-        try:
-            # Create provider and execute
-            provider = create_provider(config, is_async=False)
-            provider.initialize()
-
-            # Convert prompt to message format
-            if isinstance(prompt, str):
-                messages = [LLMMessage(role="user", content=prompt)]
-            else:
-                messages = prompt  # type: ignore[unreachable]
-
-            response = provider.complete(messages, **kwargs)
-            provider.close()
-
-            # Convert to expected format
-            return {
-                "choices": [
-                    {
-                        "text": response.content,
-                        "index": 0,
-                        "finish_reason": response.finish_reason or "stop",
-                    }
-                ],
-                "model": response.model,
-                "usage": response.usage,
-            }
-        except Exception as e:
-            # Fallback to placeholder on error
-            return {
-                "choices": [{"text": f"Error: {e!s}", "index": 0, "finish_reason": "error"}],
-                "model": session.model_name,
-            }
-
-    def _custom_complete(self, session: LLMSession, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Custom provider completion.
-
-        For custom/unknown providers.
-        """
-        raise NotImplementedError(f"Custom provider {session.provider.value} not implemented")
-
     def embed(
-        self, text: Union[str, List[str]], session: LLMSession | None = None, **kwargs
+        self,
+        text: Union[str, List[str]],
+        session: LLMSession | None = None,
+        **kwargs: Any,
     ) -> List[List[float]]:
         """Generate embeddings for text.
 
         Args:
             text: Text or list of texts to embed.
             session: Optional session to use.
-            **kwargs: Additional parameters.
+            **kwargs: ``embed_model`` selects the embedding model for this
+                call, overriding the resource's; ``dimensions`` states the
+                width the vectors must be, and a stated width is honoured or
+                refused, never ignored. Anything else is forwarded to the
+                provider.
 
         Returns:
-            List of embedding vectors.
+            One vector per input text, whether one text or many was given.
+
+        Raises:
+            ResourceError: If the provider cannot produce the embeddings.
+                The provider's own exception travels on ``__cause__`` --
+                including the ``NotImplementedError`` a provider with no
+                embeddings API raises, which this method used to answer with
+                invented constant vectors instead.
         """
         if session is None:
             session = self.acquire()
@@ -597,130 +579,45 @@ class LLMResource(BaseResourceProvider):
             should_release = False
 
         try:
-            if isinstance(text, str):
-                texts = [text]
-            else:
-                texts = text
+            call_kwargs = dict(kwargs)
+            provider = self._sync_provider(call_kwargs.pop("embed_model", None))
 
-            # Route to appropriate provider
-            if session.provider == LLMProvider.OLLAMA:
-                embeddings = self._ollama_embed(session, texts, **kwargs)
-            elif session.provider == LLMProvider.HUGGINGFACE:
-                embeddings = self._huggingface_embed(session, texts, **kwargs)
-            elif session.provider == LLMProvider.OPENAI:
-                embeddings = self._openai_embed(session, texts, **kwargs)
-            else:
-                # Fallback to fake embeddings
-                embeddings = [[0.1] * 768 for _ in texts]
+            try:
+                vectors = provider.embed(text, **call_kwargs)
+            except Exception as e:
+                raise self._operation_error(e, "embed") from e
 
-            return embeddings
+            return _as_vectors(vectors)
 
         finally:
             if should_release:
                 self.release(session)
 
-    def _ollama_embed(self, session: LLMSession, texts: List[str], **kwargs) -> List[List[float]]:
-        """Generate embeddings using Ollama.
+    def close(self) -> None:
+        """Release sessions, and close the providers this resource built.
 
-        Args:
-            session: LLM session.
-            texts: Texts to embed.
-            **kwargs: Additional parameters.
+        Ownership is unconditional on this half: the sync class has no
+        parameter for handing one in, so every provider in the map was built
+        here. The guard is still the shared one, so the sync half reads the
+        same as every other owned-teardown site rather than inventing a
+        second spelling for the same decision.
 
-        Returns:
-            List of embeddings.
+        ``AsyncLLMResource``'s async provider needs an await and is not
+        touched here -- the asymmetry between this method and ``aclose()``,
+        including the injected provider that class does accept, is its own
+        question, and this change neither widens nor narrows it.
         """
-        import urllib.request
+        for provider in self._providers.values():
+            close_if_owned_sync(provider, True, on_error=self._log_close_error)
+        self._providers.clear()
+        super().close()
 
-        embeddings = []
-        for text in texts:
-            data = {"model": kwargs.get("embed_model", "nomic-embed-text"), "prompt": text}
-
-            req = urllib.request.Request(
-                f"{session.endpoint}/api/embeddings",
-                data=json.dumps(data).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
-
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read())
-                embeddings.append(result.get("embedding", []))
-
-        return embeddings
-
-    def _huggingface_embed(
-        self, session: LLMSession, texts: List[str], **kwargs
-    ) -> List[List[float]]:
-        """Generate embeddings using HuggingFace.
-
-        Args:
-            session: LLM session.
-            texts: Texts to embed.
-            **kwargs: Additional parameters.
-
-        Returns:
-            List of embeddings.
-        """
-        try:
-            from transformers import AutoTokenizer, AutoModel
-            import torch
-
-            model_name = kwargs.get("embed_model", "sentence-transformers/all-MiniLM-L6-v2")
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModel.from_pretrained(model_name)
-
-            embeddings = []
-            for text in texts:
-                inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    # Use mean pooling
-                    embedding = outputs.last_hidden_state.mean(dim=1).squeeze().tolist()
-                embeddings.append(embedding)
-
-            return embeddings
-
-        except ImportError as e:
-            raise ResourceError(
-                "HuggingFace transformers library not installed",
-                resource_name=self.name,
-                operation="embed",
-            ) from e
-
-    def _openai_embed(self, session: LLMSession, texts: List[str], **kwargs) -> List[List[float]]:
-        """Generate embeddings using OpenAI provider system."""
-        from dataknobs_fsm.llm.base import LLMConfig
-        from dataknobs_llm.llm.providers import create_llm_provider as create_provider
-
-        # Create config for embeddings
-        config = LLMConfig(
-            provider="openai",
-            model=kwargs.get("embed_model", "text-embedding-ada-002"),
-            api_key=kwargs.get("api_key", os.getenv("OPENAI_API_KEY")),
+    def _log_close_error(self, exc: Exception) -> None:
+        """One provider failing to close must not strand the others."""
+        logger.warning(
+            "LLM provider close failed",
+            extra={"resource": self.name, "error_type": type(exc).__name__},
         )
-
-        try:
-            # Create provider and generate embeddings
-            provider = create_provider(config, is_async=False)
-            provider.initialize()
-
-            embeddings = provider.embed(texts, **kwargs)
-            provider.close()
-
-            # Ensure we return List[List[float]]. The two casts that used to
-            # be here were doing the narrowing `isinstance` already implies;
-            # they were needed only because `create_provider` returned a union
-            # spanning the async provider, so `embed` returned a coroutine as
-            # well as the two list shapes and there was nothing to narrow.
-            if isinstance(embeddings[0], list):
-                return embeddings
-            else:
-                # Single text was embedded - wrap in list
-                return [embeddings]
-
-        except Exception:
-            # Fallback to placeholder dimensions on error
-            return [[0.1] * 1536 for _ in texts]  # OpenAI ada-002 dimension
 
     def get_usage_stats(self, session: LLMSession) -> Dict[str, Any]:
         """Get usage statistics for a session.
@@ -731,7 +628,7 @@ class LLMResource(BaseResourceProvider):
         Returns:
             Usage statistics.
         """
-        stats = {
+        stats: Dict[str, Any] = {
             "provider": session.provider.value,
             "model": session.model_name,
             "total_requests": session.total_requests,
@@ -786,7 +683,7 @@ class AsyncLLMResource(LLMResource):
         model: str = "llama3.2",
         api_key: str | None = None,
         endpoint: str | None = None,
-        async_provider: Any | None = None,
+        async_provider: AsyncLLMProvider | None = None,
         **config: Any,
     ) -> None:
         """Initialize async LLM resource.
@@ -812,28 +709,18 @@ class AsyncLLMResource(LLMResource):
         # Call BaseResourceProvider directly (skip LLMResource._initialize_client)
         BaseResourceProvider.__init__(self, name, config)
 
-        # Preserve the raw provider string for create_llm_provider().
-        # The FSM LLMProvider enum is a subset of what the factory supports
-        # (e.g. "echo" is valid for the factory but not in the enum).
-        if isinstance(provider, str):
-            self._provider_name = provider.lower()
-            try:
-                self.provider = LLMProvider(self._provider_name)
-            except ValueError:
-                self.provider = LLMProvider.CUSTOM
-        else:
-            self.provider = provider
-            self._provider_name = provider.value
+        self._set_provider_identity(provider)
 
         self.model = model
         self.api_key = api_key
         self.endpoint = endpoint or self._get_default_endpoint()
         self._client = None
+        self._providers: Dict[str, SyncProviderAdapter] = {}
         self._sessions: dict[int, LLMSession] = {}
         self.status = ResourceStatus.IDLE
 
         # Async provider — either injected or lazy-initialized via ainitialize
-        self._async_provider: Any = async_provider
+        self._async_provider: AsyncLLMProvider | None = async_provider
 
         # Rate limiter from config
         rpm = config.get("requests_per_minute", 0)
@@ -852,30 +739,34 @@ class AsyncLLMResource(LLMResource):
         provider supported by ``create_llm_provider()`` works — including
         ``"echo"`` for testing.
         """
-        from dataknobs_llm.llm.base import LLMConfig as ProviderLLMConfig
+        self._async_provider = await self._build_async_provider()
+
+    async def _build_async_provider(self) -> AsyncLLMProvider:
+        """Build and initialize one async provider from this resource.
+
+        Separate from ``ainitialize`` so the lazy path can hold the result
+        as a value rather than reading back an attribute it just wrote --
+        which is the difference between a return type the checker can
+        narrow and one it has to be asserted into.
+        """
         from dataknobs_llm.llm.providers import create_llm_provider
 
-        provider_config = ProviderLLMConfig(
-            provider=self._provider_name,
-            model=self.model,
-            api_key=self.api_key,
-            api_base=self.endpoint,
-        )
-        self._async_provider = create_llm_provider(provider_config, is_async=True)
-        await self._async_provider.initialize()
+        provider = create_llm_provider(self._provider_config(self.model), is_async=True)
+        await provider.initialize()
         logger.info(
             "AsyncLLMResource initialized",
             extra={"provider": self._provider_name, "model": self.model},
         )
+        return provider
 
-    async def _get_provider(self) -> Any:
+    async def _get_provider(self) -> AsyncLLMProvider:
         """Get or lazily initialize the async provider.
 
         Returns:
             The initialized ``AsyncLLMProvider``.
         """
         if self._async_provider is None:
-            await self.ainitialize()
+            self._async_provider = await self._build_async_provider()
         return self._async_provider
 
     async def generate(
@@ -942,17 +833,7 @@ class AsyncLLMResource(LLMResource):
                     response.usage.get("completion_tokens", 0),
                 )
 
-            return {
-                "choices": [
-                    {
-                        "text": response.content,
-                        "index": 0,
-                        "finish_reason": response.finish_reason or "stop",
-                    }
-                ],
-                "model": response.model,
-                "usage": response.usage,
-            }
+            return self._as_completion_dict(response)
         finally:
             self.release(session)
 
@@ -988,12 +869,7 @@ class AsyncLLMResource(LLMResource):
             llm_provider = await self._get_provider()
             result = await llm_provider.embed(text, **kwargs)
 
-            # Normalize to list of lists
-            if isinstance(text, str):
-                if isinstance(result, list) and result and isinstance(result[0], float):
-                    return [result]
-                return cast("list[list[float]]", result)
-            return cast("list[list[float]]", result)
+            return _as_vectors(result)
         finally:
             if should_release:
                 self.release(session)
