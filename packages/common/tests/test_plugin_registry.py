@@ -1930,6 +1930,25 @@ class TestAValidateTypeProtocolAndItsAsyncTwin:
         assert "fetch" in str(caught.value)
         assert "synchronous" in str(caught.value)
 
+    def test_the_default_factory_is_gated_too_and_names_no_key(self) -> None:
+        """`set_default_factory` has no key, so the message must omit one.
+
+        It is the other class-gate caller, and the only one that reaches
+        the refusal with nothing to name --- which is why the key is
+        optional there rather than rendered as `None`.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("fetchers", validate_type=_Fetches)
+
+        with pytest.raises(TypeError) as caught:
+            registry.set_default_factory(_AsyncFetcher)
+        message = str(caught.value)
+
+        assert "Default factory" in message
+        assert "fetch" in message
+        assert "fetchers" in message
+        assert "plugin" not in message
+        assert "None" not in message
+
     def test_isinstance_still_answers_true_in_both_directions(self) -> None:
         """The fix must not move `isinstance`, and does not.
 

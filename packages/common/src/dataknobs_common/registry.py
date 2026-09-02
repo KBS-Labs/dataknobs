@@ -1118,7 +1118,12 @@ class PluginRegistry(Generic[T]):
 
         Only members the Protocol declares as callables are compared: a
         property carries no async-ness to disagree about, and a member the
-        candidate lacks entirely belongs to the presence check above.
+        candidate lacks entirely belongs to the presence check above. A
+        member declared as a bare annotation --- ``fetch: Callable[...,
+        Awaitable[str]]`` rather than a ``def`` --- is skipped for the
+        same reason, the annotation leaving nothing on the class to read
+        the async-ness off. Such a protocol is not separable from its twin
+        by any runtime check, here or elsewhere.
 
         Args:
             candidate: A factory class, or an instance a factory returned.
