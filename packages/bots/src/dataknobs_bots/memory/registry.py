@@ -28,7 +28,7 @@ that does not consume a given collaborator absorbs it with ``**_``.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.exceptions import (
@@ -36,7 +36,7 @@ from dataknobs_common.exceptions import (
     NotFoundError,
     OperationError,
 )
-from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.registry import PluginFactory, PluginRegistry
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -57,7 +57,11 @@ logger = logging.getLogger(__name__)
 
 # A memory factory is either a Memory subclass (with ``from_config`` /
 # ``from_config_async``) or a callable with the same dispatch signature.
-MemoryFactory = type[Memory] | Callable[..., Memory]
+#: Derived from the registry's own alias rather than restated, so this
+#: surface widens with the registry instead of drifting behind it. The
+#: hand-written copies omitted the asynchronous arm the registry has
+#: always accepted at runtime.
+MemoryFactory = PluginFactory[Memory]
 
 
 # ------------------------------------------------------------------
@@ -113,7 +117,7 @@ def _resolve_memory_config_cls(
 
     Unlike ``vector_backends`` (a closed set of config-bearing classes),
     ``register_memory_backend`` accepts a bare callable factory
-    (``MemoryFactory = type[Memory] | Callable[..., Memory]``). Such a
+    (``MemoryFactory = PluginFactory[Memory]``). Such a
     backend has no ``StructuredConfig`` ``CONFIG_CLS``, so the resolver
     returns :data:`SKIP_VALIDATION`: the backend is valid and constructible
     but has no typed schema to dry-run against, so ``validate`` skips it

@@ -6,6 +6,7 @@ Supports both direct instantiation and dataknobs Config-based factory pattern.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -212,6 +213,24 @@ class LLMProviderFactory:
         # and neither branch did it, so a caller passing ``prompt_builder=``
         # or ``responses=`` got a default-built provider and no error saying so.
         async_provider = provider_class(llm_config, **kwargs)
+        # This module instantiates the factory itself rather than through
+        # ``create()``, so the registry's own refusal of an awaitable factory
+        # never runs here. ``register_provider`` declares
+        # ``type[AsyncLLMProvider]`` and is the only registration path, so
+        # this cannot fire -- but the alternative to checking is a cast, and
+        # a cast would turn a broken registration into a provider that is
+        # silently a coroutine. Sync construction is this module's premise:
+        # it decides whether ``SyncProviderAdapter`` goes on top, and it
+        # cannot decide that about something it has not awaited.
+        if inspect.isawaitable(async_provider):
+            close = getattr(async_provider, "close", None)
+            if callable(close):
+                close()
+            raise TypeError(
+                f"Provider '{llm_config.provider}' is registered as an "
+                f"asynchronous factory; LLMProviderFactory constructs "
+                f"providers synchronously. Register a provider class."
+            )
         if self.is_async:
             return async_provider
         return SyncProviderAdapter(async_provider)

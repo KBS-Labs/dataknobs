@@ -23,10 +23,10 @@ Usage::
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
-from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.registry import PluginFactory, PluginRegistry
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -40,7 +40,11 @@ logger = logging.getLogger(__name__)
 
 # A strategy factory is either a ReasoningStrategy subclass (which has
 # ``from_config``) or a callable with the same signature.
-StrategyFactory = type[ReasoningStrategy] | Callable[..., ReasoningStrategy]
+#: Derived from the registry's own alias rather than restated, so this
+#: surface widens with the registry instead of drifting behind it. The
+#: hand-written copies omitted the asynchronous arm the registry has
+#: always accepted at runtime.
+StrategyFactory = PluginFactory[ReasoningStrategy]
 
 
 def _register_builtins(

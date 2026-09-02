@@ -206,6 +206,7 @@ from dataknobs_common.registry import (
     AsyncRegistry,
     BackendRegistry,
     CachedRegistry,
+    PluginFactory,
     PluginRegistry,
     Registry,
 )
@@ -458,6 +459,7 @@ __all__ = [
     "AsyncRegistry",
     "BackendRegistry",
     "CachedRegistry",
+    "PluginFactory",
     "PluginRegistry",
     "Registry",
     # Resource resolvers

@@ -618,6 +618,20 @@ count = await registry.count()
 
 ### Plugin Registry
 
+#### `PluginFactory[T]`
+
+```python
+PluginFactory: TypeAlias = type[T] | Callable[..., T] | Callable[..., Awaitable[T]]
+```
+
+The three shapes a `PluginRegistry` accepts under a key. Exported from
+`dataknobs_common`, because `get_factory()` returns one and `copy()`
+returns a mapping of them.
+
+Only `get_async()` and `create_async()` can await the third shape; the
+synchronous `get()` and `create()` raise `OperationError` naming the async
+method to call instead. See [Asynchronous factories](plugin-registry.md#asynchronous-factories).
+
 #### `PluginRegistry[T]`
 
 Registry with factory support for creating fresh instances on demand, lazy initialization, and configuration-driven key resolution.
@@ -634,7 +648,7 @@ class PluginRegistry(Generic[T]):
 ```python
 PluginRegistry(
     name: str,
-    default_factory: type[T] | Callable[..., T] | None = None,
+    default_factory: PluginFactory[T] | None = None,
     validate_type: type | None = None,
     *,
     canonicalize_keys: bool = False,
@@ -650,7 +664,7 @@ PluginRegistry(
 
 **Parameters:**
 - `name` (str): Registry name for identification
-- `default_factory` (type[T] | Callable | None): Default factory when key not found
+- `default_factory` (PluginFactory[T] | None): Default factory when key not found
 - `validate_type` (type[T] | None): Base type to validate registrations against. A class, an ABC, or a `@runtime_checkable` Protocol — including one carrying properties. See [What `validate_type` checks](plugin-registry.md#what-validate_type-checks)
 - `canonicalize_keys` (bool): Lowercase all keys for case-insensitive lookup
 - `config_key` (str | None): Field name to extract lookup key from config dicts in `create()`
@@ -669,7 +683,7 @@ Register a plugin class or factory function.
 
 **Parameters:**
 - `key` (str): Unique identifier
-- `factory` (type[T] | Callable[..., T]): Plugin class or factory
+- `factory` (PluginFactory[T]): Plugin class, factory callable, or factory callable returning an awaitable
 - `override` (bool): Allow replacing existing registration
 - `metadata` (dict[str, Any] | None): Optional metadata for the registration
 - `allow_overwrite` (bool | None): Keyword alias for `override`, matching `Registry.register`. When not `None` it wins; use whichever name fits the surrounding code
@@ -690,7 +704,9 @@ Get or create a cached plugin instance. Factories are called with `(key, config)
 
 **Returns:** Plugin instance
 
-**Raises:** `NotFoundError` if key not registered and no default
+**Raises:**
+- `NotFoundError`: If key not registered and no default
+- `OperationError`: If the factory returns an awaitable — `get()` cannot await one. The message names `get_async()`. Nothing is cached in that case
 
 ##### `create(key=None, config=None, **kwargs) -> T`
 

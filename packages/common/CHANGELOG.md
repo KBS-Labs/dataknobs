@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PluginFactory[T]`**, the exported alias for the three shapes a
+  `PluginRegistry` accepts under a key: a class, a callable returning an
+  instance, and a callable returning an *awaitable* instance. The third is
+  new to the declaration — the class had accepted it at runtime and
+  documented registering it since it grew `get_async`, while the annotation
+  excluded it, so the exclusion reported as a type error against the
+  documented pattern's own tests. It is exported because `get_factory()`
+  returns one and `copy()` returns a mapping of them: public surface whether
+  or not it had a name.
+
 - **`Capability.VECTOR_PERSIST`, `Capability.VECTOR_INDEX_TUNING` and
   `Capability.VECTOR_DOCUMENT_API`,** with a `vector_storage` family in
   `CAPABILITY_FAMILIES`. All three are for the vector stores in
@@ -46,6 +56,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discarded.
 
 ### Fixed
+
+- **A synchronous `get()` or `create()` handed the caller an un-awaited
+  coroutine when the factory was asynchronous, and `get()` cached it.**
+  Neither method asked whether the factory's result had to be awaited, so an
+  `async def` factory produced no exception and no log line — only a
+  `RuntimeWarning` at interpreter shutdown, attributed to the factory rather
+  than to the registry. Through `get()` it was worse: the coroutine became
+  the cached instance, so the first caller awaited it successfully and every
+  later caller received the same exhausted object and a bare
+  `RuntimeError: cannot reuse already awaited coroutine` naming neither the
+  registry nor the key. The failure was also inverted with respect to
+  `validate_type` — a registry that gated raised cleanly, and one that did
+  not was silent, so the stricter configuration was the safer one by
+  accident. Both methods now refuse an awaitable before anything is cached,
+  naming the registry, the key, the factory and the async method to call
+  instead; a gated registry gives that same message rather than the type
+  guard's, which said the factory "must return a Handler instance" and sent
+  the reader to change the factory.
+
+- **`get_async()` did not await every awaitable, and discarded the type
+  guard's message.** It tested its factory's result with
+  `asyncio.iscoroutine` while `create_async()` used `inspect.isawaitable`, so
+  a factory returning a future or any other `__await__` object was awaited by
+  one and handed back un-awaited by the other. Separately, its `except
+  Exception` re-wrapped the `validate_type` guard's own `OperationError`, so
+  a type failure arrived as `"Failed to create plugin 'h' (OperationError)"`
+  — alone among the four entry points in saying nothing about what was
+  wrong. Both are consequences of the same absence: the four factory-
+  invocation sites each decided independently how to call a factory, whether
+  to await the result, which predicate settled that, and which errors to
+  re-wrap. They now share one invocation seam, parameterised by the two
+  things that genuinely differ — the call arity, and whether the caller can
+  await — so the two arities are stated in exactly one place. The
+  `_factories` comment asserting that "every factory is invoked as
+  `factory(key, config)`" was wrong for both `create` methods and is
+  corrected.
 
 - **`PluginRegistry`'s class-factory gate refused the implementation it exists
   to admit, whenever `validate_type` was a Protocol carrying a property.**
