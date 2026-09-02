@@ -38,6 +38,7 @@ PROMPTS = {
         "greet": {"template": "Hello, how can I help?"},
         "farewell": {"template": "Goodbye for now"},
         "loop": {"template": "Still here"},
+        "echo_params": {"template": "state={{ state }} provider={{ _llm_provider }}"},
     },
 }
 
@@ -70,6 +71,22 @@ def two_state_flow(condition: TransitionCondition | None = None) -> Conversation
                 transition_conditions={"go": condition or keyword_condition(["help"])},
             ),
             "farewell": FlowState(prompt_name="farewell"),
+        },
+    )
+
+
+def failing_flow() -> ConversationFlow:
+    """A flow whose second state names a prompt the library does not hold."""
+    return ConversationFlow(
+        name="missing_prompt",
+        initial_state="greeting",
+        states={
+            "greeting": FlowState(
+                prompt_name="greet",
+                transitions={"go": "farewell"},
+                transition_conditions={"go": keyword_condition(["help"])},
+            ),
+            "farewell": FlowState(prompt_name="no-such-prompt"),
         },
     )
 
@@ -167,19 +184,7 @@ async def test_condition_error_surfaces_instead_of_silently_rejecting_the_arc(bu
 
 async def test_execute_raises_when_the_flow_fails(builder):
     """A failed run must raise, not return the input data as if it succeeded."""
-    flow = ConversationFlow(
-        name="missing_prompt",
-        initial_state="greeting",
-        states={
-            "greeting": FlowState(
-                prompt_name="greet",
-                transitions={"go": "farewell"},
-                transition_conditions={"go": keyword_condition(["help"])},
-            ),
-            "farewell": FlowState(prompt_name="no-such-prompt"),
-        },
-    )
-    adapter = ConversationFlowAdapter(flow=flow, prompt_builder=builder)
+    adapter = ConversationFlowAdapter(flow=failing_flow(), prompt_builder=builder)
 
     with pytest.raises(OperationError, match="farewell"):
         await adapter.execute({"topic": "billing"})
@@ -234,9 +239,12 @@ async def test_max_loops_stops_a_self_looping_state(builder):
 async def test_execute_does_not_block_the_event_loop(builder):
     """The adapter must drive the *async* FSM facade.
 
-    ``SimpleFSM`` is the sync facade: its ``_run_async`` bridges to a daemon
-    loop and blocks the calling thread for the whole FSM run, which on a
-    shared loop freezes every other in-flight task.
+    This guards the regression rather than reproducing the historical bug: the
+    pre-fix call named ``SimpleFSM.process_async``, which no longer exists, so
+    a literal reversion raises ``AttributeError`` before blocking anything. The
+    live hazard is the method that *does* exist — ``SimpleFSM.process``, whose
+    ``_run_async`` bridges to a daemon loop and blocks the calling thread for
+    the whole FSM run, freezing every other task on a shared loop.
     """
     adapter = ConversationFlowAdapter(flow=two_state_flow(), prompt_builder=builder)
 
@@ -266,3 +274,71 @@ async def test_execute_flow_yields_one_node_per_state(builder, llm):
     ]
     assert all(node.message.role == "assistant" for node in nodes)
     assert [node.prompt_name for node in nodes] == ["greet", "farewell"]
+    # Each node is constructed with an empty id and stamped from its position
+    # once it is in the tree; an unstamped node would still satisfy every
+    # assertion above.
+    assert all(node.node_id for node in nodes)
+    assert len({node.node_id for node in nodes}) == len(nodes)
+
+
+async def test_execute_flow_raises_when_the_flow_fails(builder, llm):
+    """A failed flow must reach the caller of the *public* surface.
+
+    ``execute_flow`` converts the adapter's ``OperationError`` into the
+    ``ValueError`` its docstring promises. That conversion was unreachable
+    before: ``adapter.execute()`` never raised, because it never ran a state.
+    Now it is the path every consumer takes when their flow breaks.
+    """
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=DataknobsConversationStorage(AsyncMemoryDatabase()),
+        system_prompt_name="helpful",
+    )
+
+    with pytest.raises(ValueError, match="Flow execution failed") as excinfo:
+        async for _node in manager.execute_flow(failing_flow()):
+            pass
+
+    # The cause is preserved even though the type is flattened, so the failing
+    # state is still recoverable from the chain.
+    assert isinstance(excinfo.value.__cause__, OperationError)
+    assert "farewell" in str(excinfo.value)
+
+
+async def test_internal_markers_do_not_reach_prompt_params(builder, llm):
+    """The provider and the loop-guard markers are plumbing, not template data.
+
+    ``_llm_provider`` is seeded into the flow context so
+    ``LLMClassifierCondition`` can find a provider. Splatting the whole context
+    into every render put that live object — which can hold a credential — in
+    scope for the template, and a nested prompt reference propagates the parent
+    render's variables into the child's, so it travelled further than the state
+    it was rendered for.
+
+    The template below renders both, so an unfiltered param set shows up in the
+    response content itself.
+    """
+    flow = ConversationFlow(
+        name="marker_check",
+        initial_state="greeting",
+        states={
+            "greeting": FlowState(
+                prompt_name="echo_params",
+                transitions={"go": "farewell"},
+                transition_conditions={"go": always()},
+            ),
+            "farewell": FlowState(prompt_name="farewell"),
+        },
+    )
+    adapter = ConversationFlowAdapter(flow=flow, prompt_builder=builder, llm=llm)
+
+    await adapter.execute()
+
+    rendered = adapter.execution_state.history[0][1]
+    # An unfiltered param set renders the object's repr straight into the
+    # assistant's message; a filtered one leaves the placeholder unsubstituted.
+    assert "EchoProvider" not in rendered
+    assert "greeting" in rendered
+    # The provider is still where the condition reads it.
+    assert adapter.execution_state.context["_llm_provider"] is llm

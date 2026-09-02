@@ -1338,7 +1338,7 @@ class ConversationManager:
             >>> # Execute flow
             >>> async for node in manager.execute_flow(flow):
             ...     print(f"State: {node.metadata.get('state')}")
-            ...     print(f"Response: {node.content}")
+            ...     print(f"Response: {node.message.content}")
         """
         from dataknobs_llm.conversations.flow import ConversationFlowAdapter
 

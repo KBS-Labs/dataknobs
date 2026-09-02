@@ -61,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is now seeded into the flow context as `_llm_provider`, which is the key
   that condition reads.
 
+- **The adapter's internal markers no longer reach prompt templates.** The
+  whole flow context was splatted into every render's parameters, so the
+  seeded `_llm_provider` — a live provider object, which can hold a
+  credential — was in scope for the template, and a nested prompt reference
+  propagates the parent render's variables into the child's. `_llm_provider`,
+  `_force_end` and `_error` are now withheld from prompt parameters; the
+  provider remains where the condition reads it.
+
 - **`get_execution_summary()["current_state"]` always named the first state.**
   It was written once at construction and never advanced. The transform now
   advances it, so the summary names the state the flow ended in.

@@ -16,6 +16,14 @@ from .flow import ConversationFlow, FlowState, TransitionCondition
 
 logger = logging.getLogger(__name__)
 
+#: Keys the adapter puts in the flow's data and context for its own use.
+#: They are plumbing, not template data, and are withheld from prompt params:
+#: ``_llm_provider`` is a live provider object that can hold a credential, and
+#: a nested prompt reference propagates the parent render's variables into the
+#: child's, so anything splatted here travels further than the state it was
+#: rendered for.
+INTERNAL_PARAM_KEYS = frozenset({"_llm_provider", "_force_end", "_error"})
+
 
 @dataclass
 class FlowExecutionState:
@@ -55,6 +63,13 @@ class ConversationFlowAdapter:
 
     This class converts high-level conversation flow definitions into
     FSM configurations and manages the execution lifecycle.
+
+    An instance drives one run at a time. :meth:`execute` resets the execution
+    state and the function registry on ``self``, and the transform and
+    condition closures read that state when the engine calls them, so two
+    concurrent ``execute()`` calls on the same adapter would interleave into
+    each other's history and loop counts. Construct one per run —
+    :meth:`ConversationManager.execute_flow` does.
     """
 
     def __init__(
@@ -195,14 +210,14 @@ class ConversationFlowAdapter:
                 except Exception:
                     logger.exception("on_enter hook failed for state '%s'", state_name)
 
-            # Merge prompt params with data
+            # Merge prompt params with data, less the adapter's own markers
+            # (see INTERNAL_PARAM_KEYS).
+            merged = {**data, **flow_state.prompt_params, **context}
             prompt_params = {
-                **data,
-                **flow_state.prompt_params,
-                **context,
-                "state": state_name,
-                "loop_count": loop_count,
+                key: value for key, value in merged.items() if key not in INTERNAL_PARAM_KEYS
             }
+            prompt_params["state"] = state_name
+            prompt_params["loop_count"] = loop_count
 
             # Render the state's prompt. A render failure is not an assistant
             # message reporting an error: it propagates, the engine records the
