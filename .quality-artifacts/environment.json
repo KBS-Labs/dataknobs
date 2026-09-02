@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-02T20:50:04Z",
+  "timestamp": "2026-09-02T21:51:53Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/function-caller-dispatch-and-charge",
-  "git_commit": "54b5ec3a143dfcb44efa1eea277598bf4b45118d",
+  "git_branch": "sbk/conversation-flow-adapter-execution",
+  "git_commit": "c1198f00cb26bdf58ac6a88730afe3d41ad74eae",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
