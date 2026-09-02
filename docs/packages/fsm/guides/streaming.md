@@ -127,20 +127,22 @@ FileFormat.BINARY # Binary files
 Stream query results from databases:
 
 ```python
+from dataknobs_data.query import Query
 from dataknobs_fsm.streaming.db_stream import DatabaseStreamSource
 
-# Create database stream
+# The stream is synchronous, so the database must be a SyncDatabase; an
+# AsyncDatabase is refused at construction with ConfigurationError.
 source = DatabaseStreamSource(
-    database=db_connection,  # dataknobs_data database
-    query="SELECT * FROM large_table",
-    chunk_size=5000,
-    fetch_size=10000  # Database fetch size
+    database=db,             # a dataknobs_data SyncDatabase
+    query=Query(),           # a Query, not SQL; None means all records
+    batch_size=5000,
+    cursor_field="id",       # paginated with `> cursor`, sorted ascending
 )
 
 # Process database records
 for chunk in source:
-    records = chunk.data  # List of Record objects
-    print(f"Processing {len(records)} records")
+    rows = chunk.data  # list of dicts --- Record.to_dict(include_metadata=True)
+    print(f"Processing {len(rows)} records")
 ```
 
 ### Memory Stream Source
@@ -563,24 +565,24 @@ parallel_processing()
 ### Example 3: Database to File Export
 
 ```python
+from dataknobs_data.query import Operator, Query
 from dataknobs_fsm.streaming.db_stream import DatabaseStreamSource
 from dataknobs_fsm.streaming.file_stream import FileStreamSink, FileFormat
 from dataknobs_fsm.streaming.core import StreamContext
 
-async def export_database_to_file(db_connection):
-    """Export large table to compressed JSON file."""
+def export_database_to_file(db):
+    """Export large table to compressed JSON file.
+
+    Synchronous throughout: ``context.stream`` drives the source and sink by
+    calling them, so there is nothing here to await.
+    """
 
     # Create database source
     source = DatabaseStreamSource(
-        database=db_connection,
-        query="""
-            SELECT id, name, email, created_at
-            FROM users
-            WHERE active = true
-            ORDER BY created_at
-        """,
-        chunk_size=10000,
-        fetch_size=50000
+        database=db,  # SyncDatabase --- see above
+        query=Query().filter("active", Operator.EQ, True),
+        batch_size=10000,
+        cursor_field="created_at",
     )
 
     # Create compressed file sink
@@ -593,20 +595,16 @@ async def export_database_to_file(db_connection):
     # Stream with progress tracking
     context = StreamContext()
 
-    def transform_records(chunk):
-        # Convert Records to dicts
-        chunk.data = [record.to_dict() for record in chunk.data]
-        return chunk
+    # No processor is needed: the source already yields the dicts the JSONL
+    # sink writes, so a transform converting Records to dicts would be
+    # converting something that is not a Record.
 
-    context.add_processor(transform_records)
-
-    # Process
     metrics = context.stream(source, sink)
 
-    print(f"Export complete:")
+    print("Export complete:")
     print(f"  Records exported: {metrics.items_processed}")
-    print(f"  File size: {sink.bytes_written / (1024*1024):.2f} MB")
-    print(f"  Compression ratio: {sink.compression_ratio:.2f}")
+    print(f"  Chunks: {metrics.chunks_processed}, errors: {metrics.errors_count}")
+    print(f"  Throughput: {metrics.throughput_items_per_second():.0f} records/s")
 
     return metrics
 ```
