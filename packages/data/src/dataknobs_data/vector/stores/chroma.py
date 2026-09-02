@@ -37,7 +37,7 @@ except ImportError:
     CHROMA_AVAILABLE = False
 
 
-class ChromaVectorStore(VectorStore):
+class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
     """Chroma-based vector store for semantic search.
 
     Chroma is a vector database designed for AI applications with features like:

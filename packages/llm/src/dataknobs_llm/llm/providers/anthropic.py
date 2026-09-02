@@ -843,7 +843,16 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
             accepts_inline_system=self.get_constraints().accepts_inline_system,
         )
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer already written beside ``OpenAIProvider.initialize``:
+    # ``LLMProvider`` declares the pair sync, so the whole async subtree
+    # contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong. The sibling
+    # carried the suppression and this one did not, which is the only reason
+    # the finding showed up here alone.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Initialize Anthropic client."""
         try:
             import anthropic
@@ -915,7 +924,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
     async def _close_client(self) -> None:
         """Close the Anthropic client."""
         if self._client:
-            await self._client.close()  # type: ignore[unreachable]
+            await self._client.close()
 
     async def validate_model(self) -> bool:
         """Validate model availability against the live Models API.
@@ -1284,7 +1293,7 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 self._raise_translated(exc)
 
     async def embed(
-        self, texts: Union[str, List[str]], **kwargs
+        self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
         """Anthropic doesn't provide embeddings."""
         raise NotImplementedError("Anthropic doesn't provide embedding models")

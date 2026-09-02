@@ -32,7 +32,7 @@ except ImportError:
     ASYNCPG_AVAILABLE = False
 
 
-class PgVectorStore(VectorStore):
+class PgVectorStore(VectorStore[PgVectorStoreConfig]):
     """PostgreSQL pgvector backend for vector similarity search.
 
     Uses PostgreSQL with the pgvector extension for efficient vector storage
@@ -433,6 +433,45 @@ class PgVectorStore(VectorStore):
         else:
             return "vector_cosine_ops"  # Default
 
+    def _require_pool(self) -> asyncpg.Pool:
+        """The pool, for a caller that has already established it exists.
+
+        ``initialize()`` sets ``self._pool`` before it sets
+        ``self._initialized``, and ``close()`` clears the flag, so a method
+        that has checked the flag is holding a live pool. The checker
+        cannot follow that from a flag to an attribute, which is what put
+        ``Item "None" of "Any | None" has no attribute "acquire"`` on every
+        one of these sites.
+
+        This states the invariant in one place instead of asserting it at
+        each use. The raise is unreachable while the invariant holds; it is
+        here so that a future path setting the flag without the pool fails
+        by name rather than as ``'NoneType' object has no attribute
+        'acquire'`` from inside the backend.
+        """
+        if self._pool is None:
+            raise ResourceError(
+                "pgvector store reported itself initialized without a connection pool",
+                context={"table": self.table_name, "schema": self.schema},
+            )
+        return self._pool
+
+    async def _ready_pool(self) -> asyncpg.Pool:
+        """Connect if this is first use, and hand back the pool.
+
+        The nine operations that connect on demand each opened with the
+        same two lines before reaching ``self._pool``. Holding that in one
+        place is what lets the pool arrive already narrowed: they bind the
+        return value rather than re-reading the optional attribute.
+
+        ``create_index`` deliberately does not use this --- it treats an
+        unopened store as a caller error and says so, which
+        ``test_create_index_still_refuses_rather_than_connecting`` pins.
+        """
+        if not self._initialized:
+            await self.initialize()
+        return self._require_pool()
+
     async def _check_index_exists(self) -> bool:
         """Check if a vector index exists on the embedding column.
 
@@ -512,7 +551,7 @@ class PgVectorStore(VectorStore):
         operator_class = self._get_operator_class()
         index_name = quote_ident(f"idx_{self.table_name}_{col_embedding}_{idx_type}")
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             if idx_type == "hnsw":
                 m = idx_params.get("m", 16)
                 ef_construction = idx_params.get("ef_construction", 64)
@@ -816,8 +855,7 @@ class PgVectorStore(VectorStore):
         Returns:
             List of vector IDs (provided or generated).
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         # An empty batch is a no-op, not an error: see
         # ``VectorStoreBase._is_empty_batch``.
@@ -849,7 +887,7 @@ class PgVectorStore(VectorStore):
         if self.id_type == "uuid":
             self._validate_uuid_ids(ids)
 
-        async with self._pool.acquire() as conn, conn.transaction():
+        async with pool.acquire() as conn, conn.transaction():
             # A scoped store may not write an id another domain owns.
             # The ``ON CONFLICT`` clause below assigns ``domain_id``
             # from the incoming row, so an unguarded write to a foreign
@@ -963,8 +1001,7 @@ class PgVectorStore(VectorStore):
                 no-op otherwise. Legacy rows with ``updated_at IS NULL``
                 surface as ``None`` (see vector-timestamps docs).
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         import numpy as np
 
@@ -989,7 +1026,7 @@ class PgVectorStore(VectorStore):
         domain_sql, domain_params = self._domain_scope_sql(2)
 
         results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             for vec_id in ids:
                 row = await self._exec_with_id_type_guard(
                     conn,
@@ -1036,8 +1073,7 @@ class PgVectorStore(VectorStore):
 
     async def delete_vectors(self, ids: list[str]) -> int:
         """Delete vectors by ID."""
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         id_array_cast = "::uuid[]" if self.id_type == "uuid" else "::text[]"
         col_id = self._col("id")
@@ -1054,7 +1090,7 @@ class PgVectorStore(VectorStore):
         # A scoped store may not delete another domain's row.
         domain_sql, domain_params = self._domain_scope_sql(2)
 
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             result = await self._exec_with_id_type_guard(
                 conn,
                 "execute",
@@ -1120,8 +1156,7 @@ class PgVectorStore(VectorStore):
                 config. Requires ``include_metadata=True`` — silently
                 no-op otherwise.
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         # Auto-create IVFFlat index if conditions are met
         await self._maybe_create_index()
@@ -1189,7 +1224,7 @@ class PgVectorStore(VectorStore):
             where_sql = "WHERE " + " AND ".join(where_clauses)
 
         # Execute search query
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT
@@ -1239,8 +1274,7 @@ class PgVectorStore(VectorStore):
         mirroring the upsert semantics in ``add_vectors``: any write to
         a row is a re-ingestion signal.
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         id_cast = "::uuid" if self.id_type == "uuid" else ""
         col_id = self._col("id")
@@ -1252,7 +1286,7 @@ class PgVectorStore(VectorStore):
         domain_sql, domain_params = self._domain_scope_sql(3)
 
         updated = 0
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             # strict=False, matching MemoryVectorStore and FaissVectorStore, whose
             # update_metadata sizes the pairing by the metadata list on purpose so
             # that a short one updates a prefix. Same contract, said out loud.
@@ -1291,8 +1325,7 @@ class PgVectorStore(VectorStore):
         config-level ``domain_id`` scoping. ``updated_at = NOW()`` is
         refreshed, mirroring :meth:`update_metadata`.
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         col_domain_id = self._col("domain_id")
         col_metadata = self._col("metadata")
@@ -1320,7 +1353,7 @@ class PgVectorStore(VectorStore):
         if where_clauses:
             where_sql = "WHERE " + " AND ".join(where_clauses)
 
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             result = await conn.execute(
                 f"""
                 UPDATE {self._q_qualified}
@@ -1339,8 +1372,7 @@ class PgVectorStore(VectorStore):
 
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the store."""
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         col_domain_id = self._col("domain_id")
         col_metadata = self._col("metadata")
@@ -1365,7 +1397,7 @@ class PgVectorStore(VectorStore):
         if where_clauses:
             where_sql = "WHERE " + " AND ".join(where_clauses)
 
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             count = await conn.fetchval(
                 f"SELECT COUNT(*) FROM {self._q_qualified} {where_sql}",
                 *params,
@@ -1379,8 +1411,7 @@ class PgVectorStore(VectorStore):
         Uses PostgreSQL's ``jsonb_object_keys`` to extract the union of
         all top-level keys from the JSONB metadata column.
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         col_metadata = self._col("metadata")
 
@@ -1391,7 +1422,7 @@ class PgVectorStore(VectorStore):
         domain_sql, domain_params = self._domain_scope_sql(1)
         where_sql = f"WHERE TRUE{domain_sql}" if domain_sql else ""
 
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT DISTINCT key
@@ -1414,8 +1445,7 @@ class PgVectorStore(VectorStore):
         wipes).  When either is set, a parameterized
         ``DELETE FROM ... WHERE ...`` is issued instead.
         """
-        if not self._initialized:
-            await self.initialize()
+        pool = await self._ready_pool()
 
         col_domain_id = self._col("domain_id")
         col_metadata = self._col("metadata")
@@ -1436,7 +1466,7 @@ class PgVectorStore(VectorStore):
             where_clauses.extend(filter_clauses)
             params.extend(filter_params)
 
-        async with self._pool.acquire() as conn:
+        async with pool.acquire() as conn:
             if where_clauses:
                 where_sql = "WHERE " + " AND ".join(where_clauses)
                 await conn.execute(

@@ -34,7 +34,7 @@ except ImportError:
     FAISS_AVAILABLE = False
 
 
-class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore):
+class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStoreConfig]):
     """Faiss-based vector store for efficient similarity search.
 
     Faiss is a library for efficient similarity search and clustering of dense vectors.

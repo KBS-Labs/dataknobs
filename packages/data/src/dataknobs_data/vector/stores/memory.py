@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from dataknobs_common.capabilities import CapabilityLike
 
 
-class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore):
+class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore[MemoryVectorStoreConfig]):
     """Simple in-memory vector store for testing and development.
 
     This implementation stores vectors in memory using numpy arrays
