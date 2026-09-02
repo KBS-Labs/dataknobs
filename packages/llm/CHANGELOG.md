@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `DeterministicTask` whose `fn` was a callable *object* with an
+  `async def __call__` was reported as a successful task whose value was an
+  un-awaited coroutine.** `ParallelLLMExecutor` branched on
+  `asyncio.iscoroutinefunction`, which answers `False` for a callable object —
+  the shape anything stateful is written in, and the shape two dataknobs
+  Protocols publish — so such a task took the sync branch, ran on a worker
+  thread where calling it merely *constructs* a coroutine, and returned that
+  coroutine inside a `TaskResult` with `success=True`. Nothing raised and the
+  callable's body never ran. Dispatch now judges what calling `fn` produces
+  rather than what the callable looks like, which additionally awaits a plain
+  `def` that returns a coroutine — a shape no inspection of the callable can
+  detect. `DeterministicTask.fn` was always documented as "may be sync or
+  async"; it now behaves that way for callable objects. A genuinely
+  synchronous callable still runs off the event loop, and the documented
+  timeout caveat for sync tasks is unchanged.
+
 - **`import dataknobs_llm.conversations` failed on any install without
   `dataknobs-fsm`, putting `ConversationManager` out of reach.** The FSM engine
   backs exactly two surfaces — the `fsm_integration` subpackage and

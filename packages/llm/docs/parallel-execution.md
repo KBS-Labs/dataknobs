@@ -89,6 +89,9 @@ results = await executor.execute_mixed({
 Deterministic tasks:
 - Sync callables are run in a thread executor to avoid blocking the event loop
 - Async callables are awaited directly
+- Which one a callable is depends on what *calling* it produces, not on whether
+  it is a function — so a class with an `async def __call__` is treated as
+  async, and a plain `def` that returns a coroutine is awaited too
 - Share the same concurrency semaphore as LLM tasks
 
 ### execute_sequential()
@@ -166,11 +169,22 @@ task = DeterministicTask(
     fn=fetch_from_database,
     args=("record_123",),
 )
+
+# Async callable object — anything stateful is written this way: an embedder
+# holding a model handle, a client holding a session. Treated as async.
+class Embedder:
+    def __init__(self, model: str) -> None:
+        self._model = model
+
+    async def __call__(self, text: str) -> list[float]:
+        ...
+
+task = DeterministicTask(fn=Embedder("nomic-embed-text"), args=("some text",))
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `fn` | `Callable[..., Any]` | required | The callable (sync or async) |
+| `fn` | `Callable[..., Any]` | required | The callable (sync or async; a callable object counts either way) |
 | `args` | `tuple[Any, ...]` | `()` | Positional arguments |
 | `kwargs` | `dict[str, Any]` | `{}` | Keyword arguments |
 | `tag` | `str` | `""` | Identifier; auto-populated from dict key |
