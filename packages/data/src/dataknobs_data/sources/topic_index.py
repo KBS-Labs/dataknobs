@@ -317,7 +317,21 @@ class TopicIndex(Protocol):
                 parameter overrides.
 
         Returns:
-            Content chunks from matched topic regions.
+            Content chunks from matched topic regions.  An empty list
+            means the index ran and matched nothing --- a vocabulary
+            gap, which callers may treat as a reason to try another
+            retrieval route.
+
+        Raises:
+            StrategyUnavailable: (from
+                :mod:`dataknobs_data.sources.base`) The index cannot run
+                at all, because something it needs was never supplied
+                (an embedder, a way to fetch seeds).  This is
+                deliberately *not* an empty list: a caller that falls
+                back on empty would otherwise take the same branch for
+                a wiring fault as for a vocabulary gap, on every turn,
+                and report the wrong cause.  Implementations must not
+                absorb this condition.
         """
         ...
 

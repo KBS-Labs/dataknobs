@@ -43,8 +43,10 @@ from dataknobs_data.sources.base import (
     GroundedSource,
     RetrievalIntent,
     SourceResult,
+    StrategyUnavailable,
 )
 from dataknobs_data.sources.processing import ResultPipeline, build_pipeline
+from dataknobs_data.sources.topic_index import TopicIndex
 
 from dataknobs_llm.extraction.grounding import ground_extraction
 
@@ -1054,25 +1056,13 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
             try:
                 topic_index = getattr(source, "topic_index", None)
                 if topic_index is not None:
-                    results = await topic_index.resolve(
+                    results = await self._query_via_topic_index(
+                        source,
+                        topic_index,
+                        intent,
                         user_message,
-                        llm=llm,
-                        top_k=cfg.top_k,
-                        intent=intent,
+                        llm,
                     )
-                    # Fall back to standard text queries if topic index
-                    # found no results (e.g. vocabulary gap, no seed matches)
-                    if not results:
-                        logger.info(
-                            "Topic index returned empty for source '%s', "
-                            "falling back to standard text query retrieval",
-                            source.name,
-                        )
-                        results = await source.query(
-                            intent,
-                            top_k=cfg.top_k,
-                            score_threshold=cfg.score_threshold,
-                        )
                 else:
                     results = await source.query(
                         intent,
@@ -1088,6 +1078,78 @@ class GroundedReasoning(StructuredConfigConsumer[GroundedReasoningConfig], Reaso
                 )
 
         return results_by_source
+
+    async def _query_via_topic_index(
+        self,
+        source: GroundedSource,
+        topic_index: TopicIndex,
+        intent: RetrievalIntent,
+        user_message: str,
+        llm: Any | None,
+    ) -> list[SourceResult]:
+        """Resolve through the topic index, falling back to text retrieval.
+
+        Two different conditions land on the same fallback and must not
+        be reported as the same thing.  An index that ran and matched
+        nothing is a vocabulary gap, which is what the fallback is
+        *for*: the turn is served and nothing is wrong.  An index that
+        could not run at all is a wiring fault that will take this
+        branch on every turn until someone fixes it, and saying
+        "returned empty" about it names the wrong cause.
+
+        The fallback itself is the same for both, which is why this
+        catches :class:`StrategyUnavailable` here rather than letting it
+        reach the per-source guard in :meth:`_execute_intent`: that
+        guard drops the source for the turn, which is right for an index
+        that *broke* and wrong for one that was never applicable.
+
+        Args:
+            source: The source whose index this is; also the fallback.
+            topic_index: The source's index.  Declared as the protocol
+                rather than as ``Any``: sources carry it on an untyped
+                attribute, so this signature is the only place the
+                contract --- including which failures it raises --- is
+                stated for the caller.
+            intent: Structured retrieval intent, used by the fallback
+                and forwarded to the index for scope and overrides.
+            user_message: Raw user message, which is what the index
+                resolves against.
+            llm: LLM provider for index strategies that classify.
+
+        Returns:
+            Results from the index, or from text retrieval when the
+            index matched nothing or could not run.
+        """
+        cfg = self.config.retrieval
+        try:
+            results = await topic_index.resolve(
+                user_message,
+                llm=llm,
+                top_k=cfg.top_k,
+                intent=intent,
+            )
+        except StrategyUnavailable as exc:
+            logger.warning(
+                "Topic index for source '%s' cannot resolve (%s) — falling back "
+                "to standard text query retrieval. Every turn will take this "
+                "branch until the index is given what it is missing.",
+                source.name,
+                exc,
+            )
+        else:
+            if results:
+                return results
+            logger.info(
+                "Topic index returned empty for source '%s', "
+                "falling back to standard text query retrieval",
+                source.name,
+            )
+
+        return await source.query(
+            intent,
+            top_k=cfg.top_k,
+            score_threshold=cfg.score_threshold,
+        )
 
     def _merge_source_results(
         self,

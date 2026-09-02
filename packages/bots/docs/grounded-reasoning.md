@@ -420,9 +420,13 @@ When a source has a topic index, the grounded strategy uses it instead of standa
 ```
 for each source:
     if source.topic_index exists:
-        results = topic_index.resolve(user_message, llm=..., intent=...)
-        if not results:                     # read as a vocabulary gap
-            results = source.query(intent, top_k=...)
+        try:
+            results = topic_index.resolve(user_message, llm=..., intent=...)
+        except StrategyUnavailable:         # the index cannot run at all
+            results = source.query(intent, top_k=...)      # WARNING, cause named
+        else:
+            if not results:                 # read as a vocabulary gap
+                results = source.query(intent, top_k=...)  # INFO
     else:
         results = source.query(intent, top_k=...)
 ```
@@ -434,9 +438,20 @@ nothing, and the turn retries that source through plain text retrieval.
 That is why a topic index does not absorb its own failures — an index that
 *could not run* would otherwise take the same branch as one that ran and
 matched nothing, silently rerouting the turn and logging a vocabulary gap
-as the cause. A `resolve()` that raises is instead caught by the per-source
-guard above, which drops that source for the turn and logs the real
-failure.
+as the cause. A `resolve()` that raises a genuine failure is instead caught
+by the per-source guard above, which drops that source for the turn and
+logs the real failure.
+
+An index that cannot run *at all* — no embedder, or lazy mode with no way
+to fetch seeds — is a third case, and neither disposition fits it. It is
+not a vocabulary gap, so it must not return empty; but it is not a broken
+source either, and dropping it would lose results the text fallback could
+still have found. It raises `StrategyUnavailable`, which the loop catches
+above the per-source guard: the turn takes the same fallback, and the log
+records the wiring fault at WARNING rather than blaming the corpus at INFO.
+The distinction matters because this condition does not clear on its own —
+every subsequent turn takes the same branch until someone changes the
+configuration.
 
 ### Topic Index Types
 

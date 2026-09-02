@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..vector.embedding import TextEmbedder
-from .base import RetrievalIntent, SourceResult
+from .base import RetrievalIntent, SourceResult, StrategyUnavailable
 from .processing import agglomerative_cluster, cosine_similarity
 from .topic_index import DEFAULT_HEADING_STOPWORDS
 
@@ -376,6 +376,11 @@ class ClusterTopicIndex:
         and 4 use the pre-built clusters instead.
 
         Raises:
+            StrategyUnavailable: this index cannot run at all --- no
+                embedder, or lazy mode with no way to fetch seeds.
+                Checked up front, before any work, so a lazy index with
+                no seed source does not pay for a query embedding it
+                cannot use.
             Exception: whatever ``embedder`` or ``vector_query_fn``
                 raises, unchanged. These are not absorbed into an empty
                 result, because a caller reads an empty topic index as a
@@ -383,13 +388,9 @@ class ClusterTopicIndex:
                 comments at each call site. An index that ran and matched
                 nothing still returns an empty list.
         """
-        if self._embedder is None:
-            logger.warning(
-                "No embedder configured for ClusterTopicIndex on source '%s' "
-                "— cannot resolve queries. Provide embedder at construction.",
-                self._source_name,
-            )
-            return []
+        embedder = self._require_embedder()
+        if self._eager_state() is None:
+            self._require_vector_query_fn()
 
         params = _resolve_params(self._config, intent)
 
@@ -407,7 +408,7 @@ class ClusterTopicIndex:
         # vocabulary gap and falls back to plain text retrieval, so
         # absorbing this reroutes the turn and reports the wrong cause for
         # it. The loop already drops a source that raises, with its cause.
-        query_embedding = (await self._embedder.embed([query]))[0]
+        query_embedding = (await embedder.embed([query]))[0]
 
         # Pick up the filter slice keyed by our source name and forward
         # it through vector-seed fetching, matching the convention the
@@ -529,6 +530,64 @@ class ClusterTopicIndex:
         ]
 
     # ------------------------------------------------------------------
+    # Private: what this index needs before it can answer
+    # ------------------------------------------------------------------
+
+    def _eager_state(
+        self,
+    ) -> tuple[list[SourceResult], list[list[float]], list[_Cluster]] | None:
+        """Pre-built chunks, embeddings and clusters, or ``None`` if lazy.
+
+        The one place the mode is decided.  ``resolve`` needs the answer
+        to know whether ``vector_query_fn`` is required, and
+        ``_get_clusters`` needs the state itself, so this hands back the
+        state rather than a boolean --- a predicate would leave the
+        caller to re-narrow three optionals the type checker cannot
+        narrow through a ``bool``.
+
+        Note this is not ``self._chunks is not None``:
+        :meth:`from_chunks` sets ``_chunks`` unconditionally but builds
+        ``_clusters`` only when at least one chunk had an embedding, so
+        an index built from chunks with no embeddings is *lazy* and has
+        to seed like one.
+        """
+        if self._chunks is not None and self._embeddings is not None and self._clusters is not None:
+            return self._chunks, self._embeddings, self._clusters
+        return None
+
+    def _require_embedder(self) -> TextEmbedder:
+        """The embedder, or say that this index cannot resolve at all.
+
+        Raises rather than returning an empty result: an index with no
+        embedder cannot run in either mode, and answering ``[]`` would
+        make it indistinguishable from one that ran and matched nothing.
+        See :meth:`TopicIndex.resolve` for the contract.
+        """
+        if self._embedder is None:
+            raise StrategyUnavailable(
+                f"ClusterTopicIndex on source '{self._source_name}' has no embedder, "
+                "so it cannot resolve queries. Pass embedder= at construction. "
+                "(topics() and cluster_info remain available without one, so an "
+                "index built only for inspection is still valid.)"
+            )
+        return self._embedder
+
+    def _require_vector_query_fn(self) -> VectorQueryFn:
+        """The seed-fetching callable, or say that this index cannot resolve.
+
+        Only lazy mode needs it: an eager index built by
+        :meth:`from_chunks` has its pool already and never seeds.
+        """
+        if self._vector_query_fn is None:
+            raise StrategyUnavailable(
+                f"ClusterTopicIndex on source '{self._source_name}' is in lazy mode "
+                "with no vector_query_fn, so it cannot fetch the seed chunks it "
+                "clusters. Pass vector_query_fn= at construction, or build the "
+                "index eagerly with from_chunks()."
+            )
+        return self._vector_query_fn
+
+    # ------------------------------------------------------------------
     # Private: per-turn cluster construction
     # ------------------------------------------------------------------
 
@@ -543,8 +602,9 @@ class ClusterTopicIndex:
         In eager mode, returns pre-built state.
         In lazy mode, fetches seeds and clusters them per-turn.
         """
-        if self._chunks is not None and self._embeddings is not None and self._clusters is not None:
-            return self._chunks, self._embeddings, self._clusters
+        eager = self._eager_state()
+        if eager is not None:
+            return eager
 
         # Lazy mode: fetch seeds and cluster per-turn
         seed_results = await self._fetch_vector_seeds(
@@ -575,18 +635,20 @@ class ClusterTopicIndex:
         *,
         filter_metadata: dict[str, Any] | None = None,
     ) -> list[SourceResult]:
-        """Fetch seed results via vector search."""
-        if self._vector_query_fn is None:
-            logger.debug(
-                "No vector_query_fn configured for source '%s', cannot fetch seeds in lazy mode",
-                self._source_name,
-            )
-            return []
+        """Fetch seed results via vector search.
+
+        The guard is unreachable once ``resolve`` has run --- it checks
+        the same invariant up front.  Kept because the type checker
+        cannot see that, and so that a future path reaching here without
+        going through ``resolve`` fails by name rather than as
+        ``'NoneType' object is not callable``.
+        """
+        vector_query_fn = self._require_vector_query_fn()
 
         # This is the index's retrieval call, and it is not wrapped for the
         # same reason the query embed above is not: a store that cannot be
         # reached is not a store with no seeds in it.
-        results = await self._vector_query_fn(
+        results = await vector_query_fn(
             query,
             params.seed_max_results,
             filter_metadata=filter_metadata,
@@ -608,15 +670,14 @@ class ClusterTopicIndex:
         is a real improvement *and* a real change to that failure semantics,
         so it is not made here as a side effect of a type change.
         """
-        if self._embedder is None:
-            return [], []
+        embedder = self._require_embedder()
 
         chunks: list[SourceResult] = []
         embeddings: list[list[float]] = []
         last_error: Exception | None = None
         for seed in seeds:
             try:
-                emb = (await self._embedder.embed([seed.content]))[0]
+                emb = (await embedder.embed([seed.content]))[0]
             except Exception as exc:
                 # One chunk that will not embed is dropped so the rest of
                 # the pool can still cluster, which is what this catch is

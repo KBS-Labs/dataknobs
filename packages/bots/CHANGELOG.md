@@ -138,6 +138,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A dead topic index is no longer reported as a corpus with nothing in it.**
+  `HeadingTreeIndex` returned `[]` in lazy mode when it had no
+  `vector_query_fn`, and caught everything its vector query raised and returned
+  `[]` for that too. The grounded retrieval loop reads an empty topic index as a
+  vocabulary gap, so both conditions silently rerouted the turn to plain text
+  retrieval and logged `"topic index returned empty"` — naming the corpus for
+  what was a wiring fault or an unreachable store.
+
+  An index that cannot run now raises `StrategyUnavailable`; a vector query that
+  fails propagates, and the loop's per-source guard drops that source with its
+  cause, as it already does for every other source. Only lazy mode needs the
+  callable, so an eagerly built index is unaffected.
+
+  `GroundedReasoning` catches `StrategyUnavailable` above that guard and takes
+  the same text-retrieval fallback it already took, so **the results a turn
+  produces do not change**. What changes is the record: a WARNING naming the
+  index and what it is missing, rather than an INFO about the corpus. The two
+  conditions no longer share one message, because only one of them clears
+  without someone editing the configuration.
+
 - **The `cluster` topic index is built with a `TextEmbedder`.**
   `ClusterTopicIndex` took an `embed_fn` — one text per call — and now takes an
   `embedder` satisfying the batch protocol `dataknobs-data` declares. A

@@ -5,7 +5,13 @@ in a grounded retrieval pipeline.  Sources declare schemas, receive
 structured intent, and translate it deterministically to native queries.
 """
 
-from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
+from .base import (
+    GroundedSource,
+    RetrievalIntent,
+    SourceResult,
+    SourceSchema,
+    StrategyUnavailable,
+)
 from .cluster_index import (
     ClusterTopicConfig,
     ClusterTopicIndex,
@@ -37,7 +43,6 @@ from .processing import (
     ResultPipeline,
     ResultProcessor,
     StrategyChain,
-    StrategyUnavailable,
     TermOverlapClusterer,
     TfidfClusterer,
     build_pipeline,

@@ -16,6 +16,14 @@ The loop already guards each source and drops one that raises, with its
 cause. These pin the two whole-operation failures against that guard, and
 keep the one place a caught failure is still right -- a single seed chunk
 that will not embed, which is dropped so the rest can still cluster.
+
+An index that *cannot run at all* is the third case, and it wants neither
+answer. It is not a vocabulary gap, so it must not return empty; it is not
+a broken source either, so dropping it for the turn would lose results the
+text fallback could still have found. It raises ``StrategyUnavailable``,
+which the retrieval loop catches above the drop-the-source guard: the turn
+is served by the fallback, and the log names the wiring fault rather than
+the corpus.
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_data.sources.base import SourceResult
+from dataknobs_data.sources.base import SourceResult, StrategyUnavailable
 from dataknobs_data.sources.cluster_index import ClusterTopicConfig, ClusterTopicIndex
 
 
@@ -201,3 +209,95 @@ async def test_a_working_index_with_no_match_still_answers_empty() -> None:
     idx = _lazy(embedder=_Embedder(embed_far_from_both), vector_query_fn=_seed_fn)
 
     assert await idx.resolve("unrelated") == []
+
+
+# ------------------------------------------------------------------
+# An index that cannot run at all
+# ------------------------------------------------------------------
+
+
+async def test_an_index_with_no_embedder_says_so_rather_than_answering_empty() -> None:
+    """Both modes: the query still has to be embedded to be matched.
+
+    Eager is included because the pre-built pool makes it *look* like the
+    embedder is only a construction-time concern. It is not --- the
+    clusters are pre-built, but the query is embedded per turn and matched
+    against their centroids.
+    """
+    lazy = _lazy(vector_query_fn=_seed_fn)
+    with pytest.raises(StrategyUnavailable, match="no embedder"):
+        await lazy.resolve("authentication")
+
+    eager = ClusterTopicIndex.from_chunks(_CHUNKS, _EMBEDDINGS, config=_CONFIG, source_name="kb")
+    with pytest.raises(StrategyUnavailable, match="no embedder") as caught:
+        await eager.resolve("authentication")
+    assert "kb" in str(caught.value), "the message does not say which source"
+
+
+async def test_a_lazy_index_with_no_vector_query_fn_says_so() -> None:
+    """And says which of the two things is missing.
+
+    The two conditions have the same disposition and different fixes, so
+    one message for both would send a reader to the wrong constructor
+    argument.
+    """
+    idx = _lazy(embedder=_Embedder(_near_a))
+
+    with pytest.raises(StrategyUnavailable) as caught:
+        await idx.resolve("authentication")
+
+    message = str(caught.value)
+    assert "vector_query_fn" in message
+    assert "embedder" not in message, f"names the wrong missing piece: {message}"
+
+
+async def test_an_eager_index_with_no_vector_query_fn_still_resolves() -> None:
+    """The asymmetry: only lazy mode seeds, so only lazy mode needs it.
+
+    A guard that required both callables unconditionally would break
+    every eagerly-built index, which is the ordinary way to build one.
+    """
+    idx = ClusterTopicIndex.from_chunks(
+        _CHUNKS,
+        _EMBEDDINGS,
+        embedder=_Embedder(_near_a),
+        config=_CONFIG,
+        source_name="kb",
+    )
+
+    results = await idx.resolve("authentication")
+
+    # Sorted for the same reason as above: the ranking is not the claim.
+    # The claim is that an eager index resolves at all without the
+    # callable only lazy mode uses.
+    assert sorted(r.source_id for r in results)[:2] == ["a1", "a2"]
+
+
+async def test_an_index_built_from_chunks_with_no_embeddings_is_lazy() -> None:
+    """from_chunks() does not imply eager --- the embeddings decide.
+
+    ``_chunks`` is set unconditionally, but clusters are only built when
+    at least one chunk had an embedding. So this index has a chunk list
+    and no clusters, and has to seed like a lazy one. A mode predicate
+    written as "did from_chunks run?" waves it through and it fails later,
+    somewhere less obvious.
+    """
+    idx = ClusterTopicIndex.from_chunks(
+        _CHUNKS, {}, embedder=_Embedder(_near_a), config=_CONFIG, source_name="kb"
+    )
+
+    with pytest.raises(StrategyUnavailable, match="vector_query_fn"):
+        await idx.resolve("authentication")
+
+
+async def test_an_inspection_only_index_still_reports_its_topics() -> None:
+    """An index built without an embedder is a valid thing to have built.
+
+    This is why "cannot resolve" is reported as unavailability rather
+    than as a construction error: nothing is wrong with an index built to
+    be read.
+    """
+    idx = ClusterTopicIndex.from_chunks(_CHUNKS, _EMBEDDINGS, config=_CONFIG, source_name="kb")
+
+    assert idx.topics()
+    assert len(idx.cluster_info) == len(idx.topics())
