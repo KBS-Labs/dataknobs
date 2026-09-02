@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-02T12:29:28Z",
+  "timestamp": "2026-09-02T13:28:28Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -12,10 +12,10 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "06275d354d90339e968fe30b18462220b59ee5d027971cf0a23f1d60901ca725",
+    "bots": "11cda2f4925736d757aa319f7eac9d55a085552de257093f6ce8816ce4e4fe6b",
     "common": "ccb0a5952895cdbd04ffe98f2466b66447dee30f09bc131684209822ba202c96",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
-    "data": "9385c63fc19d5ecc946d8683b5fefc7749e75e0875969f2719f31196d62121d2",
+    "data": "9979e455b1a89014467ae798015e7c13a0fc87d2fad4afad7321fe56c9f77ed9",
     "fsm": "cf80cbb63dfeb9efa2e96ab0069e51db8020c0b9ab5d73b34ab9fb438f4b69c6",
     "legacy": "f626b387e3b4dc7f7de016a1e6f67f1a6df33b685b55c1226762d4abb338d217",
     "llm": "3d10007c6e43e62216e076c3e6628aa7d79fe1589e7b3f017eff4e29c856dc11",
@@ -26,10 +26,10 @@
   },
   "workspace_hashes": {
     "toolchain": "0fb983f88318648c256cf4b7829874713d5e884ce8b5a74a27812498b759a7b9",
-    "workspace_tests": "4c16866ffaa8a050d2cc2d6f014ba9604bd54b2ef80204e2df728dc9bc95111f",
-    "docs": "caff9b7ba6560aa4a424ba979c47cb8a60210e343bdab225a548adb1302e03ec"
+    "workspace_tests": "bc62b46271f65b5fbf556f99a43578b46165a6f93feea5c1bb3042ebbbcefe46",
+    "docs": "c3d9b411beebdb5c6839e0f859ba3c8b2db02d138bae515d2eac275625a814df"
   },
-  "total_seconds": 298,
+  "total_seconds": 301,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -54,7 +54,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 67
+      "duration_seconds": 68
     },
     "documentation": {
       "status": "pass",
@@ -81,8 +81,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 94,
-      "workspace_guards_seconds": 61
+      "duration_seconds": 96,
+      "workspace_guards_seconds": 63
     },
     "integration_tests": {
       "status": "pass",
