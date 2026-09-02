@@ -114,6 +114,36 @@ against it and the registry is inert in both directions. `register()` says
 so and names the decorator rather than letting registration pass and
 `create()` fail for an unstated cause.
 
+**A member's async-ness is part of the shape.** `@runtime_checkable` asks
+whether a member is *present* and nothing more, so a Protocol and its async
+twin — the same member name, one `def` and one `async def` — satisfy each
+other. Neither `isinstance` nor `issubclass` can separate them, which means
+a registry gating on `ResourceResolver` admitted an implementation whose
+`resolve` was `async def`, and `create()` handed the caller an object whose
+method returns a coroutine. Nothing raised: the value is truthy and not
+`None`, and the only trace was a `RuntimeWarning` at interpreter shutdown
+naming the implementation rather than the registry.
+
+Both checks in the table above therefore compare each declared member's
+async-ness against the candidate's, and refuse a mismatch in either
+direction:
+
+> Factory class `AsyncFetcher` cannot satisfy `Fetches`: its `fetch()` is
+> asynchronous where `Fetches.fetch()` is not (registry `'fetchers'`,
+> plugin `'remote'`).
+
+Properties are skipped — a property carries no async-ness to disagree about
+— and so is a member the candidate does not have at all, which is the
+presence check's business.
+
+This is asked *inside* the gate rather than fixed by renaming the members,
+which has two consequences worth knowing. It covers a twin pair **you**
+define, not merely the pairs shipped here. And `isinstance` is untouched:
+it still answers `True` in both directions, because that answer belongs to
+the language rather than to this registry. A bare `isinstance` against one
+half of a twin pair remains a smoke test; `validate_type` is what makes it
+a check.
+
 ## `BackendRegistry` Protocol
 
 Consumers writing tooling that asks "is this thing a registry-like object?" should `isinstance` against the runtime_checkable `BackendRegistry` Protocol instead of the concrete `Registry` or `PluginRegistry` classes:

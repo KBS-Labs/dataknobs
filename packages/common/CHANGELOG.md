@@ -74,6 +74,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`validate_type` admitted a Protocol's async twin, because a
+  `@runtime_checkable` check asks only whether a member is present.** A
+  Protocol and its async counterpart — the same member name, one `def` and
+  one `async def` — satisfy each other under both `isinstance` and
+  `issubclass`, so a registry gated on the synchronous half accepted an
+  implementation whose method was `async def` and `create()` handed the
+  caller an object returning a coroutine. Nothing raised: the value is
+  truthy and not `None`, and the only trace was a `RuntimeWarning` at
+  interpreter shutdown naming the implementation rather than the registry
+  that let it through. Four such pairs ship in this repository, and the
+  documented promise that `validate_type` catches a structurally wrong
+  backend at registration rather than at use did not hold for any of them.
+
+  Both checks now compare each declared member's async-ness against the
+  candidate's and refuse a mismatch in either direction, naming the
+  registry, the key, the member and which side is which. Properties are
+  skipped, having no async-ness to disagree about, as is a member the
+  candidate lacks entirely — that remains the presence check's business.
+
+  The question is asked inside the gate rather than settled by renaming the
+  colliding members, which reaches a twin pair a *consumer* defines and not
+  only the pairs shipped here, and which leaves `isinstance` exactly where
+  it was: it still answers `True` in both directions, because that answer
+  belongs to the language rather than to this registry. No exported name,
+  signature or conforming registration changes.
+
 - **A synchronous `get()` or `create()` handed the caller an un-awaited
   coroutine when the factory was asynchronous, and `get()` cached it.**
   Neither method asked whether the factory's result had to be awaited, so an

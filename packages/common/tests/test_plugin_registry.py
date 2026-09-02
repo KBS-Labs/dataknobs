@@ -1694,3 +1694,267 @@ class TestABoundedErrorFromTheFactoryIsNotRewrapped:
         with pytest.raises(OperationError) as caught:
             await registry.create_async("leaky")
         assert "postgres://" not in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# A twin protocol pair: the gate compares async-ness, not just presence
+#
+# `@runtime_checkable` checks member *presence* and nothing else, so a
+# protocol and its async twin --- same member name, one `def`, one
+# `async def` --- are mutually satisfiable at runtime. A registry gating on
+# the sync half therefore admitted the async implementation, and `create()`
+# handed back an object whose method returns a coroutine. Nothing raised:
+# the caller received a truthy, non-`None` value, and the only trace was a
+# `RuntimeWarning` at interpreter shutdown attributed to the implementation
+# rather than to the registry that let it through.
+#
+# `isinstance` still answers `True` in both directions and is not touched
+# here --- that is a property of the language, not of this registry. The
+# second question is asked *inside* the gate, which is the one place that
+# knows which half of the pair it is holding.
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class _Fetches(Protocol):
+    """The sync half of a twin pair."""
+
+    def fetch(self, key: str) -> str: ...
+
+
+@runtime_checkable
+class _FetchesAsync(Protocol):
+    """The async half. Same member name --- that is the whole hazard."""
+
+    async def fetch(self, key: str) -> str: ...
+
+
+class _SyncFetcher:
+    """Conforms to `_Fetches`, and structurally to `_FetchesAsync` too."""
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+
+    def fetch(self, key: str) -> str:
+        return f"sync:{key}"
+
+
+class _AsyncFetcher:
+    """Conforms to `_FetchesAsync`, and structurally to `_Fetches` too."""
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+
+    async def fetch(self, key: str) -> str:
+        return f"async:{key}"
+
+
+@runtime_checkable
+class _Embeds(Protocol):
+    """A twin-vulnerable protocol that also carries a property.
+
+    `issubclass` refuses a protocol with any non-method member, so a class
+    gated on this one reaches the member-scan fallback instead. Both
+    branches have to ask the async question or the fix covers one shape of
+    protocol and not the other.
+    """
+
+    @property
+    def vector_field(self) -> str: ...
+
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class _SyncEmbedder:
+    """`embed` is `def`, not `async def` --- the mismatch, behind a property."""
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+
+    @property
+    def vector_field(self) -> str:
+        return "embedding"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] for _ in texts]
+
+
+class _AsyncEmbedCall:
+    """An `async def __call__`, which is how anything stateful is written."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        return [[1.0] for _ in texts]
+
+
+class _StatefulEmbedder:
+    """Correct, and the shape a naive predicate rejects.
+
+    Its `embed` is a callable *object* rather than a function, which is what
+    holding state (a model handle, a session, a counter) forces. That is
+    legitimate and must register; `inspect.iscoroutinefunction` reports it
+    as synchronous and would refuse it.
+    """
+
+    embed = _AsyncEmbedCall()
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+
+    @property
+    def vector_field(self) -> str:
+        return "embedding"
+
+
+class TestAValidateTypeProtocolAndItsAsyncTwin:
+    """Presence is not conformance when the twin differs only in `async`."""
+
+    def test_an_async_class_is_refused_by_the_sync_gate_at_registration(
+        self,
+    ) -> None:
+        registry: PluginRegistry[Any] = PluginRegistry("fetchers", validate_type=_Fetches)
+
+        with pytest.raises(TypeError) as caught:
+            registry.register("remote", _AsyncFetcher)
+
+        assert "fetch" in str(caught.value)
+
+    def test_an_async_instance_is_refused_by_the_sync_gate_at_create(self) -> None:
+        """A callable factory is judged on its result, which is the live path.
+
+        Every entry on the shipped resolver registry is a callable factory,
+        so the class gate never runs for them and this is the only check
+        standing between an async implementation and its caller.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("fetchers", validate_type=_Fetches)
+        registry.register("remote", lambda config, **_: _AsyncFetcher(config))
+
+        with pytest.raises(OperationError) as caught:
+            registry.create("remote", {})
+
+        assert "fetch" in str(caught.value)
+
+    def test_the_refusal_names_the_registry_the_key_the_member_and_the_direction(
+        self,
+    ) -> None:
+        """Four facts, because a caller holding only three cannot act.
+
+        The member is the one that is not recoverable from the others: a
+        protocol may declare several, and "this class does not conform"
+        sends the reader to compare every one of them by hand.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("fetchers", validate_type=_Fetches)
+
+        with pytest.raises(TypeError) as caught:
+            registry.register("remote", _AsyncFetcher)
+        message = str(caught.value)
+
+        assert "fetchers" in message
+        assert "remote" in message
+        assert "fetch" in message
+        assert "asynchronous" in message
+        assert "_Fetches" in message
+
+        registry.register("remote", lambda config, **_: _AsyncFetcher(config))
+        with pytest.raises(OperationError) as caught_op:
+            registry.create("remote", {})
+        instance_message = str(caught_op.value)
+
+        assert "fetchers" in instance_message
+        assert "remote" in instance_message
+        assert "fetch" in instance_message
+        assert "asynchronous" in instance_message
+
+    def test_a_correct_sync_backend_still_registers_and_creates(self) -> None:
+        """The parity net: the gate must reject the twin, not the conformer."""
+        registry: PluginRegistry[Any] = PluginRegistry("fetchers", validate_type=_Fetches)
+        registry.register("local", _SyncFetcher)
+
+        instance = registry.create("local", {})
+
+        assert isinstance(instance, _SyncFetcher)
+        assert instance.fetch("k") == "sync:k"
+
+    def test_a_member_implemented_by_an_async_callable_object_is_admitted(
+        self,
+    ) -> None:
+        """The load-bearing one: `is_async_callable`, not `iscoroutinefunction`.
+
+        Substituting the naive predicate leaves every other test in this
+        class passing and silently refuses this legitimate implementation.
+        `is_async_callable`'s own docstring names the failure --- a callable
+        object whose `__call__` is an `async def` reads as synchronous ---
+        which is why the check is made once, there, rather than spelled out
+        at each branch.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("embedders", validate_type=_Embeds)
+
+        registry.register("stateful", _StatefulEmbedder)
+        instance = registry.create("stateful", {})
+
+        assert isinstance(instance, _StatefulEmbedder)
+
+    def test_the_property_carrying_protocol_asks_the_question_too(self) -> None:
+        """Through the member-scan fallback, not the `issubclass` branch.
+
+        `_Embeds` carries a property, so `issubclass` raises and the class
+        check falls back to comparing declared members. A fix applied to
+        only the `issubclass` branch would leave this shape --- the shape
+        the shipped embedder protocol actually has --- ungated.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("embedders", validate_type=_Embeds)
+
+        with pytest.raises(TypeError) as caught:
+            registry.register("sync", _SyncEmbedder)
+
+        assert "embed" in str(caught.value)
+        assert "vector_field" not in str(caught.value)
+
+    def test_a_sync_class_is_refused_by_the_async_gate(self) -> None:
+        """The other direction, which is the one a consumer hits first.
+
+        A registry gating on the async half admitted a synchronous
+        implementation just as readily; `create_async` would then await a
+        `str`.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "fetchers_async", validate_type=_FetchesAsync
+        )
+
+        with pytest.raises(TypeError) as caught:
+            registry.register("local", _SyncFetcher)
+
+        assert "fetch" in str(caught.value)
+        assert "synchronous" in str(caught.value)
+
+    def test_the_default_factory_is_gated_too_and_names_no_key(self) -> None:
+        """`set_default_factory` has no key, so the message must omit one.
+
+        It is the other class-gate caller, and the only one that reaches
+        the refusal with nothing to name --- which is why the key is
+        optional there rather than rendered as `None`.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("fetchers", validate_type=_Fetches)
+
+        with pytest.raises(TypeError) as caught:
+            registry.set_default_factory(_AsyncFetcher)
+        message = str(caught.value)
+
+        assert "Default factory" in message
+        assert "fetch" in message
+        assert "fetchers" in message
+        assert "plugin" not in message
+        assert "None" not in message
+
+    def test_isinstance_still_answers_true_in_both_directions(self) -> None:
+        """The fix must not move `isinstance`, and does not.
+
+        Published documentation asserts this exact answer, and a guard in
+        another package asserts it too. Asking a second question inside the
+        gate leaves both true; renaming the members would not have.
+        """
+        assert isinstance(_SyncFetcher(), _FetchesAsync)
+        assert isinstance(_AsyncFetcher(), _Fetches)
