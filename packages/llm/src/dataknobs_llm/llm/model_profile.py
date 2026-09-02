@@ -148,10 +148,18 @@ _PROFILE_FACETS: tuple[str, ...] = tuple(f.name for f in fields(ModelProfile))
 #: Canonical capability ordering for reconstructing an ordered capability *list*
 #: from a resolved ``frozenset`` facet, so a provider whose ``get_capabilities``
 #: historically returned an ordered list keeps byte-identical order.
+#:
+#: **Every** :class:`ModelCapability` member must appear here. The projection
+#: is ``[c for c in CAPABILITY_ORDER if c in capabilities]``, so a member left
+#: out is not merely unordered — it is dropped, silently, from every provider
+#: that resolves capabilities through a profile, with the source still
+#: reporting it. ``test_capability_order_covers_the_enum`` fails when the two
+#: fall out of step, because nothing else would.
 CAPABILITY_ORDER: tuple[ModelCapability, ...] = (
     ModelCapability.TEXT_GENERATION,
     ModelCapability.CHAT,
     ModelCapability.EMBEDDINGS,
+    ModelCapability.EMBEDDING_DIMENSIONS,
     ModelCapability.STREAMING,
     ModelCapability.CODE,
     ModelCapability.VISION,
@@ -351,7 +359,7 @@ class CallableModelMetadataSource:
     """
 
     name: str
-    fn: Any  # Callable[[str], ModelProfile]
+    fn: Callable[[str], ModelProfile]
 
     def resolve(self, model: str) -> ModelProfile:
         return self.fn(model)

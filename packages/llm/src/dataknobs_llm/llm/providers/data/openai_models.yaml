@@ -119,13 +119,17 @@ models:
     param_remaps: {max_tokens: max_completion_tokens}
     pricing: {input_per_mtok: 1.1, output_per_mtok: 4.4, cached_input_per_mtok: 0.275}
   # --- Embedding models ------------------------------------------------------
+  # `embedding_dimensions` marks a model that accepts a `dimensions`
+  # parameter and returns vectors of that length. The 3-series does;
+  # ada-002 rejects the parameter, so it is absent there rather than
+  # merely unlisted.
   text-embedding-3-small:
     context_window: 8191
-    capabilities: [embeddings]
+    capabilities: [embeddings, embedding_dimensions]
     pricing: {input_per_mtok: 0.02}
   text-embedding-3-large:
     context_window: 8191
-    capabilities: [embeddings]
+    capabilities: [embeddings, embedding_dimensions]
     pricing: {input_per_mtok: 0.13}
   text-embedding-ada-002:
     context_window: 8191

@@ -91,9 +91,19 @@ class TestCapabilities:
         assert ModelCapability.VISION not in caps
 
     def test_embedding_model_disjoint(self) -> None:
-        assert _provider("amazon.titan-embed-text-v2:0").get_capabilities() == [
-            ModelCapability.EMBEDDINGS
-        ]
+        """An embed-only model advertises nothing outside the embedding family.
+
+        Containment rather than an exact list: the claim is that no chat /
+        generation capability leaks onto an embedding model, and Titan V2
+        legitimately gained EMBEDDING_DIMENSIONS — its invoke body takes a
+        width.
+        """
+        caps = _provider("amazon.titan-embed-text-v2:0").get_capabilities()
+        assert set(caps) <= {
+            ModelCapability.EMBEDDINGS,
+            ModelCapability.EMBEDDING_DIMENSIONS,
+        }
+        assert ModelCapability.EMBEDDINGS in caps
 
     def test_claude_on_bedrock_reuses_shared_caps(self) -> None:
         """A Claude-on-Bedrock id resolves the SHARED Claude capability set

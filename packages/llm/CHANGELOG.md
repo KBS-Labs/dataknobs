@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stated embedding width is honoured or refused, never ignored.**
+  `LLMConfig.dimensions` was documented as the embedding dimensionality on
+  `LLMConfig` itself, described by `create_embedding_provider` as forwarded to
+  the provider, and offered again as a per-call `dimensions=` keyword in
+  `AsyncLLMProvider.embed`'s own docstring. One provider read it — Bedrock's
+  Titan path. `EchoProvider` read a different key (`options["embedding_dim"]`),
+  and OpenAI, Anthropic, Ollama and HuggingFace read neither. The keyword was
+  accepted and discarded by all six.
+
+  So a config asking `text-embedding-3-large` for 512-dimensional vectors
+  received 3072: valid vectors, six times wider than requested, at six times
+  the storage and the price. Nothing raised at any layer. The first component
+  to object was a vector store rejecting the write, and that message names the
+  store rather than the misconfiguration — which is how a reader ends up in
+  the wrong file.
+
+  There is now one rule, resolved once on the base and wired into each
+  provider's `embed`:
+
+  - **The call beats the config.** `LLMProvider._requested_embedding_dimensions`
+    reads the per-call `dimensions=` keyword, else `LLMConfig.dimensions`. No
+    provider decides precedence for itself; that is how three different
+    readings of one field accumulated.
+  - **A model that accepts a width gets one.** OpenAI forwards `dimensions` to
+    `embeddings.create` for `text-embedding-3-*`; Bedrock's Titan body takes it
+    (and now takes the per-call keyword, which reading `config` directly had
+    made unreachable).
+  - **A model whose width is fixed is checked, not ignored.** Ollama's
+    `/api/embeddings` and HuggingFace's feature-extraction endpoint have no
+    width parameter, and `text-embedding-ada-002` rejects one.
+    `LLMProvider._check_embedding_width` raises `ValueError` naming the model,
+    the width asked for and the width returned. Declaring the width a model
+    *does* produce stays valid and silent — the rule is that a stated width is
+    never ignored, not that one may not be stated. Nothing is sent when
+    nothing is stated, so ada-002 keeps working.
+
+  **`ModelCapability.EMBEDDING_DIMENSIONS` answers which of the two applies,
+  before anything is embedded.** That is the point rather than a convenience:
+  a vector column is created at a fixed width before the first vector exists,
+  so the consumer choosing that width cannot afford to learn the answer by
+  making a call. It resolves from the bundled model tables — declared for
+  `text-embedding-3-small` / `-3-large` and `amazon.titan-embed`, and pointedly
+  absent for `text-embedding-ada-002` — and is overridable through
+  `model_profile_overrides`, so a model released after the table was written
+  needs no release here.
+
+  **Behaviour change: `EchoProvider` now sizes its vectors from
+  `config.dimensions`** when set, falling back to `options["embedding_dim"]`
+  and then to 768. A config setting both gets `dimensions`. Configs using only
+  the legacy option are unaffected. This matters past Echo itself: a testing
+  provider whose vectors ignore the width its config states makes every test
+  written against that config a demonstration of the defect rather than a
+  guard against it.
+
+- **`CAPABILITY_ORDER` silently dropped any `ModelCapability` missing from it.**
+  `ProfileDetectionMixin._detect_capabilities` projects the resolved capability
+  set through that tuple, so a member not listed is not merely unordered — it
+  is dropped from every provider that resolves through a profile, while the
+  bundled resource and every source still report it, and nothing raises. Found
+  by adding `EMBEDDING_DIMENSIONS`: two model tables declared it, both OpenAI
+  sources returned it, and `get_capabilities()` answered `['embeddings']`.
+  `test_capability_order_covers_the_enum` now fails when the tuple and the enum
+  fall out of step.
+
 - **`AsyncLLMProvider.stream_complete` is declared as what it returns.** It was
   `async def ... -> AsyncIterator[LLMStreamResponse]` with a `pass` body, which
   types the call as a *coroutine wrapping* an iterator. Every one of the seven

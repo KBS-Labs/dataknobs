@@ -67,7 +67,7 @@ import logging
 import time
 import warnings
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.exceptions import ConfigurationError
@@ -488,6 +488,24 @@ def _bool_option(options: dict[str, Any] | None, key: str, default: bool) -> boo
     return bool(raw)
 
 
+@overload
+def _numeric_option(
+    options: dict[str, Any] | None,
+    key: str,
+    default: float,
+    cast: Callable[[Any], float],
+) -> float: ...
+
+
+@overload
+def _numeric_option(
+    options: dict[str, Any] | None,
+    key: str,
+    default: None,
+    cast: Callable[[Any], float],
+) -> float | None: ...
+
+
 def _numeric_option(
     options: dict[str, Any] | None,
     key: str,
@@ -499,6 +517,10 @@ def _numeric_option(
     A present-but-uncoercible value (e.g. ``embed_max_concurrency: "auto"``)
     raises :class:`ConfigurationError` naming the option — the project
     convention — rather than a bare ``ValueError`` with no context.
+
+    Overloaded on *default* because the two uses are different contracts and
+    the union hid it: a caller passing a real default cannot receive ``None``,
+    and three call sites were passing one to a parameter typed ``float``.
     """
     raw = (options or {}).get(key)
     if raw is None:
@@ -526,6 +548,7 @@ async def _embed_titan(
     config: LLMConfig,
     *,
     max_concurrency: int,
+    dimensions: int | None = None,
 ) -> list[list[float]]:
     """Embed each text via a Titan ``invoke_model`` call (one per text).
 
@@ -535,8 +558,15 @@ async def _embed_titan(
     unbounded ``invoke_model`` calls and trip Bedrock throttling or exhaust
     the client's connection pool. ``normalize`` defaults to ``True`` and is
     overridable via ``options["normalize"]``.
+
+    Args:
+        dimensions: The width to request, already resolved from the call's
+            ``dimensions=`` keyword or ``LLMConfig.dimensions`` by
+            :meth:`~dataknobs_llm.llm.base.LLMProvider._requested_embedding_dimensions`.
+            Taken as a parameter rather than read off *config* so the per-call
+            keyword reaches the wire — reading the config here made the
+            keyword unreachable on the one provider that forwarded anything.
     """
-    dimensions = config.dimensions
     normalize = _bool_option(config.options, "normalize", True)
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -548,7 +578,8 @@ async def _embed_titan(
             result = await client.invoke_model(modelId=model, body=json.dumps(body))
             raw = await result["body"].read()
         parsed = json.loads(raw)
-        return parsed["embedding"]
+        vector: list[float] = parsed["embedding"]
+        return vector
 
     return list(await asyncio.gather(*(_one(t) for t in texts)))
 
@@ -560,6 +591,7 @@ async def _embed_cohere(
     config: LLMConfig,
     *,
     max_concurrency: int,
+    dimensions: int | None = None,
 ) -> list[list[float]]:
     """Embed the whole list via one Cohere ``invoke_model`` call.
 
@@ -567,13 +599,19 @@ async def _embed_cohere(
     is accepted for a uniform family signature but unused. ``input_type``
     defaults to :data:`_COHERE_DEFAULT_INPUT_TYPE` and is overridable via
     ``options["input_type"]`` (e.g. ``"search_query"`` at query time).
+
+    ``dimensions`` is likewise accepted for the uniform signature and unused:
+    Cohere's Embed models have a fixed width and the invoke body has nowhere
+    to put a request for another. A width stated anyway is not dropped —
+    ``BedrockProvider.embed`` checks the returned vectors against it.
     """
     input_type = (config.options or {}).get("input_type", _COHERE_DEFAULT_INPUT_TYPE)
     body = {"texts": texts, "input_type": input_type}
     result = await client.invoke_model(modelId=model, body=json.dumps(body))
     raw = await result["body"].read()
     parsed = json.loads(raw)
-    return parsed["embeddings"]
+    vectors: list[list[float]] = parsed["embeddings"]
+    return vectors
 
 
 _EMBED_FAMILIES: tuple[tuple[str, Any], ...] = (
@@ -670,7 +708,13 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 ),
             )
 
-    async def initialize(self) -> None:
+    # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
+    # same answer: ``LLMProvider`` declares the pair sync, so the whole async
+    # subtree contradicts its own base. Resolving it moves the pair down into
+    # ``SyncLLMProvider`` --- a public-ABC contract change needing consumer
+    # verification, argued and deferred where the base declares it. Suppressed
+    # here for that decision, not because this override is wrong.
+    async def initialize(self) -> None:  # type: ignore[override]
         """Build and cache the shared aioboto3 session for Bedrock.
 
         The session factory offloads construction off the event loop and
@@ -1161,10 +1205,20 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
         Returns a single vector for a ``str`` input and a list of vectors
         for a list input, per the base contract.
 
+        A stated width is forwarded where the family accepts one (Titan takes
+        ``dimensions`` in the invoke body) and checked where it does not
+        (Cohere's width is the model's). Either way it is not ignored.
+
+        Args:
+            texts: A single text or a batch.
+            **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
+                for this call.
+
         Raises:
             ValueError: If the model id does not match a supported embedding
                 family (Titan ``amazon.titan-embed*`` or Cohere
-                ``cohere.embed*``).
+                ``cohere.embed*``), or if the vectors are not the width that
+                was asked for.
         """
         if not self._is_initialized:
             await self.initialize()
@@ -1187,11 +1241,13 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
             )
 
         max_concurrency = self._embed_max_concurrency()
+        requested = self._requested_embedding_dimensions(kwargs)
         start = time.perf_counter()
         async with self._session.client(
             "bedrock-runtime",
             **self._client_kwargs(read_timeout=self.config.timeout),
         ) as client:
+            vectors: list[list[float]]
             try:
                 vectors = await embed_fn(
                     client,
@@ -1199,9 +1255,11 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                     text_list,
                     self.config,
                     max_concurrency=max_concurrency,
+                    dimensions=requested,
                 )
             except Exception as exc:
                 self._raise_translated(exc)
+        self._check_embedding_width(vectors, requested)
 
         logger.debug(
             "Bedrock embed complete (model=%s, count=%d, latency_ms=%d)",

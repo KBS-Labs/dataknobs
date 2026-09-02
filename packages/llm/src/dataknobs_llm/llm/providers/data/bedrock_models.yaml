@@ -105,9 +105,15 @@ models:
     capabilities: [text_generation, chat, streaming]
     pricing: {input_per_mtok: 0.15, output_per_mtok: 0.2}
     available: true
+  # `embedding_dimensions`: Titan Text Embeddings V2 takes a `dimensions`
+  # field in the invoke body (256/512/1024). The key is a family alias, so
+  # it also covers V1, whose width is fixed at 1536 — declaring it there is
+  # the pre-existing behaviour (the body has always carried the field when
+  # configured) rather than a new claim, and a V1 answer of the wrong width
+  # is caught by the returned-width check.
   amazon.titan-embed:
     context_window: 8192
-    capabilities: [embeddings]
+    capabilities: [embeddings, embedding_dimensions]
     pricing: {input_per_mtok: 0.02}
     available: true
 

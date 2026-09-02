@@ -60,7 +60,7 @@ import logging
 import math
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -156,6 +156,14 @@ class ModelCapability(Enum):
         TEXT_GENERATION: Basic text generation
         CHAT: Multi-turn conversational interactions
         EMBEDDINGS: Vector embedding generation
+        EMBEDDING_DIMENSIONS: The caller may choose the width of the
+            vectors, by setting ``LLMConfig.dimensions`` or passing
+            ``dimensions=`` to :meth:`~AsyncLLMProvider.embed`. Narrower
+            than EMBEDDINGS and independent of it: every embedding model
+            produces vectors, and only some let the caller say how long
+            they are. Absent is the common case and the safe default ---
+            a stated width is then verified against what came back rather
+            than sent to an API that has nowhere to put it.
         FUNCTION_CALLING: Tool/function calling support
         VISION: Image understanding capabilities
         CODE: Code generation and analysis
@@ -185,6 +193,7 @@ class ModelCapability(Enum):
     TEXT_GENERATION = "text_generation"
     CHAT = "chat"
     EMBEDDINGS = "embeddings"
+    EMBEDDING_DIMENSIONS = "embedding_dimensions"
     FUNCTION_CALLING = "function_calling"
     VISION = "vision"
     CODE = "code"
@@ -1620,6 +1629,92 @@ class LLMProvider(ABC):
                 wire[dest] = wire.pop(source)
         return wire
 
+    # ---- Embedding width -------------------------------------------------
+    # A stated width is honored or refused, never ignored. The two halves of
+    # that rule live here so every provider reads one precedence and raises
+    # one message; each wires them into its own ``embed``, the same shape
+    # ``_apply_param_remaps`` above uses for request shaping.
+
+    def _requested_embedding_dimensions(
+        self, kwargs: Mapping[str, Any] | None = None
+    ) -> int | None:
+        """The vector width this embed call was asked for, or ``None``.
+
+        Two surfaces state a width and this settles which wins: the
+        per-call ``dimensions=`` keyword documented on
+        :meth:`AsyncLLMProvider.embed`, else ``LLMConfig.dimensions``. The
+        call beats the config for the ordinary reason — it is the more
+        specific statement, made later, by a caller who can see what the
+        config says.
+
+        Resolved here rather than in each provider so the precedence cannot
+        drift between them. It drifted once already: of six providers one
+        read the config field, none read the keyword, and one read a third
+        key of its own (``options["embedding_dim"]``).
+
+        Args:
+            kwargs: The keyword arguments ``embed`` received. A ``None`` or
+                absent ``dimensions`` falls through to the config.
+
+        Returns:
+            The stated width, or ``None`` when neither surface states one.
+            ``None`` means *say nothing* — do not send a default to an API
+            that may reject the parameter outright, as
+            ``text-embedding-ada-002`` does.
+        """
+        if kwargs:
+            stated = kwargs.get("dimensions")
+            if stated is not None:
+                return int(stated)
+        configured = getattr(self.config, "dimensions", None)
+        return int(configured) if configured is not None else None
+
+    def _check_embedding_width(
+        self, vectors: Sequence[Sequence[float]], requested: int | None
+    ) -> None:
+        """Raise when the vectors are not the width that was asked for.
+
+        The half of the rule that serves providers whose API has no width
+        parameter. Ollama's ``/api/embeddings`` takes a model and a prompt;
+        HuggingFace's feature-extraction endpoint takes inputs. For those a
+        stated width is not a request they can grant, and the two honest
+        answers are to check it or to refuse it outright. Checking is
+        strictly better: it costs nothing, it never refuses a width the
+        model does produce, and declaring the width a model actually returns
+        is the shape ``LLMProviderEmbedder`` recommends in as many words.
+
+        Also called by the providers that *do* forward the parameter, since
+        an API that accepted a width and returned another is exactly the
+        condition nothing else would notice.
+
+        What it replaces is silence. A width stated in config and a width
+        written to a store used to come apart with nothing raised at any
+        layer; the first thing to object was a vector store rejecting the
+        write, and that message names the store rather than the
+        misconfiguration.
+
+        Args:
+            vectors: What the provider is about to return, as a batch.
+            requested: The width from :meth:`_requested_embedding_dimensions`.
+                ``None`` — nobody stated one — checks nothing.
+
+        Raises:
+            ValueError: The first vector's length is not *requested*.
+        """
+        if requested is None or not vectors:
+            return
+        observed = len(vectors[0])
+        if observed == requested:
+            return
+        model = getattr(self.config, "model", None) or "unknown"
+        raise ValueError(
+            f"{type(self).__name__} was asked for {requested}-dimensional "
+            f"embeddings and {model} returned {observed}. The model's width is "
+            f"not selectable here, so the request could not be forwarded — set "
+            f"`dimensions` to {observed}, or choose a model whose width is "
+            f"selectable (ModelCapability.EMBEDDING_DIMENSIONS)."
+        )
+
     def _shape_request_params(
         self, config: LLMConfig, extra: Mapping[str, Any] | None = None
     ) -> _ShapedRequest:
@@ -2344,7 +2439,14 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             texts: Single text string or list of texts to embed
             **kwargs: Provider-specific parameters:
                 - model (str): Embedding model override
-                - dimensions (int): Target dimensions (if supported)
+                - dimensions (int): The width the vectors should be,
+                  overriding ``LLMConfig.dimensions`` for this call. Honored
+                  or refused, never ignored: a provider whose model accepts a
+                  width parameter forwards it (ask
+                  ``ModelCapability.EMBEDDING_DIMENSIONS`` to find out before
+                  calling), and one whose model has a fixed width raises
+                  ``ValueError`` when what came back is not what was asked
+                  for. Omit it, and nothing about width is sent or checked.
 
         Returns:
             Single embedding vector (List[float]) if input is a string,

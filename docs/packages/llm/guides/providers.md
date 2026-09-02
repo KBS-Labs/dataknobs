@@ -169,6 +169,57 @@ When the nested format is present, it takes precedence over legacy keys.
 the caller's config includes `"mode": "chat"`. This ensures the provider is
 correctly configured for `embed()` calls.
 
+### The vector width
+
+`dimensions` says how wide the vectors should be. It is **honoured or
+refused, never ignored** — by every provider, and by the per-call
+`dimensions=` keyword as well as the config field.
+
+```python
+# Config-wide
+provider = await create_embedding_provider(
+    LLMConfig(provider="openai", model="text-embedding-3-large", dimensions=512)
+)
+
+# Or for one call, overriding the config
+vectors = await provider.embed(texts, dimensions=256)
+```
+
+Which of the two happens depends on the model, and the answer is available
+**before** you embed anything — which is what lets a fixed-width vector
+column be created up front:
+
+```python
+from dataknobs_llm.llm.base import ModelCapability
+
+if ModelCapability.EMBEDDING_DIMENSIONS in provider.get_capabilities():
+    ...  # the width you ask for is the width you get
+```
+
+| The model | What a stated width does |
+|---|---|
+| accepts a width parameter (`text-embedding-3-*`, Titan V2) | forwarded to the API |
+| has a fixed width (`text-embedding-ada-002`, Ollama, HuggingFace, Cohere Embed) | checked against what came back; a mismatch raises `ValueError` naming the model, the width asked for and the width returned |
+
+Declaring the width a fixed-width model *does* produce is valid and silent —
+the rule is that a stated width is never ignored, not that one may not be
+stated. Stating nothing sends nothing and checks nothing, which matters for
+`text-embedding-ada-002`: it rejects the parameter outright.
+
+`EMBEDDING_DIMENSIONS` resolves from the bundled model tables and is
+config-overridable through `model_profile_overrides`, so a model released
+after the table was written can be declared without waiting for a release.
+
+**Why this is not cosmetic.** The field was documented on `LLMConfig`, on
+`create_embedding_provider` and on `AsyncLLMProvider.embed`, and was read by
+one provider — Bedrock's Titan path. `EchoProvider` read a different key
+(`options["embedding_dim"]`), and OpenAI, Anthropic, Ollama and HuggingFace
+read neither. So a config asking `text-embedding-3-large` for 512 silently
+received 3072: valid vectors, six times wider than requested, at six times
+the storage and the price. Nothing raised at any layer; the first component
+to object was a vector store rejecting the write, and that message names the
+store rather than the misconfiguration.
+
 ### Config-lint validation
 
 Because an embedder config is an `LLMConfig`, `dataknobs-llm` registers an
@@ -274,7 +325,7 @@ needs:
 
 | | |
 |---|---|
-| `dimensions` | The vector width, settled. Taken from the `dimensions` argument, else the provider's configured `dimensions`, else observed on the first `embed()` — and a *declared* width is checked against that batch rather than trusted, because the two can disagree and nothing else in the stack notices until a vector store rejects a write and names the store rather than the misconfigured provider. |
+| `dimensions` | The vector width, settled. Taken from the `dimensions` argument, else the provider's configured `dimensions`, else observed on the first `embed()` — and a *declared* width is checked against that batch rather than trusted. The argument is the case that needs it: it names the width **this embedder** promises its callers, and the provider never sees it. A width in `config.dimensions` is reconciled one layer down (see [The vector width](#the-vector-width)) and arrives here already agreed. |
 | `model_id` | `provider:model`, the **staleness key** written beside a stored vector. A sweep reads it back to decide whether a vector is still comparable, having never seen the embedder that produced it. |
 
 `dimensions` raises if nothing has declared a width and nothing has been

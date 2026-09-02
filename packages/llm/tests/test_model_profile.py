@@ -21,6 +21,7 @@ import pytest
 
 from dataknobs_llm.llm.base import ModelCapability
 from dataknobs_llm.llm.model_profile import (
+    CAPABILITY_ORDER,
     BundledResourceSource,
     CallableModelMetadataSource,
     ConfigOverrideSource,
@@ -255,3 +256,27 @@ class TestSourceRegistry:
 
         with pytest.raises(ValueError, match="model metadata source"):
             model_metadata_sources.create(key="_never_registered", config={})
+
+
+# ---------------------------------------------------------------------------
+# CAPABILITY_ORDER is a projection, so a member missing from it is dropped
+# ---------------------------------------------------------------------------
+
+
+def test_capability_order_covers_the_enum() -> None:
+    """Every ``ModelCapability`` must be listed, and nothing else may be.
+
+    ``ProfileDetectionMixin._detect_capabilities`` projects the resolved
+    frozenset through this tuple --- ``[c for c in CAPABILITY_ORDER if c in
+    capabilities]`` --- so a member left out is not merely unordered. It is
+    dropped from every provider that resolves capabilities through a profile,
+    while the source and the bundled resource both still report it, and
+    nothing anywhere raises.
+
+    That is not hypothetical: ``EMBEDDING_DIMENSIONS`` was added to the enum,
+    declared in two bundled resources and returned by both OpenAI sources, and
+    ``get_capabilities()`` answered ``['embeddings']`` for every model until
+    this tuple learned the name. A guard is cheaper than finding it twice.
+    """
+    assert set(CAPABILITY_ORDER) == set(ModelCapability)
+    assert len(CAPABILITY_ORDER) == len(set(CAPABILITY_ORDER))

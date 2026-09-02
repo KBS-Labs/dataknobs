@@ -361,8 +361,16 @@ class TestCapabilities:
         assert ModelCapability.STREAMING not in caps
         assert ModelCapability.TEXT_GENERATION not in caps
         assert ModelCapability.VISION not in caps
-        # embeddings is the sole capability
-        assert caps == [ModelCapability.EMBEDDINGS]
+        # Nothing outside the embedding family. Stated as containment rather
+        # than as `caps == [EMBEDDINGS]`: the claim is disjointness from the
+        # chat capabilities, and an exact list also fails when the embedding
+        # family gains a member — as it did with EMBEDDING_DIMENSIONS, which
+        # is exactly what an embed-only model should be free to advertise.
+        assert set(caps) <= {
+            ModelCapability.EMBEDDINGS,
+            ModelCapability.EMBEDDING_DIMENSIONS,
+        }
+        assert ModelCapability.EMBEDDINGS in caps
 
     def test_cohere_embed_model_excludes_chat_capabilities(self) -> None:
         """Cohere embed models are embed-only too (``-embed-`` / prefix)."""
