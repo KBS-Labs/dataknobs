@@ -182,6 +182,36 @@ successfully and every later one received the same exhausted object.
 
 A synchronous factory needs no change and works through all four methods.
 
+## Errors from a factory
+
+All four entry points wrap an exception the factory raised in
+`OperationError`, naming the key and the exception type and carrying the
+original on `__cause__`. The factory's own words stay out of the message: a
+factory builds a backend from deployment config, so its failure text is a
+driver's or an SDK's and can carry the connection URL it was handed.
+
+`NotFoundError` and `OperationError` are the exceptions. Their text is ours
+and already bounded, so they pass through unchanged — which keeps the type a
+caller catches on:
+
+```python
+def composite(config, **kwargs):
+    # resolves a sub-component through another registry
+    return Composite(sub_backends.create(config["sub"]))
+
+backends.register("composite", composite)
+
+try:
+    backends.create("composite", {"sub": "missing"})
+except NotFoundError as e:
+    # the inner registry's own error, not "Failed to create plugin"
+    e.context["registry"]  # -> "sub_backends"
+```
+
+Note the factory's `(config, **kwargs)` signature: that is the `create` lane.
+A factory registered for `get()` takes `(key, config)` instead — see
+[`get()` vs `create()`](#get-vs-create).
+
 `PluginFactory[T]` is the exported alias for all three accepted shapes —
 a class, a callable returning an instance, and a callable returning an
 awaitable one — for consumers annotating a factory before registering it:

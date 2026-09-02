@@ -55,6 +55,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indistinguishable from a synchronous one until its coroutine has already been
   discarded.
 
+- **`PluginRegistry.get()` and `get_async()` no longer re-wrap a
+  `NotFoundError` raised by the factory itself.** Both now pass a
+  `NotFoundError` or an `OperationError` from the factory through unchanged,
+  which is what `create()` and `create_async()` have done since the class was
+  generalized; every other exception is still wrapped. The wrapper exists for
+  a stated reason — a factory builds a backend from deployment config, so its
+  failure text is a driver's or an SDK's and can carry the connection URL it
+  was handed — and that reason does not reach our own error types, whose text
+  we wrote and already bounded. The visible change is for a composite factory
+  that resolves a sub-component through another registry and misses: through
+  `get()` that arrived as `OperationError("Failed to create plugin '<outer>'
+  (NotFoundError)")` with the real error on `__cause__`, and now arrives as
+  the `NotFoundError` itself, so a caller's `except NotFoundError` catches it.
+  The rule is stated once on the class, and each method's `Raises:` now lists
+  it — `get()` had never listed `OperationError` at all and `get_async()` had
+  carried no `Raises:` block.
+
 ### Fixed
 
 - **A synchronous `get()` or `create()` handed the caller an un-awaited

@@ -223,6 +223,11 @@ class LLMProviderFactory:
         # it decides whether ``SyncProviderAdapter`` goes on top, and it
         # cannot decide that about something it has not awaited.
         if inspect.isawaitable(async_provider):
+            # Closed rather than dropped, for the same reason
+            # ``PluginRegistry._refuse_awaitable`` closes: an un-awaited
+            # coroutine left to be collected emits a ``RuntimeWarning`` at
+            # interpreter shutdown, attributed to the factory rather than to
+            # the refusal -- which is the confusion the raise below removes.
             close = getattr(async_provider, "close", None)
             if callable(close):
                 close()

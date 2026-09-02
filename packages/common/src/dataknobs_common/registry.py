@@ -939,6 +939,20 @@ class PluginRegistry(Generic[T]):
         registry.register("async", create_async_handler)
         handler = await registry.get_async("async", config={"url": "..."})
         ```
+
+    Errors from a factory:
+        ``get``, ``get_async``, ``create`` and ``create_async`` all wrap an
+        exception the factory raised in ``OperationError``, naming the key
+        and the exception type and carrying the original on ``__cause__``.
+        The factory's own words stay out of the message: a factory builds a
+        backend from deployment config, so its failure text is a driver's or
+        an SDK's and can carry the connection URL it was handed.
+
+        ``NotFoundError`` and ``OperationError`` are the exceptions to that.
+        Their text is ours and already bounded, so they reach the caller
+        unchanged -- which keeps the type a caller catches on. A composite
+        factory that resolves a sub-component through another registry and
+        misses raises ``NotFoundError``, and the caller sees it as one.
     """
 
     def __init__(
@@ -1502,7 +1516,12 @@ class PluginRegistry(Generic[T]):
             Plugin instance
 
         Raises:
-            NotFoundError: If key not registered and use_default=False
+            NotFoundError: If key not registered and use_default=False, or
+                raised by the factory itself (see "Errors from a factory").
+            OperationError: If the factory returns an awaitable -- this
+                method cannot await one, so call ``get_async()`` -- if the
+                instance fails the ``validate_type`` guard, or wrapping any
+                other exception the factory raised.
 
         Example:
             ```python
@@ -1592,6 +1611,12 @@ class PluginRegistry(Generic[T]):
 
         Returns:
             Plugin instance
+
+        Raises:
+            NotFoundError: If key not registered and use_default=False, or
+                raised by the factory itself (see "Errors from a factory").
+            OperationError: If the instance fails the ``validate_type``
+                guard, or wrapping any other exception the factory raised.
 
         Example:
             ```python
@@ -1701,9 +1726,12 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
-            NotFoundError: If resolved key is not registered.
-            OperationError: If factory raises an exception (including
-                type validation failures from ``validate_type``).
+            NotFoundError: If resolved key is not registered, or raised by
+                the factory itself (see "Errors from a factory").
+            OperationError: If the factory returns an awaitable -- this
+                method cannot await one, so call ``create_async()`` -- or
+                wrapping an exception the factory raised (including type
+                validation failures from ``validate_type``).
 
         Note:
             Type validation errors from ``register()`` raise ``TypeError``
@@ -1791,9 +1819,10 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
-            NotFoundError: If the resolved key is not registered.
-            OperationError: If the factory raises (including
-                ``validate_type`` failures).
+            NotFoundError: If the resolved key is not registered, or raised
+                by the factory itself (see "Errors from a factory").
+            OperationError: Wrapping an exception the factory raised
+                (including ``validate_type`` failures).
         """
         factory, key, config = self._resolve_factory(key, config)
 
