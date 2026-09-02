@@ -7,17 +7,86 @@ Note: This module was migrated from dataknobs_fsm.functions.library.llm to
 consolidate all LLM functionality in the dataknobs-llm package.
 """
 
-import asyncio
 import json
+import string
 from typing import Any, Callable, Dict, List
 
+from dataknobs_common.callbacks import run_callback_off_loop
 from dataknobs_fsm.functions.base import (
     ITransformFunction,
     IValidationFunction,
     TransformError,
     ValidationError,
 )
-from dataknobs_llm.fsm_integration.resources import LLMResource
+from dataknobs_llm.fsm_integration.resources import AsyncLLMResource
+
+
+class _DottedNameFormatter(string.Formatter):
+    """Resolve ``{a.b}`` against a dict of dotted names.
+
+    ``str.format`` reads ``{user.name}`` as "key ``user``, attribute
+    ``name``", so a dotted placeholder can never reach a value stored under
+    the dotted key itself. ``PromptBuilder`` extracts nested variables under
+    exactly that key, so it needs the name resolved whole before ``Formatter``
+    splits it.
+    """
+
+    def get_field(
+        self,
+        field_name: str,
+        args: Any,
+        kwargs: Any,
+    ) -> tuple[Any, str]:
+        """Return the value for ``field_name``, preferring the whole name."""
+        if field_name in kwargs:
+            return kwargs[field_name], field_name
+        resolved: tuple[Any, str] = super().get_field(field_name, args, kwargs)
+        return resolved
+
+
+_FORMATTER = _DottedNameFormatter()
+
+
+def _resolve_path(data: Dict[str, Any], path: str) -> Any:
+    """Walk a dotted ``path`` through nested dicts.
+
+    Returns:
+        The value at ``path``, or ``None`` if any segment is missing or a
+        segment is reached on something that is not a dict.
+    """
+    value: Any = data
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _require_async_resource(
+    data: Dict[str, Any],
+    resource_name: str,
+) -> AsyncLLMResource:
+    """Return the named resource, or raise naming what was wrong.
+
+    The async transforms in this module use ``generate()``/``embed()`` as
+    coroutines, which only ``AsyncLLMResource`` supplies -- the sync
+    ``LLMResource`` base has no ``generate`` at all and a **synchronous**
+    ``embed``. Guarding on the base admitted it and failed later, deep inside
+    the call, as an ``AttributeError`` or an awaited list.
+
+    Raises:
+        TransformError: If the resource is absent or is not async.
+    """
+    resource = data.get("_resources", {}).get(resource_name)
+    if resource is None:
+        raise TransformError(f"LLM resource '{resource_name}' not found")
+    if not isinstance(resource, AsyncLLMResource):
+        raise TransformError(
+            f"LLM resource '{resource_name}' must be an AsyncLLMResource "
+            f"(got {type(resource).__name__}); the sync LLMResource base does "
+            f"not provide the async generate()/embed() these transforms use"
+        )
+    return resource
 
 
 class PromptBuilder(ITransformFunction):
@@ -33,9 +102,15 @@ class PromptBuilder(ITransformFunction):
         """Initialize the prompt builder.
 
         Args:
-            template: Prompt template with {variable} placeholders.
+            template: Prompt template with ``{variable}`` placeholders. A
+                placeholder may name a nested value with dots --
+                ``{user.name}`` -- in which case the whole dotted name is
+                looked up as a path of keys, not as an attribute access.
             system_prompt: Optional system prompt.
-            variables: List of variable names to extract from data.
+            variables: List of variable names to extract from data. A name
+                containing dots (``"user.name"``) is resolved through nested
+                dicts; a name that resolves to nothing is omitted, and the
+                template then reports it as a missing variable.
             format_spec: Output format specification.
         """
         self.template = template
@@ -53,26 +128,19 @@ class PromptBuilder(ITransformFunction):
             Data with built prompt.
         """
         # Extract variables
-        variables = {}
+        variables: Dict[str, Any] = {}
         for var in self.variables:
             if var in data:
                 variables[var] = data[var]
             else:
-                # Try nested access
-                parts = var.split(".")
-                value = data
-                for part in parts:
-                    if isinstance(value, dict) and part in value:
-                        value = value[part]
-                    else:
-                        value = None
-                        break
+                value = _resolve_path(data, var)
                 if value is not None:
                     variables[var] = value
 
-        # Build prompt
+        # Build prompt. A dotted variable is stored under its whole name, so
+        # the formatter resolves the name before splitting it on the dot.
         try:
-            prompt = self.template.format(**variables)
+            prompt = _FORMATTER.vformat(self.template, (), variables)
         except KeyError as e:
             raise TransformError(f"Missing variable for prompt: {e}") from e
 
@@ -141,9 +209,7 @@ class LLMCaller(ITransformFunction):
             Data with LLM response.
         """
         # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, LLMResource):
-            raise TransformError(f"LLM resource '{self.resource_name}' not found")
+        resource = _require_async_resource(data, self.resource_name)
 
         # Get prompt
         prompt = data.get("prompt")
@@ -152,8 +218,12 @@ class LLMCaller(ITransformFunction):
 
         system_prompt = data.get("system_prompt")
 
+        # Only the provider call is wrapped. The handler reports the
+        # exception's type and nothing else, deliberately -- a provider's text
+        # carries endpoint URLs and response bodies -- so anything raised
+        # inside its reach loses its own message. The contract check below
+        # therefore sits outside it.
         try:
-            # Call LLM
             response = await resource.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -162,24 +232,34 @@ class LLMCaller(ITransformFunction):
                 max_tokens=self.max_tokens,
                 stream=self.stream,
             )
-
-            if self.stream:
-                # For streaming, return an async generator
-                return {
-                    **data,
-                    self.response_field: response,  # Async generator
-                    "is_streaming": True,
-                }
-            else:
-                # For non-streaming, return the full response
-                return {
-                    **data,
-                    self.response_field: response,
-                    "tokens_used": response.get("usage", {}).get("total_tokens"),
-                }
-
         except Exception as e:
             raise TransformError(f"LLM call failed ({type(e).__name__})") from e
+
+        if self.stream:
+            # For streaming, return an async generator
+            return {
+                **data,
+                self.response_field: response,  # Async generator
+                "is_streaming": True,
+            }
+
+        # `generate()` returns a dict for a non-streaming call and an async
+        # iterator for a streaming one. Saying so is what lets `usage` be read
+        # at all; leaving it unsaid would mean reporting `tokens_used: None`
+        # for a response that is not a mapping, which is the silent-success
+        # shape this module is otherwise being cleared of.
+        if not isinstance(response, dict):
+            raise TransformError(
+                f"LLM resource '{self.resource_name}' returned "
+                f"{type(response).__name__} for a non-streaming call; "
+                f"generate() must return a dict when stream is False"
+            )
+
+        return {
+            **data,
+            self.response_field: response,
+            "tokens_used": response.get("usage", {}).get("total_tokens"),
+        }
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation.
@@ -360,11 +440,17 @@ class FunctionCaller(ITransformFunction):
         func = self.function_registry[function_name]
 
         try:
-            # Call function
-            if asyncio.iscoroutinefunction(func):
-                result = await func(**function_args)
-            else:
-                result = func(**function_args)
+            # Dispatch on what calling `func` produces, not on what the
+            # callable looks like: `iscoroutinefunction` answers False for an
+            # object with an `async def __call__`, and the sync branch then
+            # stored that object's un-awaited coroutine as the result while
+            # `function_called` claimed the call had happened. The sync branch
+            # also ran the consumer's function inline on the event loop.
+            # `run_callback_off_loop` judges the result and keeps a genuinely
+            # sync function on a worker thread; its first parameter is
+            # positional-only, so a model emitting a `callback` argument
+            # cannot shadow it.
+            result = await run_callback_off_loop(func, **function_args)
 
             return {
                 **data,
@@ -500,9 +586,7 @@ class EmbeddingGenerator(ITransformFunction):
             Data with embeddings.
         """
         # Get resource from context
-        resource = data.get("_resources", {}).get(self.resource_name)
-        if not resource or not isinstance(resource, LLMResource):
-            raise TransformError(f"LLM resource '{self.resource_name}' not found")
+        resource = _require_async_resource(data, self.resource_name)
 
         # Get text to embed
         text = data.get(self.text_field)
@@ -540,31 +624,31 @@ class EmbeddingGenerator(ITransformFunction):
 
 
 # Convenience functions for creating LLM functions
-def build_prompt(template: str, **kwargs) -> PromptBuilder:
+def build_prompt(template: str, **kwargs: Any) -> PromptBuilder:
     """Create a PromptBuilder."""
     return PromptBuilder(template, **kwargs)
 
 
-def call_llm(resource: str, **kwargs) -> LLMCaller:
+def call_llm(resource: str, **kwargs: Any) -> LLMCaller:
     """Create an LLMCaller."""
     return LLMCaller(resource, **kwargs)
 
 
-def validate_response(**kwargs) -> ResponseValidator:
+def validate_response(**kwargs: Any) -> ResponseValidator:
     """Create a ResponseValidator."""
     return ResponseValidator(**kwargs)
 
 
-def call_function(**kwargs) -> FunctionCaller:
+def call_function(**kwargs: Any) -> FunctionCaller:
     """Create a FunctionCaller."""
     return FunctionCaller(**kwargs)
 
 
-def manage_conversation(**kwargs) -> ConversationManager:
+def manage_conversation(**kwargs: Any) -> ConversationManager:
     """Create a ConversationManager."""
     return ConversationManager(**kwargs)
 
 
-def generate_embeddings(resource: str, **kwargs) -> EmbeddingGenerator:
+def generate_embeddings(resource: str, **kwargs: Any) -> EmbeddingGenerator:
     """Create an EmbeddingGenerator."""
     return EmbeddingGenerator(resource, **kwargs)

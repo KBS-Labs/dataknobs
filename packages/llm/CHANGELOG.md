@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An FSM tool whose callable was an *object* was never run, and the record
+  claimed it had been.** `FunctionCaller.transform()` dispatched on
+  `asyncio.iscoroutinefunction`, which answers `False` for a callable object
+  with an `async def __call__` — the shape any stateful tool takes. Such a
+  tool took the sync branch, where calling it merely *constructs* a coroutine,
+  so `function_result` held an un-awaited coroutine while `function_called`
+  reported the call as having happened. Nothing raised. Dispatch now judges
+  what calling the function produces, which additionally awaits a plain `def`
+  that returns a coroutine.
+
+- **A synchronous FSM tool ran on the event loop.** The same sync branch
+  called the consumer's function inline inside an `async def`, so a tool doing
+  I/O stalled every other task sharing that loop. Synchronous tools now run on
+  a worker thread, matching the sibling dispatch in `execution/parallel.py`.
+
+- **`LLMCaller` and `EmbeddingGenerator` accepted a resource they cannot
+  use.** Both guarded on `LLMResource` — the *synchronous* base — and then
+  used the async API that only `AsyncLLMResource` provides. The base has no
+  `generate()` at all, and its `embed()` is synchronous, so a base resource
+  produced `TransformError: LLM call failed (AttributeError)` or an awaited
+  `list`. Both now require an `AsyncLLMResource` and say so by name, and a
+  genuinely missing resource still reports "not found". **This is
+  behaviour-visible:** passing a plain `LLMResource` previously failed
+  obscurely partway through the call and now fails immediately with a message
+  naming the requirement.
+
+- **`LLMCaller` reported no token usage instead of a broken contract.**
+  `generate()` returns a dict for a non-streaming call and an async iterator
+  for a streaming one; the non-streaming path read `usage` off the response
+  without saying which it required, so a resource returning anything else
+  yielded `tokens_used: None` and no error. It now names what came back and
+  what was required. The blanket handler around the provider call --- which
+  reports only the exception's type, so a provider's endpoint URLs and
+  response bodies cannot reach a caller --- has been narrowed to the call
+  itself, so this contract error keeps its own message rather than being
+  re-reported as `LLM call failed (TransformError)`. That disclosure bound is
+  otherwise unchanged and still covered by its recurrence guard.
+
+- **`PromptBuilder` nested variables never worked.** A dotted entry in
+  `variables` (e.g. `"user.name"`) was resolved out of the data and stored
+  under the dotted key, then passed to `str.format(**variables)` — which reads
+  `{user.name}` as "key `user`, attribute `name`" and so raised
+  `TransformError: Missing variable for prompt: 'user'` for every such
+  template. The whole nested-access branch was unreachable in effect. Dotted
+  names are now resolved as a path of keys, as the code always intended.
+
 - **A `DeterministicTask` whose `fn` was a callable *object* with an
   `async def __call__` was reported as a successful task whose value was an
   un-awaited coroutine.** `ParallelLLMExecutor` branched on
