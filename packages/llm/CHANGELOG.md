@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Registering a `ModelMetadataSource` *class* in `model_metadata_sources`
+  raised instead of registering it.** The registry gates class factories on
+  `ModelMetadataSource`, whose `name` is a property, and `issubclass` refuses a
+  Protocol carrying any non-method member — so the gate raised
+  `TypeError: Protocols with non-method members don't support issubclass()`
+  before judging anything, naming neither the registry, the protocol, nor the
+  class. This is the registry's own documented extension point: an in-house
+  gateway or proxy registering a source without a dataknobs release met it on
+  the obvious shape, a class implementing the published protocol. Only the
+  callable-factory route worked, and it is the only one this package's tests
+  had exercised.
+
+  Fixed in `dataknobs-common`'s `PluginRegistry` — see its changelog. A source
+  class now registers and resolves; one missing a protocol member is still
+  refused, with a message naming the member.
+
 - **The FSM `LLMResource` no longer invents an embedding it could not
   compute.** Its sync `embed()` routed to one of three per-provider methods
   and answered everything else with `[[0.1] * 768]` — a constant vector of a

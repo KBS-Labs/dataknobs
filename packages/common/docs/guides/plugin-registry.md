@@ -51,7 +51,7 @@ handler = handlers.create(config={"handler_type": "fast", "timeout": 5})
 |-----------|------|---------|-------------|
 | `name` | `str` | required | Registry name for identification |
 | `default_factory` | `type[T] \| Callable \| None` | `None` | Default factory when key not found |
-| `validate_type` | `type \| None` | `None` | Base type to validate registrations against |
+| `validate_type` | `type \| None` | `None` | Base type to validate registrations against. A class, an ABC, or a `@runtime_checkable` Protocol — including one carrying properties. See [What `validate_type` checks](#what-validate_type-checks). |
 | `canonicalize_keys` | `bool` | `False` | Lowercase all keys for case-insensitive lookup |
 | `config_key` | `str \| None` | `None` | Field name to extract lookup key from config dicts |
 | `config_key_default` | `str \| None` | `None` | Fallback when `config_key` field is absent |
@@ -86,6 +86,33 @@ partition_resolver_backends: PluginRegistry[Any] = PluginRegistry(
 ```
 
 If a consumer later surfaces "actually we wanted one flat registry," the cost of being wrong is one line per entry (move entries between registries; deprecate the smaller one). The choice is reversible; the typed pin is not.
+
+## What `validate_type` checks
+
+Two checks, at two moments, and a Protocol is a first-class argument to both.
+
+| When | What is checked | On failure |
+|---|---|---|
+| `register()` / `set_default_factory()`, **class factories only** | the class can produce `validate_type` | `TypeError`, naming the registry, the base, the class, and any missing members |
+| `get()` / `create()` and their async twins, **every factory** | the instance the factory returned is a `validate_type` | `OperationError` |
+
+A callable factory's return type is unknowable before it runs, so it is
+checked at the second moment only. That asymmetry is inherent, not a gap:
+the shape is still caught before the instance reaches a caller.
+
+**Protocols carrying properties.** `issubclass` refuses a Protocol with any
+non-method member — the whole call, not the offending member — so the class
+check falls back to comparing the class against the Protocol's declared
+members. That fallback is the same check `issubclass` performs for a
+method-only Protocol, moved to a shape `issubclass` will not accept, so a
+property-carrying Protocol and its method-only twin reach the same verdict
+on the same class.
+
+**Protocols must be `@runtime_checkable`.** A Protocol without the decorator
+supports neither `isinstance` nor `issubclass`, so neither check can run
+against it and the registry is inert in both directions. `register()` says
+so and names the decorator rather than letting registration pass and
+`create()` fail for an unstated cause.
 
 ## `BackendRegistry` Protocol
 

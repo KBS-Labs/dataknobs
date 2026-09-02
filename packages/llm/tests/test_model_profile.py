@@ -26,6 +26,7 @@ from dataknobs_llm.llm.model_profile import (
     CallableModelMetadataSource,
     ConfigOverrideSource,
     LayeredModelProfileResolver,
+    ModelMetadataSource,
     ModelPricing,
     ModelProfile,
     PartialModelProfile,
@@ -256,6 +257,66 @@ class TestSourceRegistry:
 
         with pytest.raises(ValueError, match="model metadata source"):
             model_metadata_sources.create(key="_never_registered", config={})
+
+    def test_a_source_class_registers_as_readily_as_a_factory(self) -> None:
+        """The shape the comment above the registry invites, through the registry.
+
+        ``ModelMetadataSource`` carries ``name`` as a property, and a
+        property is a non-method member, so gating a *class* on this
+        protocol used to raise ``TypeError`` from ``issubclass`` before any
+        class was judged --- on the conforming class as readily as on a
+        wrong one, with a message naming neither the registry, the
+        protocol, nor the class. An in-house gateway following the
+        registry's own invitation to "register a source" met that.
+
+        The test above registers a *function*, which is the branch that
+        skips the class gate entirely, so this path had never been
+        executed against this registry.
+        """
+        name = "_test_gateway_source_class"
+
+        class _GatewaySource:
+            def __init__(self, config: dict) -> None:
+                self._model = config.get("model", "m")
+
+            @property
+            def name(self) -> str:
+                return "gateway"
+
+            def resolve(self, model: str) -> ModelProfile:
+                return ModelProfile(available=model == self._model)
+
+        model_metadata_sources.register(name, _GatewaySource)
+        try:
+            src = model_metadata_sources.create(key=name, config={"model": "m"})
+            assert isinstance(src, ModelMetadataSource)
+            assert src.name == "gateway"
+            assert src.resolve("m").available is True
+            assert src.resolve("other").available is False
+        finally:
+            model_metadata_sources.unregister(name)
+
+    def test_a_class_missing_a_protocol_member_is_still_refused(self) -> None:
+        """And the message says which member, which is the point of gating early.
+
+        Without this the fix reads as "the gate stopped raising", which is
+        also what deleting it would look like.
+        """
+
+        class _NoResolve:
+            def __init__(self, config: dict) -> None:
+                self._config = config
+
+            @property
+            def name(self) -> str:
+                return "gateway"
+
+        with pytest.raises(TypeError) as caught:
+            model_metadata_sources.register("_test_incomplete_source", _NoResolve)
+
+        message = str(caught.value)
+        assert "resolve" in message, f"does not name the missing member: {message}"
+        assert "model_metadata_sources" in message, f"does not name the registry: {message}"
 
 
 # ---------------------------------------------------------------------------

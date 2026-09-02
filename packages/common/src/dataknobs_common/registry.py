@@ -49,6 +49,7 @@ import inspect
 import logging
 import threading
 import time
+import typing
 from collections.abc import Iterator
 from typing import (
     Any,
@@ -812,6 +813,27 @@ class AsyncRegistry(Generic[T]):
         return iter(list(self._items.values()))
 
 
+def _protocol_members(base: type) -> frozenset[str] | None:
+    """The members a Protocol declares, or ``None`` if *base* is not one.
+
+    ``typing.get_protocol_members`` is the public spelling and exists from
+    3.13; ``__protocol_attrs__`` is what CPython sets below that. One of the
+    two is asserted by a test rather than assumed, because
+    :meth:`PluginRegistry._check_factory_class` has no footing without it and
+    would otherwise degrade silently into re-raising.
+    """
+    getter = getattr(typing, "get_protocol_members", None)
+    if getter is not None:
+        try:
+            return frozenset(getter(base))
+        except TypeError:
+            # 3.13+ raises for anything that is not a Protocol, which is the
+            # same answer `__protocol_attrs__` gives by being absent.
+            return None
+    members = getattr(base, "__protocol_attrs__", None)
+    return None if members is None else frozenset(members)
+
+
 class PluginRegistry(Generic[T]):
     """Registry for plugins with factory support and defaults.
 
@@ -915,7 +937,14 @@ class PluginRegistry(Generic[T]):
         Args:
             name: Registry name for identification
             default_factory: Default class or factory to use when key not found
-            validate_type: Optional base type to validate registrations against
+            validate_type: Optional base type to validate registrations
+                against. A class, an ABC, or a ``@runtime_checkable``
+                Protocol --- including one carrying properties, which
+                ``issubclass`` cannot check and which is checked against
+                the protocol's declared members instead (see
+                :meth:`_check_factory_class`). A Protocol without the
+                decorator supports neither check and is refused at
+                registration, naming the decorator.
             canonicalize_keys: When True, all keys are lowercased
             config_key: Field name to extract lookup key from config dict in
                 ``create()`` when ``key`` is ``None``
@@ -1039,6 +1068,90 @@ class PluginRegistry(Generic[T]):
                 context={"key": key, "registry": self._name},
             )
 
+    def _check_factory_class(self, factory: type, *, what: str) -> None:
+        """Reject a factory class that cannot produce the registered type.
+
+        ``issubclass`` is the right check and is what runs wherever it can.
+        It cannot run against a ``@runtime_checkable`` Protocol carrying a
+        non-method member --- a property is not a method, and CPython
+        refuses the whole call rather than the offending member --- so such
+        a protocol is checked against its declared members instead.
+
+        That fallback is the *same* check rather than a quieter one:
+        ``issubclass`` against a method-only Protocol is itself a
+        member-presence scan of the class, so a property-carrying protocol
+        reaches exactly the verdict its method-only twin would have
+        reached. Nor is it a relaxation, because the alternative is not a
+        stricter check --- it is a ``TypeError`` raised on the conforming
+        class as readily as on a wrong one, naming neither the registry,
+        the protocol, nor the class.
+
+        A Protocol that was never decorated ``@runtime_checkable`` is the
+        other way the check cannot run, and there the fault is in the
+        registry rather than in the factory: ``isinstance`` refuses such a
+        base at ``create()`` too, so the registry is broken in both
+        directions. It is reported here, where the missing decorator can be
+        named, rather than absorbed into a member scan that would let
+        registration pass and leave ``create()`` to fail for a cause
+        nobody stated.
+
+        Anything else ``issubclass`` refuses --- a ``validate_type`` that
+        is not a class at all --- keeps landing on ``issubclass``'s own
+        ``TypeError``. That is the disposition
+        :func:`~dataknobs_common.imports.resolve_class` documents for the
+        identical condition: a constraint the calling code got wrong.
+
+        Two sites built this check inline, and the second named neither the
+        class it rejected nor the registry that rejected it, which is why
+        the fix is one method rather than two edits. ``bulk_register``
+        delegates to ``register`` and so needs nothing.
+
+        Args:
+            factory: The class being registered.
+            what: The subject of the message --- ``"Factory class"`` or
+                ``"Default factory"``.
+
+        Raises:
+            TypeError: If *factory* cannot produce ``validate_type``, or if
+                ``validate_type`` cannot be checked against at all.
+        """
+        base = self._validate_type
+        if base is None:
+            return
+
+        try:
+            conforms = issubclass(factory, base)
+        except TypeError:
+            members = _protocol_members(base)
+            if members is None:
+                raise
+            if not getattr(base, "_is_runtime_protocol", False):
+                raise TypeError(
+                    f"Registry {self._name!r} cannot check {what.lower()} "
+                    f"{factory.__name__}: validate_type={base.__name__} is a "
+                    f"Protocol that was never decorated @runtime_checkable, "
+                    f"so no runtime check can run against it and create() "
+                    f"fails the same way. Decorate {base.__name__} with "
+                    f"typing.runtime_checkable."
+                ) from None
+            # CPython's own subclass hook reads a class-dict entry of None
+            # as "declared, not implemented", so the fallback reads it the
+            # same way rather than inventing a second rule.
+            missing = sorted(m for m in members if getattr(factory, m, None) is None)
+            if missing:
+                raise TypeError(
+                    f"{what} {factory.__name__} does not implement "
+                    f"{base.__name__}: missing {', '.join(missing)} "
+                    f"(registry {self._name!r})"
+                ) from None
+            return
+
+        if not conforms:
+            raise TypeError(
+                f"{what} must be a subclass of {base.__name__}, "
+                f"got {factory.__name__} (registry {self._name!r})"
+            )
+
     def _canon(self, key: str) -> str:
         """Canonicalize a key if configured."""
         return key.lower() if self._canonicalize_keys else key
@@ -1132,7 +1245,11 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             OperationError: If key already registered and override=False
-            TypeError: If factory doesn't match validate_type
+            TypeError: If *factory* is not a class or callable, if it is a
+                class that cannot produce ``validate_type``, or if
+                ``validate_type`` cannot be checked against at all. A
+                callable factory's result is checked instead by
+                ``get()`` / ``create()``, which raise ``OperationError``.
 
         Example:
             ```python
@@ -1165,11 +1282,7 @@ class PluginRegistry(Generic[T]):
 
             # Validate type if specified
             if self._validate_type and isinstance(factory, type):
-                if not issubclass(factory, self._validate_type):
-                    raise TypeError(
-                        f"Factory class must be a subclass of {self._validate_type.__name__}, "
-                        f"got {factory.__name__}"
-                    )
+                self._check_factory_class(factory, what="Factory class")
             elif not callable(factory):
                 raise TypeError(
                     f"Factory must be a class or callable, got {type(factory).__name__}"
@@ -2010,13 +2123,12 @@ class PluginRegistry(Generic[T]):
             factory: New default factory
 
         Raises:
-            TypeError: If factory doesn't match validate_type
+            TypeError: If *factory* is a class that cannot produce
+                ``validate_type``, or if ``validate_type`` cannot be
+                checked against at all.
         """
         if self._validate_type and isinstance(factory, type):
-            if not issubclass(factory, self._validate_type):
-                raise TypeError(
-                    f"Default factory must be a subclass of {self._validate_type.__name__}"
-                )
+            self._check_factory_class(factory, what="Default factory")
 
         self._default_factory = factory
 

@@ -1,7 +1,8 @@
 """Tests for PluginRegistry class."""
 
 import asyncio
-from typing import Any, Dict
+import typing
+from typing import Any, Dict, Protocol, runtime_checkable
 
 import pytest
 
@@ -1040,3 +1041,291 @@ class TestFirstAccessAtomicity:
 
         assert registry.is_registered("a")
         assert registry.is_registered("b")
+
+
+# ---------------------------------------------------------------------------
+# A ``validate_type`` that is a Protocol carrying a non-method member
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class _Described(Protocol):
+    """A protocol whose ``name`` is a property, which is the whole hazard.
+
+    ``issubclass`` refuses a protocol carrying *any* non-method member ---
+    the whole call, not the offending member --- so a registry gating on
+    this shape could not judge a class factory at all. It did not reject
+    the class: it raised before any class was judged, on the conforming
+    one as readily as on a wrong one.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    def describe(self) -> str: ...
+
+
+@runtime_checkable
+class _DescribedByMethod(Protocol):
+    """``_Described``'s twin, with ``name`` as a method instead.
+
+    Identical in every other respect, and the only difference is the one
+    that decides whether ``issubclass`` runs. It is what the
+    property-carrying protocol's verdicts are compared against: the
+    fallback has to agree with the check it stands in for, or it is a
+    second, quieter policy rather than the same one.
+    """
+
+    def name(self) -> str: ...
+
+    def describe(self) -> str: ...
+
+
+class _Descriptor:
+    """A conforming implementation, by the protocol's own reading."""
+
+    def __init__(self, config: Dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+
+    @property
+    def name(self) -> str:
+        return "descriptor"
+
+    def describe(self) -> str:
+        return "a source of descriptions"
+
+
+class _DescriptorForGet(_Descriptor):
+    """``_Descriptor`` under the other factory arity.
+
+    ``get()`` invokes a factory as ``factory(key, config)`` and ``create()``
+    as ``factory(config, **kwargs)``, so a class reachable through both
+    would need to accept either. Only the default-factory path is reached
+    through ``get()`` here, and splitting the two keeps each test's factory
+    matched to the entry point it actually goes through instead of hiding
+    the difference behind a permissive signature.
+    """
+
+    def __init__(self, key: str, config: Dict[str, Any] | None = None) -> None:
+        super().__init__(config)
+        self.key = key
+
+
+class _Undescribed:
+    """Conforms in name only --- literally: it has ``name`` and nothing else."""
+
+    def __init__(self, config: Dict[str, Any] | None = None) -> None:
+        self.config = config or {}
+
+    @property
+    def name(self) -> str:
+        return "incomplete"
+
+
+def _described_registry(**kwargs: Any) -> PluginRegistry[Any]:
+    return PluginRegistry("descriptions", validate_type=_Described, **kwargs)
+
+
+class TestValidateTypeOnAProtocolWithANonMethodMember:
+    """A gate that cannot run must not reject the implementation it exists for.
+
+    ``validate_type=`` is documented as load-bearing under consumer
+    extensibility: it is supposed to catch a backend of the wrong shape at
+    registration instead of at use. For a Protocol carrying a property it
+    did the opposite --- the *conforming* class raised, with a message
+    naming neither the registry, nor the protocol, nor the class --- and
+    the shape it exists to exclude was never evaluated, because
+    ``issubclass`` never got as far as judging anything.
+
+    Passing the identical class to a registry with no ``validate_type`` at
+    all worked. So the constraint was strictly worse than its own absence,
+    which is the sense in which this is a defect rather than a strictness
+    tradeoff.
+    """
+
+    def test_a_conforming_class_registers(self) -> None:
+        """The defect, at the gate that consumers reach first."""
+        registry = _described_registry()
+
+        registry.register("descriptor", _Descriptor)
+
+        instance = registry.create("descriptor", {})
+        assert isinstance(instance, _Described)
+        assert instance.describe() == "a source of descriptions"
+
+    def test_a_conforming_class_can_be_the_default_factory(self) -> None:
+        """The second gate, which is why a one-site fix does not close this.
+
+        ``set_default_factory`` re-implemented the same check rather than
+        sharing it, so fixing ``register`` alone would leave a registry
+        that accepts a conforming class as an entry and refuses the same
+        class as its fallback.
+        """
+        registry = _described_registry()
+
+        registry.set_default_factory(_DescriptorForGet)
+
+        instance = registry.get("anything-unregistered", config={})
+        assert isinstance(instance, _Described)
+        assert instance.key == "anything-unregistered"
+
+    def test_bulk_register_of_a_conforming_class_succeeds(self) -> None:
+        """``bulk_register`` delegates, and this is what keeps it that way.
+
+        A third copy of the check would pass every other test here while
+        failing this one, so the delegation is pinned rather than assumed.
+        """
+        registry = _described_registry()
+
+        registry.bulk_register({"descriptor": _Descriptor})
+
+        assert registry.is_registered("descriptor")
+
+    def test_a_class_missing_a_member_is_still_rejected(self) -> None:
+        """The gate still gates --- otherwise the fix is a hole, not a fix.
+
+        The message has to name the member that is missing, because the
+        whole point of checking at registration rather than at use is that
+        the consumer is still looking at the line they wrote.
+        """
+        registry = _described_registry()
+
+        with pytest.raises(TypeError) as caught:
+            registry.register("incomplete", _Undescribed)
+
+        message = str(caught.value)
+        assert "describe" in message, f"does not name the missing member: {message}"
+        assert "_Undescribed" in message
+        assert "_Described" in message
+        assert "descriptions" in message, f"does not name the registry: {message}"
+
+    def test_the_default_factory_gate_names_all_four_facts_too(self) -> None:
+        """The second gate's message named neither the class nor the registry.
+
+        A consumer holding a ``TypeError`` from a module-level registry
+        they did not construct needs the registry's name to find it, and
+        the class name to know which of their factories was refused.
+        """
+        registry = _described_registry()
+
+        with pytest.raises(TypeError) as caught:
+            registry.set_default_factory(_Undescribed)
+
+        message = str(caught.value)
+        assert "describe" in message
+        assert "_Undescribed" in message
+        assert "_Described" in message
+        assert "descriptions" in message
+
+    def test_the_fallback_agrees_with_issubclass_on_the_twin_protocol(self) -> None:
+        """The fallback is the same check, not a quieter one.
+
+        ``_DescribedByMethod`` differs from ``_Described`` only in the
+        member that decides whether ``issubclass`` can run, so it is the
+        control: whatever verdict the real check reaches there, the
+        fallback must reach here. Without this the fallback could drift
+        into a weaker or stricter policy and every other test would still
+        pass.
+        """
+        by_property = _described_registry()
+        by_method: PluginRegistry[Any] = PluginRegistry(
+            "descriptions", validate_type=_DescribedByMethod
+        )
+
+        def verdict(registry: PluginRegistry[Any], factory: type) -> bool:
+            try:
+                registry.register("candidate", factory, override=True)
+            except TypeError:
+                return False
+            return True
+
+        for candidate in (_Descriptor, _Undescribed, InvalidHandler):
+            assert verdict(by_property, candidate) == verdict(by_method, candidate), (
+                f"{candidate.__name__} is judged differently by a protocol "
+                f"with a property than by its method-only twin"
+            )
+
+    def test_an_issubclass_able_base_keeps_the_stronger_check(self) -> None:
+        """11 of the 12 gated registries in this repo, unaffected.
+
+        An ABC gates nominally and a method-only Protocol gates
+        structurally; the fallback is reached by neither, and both must
+        still reject what they rejected before.
+        """
+        by_abc = PluginRegistry[BaseHandler]("handlers", validate_type=BaseHandler)
+        with pytest.raises(TypeError, match="must be a subclass"):
+            by_abc.register("invalid", InvalidHandler)
+
+        by_protocol: PluginRegistry[Any] = PluginRegistry(
+            "descriptions", validate_type=_DescribedByMethod
+        )
+        with pytest.raises(TypeError):
+            by_protocol.register("invalid", InvalidHandler)
+
+        # And a nominal subclass still passes the nominal gate, so the
+        # rejections above are not an indiscriminate raise.
+        by_abc.register("valid", CustomHandler)
+
+    def test_a_protocol_that_is_not_runtime_checkable_says_which(self) -> None:
+        """The other way the gate cannot run, and it is the registry's fault.
+
+        Such a registry is broken in both directions --- ``isinstance``
+        refuses it at ``create()`` too --- so the useful moment to say so
+        is at registration, naming the decorator that fixes it. Silently
+        checking members instead would let registration pass and leave the
+        failure for ``create()``, which is the same wrong-cause report
+        this item exists to remove.
+        """
+
+        class _NotRuntimeCheckable(Protocol):
+            @property
+            def name(self) -> str: ...
+
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "descriptions", validate_type=_NotRuntimeCheckable
+        )
+
+        with pytest.raises(TypeError) as caught:
+            registry.register("descriptor", _Descriptor)
+
+        message = str(caught.value)
+        assert "runtime_checkable" in message, message
+        assert "_NotRuntimeCheckable" in message
+        assert "descriptions" in message
+
+    def test_a_validate_type_that_is_not_a_class_still_raises(self) -> None:
+        """The disposition ``resolve_class`` already takes, preserved.
+
+        A ``validate_type`` that cannot support ``issubclass`` for any
+        reason other than protocol-ness is a defect in the code that built
+        the registry, and it keeps landing on ``issubclass``'s own
+        ``TypeError`` rather than being absorbed into a member check that
+        has nothing to check against.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "descriptions",
+            validate_type="not a type",  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(TypeError, match="arg 2"):
+            registry.register("descriptor", _Descriptor)
+
+    def test_protocol_member_introspection_is_available(self) -> None:
+        """A guard on the fallback's footing, not on its behaviour.
+
+        The members of a Protocol are recovered through
+        ``typing.get_protocol_members`` where it exists (3.13+) and
+        through ``__protocol_attrs__`` below that. Neither is guaranteed
+        forever. If both disappear the fallback degrades to re-raising,
+        and every test above would fail at once looking like a regression
+        in the fix rather than a change in the platform. This one names
+        the real cause.
+        """
+        assert hasattr(typing, "get_protocol_members") or hasattr(
+            _Described, "__protocol_attrs__"
+        ), "no way to recover a Protocol's members on this Python"
+        assert getattr(_Described, "_is_runtime_protocol", False), (
+            "runtime-checkability is no longer discoverable as "
+            "_is_runtime_protocol, so the fallback cannot tell a checkable "
+            "protocol from one that was never decorated"
+        )
