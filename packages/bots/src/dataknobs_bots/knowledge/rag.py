@@ -19,6 +19,7 @@ from dataknobs_common.capabilities import (
     Capability,
     CapabilityLike,
     CapabilityMixin,
+    supports_capability,
 )
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned
@@ -575,7 +576,7 @@ class RAGKnowledgeBase(
             ```
         """
         directory = Path(directory)
-        results = {"total_files": 0, "total_chunks": 0, "errors": []}
+        results: dict[str, Any] = {"total_files": 0, "total_chunks": 0, "errors": []}
 
         entries = await asyncio.to_thread(
             lambda: [p for p in directory.glob(pattern) if p.is_file()]
@@ -2130,18 +2131,36 @@ class RAGKnowledgeBase(
         return await self.vector_store.update_metadata_where(self._scope_for_write(filter), set_)
 
     async def save(self) -> None:
-        """Save the knowledge base to persistent storage.
+        """Persist the vector store, when the store it holds can be persisted.
 
-        This persists the vector store index and metadata to disk.
-        Only applicable for vector stores that support persistence (e.g., FAISS).
+        A knowledge base does not choose its backend, so this asks before
+        it acts: a store that does not advertise
+        :attr:`~dataknobs_common.capabilities.Capability.VECTOR_PERSIST`
+        has nowhere to write a snapshot, and saying so is not an error.
+        Two quite different stores answer ``False`` -- one whose rows live
+        in a service, and one that could snapshot but was configured
+        without a path -- and this method treats them the same, because
+        from here they are the same.
+
+        The question used to be ``hasattr(vector_store, "save")``, which
+        was a proxy for it. That proxy answers ``True`` for every backend
+        now that the method is declared on ``VectorStore`` itself, so it
+        would ask a store to do something it had already said it could
+        not.
+
+        ``supports_capability`` rather than ``vector_store.supports``
+        because this attribute is deliberately untyped: a consumer may
+        hand in a duck-typed store, and one that does not implement the
+        capability contract at all should read as "cannot persist"
+        rather than as ``AttributeError``.
 
         Example:
             ```python
             await kb.load_markdown_document("docs/api.md")
-            await kb.save()  # Persist to disk
+            await kb.save()  # Persists if the store can; no-op if not
             ```
         """
-        if hasattr(self.vector_store, "save"):
+        if supports_capability(self.vector_store, Capability.VECTOR_PERSIST):
             await self.vector_store.save()
 
     def providers(self) -> dict[str, Any]:

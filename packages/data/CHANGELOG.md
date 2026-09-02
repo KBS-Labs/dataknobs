@@ -66,6 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does the former, matching `FaissVectorStore.initialize()`, which already
   did.
 
+  **A `hasattr(store, "save")` probe is the case to look for, and it does not
+  announce itself.** It used to be a serviceable proxy for "can this persist?",
+  because the method existed only on the backends that had one. Now that
+  `save` / `load` / `create_index` are declared on `VectorStore`, the probe
+  answers `True` for every backend, so a guard written that way *stops
+  guarding* and passes the call through to a store that will refuse it — a
+  silent no-op turning into a raise at the one site that thought it had
+  checked. Replace it with `store.supports(Capability.VECTOR_PERSIST)`.
+
 - **`VectorMigration`'s progress callback and `call_embedding_fn`'s dispatch
   delegate instead of spelling the branch out.** Both hand-wrote a judgement
   that `dataknobs_common.callbacks` now owns, and the copy in

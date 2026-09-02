@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from dataknobs_common import Capability
+
 from dataknobs_bots.knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
 from dataknobs_bots.tools import KnowledgeSearchTool
 from dataknobs_data.vector.stores import VectorStoreFactory
@@ -230,6 +232,41 @@ class TestRAGKnowledgeBase:
 
             # Verify file was created
             assert os.path.exists(persist_path), "Vector store file not created"
+
+    @pytest.mark.asyncio
+    async def test_save_on_a_store_that_cannot_persist_is_a_no_op(self):
+        """``kb.save()`` declines rather than raising when the store cannot.
+
+        A knowledge base does not know what backend it was handed. A
+        ``memory`` store with no ``persist_path``, or any service-backed
+        store, cannot take a snapshot -- and asking it to is not an error
+        on the caller's part, it is a question with the answer "nothing to
+        do".
+
+        The guard used to be ``hasattr(vector_store, "save")``, which was
+        a proxy for the real question and stopped being even that once
+        ``save`` moved onto the ``VectorStore`` ABC: ``hasattr`` answers
+        ``True`` for every backend, so the proxy passed and the store
+        refused. Reproduces as ``CapabilityNotSupportedError``.
+        """
+        config = {
+            "vector_store": {
+                "backend": "memory",
+                "dimensions": 384,
+            },
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        assert not kb.vector_store.supports(Capability.VECTOR_PERSIST)
+
+        # No raise, and the rows are still queryable afterwards.
+        await kb.save()
+        assert await kb.count() > 0
 
     @pytest.mark.asyncio
     async def test_close_saves_and_releases_resources(self):

@@ -188,6 +188,17 @@ class TestKnowledgeIngestionService:
             assert result.total_files >= 1
             assert result.total_chunks >= 1
 
+            # A run that ingested every file reports no error. The store
+            # here is a ``memory`` backend with no ``persist_path``, which
+            # is the ordinary shape for an ephemeral knowledge base -- and
+            # the shape under which ``_ingest`` used to call ``save()`` on
+            # a store that cannot persist. Ingestion succeeded and the
+            # result still said it had failed, because the post-ingest
+            # save raised and was caught by the outer handler.
+            assert result.error is None, (
+                f"ingestion succeeded but reported an error: {result.error}"
+            )
+
             # Verify actual vector store was populated
             count = await real_knowledge_base.count()
             assert count > 0

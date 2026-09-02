@@ -7,7 +7,7 @@ one meant an ``isinstance`` downcast, and a consumer that downcasts has
 stopped being portable. The family now speaks ``CapabilityContract``, so
 the question has an answer: ``store.supports(...)``.
 
-Six things are pinned here:
+Seven things are pinned here:
 
 1. **Conformance** — every backend class is a capability-contract host,
    checkable without an instance and without a service connection.
@@ -31,7 +31,13 @@ Six things are pinned here:
    capability answers with ``CapabilityNotSupportedError`` rather than
    ``AttributeError``, which is the difference between "unsupported
    operation" and "you misspelled something".
-6. **The published matrix** is regenerated from the classes and from
+6. **A bargain, not a feature** — ``VECTOR_DOCUMENT_API`` marks
+   server-side embedding, which one backend offers and which costs the
+   caller the model's identity. The portable text path,
+   ``bulk_embed_and_store``, is on every backend, so this cell pins both
+   halves: who advertises the convenience, and that declining it costs
+   nobody the ability to store text.
+7. **The published matrix** is regenerated from the classes and from
    live instances, so the document cannot drift from the code.
 
 No mocks: real in-process backends. pgvector's class-level advertisement

@@ -96,6 +96,7 @@ from dataknobs_common.capabilities import (
     CapabilityNotSupportedError,
     DynamicCapabilityMixin,
     require_capability,
+    supports_capability,
 )
 from dataknobs_common.config_loading import (
     DEFAULT_CONFIG_EXTENSIONS,
@@ -378,6 +379,7 @@ __all__ = [
     "DynamicCapabilityMixin",
     "CapabilityNotSupportedError",
     "require_capability",
+    "supports_capability",
     # Config loading
     "DEFAULT_CONFIG_EXTENSIONS",
     "ConfigLoadError",

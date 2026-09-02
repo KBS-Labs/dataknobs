@@ -58,6 +58,13 @@ the ABC, `hasattr` answers `True` for every backend and settles nothing
 — which is the point, but it means probing for the method instead of
 asking for the capability tells you less than nothing.
 
+If the store is held behind an untyped attribute — a backend a consumer
+handed in, a plugin loaded by name — ask through
+`supports_capability(store, ...)` from `dataknobs_common` instead of
+`store.supports(...)`. It reads an object that does not implement the
+contract at all as "cannot", which is the same reading the raising guard
+gives it, rather than raising `AttributeError` on the check itself.
+
 There are two ways a store can decline to persist and **they behave the
 same**: no `VECTOR_PERSIST`, no snapshot, `CapabilityNotSupportedError`.
 
