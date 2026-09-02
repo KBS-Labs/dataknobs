@@ -1011,7 +1011,13 @@ class LLMProvider(ABC):
         """
         self.config = normalize_llm_config(config)
         self.prompt_builder = prompt_builder
-        self._client = None
+        # The slot every provider keeps its SDK client in. The types are
+        # unrelated (``AsyncOpenAI``, ``AsyncAnthropic``, an aiohttp
+        # session) and share no protocol, so the base names none; a
+        # provider that has one narrows this to its own in its class body.
+        # Left bare, the checker inferred ``None`` from the assignment and
+        # read every real client as an incompatible assignment.
+        self._client: Any = None
         self._is_initialized = False
         self._is_closing = False
         self._in_flight: set[asyncio.Task[Any]] = set()

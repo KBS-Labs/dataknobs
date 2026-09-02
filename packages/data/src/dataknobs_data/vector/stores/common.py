@@ -11,7 +11,7 @@ import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
@@ -208,7 +208,18 @@ class PathPersistedCapabilityMixin:
         return frozenset(caps)
 
 
-class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
+VectorStoreConfigT = TypeVar("VectorStoreConfigT", bound=VectorStoreConfig)
+"""The leaf config a concrete store is constructed from.
+
+Every backend already declares its own ``CONFIG_CLS``, so the object on
+``store.config`` at runtime is the leaf --- ``PgVectorStoreConfig``, not
+``VectorStoreConfig``. Naming that type here is what lets a backend read
+its own fields off ``self.config`` without the checker objecting that the
+base does not declare them.
+"""
+
+
+class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
     """Base implementation with common functionality for all vector stores.
 
     Constructed through a :class:`VectorStoreConfig` subclass via
@@ -218,6 +229,11 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfig]):
     a dict). This class provides the shared derived-attribute computation
     (in :meth:`_setup`) plus the common similarity / filter / timestamp
     helpers.
+
+    Generic in the leaf config type, so a backend reading its own fields
+    off ``self.config`` gets the type it was actually constructed with.
+    Left unparameterized --- as an annotation naming the family rather
+    than one backend --- it behaves exactly as it did before.
     """
 
     CONFIG_CLS: ClassVar[type[VectorStoreConfig]] = VectorStoreConfig

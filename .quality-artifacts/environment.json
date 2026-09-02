@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-02T11:41:19Z",
+  "timestamp": "2026-09-02T12:29:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/a-failure-is-not-a-vector",
-  "git_commit": "011d70355c2ea6df153138031cff6ce89f7fe596",
+  "git_branch": "sbk/the-type-forgets-what-construction-guaranteed",
+  "git_commit": "e6e67165c39738f9484a9b926e8d2161b7a1e307",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

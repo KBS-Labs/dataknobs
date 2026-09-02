@@ -54,6 +54,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`VectorStore` is generic in its config type, so a backend reads its own
+  config fields as the type it was built with.** Every backend already
+  declared a leaf `CONFIG_CLS` and every instance already held the leaf
+  object at runtime, but `VectorStoreBase` named `VectorStoreConfig` for the
+  whole family, so statically `store.config` was the shared base. Reading
+  `config.connection_string`, `config.collection_name` or `config.index_type`
+  off it was an attribute the declared type did not have — 17 such reads
+  across pgvector, Chroma and FAISS. Each backend now names its own config
+  (`PgVectorStore(VectorStore[PgVectorStoreConfig])`), which is what the
+  other thirty-odd `StructuredConfigConsumer` adopters in dataknobs already
+  did; the vector stores were the one family that pinned the base instead.
+
+  Nothing changes at runtime, and an unparameterized `VectorStore` annotation
+  — naming the family rather than one backend — behaves exactly as before.
+  A consumer writing an out-of-tree backend with its own config gets the same
+  typing by naming it: see *Adding a capability to a backend* in
+  `vector-store-capabilities.md`.
+
 - **BREAKING: `save()` and `load()` raise instead of returning quietly when a
   store has no `persist_path`.** `MemoryVectorStore` and `FaissVectorStore`
   previously answered a request to persist with a successful-looking no-op,

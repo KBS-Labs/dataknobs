@@ -138,6 +138,31 @@ For a capability that depends on construction, override
 `DynamicCapabilityMixin`, and
 `PathPersistedCapabilityMixin` is the in-tree example.
 
+A backend with its own configuration names it as a type parameter, and
+`self.config` then has that type rather than the shared base:
+
+```python
+@dataclass(frozen=True)
+class MyVectorStoreConfig(VectorStoreConfig):
+    endpoint: str = ""
+
+
+class MyVectorStore(VectorStore[MyVectorStoreConfig]):
+    CONFIG_CLS: ClassVar[type[MyVectorStoreConfig]] = MyVectorStoreConfig
+
+    def _setup(self) -> None:
+        super()._setup()
+        self.endpoint = self.config.endpoint     # typed, not `Any`
+```
+
+Leaving it unparameterized — `VectorStore`, as an annotation naming the
+family rather than one backend — behaves exactly as before. The parameter
+is what lets a backend read its own fields off `self.config`; without it
+the checker sees only `VectorStoreConfig` and reports every backend field
+as an attribute that does not exist. That is what pgvector, Chroma and
+FAISS reported until they named theirs; `MemoryVectorStore` never did,
+because its config adds no fields to read.
+
 Consumer-defined capabilities need no enum member: `supports()` accepts
 a raw string, so an out-of-tree backend can advertise its own vocabulary
 without a change here.

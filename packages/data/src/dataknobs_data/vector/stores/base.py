@@ -19,7 +19,7 @@ from ...records import Record
 from ..content import MODEL_NAME_KEY
 from ..embedding import default_model_name, embed_texts, require_embedding_source
 from ..types import VectorSearchResult
-from .common import VectorStoreBase
+from .common import VectorStoreBase, VectorStoreConfigT
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from ..embedding import TextEmbedder
 
 
-class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase):
+class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfigT]):
     """Abstract base class for specialized vector stores.
 
     This provides a dedicated vector storage backend that can be used

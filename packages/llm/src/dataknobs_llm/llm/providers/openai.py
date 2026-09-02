@@ -439,7 +439,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
     async def _close_client(self) -> None:
         """Close the OpenAI client."""
         if self._client:
-            await self._client.close()  # type: ignore[unreachable]
+            await self._client.close()
 
     async def _probe_model_available(self) -> bool:
         """Authoritative liveness probe — membership in the Models API list.
