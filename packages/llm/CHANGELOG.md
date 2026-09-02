@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A conversation flow never ran a single state.**
+  `ConversationManager.execute_flow()` and `ConversationFlowAdapter.execute()`
+  have never completed a transition in any release, for any flow: the adapter
+  emitted a `functions` key that `FSMConfig` does not define (silently dropped
+  before the schema became strict, a `ValidationError` after), and then called
+  `process_async` on the *synchronous* FSM facade — a method removed from that
+  facade before the adapter was written. Behind those sat further failures,
+  each reachable only once the one in front of it was removed. The adapter now
+  registers its transform and condition callables as `custom_functions` and
+  drives the **async** facade, so a flow runs, yields a node per state, and
+  reports what happened.
+
+- **The adapter blocked the event loop for the whole run.** It drove
+  `SimpleFSM`, whose sync bridge blocks the calling thread from inside an
+  `async def`, so one flow froze every other task sharing that loop. It now
+  drives `AsyncSimpleFSM` and closes it on the way out.
+
+- **The state transform and the arc condition mis-read the engine's context.**
+  Both were typed `Dict[str, Any]` and splatted the argument as a mapping, but
+  the engine passes a `FunctionContext` dataclass — `TypeError` in both, one
+  discarded by the engine's failed-state bookkeeping and one by the adapter's
+  own handler. Both now take the engine context as what it is and read the
+  conversation context from the adapter's execution state.
+
+- **The state transform called a prompt-builder method that does not exist.**
+  It asked `AsyncPromptBuilder` for `build_prompt`, and the resulting
+  `AttributeError` was caught and turned into a response reading
+  `[Error in state <name>]` — an error message delivered to the conversation as
+  assistant content. It now calls `render_user_prompt`, and a render failure
+  propagates: the run is reported as failed rather than narrated.
+
+- **A failed flow returned the input data and reported nothing.**
+  `execute()` read the FSM result's `data` without consulting its `success`
+  flag, so a failed run was reported as a completed one; a raised exception was
+  caught and answered with the caller's own input plus two private keys no
+  caller has ever read. It now raises `OperationError`, which
+  `execute_flow` surfaces as the `ValueError` its docstring already promised.
+  A tripped loop guard reports its own reason (`stop_reason`, also on
+  `get_execution_summary()`) rather than the engine's "no valid transitions".
+
+- **A condition that *failed* was read as a condition that said "no".** A
+  blanket `except Exception: return False` de-selected the arc, converting an
+  outage in whatever the condition consults into a data-quality outcome —
+  precisely the distinction the FSM engine draws deliberately one frame away.
+  Evaluation errors now propagate.
+
+- **`ConversationFlowAdapter(llm=...)` was accepted and never used.** The
+  provider was stored and never read, so `LLMClassifierCondition` could not
+  find one through the adapter and raised unless given its own `llm_config`.
+  It is now seeded into the flow context as `_llm_provider`, which is the key
+  that condition reads.
+
+- **`get_execution_summary()["current_state"]` always named the first state.**
+  It was written once at construction and never advanced. The transform now
+  advances it, so the summary names the state the flow ended in.
+
+- **`execute_flow()` could not build a single node.** It constructed
+  `ConversationNode` with `role=` and `content=` parameters it does not accept
+  (the node holds an `LLMMessage`), so the first yield raised `TypeError`.
+  Nodes now carry a proper message and the state's prompt name.
+
 - **An FSM tool whose callable was an *object* was never run, and the record
   claimed it had been.** `FunctionCaller.transform()` dispatched on
   `asyncio.iscoroutinefunction`, which answers `False` for a callable object

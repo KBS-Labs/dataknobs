@@ -1362,10 +1362,9 @@ class ConversationManager:
             for state_name, response in adapter.execution_state.history:
                 # Create node for this state's response
                 node = ConversationNode(
-                    node_id=str(uuid.uuid4()),  # Temporary ID
-                    role="assistant",
-                    content=response,
-                    timestamp=datetime.now(),
+                    message=LLMMessage(role="assistant", content=response),
+                    node_id="",  # Calculated below, once the node is in the tree
+                    prompt_name=flow.states[state_name].prompt_name,
                     metadata={"state": state_name, "flow_name": flow.name, "flow_execution": True},
                 )
 
@@ -1373,6 +1372,8 @@ class ConversationManager:
                 current_tree_node = get_node_by_id(
                     self.state.message_tree, self.state.current_node_id
                 )
+                if current_tree_node is None:
+                    raise ValueError(f"Current node '{self.state.current_node_id}' not found")
 
                 new_tree_node = Tree(node)
                 current_tree_node.add_child(new_tree_node)
