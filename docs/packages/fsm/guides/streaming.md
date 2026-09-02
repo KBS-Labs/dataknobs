@@ -570,8 +570,12 @@ from dataknobs_fsm.streaming.db_stream import DatabaseStreamSource
 from dataknobs_fsm.streaming.file_stream import FileStreamSink, FileFormat
 from dataknobs_fsm.streaming.core import StreamContext
 
-async def export_database_to_file(db):
-    """Export large table to compressed JSON file."""
+def export_database_to_file(db):
+    """Export large table to compressed JSON file.
+
+    Synchronous throughout: ``context.stream`` drives the source and sink by
+    calling them, so there is nothing here to await.
+    """
 
     # Create database source
     source = DatabaseStreamSource(
@@ -591,20 +595,16 @@ async def export_database_to_file(db):
     # Stream with progress tracking
     context = StreamContext()
 
-    def transform_records(chunk):
-        # Convert Records to dicts
-        chunk.data = [record.to_dict() for record in chunk.data]
-        return chunk
+    # No processor is needed: the source already yields the dicts the JSONL
+    # sink writes, so a transform converting Records to dicts would be
+    # converting something that is not a Record.
 
-    context.add_processor(transform_records)
-
-    # Process
     metrics = context.stream(source, sink)
 
-    print(f"Export complete:")
+    print("Export complete:")
     print(f"  Records exported: {metrics.items_processed}")
-    print(f"  File size: {sink.bytes_written / (1024*1024):.2f} MB")
-    print(f"  Compression ratio: {sink.compression_ratio:.2f}")
+    print(f"  Chunks: {metrics.chunks_processed}, errors: {metrics.errors_count}")
+    print(f"  Throughput: {metrics.throughput_items_per_second():.0f} records/s")
 
     return metrics
 ```

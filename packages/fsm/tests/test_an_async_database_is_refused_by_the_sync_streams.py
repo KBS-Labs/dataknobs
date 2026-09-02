@@ -64,7 +64,7 @@ def test_a_sync_database_still_round_trips() -> None:
 
     sink = DatabaseStreamSink(database=database, batch_size=2)
     assert sink.write_chunk(
-        StreamChunk(data=[{"id": "a", "v": 1}, {"id": "b", "v": 2}], chunk_id=0, is_last=True)
+        StreamChunk(data=[{"id": "a", "v": 1}, {"id": "b", "v": 2}], chunk_id="0", is_last=True)
     )
 
     read = [
