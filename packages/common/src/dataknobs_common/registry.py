@@ -982,7 +982,12 @@ class PluginRegistry(Generic[T]):
                 the protocol's declared members instead (see
                 :meth:`_check_factory_class`). A Protocol without the
                 decorator supports neither check and is refused at
-                registration, naming the decorator.
+                registration, naming the decorator. For a Protocol, a
+                declared member's async-ness is part of the shape being
+                gated: a sync implementation of an ``async def`` member is
+                refused, and the reverse too, because ``isinstance`` alone
+                cannot tell a protocol from its async twin (see
+                :meth:`_async_member_mismatch`).
             canonicalize_keys: When True, all keys are lowercased
             config_key: Field name to extract lookup key from config dict in
                 ``create()`` when ``key`` is ``None``
@@ -1092,6 +1097,68 @@ class PluginRegistry(Generic[T]):
                     f"percent sign must be written %%."
                 ) from exc
 
+    def _async_member_mismatch(self, candidate: Any) -> str | None:
+        """Why *candidate* disagrees with ``validate_type`` on async-ness.
+
+        ``@runtime_checkable`` answers a presence question and nothing
+        more, so a Protocol and its async twin --- same member name, one
+        ``def`` and one ``async def`` --- are mutually satisfiable, and
+        neither ``isinstance`` nor ``issubclass`` can separate them. The
+        consequence is silent by construction: a synchronous caller
+        receives an object whose method returns a coroutine, which is
+        truthy and non-``None``, and the only trace is a
+        ``RuntimeWarning`` at interpreter shutdown attributed to the
+        implementation rather than to the registry that admitted it.
+
+        Asked here rather than settled by renaming the members, because
+        this reaches every twin pair a *consumer* defines and not only the
+        ones shipped here, and because it leaves ``isinstance`` where it
+        was --- that answer is the language's, not this registry's, and
+        documentation and tests elsewhere rely on it.
+
+        Only members the Protocol declares as callables are compared: a
+        property carries no async-ness to disagree about, and a member the
+        candidate lacks entirely belongs to the presence check above.
+
+        Args:
+            candidate: A factory class, or an instance a factory returned.
+                Both are read with ``getattr``, which yields the function
+                for a class and the bound method for an instance.
+
+        Returns:
+            A clause naming the member and the direction, or ``None`` when
+            every declared member agrees --- including when
+            ``validate_type`` is unset or is not a Protocol, where the
+            question does not arise.
+        """
+        # Deferred because `callbacks` imports `events`, which imports this
+        # module: a top-level import fails on `from dataknobs_common.events
+        # import Event`. Measured, not presumed.
+        from dataknobs_common.callbacks import is_async_callable
+
+        base = self._validate_type
+        if base is None:
+            return None
+        members = _protocol_members(base)
+        if members is None:
+            return None
+
+        for member in sorted(members):
+            declared = getattr(base, member, None)
+            if not callable(declared):
+                continue
+            implemented = getattr(candidate, member, None)
+            if implemented is None:
+                continue
+            wants_async = is_async_callable(declared)
+            if is_async_callable(implemented) == wants_async:
+                continue
+            found, expected = (
+                ("synchronous", "asynchronous") if wants_async else ("asynchronous", "not")
+            )
+            return f"its {member}() is {found} where {base.__name__}.{member}() is {expected}"
+        return None
+
     def _check_validate_type(self, key: str, instance: Any) -> None:
         """Reject a factory result that is not the registered type.
 
@@ -1108,15 +1175,26 @@ class PluginRegistry(Generic[T]):
         Four call sites built this check inline, which is why correcting the
         wrap once would otherwise have had to be done four times.
         """
-        if self._validate_type and not isinstance(instance, self._validate_type):
+        base = self._validate_type
+        if base is None:
+            return
+        if not isinstance(instance, base):
             raise OperationError(
                 f"Factory for plugin '{key}' must return a "
-                f"{self._validate_type.__name__} instance, "
+                f"{base.__name__} instance, "
                 f"got {type(instance).__name__}",
                 context={"key": key, "registry": self._name},
             )
+        mismatch = self._async_member_mismatch(instance)
+        if mismatch is not None:
+            raise OperationError(
+                f"Factory for plugin '{key}' in registry '{self._name}' "
+                f"returned a {type(instance).__name__} that does not "
+                f"satisfy {base.__name__}: {mismatch}",
+                context={"key": key, "registry": self._name},
+            )
 
-    def _check_factory_class(self, factory: type, *, what: str) -> None:
+    def _check_factory_class(self, factory: type, *, what: str, key: str | None = None) -> None:
         """Reject a factory class that cannot produce the registered type.
 
         ``issubclass`` is the right check and is what runs wherever it can.
@@ -1154,14 +1232,25 @@ class PluginRegistry(Generic[T]):
         the fix is one method rather than two edits. ``bulk_register``
         delegates to ``register`` and so needs nothing.
 
+        Presence settled, the class still has to be the right half of a
+        twin pair, which :meth:`_async_member_mismatch` decides. Both
+        branches reach that check rather than only the ``issubclass`` one:
+        the protocol shapes most likely to have an async twin are the ones
+        carrying a property, so gating one branch would miss them.
+
         Args:
             factory: The class being registered.
             what: The subject of the message --- ``"Factory class"`` or
                 ``"Default factory"``.
+            key: The key being registered under, when there is one.
+                ``set_default_factory`` has none, so it is optional and
+                omitted from the message rather than rendered as ``None``.
 
         Raises:
-            TypeError: If *factory* cannot produce ``validate_type``, or if
-                ``validate_type`` cannot be checked against at all.
+            TypeError: If *factory* cannot produce ``validate_type`` ---
+                by missing a member or by implementing one with the wrong
+                async-ness --- or if ``validate_type`` cannot be checked
+                against at all.
         """
         base = self._validate_type
         if base is None:
@@ -1192,12 +1281,22 @@ class PluginRegistry(Generic[T]):
                     f"{base.__name__}: missing {', '.join(missing)} "
                     f"(registry {self._name!r})"
                 ) from None
-            return
+        else:
+            if not conforms:
+                raise TypeError(
+                    f"{what} must be a subclass of {base.__name__}, "
+                    f"got {factory.__name__} (registry {self._name!r})"
+                )
 
-        if not conforms:
+        # Both branches above settle presence and arrive here, because a
+        # member that is present can still be the wrong half of a twin pair.
+        mismatch = self._async_member_mismatch(factory)
+        if mismatch is not None:
+            where = f"registry {self._name!r}"
+            if key is not None:
+                where += f", plugin {key!r}"
             raise TypeError(
-                f"{what} must be a subclass of {base.__name__}, "
-                f"got {factory.__name__} (registry {self._name!r})"
+                f"{what} {factory.__name__} cannot satisfy {base.__name__}: {mismatch} ({where})"
             )
 
     def _canon(self, key: str) -> str:
@@ -1330,7 +1429,7 @@ class PluginRegistry(Generic[T]):
 
             # Validate type if specified
             if self._validate_type and isinstance(factory, type):
-                self._check_factory_class(factory, what="Factory class")
+                self._check_factory_class(factory, what="Factory class", key=key)
             elif not callable(factory):
                 raise TypeError(
                     f"Factory must be a class or callable, got {type(factory).__name__}"

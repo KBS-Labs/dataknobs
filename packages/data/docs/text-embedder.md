@@ -338,6 +338,13 @@ on the check: `TypeError: object list can't be used in 'await' expression`.
 Loud and immediate, so nothing stores a non-vector — but it is the annotation,
 not the `isinstance`, that stops the mistake being made.
 
+One place does stop it earlier. A `PluginRegistry` gated with
+`validate_type=TextEmbedder` refuses a `SyncTextEmbedder` at registration and
+at `create()`, because that gate compares each declared member's async-ness
+rather than only its presence — `embed` is `def` where the protocol's is
+`async def`. `isinstance` still answers `True`; the registry asks the second
+question that `isinstance` cannot.
+
 ## Testing against one
 
 ```python
