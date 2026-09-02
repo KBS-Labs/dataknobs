@@ -69,7 +69,7 @@ DataknobsError(
 **Parameters:**
 - `message` (str): Error message
 - `context` (dict[str, Any] | None): Optional context dictionary with additional error details
-- `details` (dict[str, Any] | None): The same thing under the name FSM-derived code uses. When both are given, `details` wins
+- `details` (dict[str, Any] | None): The same thing under the name FSM-derived code uses. The two are never merged — the attribute becomes the first non-empty of `details`, `context`, `{}` — so `details` wins over `context` except when `details` is itself empty
 
 **Attributes:**
 - `context` (dict[str, Any]): The context dictionary — always a dict, `{}` when neither argument was given, so it is safe to subscript without a `None` check

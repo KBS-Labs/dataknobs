@@ -76,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected it; every rejection from either gate now names the registry, the
   base, the class, and any missing members.
 
+- **`DataknobsError` documented its two context arguments as merged, and they
+  are not.** The constructor resolves `details or context or {}`, so the first
+  *non-empty* argument becomes both attributes and the other is discarded — a
+  consumer following the docstring and passing halves of one dict to `context`
+  and `details` would silently lose one of them. Corrected on
+  `DataknobsError`, on `RateLimitError`, which carried a copy of the same
+  sentence, and in the API reference. Behaviour is unchanged; only the claim
+  about it was wrong.
+
 - **`run_callback` and `run_callback_off_loop` handed back an un-run async
   generator instead of refusing it.** `inspect.iscoroutinefunction` answers
   `False` for an async generator function, so the synchronous arm called it —

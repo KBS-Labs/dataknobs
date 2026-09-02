@@ -68,7 +68,8 @@ class DataknobsError(Exception):
     Args:
         message: Human-readable error message
         context: Optional dictionary with error context (field names, IDs, etc.)
-        details: Alternative to context (both are supported for compatibility)
+        details: Alternative to context. Whichever of the two is
+            non-empty becomes both attributes; they are never merged
 
     Example:
         ```python
@@ -94,11 +95,12 @@ class DataknobsError(Exception):
         Args:
             message: Error message
             context: Optional context dictionary
-            details: Optional details dictionary (merged with context)
+            details: Optional details dictionary. Not merged with
+                ``context`` -- the first non-empty of the two is used
         """
         super().__init__(message)
         # Support both context and details parameters
-        # Details takes precedence if both are provided
+        # Neither is merged: the first non-empty wins, details first
         self.context = details or context or {}
         # Alias for FSM-style compatibility
         self.details = self.context
@@ -362,7 +364,8 @@ class RateLimitError(OperationError):
             message: Error message.
             retry_after: Optional seconds to wait before retrying.
             context: Optional context dictionary.
-            details: Optional details dictionary (merged with context).
+            details: Optional details dictionary. Not merged with
+                ``context`` -- the first non-empty of the two is used.
         """
         super().__init__(message, context=context, details=details)
         self.retry_after = retry_after
