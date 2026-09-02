@@ -135,7 +135,7 @@ flow = ConversationFlow(
 # Execute flow with ConversationManager
 async for node in manager.execute_flow(flow):
     print(f"State: {node.metadata['state']}")
-    print(f"Response: {node.content}")
+    print(f"Response: {node.message.content}")
 ```
 
 **Features:**
