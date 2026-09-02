@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-02T03:41:18Z",
+  "timestamp": "2026-09-02T11:41:19Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/a-width-the-config-can-ask-for",
-  "git_commit": "62360b4f41c0cb49863ce1647f66ff5031f1e857",
+  "git_branch": "sbk/a-failure-is-not-a-vector",
+  "git_commit": "011d70355c2ea6df153138031cff6ce89f7fe596",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
