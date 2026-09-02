@@ -56,6 +56,7 @@ See Also:
 """
 
 import asyncio
+import json
 import logging
 import math
 import types
@@ -3127,6 +3128,58 @@ class LLMAdapter(ABC):
             Provider-specific tool definitions.
         """
         pass
+
+    @staticmethod
+    def tool_call_parameters(tool_name: str, raw: Any) -> Dict[str, Any]:
+        """Normalize a provider's raw tool-call arguments into a mapping.
+
+        :attr:`ToolCall.parameters` is declared ``Dict[str, Any]`` and every
+        consumer splats it (``tool.execute(**tool_call.parameters)``), so a
+        non-mapping there is a ``TypeError`` raised at the call site, a long
+        way from the parse that produced it. Nothing enforces the declared
+        type, so the shape is settled here instead: providers disagree about
+        the wire form -- OpenAI sends a JSON string, Ollama and the
+        Claude family send an object -- and a model can emit the other one.
+
+        Args:
+            tool_name: Name of the tool being called, used in the error.
+            raw: Whatever the provider put in the arguments slot: a mapping, a
+                JSON-encoded string, or nothing at all.
+
+        Returns:
+            The arguments as a mapping. Absent or empty arguments become
+            ``{}``, which is what a tool taking none is called with.
+
+        Raises:
+            ValidationError: If the arguments are present but are not, and do
+                not decode to, a JSON object. Raising reports the unusable
+                tool call where it is parsed; the alternative -- substituting
+                ``{}`` -- executes the tool with no arguments at all, which is
+                indistinguishable from a tool that takes none.
+        """
+        if raw is None or raw == "":
+            return {}
+
+        decoded = raw
+        if isinstance(raw, str):
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValidationError(
+                    f"Tool call '{tool_name}' carries arguments that are not "
+                    f"valid JSON, so the call cannot be executed.",
+                    context={"tool": tool_name, "arguments_type": "str"},
+                ) from exc
+
+        if not isinstance(decoded, dict):
+            raise ValidationError(
+                f"Tool call '{tool_name}' carries arguments that are not a "
+                f"JSON object, so the call cannot be executed.",
+                context={"tool": tool_name, "arguments_type": type(decoded).__name__},
+            )
+
+        params: Dict[str, Any] = decoded
+        return params
 
 
 class LLMMiddleware(Protocol):

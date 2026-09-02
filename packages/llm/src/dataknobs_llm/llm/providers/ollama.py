@@ -491,6 +491,11 @@ class OllamaAdapter(LLMAdapter):
 
         Returns:
             Standard ``LLMResponse`` with content, tool_calls, and usage.
+
+        Raises:
+            ValidationError: If a tool call carries arguments that are not,
+                and do not decode to, a JSON object. See
+                :meth:`LLMAdapter.tool_call_parameters`.
         """
         message = data.get("message", {})
         content = message.get("content", "")
@@ -498,14 +503,17 @@ class OllamaAdapter(LLMAdapter):
 
         tool_calls = None
         if raw_tool_calls:
-            tool_calls = [
-                ToolCall(
-                    name=tc.get("function", {}).get("name", ""),
-                    parameters=tc.get("function", {}).get("arguments", {}),
-                    id=tc.get("id"),
+            tool_calls = []
+            for tc in raw_tool_calls:
+                function = tc.get("function", {})
+                name = function.get("name", "")
+                tool_calls.append(
+                    ToolCall(
+                        name=name,
+                        parameters=self.tool_call_parameters(name, function.get("arguments")),
+                        id=tc.get("id"),
+                    )
                 )
-                for tc in raw_tool_calls
-            ]
 
         usage = None
         if "eval_count" in data:
