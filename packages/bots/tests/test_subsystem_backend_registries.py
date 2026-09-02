@@ -662,3 +662,54 @@ class TestSubsystemConfigRedaction:
         rendered = repr(cfg)
         assert "sk-x" not in rendered
         assert "'api_key': '***'" in rendered
+
+
+# ===========================================================================
+# The one shipped registry that registers an asynchronous factory
+#
+# `source_backends` registers `_create_database_source`, an `async def`, and
+# `SourceFactory` used to be a hand-written copy of the registry's contract
+# that omitted the async arm -- so the module's own registration was the one
+# call its own declaration refused. These pin that the shipped registry
+# resolves that factory through the async lane, and that the sync lane
+# refuses it by name rather than handing back a coroutine.
+# ===========================================================================
+
+
+class TestTheDatabaseSourceBackendIsAsynchronous:
+    """The live consumer, exercised through the shipped registry."""
+
+    def test_the_registered_factory_is_a_coroutine_function(self) -> None:
+        """The premise the other two rest on.
+
+        If this ever stops being true the tests below still pass while
+        testing nothing, so it is asserted rather than assumed.
+        """
+        import inspect
+
+        from dataknobs_bots.knowledge.sources.factory import (
+            get_source_backend_factory,
+        )
+
+        factory = get_source_backend_factory("database")
+        assert factory is not None, "the shipped registry lost its database backend"
+        assert inspect.iscoroutinefunction(factory), (
+            "the database backend is no longer an async factory, so this "
+            "registry no longer exercises the async lane at all"
+        )
+
+    def test_the_sync_lane_refuses_it_by_name(self) -> None:
+        """Not a coroutine handed to the caller, and not the type guard's
+        message either -- `source_backends` gates on `GroundedSource`, so
+        before the fix this failed through the guard with advice that sent
+        the reader to change the factory.
+        """
+        from dataknobs_common import OperationError
+        from dataknobs_bots.knowledge.sources.factory import source_backends
+
+        with pytest.raises(OperationError) as caught:
+            source_backends.create("database", {})
+
+        message = str(caught.value)
+        assert "create_async" in message, f"wrong remedy: {message}"
+        assert "must return" not in message, f"reached the type guard: {message}"

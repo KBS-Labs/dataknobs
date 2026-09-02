@@ -141,7 +141,87 @@ The registry supports two modes of instantiation with different calling conventi
 | **Caching** | Returns cached instances | Always creates fresh instances |
 | **Factory signature** | `factory(key, config)` | `factory.from_config(config, **kwargs)` or `factory(config, **kwargs)` |
 | **Key resolution** | Required positional arg | Optional — can extract from config via `config_key` |
+| **Async twin** | `get_async()` | `create_async()` |
 | **Use case** | Singletons, shared resources | Per-request instances, config-driven construction |
+
+The two factory signatures are the reason the async twins are not
+interchangeable: sending a `get()` caller to `create_async()` would change
+the arity out from under their factory. Each sync method names its own twin.
+
+## Asynchronous factories
+
+A factory may be `async def`, or may return any awaitable. Register it the
+same way:
+
+```python
+async def build_backend(config, **kwargs):
+    backend = Backend(config)
+    await backend.connect()
+    return backend
+
+registry.register("remote", build_backend)
+
+backend = await registry.create_async("remote", config)
+```
+
+**Only the async methods can await one.** `get()` and `create()` raise
+`OperationError` naming the registry, the key, and the async method to call
+instead:
+
+> Plugin `'remote'` in registry `'backends'` has an asynchronous factory
+> (`build_backend`); this method cannot await it. Call `create_async()`
+> instead.
+
+That refusal is the point rather than a limitation. A synchronous caller
+cannot await, so its only honest answers are the instance or an error —
+and the third answer, handing back the un-awaited coroutine, produces no
+exception, no log line, and a `RuntimeWarning` at interpreter shutdown
+attributed to the factory rather than to the registry. Through `get()` it
+was worse still: the coroutine was *cached*, so the first caller awaited it
+successfully and every later one received the same exhausted object.
+
+A synchronous factory needs no change and works through all four methods.
+
+## Errors from a factory
+
+All four entry points wrap an exception the factory raised in
+`OperationError`, naming the key and the exception type and carrying the
+original on `__cause__`. The factory's own words stay out of the message: a
+factory builds a backend from deployment config, so its failure text is a
+driver's or an SDK's and can carry the connection URL it was handed.
+
+`NotFoundError` and `OperationError` are the exceptions. Their text is ours
+and already bounded, so they pass through unchanged — which keeps the type a
+caller catches on:
+
+```python
+def composite(config, **kwargs):
+    # resolves a sub-component through another registry
+    return Composite(sub_backends.create(config["sub"]))
+
+backends.register("composite", composite)
+
+try:
+    backends.create("composite", {"sub": "missing"})
+except NotFoundError as e:
+    # the inner registry's own error, not "Failed to create plugin"
+    e.context["registry"]  # -> "sub_backends"
+```
+
+Note the factory's `(config, **kwargs)` signature: that is the `create` lane.
+A factory registered for `get()` takes `(key, config)` instead — see
+[`get()` vs `create()`](#get-vs-create).
+
+`PluginFactory[T]` is the exported alias for all three accepted shapes —
+a class, a callable returning an instance, and a callable returning an
+awaitable one — for consumers annotating a factory before registering it:
+
+```python
+from dataknobs_common import PluginFactory
+
+def make_backend() -> PluginFactory[Backend]:
+    ...
+```
 
 ## Lazy Initialization
 

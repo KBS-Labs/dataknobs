@@ -618,6 +618,20 @@ count = await registry.count()
 
 ### Plugin Registry
 
+#### `PluginFactory[T]`
+
+```python
+PluginFactory: TypeAlias = type[T] | Callable[..., T] | Callable[..., Awaitable[T]]
+```
+
+The three shapes a `PluginRegistry` accepts under a key. Exported from
+`dataknobs_common`, because `get_factory()` returns one and `copy()`
+returns a mapping of them.
+
+Only `get_async()` and `create_async()` can await the third shape; the
+synchronous `get()` and `create()` raise `OperationError` naming the async
+method to call instead. See [Asynchronous factories](plugin-registry.md#asynchronous-factories).
+
 #### `PluginRegistry[T]`
 
 Registry with factory support for creating fresh instances on demand, lazy initialization, and configuration-driven key resolution.
@@ -634,7 +648,7 @@ class PluginRegistry(Generic[T]):
 ```python
 PluginRegistry(
     name: str,
-    default_factory: type[T] | Callable[..., T] | None = None,
+    default_factory: PluginFactory[T] | None = None,
     validate_type: type | None = None,
     *,
     canonicalize_keys: bool = False,
@@ -650,7 +664,7 @@ PluginRegistry(
 
 **Parameters:**
 - `name` (str): Registry name for identification
-- `default_factory` (type[T] | Callable | None): Default factory when key not found
+- `default_factory` (PluginFactory[T] | None): Default factory when key not found
 - `validate_type` (type[T] | None): Base type to validate registrations against. A class, an ABC, or a `@runtime_checkable` Protocol — including one carrying properties. See [What `validate_type` checks](plugin-registry.md#what-validate_type-checks)
 - `canonicalize_keys` (bool): Lowercase all keys for case-insensitive lookup
 - `config_key` (str | None): Field name to extract lookup key from config dicts in `create()`
@@ -669,7 +683,7 @@ Register a plugin class or factory function.
 
 **Parameters:**
 - `key` (str): Unique identifier
-- `factory` (type[T] | Callable[..., T]): Plugin class or factory
+- `factory` (PluginFactory[T]): Plugin class, factory callable, or factory callable returning an awaitable
 - `override` (bool): Allow replacing existing registration
 - `metadata` (dict[str, Any] | None): Optional metadata for the registration
 - `allow_overwrite` (bool | None): Keyword alias for `override`, matching `Registry.register`. When not `None` it wins; use whichever name fits the surrounding code
@@ -690,7 +704,9 @@ Get or create a cached plugin instance. Factories are called with `(key, config)
 
 **Returns:** Plugin instance
 
-**Raises:** `NotFoundError` if key not registered and no default
+**Raises:**
+- `NotFoundError`: If key not registered and no default — or raised by the factory itself, in which case it reaches the caller unchanged
+- `OperationError`: If the factory returns an awaitable — `get()` cannot await one. The message names `get_async()`. Nothing is cached in that case. Also if the instance fails `validate_type`, or wrapping any other exception the factory raised
 
 ##### `create(key=None, config=None, **kwargs) -> T`
 
@@ -705,10 +721,18 @@ Create a fresh instance without caching. Uses `(config, **kwargs)` factory signa
 
 **Raises:**
 - `ValueError`: If `key` is None and cannot be resolved
-- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names
-- `OperationError`: If the factory raises, or if it returns something that is not a `validate_type`. The factory's own message is not copied into the wrapper; it travels on `__cause__`
+- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names — or raised by the factory itself, in which case it reaches the caller unchanged
+- `OperationError`: If the factory returns an awaitable (the message names `create_async()`), if the factory raises, or if it returns something that is not a `validate_type`. The factory's own message is not copied into the wrapper; it travels on `__cause__`
 
-##### `get_factory(key) -> type[T] | Callable[..., T] | None`
+A `NotFoundError` or an `OperationError` raised *by the factory* is passed
+through by all four entry points rather than wrapped. The wrapper exists to
+keep a driver's or an SDK's failure text — which can carry the connection URL
+the factory was handed — out of the message; that reason does not reach our
+own error types, whose text is already bounded. So a composite factory that
+resolves a sub-component through another registry and misses raises
+`NotFoundError`, and the caller's `except NotFoundError` catches it.
+
+##### `get_factory(key) -> PluginFactory[T] | None`
 
 Get the raw factory for a key without creating an instance.
 

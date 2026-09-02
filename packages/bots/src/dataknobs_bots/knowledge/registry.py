@@ -22,7 +22,7 @@ The discriminator key is ``type`` (default ``rag``).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from dataknobs_common.exceptions import (
@@ -30,7 +30,7 @@ from dataknobs_common.exceptions import (
     NotFoundError,
     OperationError,
 )
-from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.registry import PluginFactory, PluginRegistry
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -45,7 +45,11 @@ logger = logging.getLogger(__name__)
 # A knowledge-base factory is either a KnowledgeBase subclass (with
 # ``from_config`` / ``from_config_async``) or a callable with the same
 # dispatch signature.
-KnowledgeBaseFactory = type[KnowledgeBase] | Callable[..., KnowledgeBase]
+#: Derived from the registry's own alias rather than restated, so this
+#: surface widens with the registry instead of drifting behind it. The
+#: hand-written copies omitted the asynchronous arm the registry has
+#: always accepted at runtime.
+KnowledgeBaseFactory = PluginFactory[KnowledgeBase]
 
 
 def _register_builtins(registry: PluginRegistry[KnowledgeBase]) -> None:

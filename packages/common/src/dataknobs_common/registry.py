@@ -50,7 +50,7 @@ import logging
 import threading
 import time
 import typing
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator, Mapping
 from typing import (
     Any,
     Callable,
@@ -60,6 +60,7 @@ from typing import (
     NamedTuple,
     Protocol,
     Sequence,
+    TypeAlias,
     TypeVar,
     runtime_checkable,
 )
@@ -91,6 +92,29 @@ DEFAULT_KEY_WARNING = (
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
+
+PluginFactory: TypeAlias = type[T] | Callable[..., T] | Callable[..., Awaitable[T]]
+"""What a :class:`PluginRegistry` stores under a key.
+
+Three shapes, and the third is the one the declaration used to omit: a
+class, a callable returning an instance, and a callable returning an
+*awaitable* instance. The class has always accepted all three at runtime
+and has documented registering the third since it grew ``get_async``; only
+the annotation excluded it, so the exclusion reported as a type error on
+the documented pattern's own tests.
+
+Exported because :meth:`PluginRegistry.get_factory` returns one and
+:meth:`PluginRegistry.copy` returns a mapping of them — it is public
+surface whether or not it has a name, and a consumer annotating a factory
+they are about to register needs the name.
+
+**An awaitable factory is not usable from every entry point.** Only
+``get_async`` and ``create_async`` can await one; the synchronous
+``get`` and ``create`` refuse it, naming the async method to call
+instead. That refusal is the reason this alias is safe to widen: without
+it, admitting the third shape would have deleted the type error that was
+the only thing stopping a caller from silently receiving a coroutine.
+"""
 
 
 class Unavailable(NamedTuple):
@@ -915,12 +939,26 @@ class PluginRegistry(Generic[T]):
         registry.register("async", create_async_handler)
         handler = await registry.get_async("async", config={"url": "..."})
         ```
+
+    Errors from a factory:
+        ``get``, ``get_async``, ``create`` and ``create_async`` all wrap an
+        exception the factory raised in ``OperationError``, naming the key
+        and the exception type and carrying the original on ``__cause__``.
+        The factory's own words stay out of the message: a factory builds a
+        backend from deployment config, so its failure text is a driver's or
+        an SDK's and can carry the connection URL it was handed.
+
+        ``NotFoundError`` and ``OperationError`` are the exceptions to that.
+        Their text is ours and already bounded, so they reach the caller
+        unchanged -- which keeps the type a caller catches on. A composite
+        factory that resolves a sub-component through another registry and
+        misses raises ``NotFoundError``, and the caller sees it as one.
     """
 
     def __init__(
         self,
         name: str,
-        default_factory: type[T] | Callable[..., T] | None = None,
+        default_factory: PluginFactory[T] | None = None,
         validate_type: type | None = None,
         *,
         canonicalize_keys: bool = False,
@@ -992,17 +1030,27 @@ class PluginRegistry(Generic[T]):
                 the way the documentation writes it.
         """
         self._name = name
-        #: Every factory is invoked as ``factory(key, config)``, so the stored
-        #: shape is the callable one. A class satisfies it: ``type[T]`` is
-        #: assignable to ``Callable[..., T]``, and ``register`` still spells
-        #: the union to document that both are accepted. Storing the union
-        #: instead makes mypy resolve a call against ``type[T]``'s ``__init__``
-        #: -- ``object.__init__`` for an unbound TypeVar -- so every call site
-        #: reported "Too many arguments" and returned ``Any``.
-        self._factories: Dict[str, Callable[..., T]] = {}
+        #: Two arities, chosen by the entry point rather than by the
+        #: factory: the ``get`` lane calls ``factory(key, config)`` and
+        #: the ``create`` lane calls ``factory(config, **kwargs)``.
+        #: :meth:`_invoke_factory` is where that choice is made, and is
+        #: the only place either spelling appears.
+        #:
+        #: The stored shape is the full :data:`PluginFactory` union, which
+        #: it previously could not be. Storing the union used to make mypy
+        #: resolve each call against ``type[T]``'s ``__init__`` --
+        #: ``object.__init__`` for an unbound TypeVar -- so *every call
+        #: site* reported "Too many arguments" and returned ``Any``, and
+        #: the storage was narrowed to ``Callable[..., T]`` to avoid it.
+        #: There is now exactly one call site, inside ``_invoke_factory``,
+        #: whose parameter is ``Callable[..., Any]``; the union is never
+        #: resolved against a call, so the cascade has nothing to cascade
+        #: through. Narrowing the storage again would restore the lie
+        #: without restoring the reason for it.
+        self._factories: Dict[str, PluginFactory[T]] = {}
         self._instances: Dict[str, T] = {}
         self._lock = threading.RLock()
-        self._default_factory: Callable[..., T] | None = default_factory
+        self._default_factory: PluginFactory[T] | None = default_factory
         self._validate_type = validate_type
         self._canonicalize_keys = canonicalize_keys
         self._config_key = config_key
@@ -1221,7 +1269,7 @@ class PluginRegistry(Generic[T]):
     def register(
         self,
         key: str,
-        factory: type[T] | Callable[..., T],
+        factory: PluginFactory[T],
         override: bool = False,
         metadata: Dict[str, Any] | None = None,
         *,
@@ -1468,7 +1516,12 @@ class PluginRegistry(Generic[T]):
             Plugin instance
 
         Raises:
-            NotFoundError: If key not registered and use_default=False
+            NotFoundError: If key not registered and use_default=False, or
+                raised by the factory itself (see "Errors from a factory").
+            OperationError: If the factory returns an awaitable -- this
+                method cannot await one, so call ``get_async()`` -- if the
+                instance fails the ``validate_type`` guard, or wrapping any
+                other exception the factory raised.
 
         Example:
             ```python
@@ -1499,12 +1552,28 @@ class PluginRegistry(Generic[T]):
                 )
 
             # Create instance
+            # Annotated for the same reason the other three entry points
+            # are: the result reaches T through `_invoke_factory`, whose
+            # parameter is deliberately `Callable[..., Any]`, and
+            # `_check_validate_type` is what enforces the promise.
+            instance: T
             try:
-                instance = factory(key, config or {})
+                instance = self._refuse_awaitable(
+                    key,
+                    self._invoke_factory(
+                        factory,
+                        key,
+                        config,
+                        {},
+                        positional_key=True,
+                        allow_async_classmethod=False,
+                    ),
+                    async_method="get_async",
+                )
 
                 self._check_validate_type(key, instance)
 
-            except OperationError:
+            except (NotFoundError, OperationError):
                 raise
             except Exception as e:
                 # Bounded message: a plugin factory builds a backend — a
@@ -1543,6 +1612,12 @@ class PluginRegistry(Generic[T]):
         Returns:
             Plugin instance
 
+        Raises:
+            NotFoundError: If key not registered and use_default=False, or
+                raised by the factory itself (see "Errors from a factory").
+            OperationError: If the instance fails the ``validate_type``
+                guard, or wrapping any other exception the factory raised.
+
         Example:
             ```python
             handler = await registry.get_async("async-handler", config={"url": "..."})
@@ -1578,18 +1653,20 @@ class PluginRegistry(Generic[T]):
         # promised, and _check_validate_type is what enforces it.
         instance: T
         try:
-            if isinstance(factory, type):
-                instance = factory(key, config or {})
-            else:
-                result = factory(key, config or {})
-                # Await if coroutine
-                if asyncio.iscoroutine(result):
-                    instance = await result
-                else:
-                    instance = result
+            result = self._invoke_factory(
+                factory,
+                key,
+                config,
+                {},
+                positional_key=True,
+                allow_async_classmethod=False,
+            )
+            instance = await result if inspect.isawaitable(result) else result
 
             self._check_validate_type(key, instance)
 
+        except (NotFoundError, OperationError):
+            raise
         except Exception as e:
             raise OperationError(
                 f"Failed to create plugin '{key}' ({type(e).__name__})",
@@ -1649,9 +1726,12 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
-            NotFoundError: If resolved key is not registered.
-            OperationError: If factory raises an exception (including
-                type validation failures from ``validate_type``).
+            NotFoundError: If resolved key is not registered, or raised by
+                the factory itself (see "Errors from a factory").
+            OperationError: If the factory returns an awaitable -- this
+                method cannot await one, so call ``create_async()`` -- or
+                wrapping an exception the factory raised (including type
+                validation failures from ``validate_type``).
 
         Note:
             Type validation errors from ``register()`` raise ``TypeError``
@@ -1669,10 +1749,18 @@ class PluginRegistry(Generic[T]):
         # promised, and _check_validate_type is what enforces it.
         instance: T
         try:
-            if isinstance(factory, type) and hasattr(factory, "from_config"):
-                instance = factory.from_config(config or {}, **kwargs)
-            else:
-                instance = factory(config or {}, **kwargs)
+            instance = self._refuse_awaitable(
+                key,
+                self._invoke_factory(
+                    factory,
+                    key,
+                    config,
+                    kwargs,
+                    positional_key=False,
+                    allow_async_classmethod=False,
+                ),
+                async_method="create_async",
+            )
 
             self._check_validate_type(key, instance)
 
@@ -1731,9 +1819,10 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
-            NotFoundError: If the resolved key is not registered.
-            OperationError: If the factory raises (including
-                ``validate_type`` failures).
+            NotFoundError: If the resolved key is not registered, or raised
+                by the factory itself (see "Errors from a factory").
+            OperationError: Wrapping an exception the factory raised
+                (including ``validate_type`` failures).
         """
         factory, key, config = self._resolve_factory(key, config)
 
@@ -1743,14 +1832,15 @@ class PluginRegistry(Generic[T]):
         # and _check_validate_type is what enforces it.
         instance: T
         try:
-            if isinstance(factory, type) and hasattr(factory, "from_config_async"):
-                instance = await factory.from_config_async(config or {}, **kwargs)
-            else:
-                if isinstance(factory, type) and hasattr(factory, "from_config"):
-                    result = factory.from_config(config or {}, **kwargs)
-                else:
-                    result = factory(config or {}, **kwargs)
-                instance = await result if inspect.isawaitable(result) else result
+            result = self._invoke_factory(
+                factory,
+                key,
+                config,
+                kwargs,
+                positional_key=False,
+                allow_async_classmethod=True,
+            )
+            instance = await result if inspect.isawaitable(result) else result
 
             self._check_validate_type(key, instance)
 
@@ -1768,7 +1858,7 @@ class PluginRegistry(Generic[T]):
         self,
         key: str | None,
         config: Dict[str, Any] | None,
-    ) -> tuple[Callable[..., T], str, Dict[str, Any] | None]:
+    ) -> tuple[PluginFactory[T], str, Dict[str, Any] | None]:
         """Resolve ``(factory, canonical_key, config)`` for create paths.
 
         Shared prologue for :meth:`create` and :meth:`create_async` — the
@@ -1850,6 +1940,96 @@ class PluginRegistry(Generic[T]):
                     raise exc_cls(message, context=context)
                 raise exc_cls(message)
             return self._factories[key], key, config
+
+    # ------------------------------------------------------------------
+    # The invocation epilogue
+    #
+    # `_resolve_factory` was extracted "so sync create and create_async
+    # cannot drift" -- and it covers the prologue only, so the epilogue
+    # went on being written four times and drifted four ways: the call
+    # arity, whether the result is awaited, which predicate decides
+    # "awaitable", and whether the type guard's own message survives.
+    # These three methods are that epilogue, shared. What genuinely
+    # differs between the four entry points is two booleans, and they are
+    # parameters here rather than four copies of a body.
+    # ------------------------------------------------------------------
+
+    def _invoke_factory(
+        self,
+        factory: Callable[..., Any],
+        key: str,
+        config: Dict[str, Any] | None,
+        kwargs: Dict[str, Any],
+        *,
+        positional_key: bool,
+        allow_async_classmethod: bool,
+    ) -> Any:
+        """Call ``factory`` and return its result, awaited or not.
+
+        The one place this class decides how a factory is invoked, and
+        therefore the only place the two arities are stated:
+
+        * ``positional_key`` -- the ``get`` lane's ``factory(key, config)``.
+          The key identifies the plugin to the factory, and no extra
+          keyword arguments are threaded.
+        * otherwise -- the ``create`` lane's ``factory(config, **kwargs)``,
+          which prefers a class's ``from_config`` / ``from_config_async``
+          constructor when it has one.
+
+        ``allow_async_classmethod`` is separate from the lane because only
+        a caller that can await may reach ``from_config_async``; a
+        synchronous caller must fall through to ``from_config`` and get a
+        real instance rather than a coroutine it cannot resolve.
+
+        The result may be an awaitable. Deciding what to do about that is
+        the caller's, through :meth:`_refuse_awaitable` or an ``await``.
+        """
+        if positional_key:
+            return factory(key, config or {})
+        if isinstance(factory, type):
+            if allow_async_classmethod and hasattr(factory, "from_config_async"):
+                return factory.from_config_async(config or {}, **kwargs)
+            if hasattr(factory, "from_config"):
+                return factory.from_config(config or {}, **kwargs)
+        return factory(config or {}, **kwargs)
+
+    def _refuse_awaitable(self, key: str, result: Any, *, async_method: str) -> Any:
+        """Pass a plain result through; refuse an awaitable one.
+
+        A synchronous caller cannot await, so the only two honest answers
+        are the instance or an error. Returning the awaitable was the
+        third, and it is the defect this method exists to remove: an
+        un-awaited coroutine reaching a caller produces no exception, no
+        log line, and a ``RuntimeWarning`` at interpreter shutdown
+        attributed to the factory rather than to the registry.
+
+        It is refused *before* the caller caches anything. ``get`` cached
+        whatever it received, so the coroutine became the stored instance
+        and every later caller got the same already-awaited object --
+        ``RuntimeError: cannot reuse already awaited coroutine``, naming
+        neither the registry nor the key.
+
+        The awaitable is closed rather than dropped, so refusing it does
+        not itself emit the warning the refusal exists to make unnecessary.
+        """
+        if not inspect.isawaitable(result):
+            return result
+
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+
+        name = getattr(result, "__qualname__", None) or type(result).__name__
+        raise OperationError(
+            f"Plugin '{key}' in registry '{self._name}' has an asynchronous "
+            f"factory ({name}); this method cannot await it. "
+            f"Call {async_method}() instead.",
+            context={
+                "key": key,
+                "registry": self._name,
+                "async_method": async_method,
+            },
+        )
 
     def _report_key_defaulted(self, key: str) -> None:
         """Report that nothing in the config chose ``key``.
@@ -2037,7 +2217,7 @@ class PluginRegistry(Generic[T]):
             else:
                 self._instances.clear()
 
-    def get_factory(self, key: str) -> type[T] | Callable[..., T] | None:
+    def get_factory(self, key: str) -> PluginFactory[T] | None:
         """Get the registered factory for a key.
 
         Args:
@@ -2116,7 +2296,7 @@ class PluginRegistry(Generic[T]):
         self._ensure_initialized()
         return self._instances
 
-    def set_default_factory(self, factory: type[T] | Callable[..., T]) -> None:
+    def set_default_factory(self, factory: PluginFactory[T]) -> None:
         """Set the default factory.
 
         Args:
@@ -2134,7 +2314,7 @@ class PluginRegistry(Generic[T]):
 
     def bulk_register(
         self,
-        factories: Dict[str, type[T] | Callable[..., T]],
+        factories: Mapping[str, PluginFactory[T]],
         override: bool = False,
     ) -> None:
         """Register multiple plugins at once.
@@ -2154,7 +2334,7 @@ class PluginRegistry(Generic[T]):
         for key, factory in factories.items():
             self.register(key, factory, override=override)
 
-    def copy(self) -> Dict[str, type[T] | Callable[..., T]]:
+    def copy(self) -> Dict[str, PluginFactory[T]]:
         """Get a copy of all registered factories.
 
         Returns:

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SourceFactory` is `PluginFactory[GroundedSource]`** rather than a
+  hand-written copy of the registry's contract. The copy omitted the
+  asynchronous arm, and this module registers an asynchronous factory
+  (`_create_database_source`) — so the module's own registration was the one
+  call its own declaration refused. Deriving the alias also means the
+  `source_backends` surface widens with the registry rather than drifting
+  behind it. `register_source_backend` accepts the same three factory shapes
+  it always accepted at runtime.
+
 - **Wizard arcs carry a name, and a transition record says which one fired.**
   A stage may declare several transitions to the same target — different
   conditions, one destination. The compiled FSM arcs were anonymous, so

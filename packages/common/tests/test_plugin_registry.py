@@ -1329,3 +1329,368 @@ class TestValidateTypeOnAProtocolWithANonMethodMember:
             "_is_runtime_protocol, so the fallback cannot tell a checkable "
             "protocol from one that was never decorated"
         )
+
+
+# ---------------------------------------------------------------------------
+# An asynchronous factory, through all four entry points
+#
+# The class documents registering one ("With async factories:", registry.py),
+# `create_async` and `get_async` exist to await it, and the declaration
+# excludes it. What the sync lane did with one was hand it to the caller
+# un-awaited: `create()` returned the coroutine, and `get()` returned AND
+# CACHED it, so the registry worked exactly once and every later caller got
+# `RuntimeError: cannot reuse already awaited coroutine`.
+#
+# The four invocation sites had each chosen independently how to call a
+# factory and what to do with the result, and had drifted four ways: the
+# arity, whether to await, which predicate decides "awaitable", and whether
+# a validate_type failure keeps its own message. These pin all four.
+# ---------------------------------------------------------------------------
+
+
+async def _async_create_factory(config: Dict[str, Any], **_: Any) -> BaseHandler:
+    """The `create` lane's arity: ``factory(config, **kwargs)``."""
+    await asyncio.sleep(0)
+    return BaseHandler("async", config)
+
+
+class _NotACoroutine:
+    """A non-coroutine awaitable — what a Future or an ``__await__`` object is.
+
+    `inspect.isawaitable` admits it; `asyncio.iscoroutine` does not. That
+    difference was the whole distance between `create_async` (which awaited
+    it) and `get_async` (which handed it back un-awaited).
+    """
+
+    def __await__(self) -> Any:
+        async def _build() -> BaseHandler:
+            return BaseHandler("awaited", {})
+
+        return _build().__await__()
+
+
+class TestAsynchronousFactories:
+    """The sync lane must refuse an awaitable, not return it."""
+
+    def test_create_refuses_an_async_factory_instead_of_returning_the_coroutine(
+        self,
+    ) -> None:
+        """The silent case: no `validate_type`, so nothing else catches it.
+
+        This is the failure a consumer meets, and the inversion it exposes:
+        the registry that gates raises cleanly, and the one that does not
+        returns a coroutine with only a shutdown RuntimeWarning to show for it.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("ungated")
+        registry.register("h", _async_create_factory)
+
+        with pytest.raises(OperationError) as caught:
+            registry.create("h", {})
+
+        message = str(caught.value)
+        assert "create_async" in message, f"does not name the remedy: {message}"
+        assert "ungated" in message, f"does not name the registry: {message}"
+        assert "h" in message, f"does not name the key: {message}"
+
+    def test_get_refuses_an_async_factory(self) -> None:
+        """The `get` lane's arity, and its own remedy.
+
+        `get()` and `create()` call a factory differently, so they must name
+        different methods: sending a `get()` caller to `create_async` would
+        change the arity out from under them.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("ungated")
+        registry.register("h", async_handler_factory)
+
+        with pytest.raises(OperationError) as caught:
+            registry.get("h", {})
+
+        assert "get_async" in str(caught.value), str(caught.value)
+
+    def test_a_refused_async_factory_does_not_poison_the_cache(self) -> None:
+        """The escalation `create()` alone does not show.
+
+        `get()` cached whatever the factory returned, coroutine included, and
+        returned the same object every time — so the first caller awaited it
+        successfully and every later one got `RuntimeError: cannot reuse
+        already awaited coroutine`, naming neither registry nor key. A refusal
+        that still cached would leave that intact.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("ungated")
+        registry.register("h", async_handler_factory)
+
+        with pytest.raises(OperationError):
+            registry.get("h", {})
+
+        assert registry.cached_instances == {}, (
+            "the refused awaitable was cached, so the poisoning this "
+            "refusal exists to prevent survives it"
+        )
+
+        # And the key is still usable once the factory is corrected.
+        registry.register("h", handler_factory, override=True)
+        assert isinstance(registry.get("h", {}), BaseHandler)
+
+    def test_a_gated_registry_gives_the_same_answer_as_an_ungated_one(self) -> None:
+        """One condition, one message, whether or not `validate_type` is set.
+
+        A gated registry already failed loudly — but through the type guard,
+        whose message says the factory "must return a BaseHandler instance,
+        got coroutine". That sends the reader to change the factory when the
+        fix is to call `create_async`.
+        """
+        gated: PluginRegistry[BaseHandler] = PluginRegistry("gated", validate_type=BaseHandler)
+        gated.register("h", _async_create_factory)
+
+        with pytest.raises(OperationError) as caught:
+            gated.create("h", {})
+
+        message = str(caught.value)
+        assert "create_async" in message, f"still gives the wrong advice: {message}"
+        assert "must return" not in message, (
+            f"reached the type guard instead of the awaitable check: {message}"
+        )
+
+
+class TestTheAsyncLaneAgreesWithItself:
+    """The two async methods answered the same questions differently."""
+
+    async def test_get_async_awaits_a_non_coroutine_awaitable(self) -> None:
+        """`asyncio.iscoroutine` was too narrow, and only on this side.
+
+        `create_async` used `inspect.isawaitable` and awaited such a result;
+        `get_async` used `asyncio.iscoroutine` and handed it back. Same defect
+        as the sync lane's, inside the half that looked correct.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("awaitables")
+        registry.register("h", lambda key, config: _NotACoroutine())
+
+        got = await registry.get_async("h", {})
+
+        assert isinstance(got, BaseHandler), f"handed back un-awaited: {type(got).__name__}"
+
+    async def test_create_async_still_awaits_both_shapes(self) -> None:
+        """The no-op half — a regression guard, not a fix."""
+        registry: PluginRegistry[Any] = PluginRegistry("awaitables")
+        registry.register("coro", _async_create_factory)
+        registry.register("other", lambda config, **_: _NotACoroutine())
+
+        assert isinstance(await registry.create_async("coro", {}), BaseHandler)
+        assert isinstance(await registry.create_async("other", {}), BaseHandler)
+
+    async def test_get_async_keeps_the_type_guards_own_message(self) -> None:
+        """`get_async` was the only one of the four that discarded it.
+
+        Its `except Exception` re-wrapped the guard's own `OperationError`,
+        so a `validate_type` failure arrived as "Failed to create plugin 'h'
+        (OperationError)" — the one message of the four that says nothing
+        about what was wrong.
+        """
+        registry: PluginRegistry[BaseHandler] = PluginRegistry("gated", validate_type=BaseHandler)
+
+        # A callable rather than the class itself: a class factory is judged
+        # by `register()`, which would raise TypeError before `get_async` ran
+        # and test something else entirely.
+        def wrong_factory(key: str, config: Dict[str, Any]) -> Any:
+            return InvalidHandler(key, config)
+
+        registry.register("h", wrong_factory)
+
+        with pytest.raises(OperationError) as caught:
+            await registry.get_async("h", {})
+
+        assert "must return" in str(caught.value), (
+            f"the guard's message was discarded: {caught.value}"
+        )
+
+
+class TestEveryFactoryShapeStillWorks:
+    """The parity net the seam extraction needs.
+
+    Extracting one invocation seam is only safe if every shape the four
+    methods accepted still reaches the same instance through the same method.
+    This is the test that fails if the extraction changed dispatch rather
+    than sharing it.
+    """
+
+    async def test_every_shape_through_the_create_lane(self) -> None:
+        class FromConfig:
+            def __init__(self, config: Dict[str, Any]) -> None:
+                self.config = config
+
+            @classmethod
+            def from_config(cls, config: Dict[str, Any], **_: Any) -> "FromConfig":
+                return cls(config)
+
+        class FromConfigAsync(FromConfig):
+            @classmethod
+            async def from_config_async(cls, config: Dict[str, Any], **_: Any) -> "FromConfigAsync":
+                return cls(config)
+
+        class Plain:
+            def __init__(self, config: Dict[str, Any], **_: Any) -> None:
+                self.config = config
+
+        registry: PluginRegistry[Any] = PluginRegistry("shapes")
+        registry.register("from_config", FromConfig)
+        registry.register("from_config_async", FromConfigAsync)
+        registry.register("plain_class", Plain)
+        registry.register("sync_callable", lambda config, **_: Plain(config))
+        registry.register("async_callable", _async_create_factory)
+
+        # from_config_async is async-only; every other shape works in both.
+        for key in ("from_config", "plain_class", "sync_callable"):
+            assert registry.create(key, {}) is not None, f"sync create: {key}"
+        for key in (
+            "from_config",
+            "from_config_async",
+            "plain_class",
+            "sync_callable",
+            "async_callable",
+        ):
+            assert await registry.create_async(key, {}) is not None, f"async: {key}"
+
+    async def test_every_shape_through_the_get_lane(self) -> None:
+        registry: PluginRegistry[Any] = PluginRegistry("shapes")
+        registry.register("class", BaseHandler)
+        registry.register("sync_callable", handler_factory)
+        registry.register("async_callable", async_handler_factory)
+
+        for key in ("class", "sync_callable"):
+            assert registry.get(key, {}) is not None, f"sync get: {key}"
+        for key in ("class", "sync_callable", "async_callable"):
+            assert await registry.get_async(key, {}) is not None, f"async get: {key}"
+
+
+class TestThePluginFactoryAlias:
+    """The declaration must admit the shape the class documents."""
+
+    def test_the_alias_is_exported(self) -> None:
+        """It is the first name this class publishes for what it stores.
+
+        `get_factory` returns one and `copy` returns a mapping of them, so it
+        is public surface whether or not it is exported — exporting it is what
+        lets a consumer annotate a factory they are about to register.
+        """
+        import dataknobs_common
+
+        assert hasattr(dataknobs_common, "PluginFactory")
+        assert "PluginFactory" in dataknobs_common.__all__
+
+    def test_an_async_factory_is_accepted_by_every_declaration_site(self) -> None:
+        """Runtime acceptance at all four sites that name a factory type.
+
+        mypy is the real check here and the gate runs it; this pins that the
+        runtime agrees, so a widening that type-checks but breaks
+        `bulk_register` or `copy` cannot pass unnoticed.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "sites", default_factory=_async_create_factory
+        )
+        registry.register("one", _async_create_factory)
+        registry.bulk_register({"two": _async_create_factory})
+        registry.set_default_factory(_async_create_factory)
+
+        assert registry.get_factory("one") is _async_create_factory
+        assert registry.copy()["two"] is _async_create_factory
+
+
+class TestABoundedErrorFromTheFactoryIsNotRewrapped:
+    """A ``DataknobsError`` raised *by the factory* reaches the caller as-is.
+
+    The wrapper exists for one reason, stated where it is raised: a factory
+    builds a backend from deployment config, so its failure text is a
+    driver's or an SDK's and can carry the connection URL it was handed.
+    That reason does not reach our own error types, whose text we wrote and
+    already bounded — so ``NotFoundError`` and ``OperationError`` pass
+    through, and everything else is wrapped.
+
+    ``create``/``create_async`` have done this since the class was
+    generalized. ``get`` re-wrapped ``NotFoundError`` and ``get_async``
+    re-wrapped both, which is the fourth of the four ways the lanes had
+    drifted. These pin the agreement so it cannot drift back silently.
+
+    The realistic shape is a composite factory: one that resolves a
+    sub-component through another registry and does not find it.
+    """
+
+    @staticmethod
+    def _inner_miss(*args: Any, **kwargs: Any) -> BaseHandler:
+        """Stand in for a factory whose own sub-lookup misses."""
+        raise NotFoundError(
+            "Plugin 'sub' not registered",
+            context={"key": "sub", "registry": "inner"},
+        )
+
+    def test_get_passes_a_not_found_error_through(self) -> None:
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("composite", self._inner_miss)
+
+        with pytest.raises(NotFoundError) as caught:
+            registry.get("composite")
+
+        # The inner registry's own words, not "Failed to create plugin".
+        assert "Plugin 'sub' not registered" in str(caught.value)
+        assert caught.value.context["registry"] == "inner"
+
+    async def test_get_async_passes_a_not_found_error_through(self) -> None:
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("composite", self._inner_miss)
+
+        with pytest.raises(NotFoundError) as caught:
+            await registry.get_async("composite")
+
+        assert "Plugin 'sub' not registered" in str(caught.value)
+        assert caught.value.context["registry"] == "inner"
+
+    def test_create_passes_a_not_found_error_through(self) -> None:
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("composite", self._inner_miss)
+
+        with pytest.raises(NotFoundError) as caught:
+            registry.create("composite")
+
+        assert "Plugin 'sub' not registered" in str(caught.value)
+
+    async def test_create_async_passes_a_not_found_error_through(self) -> None:
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("composite", self._inner_miss)
+
+        with pytest.raises(NotFoundError) as caught:
+            await registry.create_async("composite")
+
+        assert "Plugin 'sub' not registered" in str(caught.value)
+
+    def test_a_foreign_error_is_still_wrapped_in_every_lane(self) -> None:
+        """The control: the passthrough is for our types, not for all types.
+
+        Without this, widening the tuple to ``Exception`` would pass the
+        four tests above and lose the bound the wrapper exists to keep.
+        """
+
+        def leaky(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise RuntimeError("postgres://user:pw@host/db refused")
+
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("leaky", leaky)
+
+        for call in (registry.get, registry.create):
+            with pytest.raises(OperationError) as caught:
+                call("leaky")
+            assert "postgres://" not in str(caught.value)
+            assert "(RuntimeError)" in str(caught.value)
+
+    async def test_a_foreign_error_is_still_wrapped_in_the_async_lanes(self) -> None:
+        async def leaky(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise RuntimeError("postgres://user:pw@host/db refused")
+
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("leaky", leaky)
+
+        with pytest.raises(OperationError) as caught:
+            await registry.get_async("leaky")
+        assert "postgres://" not in str(caught.value)
+
+        with pytest.raises(OperationError) as caught:
+            await registry.create_async("leaky")
+        assert "postgres://" not in str(caught.value)

@@ -19,7 +19,7 @@ from dataknobs_common.exceptions import (
     OperationError,
 )
 from dataknobs_common.imports import resolve_optional_callable
-from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.registry import PluginFactory, PluginRegistry
 from dataknobs_data.sources.base import GroundedSource
 
 if TYPE_CHECKING:
@@ -31,7 +31,12 @@ logger = logging.getLogger(__name__)
 
 # A source factory is either a GroundedSource subclass or a callable with
 # the ``(config, **collaborators)`` dispatch signature.
-SourceFactory = type[GroundedSource] | Callable[..., GroundedSource]
+#: What ``source_backends`` accepts. Defined in terms of the registry's own
+#: alias rather than restated: this module registers an *asynchronous*
+#: factory (``_create_database_source``), and the hand-maintained copy that
+#: stood here omitted that arm -- so the module's own registration was the
+#: one call the declaration refused.
+SourceFactory = PluginFactory[GroundedSource]
 
 
 async def create_source_from_config(
