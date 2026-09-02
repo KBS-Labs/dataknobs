@@ -22,6 +22,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+from dataknobs_common.callbacks import run_callback_off_loop
 from dataknobs_common.retry import RetryConfig, RetryExecutor
 
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage, LLMResponse
@@ -59,7 +60,9 @@ class DeterministicTask:
     """A sync or async callable to execute alongside LLM tasks.
 
     Attributes:
-        fn: The callable to execute. May be sync or async.
+        fn: The callable to execute. May be sync or async, and may be a
+            callable object rather than a function — an object with an
+            ``async def __call__`` is treated as async.
         args: Positional arguments forwarded to fn.
         kwargs: Keyword arguments forwarded to fn.
         tag: Identifier for result lookup.
@@ -412,11 +415,13 @@ class ParallelLLMExecutor:
             task.timeout if task.timeout is not None else self._default_per_task_timeout
         )
         try:
-            if asyncio.iscoroutinefunction(task.fn):
-                inner = task.fn(*task.args, **task.kwargs)
-            else:
-                loop = asyncio.get_running_loop()
-                inner = loop.run_in_executor(None, lambda: task.fn(*task.args, **task.kwargs))
+            # Dispatch on what calling `fn` produces, not on what the callable
+            # looks like: `iscoroutinefunction` answers False for an object with
+            # an `async def __call__`, which is how a stateful async callable is
+            # written, and the sync branch then returned its un-awaited coroutine
+            # as the task's value. `run_callback_off_loop` judges the result, and
+            # keeps a genuinely sync callable on a worker thread as before.
+            inner = run_callback_off_loop(task.fn, *task.args, **task.kwargs)
             if effective_timeout is None:
                 value = await inner
             else:
