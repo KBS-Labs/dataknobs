@@ -9,13 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`Capability.VECTOR_PERSIST` and `Capability.VECTOR_INDEX_TUNING`,** with a
-  `vector_storage` family in `CAPABILITY_FAMILIES`. Both are for the vector
-  stores in `dataknobs-data`, whose family had no way to say which of its
-  public methods a given backend actually has. `VECTOR_PERSIST` carries a note
+- **`Capability.VECTOR_PERSIST`, `Capability.VECTOR_INDEX_TUNING` and
+  `Capability.VECTOR_DOCUMENT_API`,** with a `vector_storage` family in
+  `CAPABILITY_FAMILIES`. All three are for the vector stores in
+  `dataknobs-data`, whose family had no way to say which of its public
+  operations a given backend actually supports. `VECTOR_PERSIST` carries a note
   on the member itself that it is instance-scoped: a store can have `save()`
   and `load()` and still not persist, so declaring it from a `ClassVar` claims
-  a guarantee the instance cannot keep.
+  a guarantee the instance cannot keep. `VECTOR_DOCUMENT_API` marks
+  *server-side* embedding specifically — the portable text path is
+  `VectorStore.bulk_embed_and_store`, which every backend has — because the
+  two differ in whether the caller can later tell which model produced a
+  vector.
+
+- **`supports_capability(host, capability)`** — the non-raising half of the
+  guard pair, exported alongside `require_capability`. The two answer the same
+  question and now share one implementation, so they cannot read a host
+  differently; `require_capability` is defined in terms of this one.
+
+  It exists for the caller that means to *branch* rather than to insist, and
+  specifically for the caller whose host is not statically known to be a
+  contract host — an attribute typed `Any`, an object a consumer handed in, a
+  plugin loaded by name. `host.supports(...)` raises `AttributeError` on such
+  an object; `require_capability` already tolerated it and read it as "no", and
+  a caller asking first had no way to get that same reading. Where the host's
+  type is known, `host.supports(...)` remains the direct form.
 
 ### Changed
 

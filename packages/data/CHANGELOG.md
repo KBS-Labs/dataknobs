@@ -9,21 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The vector stores advertise their capabilities.** `VectorStore` now
-  implements `CapabilityContract`, so a consumer holding the abstraction asks
+- **The vector stores advertise their capabilities, and the guarded methods
+  are reachable through the abstraction.** `VectorStore` implements
+  `CapabilityContract`, so a consumer asks
   `store.supports(Capability.VECTOR_PERSIST)` rather than reaching a
   backend-only method through an `isinstance` downcast — which forfeits the
-  portability the abstraction exists for. `PgVectorStore` advertises
-  `VECTOR_INDEX_TUNING`; `MemoryVectorStore` and `FaissVectorStore` advertise
-  `VECTOR_PERSIST`, **per instance and only when a `persist_path` is
-  configured**, because `save()` and `load()` return early without one. A store
-  built without a path persists exactly as much as a server-backed store does,
-  and the methods being present is what makes getting this wrong dangerous: a
-  caller who checks by reading the class gets a silent no-op rather than an
-  error. New doc: `docs/vector-store-capabilities.md`, whose matrix is rebuilt
-  from the classes by a test rather than maintained by hand.
+  portability the abstraction exists for. `save()`, `load()` and
+  `create_index()` are declared on `VectorStore` itself so that the answer can
+  be *acted on* without that downcast; a backend without the capability raises
+  `CapabilityNotSupportedError`, following `AsyncDatabase.begin_transaction`,
+  instead of the `AttributeError` a missing method used to raise.
+
+  `PgVectorStore` advertises `VECTOR_INDEX_TUNING`; `ChromaVectorStore`
+  advertises `VECTOR_DOCUMENT_API` for its server-side-embedding
+  `add_documents` / `search_documents` (the *portable* text path is
+  `bulk_embed_and_store`, which every backend has and which records the model
+  identity each row was written with); `MemoryVectorStore` and
+  `FaissVectorStore` advertise `VECTOR_PERSIST`, **per instance and only when
+  a `persist_path` is configured** — a store built without a path persists
+  exactly as much as a server-backed store does. New doc:
+  `docs/vector-store-capabilities.md`, whose matrix is rebuilt from the
+  classes by a test rather than maintained by hand.
 
 ### Fixed
+
+- **`ChromaVectorStore.search_documents` did not accept `include_timestamps`.**
+  Its two siblings, `search` and `get_vectors`, gained the parameter and this
+  one did not, so a caller asking a Chroma store for timestamped document hits
+  got `TypeError` on an unexpected keyword argument. `search_documents` is
+  Chroma's alone — no other backend embeds a query server-side — so it appears
+  in no cross-backend parity fixture, which is how it kept the older signature
+  while the methods around it moved. It now injects the configured timestamp
+  keys on the same terms as `search`, after the post-filter and only when
+  metadata was requested.
 
 - **`VectorStore.search_similar_records` ran a synchronous `fetch_records` on
   the event loop.** The parameter's own docstring says "fetching by id is I/O,
@@ -35,6 +53,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The returned value was correct either way, which is why nothing caught it.
 
 ### Changed
+
+- **BREAKING: `save()` and `load()` raise instead of returning quietly when a
+  store has no `persist_path`.** `MemoryVectorStore` and `FaissVectorStore`
+  previously answered a request to persist with a successful-looking no-op,
+  leaving the caller with nothing on disk to restore from and no indication
+  why. Both now raise `CapabilityNotSupportedError`, which is the same
+  response a server-backed backend gives and for the same reason — so
+  `store.supports(Capability.VECTOR_PERSIST)` is a single check covering
+  every way a store can decline. Gate on `persist_path` or on the capability
+  where a call was previously unconditional; `MemoryVectorStore.initialize()`
+  does the former, matching `FaissVectorStore.initialize()`, which already
+  did.
+
+  **A `hasattr(store, "save")` probe is the case to look for, and it does not
+  announce itself.** It used to be a serviceable proxy for "can this persist?",
+  because the method existed only on the backends that had one. Now that
+  `save` / `load` / `create_index` are declared on `VectorStore`, the probe
+  answers `True` for every backend, so a guard written that way *stops
+  guarding* and passes the call through to a store that will refuse it — a
+  silent no-op turning into a raise at the one site that thought it had
+  checked. Replace it with `store.supports(Capability.VECTOR_PERSIST)`.
 
 - **`VectorMigration`'s progress callback and `call_embedding_fn`'s dispatch
   delegate instead of spelling the branch out.** Both hand-wrote a judgement

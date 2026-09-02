@@ -7,7 +7,7 @@ one meant an ``isinstance`` downcast, and a consumer that downcasts has
 stopped being portable. The family now speaks ``CapabilityContract``, so
 the question has an answer: ``store.supports(...)``.
 
-Four things are pinned here:
+Seven things are pinned here:
 
 1. **Conformance** — every backend class is a capability-contract host,
    checkable without an instance and without a service connection.
@@ -26,6 +26,19 @@ Four things are pinned here:
    aspiration. A store advertising ``VECTOR_PERSIST`` round-trips its
    corpus through disk; one that does not advertise it writes nothing
    when asked to save.
+5. **Reachable and refusing** — the guarded methods are on the ABC, so a
+   consumer can call what it just confirmed. A backend without the
+   capability answers with ``CapabilityNotSupportedError`` rather than
+   ``AttributeError``, which is the difference between "unsupported
+   operation" and "you misspelled something".
+6. **A bargain, not a feature** — ``VECTOR_DOCUMENT_API`` marks
+   server-side embedding, which one backend offers and which costs the
+   caller the model's identity. The portable text path,
+   ``bulk_embed_and_store``, is on every backend, so this cell pins both
+   halves: who advertises the convenience, and that declining it costs
+   nobody the ability to store text.
+7. **The published matrix** is regenerated from the classes and from
+   live instances, so the document cannot drift from the code.
 
 No mocks: real in-process backends. pgvector's class-level advertisement
 is asserted here without a connection; its behaviour lives with the
@@ -41,7 +54,12 @@ from typing import Any
 
 import numpy as np
 import pytest
-from dataknobs_common import Capability, CapabilityContract, CapabilityMixin
+from dataknobs_common import (
+    Capability,
+    CapabilityContract,
+    CapabilityMixin,
+    CapabilityNotSupportedError,
+)
 from dataknobs_common.testing import (
     is_chromadb_available,
     is_faiss_available,
@@ -109,9 +127,19 @@ async def test_instance_is_contract_and_does_not_shadow_the_abc_set(
 ) -> None:
     """A live instance speaks the contract and keeps the ABC's guarantees.
 
-    If a backend ever declares ``SUPPORTED_CAPABILITIES`` without unioning
-    ``VectorStore.SUPPORTED_CAPABILITIES``, everything the ABC declares
-    drops out of that backend silently. This is the cell that notices.
+    Two assertions, and only the first is load-bearing today. ``isinstance``
+    against the runtime-checkable ``CapabilityContract`` is the conformance
+    check cell 1 defers to here, a live instance being the only way to ask it.
+
+    The second arms later, and says so rather than implying otherwise. If a
+    backend ever declares ``SUPPORTED_CAPABILITIES`` without unioning
+    ``VectorStore.SUPPORTED_CAPABILITIES``, everything the ABC declares drops
+    out of that backend silently, because ``CapabilityMixin`` does not union
+    across the MRO. But the ABC's set is empty today, so every set satisfies
+    the superset test and no backend can fail it. It becomes a real guard on
+    the commit that gives the ABC its first capability — which is exactly the
+    commit that would otherwise have to remember this hazard unaided, and the
+    reason to write the assertion while it still cannot fail.
     """
     assert isinstance(initialized_vector_store, CapabilityContract)
     advertised = initialized_vector_store.instance_capabilities()
@@ -208,7 +236,7 @@ async def test_advertised_persist_actually_round_trips(kind: str) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", _PERSISTABLE)
-async def test_unadvertised_persist_writes_nothing(kind: str) -> None:
+async def test_unadvertised_persist_refuses_and_writes_nothing(kind: str) -> None:
     """A store that does not advertise it saves nothing when asked.
 
     The negative half of the same claim, and the reason the capability is
@@ -227,7 +255,16 @@ async def test_unadvertised_persist_writes_nothing(kind: str) -> None:
         await store.initialize()
         try:
             await store.add_vectors(np.eye(1, 4, dtype=np.float32), ids=["a"])
-            await store.save(force=True)
+            # One rule, whatever the reason: a store that does not
+            # advertise VECTOR_PERSIST refuses. These two *classes* can
+            # persist and these two *instances* cannot, which used to be
+            # the case that returned quietly — the caller asked for a
+            # snapshot, got a successful-looking call, and had nothing on
+            # disk to restore from.
+            for call in (store.save(force=True), store.load()):
+                with pytest.raises(CapabilityNotSupportedError) as excinfo:
+                    await call
+                assert "vector_persist" in str(excinfo.value)
         finally:
             await store.close()
         # Offloaded rather than called inline: this is an ``async def`` on a
@@ -252,11 +289,117 @@ def test_index_tuning_is_advertised_by_pgvector_alone() -> None:
         if other is PgVectorStore:
             continue
         assert Capability.VECTOR_INDEX_TUNING not in other.supported_capabilities()
-        assert not hasattr(other, "create_index")
+        # ``hasattr`` is no longer the question. The method is on the ABC
+        # so that a consumer can call what it just confirmed; what a
+        # backend without the capability owes is a refusal, not an
+        # ``AttributeError`` that reads as a missing attribute rather
+        # than an unsupported operation.
+        assert hasattr(other, "create_index")
 
 
 # ---------------------------------------------------------------------------
-# 5. The published matrix is generated, not maintained.
+# 5. Reachable, and refusing — the half a declaration alone does not buy.
+# ---------------------------------------------------------------------------
+def _unconfigured(name: str) -> Any:
+    """One constructed store per backend, no service, no persist path."""
+    plain, _ = _probe_pair(name)
+    return plain
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["ChromaVectorStore", "PgVectorStore"])
+async def test_a_backend_that_cannot_persist_refuses_rather_than_vanishing(
+    name: str,
+) -> None:
+    """``save``/``load`` reach every backend and refuse where unsupported.
+
+    Declaring the capability without declaring the method left the check
+    reachable and the call not: ``supports`` answered truthfully and the
+    only way to act on the answer was to downcast. These two backends
+    keep their rows in a service, so the refusal is the honest response —
+    and it is a refusal, naming the capability, rather than the
+    ``AttributeError`` a missing method used to raise.
+
+    No service is contacted: the guard runs before any transport would.
+    """
+    store = _unconfigured(name)
+    assert not store.supports(Capability.VECTOR_PERSIST)
+
+    for call in (store.save(), store.load()):
+        with pytest.raises(CapabilityNotSupportedError) as excinfo:
+            await call
+        assert "vector_persist" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["MemoryVectorStore", "FaissVectorStore", "ChromaVectorStore"])
+async def test_a_backend_without_index_tuning_refuses_create_index(name: str) -> None:
+    """``create_index`` is reachable on all four and honoured by one.
+
+    pgvector is excluded because it *implements* the method; its own
+    behaviour is asserted by the suites that have a server.
+    """
+    store = _unconfigured(name)
+    assert not store.supports(Capability.VECTOR_INDEX_TUNING)
+
+    with pytest.raises(CapabilityNotSupportedError) as excinfo:
+        await store.create_index()
+    assert "vector_index_tuning" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_a_store_that_advertises_persist_and_does_not_implement_it_is_caught() -> None:
+    """The other direction: declared, inherited, and therefore unimplemented.
+
+    ``require_capability`` passing is not the end of the base method. A
+    backend that advertises ``VECTOR_PERSIST`` and inherits the default
+    would otherwise persist nothing in silence — a consumer that checked,
+    was told yes, and lost its rows. That is the precise failure the
+    advertisement exists to prevent, so the default refuses loudly
+    instead of returning.
+    """
+
+    class _Liar(ChromaVectorStore):
+        SUPPORTED_CAPABILITIES = ChromaVectorStore.SUPPORTED_CAPABILITIES | {
+            Capability.VECTOR_PERSIST
+        }
+
+    store = _Liar({"dimensions": 4, "collection_name": "capability_liar_probe"})
+    assert store.supports(Capability.VECTOR_PERSIST)
+
+    with pytest.raises(NotImplementedError, match="does not implement save"):
+        await store.save()
+
+
+# ---------------------------------------------------------------------------
+# 6. The document API is a different bargain, not a missing feature.
+# ---------------------------------------------------------------------------
+def test_document_api_is_chroma_alone_and_the_portable_path_is_everywhere() -> None:
+    """``VECTOR_DOCUMENT_API`` marks server-side embedding, not "can store text".
+
+    The distinction is the whole reason to advertise it. Every backend
+    stores text through ``bulk_embed_and_store``, which takes the
+    caller's embedder and records the model identity in each row — so a
+    vector's provenance survives. Chroma's document API embeds with the
+    *store's* model instead, which is convenient and drops that record.
+    A consumer that reads the capability as "only Chroma handles
+    documents" would reach for the one backend that cannot tell it what
+    embedded its rows.
+    """
+    assert Capability.VECTOR_DOCUMENT_API in ChromaVectorStore.supported_capabilities()
+    for other in _BACKEND_CLASSES:
+        if other is ChromaVectorStore:
+            continue
+        assert Capability.VECTOR_DOCUMENT_API not in other.supported_capabilities()
+        assert not hasattr(other, "add_documents")
+
+    # The portable path, which is what a consumer should reach for first.
+    for cls in _BACKEND_CLASSES:
+        assert callable(getattr(cls, "bulk_embed_and_store", None))
+
+
+# ---------------------------------------------------------------------------
+# 7. The published matrix is generated, not maintained.
 # ---------------------------------------------------------------------------
 _DOC = Path(__file__).parents[3] / "docs" / "vector-store-capabilities.md"
 _MATRIX_START = "<!-- capability-matrix:start -->"
@@ -264,7 +407,11 @@ _MATRIX_END = "<!-- capability-matrix:end -->"
 
 # Column order is the document's; a capability added to the family adds a
 # column here and the test then requires the document to grow one too.
-_MATRIX_COLUMNS = (Capability.VECTOR_PERSIST, Capability.VECTOR_INDEX_TUNING)
+_MATRIX_COLUMNS = (
+    Capability.VECTOR_PERSIST,
+    Capability.VECTOR_INDEX_TUNING,
+    Capability.VECTOR_DOCUMENT_API,
+)
 
 # Row order is the document's, and the roster is deliberately written out:
 # a backend added to the family without a row is the divergence this whole

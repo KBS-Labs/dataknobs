@@ -269,10 +269,14 @@ class KnowledgeIngestionService:
             result.total_chunks = load_result.get("total_chunks", 0)
             result.errors = load_result.get("errors", [])
 
-            # Save the knowledge base
-            if hasattr(knowledge_base, "save"):
-                await knowledge_base.save()
-                self._logger.info("Knowledge base saved")
+            # Persist, if the knowledge base's store can be persisted --
+            # ``save()`` asks its store that question and is a no-op when
+            # the answer is no. The guard that used to stand here probed
+            # ``hasattr(knowledge_base, "save")``, which every
+            # ``RAGKnowledgeBase`` satisfies, so it never decided
+            # anything; the decision belongs to the object that knows
+            # which store it holds.
+            await knowledge_base.save()
 
             self._logger.info(
                 "Ingestion complete: %d files, %d chunks",

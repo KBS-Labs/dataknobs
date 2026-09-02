@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import numpy as np
 
+from dataknobs_common.capabilities import Capability, require_capability
+
 from .base import VectorStore
 from .common import PathPersistedCapabilityMixin
 from .config import MemoryVectorStoreConfig
@@ -57,10 +59,14 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore):
         if self._initialized:
             return
 
-        # Load existing data if any. ``load`` self-guards on the persist
-        # path and the file's existence (off the event loop), so there is
-        # no on-loop ``os.path.exists`` stat here.
-        await self.load()
+        # Load existing data if any. Gated on the configured path here
+        # rather than inside ``load``, which now refuses a store that
+        # cannot persist instead of returning — the same shape
+        # ``FaissVectorStore.initialize`` already had. ``load`` still
+        # offloads its own existence check, so there is no on-loop
+        # ``os.path.exists`` stat.
+        if self.persist_path:
+            await self.load()
 
         self._initialized = True
 
@@ -99,8 +105,12 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore):
                 further save because what it compares against has not
                 moved.
         """
-        if not self.persist_path:
-            return
+        # A store built without a ``persist_path`` does not advertise
+        # VECTOR_PERSIST, so this is the same refusal a server-backed
+        # backend gives, for the same reason: the call cannot persist.
+        # It replaces an early return, which answered a request to
+        # snapshot with a successful-looking no-op.
+        require_capability(self, Capability.VECTOR_PERSIST)
         # Snapshot the mutable in-memory state on the event loop BEFORE
         # handing off to the worker thread. ``add_vectors`` /
         # ``delete_vectors`` / ``update_metadata`` mutate these dicts
@@ -170,8 +180,12 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore):
         owns, and doing that mid-save declares the store in step with a
         file the save has not written yet.
         """
-        if not self.persist_path:
-            return
+        # A store built without a ``persist_path`` does not advertise
+        # VECTOR_PERSIST, so this is the same refusal a server-backed
+        # backend gives, for the same reason: the call cannot persist.
+        # It replaces an early return, which answered a request to
+        # snapshot with a successful-looking no-op.
+        require_capability(self, Capability.VECTOR_PERSIST)
         async with self._save_lock:
             await asyncio.to_thread(self._load_from_disk)
 

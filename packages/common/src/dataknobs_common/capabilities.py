@@ -105,6 +105,14 @@ class Capability(str, Enum):
     # closes by being *declared* rather than by being implemented
     # everywhere.
     VECTOR_INDEX_TUNING = "vector_index_tuning"
+    # Accept raw text and embed it *server-side*, without the caller
+    # supplying an embedder. Not the family's portable document path —
+    # ``VectorStore.bulk_embed_and_store`` is, and every backend has it —
+    # but a genuinely different bargain: the model is the store's, so the
+    # caller neither chooses it nor records which one produced a vector.
+    # Declared so a consumer can tell the two apart before writing rows
+    # whose provenance it cannot later reconstruct.
+    VECTOR_DOCUMENT_API = "vector_document_api"
 
 
 CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
@@ -156,6 +164,7 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
             {
                 Capability.VECTOR_PERSIST,
                 Capability.VECTOR_INDEX_TUNING,
+                Capability.VECTOR_DOCUMENT_API,
             }
         ),
     }
@@ -340,6 +349,31 @@ class CapabilityNotSupportedError(OperationError):
         self.host = host
 
 
+def supports_capability(host: Any, capability: CapabilityLike) -> bool:
+    """Ask whether ``host`` supports ``capability``, tolerating a host
+    that does not implement :class:`CapabilityContract` at all.
+
+    This is the non-raising half of the pair, for the caller that means
+    to *branch* rather than to insist::
+
+        if supports_capability(store, Capability.VECTOR_PERSIST):
+            await store.save()
+
+    ``host.supports(...)`` says the same thing and is the direct form to
+    reach for when the host is statically known to be a contract host.
+    Use this one where it is not — an attribute typed ``Any``, a
+    duck-typed object a consumer handed in, a plugin loaded by name. A
+    host with no ``supports`` answers ``False``, which is the same
+    reading :func:`require_capability` gives it, so the ask and the act
+    cannot disagree about an object neither of them recognises.
+
+    Accepts both :class:`Capability` enum members and raw strings (for
+    consumer-defined capabilities not part of the dataknobs enum).
+    """
+    supports = getattr(host, "supports", None)
+    return supports is not None and bool(supports(capability))
+
+
 def require_capability(host: Any, capability: CapabilityLike) -> None:
     """Pre-call guard. Raises :class:`CapabilityNotSupportedError` when
     the host does not support the capability.
@@ -352,8 +386,7 @@ def require_capability(host: Any, capability: CapabilityLike) -> None:
     Accepts both :class:`Capability` enum members and raw strings (for
     consumer-defined capabilities not part of the dataknobs enum).
     """
-    supports = getattr(host, "supports", None)
-    if supports is None or not supports(capability):
+    if not supports_capability(host, capability):
         raise CapabilityNotSupportedError(capability, host)
 
 

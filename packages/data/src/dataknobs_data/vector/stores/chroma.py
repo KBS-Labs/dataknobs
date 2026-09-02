@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
+from dataknobs_common.capabilities import Capability
+
 from ..types import DistanceMetric
 from .base import VectorStore
 from .config import ChromaVectorStoreConfig
@@ -15,6 +17,10 @@ from .config import ChromaVectorStoreConfig
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from typing import ClassVar
+
+    from chromadb.api.types import EmbeddingFunction
+
+    from dataknobs_common.capabilities import CapabilityLike
 
     import numpy as np
 
@@ -43,6 +49,15 @@ class ChromaVectorStore(VectorStore):
 
     CONFIG_CLS: ClassVar[type[ChromaVectorStoreConfig]] = ChromaVectorStoreConfig
 
+    # Chroma alone embeds text it is handed, using its own configured
+    # embedding function. Written as a union with the ABC's set even
+    # though that set is empty today: ``CapabilityMixin`` does not union
+    # across the MRO, so a bare literal would silently drop whatever the
+    # ABC later declares.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = (
+        VectorStore.SUPPORTED_CAPABILITIES | {Capability.VECTOR_DOCUMENT_API}
+    )
+
     def _setup(self) -> None:
         """Initialize Chroma-specific derived config and runtime state."""
         if not CHROMA_AVAILABLE:
@@ -65,8 +80,12 @@ class ChromaVectorStore(VectorStore):
         # See ``vector-filter-semantics.md`` for the partition rules.
         self.scalar_metadata_keys: frozenset[str] = cfg.scalar_metadata_keys or frozenset()
 
-        # Handle embedding function
-        self.embedding_function = None
+        # Handle embedding function. Annotated rather than inferred: the
+        # three assignments below are a string-mapped default, a
+        # string-mapped OpenAI function, and a caller-supplied object, and
+        # inference from the first two narrows the attribute to the
+        # default's own class — which the second then contradicts.
+        self.embedding_function: EmbeddingFunction[Any] | None = None
         ef = cfg.embedding_function
         if ef is not None:
             if isinstance(ef, str):
@@ -1225,10 +1244,20 @@ class ChromaVectorStore(VectorStore):
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
+        include_timestamps: bool = False,
     ) -> list[tuple[str, float, str, dict[str, Any] | None]]:
-        """Search using text query (uses Chroma's embedding)."""
+        """Search using text query (uses Chroma's embedding).
+
+        See :meth:`get_vectors` for what ``include_timestamps`` exposes
+        and how a key collision is arbitrated. This method is Chroma's
+        alone, so it has no cross-backend parity cell — which is how it
+        kept the older signature after ``search`` and ``get_vectors``
+        gained the parameter.
+        """
         if not self._initialized:
             await self.initialize()
+
+        inject = include_timestamps and include_metadata
 
         # Apply config-level domain_id scoping (no-op when unset).
         filter = self._effective_filter(filter)
@@ -1270,12 +1299,19 @@ class ChromaVectorStore(VectorStore):
                 metadata = self._decode_metadata(raw_meta)
                 if post_filter and not self._match_metadata_filter(metadata, post_filter):
                     continue
+                # Injection lands after the post-filter, matching
+                # ``search``: a filter is written against the metadata the
+                # caller stored, and the timestamp keys are the store's.
+                out_meta = metadata if include_metadata else None
+                if inject:
+                    created, updated = self._reserved_timestamps(raw_meta)
+                    out_meta = self._inject_timestamps(out_meta, created=created, updated=updated)
                 rows.append(
                     (
                         id_val,
                         self._score_from_distance(distance),
                         doc,
-                        metadata if include_metadata else None,
+                        out_meta,
                     )
                 )
             return rows
