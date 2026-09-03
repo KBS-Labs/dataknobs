@@ -56,7 +56,6 @@ from ..base import (
     LLMStreamResponse,
     AsyncLLMProvider,
     ModelCapability,
-    ToolCall,
     LLMAdapter,
     normalize_llm_config,
 )
@@ -234,12 +233,28 @@ class OpenAIAdapter(LLMAdapter):
         return adapted
 
     def adapt_response(self, response: Any) -> LLMResponse:
-        """Convert OpenAI response to standard format."""
+        """Convert OpenAI response to standard format.
+
+        Args:
+            response: OpenAI ``ChatCompletion`` object from the SDK.
+
+        Returns:
+            Standard ``LLMResponse`` with content, tool_calls, and usage.
+
+        Raises:
+            ValidationError: If a tool call carries arguments that are not a
+                JSON object (see :meth:`LLMAdapter.tool_call_parameters`).
+        """
         choice = response.choices[0]
         message = choice.message
 
         return LLMResponse(
             content=message.content or "",
+            # OpenAI sends each call's arguments as a JSON-encoded string.
+            tool_calls=self.build_tool_calls(
+                (tc.function.name, tc.function.arguments, tc.id)
+                for tc in (getattr(message, "tool_calls", None) or [])
+            ),
             model=response.model,
             finish_reason=choice.finish_reason,
             # OpenAI signals a token-budget cut-off with finish_reason
@@ -688,14 +703,10 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 # Build tool_calls on final chunk
                 accumulated_tool_calls = None
                 if finish_reason is not None and tool_call_accumulators:
-                    accumulated_tool_calls = [
-                        ToolCall(
-                            name=acc["name"],
-                            parameters=json.loads(acc["arguments"]) if acc["arguments"] else {},
-                            id=acc["id"] or None,
-                        )
+                    accumulated_tool_calls = self.adapter.build_tool_calls(
+                        (acc["name"], acc["arguments"], acc["id"])
                         for _, acc in sorted(tool_call_accumulators.items())
-                    ]
+                    )
 
                 chunk_resp = LLMStreamResponse(
                     delta=content,

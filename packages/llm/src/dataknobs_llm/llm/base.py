@@ -61,7 +61,7 @@ import logging
 import math
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -3028,6 +3028,52 @@ class LLMAdapter(ABC):
 
         params: Dict[str, Any] = decoded
         return params
+
+    @classmethod
+    def build_tool_calls(
+        cls,
+        raw_calls: Iterable[tuple[str, Any, str | None]],
+    ) -> list["ToolCall"] | None:
+        """Build the canonical tool-call list from a provider's raw calls.
+
+        Every provider ends up at the same place -- a name, whatever it put in
+        the arguments slot, and an optional vendor id -- so extracting those
+        three from the wire format is the only part that is provider-specific.
+        Doing the rest here is what keeps the answer single: a tool call is
+        constructed in six places across four providers, and before this
+        existed those six sites disagreed three ways about unreadable
+        arguments, about whether an absent list is ``None`` or ``[]``, and one
+        of them built no tool calls at all.
+
+        Args:
+            raw_calls: ``(name, raw_arguments, call_id)`` triples in the order
+                the model asked for them. ``raw_arguments`` is passed to
+                :meth:`tool_call_parameters`, so it may be a mapping, a
+                JSON-encoded string, or nothing.
+
+        Returns:
+            The calls, or ``None`` when there are none. ``None`` rather than
+            ``[]`` because :attr:`LLMResponse.tool_calls` is declared optional
+            and every consumer tests it for truth; an empty list would be a
+            second falsy spelling of the same thing. An empty ``call_id``
+            likewise becomes ``None``, since it carries no more information
+            than an absent one.
+
+        Raises:
+            ValidationError: If any call's arguments cannot be read. The turn
+                fails as a whole rather than executing the readable calls and
+                dropping the rest, which would look like a model that asked
+                for fewer tools than it did.
+        """
+        calls = [
+            ToolCall(
+                name=name,
+                parameters=cls.tool_call_parameters(name, raw_arguments),
+                id=call_id or None,
+            )
+            for name, raw_arguments, call_id in raw_calls
+        ]
+        return calls or None
 
 
 class LLMMiddleware(Protocol):

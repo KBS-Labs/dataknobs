@@ -103,7 +103,6 @@ from ..base import (
     LLMStreamResponse,
     AsyncLLMProvider,
     ModelCapability,
-    ToolCall,
     normalize_llm_config,
 )
 from ..model_profile import (
@@ -500,19 +499,14 @@ class OllamaAdapter(LLMAdapter):
         content = message.get("content", "")
         raw_tool_calls = message.get("tool_calls", [])
 
-        tool_calls = None
-        if raw_tool_calls:
-            tool_calls = []
-            for tc in raw_tool_calls:
-                function = tc.get("function", {})
-                name = function.get("name", "")
-                tool_calls.append(
-                    ToolCall(
-                        name=name,
-                        parameters=self.tool_call_parameters(name, function.get("arguments")),
-                        id=tc.get("id"),
-                    )
-                )
+        tool_calls = self.build_tool_calls(
+            (
+                tc.get("function", {}).get("name", ""),
+                tc.get("function", {}).get("arguments"),
+                tc.get("id"),
+            )
+            for tc in raw_tool_calls
+        )
 
         usage = None
         if "eval_count" in data:

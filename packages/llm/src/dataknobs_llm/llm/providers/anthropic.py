@@ -62,7 +62,6 @@ from ..base import (
     LLMStreamResponse,
     AsyncLLMProvider,
     ModelConstraints,
-    ToolCall,
     normalize_claude_stop_reason,
     normalize_llm_config,
 )
@@ -548,19 +547,15 @@ class AnthropicAdapter(LLMAdapter):
             Standard ``LLMResponse`` with content, tool_calls, and usage.
         """
         content = ""
-        tool_calls: list[ToolCall] = []
+        raw_calls: list[tuple[str, Any, str | None]] = []
 
         for block in response.content:
             if block.type == "text":
                 content += block.text
             elif block.type == "tool_use":
-                tool_calls.append(
-                    ToolCall(
-                        name=block.name,
-                        parameters=block.input if isinstance(block.input, dict) else {},
-                        id=block.id,
-                    )
-                )
+                raw_calls.append((block.name, block.input, block.id))
+
+        tool_calls = self.build_tool_calls(raw_calls)
 
         usage = None
         if hasattr(response, "usage"):
@@ -578,7 +573,7 @@ class AnthropicAdapter(LLMAdapter):
             finish_reason=finish_reason,
             truncated=truncated,
             usage=usage,
-            tool_calls=tool_calls if tool_calls else None,
+            tool_calls=tool_calls,
             metadata=metadata,
         )
 

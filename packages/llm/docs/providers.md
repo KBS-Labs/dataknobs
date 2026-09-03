@@ -973,6 +973,39 @@ discovery memoized for the process so subsequent requests to that model drop it
 up front (≤1 wasted round-trip per model). Declaring the param in `constraints`
 pre-empts even that first round-trip.
 
+## Tool-call arguments
+
+Providers disagree about the wire form of a tool call's arguments: OpenAI sends
+a JSON-encoded string, the Claude family and Ollama send an object, and a model
+can emit the other one. Every provider builds its tool calls through the same
+shared adapter helper, so a `ToolCall` that came from a provider carries
+`parameters` as a mapping, ready to splat:
+
+```python
+response = await llm.complete("...", tools=my_tools)
+for call in response.tool_calls or []:
+    result = await registry.get_tool(call.name).execute(**call.parameters)
+```
+
+Arguments that are absent or empty become `{}` — what a tool taking none is
+called with. Arguments that are **present but cannot be read** as a JSON object
+raise `ValidationError` at the parse, naming the tool:
+
+```python
+try:
+    response = await llm.complete("...", tools=my_tools)
+except ValidationError:
+    # The model emitted arguments that are not a JSON object. Retry, or
+    # surface the failure — the tool cannot be called with what it sent.
+    ...
+```
+
+Raising reports the unusable call where it is parsed. The alternative —
+substituting `{}` — executes the tool with no arguments at all, which is
+indistinguishable from a tool that legitimately takes none, and surfaces as a
+puzzling result rather than an error.
+
+
 ## Response truncation signal
 
 When a provider cuts generation off at the token budget, the response is

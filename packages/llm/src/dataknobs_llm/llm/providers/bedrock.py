@@ -79,7 +79,6 @@ from ..base import (
     LLMResponse,
     LLMStreamResponse,
     ModelCapability,
-    ToolCall,
     normalize_claude_stop_reason,
     normalize_llm_config,
 )
@@ -393,20 +392,17 @@ class BedrockConverseAdapter(LLMAdapter):
         """
         message = response.get("output", {}).get("message", {})
         content = ""
-        tool_calls: list[ToolCall] = []
+        raw_calls: list[tuple[str, Any, str | None]] = []
         for block in message.get("content", []):
             if "text" in block:
                 content += block["text"]
             elif "toolUse" in block:
                 tool_use = block["toolUse"]
-                tool_input = tool_use.get("input")
-                tool_calls.append(
-                    ToolCall(
-                        name=tool_use.get("name", ""),
-                        parameters=tool_input if isinstance(tool_input, dict) else {},
-                        id=tool_use.get("toolUseId"),
-                    )
+                raw_calls.append(
+                    (tool_use.get("name", ""), tool_use.get("input"), tool_use.get("toolUseId"))
                 )
+
+        tool_calls = self.build_tool_calls(raw_calls)
 
         usage_raw = response.get("usage") or {}
         usage: dict[str, int] | None = None
@@ -433,7 +429,7 @@ class BedrockConverseAdapter(LLMAdapter):
             finish_reason=finish_reason,
             truncated=truncated,
             usage=usage,
-            tool_calls=tool_calls or None,
+            tool_calls=tool_calls,
             metadata=metadata,
         )
 
@@ -1129,16 +1125,10 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                             "total_tokens": usage_raw.get("totalTokens", 0),
                         }
 
-            tool_calls: list[ToolCall] | None = None
-            if tool_accumulators:
-                tool_calls = [
-                    ToolCall(
-                        name=acc["name"],
-                        parameters=(json.loads(acc["input"]) if acc["input"] else {}),
-                        id=acc["id"],
-                    )
-                    for _, acc in sorted(tool_accumulators.items())
-                ]
+            tool_calls = self.adapter.build_tool_calls(
+                (acc["name"], acc["input"], acc["id"])
+                for _, acc in sorted(tool_accumulators.items())
+            )
 
             logger.debug(
                 "Bedrock converse_stream done (model=%s, finish=%s, tokens=%s, latency_ms=%d)",

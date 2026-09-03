@@ -166,6 +166,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an object — reporting the unusable tool call where it is parsed rather than
   substituting `{}` and executing the tool with no arguments at all.
 
+- **The buffered OpenAI path dropped every tool call.**
+  `OpenAIAdapter.adapt_response` built its `LLMResponse` without a `tool_calls`
+  argument at all, so `OpenAIProvider.complete(tools=[...])` always returned
+  `tool_calls=None` while the provider advertised
+  `ModelCapability.FUNCTION_CALLING` for the model family. Only the streaming
+  path surfaced calls. Two base-class hooks read `response.tool_calls` and were
+  silently disarmed on that path as a result: `_analyze_response` labelled a
+  tool-call-only turn `thinking_only` (empty content, tokens spent, no visible
+  calls), and `_warn_if_truncated` logged the dangerous truncated-mid-tool-call
+  case at `info` as though it were plain truncated prose. All three now behave
+  as they always did for Anthropic, Bedrock and Ollama.
+
+- **Unreadable tool-call arguments were answered three different ways.** A
+  `ToolCall` is built at six sites across four providers, and each had settled
+  the question locally: Anthropic and Bedrock substituted `{}` for arguments
+  that were not a mapping, which executes the tool with no arguments at all and
+  is indistinguishable from a tool that takes none; the OpenAI and Bedrock
+  streaming accumulators called `json.loads` unguarded, so malformed arguments
+  raised `json.JSONDecodeError` through the provider abstraction instead of the
+  `ValidationError` every other parse failure in this package raises. All six
+  sites now build their calls through `LLMAdapter.build_tool_calls()`, which
+  normalizes each call's arguments through `tool_call_parameters()` and returns
+  `None` rather than `[]` for a turn with no calls. An empty vendor call id
+  becomes `None`, which it already did on two of the six paths.
+
 ### Added
 
 - **`fsm` extra.** `dataknobs-fsm` backs `dataknobs_llm.fsm_integration`
