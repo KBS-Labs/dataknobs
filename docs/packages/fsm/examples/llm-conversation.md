@@ -21,7 +21,7 @@ The new example demonstrates:
 ```python
 from dataknobs_llm import create_llm_provider, LLMConfig
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
-from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, KeywordCondition
+from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, always
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 from dataknobs_data.backends import AsyncMemoryDatabase
 from pathlib import Path
@@ -36,37 +36,38 @@ builder = AsyncPromptBuilder(library=library)
 db = AsyncMemoryDatabase()
 storage = DataknobsConversationStorage(db)
 
-# Define conversation flow
+# Define conversation flow. `transitions` names the target state; the condition
+# that decides the arc lives beside it under the same key.
 flow = ConversationFlow(
     name="conversation",
     initial_state="greet",
     states={
         "greet": FlowState(
-            prompt="greeting",
-            transitions={"continue": KeywordCondition([".*"])},
-            next_states={"continue": "respond"}
+            prompt_name="greeting",
+            transitions={"continue": "respond"},
+            transition_conditions={"continue": always()},
         ),
-        "respond": FlowState(
-            prompt="response",
-            transitions={},
-            next_states={}
-        )
+        "respond": FlowState(prompt_name="response"),
     }
 )
 
-# Create conversation manager
+# Create conversation manager (the flow is passed to execute_flow, not here)
 manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
     storage=storage,
-    flow=flow
+    system_prompt_name="assistant",
 )
 
-# Use the conversation system
+# Run the flow: one assistant node per state, yielded once the run completes
 await manager.add_message(role="user", content="Hello!")
-response = await manager.execute_flow()
-print(response.content)
+async for node in manager.execute_flow(flow):
+    print(node.metadata["state"], "->", node.message.content)
 ```
+
+Flows need `dataknobs-llm[fsm]`, and a flow state renders its prompt rather
+than calling the LLM — see
+[FSM-Based Flows](../../llm/guides/flows.md) before writing one.
 
 ## Related Documentation
 

@@ -1,434 +1,250 @@
-# FSM-Based Conversation Flow Example
+# FSM-Based Conversation Flow
 
-This example demonstrates how to build sophisticated conversation systems using FSM-based conversation flows with the LLM package.
+One complete program: a support-triage bot that restates an incoming request,
+routes it to the right queue, and closes with a ticket number — as a
+`ConversationFlow` executed through a `ConversationManager`.
 
-## Overview
+It runs as written. `EchoProvider` and an in-memory prompt library stand in for
+a real provider and a prompt directory, so there is no API key and nothing on
+disk.
 
-This example showcases:
+For the reference material behind it, see
+[FSM-Based Flows](../guides/flows.md); for smaller single-purpose snippets, see
+[Conversation Flow Examples](conversation-flows.md).
 
-- **Multi-stage conversation flow** (analyze, respond, refine)
-- **Intent recognition** and dynamic state transitions
-- **Context management** and conversation history
-- **Error recovery** with fallback mechanisms
-- **Template selection** based on user input
+## What it demonstrates
 
-## Key Components
+- Routing on **the user's own words**, by interpolating them into the first
+  state's template so the arcs out of that state can match them
+- A **catch-all arc** declared last, since the first passing condition wins
+- **Static parameters** per state (`prompt_params`) alongside run-wide ones
+  (`initial_context`)
+- Reading the resulting **conversation transcript**, which mixes the real user
+  turn with the flow's generated ones
 
-### Conversation Flow Definition
+## The prompts
+
+A flow state names a prompt in the library and renders it. These five are the
+whole vocabulary of the bot.
+
+```python
+PROMPTS = {
+    "system": {
+        "triage_agent": {"template": "You triage incoming support requests."},
+    },
+    "user": {
+        "restate": {
+            "template": "Let me make sure I have this right: {{user_message}}",
+        },
+        "technical": {
+            "template": (
+                "That sounds like a technical fault. I'm opening ticket "
+                "{{ticket_id}} and routing it to engineering."
+            ),
+        },
+        "billing": {
+            "template": (
+                "That's a billing matter. I'm opening ticket {{ticket_id}} "
+                "and routing it to accounts."
+            ),
+        },
+        "general": {
+            "template": "I'll pass this to a support agent under ticket {{ticket_id}}.",
+        },
+        "close": {"template": "Ticket {{ticket_id}} is open. Anything else?"},
+    },
+}
+```
+
+In production these live in a prompt directory and are loaded with
+`FileSystemPromptLibrary(prompt_dir=Path("prompts/"))`; nothing else changes.
+
+## The flow
+
+Five states. `restate` fans out to three queues and each queue converges on
+`close`, which is terminal.
 
 ```python
 from dataknobs_llm.conversations.flow import (
     ConversationFlow,
     FlowState,
-    KeywordCondition,
-    LLMClassifierCondition
+    always,
+    keyword_condition,
 )
-from dataknobs_llm import create_llm_provider, LLMConfig
-from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
-from dataknobs_data.backends import AsyncMemoryDatabase
-from dataknobs_llm.conversations import DataknobsConversationStorage
-from pathlib import Path
 
-# Configure LLM
-config = LLMConfig(provider="openai", api_key="your-key", model="gpt-4")
-llm = create_llm_provider(config)
 
-# Create conversation flow
-conversation_flow = ConversationFlow(
-    name="intelligent_conversation",
-    initial_state="analyze_input",
-    states={
-        "analyze_input": FlowState(
-            prompt="analyze_user_intent",
-            transitions={
-                "question": KeywordCondition(["what", "how", "why", "when", "where"]),
-                "command": KeywordCondition(["do", "create", "make", "build", "generate"]),
-                "greeting": KeywordCondition(["hello", "hi", "hey", "greetings"]),
-                "feedback": KeywordCondition(["thanks", "good", "bad", "helpful"])
-            },
-            next_states={
-                "question": "handle_question",
-                "command": "handle_command",
-                "greeting": "handle_greeting",
-                "feedback": "handle_feedback"
-            }
-        ),
-        "handle_question": FlowState(
-            prompt="answer_question",
-            transitions={
-                "needs_clarification": KeywordCondition(["unclear", "don't understand"]),
-                "complete": KeywordCondition([".*"])  # Default
-            },
-            next_states={
-                "needs_clarification": "request_clarification",
-                "complete": "refine_response"
-            }
-        ),
-        "handle_command": FlowState(
-            prompt="process_command",
-            transitions={
-                "complete": KeywordCondition([".*"])
-            },
-            next_states={"complete": "refine_response"}
-        ),
-        "handle_greeting": FlowState(
-            prompt="greeting_response",
-            transitions={
-                "complete": KeywordCondition([".*"])
-            },
-            next_states={"complete": "end"}
-        ),
-        "handle_feedback": FlowState(
-            prompt="acknowledge_feedback",
-            transitions={
-                "complete": KeywordCondition([".*"])
-            },
-            next_states={"complete": "end"}
-        ),
-        "request_clarification": FlowState(
-            prompt="ask_clarification",
-            transitions={},
-            next_states={}
-        ),
-        "refine_response": FlowState(
-            prompt="refine_and_validate",
-            transitions={},
-            next_states={}
-        ),
-        "end": FlowState(
-            prompt=None,
-            transitions={},
-            next_states={}
-        )
-    }
-)
+def triage_flow(ticket_id: str) -> ConversationFlow:
+    routed = {"prompt_params": {"ticket_id": ticket_id}}
+    return ConversationFlow(
+        name="support_triage",
+        initial_state="restate",
+        description="Restate the request, route it, then close.",
+        max_total_loops=4,
+        initial_context={"ticket_id": ticket_id},
+        states={
+            "restate": FlowState(
+                prompt_name="restate",
+                transitions={
+                    "technical": "technical",
+                    "billing": "billing",
+                    "general": "general",
+                },
+                transition_conditions={
+                    "technical": keyword_condition(["error", "crash", "broken", "bug"]),
+                    "billing": keyword_condition(["invoice", "charge", "refund", "billing"]),
+                    "general": always(),
+                },
+            ),
+            "technical": FlowState(
+                prompt_name="technical",
+                transitions={"done": "close"},
+                transition_conditions={"done": always()},
+                **routed,
+            ),
+            "billing": FlowState(
+                prompt_name="billing",
+                transitions={"done": "close"},
+                transition_conditions={"done": always()},
+                **routed,
+            ),
+            "general": FlowState(
+                prompt_name="general",
+                transitions={"done": "close"},
+                transition_conditions={"done": always()},
+                **routed,
+            ),
+            "close": FlowState(prompt_name="close", **routed),
+        },
+    )
 ```
 
-### Prompt Templates
+Three things in there are load-bearing:
 
-Create prompt templates in your prompt directory (`prompts/user/`):
+**`general: always()` is declared last.** Arcs are tried in declaration order
+and the first passing one wins, so a catch-all placed earlier would swallow
+every request before the keyword arcs were reached.
 
-**analyze_user_intent.yaml**:
-```yaml
-template: |
-  Analyze the user's intent in this message: "{{user_input}}"
+**The keyword arcs match the text `restate` rendered**, which is the user's
+message wrapped in one sentence. That is why the request has to be interpolated
+into the template — a condition never sees the raw input, only what a state
+produced.
 
-  Determine the primary intent and extract key information.
+**`close` has no transitions**, which is what makes it terminal. A state that
+should end the run needs no arcs; a state with arcs and no passing condition
+fails the run instead.
 
-  User message: {{user_input}}
-
-defaults:
-  user_input: ""
-```
-
-**answer_question.yaml**:
-```yaml
-template: |
-  Answer this question clearly and concisely:
-
-  Question: {{user_input}}
-
-  {% if context %}
-  Previous conversation context:
-  {{context}}
-  {% endif %}
-
-  Provide a helpful, accurate answer.
-
-defaults:
-  user_input: ""
-  context: ""
-```
-
-**process_command.yaml**:
-```yaml
-template: |
-  Process this user command:
-
-  Command: {{user_input}}
-
-  Explain what you will do and provide the result.
-
-defaults:
-  user_input: ""
-```
-
-**refine_and_validate.yaml**:
-```yaml
-template: |
-  Review and refine this response for clarity and accuracy:
-
-  {{draft_response}}
-
-  Make it more helpful and precise.
-
-defaults:
-  draft_response: ""
-```
-
-## Complete Usage Example
+## Running it
 
 ```python
 import asyncio
-from dataknobs_llm import create_llm_provider, LLMConfig
+
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
-from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
-from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, KeywordCondition
-from dataknobs_data.backends import AsyncMemoryDatabase
-from pathlib import Path
+from dataknobs_llm.llm import EchoProvider, LLMConfig
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 
-async def create_conversation_system():
-    """Create an intelligent conversation system."""
 
-    # Setup LLM
-    config = LLMConfig(
-        provider="openai",
-        api_key="your-key",
-        model="gpt-4",
-        temperature=0.7
-    )
-    llm = create_llm_provider(config)
+async def triage(user_message: str, ticket_id: str) -> None:
+    llm = EchoProvider(LLMConfig(provider="echo", model="echo", options={"echo_prefix": ""}))
+    builder = AsyncPromptBuilder(library=ConfigPromptLibrary(PROMPTS))
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
-    # Setup prompt builder
-    library = FileSystemPromptLibrary(prompt_dir=Path("prompts/"))
-    builder = AsyncPromptBuilder(library=library)
-
-    # Setup storage
-    db = AsyncMemoryDatabase()
-    storage = DataknobsConversationStorage(db)
-
-    # Define conversation flow (as shown above)
-    flow = conversation_flow
-
-    # Create conversation manager
     manager = await ConversationManager.create(
         llm=llm,
         prompt_builder=builder,
         storage=storage,
-        flow=flow,
-        system_prompt_name="conversation_assistant"
+        system_prompt_name="triage_agent",
+        conversation_id=ticket_id,
     )
+    await manager.add_message(role="user", content=user_message)
 
-    return manager
+    print(f"\n--- {ticket_id}: {user_message!r}")
+    async for node in manager.execute_flow(
+        triage_flow(ticket_id), initial_params={"user_message": user_message}
+    ):
+        print(f"  [{node.metadata['state']}] {node.message.content}")
 
-async def interactive_conversation():
-    """Run an interactive conversation."""
+    print("  transcript:")
+    for message in await manager.get_history():
+        print(f"    {message.role}: {message.content}")
+    await llm.close()
 
-    manager = await create_conversation_system()
 
-    print("Conversation System Ready!")
-    print("Type 'exit' to quit\n")
+async def main() -> None:
+    await triage("The export button throws an error every time", "T-1001")
+    await triage("I was charged twice on my last invoice", "T-1002")
+    await triage("How do I add a teammate?", "T-1003")
 
-    while True:
-        user_input = input("You: ").strip()
 
-        if user_input.lower() == 'exit':
-            break
-
-        # Add user message
-        await manager.add_message(
-            role="user",
-            content=user_input
-        )
-
-        # Execute flow to get response
-        response = await manager.execute_flow()
-
-        print(f"Assistant: {response.content}\n")
-
-        # View conversation tree (optional)
-        tree = await manager.get_tree_structure()
-        print(f"[Flow state: {manager.current_state}]")
-
-# Run the conversation system
-asyncio.run(interactive_conversation())
+asyncio.run(main())
 ```
 
-## Advanced Features
+`initial_params` becomes the flow's starting data, which every state's render
+can read — that is how `{{user_message}}` gets filled. The manager must already
+have a conversation before `execute_flow` is called, which the
+`system_prompt_name` and the `add_message()` between them guarantee.
 
-### Intent Classification with LLM
+## The output
 
-For more sophisticated intent detection, use `LLMClassifierCondition`:
+```
+--- T-1001: 'The export button throws an error every time'
+  [restate] Let me make sure I have this right: The export button throws an error every time
+  [technical] That sounds like a technical fault. I'm opening ticket T-1001 and routing it to engineering.
+  [close] Ticket T-1001 is open. Anything else?
+  transcript:
+    system: You triage incoming support requests.
+    user: The export button throws an error every time
+    assistant: Let me make sure I have this right: The export button throws an error every time
+    assistant: That sounds like a technical fault. I'm opening ticket T-1001 and routing it to engineering.
+    assistant: Ticket T-1001 is open. Anything else?
 
-```python
-from dataknobs_llm.conversations.flow import LLMClassifierCondition
+--- T-1002: 'I was charged twice on my last invoice'
+  [restate] Let me make sure I have this right: I was charged twice on my last invoice
+  [billing] That's a billing matter. I'm opening ticket T-1002 and routing it to accounts.
+  [close] Ticket T-1002 is open. Anything else?
+  transcript:
+    system: You triage incoming support requests.
+    user: I was charged twice on my last invoice
+    assistant: Let me make sure I have this right: I was charged twice on my last invoice
+    assistant: That's a billing matter. I'm opening ticket T-1002 and routing it to accounts.
+    assistant: Ticket T-1002 is open. Anything else?
 
-# Define flow with LLM-based classification
-sophisticated_flow = ConversationFlow(
-    name="advanced_conversation",
-    initial_state="classify_intent",
-    states={
-        "classify_intent": FlowState(
-            prompt="initial_prompt",
-            transitions={
-                "technical_question": LLMClassifierCondition(
-                    llm=llm,
-                    classification_prompt="""
-                    Is this a technical question requiring code or technical explanation?
-                    Input: {{user_input}}
-                    Answer with 'yes' or 'no'.
-                    """,
-                    target_class="yes"
-                ),
-                "general_question": LLMClassifierCondition(
-                    llm=llm,
-                    classification_prompt="""
-                    Is this a general knowledge question?
-                    Input: {{user_input}}
-                    Answer with 'yes' or 'no'.
-                    """,
-                    target_class="yes"
-                )
-            },
-            next_states={
-                "technical_question": "handle_technical",
-                "general_question": "handle_general"
-            }
-        ),
-        "handle_technical": FlowState(
-            prompt="technical_response",
-            transitions={},
-            next_states={}
-        ),
-        "handle_general": FlowState(
-            prompt="general_response",
-            transitions={},
-            next_states={}
-        )
-    }
-)
+--- T-1003: 'How do I add a teammate?'
+  [restate] Let me make sure I have this right: How do I add a teammate?
+  [general] I'll pass this to a support agent under ticket T-1003.
+  [close] Ticket T-1003 is open. Anything else?
+  transcript:
+    system: You triage incoming support requests.
+    user: How do I add a teammate?
+    assistant: Let me make sure I have this right: How do I add a teammate?
+    assistant: I'll pass this to a support agent under ticket T-1003.
+    assistant: Ticket T-1003 is open. Anything else?
 ```
 
-### Context Preservation
+Every `assistant:` line is a rendered template, not a completion. The flow
+never called the provider — a flow's LLM use is confined to
+`LLMClassifierCondition`. What the flow gives you instead is a guaranteed
+shape: the same three turns, in the same order, for every request that routes
+the same way.
 
-The conversation manager automatically maintains context:
+## Where to take it next
 
-```python
-# Context is preserved across flow executions
-manager = await ConversationManager.create(
-    llm=llm,
-    prompt_builder=builder,
-    storage=storage,
-    flow=flow,
-    conversation_id="user123-session1"  # Persistent across restarts
-)
-
-# First exchange
-await manager.add_message(role="user", content="What is Python?")
-response1 = await manager.execute_flow()
-
-# Second exchange - context is automatically included
-await manager.add_message(role="user", content="Show me an example")
-response2 = await manager.execute_flow()  # Knows we're talking about Python
-
-# View conversation history
-history = manager.get_history()
-for msg in history:
-    print(f"{msg.role}: {msg.content}")
-```
-
-### Error Recovery
-
-Add error handling with fallback states:
-
-```python
-error_handling_flow = ConversationFlow(
-    name="resilient_conversation",
-    initial_state="start",
-    states={
-        "start": FlowState(
-            prompt="initial_prompt",
-            transitions={
-                "success": KeywordCondition([".*"]),
-                "error": KeywordCondition([])  # Fallback
-            },
-            next_states={
-                "success": "process",
-                "error": "handle_error"
-            }
-        ),
-        "handle_error": FlowState(
-            prompt="error_recovery",
-            transitions={},
-            next_states={}
-        ),
-        "process": FlowState(
-            prompt="main_processing",
-            transitions={},
-            next_states={}
-        )
-    }
-)
-```
-
-### Branching Conversations
-
-Explore alternative responses:
-
-```python
-# Save checkpoint before trying different approaches
-checkpoint = manager.current_node
-
-# Try approach A
-await manager.add_message(role="user", content="Explain in detail")
-detail_response = await manager.execute_flow()
-
-# Go back and try approach B
-await manager.switch_to_node(checkpoint)
-await manager.add_message(role="user", content="Give me a brief summary")
-brief_response = await manager.execute_flow()
-
-# Compare results
-print(f"Detailed: {detail_response.content[:100]}...")
-print(f"Brief: {brief_response.content[:100]}...")
-```
-
-## Benefits of FSM-Based Conversation Flow
-
-1. **Structured Flow**: Explicit state transitions ensure consistent conversation patterns
-2. **Intent-Driven**: Automatically route to appropriate handlers based on user intent
-3. **Context Management**: Automatic history tracking and context preservation
-4. **Error Resilience**: Graceful handling of unexpected inputs
-5. **Branching Support**: Explore alternative conversation paths
-6. **Debuggable**: Clear visibility into conversation state and transitions
-
-## Comparison with Simple Conversations
-
-### Simple Conversation (No Flow)
-
-```python
-# Simple back-and-forth without explicit flow
-manager = await ConversationManager.create(llm=llm, prompt_builder=builder, storage=storage)
-
-await manager.add_message(role="user", content="Hello")
-response = await manager.complete()
-```
-
-### FSM-Based Conversation (With Flow)
-
-```python
-# Structured conversation with explicit states and transitions
-manager = await ConversationManager.create(
-    llm=llm,
-    prompt_builder=builder,
-    storage=storage,
-    flow=conversation_flow
-)
-
-await manager.add_message(role="user", content="Hello")
-response = await manager.execute_flow()  # Follows defined flow states
-```
-
-The FSM approach provides more control over conversation logic, making it ideal for:
-- Customer support chatbots
-- Multi-step wizards
-- Interview/survey systems
-- Complex domain-specific assistants
+- **Route with a model rather than keywords.** Swap the keyword arcs for
+  [`LLMClassifierCondition`](../guides/flows.md#llmclassifiercondition) and pass
+  a real provider; the condition finds it in the run context.
+- **Branch on account data.** `context_condition` reads the run context instead
+  of the text, so a `customer_tier` seeded through `initial_context` can pick
+  the queue.
+- **Persist across restarts.** Swap `AsyncMemoryDatabase` for any
+  `dataknobs-data` backend and reopen with `ConversationManager.resume()` — see
+  [Persisting and resuming](conversation-flows.md#persisting-and-resuming).
+- **Let a real model answer.** A flow scripts the shape of a conversation; use
+  `manager.complete()` for the turns that need a model to speak. The two share
+  one conversation tree.
 
 ## See Also
 
-- [Conversation Flow Examples](conversation-flows.md) - More flow patterns
-- [Conversation Management Guide](../guides/conversations.md) - Core concepts
-- [FSM-Based Flows Guide](../guides/flows.md) - Flow orchestration details
-- [API Reference](../api/conversations.md) - Complete API documentation
+- [FSM-Based Flows](../guides/flows.md) — the reference guide
+- [Conversation Flow Examples](conversation-flows.md) — smaller patterns
+- [Conversation Management](../guides/conversations.md) — branching, metadata, persistence
+- [Conversations API](../api/conversations.md) — generated reference

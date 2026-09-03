@@ -332,6 +332,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passing a `list[str]` or a `list[LLMResponse]` was a type error at every
   call site even though the method only copies what it is given.
 
+### Documentation
+
+- **The conversation-flow documentation describes the shipped API.** Seven
+  published pages taught a `FlowState(prompt=..., transitions={name: Condition},
+  next_states={...})` shape, a `ConversationManager.create(flow=...)` parameter
+  and an `execute_flow()` returning a response — none of which has ever
+  existed. They now document what the code does: `prompt_name`, the paired
+  `transitions` / `transition_conditions` dictionaries, `execute_flow(flow)` as
+  an async iterator of nodes, the real constructor signature of every condition
+  type, arc evaluation in declaration order, the loop guards and the failure
+  semantics. Every code block on the two example pages is executed as written
+  before publication.
+
+  It also states the thing the old pages inverted: **a flow state renders its
+  prompt rather than calling the LLM**, and a condition therefore tests the
+  text a state produced, not user input. `LLMClassifierCondition` is the only
+  condition that reaches a provider.
+
+  `ConversationManager.execute_flow()`'s own docstring is corrected the same
+  way — its example raised `ValueError` on construction, and its summary
+  described a run streaming as it progressed when the whole flow completes
+  before the first node is yielded.
+
 ## v0.9.0 - 2026-09-02
 
 ### Fixed

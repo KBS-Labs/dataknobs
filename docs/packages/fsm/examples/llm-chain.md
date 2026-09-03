@@ -21,30 +21,31 @@ The LLM package now provides these patterns directly:
 Use conversation flows for sequential processing:
 
 ```python
-from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, KeywordCondition
+from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, always
 
 chain_flow = ConversationFlow(
     name="sequential_chain",
     initial_state="summarize",
     states={
         "summarize": FlowState(
-            prompt="summarize_text",
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "analyze"}
+            prompt_name="summarize_text",
+            transitions={"next": "analyze"},
+            transition_conditions={"next": always()},
         ),
         "analyze": FlowState(
-            prompt="analyze_summary",
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "conclude"}
+            prompt_name="analyze_summary",
+            transitions={"next": "conclude"},
+            transition_conditions={"next": always()},
         ),
-        "conclude": FlowState(
-            prompt="draw_conclusions",
-            transitions={},
-            next_states={}
-        )
+        "conclude": FlowState(prompt_name="draw_conclusions"),   # terminal
     }
 )
 ```
+
+`transitions` names the target state and `transition_conditions` holds the
+condition that decides the arc, under the same key. `always()` is the
+unconditional step. Run the flow with
+`async for node in manager.execute_flow(chain_flow)`.
 
 ### Chain-of-Thought Reasoning
 
@@ -56,23 +57,24 @@ cot_flow = ConversationFlow(
     initial_state="decompose",
     states={
         "decompose": FlowState(
-            prompt="break_down_problem",
-            transitions={"decomposed": KeywordCondition([".*"])},
-            next_states={"decomposed": "solve_steps"}
+            prompt_name="break_down_problem",
+            transitions={"decomposed": "solve_steps"},
+            transition_conditions={"decomposed": always()},
         ),
         "solve_steps": FlowState(
-            prompt="solve_each_step",
-            transitions={"solved": KeywordCondition([".*"])},
-            next_states={"solved": "synthesize"}
+            prompt_name="solve_each_step",
+            transitions={"solved": "synthesize"},
+            transition_conditions={"solved": always()},
         ),
-        "synthesize": FlowState(
-            prompt="combine_solutions",
-            transitions={},
-            next_states={}
-        )
+        "synthesize": FlowState(prompt_name="combine_solutions"),
     }
 )
 ```
+
+A flow state renders its prompt; it does not call the LLM. This sequences the
+*prompts* of a chain-of-thought — drive the reasoning turns themselves with
+`manager.complete()`, and see
+[FSM-Based Flows](../../llm/guides/flows.md) for the full model.
 
 ### RAG (Retrieval-Augmented Generation)
 
@@ -90,7 +92,7 @@ template: |
 
 rag_configs:
   - adapter_name: knowledge_base
-    query_template: "{{question}}"
+    query: "{{question}}"
     k: 5
     placeholder: "RAG_DOCS"
 ```

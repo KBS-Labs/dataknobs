@@ -242,6 +242,9 @@
         "user-guide.md"
       ],
       "site_only": [
+        "examples/conversation-flows.md",
+        "examples/fsm-conversation-flow.md",
+        "guides/flows.md",
         "index.md",
         "quickstart.md"
       ],
@@ -462,8 +465,11 @@
         "fsm-subflows.md"
       ],
       "site_only": [
+        "examples/llm-chain.md",
+        "examples/llm-conversation.md",
         "faq.md",
         "index.md",
+        "patterns/llm-workflow.md",
         "quickstart.md"
       ]
     },
