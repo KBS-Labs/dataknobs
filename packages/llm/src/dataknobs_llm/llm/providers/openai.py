@@ -212,19 +212,10 @@ class OpenAIAdapter(LLMAdapter):
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            # ``ToolCall.parameters`` is declared
-                            # ``Dict[str, Any]`` and every adapter now
-                            # produces one, so mypy reads the ``str`` arm as
-                            # unreachable. It is not: ``ToolCall.from_dict``
-                            # does not normalize, so a stored conversation or
-                            # a consumer-built call can still carry a string,
-                            # and OpenAI's wire format wants exactly that --
-                            # re-encoding it would double-escape the JSON.
-                            "arguments": (
-                                tc.parameters
-                                if isinstance(tc.parameters, str)  # type: ignore[unreachable]
-                                else json.dumps(tc.parameters)
-                            ),
+                            # A mapping, whether the call came from a provider
+                            # parse or from ToolCall.from_dict, so there is no
+                            # already-encoded string arm to preserve here.
+                            "arguments": json.dumps(tc.parameters),
                         },
                     }
                     for tc in msg.tool_calls

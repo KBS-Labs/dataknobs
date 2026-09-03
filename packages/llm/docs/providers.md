@@ -1005,6 +1005,14 @@ substituting `{}` — executes the tool with no arguments at all, which is
 indistinguishable from a tool that legitimately takes none, and surfaces as a
 puzzling result rather than an error.
 
+The same normalization runs when a call is read back rather than parsed:
+`ToolCall.from_dict` — and so `LLMMessage.from_dict` and conversation storage —
+applies it too, so the declared mapping is true of every `ToolCall` however it
+was built. A stored call whose arguments cannot be read raises at the load, and
+`ConversationNode.from_dict` names the node in the message and in
+`context["node_id"]`. There is no option to skip it: a caller that wants the
+record exactly as written already has it, in the dictionary being loaded.
+
 
 ## Response truncation signal
 

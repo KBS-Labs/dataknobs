@@ -134,6 +134,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm.base import LLMMessage
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_llm.exceptions import StorageError, SchemaVersionError
 
 if TYPE_CHECKING:  # pragma: no cover - annotation-only, no runtime import
@@ -211,11 +212,34 @@ class ConversationNode:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ConversationNode":
-        """Create node from dictionary."""
+        """Create node from dictionary.
+
+        Args:
+            data: One node as written by :meth:`to_dict`.
+
+        Returns:
+            The reconstituted node.
+
+        Raises:
+            ValidationError: If the stored message cannot be reconstituted --
+                a tool call whose arguments are not a JSON object, say. The
+                node id is added to the message and the context, because the
+                loader builds every node before it builds the tree, so without
+                it the failure names a tool somewhere in the conversation and
+                gives the holder of the record nothing to repair.
+        """
         msg_data = data.get("message", {})
+        node_id = data["node_id"]
+        try:
+            message = LLMMessage.from_dict(msg_data)
+        except ValidationError as exc:
+            raise ValidationError(
+                f"Stored conversation node '{node_id}' cannot be read: {exc}",
+                context={**(exc.context or {}), "node_id": node_id},
+            ) from exc
         return cls(
-            message=LLMMessage.from_dict(msg_data),
-            node_id=data["node_id"],
+            message=message,
+            node_id=node_id,
             timestamp=datetime.fromisoformat(data["timestamp"]),
             prompt_name=data.get("prompt_name"),
             branch_name=data.get("branch_name"),
