@@ -366,6 +366,23 @@ class ToolCall:
     parameters: Dict[str, Any]
     id: str | None = None
 
+    def __post_init__(self) -> None:
+        """Make the declared mapping true of every instance, however it is built.
+
+        The adapters normalize before they construct, and :meth:`from_dict`
+        normalizes on load, but a call a consumer assembles itself reaches
+        neither -- and a dataclass field annotation is a hint, not a check. So
+        the guarantee held for the doors this package owns and lapsed at the
+        one it does not, which is the door a consumer reaches for.
+
+        Enforcing it here is what lets a reader take the annotation at face
+        value. It also removes the failure that has no error: a call carrying
+        an already-encoded string is JSON-encoded a second time on the way to
+        the provider, and the model is handed a string where the tool declares
+        an object, with nothing raised anywhere along the path.
+        """
+        self.parameters = _normalize_tool_call_parameters(self.name, self.parameters)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to canonical dictionary format for storage/interchange.
 

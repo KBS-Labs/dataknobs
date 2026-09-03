@@ -221,12 +221,17 @@ class ConversationNode:
             The reconstituted node.
 
         Raises:
-            ValidationError: If the stored message cannot be reconstituted --
-                a tool call whose arguments are not a JSON object, say. The
-                node id is added to the message and the context, because the
-                loader builds every node before it builds the tree, so without
-                it the failure names a tool somewhere in the conversation and
-                gives the holder of the record nothing to repair.
+            ValidationError: If the stored message is readable but not usable
+                -- a tool call whose arguments are not a JSON object. The node
+                id is added to the message and the context, because the loader
+                builds every node before it builds the tree, so without it the
+                failure names a tool somewhere in the conversation and gives
+                the holder of the record nothing to repair.
+            KeyError: If the record is structurally malformed -- a message with
+                no ``role``, a node with no ``timestamp``. These are not named
+                with the node id; the enrichment covers the failure this class
+                of record actually exhibits, not every way a record can be
+                wrong.
         """
         msg_data = data.get("message", {})
         node_id = data["node_id"]

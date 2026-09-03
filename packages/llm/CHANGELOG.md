@@ -201,10 +201,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would leave the declared type untrue and move the failure back to the splat
   site.
 
-  With the invariant true of every instance however it was built,
-  `OpenAIAdapter.adapt_messages` no longer needs its already-encoded-string
-  branch, and the `# type: ignore[unreachable]` that branch carried is gone
-  with it.
+  `ToolCall.__post_init__` applies the same normalization, so the invariant is
+  a property of the type rather than of the door an instance came through. A
+  call a consumer assembles itself reaches no adapter and no loader, and that
+  was the route that could still carry an encoded string into
+  `OpenAIAdapter.adapt_messages` -- which encodes unconditionally, so the
+  model was handed JSON *of* JSON where the tool declares an object, with
+  nothing raised anywhere on the path. With the invariant true of every
+  instance however it was built, `adapt_messages` no longer needs its
+  already-encoded-string branch, and the `# type: ignore[unreachable]` that
+  branch carried is gone with it.
 
 - **Unreadable tool-call arguments were answered three different ways.** A
   `ToolCall` is built at six sites across four providers, and each had settled

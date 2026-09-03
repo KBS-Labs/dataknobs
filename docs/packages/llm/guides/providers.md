@@ -1007,11 +1007,14 @@ puzzling result rather than an error.
 
 The same normalization runs when a call is read back rather than parsed:
 `ToolCall.from_dict` — and so `LLMMessage.from_dict` and conversation storage —
-applies it too, so the declared mapping is true of every `ToolCall` however it
-was built. A stored call whose arguments cannot be read raises at the load, and
-`ConversationNode.from_dict` names the node in the message and in
-`context["node_id"]`. There is no option to skip it: a caller that wants the
-record exactly as written already has it, in the dictionary being loaded.
+applies it too, and `ToolCall.__post_init__` closes the third route — a call a
+consumer assembles itself, which reaches neither. The declared mapping is
+therefore true of every `ToolCall` however it was built, rather than of the ones
+this package happened to construct. A stored call whose arguments cannot be read
+raises at the load, and `ConversationNode.from_dict` names the node in the
+message and in `context["node_id"]`. There is no option to skip it: a caller
+that wants the record exactly as written already has it, in the dictionary
+being loaded.
 
 
 ## Response truncation signal

@@ -35,10 +35,17 @@ failure in this package raises.
 with no arguments at all, which is indistinguishable from a tool that takes
 none.
 
+Settling the six leaves a seventh route open -- the call a consumer builds
+itself, which reaches no adapter and no loader. ``TestDirectConstruction``
+covers it, and the harm it carries once the providers agree: ``adapt_messages``
+encodes ``parameters`` unconditionally, so a call holding an already-encoded
+string is encoded twice and the model is handed a string where the tool
+declares an object, silently.
+
 Failing before the fix: every test in ``TestOpenAIBufferedPath``,
 ``TestUnreadableArgumentsRaise`` (the Anthropic, both Bedrock and the OpenAI
-stream cases), and ``TestDisarmedBaseHooks``. ``TestParity`` passes for Ollama
-before the fix and for all four after it.
+stream cases), ``TestDisarmedBaseHooks``, and ``TestDirectConstruction``.
+``TestParity`` passes for Ollama before the fix and for all four after it.
 """
 
 from __future__ import annotations
@@ -46,11 +53,12 @@ from __future__ import annotations
 import json
 import logging
 import types
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from dataknobs_common.exceptions import ValidationError
-from dataknobs_llm.llm.base import LLMConfig
+from dataknobs_llm.llm.base import LLMConfig, LLMMessage, ToolCall
 from dataknobs_llm.llm.providers.anthropic import AnthropicAdapter
 from dataknobs_llm.llm.providers.bedrock import BedrockConverseAdapter
 from dataknobs_llm.llm.providers.echo import EchoProvider
@@ -419,3 +427,47 @@ class TestParity:
         )
         assert parsed.tool_calls is not None
         assert parsed.tool_calls[0].id is None
+
+
+class TestDirectConstruction:
+    """The seventh route: a call a consumer builds itself.
+
+    The six sites above are the ones a *provider* uses, and routing them
+    through the shared builder settles what they answer. It leaves the type's
+    own guarantee resting on which door an instance came through -- and the
+    door that enforces nothing is the one a consumer reaches for.
+    """
+
+    def test_a_string_becomes_the_mapping_the_type_declares(self) -> None:
+        call = ToolCall(name="search", parameters='{"q": "cats"}')
+        assert call.parameters == {"q": "cats"}
+
+    def test_unreadable_arguments_raise_at_construction(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            ToolCall(name="search", parameters="not json")
+        assert "search" in str(excinfo.value)
+
+    def test_absent_arguments_become_an_empty_mapping(self) -> None:
+        assert ToolCall(name="ping", parameters=None).parameters == {}
+
+    def test_replace_renormalizes(self) -> None:
+        """``dataclasses.replace`` rebuilds, so it re-enforces."""
+        call = replace(ToolCall(name="search", parameters={}), parameters='{"q": "cats"}')
+        assert call.parameters == {"q": "cats"}
+
+    def test_openai_does_not_double_encode_a_consumer_built_call(self) -> None:
+        """The harm the deleted ``isinstance`` arm used to absorb.
+
+        ``adapt_messages`` encodes ``parameters`` unconditionally. A call
+        carrying an already-encoded string is then JSON *of* JSON -- the model
+        is handed a string where the tool declares an object, and nothing
+        raises.
+        """
+        message = LLMMessage(
+            role="assistant",
+            content="",
+            tool_calls=[ToolCall(name="search", parameters='{"q": "cats"}')],
+        )
+        adapted = OpenAIAdapter().adapt_messages([message])
+        arguments = adapted[0]["tool_calls"][0]["function"]["arguments"]
+        assert json.loads(arguments) == {"q": "cats"}

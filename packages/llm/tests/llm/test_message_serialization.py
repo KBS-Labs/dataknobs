@@ -304,7 +304,11 @@ class TestConversationLoadNamesTheBadNode:
             )
 
     def test_a_readable_node_loads(self) -> None:
-        """Control."""
+        """Not a control -- the decode reaches through the node too.
+
+        Stored arguments are the encoded form, so this fails before the fix
+        for the same reason the raising cases do.
+        """
         from dataknobs_llm.conversations.storage import ConversationNode
 
         node = ConversationNode.from_dict(
