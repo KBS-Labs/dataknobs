@@ -178,6 +178,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case at `info` as though it were plain truncated prose. All three now behave
   as they always did for Anthropic, Bedrock and Ollama.
 
+- **A `ToolCall` read back from storage did not carry the shape its type
+  declares.** `ToolCall.from_dict` built `parameters` from the stored value
+  verbatim, so the one guarantee `parameters: Dict[str, Any]` makes held for
+  calls a provider had just parsed and not for calls read back from a
+  conversation store or a capture — and consumers splat it either way. A record
+  written before the adapters enforced the shape reloaded as a `str` and raised
+  `TypeError` at the splat site, a long way from the load. Loading now applies
+  the same normalization as a live parse, which *repairs* the realistic stored
+  form rather than merely tolerating it: `to_dict` writes `parameters`
+  verbatim, so the population that can exist is JSON-encoded arguments, and
+  those decode.
+
+  **Migration.** A stored call whose arguments are present but do not decode to
+  a JSON object now raises `ValidationError` at the load instead of failing
+  later, and `ConversationNode.from_dict` names the offending node in the
+  message and in `context["node_id"]` so the record can be found and repaired.
+  The loader builds every node before it builds the tree, so one such node
+  fails the whole conversation load; a caller that needs the record exactly as
+  written already has it, in the dictionary it passed in. No option to skip
+  normalization is offered, because a `ToolCall` that keeps an unreadable value
+  would leave the declared type untrue and move the failure back to the splat
+  site.
+
+  `ToolCall.__post_init__` applies the same normalization, so the invariant is
+  a property of the type rather than of the door an instance came through. A
+  call a consumer assembles itself reaches no adapter and no loader, and that
+  was the route that could still carry an encoded string into
+  `OpenAIAdapter.adapt_messages` -- which encodes unconditionally, so the
+  model was handed JSON *of* JSON where the tool declares an object, with
+  nothing raised anywhere on the path. With the invariant true of every
+  instance however it was built, `adapt_messages` no longer needs its
+  already-encoded-string branch, and the `# type: ignore[unreachable]` that
+  branch carried is gone with it.
+
 - **Unreadable tool-call arguments were answered three different ways.** A
   `ToolCall` is built at six sites across four providers, and each had settled
   the question locally: Anthropic and Bedrock substituted `{}` for arguments

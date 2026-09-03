@@ -9,6 +9,8 @@ Verifies that:
 
 from __future__ import annotations
 
+import pytest
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_llm.llm.base import LLMMessage, ToolCall
 
 
@@ -188,3 +190,137 @@ class TestLLMMessageSerialization:
         data = {"role": "tool", "content": "result", "name": "search"}
         msg = LLMMessage.from_dict(data)
         assert msg.tool_call_id is None
+
+
+class TestLoadNormalizesParameters:
+    """A ToolCall read back from storage carries the shape its type declares.
+
+    ``from_dict`` built ``parameters`` from the stored value verbatim, so the
+    one guarantee ``ToolCall.parameters: Dict[str, Any]`` makes held for calls
+    a provider had just parsed and not for calls read back from a conversation
+    store or a capture. Consumers splat it either way, so a record persisted
+    before the Ollama adapter was fixed -- arguments JSON-encoded as a string,
+    which is what a model emitting them that way produces -- reloaded as a
+    ``str`` and raised ``TypeError`` at the splat site, a long way from the
+    load that produced it.
+
+    Loading now goes through the same normalization as a live parse. Repair is
+    what makes those legacy records usable rather than merely loadable: the
+    realistic population is JSON strings that decode, because ``to_dict``
+    writes ``parameters`` verbatim and only a bad in-memory call could have
+    persisted a bad value.
+
+    Failing before the fix: every test here except the two controls.
+    """
+
+    def test_a_persisted_json_string_is_repaired(self) -> None:
+        restored = ToolCall.from_dict({"name": "search", "parameters": '{"q": "cats"}'})
+        assert restored.parameters == {"q": "cats"}
+
+    def test_loaded_parameters_are_splattable(self) -> None:
+        """The guarantee consumers actually rely on."""
+        restored = ToolCall.from_dict({"name": "search", "parameters": '{"q": "cats"}'})
+        assert dict(**restored.parameters) == {"q": "cats"}
+
+    def test_unreadable_parameters_raise_at_the_load(self) -> None:
+        """Not at the splat site, and not silently as ``{}``."""
+        with pytest.raises(ValidationError, match="search"):
+            ToolCall.from_dict({"name": "search", "parameters": "not json at all"})
+
+    def test_a_json_scalar_is_not_an_arguments_object(self) -> None:
+        with pytest.raises(ValidationError, match="search"):
+            ToolCall.from_dict({"name": "search", "parameters": "5"})
+
+    def test_a_message_repairs_the_calls_it_carries(self) -> None:
+        msg = LLMMessage.from_dict(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "search", "parameters": '{"q": "cats"}', "id": "c1"}],
+            }
+        )
+        assert msg.tool_calls is not None
+        assert msg.tool_calls[0].parameters == {"q": "cats"}
+
+    def test_a_well_formed_mapping_is_unchanged(self) -> None:
+        """Control: the overwhelmingly common case is untouched."""
+        data = {"name": "search", "parameters": {"q": "cats"}, "id": "c1"}
+        restored = ToolCall.from_dict(data)
+        assert restored.parameters == {"q": "cats"}
+        assert restored.to_dict() == data
+
+    def test_absent_parameters_load_as_an_empty_mapping(self) -> None:
+        """Control: a tool taking no arguments."""
+        assert ToolCall.from_dict({"name": "ping"}).parameters == {}
+
+
+class TestConversationLoadNamesTheBadNode:
+    """An unreadable stored call says which node carries it.
+
+    ``ConversationNode.from_dict`` reconstitutes one node of a stored
+    conversation, and the loader builds every node before it builds the tree,
+    so a call whose arguments cannot be read fails the whole load. That is the
+    right outcome -- the alternative is a conversation whose history is quietly
+    not what was recorded -- but the bare error names only the tool, and a
+    consumer holding a stored conversation needs to know which record to
+    repair. Failing before the fix: the error mentions the tool and not the
+    node.
+    """
+
+    def test_the_error_names_the_node(self) -> None:
+        from dataknobs_llm.conversations.storage import ConversationNode
+
+        with pytest.raises(ValidationError, match="n-7") as excinfo:
+            ConversationNode.from_dict(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{"name": "search", "parameters": "not json"}],
+                    },
+                    "node_id": "n-7",
+                    "timestamp": "2026-01-01T00:00:00",
+                }
+            )
+        # Documented alongside the message, so a caller can find the record
+        # without parsing prose.
+        assert excinfo.value.context["node_id"] == "n-7"
+        assert excinfo.value.context["tool"] == "search"
+
+    def test_the_error_still_names_the_tool(self) -> None:
+        from dataknobs_llm.conversations.storage import ConversationNode
+
+        with pytest.raises(ValidationError, match="search"):
+            ConversationNode.from_dict(
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{"name": "search", "parameters": "not json"}],
+                    },
+                    "node_id": "n-7",
+                    "timestamp": "2026-01-01T00:00:00",
+                }
+            )
+
+    def test_a_readable_node_loads(self) -> None:
+        """Not a control -- the decode reaches through the node too.
+
+        Stored arguments are the encoded form, so this fails before the fix
+        for the same reason the raising cases do.
+        """
+        from dataknobs_llm.conversations.storage import ConversationNode
+
+        node = ConversationNode.from_dict(
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"name": "search", "parameters": '{"q": "cats"}'}],
+                },
+                "node_id": "n-7",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
+        assert node.message.tool_calls is not None
+        assert node.message.tool_calls[0].parameters == {"q": "cats"}

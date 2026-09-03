@@ -316,6 +316,40 @@ class ModelConstraints:
         return replace(self, **changes)
 
 
+def _normalize_tool_call_parameters(tool_name: str, raw: Any) -> Dict[str, Any]:
+    """Coerce a raw arguments value into the mapping ``ToolCall`` declares.
+
+    The single implementation behind :meth:`LLMAdapter.tool_call_parameters`
+    (a provider parsing a live response) and :meth:`ToolCall.from_dict` (a call
+    read back from a conversation store or a capture). Both reach the same
+    value type, so both enforce the same invariant; see the adapter method for
+    the full account of why.
+    """
+    if raw is None or raw == "":
+        return {}
+
+    decoded = raw
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValidationError(
+                f"Tool call '{tool_name}' carries arguments that are not "
+                f"valid JSON, so the call cannot be executed.",
+                context={"tool": tool_name, "arguments_type": "str"},
+            ) from exc
+
+    if not isinstance(decoded, dict):
+        raise ValidationError(
+            f"Tool call '{tool_name}' carries arguments that are not a "
+            f"JSON object, so the call cannot be executed.",
+            context={"tool": tool_name, "arguments_type": type(decoded).__name__},
+        )
+
+    params: Dict[str, Any] = decoded
+    return params
+
+
 @dataclass
 class ToolCall:
     """Represents a tool call from the LLM.
@@ -332,6 +366,23 @@ class ToolCall:
     parameters: Dict[str, Any]
     id: str | None = None
 
+    def __post_init__(self) -> None:
+        """Make the declared mapping true of every instance, however it is built.
+
+        The adapters normalize before they construct, and :meth:`from_dict`
+        normalizes on load, but a call a consumer assembles itself reaches
+        neither -- and a dataclass field annotation is a hint, not a check. So
+        the guarantee held for the doors this package owns and lapsed at the
+        one it does not, which is the door a consumer reaches for.
+
+        Enforcing it here is what lets a reader take the annotation at face
+        value. It also removes the failure that has no error: a call carrying
+        an already-encoded string is JSON-encoded a second time on the way to
+        the provider, and the model is handed a string where the tool declares
+        an object, with nothing raised anywhere along the path.
+        """
+        self.parameters = _normalize_tool_call_parameters(self.name, self.parameters)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to canonical dictionary format for storage/interchange.
 
@@ -347,15 +398,31 @@ class ToolCall:
     def from_dict(cls, data: Dict[str, Any]) -> "ToolCall":
         """Create a ToolCall from a dictionary.
 
+        ``parameters`` is normalized exactly as a provider normalizes a live
+        response, so the mapping this type declares is true of every instance
+        however it was built. Without that the guarantee held only for calls a
+        provider had just parsed: a record written before an adapter enforced
+        the shape read back as whatever was stored, and failed at the splat
+        site rather than at the load. Repairing on the way in is what makes
+        such a record usable rather than merely readable -- the realistic
+        stored form is JSON-encoded arguments, which decode.
+
         Args:
             data: Dictionary with ``name`` (required), ``parameters``, and ``id``.
 
         Returns:
             ToolCall instance.
+
+        Raises:
+            ValidationError: If ``parameters`` is present but is not, and does
+                not decode to, a JSON object. A stored call whose arguments
+                cannot be read cannot be executed either; a caller that needs
+                the record as written already has it, in ``data``.
         """
+        name = data["name"]
         return cls(
-            name=data["name"],
-            parameters=data.get("parameters", {}),
+            name=name,
+            parameters=_normalize_tool_call_parameters(name, data.get("parameters")),
             id=data.get("id"),
         )
 
@@ -3005,29 +3072,7 @@ class LLMAdapter(ABC):
                 ``{}`` -- executes the tool with no arguments at all, which is
                 indistinguishable from a tool that takes none.
         """
-        if raw is None or raw == "":
-            return {}
-
-        decoded = raw
-        if isinstance(raw, str):
-            try:
-                decoded = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise ValidationError(
-                    f"Tool call '{tool_name}' carries arguments that are not "
-                    f"valid JSON, so the call cannot be executed.",
-                    context={"tool": tool_name, "arguments_type": "str"},
-                ) from exc
-
-        if not isinstance(decoded, dict):
-            raise ValidationError(
-                f"Tool call '{tool_name}' carries arguments that are not a "
-                f"JSON object, so the call cannot be executed.",
-                context={"tool": tool_name, "arguments_type": type(decoded).__name__},
-            )
-
-        params: Dict[str, Any] = decoded
-        return params
+        return _normalize_tool_call_parameters(tool_name, raw)
 
     @classmethod
     def build_tool_calls(
