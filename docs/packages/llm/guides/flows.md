@@ -435,9 +435,11 @@ Also available: `flow.get_state(name)` (raises `KeyError`) and
 ## Current limitations
 
 - **A flow needs at least two states.** A single state is both the start and
-  the end of its machine, and that combination is not handled: the run fails
-  with `No valid transitions from state: start`, naming a state your
-  configuration never declared.
+  the end of its machine, and that combination is not handled: the engine finds
+  no start state, falls back to the literal name `start`, and the run fails with
+  `No valid transitions from state: start` — naming a state your configuration
+  never declared. Naming your one state `start` makes that fallback coincide
+  with it and the run succeeds, but only by coincidence; write two states.
 - **`timeout_seconds` is not enforced.** It is declared on `ConversationFlow`
   and read by nothing — neither the adapter nor the engine. Bound a run with
   `max_total_loops`, or impose your own deadline with `asyncio.timeout()`.
