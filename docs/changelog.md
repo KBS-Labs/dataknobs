@@ -5,6 +5,49 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-09-03
+
+### dataknobs-llm [0.10.0]
+
+#### Added
+- `fsm` extra — `dataknobs-fsm` backs `fsm_integration` and `ConversationFlowAdapter` but was declared in no dependency list and no extra, not even `[all]`
+- `mock_tool_arguments()` (`dataknobs_llm.testing`) — deterministic stand-in tool-call arguments derived from a tool's JSON schema, honoring `enum`, nested `properties`, array `items` and `required_only=`
+- `rag_config_from_dict()` (`dataknobs_llm.prompts`) — one stated home for the recognized `RAGConfig` keys; `add_message(rag_configs=...)` parses through it rather than forwarding what it was handed
+- declare `dataknobs-structures`; `Tree` backs `ConversationState` at module scope, so even a bare `import dataknobs_llm` needed it, and it was reaching installs only through `dataknobs-utils`
+
+#### Changed
+- `EchoProvider.set_responses()` accepts any sequence — the parameter was an invariant `List`, so a `list[str]` was a type error at every call site
+
+#### Removed
+- **Breaking:** the deprecated `function_call()` provider API and `LLMResponse.function_call`, with the `adapt_raw_functions()` helpers, the legacy base shim, and the prompt-based tool-calling fallback that lived only on that path — deprecated since v0.4.0 in favor of `complete(tools=...)` and `response.tool_calls`. `LLMMessage.function_call` (the wire format) and `LLMConfig.function_call` (the request parameter) are unaffected
+- `EchoProvider`'s schema-derived mock arguments, returning as `mock_tool_arguments()` — a pure function of the schema, so any provider double can use it
+
+#### Fixed
+- conversation flows never ran a single state, in any release — the adapter emitted a `functions` key `FSMConfig` does not define, then called `process_async` on the *synchronous* facade; nine further failures sat behind those, each reachable only once the one in front of it was removed
+- flow runs drive `AsyncSimpleFSM` and close it, instead of blocking the event loop for their whole duration
+- the state transform and arc condition read the engine's `FunctionContext` as what it is, and call a prompt-builder method that exists — a render failure now fails the run instead of being delivered to the conversation as assistant content reading `[Error in state <name>]`
+- a failed flow raises `OperationError` instead of reporting success and handing back the caller's own input; a tripped loop guard reports its own `stop_reason`; a condition that *raised* is no longer read as a condition that said "no"
+- `ConversationFlowAdapter(llm=...)` reaches `LLMClassifierCondition`, and the adapter's internal keys — `_llm_provider` and the live credential it can hold, `_force_end`, `_error` — no longer reach prompt templates
+- `get_execution_summary()["current_state"]` names the state the flow ended in, not the first one; `execute_flow()` builds nodes at all, having constructed `ConversationNode` with parameters it does not accept
+- an FSM tool or `DeterministicTask` whose callable is an *object* with an `async def __call__` now runs and is awaited — `iscoroutinefunction` answers `False` for that shape, so it was reported successful with an un-awaited coroutine as its value and its body never ran
+- synchronous FSM tools run on a worker thread rather than inline on the event loop
+- `LLMCaller` and `EmbeddingGenerator` require an `AsyncLLMResource` and say so by name — both guarded on the synchronous base and then used the async API only its subclass provides
+- `LLMCaller` names a broken usage contract instead of reporting `tokens_used: None`
+- `PromptBuilder` nested variables resolve as a path of keys — a dotted entry such as `"user.name"` reached `str.format()` under its dotted key, so every such template raised
+- `import dataknobs_llm.conversations` no longer requires `dataknobs-fsm`, which had put `ConversationManager` out of reach on every base install
+- the buffered OpenAI path returns tool calls — `adapt_response` built its `LLMResponse` without them, silently disarming `_analyze_response` and `_warn_if_truncated` on that path
+- unreadable tool-call arguments are settled once on the adapter base, and `ToolCall` normalizes `parameters` however an instance was built — six sites across four providers had answered differently, and a call read back from storage kept whatever was stored
+- `get_total_cost()` and `get_cost_by_branch()` stop at a leaf, where `Tree.children` is `None` rather than empty — cost tracking had never recorded a cost, the walk raising on the first leaf of every branch inside a handler that logged and continued
+- `stream_complete()` reports a `reset()` arriving mid-turn as the reason `complete()` has always given, rather than an `AttributeError`, and no longer hands `None` to post-response middleware that declares a `ConversationState`
+
+#### Documented
+- the conversation-flow pages describe the shipped API — seven published pages taught a `FlowState` shape, a `ConversationManager.create(flow=...)` parameter and an `execute_flow()` returning a response, none of which has ever existed. They now state the thing the old pages inverted: a flow state renders its prompt rather than calling the LLM. Every code block on the two example pages is executed as written before publication
+
+### dataknobs-bots [0.13.0]
+
+#### Changed
+- raised the `dataknobs-llm` floor to `>=0.10.0`
+
 ## Release - 2026-09-02
 
 Four changes run across the workspace in this release.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.10.0 - 2026-09-03
+
 ### Fixed
 
 - **A conversation flow never ran a single state.**
@@ -263,7 +265,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `from dataknobs_llm.fsm_integration import LLMResource` raised
   `ModuleNotFoundError`, and no extra existed that a consumer could have
   installed instead. Install `dataknobs-llm[fsm]`, which `[all]` now includes.
-  The floor is `>=0.4.0`: that release rebased `dataknobs_fsm.functions.base`
+  The floor is `>=0.5.0`: that release rebased `dataknobs_fsm.functions.base`
   onto the shared `dataknobs_common` exception hierarchy, and this package
   raises `ResourceError` and re-exports `TransformError` / `ValidationError`
   from it.

@@ -108,7 +108,7 @@ from dataknobs_llm.testing import (
     tool_call_to_dict,
 )
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 __all__ = [
     # Base classes
