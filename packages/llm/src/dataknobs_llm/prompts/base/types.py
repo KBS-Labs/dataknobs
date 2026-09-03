@@ -149,6 +149,46 @@ class RAGConfig(TypedDict, total=False):
     item_template: str
 
 
+def rag_config_from_dict(data: dict[str, Any]) -> RAGConfig:
+    """Build a :class:`RAGConfig` from a plain mapping.
+
+    ``RAGConfig`` is a ``total=False`` TypedDict, so a ``dict[str, Any]`` from
+    a config file or a caller's keyword argument does not satisfy it — the
+    known keys have to be picked out. Every consumer that reads RAG settings
+    from untyped data goes through here, so the set of keys recognized is
+    stated once.
+
+    Args:
+        data: Mapping holding RAG settings. Unrecognized keys are dropped;
+            nothing downstream reads them.
+
+    Returns:
+        The recognized settings. ``adapter_name`` and ``query`` are always
+        present, defaulting to the empty string so a caller that omits
+        ``adapter_name`` reaches the search's own "missing 'adapter_name'"
+        error rather than a ``KeyError`` here.
+    """
+    rag_config: RAGConfig = {
+        "adapter_name": data.get("adapter_name", ""),
+        "query": data.get("query", ""),
+    }
+
+    # Spelled out rather than looped: a TypedDict key has to be a literal for
+    # the assignment to be checked at all, and the check is the point.
+    if "k" in data:
+        rag_config["k"] = data["k"]
+    if "filters" in data:
+        rag_config["filters"] = data["filters"]
+    if "placeholder" in data:
+        rag_config["placeholder"] = data["placeholder"]
+    if "header" in data:
+        rag_config["header"] = data["header"]
+    if "item_template" in data:
+        rag_config["item_template"] = data["item_template"]
+
+    return rag_config
+
+
 class MessageIndex(TypedDict, total=False):
     """Structure for a message index definition.
 

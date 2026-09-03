@@ -42,6 +42,7 @@ from .base import (
     ValidationConfig,
     PromptTemplateDict,
     RAGConfig,
+    rag_config_from_dict,
     MessageIndex,
     RenderResult,
     AbstractPromptLibrary,
@@ -124,6 +125,7 @@ __all__ = [
     # Types
     "PromptTemplateDict",
     "RAGConfig",
+    "rag_config_from_dict",
     "MessageIndex",
     "RenderResult",
     # Base classes

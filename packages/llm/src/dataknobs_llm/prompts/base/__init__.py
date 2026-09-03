@@ -5,6 +5,7 @@ from .types import (
     ValidationConfig,
     PromptTemplateDict,
     RAGConfig,
+    rag_config_from_dict,
     MessageIndex,
     RenderResult,
     TemplateDict,
@@ -22,6 +23,7 @@ __all__ = [
     # Template types
     "PromptTemplateDict",
     "RAGConfig",
+    "rag_config_from_dict",
     "MessageIndex",
     "RenderResult",
     # Type aliases

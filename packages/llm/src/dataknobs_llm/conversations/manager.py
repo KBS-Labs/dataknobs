@@ -95,7 +95,7 @@ from dataknobs_llm.llm import AsyncLLMProvider, LLMMessage, LLMResponse, LLMStre
 
 if TYPE_CHECKING:
     from dataknobs_llm.summarization import Summarizer
-from dataknobs_llm.prompts import AsyncPromptBuilder
+from dataknobs_llm.prompts import AsyncPromptBuilder, rag_config_from_dict
 from dataknobs_llm.conversations.flow.flow import ConversationFlow
 from dataknobs_llm.conversations.middleware import ConversationMiddleware
 from dataknobs_llm.conversations.storage import (
@@ -489,6 +489,11 @@ class ConversationManager:
         if not content and not prompt_name:
             raise ValueError("Either content or prompt_name must be provided")
 
+        # The message's content, whatever produced it. The guard above makes
+        # this non-empty whenever no prompt is rendered; a rendered prompt
+        # replaces it below.
+        resolved_content: str = content or ""
+
         # Prompt rendering only applies to system/user roles.
         # Other roles (tool, assistant, function) are stored directly.
         rag_metadata_to_store = None
@@ -519,7 +524,7 @@ class ConversationManager:
             else:
                 raise ValueError(f"Cannot render prompt for role '{role}'")
 
-            content = result.content
+            resolved_content = result.content
 
             # Store RAG metadata if caching is enabled and metadata was captured
             if self.cache_rag_results and result.rag_metadata:
@@ -530,32 +535,38 @@ class ConversationManager:
             # template variables (e.g. {{current_date}}) are always resolved,
             # and RAG enhancement is applied when rag_configs are present.
             params = params or {}
+            # The builder takes RAGConfig, and this method's callers pass plain
+            # dicts — from YAML, from a bot's config, from a keyword argument.
+            # One parser for both, so the keys recognized are stated once.
+            parsed_rag_configs = (
+                [rag_config_from_dict(cfg) for cfg in rag_configs] if rag_configs else None
+            )
             if role == "system":
                 result = await self.prompt_builder.render_inline_system_prompt(
                     content,
                     params=params,
-                    rag_configs=rag_configs,
-                    include_rag=include_rag and bool(rag_configs),
+                    rag_configs=parsed_rag_configs,
+                    include_rag=include_rag and bool(parsed_rag_configs),
                     return_rag_metadata=self.cache_rag_results,
                 )
             else:
                 result = await self.prompt_builder.render_inline_user_prompt(
                     content,
                     params=params,
-                    rag_configs=rag_configs,
-                    include_rag=include_rag and bool(rag_configs),
+                    rag_configs=parsed_rag_configs,
+                    include_rag=include_rag and bool(parsed_rag_configs),
                     return_rag_metadata=self.cache_rag_results,
                 )
 
             if result:
-                content = result.content
+                resolved_content = result.content
                 if self.cache_rag_results and result.rag_metadata:
                     rag_metadata_to_store = result.rag_metadata
 
         # Create message
         message = LLMMessage(
             role=role,
-            content=content,
+            content=resolved_content,
             name=name,
             tool_call_id=tool_call_id,
         )
@@ -564,6 +575,16 @@ class ConversationManager:
         node_metadata = metadata or {}
         if rag_metadata_to_store:
             node_metadata["rag_metadata"] = rag_metadata_to_store
+
+        # The node this call creates, whether it roots the conversation or
+        # extends it. Built once so the method can return it directly instead
+        # of looking up the position it just moved to.
+        node = ConversationNode(
+            message=message,
+            node_id="",  # Calculated below, once the node is in the tree
+            prompt_name=prompt_name,
+            metadata=node_metadata,
+        )
 
         # Initialize state if this is the first message
         if self.state is None:
@@ -575,16 +596,9 @@ class ConversationManager:
             # included. Re-materialization after a reset re-captures the
             # already-clean seed, so it stays idempotent.
             self._pre_turn_seed = dict(self._initial_metadata)
-            root_node = ConversationNode(
-                message=message,
-                node_id="",
-                prompt_name=prompt_name,
-                metadata=node_metadata,
-            )
-            tree = Tree(root_node)
             self.state = ConversationState(
                 conversation_id=conversation_id,
-                message_tree=tree,
+                message_tree=Tree(node),
                 current_node_id="",
                 metadata=self._initial_metadata,
             )
@@ -594,25 +608,14 @@ class ConversationManager:
             if current_tree_node is None:
                 raise ValueError(f"Current node '{self.state.current_node_id}' not found")
 
-            # Create new tree node
-            new_tree_node = Tree(
-                ConversationNode(
-                    message=message,
-                    node_id="",  # Will be calculated after adding to tree
-                    prompt_name=prompt_name,
-                    metadata=node_metadata,
-                )
-            )
-
-            # Add to tree
+            new_tree_node = Tree(node)
             current_tree_node.add_child(new_tree_node)
 
             # Calculate and set node_id
-            node_id = calculate_node_id(new_tree_node)
-            new_tree_node.data.node_id = node_id
+            node.node_id = calculate_node_id(new_tree_node)
 
             # Move current position to new node
-            self.state.current_node_id = node_id
+            self.state.current_node_id = node.node_id
 
         # Update timestamp
         self.state.updated_at = datetime.now()
@@ -620,11 +623,32 @@ class ConversationManager:
         # Persist
         await self._save_state()
 
-        return self.state.get_current_node().data
+        return node
 
     # -----------------------------------------------------------------
     # Shared completion helpers (used by both complete & stream_complete)
     # -----------------------------------------------------------------
+
+    def _require_state(self) -> ConversationState:
+        """The conversation state, for the helpers that run inside a turn.
+
+        A completion is three calls — :meth:`_prepare_completion`, the
+        provider, :meth:`_finalize_completion` — and the last two read the
+        state the first one validated. Re-deriving it from ``self`` is what
+        makes it optional again to a reader and to a type checker, so they
+        ask here instead. Raising rather than carrying ``None`` forward also
+        keeps the middleware contract: ``process_request`` and
+        ``process_response`` both take a ``ConversationState``.
+
+        Returns:
+            The current conversation state.
+
+        Raises:
+            ValueError: If the conversation has no messages yet.
+        """
+        if self.state is None:
+            raise ValueError("Cannot complete: no messages in conversation")
+        return self.state
 
     def _prepare_completion(
         self,
@@ -646,10 +670,7 @@ class ConversationManager:
         Raises:
             ValueError: If the conversation has no messages yet.
         """
-        if not self.state:
-            raise ValueError("Cannot complete: no messages in conversation")
-
-        messages = self.state.get_current_messages()
+        messages = self._require_state().get_current_messages()
 
         if system_prompt_override is not None:
             messages = list(messages)  # shallow copy
@@ -676,8 +697,9 @@ class ConversationManager:
         Returns:
             Processed message list.
         """
+        state = self._require_state()
         for mw in self.middleware:
-            messages = await mw.process_request(messages, self.state)
+            messages = await mw.process_request(messages, state)
         return messages
 
     @asynccontextmanager
@@ -774,14 +796,16 @@ class ConversationManager:
         Raises:
             ValueError: If the current tree node cannot be found.
         """
+        state = self._require_state()
+
         # Execute middleware (post-LLM) in reverse order (onion model)
         for mw in reversed(self.middleware):
-            response = await mw.process_response(response, self.state)
+            response = await mw.process_response(response, state)
 
         # Add assistant message as child
-        current_tree_node = self.state.get_current_node()
+        current_tree_node = state.get_current_node()
         if current_tree_node is None:
-            raise ValueError(f"Current node '{self.state.current_node_id}' not found")
+            raise ValueError(f"Current node '{state.current_node_id}' not found")
 
         # Create assistant message node, including tool_calls on the
         # message itself so providers can include them in message history.
@@ -860,8 +884,8 @@ class ConversationManager:
         new_tree_node.data.node_id = node_id
 
         # Move current position
-        self.state.current_node_id = node_id
-        self.state.updated_at = datetime.now()
+        state.current_node_id = node_id
+        state.updated_at = datetime.now()
 
         # Persist
         await self._save_state()
@@ -988,7 +1012,7 @@ class ConversationManager:
         llm_config_overrides: Dict[str, Any] | None = None,
         system_prompt_override: str | None = None,
         tools: list[Any] | None = None,
-        **llm_kwargs,
+        **llm_kwargs: Any,
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Stream LLM completion and add as child of current node.
 
@@ -1548,12 +1572,14 @@ class ConversationManager:
 
         while queue:
             tree_node = queue.popleft()
-            node_data = tree_node.data
+            # ``Tree`` holds arbitrary data, so its type is the tree's caller
+            # to state — every conversation tree holds ConversationNodes.
+            node_data: ConversationNode = tree_node.data
 
             # Check if this node has the same prompt name and role
             if node_data.prompt_name == prompt_name and node_data.message.role == role:
                 # Check if RAG metadata exists
-                rag_metadata = node_data.metadata.get("rag_metadata")
+                rag_metadata: Dict[str, Any] | None = node_data.metadata.get("rag_metadata")
                 if rag_metadata:
                     # Check if query hashes match for all placeholders
                     all_match = True
@@ -1648,7 +1674,9 @@ class ConversationManager:
             raise ValueError(f"Node '{node_id}' not found in conversation tree")
 
         # Return RAG metadata if present
-        return tree_node.data.metadata.get("rag_metadata")
+        node: ConversationNode = tree_node.data
+        metadata: Dict[str, Any] | None = node.metadata.get("rag_metadata")
+        return metadata
 
     async def _save_state(self) -> None:
         """Persist current state to storage."""
@@ -1821,9 +1849,13 @@ class ConversationManager:
         Returns:
             System prompt string.
         """
-        for msg in self.messages:
-            if msg.get("role") == "system":
-                return msg.get("content", "")
+        if not self.state:
+            return "You are a helpful assistant."
+        # The typed nodes rather than the ``messages`` dict view: the same
+        # walk, without flattening a str into an Any on the way past.
+        for node in self.state.get_current_nodes():
+            if node.message.role == "system":
+                return node.message.content
         return "You are a helpful assistant."
 
     def get_metadata(
@@ -2187,7 +2219,9 @@ class ConversationManager:
 
         total = 0.0
 
-        # Walk the tree and sum costs from all assistant message nodes
+        # Walk the tree and sum costs from all assistant message nodes.
+        # ``Tree.children`` is None at a leaf, not an empty list, so every
+        # branch of the walk ends on one.
         def walk_tree(node: Tree) -> None:
             nonlocal total
             if node.data and node.data.metadata:
@@ -2195,7 +2229,7 @@ class ConversationManager:
                 if cost is not None:
                     total += cost
 
-            for child in node.children:
+            for child in node.children or ():
                 walk_tree(child)
 
         walk_tree(self.state.message_tree)
@@ -2237,8 +2271,12 @@ class ConversationManager:
         current = self.state.message_tree
 
         for idx in indexes:
-            if idx < len(current.children):
-                current = current.children[idx]
+            # None at a leaf, so a node id that runs deeper than the tree
+            # stops here — the same leniency this loop already applies to an
+            # index past the end of a level.
+            children = current.children or ()
+            if idx < len(children):
+                current = children[idx]
                 if current.data and current.data.metadata:
                     cost = current.data.metadata.get("cost_usd")
                     if cost is not None:

@@ -116,6 +116,13 @@ Resource adapters provide data for RAG and template variables.
       show_source: true
       heading_level: 3
 
+### rag_config_from_dict
+
+::: dataknobs_llm.prompts.rag_config_from_dict
+    options:
+      show_source: true
+      heading_level: 3
+
 ## Usage Examples
 
 ### Basic Template Loading
