@@ -500,8 +500,8 @@ try:
     print(f"Total conversation cost: ${response.cumulative_cost_usd:.4f}")
 
     # Check if tools were used
-    if response.function_call:
-        print(f"Function called: {response.function_call['name']}")
+    for call in response.tool_calls or []:
+        print(f"Tool called: {call.name} with {call.parameters}")
 
 except RateLimitError:
     print("Rate limit exceeded, please try again later")

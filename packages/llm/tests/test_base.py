@@ -67,7 +67,7 @@ def test_llm_response_basic():
     assert response.model == "gpt-4"
     assert response.finish_reason is None
     assert response.usage is None
-    assert response.function_call is None
+    assert response.tool_calls is None
     assert response.metadata == {}
     assert isinstance(response.created_at, datetime)
 

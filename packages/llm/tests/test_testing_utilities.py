@@ -9,6 +9,7 @@ from dataknobs_llm.testing import (
     tool_call_response,
     multi_tool_response,
     extraction_response,
+    mock_tool_arguments,
     ResponseSequenceBuilder,
 )
 from dataknobs_llm.llm.providers import EchoProvider
@@ -377,3 +378,95 @@ class TestEchoProviderIntegration:
         # Second call returns text
         response2 = await provider.complete("Continue")
         assert response2.content == "All done!"
+
+
+class TestMockToolArguments:
+    """Schema-derived arguments, so a tool test does not hand-write them.
+
+    The deprecated ``function_call()`` synthesized arguments from a function's
+    JSON schema; ``complete(tools=...)`` never had that, so removing the method
+    took the capability with it. It comes back here rather than on
+    ``EchoProvider`` because deriving a value from a schema is a pure function
+    of the schema: any provider double can use it, and a consumer testing a
+    tool-using bot can call it directly.
+    """
+
+    def test_a_value_per_declared_property(self) -> None:
+        args = mock_tool_arguments(
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "fuzzy": {"type": "boolean"},
+                },
+            }
+        )
+        assert set(args) == {"query", "limit", "fuzzy"}
+        assert isinstance(args["query"], str)
+        assert isinstance(args["limit"], int)
+        assert isinstance(args["fuzzy"], bool)
+
+    def test_same_seed_same_arguments(self) -> None:
+        schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
+        assert mock_tool_arguments(schema, seed="a") == mock_tool_arguments(schema, seed="a")
+
+    def test_different_seeds_can_differ(self) -> None:
+        schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
+        seeds = {mock_tool_arguments(schema, seed=str(i))["n"] for i in range(25)}
+        assert len(seeds) > 1
+
+    def test_an_enum_property_gets_a_permitted_value(self) -> None:
+        """A value outside the enum is invalid against the schema it came from."""
+        args = mock_tool_arguments(
+            {
+                "type": "object",
+                "properties": {"unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}},
+            }
+        )
+        assert args["unit"] in ("celsius", "fahrenheit")
+
+    def test_a_nested_object_is_built_from_its_own_schema(self) -> None:
+        args = mock_tool_arguments(
+            {
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "object",
+                        "properties": {"since": {"type": "string"}},
+                    }
+                },
+            }
+        )
+        assert isinstance(args["filter"], dict)
+        assert isinstance(args["filter"]["since"], str)
+
+    def test_an_array_element_matches_the_items_schema(self) -> None:
+        args = mock_tool_arguments(
+            {
+                "type": "object",
+                "properties": {"ids": {"type": "array", "items": {"type": "integer"}}},
+            }
+        )
+        assert isinstance(args["ids"], list)
+        assert args["ids"] and all(isinstance(v, int) for v in args["ids"])
+
+    def test_only_required_when_asked(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+            "required": ["a"],
+        }
+        assert set(mock_tool_arguments(schema, required_only=True)) == {"a"}
+        assert set(mock_tool_arguments(schema)) == {"a", "b"}
+
+    def test_a_schema_with_no_properties_yields_no_arguments(self) -> None:
+        assert mock_tool_arguments({"type": "object"}) == {}
+
+    def test_composes_with_tool_call_response(self) -> None:
+        """The documented replacement for the removed synthesizer."""
+        schema = {"type": "object", "properties": {"query": {"type": "string"}}}
+        response = tool_call_response("search", mock_tool_arguments(schema))
+        assert response.tool_calls is not None
+        assert response.tool_calls[0].name == "search"
+        assert set(response.tool_calls[0].parameters) == {"query"}

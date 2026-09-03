@@ -153,6 +153,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both remain importable from `dataknobs_llm.conversations.flow` exactly as
   before, and nothing that already had the engine changes behaviour.
 
+- **Ollama tool-call arguments could reach a consumer as a string.**
+  `OllamaAdapter.adapt_response` read `message.tool_calls[].function.arguments`
+  straight into `ToolCall.parameters` — declared `Dict[str, Any]`, enforced
+  nowhere — with no shape check, so a model emitting JSON-encoded arguments
+  produced a tool call that raised `TypeError: dict() argument after ** must be
+  a mapping, not str` where consumers splat it, a long way from the parse.
+  Ollama was the only adapter without a guard. The shape is now settled once,
+  on the shared adapter base: `LLMAdapter.tool_call_parameters()` passes a
+  mapping through, decodes a JSON string, treats absent arguments as `{}`, and
+  raises `ValidationError` on arguments that are present but do not decode to
+  an object — reporting the unusable tool call where it is parsed rather than
+  substituting `{}` and executing the tool with no arguments at all.
+
+- **The buffered OpenAI path dropped every tool call.**
+  `OpenAIAdapter.adapt_response` built its `LLMResponse` without a `tool_calls`
+  argument at all, so `OpenAIProvider.complete(tools=[...])` always returned
+  `tool_calls=None` while the provider advertised
+  `ModelCapability.FUNCTION_CALLING` for the model family. Only the streaming
+  path surfaced calls. Two base-class hooks read `response.tool_calls` and were
+  silently disarmed on that path as a result: `_analyze_response` labelled a
+  tool-call-only turn `thinking_only` (empty content, tokens spent, no visible
+  calls), and `_warn_if_truncated` logged the dangerous truncated-mid-tool-call
+  case at `info` as though it were plain truncated prose. All three now behave
+  as they always did for Anthropic, Bedrock and Ollama.
+
+- **Unreadable tool-call arguments were answered three different ways.** A
+  `ToolCall` is built at six sites across four providers, and each had settled
+  the question locally: Anthropic and Bedrock substituted `{}` for arguments
+  that were not a mapping, which executes the tool with no arguments at all and
+  is indistinguishable from a tool that takes none; the OpenAI and Bedrock
+  streaming accumulators called `json.loads` unguarded, so malformed arguments
+  raised `json.JSONDecodeError` through the provider abstraction instead of the
+  `ValidationError` every other parse failure in this package raises. All six
+  sites now build their calls through `LLMAdapter.build_tool_calls()`, which
+  normalizes each call's arguments through `tool_call_parameters()` and returns
+  `None` rather than `[]` for a turn with no calls. An empty vendor call id
+  becomes `None`, which it already did on two of the six paths.
+
 ### Added
 
 - **`fsm` extra.** `dataknobs-fsm` backs `dataknobs_llm.fsm_integration`
@@ -168,12 +206,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises `ResourceError` and re-exports `TransformError` / `ValidationError`
   from it.
 
+- **`mock_tool_arguments()`** (`dataknobs_llm.testing`) derives stand-in
+  arguments from a tool's JSON schema, so a test scripting a tool call does not
+  transcribe them by hand:
+  `tool_call_response(tool.name, mock_tool_arguments(tool.schema))`. Values are
+  derived from a seed and the property's path, so a given schema and seed
+  always produce the same arguments; `enum` members, nested `properties` and
+  array `items` are honoured, and `required_only=True` emits only the required
+  properties. It replaces — and generalizes past `EchoProvider` — the schema
+  synthesis that the removed `function_call()` carried (see Removed).
+
 - **`dataknobs-structures` is now declared.** `Tree` backs `ConversationState`
   and is imported at module scope by `conversations/manager.py` and
   `conversations/storage.py`, so every subpackage — including a bare
   `import dataknobs_llm` — requires it. It was reaching installs only through
   `dataknobs-utils`' own dependency list, which is not a guarantee this
   package's metadata made.
+
+### Removed
+
+- **The deprecated `function_call()` provider API.** Removed from
+  `AsyncLLMProvider` and `SyncLLMProvider`, from all six provider
+  implementations, from `SyncProviderAdapter`, `CachingEmbedProvider` and
+  `CapturingProvider`, together with the `adapt_raw_functions()` adapter
+  helpers and the `_attach_legacy_function_call()` base shim that existed only
+  to serve it. Deprecated since v0.4.0 in favour of `complete(tools=...)`,
+  which every provider supports and which returns the model's requests on
+  `LLMResponse.tool_calls`.
+
+  It was not merely redundant. Ollama's override re-implemented response
+  parsing inline rather than delegating to its own adapter, and on a
+  two-tool-call turn returned `tool_calls=None`, discarded every call after
+  the first, reported `truncated=False` on a `done_reason: "length"` payload
+  and carried an empty `metadata` — all four of which `adapt_response()`, 900
+  lines above it in the same file, already got right. Migration: pass `Tool`
+  objects to `complete(tools=[...])` and read `response.tool_calls`, a list of
+  `ToolCall` with `.name` and `.parameters`.
+
+- **`LLMResponse.function_call`.** The legacy single-call field that
+  `function_call()` populated. `LLMResponse.tool_calls` carries every tool call
+  the model requested, is populated by every provider, and is the only shape
+  consumers need. `LLMMessage.function_call` is a different field — the
+  assistant-message wire format — and is unaffected, as is the
+  `LLMConfig.function_call` request parameter.
+
+- **`EchoProvider`'s schema-derived mock arguments.** Its `function_call()`
+  override generated a deterministic value per declared property from the
+  function's JSON schema, which nothing on the `complete(tools=...)` path ever
+  offered. The capability is back as `mock_tool_arguments()` (see Added),
+  where it is a pure function of the schema rather than provider behaviour, so
+  any provider double — or a consumer's own test — can use it.
+
+- **Prompt-based tool-calling fallback.** Ollama and Anthropic answered a
+  "model does not support native tools" 400 by re-issuing the request with a
+  system prompt describing the functions and parsing a tool call out of the
+  reply. It lived only on the removed method, so it was never available to
+  `complete(tools=...)` on any provider.
+
+### Changed
+
+- **`EchoProvider.set_responses()` accepts any sequence.** The parameter was
+  `List[str | LLMResponse | ErrorResponse]`, and `list` is invariant, so
+  passing a `list[str]` or a `list[LLMResponse]` was a type error at every
+  call site even though the method only copies what it is given.
 
 ## v0.9.0 - 2026-09-02
 

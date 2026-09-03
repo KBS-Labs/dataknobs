@@ -66,7 +66,7 @@ def make_openai_response(
     model: str = "gpt-4",
 ) -> object:
     """Build a minimal object with the OpenAI response attribute shape."""
-    message = types.SimpleNamespace(content=content, function_call=None)
+    message = types.SimpleNamespace(content=content)
     choice = types.SimpleNamespace(message=message, finish_reason=finish_reason)
     usage = types.SimpleNamespace(prompt_tokens=5, completion_tokens=7, total_tokens=12)
     return types.SimpleNamespace(choices=[choice], model=model, usage=usage)
@@ -295,12 +295,11 @@ class TestBedrockAdaptResponse:
 
 
 # ---------------------------------------------------------------------------
-# Rebuild / deprecated-function_call paths preserve the flag
+# Rebuild paths preserve the flag
 #
 # The buffered/streaming complete paths route the response through
-# _analyze_response, but two paths rebuild the response and could silently drop
-# a newly-added field (or skip the warn hook): Ollama's <think>-tag extraction,
-# and the deprecated function_call() entry point that surfaces a legacy dict.
+# _analyze_response, but Ollama's <think>-tag extraction rebuilds the response
+# afterwards and could silently drop a newly-added field, or skip the warn hook.
 # ---------------------------------------------------------------------------
 
 
@@ -348,15 +347,14 @@ class TestOllamaThinkTagReconstruction:
         )
 
 
-class TestAnthropicFunctionCallTruncation:
-    """The deprecated ``function_call()`` path preserves truncation + warns.
+class TestAnthropicProviderTruncation:
+    """The buffered provider path preserves truncation + warns.
 
-    ``function_call()`` parses via ``adapt_response`` (which sets ``truncated``
-    and ``metadata['raw_finish_reason']``) then surfaces a legacy
-    ``function_call`` dict. Reproduce-first: FAILS when it rebuilds a fresh
-    ``LLMResponse`` dropping ``truncated`` / ``metadata`` and skipping the warn
-    hook; passes when it routes through the shared ``_analyze_response`` choke
-    point.
+    ``complete()`` parses via ``adapt_response`` (which sets ``truncated`` and
+    ``metadata['raw_finish_reason']``) and routes the result through the shared
+    ``_analyze_response`` choke point, which fires the warn hook. This asserts
+    the whole path end to end, not just the adapter half that
+    :class:`TestAnthropicAdaptResponse` covers.
     """
 
     def _provider_returning(self, response: object) -> AnthropicProvider:
@@ -383,16 +381,12 @@ class TestAnthropicFunctionCallTruncation:
             )
         )
         with caplog.at_level(logging.WARNING, logger="dataknobs_llm.llm.base"):
-            with pytest.warns(DeprecationWarning):
-                result = await provider.function_call(
-                    [LLMMessage(role="user", content="go")],
-                    [{"name": "submit", "description": "d", "parameters": {}}],
-                )
+            result = await provider.complete([LLMMessage(role="user", content="go")])
         assert result.truncated is True
         assert result.finish_reason == "length"
         assert result.metadata["raw_finish_reason"] == "max_tokens"
-        # Legacy dict still surfaced for backward compatibility.
-        assert result.function_call == {"name": "submit", "arguments": {}}
+        assert result.tool_calls is not None
+        assert [tc.name for tc in result.tool_calls] == ["submit"]
         # The dangerous truncated tool-call turn warned.
         assert any(
             "mid tool-call" in r.message and r.levelno == logging.WARNING for r in caplog.records

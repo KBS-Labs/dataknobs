@@ -47,7 +47,6 @@ See Also:
 import json
 import logging
 import os
-import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -57,7 +56,6 @@ from ..base import (
     LLMStreamResponse,
     AsyncLLMProvider,
     ModelCapability,
-    ToolCall,
     LLMAdapter,
     normalize_llm_config,
 )
@@ -214,9 +212,17 @@ class OpenAIAdapter(LLMAdapter):
                         "type": "function",
                         "function": {
                             "name": tc.name,
+                            # ``ToolCall.parameters`` is declared
+                            # ``Dict[str, Any]`` and every adapter now
+                            # produces one, so mypy reads the ``str`` arm as
+                            # unreachable. It is not: ``ToolCall.from_dict``
+                            # does not normalize, so a stored conversation or
+                            # a consumer-built call can still carry a string,
+                            # and OpenAI's wire format wants exactly that --
+                            # re-encoding it would double-escape the JSON.
                             "arguments": (
                                 tc.parameters
-                                if isinstance(tc.parameters, str)
+                                if isinstance(tc.parameters, str)  # type: ignore[unreachable]
                                 else json.dumps(tc.parameters)
                             ),
                         },
@@ -227,12 +233,28 @@ class OpenAIAdapter(LLMAdapter):
         return adapted
 
     def adapt_response(self, response: Any) -> LLMResponse:
-        """Convert OpenAI response to standard format."""
+        """Convert OpenAI response to standard format.
+
+        Args:
+            response: OpenAI ``ChatCompletion`` object from the SDK.
+
+        Returns:
+            Standard ``LLMResponse`` with content, tool_calls, and usage.
+
+        Raises:
+            ValidationError: If a tool call carries arguments that are not a
+                JSON object (see :meth:`LLMAdapter.tool_call_parameters`).
+        """
         choice = response.choices[0]
         message = choice.message
 
         return LLMResponse(
             content=message.content or "",
+            # OpenAI sends each call's arguments as a JSON-encoded string.
+            tool_calls=self.build_tool_calls(
+                (tc.function.name, tc.function.arguments, tc.id)
+                for tc in (getattr(message, "tool_calls", None) or [])
+            ),
             model=response.model,
             finish_reason=choice.finish_reason,
             # OpenAI signals a token-budget cut-off with finish_reason
@@ -246,7 +268,6 @@ class OpenAIAdapter(LLMAdapter):
             }
             if response.usage
             else None,
-            function_call=message.function_call if hasattr(message, "function_call") else None,
         )
 
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
@@ -371,21 +392,27 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
             api_key="azure-key"
         )
 
-        # Function calling
-        functions = [{
-            "name": "search",
-            "description": "Search for information",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"}
-                }
-            }
-        }]
+        # Tool calling
+        from dataknobs_llm import Tool
 
-        response = await llm.function_call(messages, functions)
-        if response.function_call:
-            print(f"Call: {response.function_call['name']}")
+        class SearchTool(Tool):
+            def __init__(self):
+                super().__init__("search", "Search for information")
+
+            @property
+            def schema(self):
+                return {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                }
+
+            async def execute(self, query: str):
+                return f"results for {query}"
+
+        response = await llm.complete(messages, tools=[SearchTool()])
+        for call in response.tool_calls or []:
+            print(f"Call: {call.name} with {call.parameters}")
         ```
 
     Args:
@@ -481,8 +508,8 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
     ) -> Dict[str, Any]:
         """Build OpenAI API params with the family's request-shape rules applied.
 
-        Single choke point shared by ``complete`` / ``stream_complete`` /
-        ``function_call``. Delegates the request-shaping front-half to the base
+        Single choke point shared by ``complete`` and ``stream_complete``.
+        Delegates the request-shaping front-half to the base
         :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
         once, folds shaped per-call kwargs into the config, drops family-rejected
         sampling params, clamps ``max_tokens`` to the ceiling — all in canonical
@@ -676,14 +703,10 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 # Build tool_calls on final chunk
                 accumulated_tool_calls = None
                 if finish_reason is not None and tool_call_accumulators:
-                    accumulated_tool_calls = [
-                        ToolCall(
-                            name=acc["name"],
-                            parameters=json.loads(acc["arguments"]) if acc["arguments"] else {},
-                            id=acc["id"] or None,
-                        )
+                    accumulated_tool_calls = self.adapter.build_tool_calls(
+                        (acc["name"], acc["arguments"], acc["id"])
                         for _, acc in sorted(tool_call_accumulators.items())
-                    ]
+                    )
 
                 chunk_resp = LLMStreamResponse(
                     delta=content,
@@ -741,33 +764,3 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         embeddings = [e.embedding for e in response.data]
         self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
-
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling."""
-        warnings.warn(
-            "function_call() is deprecated, use complete(tools=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not self._is_initialized:
-            await self.initialize()
-
-        # Add system prompt if configured
-        if self.config.system_prompt and messages[0].role != "system":
-            messages.insert(0, LLMMessage(role="system", content=self.config.system_prompt))
-
-        # Adapt messages and config (drops rejected params, clamps max_tokens,
-        # applies the family's wire-param remaps — no-op for permissive models).
-        adapted_messages = self.adapter.adapt_messages(messages)
-        params = self._build_api_kwargs(self.config, kwargs)
-        params["functions"] = functions
-        params["function_call"] = kwargs.get("function_call", "auto")
-
-        # Make API call
-        response = await self._call_api(
-            lambda: self._client.chat.completions.create(messages=adapted_messages, **params)
-        )
-
-        return self._analyze_response(self.adapter.adapt_response(response))

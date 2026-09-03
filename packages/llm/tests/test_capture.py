@@ -191,7 +191,6 @@ class TestLLMResponseSerialization:
         assert "usage" not in d
         assert "tool_calls" not in d
         assert "cost_usd" not in d
-        assert "function_call" not in d
 
     def test_response_with_metadata(self):
         resp = LLMResponse(content="Hi", model="test", metadata={"provider": "ollama"})

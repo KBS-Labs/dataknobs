@@ -36,6 +36,7 @@ Capture example:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -74,6 +75,7 @@ __all__ = [
     "llm_message_to_dict",
     "llm_response_from_dict",
     "llm_response_to_dict",
+    "mock_tool_arguments",
     "multi_tool_response",
     "text_response",
     "tool_call_from_dict",
@@ -186,6 +188,117 @@ def tool_call_response(
         finish_reason="tool_calls",
         truncated=truncated,
         tool_calls=tools,
+    )
+
+
+def _mock_scalar(schema: Dict[str, Any], seed: str, path: str) -> Any:
+    """Build one deterministic value for a leaf schema node."""
+    enum = schema.get("enum")
+    if enum:
+        # A value outside the enum is invalid against the very schema it was
+        # derived from, so the enum wins over the declared type.
+        digest = hashlib.sha256(f"{seed}:{path}".encode()).digest()
+        return enum[digest[0] % len(enum)]
+
+    json_type = schema.get("type", "string")
+    if json_type == "string":
+        return f"mock_{path.rsplit('.', 1)[-1]}"
+    if json_type in ("integer", "number"):
+        digest = hashlib.sha256(f"{seed}:{path}".encode()).digest()
+        value = int.from_bytes(digest[:4], "big") % 100
+        return value if json_type == "integer" else value + 0.5
+    if json_type == "boolean":
+        return hashlib.sha256(f"{seed}:{path}".encode()).digest()[0] % 2 == 0
+    if json_type == "null":
+        return None
+    return None
+
+
+def _mock_value(schema: Dict[str, Any], seed: str, path: str, depth: int) -> Any:
+    """Build one deterministic value for any schema node."""
+    json_type = schema.get("type")
+    if depth > 0 and not schema.get("enum"):
+        if json_type == "object":
+            return _mock_properties(schema, seed=seed, prefix=path, depth=depth - 1)
+        if json_type == "array":
+            items = schema.get("items") or {"type": "string"}
+            return [_mock_value(items, seed, f"{path}[0]", depth - 1)]
+    if json_type == "object":
+        return {}
+    if json_type == "array":
+        return []
+    return _mock_scalar(schema, seed, path)
+
+
+def _mock_properties(
+    schema: Dict[str, Any],
+    *,
+    seed: str,
+    prefix: str,
+    depth: int,
+    required_only: bool = False,
+) -> Dict[str, Any]:
+    properties: Dict[str, Any] = schema.get("properties") or {}
+    required = set(schema.get("required") or ())
+    return {
+        name: _mock_value(
+            subschema if isinstance(subschema, dict) else {},
+            seed,
+            f"{prefix}.{name}" if prefix else name,
+            depth,
+        )
+        for name, subschema in properties.items()
+        if not required_only or name in required
+    }
+
+
+def mock_tool_arguments(
+    schema: Dict[str, Any],
+    *,
+    seed: str = "",
+    required_only: bool = False,
+    max_depth: int = 4,
+) -> Dict[str, Any]:
+    """Derive deterministic stand-in arguments from a tool's JSON schema.
+
+    Scripting a tool call means writing its arguments, and for a tool whose
+    schema has more than two or three properties that is transcription rather
+    than test intent -- the test usually cares *that* the tool was called with
+    schema-shaped arguments, not what the values were. Pair it with
+    :func:`tool_call_response`::
+
+        response = tool_call_response(tool.name, mock_tool_arguments(tool.schema))
+
+    Values are derived from the seed and the property's path, so a given
+    schema and seed always produce the same arguments, and two properties of
+    the same type in the same schema do not collide.
+
+    The values satisfy the schema's *shape* -- declared type, ``enum``
+    membership, nested ``properties`` and array ``items``. They are not
+    validated against ``format``, numeric bounds, or ``pattern``, so a tool
+    that enforces those needs arguments written by hand.
+
+    Args:
+        schema: A JSON-schema object, as returned by :attr:`Tool.schema`.
+        seed: Varies the generated values. The default produces the same
+            arguments on every run, which is what a test assertion wants.
+        required_only: Emit only the properties listed in ``required``.
+            Useful for exercising a tool's handling of absent optionals.
+        max_depth: How far to descend into nested objects and arrays before
+            emitting an empty container. Guards against a self-referential
+            schema.
+
+    Returns:
+        A mapping from property name to a stand-in value, ready to splat into
+        ``tool.execute(**arguments)``. A schema declaring no properties yields
+        ``{}``, which is what a tool taking no arguments is called with.
+    """
+    return _mock_properties(
+        schema,
+        seed=seed,
+        prefix="",
+        depth=max_depth,
+        required_only=required_only,
     )
 
 
@@ -578,8 +691,6 @@ def llm_response_to_dict(resp: LLMResponse) -> dict[str, Any]:
         d["truncated"] = True
     if resp.usage is not None:
         d["usage"] = resp.usage
-    if resp.function_call is not None:
-        d["function_call"] = resp.function_call
     if resp.tool_calls is not None:
         d["tool_calls"] = [tool_call_to_dict(tc) for tc in resp.tool_calls]
     if resp.metadata:
@@ -608,7 +719,6 @@ def llm_response_from_dict(d: dict[str, Any]) -> LLMResponse:
         finish_reason=d.get("finish_reason"),
         truncated=d.get("truncated", False),
         usage=d.get("usage"),
-        function_call=d.get("function_call"),
         tool_calls=tool_calls,
         metadata=d.get("metadata", {}),
         cost_usd=d.get("cost_usd"),
@@ -696,11 +806,11 @@ class CapturingProvider(AsyncLLMProvider):
 
     # -- Delegated lifecycle methods --
 
-    async def initialize(self) -> None:
+    async def initialize(self) -> None:  # type: ignore[override]
         """Delegate initialization to the wrapped provider."""
         await self._delegate.initialize()
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # type: ignore[override]
         """Delegate close to the wrapped provider."""
         await self._delegate.close()
 
@@ -835,32 +945,6 @@ class CapturingProvider(AsyncLLMProvider):
     ) -> Union[List[float], List[List[float]]]:
         """Delegate embedding to the wrapped provider (not captured)."""
         return await self._delegate.embed(texts, **kwargs)
-
-    async def function_call(
-        self,
-        messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Delegate function calling to the wrapped provider and capture the call."""
-        serialized_msgs = [llm_message_to_dict(m) for m in messages]
-
-        start = time.monotonic()
-        response = await self._delegate.function_call(messages, functions, **kwargs)
-        duration = time.monotonic() - start
-
-        self._captured_calls.append(
-            CapturedCall(
-                role=self._role,
-                messages=serialized_msgs,
-                response=llm_response_to_dict(response),
-                tools=functions,
-                duration_seconds=round(duration, 4),
-                call_index=len(self._captured_calls),
-            )
-        )
-
-        return response
 
 
 # =============================================================================

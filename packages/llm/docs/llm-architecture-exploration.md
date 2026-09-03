@@ -34,7 +34,7 @@ LLMMiddleware (Protocol) - Request/response processing
   - Fields: `role` (system/user/assistant/function), `content`, `name`, `function_call`, `metadata`
   
 - **LLMResponse**: Response from LLM
-  - Fields: `content`, `model`, `finish_reason`, `usage`, `function_call`, `metadata`, `created_at`
+  - Fields: `content`, `model`, `finish_reason`, `truncated`, `usage`, `tool_calls`, `metadata`, `created_at`
   
 - **LLMStreamResponse**: Streaming response chunks
   - Fields: `delta`, `is_final`, `finish_reason`, `usage`, `metadata`
@@ -57,8 +57,9 @@ async def stream_complete(messages: List[LLMMessage]) -> AsyncIterator[LLMStream
 # Embeddings
 async def embed(texts: Union[str, List[str]]) -> Union[List[float], List[List[float]]]
 
-# Function Calling
-async def function_call(messages: List[LLMMessage], functions: List[Dict]) -> LLMResponse
+# Tool calling — pass Tool objects to complete(); the model's requests
+# come back on LLMResponse.tool_calls
+async def complete(messages: List[LLMMessage], tools: list[Tool]) -> LLMResponse
 
 # Prompt Integration
 async def render_and_complete(prompt_name: str, params: Dict, prompt_type: str) -> LLMResponse
@@ -568,12 +569,13 @@ class LLMConfig:
     function_call: Union[str, Dict[str, str]] | None  # 'auto', 'none', or {name: ...}
 
 class LLMResponse:
-    function_call: Dict[str, Any] | None
+    tool_calls: list[ToolCall] | None
 
 class AsyncLLMProvider:
-    async def function_call(
+    async def complete(
         messages: List[LLMMessage],
-        functions: List[Dict[str, Any]],
+        config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> LLMResponse
 ```

@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Union, AsyncIterator
 
@@ -193,13 +192,16 @@ class EchoProvider(AsyncLLMProvider):
 
     def set_responses(
         self,
-        responses: List[Union[str, LLMResponse, ErrorResponse]],
+        responses: Sequence[Union[str, LLMResponse, ErrorResponse]],
         cycle: bool = False,
     ) -> EchoProvider:
         """Set queue of responses to return in order.
 
         Args:
-            responses: List of response strings or LLMResponse objects
+            responses: Sequence of response strings or LLMResponse objects.
+                Read-only -- the queue is a copy, so a caller may pass a
+                narrower list (``list[str]``) without the invariance error a
+                ``List[...]`` parameter would raise.
             cycle: If True, cycle through responses instead of exhausting
 
         Returns:
@@ -614,9 +616,9 @@ class EchoProvider(AsyncLLMProvider):
     async def initialize(self) -> None:  # type: ignore[override]
         """Initialize echo provider. Tracks call count via ``init_count``.
 
-        Note: ``complete()``, ``stream_complete()``, ``embed()``, and
-        ``function_call()`` auto-call this method if the provider is not
-        yet initialized, which also increments ``init_count``.
+        Note: ``complete()``, ``stream_complete()``, and ``embed()``
+        auto-call this method if the provider is not yet initialized, which
+        also increments ``init_count``.
         """
         self._init_count += 1
         self._is_initialized = True
@@ -875,82 +877,3 @@ class EchoProvider(AsyncLLMProvider):
             return self._generate_embedding(texts, width)
         else:
             return [self._generate_embedding(text, width) for text in texts]
-
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Mock function calling with deterministic response.
-
-        Args:
-            messages: Conversation messages
-            functions: Available functions
-            **kwargs: Additional parameters (ignored)
-
-        Returns:
-            Response with mock function call
-        """
-        warnings.warn(
-            "function_call() is deprecated, use complete(tools=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not self._is_initialized:
-            await self.initialize()
-
-        # Get last user message
-        user_messages = [msg for msg in messages if msg.role == "user"]
-        user_content = user_messages[-1].content if user_messages else ""
-
-        # Mock function call: use first function with mock arguments
-        if functions:
-            first_func = functions[0]
-            func_name = first_func.get("name", "unknown_function")
-
-            # Generate mock arguments based on parameters schema
-            params = first_func.get("parameters", {})
-            properties = params.get("properties", {})
-
-            mock_args: Dict[str, Any] = {}
-            for param_name, param_schema in properties.items():
-                param_type = param_schema.get("type", "string")
-
-                # Generate mock value based on type
-                if param_type == "string":
-                    mock_args[param_name] = f"mock_{param_name}_from_echo"
-                elif param_type == "number" or param_type == "integer":
-                    # Use hash to generate deterministic number
-                    hash_val = int(hashlib.md5(user_content.encode()).hexdigest()[:8], 16)
-                    mock_args[param_name] = hash_val % 100
-                elif param_type == "boolean":
-                    # Deterministic boolean based on hash
-                    hash_val = int(hashlib.md5(user_content.encode()).hexdigest()[:2], 16)
-                    mock_args[param_name] = hash_val % 2 == 0
-                elif param_type == "array":
-                    mock_args[param_name] = ["mock_item_1", "mock_item_2"]
-                elif param_type == "object":
-                    mock_args[param_name] = {"mock_key": "mock_value"}
-                else:
-                    mock_args[param_name] = None
-
-            # Build response with function call
-            content = f"{self.echo_prefix}Calling function '{func_name}'"
-
-            prompt_tokens = sum(self._count_tokens(msg.content) for msg in messages)
-            completion_tokens = self._count_tokens(content)
-
-            return LLMResponse(
-                content=content,
-                model=self.config.model or "echo-model",
-                finish_reason="function_call",
-                usage={
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                }
-                if self.mock_tokens
-                else None,
-                function_call={"name": func_name, "arguments": mock_args},
-            )
-        else:
-            # No functions provided, just echo
-            return await self.complete(messages, **kwargs)

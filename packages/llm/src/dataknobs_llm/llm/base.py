@@ -56,11 +56,12 @@ See Also:
 """
 
 import asyncio
+import json
 import logging
 import math
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -185,8 +186,10 @@ class ModelCapability(Enum):
                 print(chunk.delta, end="")
 
         if ModelCapability.FUNCTION_CALLING in capabilities:
-            # Use function calling
-            response = await llm.function_call(messages, functions)
+            # Pass Tool objects; the model's requests come back on tool_calls
+            response = await llm.complete(messages, tools=[search_tool])
+            for call in response.tool_calls or []:
+                print(call.name, call.parameters)
         ```
     """
 
@@ -495,7 +498,6 @@ class LLMResponse:
             set this consistently so a consumer can honor it without knowing
             each provider's stop-reason vocabulary.
         usage: Token usage stats (prompt_tokens, completion_tokens, total_tokens)
-        function_call: Function call data if model requested tool use
         metadata: Provider-specific metadata
         created_at: Response timestamp
         cost_usd: Estimated cost in USD for this request
@@ -536,8 +538,7 @@ class LLMResponse:
     finish_reason: str | None = None  # 'stop', 'length', 'function_call', 'tool_calls'
     truncated: bool = False  # provider cut generation off at the token budget
     usage: Dict[str, int] | None = None  # tokens used
-    function_call: Dict[str, Any] | None = None  # Legacy single function call
-    tool_calls: list["ToolCall"] | None = None  # List of tool calls (preferred)
+    tool_calls: list["ToolCall"] | None = None  # Tool calls the model requested
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -1876,23 +1877,6 @@ class LLMProvider(ABC):
                 response.model,
             )
 
-    @staticmethod
-    def _attach_legacy_function_call(response: "LLMResponse") -> "LLMResponse":
-        """Surface the first tool call as the legacy ``function_call`` dict.
-
-        Backward-compat shim for the deprecated :meth:`function_call` entry
-        point: the modern path returns ``tool_calls``, but legacy callers read
-        the single ``function_call`` dict. Providers whose ``function_call``
-        override needs this shape call it, then route the result through
-        :meth:`_analyze_response` — the shared post-processing choke point that
-        preserves ``truncated`` / ``metadata`` and fires
-        :meth:`_warn_if_truncated`. Mutates and returns ``response``.
-        """
-        if response.tool_calls:
-            tc = response.tool_calls[0]
-            response.function_call = {"name": tc.name, "arguments": tc.parameters}
-        return response
-
     @property
     def is_initialized(self) -> bool:
         """Check if provider is initialized."""
@@ -2535,125 +2519,6 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         pass
 
-    @abstractmethod
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling asynchronously.
-
-        .. deprecated::
-            Use ``complete(tools=...)`` instead. The ``function_call()`` method
-            will be removed in a future major version. All providers now support
-            the ``tools`` parameter on ``complete()`` for consistent tool
-            handling.
-
-        Enables the LLM to call external functions/tools. The model decides
-        which function to call based on the conversation context, and returns
-        the function name and arguments in a structured format.
-
-        Args:
-            messages: Conversation messages leading up to the function call
-            functions: List of function definitions in JSON Schema format.
-                Each function dict must have:
-                - name (str): Function name
-                - description (str): What the function does
-                - parameters (dict): JSON Schema for parameters
-            **kwargs: Provider-specific parameters:
-                - function_call (str|dict): 'auto', 'none', or specific function
-                - temperature (float): Sampling temperature
-                - max_tokens (int): Maximum response tokens
-
-        Returns:
-            LLMResponse with function_call field populated containing:
-            - name (str): Function to call
-            - arguments (str): JSON string of arguments
-
-        Raises:
-            ValueError: If functions format is invalid
-            ConnectionError: If API connection fails
-
-        Example:
-            ```python
-            from dataknobs_llm import create_llm_provider
-            from dataknobs_llm.llm.base import LLMMessage
-            import json
-
-            llm = create_llm_provider("openai", model="gpt-4")
-
-            # Define available functions
-            functions = [
-                {
-                    "name": "search_docs",
-                    "description": "Search documentation for information",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search query"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Max results"
-                            }
-                        },
-                        "required": ["query"]
-                    }
-                },
-                {
-                    "name": "execute_code",
-                    "description": "Execute Python code",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string"}
-                        },
-                        "required": ["code"]
-                    }
-                }
-            ]
-
-            # Ask question that requires function
-            messages = [
-                LLMMessage(
-                    role="user",
-                    content="Search for information about async/await in Python"
-                )
-            ]
-
-            # Model decides to call function
-            response = await llm.function_call(messages, functions)
-
-            if response.function_call:
-                func_name = response.function_call["name"]
-                func_args = json.loads(response.function_call["arguments"])
-
-                print(f"Function: {func_name}")
-                print(f"Arguments: {func_args}")
-                # => Function: search_docs
-                # => Arguments: {'query': 'async/await Python', 'limit': 5}
-
-                # Execute function
-                results = search_docs(**func_args)
-
-                # Add function result to conversation
-                messages.append(LLMMessage(
-                    role="function",
-                    name=func_name,
-                    content=json.dumps(results)
-                ))
-
-                # Get final response
-                final = await llm.complete(messages)
-                print(final.content)
-            ```
-
-        See Also:
-            complete: Standard completion without functions
-            dataknobs_llm.tools: Tool abstraction framework
-        """
-        pass
-
     def __enter__(self) -> NoReturn:
         """Prevent sync context manager usage on async providers."""
         raise TypeError("Use 'async with' for AsyncLLMProvider, not 'with'")
@@ -2953,22 +2818,6 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         pass
 
-    @abstractmethod
-    def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling synchronously.
-
-        Args:
-            messages: Conversation messages
-            functions: Available functions
-            **kwargs: Additional parameters
-
-        Returns:
-            Response with function call
-        """
-        pass
-
     def initialize(self) -> None:
         """Initialize the sync LLM client."""
         self._is_initialized = True
@@ -3127,6 +2976,104 @@ class LLMAdapter(ABC):
             Provider-specific tool definitions.
         """
         pass
+
+    @staticmethod
+    def tool_call_parameters(tool_name: str, raw: Any) -> Dict[str, Any]:
+        """Normalize a provider's raw tool-call arguments into a mapping.
+
+        :attr:`ToolCall.parameters` is declared ``Dict[str, Any]`` and every
+        consumer splats it (``tool.execute(**tool_call.parameters)``), so a
+        non-mapping there is a ``TypeError`` raised at the call site, a long
+        way from the parse that produced it. Nothing enforces the declared
+        type, so the shape is settled here instead: providers disagree about
+        the wire form -- OpenAI sends a JSON string, Ollama and the
+        Claude family send an object -- and a model can emit the other one.
+
+        Args:
+            tool_name: Name of the tool being called, used in the error.
+            raw: Whatever the provider put in the arguments slot: a mapping, a
+                JSON-encoded string, or nothing at all.
+
+        Returns:
+            The arguments as a mapping. Absent or empty arguments become
+            ``{}``, which is what a tool taking none is called with.
+
+        Raises:
+            ValidationError: If the arguments are present but are not, and do
+                not decode to, a JSON object. Raising reports the unusable
+                tool call where it is parsed; the alternative -- substituting
+                ``{}`` -- executes the tool with no arguments at all, which is
+                indistinguishable from a tool that takes none.
+        """
+        if raw is None or raw == "":
+            return {}
+
+        decoded = raw
+        if isinstance(raw, str):
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValidationError(
+                    f"Tool call '{tool_name}' carries arguments that are not "
+                    f"valid JSON, so the call cannot be executed.",
+                    context={"tool": tool_name, "arguments_type": "str"},
+                ) from exc
+
+        if not isinstance(decoded, dict):
+            raise ValidationError(
+                f"Tool call '{tool_name}' carries arguments that are not a "
+                f"JSON object, so the call cannot be executed.",
+                context={"tool": tool_name, "arguments_type": type(decoded).__name__},
+            )
+
+        params: Dict[str, Any] = decoded
+        return params
+
+    @classmethod
+    def build_tool_calls(
+        cls,
+        raw_calls: Iterable[tuple[str, Any, str | None]],
+    ) -> list["ToolCall"] | None:
+        """Build the canonical tool-call list from a provider's raw calls.
+
+        Every provider ends up at the same place -- a name, whatever it put in
+        the arguments slot, and an optional vendor id -- so extracting those
+        three from the wire format is the only part that is provider-specific.
+        Doing the rest here is what keeps the answer single: a tool call is
+        constructed in six places across four providers, and before this
+        existed those six sites disagreed three ways about unreadable
+        arguments, about whether an absent list is ``None`` or ``[]``, and one
+        of them built no tool calls at all.
+
+        Args:
+            raw_calls: ``(name, raw_arguments, call_id)`` triples in the order
+                the model asked for them. ``raw_arguments`` is passed to
+                :meth:`tool_call_parameters`, so it may be a mapping, a
+                JSON-encoded string, or nothing.
+
+        Returns:
+            The calls, or ``None`` when there are none. ``None`` rather than
+            ``[]`` because :attr:`LLMResponse.tool_calls` is declared optional
+            and every consumer tests it for truth; an empty list would be a
+            second falsy spelling of the same thing. An empty ``call_id``
+            likewise becomes ``None``, since it carries no more information
+            than an absent one.
+
+        Raises:
+            ValidationError: If any call's arguments cannot be read. The turn
+                fails as a whole rather than executing the readable calls and
+                dropping the rest, which would look like a model that asked
+                for fewer tools than it did.
+        """
+        calls = [
+            ToolCall(
+                name=name,
+                parameters=cls.tool_call_parameters(name, raw_arguments),
+                id=call_id or None,
+            )
+            for name, raw_arguments, call_id in raw_calls
+        ]
+        return calls or None
 
 
 class LLMMiddleware(Protocol):

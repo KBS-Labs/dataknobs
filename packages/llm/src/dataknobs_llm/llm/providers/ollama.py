@@ -91,7 +91,6 @@ import json
 import logging
 import os
 import re
-import warnings
 from collections.abc import Iterable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
@@ -104,7 +103,6 @@ from ..base import (
     LLMStreamResponse,
     AsyncLLMProvider,
     ModelCapability,
-    ToolCall,
     normalize_llm_config,
 )
 from ..model_profile import (
@@ -491,21 +489,24 @@ class OllamaAdapter(LLMAdapter):
 
         Returns:
             Standard ``LLMResponse`` with content, tool_calls, and usage.
+
+        Raises:
+            ValidationError: If a tool call carries arguments that are not,
+                and do not decode to, a JSON object. See
+                :meth:`LLMAdapter.tool_call_parameters`.
         """
         message = data.get("message", {})
         content = message.get("content", "")
         raw_tool_calls = message.get("tool_calls", [])
 
-        tool_calls = None
-        if raw_tool_calls:
-            tool_calls = [
-                ToolCall(
-                    name=tc.get("function", {}).get("name", ""),
-                    parameters=tc.get("function", {}).get("arguments", {}),
-                    id=tc.get("id"),
-                )
-                for tc in raw_tool_calls
-            ]
+        tool_calls = self.build_tool_calls(
+            (
+                tc.get("function", {}).get("name", ""),
+                tc.get("function", {}).get("arguments"),
+                tc.get("id"),
+            )
+            for tc in raw_tool_calls
+        )
 
         usage = None
         if "eval_count" in data:
@@ -583,34 +584,6 @@ class OllamaAdapter(LLMAdapter):
             List of Ollama tool definitions.
         """
         return [self._tool_to_dict(tool) for tool in tools]
-
-    def adapt_raw_functions(
-        self,
-        functions: list[Dict[str, Any]],
-    ) -> list[Dict[str, Any]]:
-        """Convert raw function dicts to Ollama tools format.
-
-        Used by the deprecated ``function_call()`` method which receives
-        raw dicts rather than Tool objects.
-
-        Args:
-            functions: List of raw function definition dicts with
-                ``name``, ``description``, and ``parameters`` keys.
-
-        Returns:
-            List of Ollama tool definitions.
-        """
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                },
-            }
-            for func in functions
-        ]
 
     @staticmethod
     def _tool_to_dict(tool: Any) -> Dict[str, Any]:
@@ -748,24 +721,26 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         print(f"Generated {len(embeddings)} embeddings")
 
         # Tool use (Ollama 0.1.17+)
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get current weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {"type": "string"}
-                        },
-                        "required": ["location"]
-                    }
-                }
-            }
-        ]
+        from dataknobs_llm import Tool
 
-        response = await llm.function_call(messages, tools)
+        class WeatherTool(Tool):
+            def __init__(self):
+                super().__init__("get_weather", "Get current weather")
+
+            @property
+            def schema(self):
+                return {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                }
+
+            async def execute(self, location: str):
+                return f"sunny in {location}"
+
+        response = await llm.complete(messages, tools=[WeatherTool()])
+        for call in response.tool_calls or []:
+            print(call.name, call.parameters)
         ```
 
     Args:
@@ -1041,8 +1016,8 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
     def _build_shaped_options(self, config: LLMConfig) -> Dict[str, Any]:
         """Build Ollama ``options`` with the family's request-shape rules applied.
 
-        Request-shaping choke point shared by ``complete`` / ``stream_complete``
-        / ``function_call``, mirroring the other providers' ``_build_api_kwargs``:
+        Request-shaping choke point shared by ``complete`` and
+        ``stream_complete``, mirroring the other providers' ``_build_api_kwargs``:
         delegates the request-shaping front-half to the shared
         :meth:`~..base.LLMProvider._shape_request_params` (resolves constraints
         once, drops family-rejected sampling params, clamps ``max_tokens`` to the
@@ -1330,145 +1305,6 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
-
-    async def function_call(
-        self, messages: List[LLMMessage], functions: List[Dict[str, Any]], **kwargs: Any
-    ) -> LLMResponse:
-        """Execute function calling with native Ollama tools support.
-
-        For Ollama 0.1.17+, uses native tools API.
-        Falls back to prompt-based approach for older versions.
-        """
-        warnings.warn(
-            "function_call() is deprecated, use complete(tools=...) instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if not self._is_initialized:
-            await self.initialize()
-
-        # Add system prompt if configured
-        if self.config.system_prompt and (not messages or messages[0].role != "system"):
-            messages = [LLMMessage(role="system", content=self.config.system_prompt)] + list(
-                messages
-            )
-
-        # Convert to Ollama format
-        ollama_messages = self._messages_to_ollama(messages)
-
-        # function_call() receives raw dicts, not Tool objects — delegate
-        # to the adapter's raw function converter.
-        ollama_tools = self.adapter.adapt_raw_functions(functions)
-
-        # Keep the live model-metadata cache fresh before shaping (mirrors
-        # complete()/stream_complete()).
-        await self._live_source.refresh_if_stale()
-
-        # Build payload with tools (options shaped by the model family's
-        # constraints — a no-op by default; honors a consumer constraints override)
-        payload = {
-            "model": self.config.model,
-            "messages": ollama_messages,
-            "tools": ollama_tools,
-            "stream": False,
-            "options": self._build_shaped_options(self.config),
-        }
-
-        from ...exceptions import ToolsNotSupportedError
-
-        try:
-            async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    # An older Ollama / non-tool model rejects the native tools
-                    # API with a 400 "does not support tools" — the one case a
-                    # prompt-based fallback is appropriate. Mirrors complete().
-                    if response.status == 400 and "does not support tools" in error_text:
-                        raise ToolsNotSupportedError(
-                            model=self.config.model,
-                            suggestion=(
-                                "For tool support, use: llama3.1:8b, qwen3:8b, "
-                                "mistral:7b, or command-r:latest"
-                            ),
-                        )
-                    logger.error(
-                        "Ollama API error (status %s): %s",
-                        response.status,
-                        error_text,
-                    )
-                    await raise_for_status_with_body(response, body=error_text)
-                data = await response.json()
-
-            # Extract response and tool calls
-            message = data.get("message", {})
-            content = message.get("content", "")
-            tool_calls = message.get("tool_calls", [])
-
-            # Build response
-            llm_response = LLMResponse(
-                content=content,
-                model=self.config.model,
-                finish_reason="tool_calls" if tool_calls else "stop",
-                usage={
-                    "prompt_tokens": data.get("prompt_eval_count", 0),
-                    "completion_tokens": data.get("eval_count", 0),
-                    "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
-                }
-                if "eval_count" in data
-                else None,
-            )
-
-            # Add tool call information if present
-            if tool_calls:
-                # Use first tool call (Ollama can return multiple)
-                tool_call = tool_calls[0]
-                llm_response.function_call = {
-                    "name": tool_call.get("function", {}).get("name", ""),
-                    "arguments": tool_call.get("function", {}).get("arguments", {}),
-                }
-
-            return llm_response
-
-        except ToolsNotSupportedError:
-            # Native tools genuinely unsupported — fall back to prompt-based
-            # function calling. A transport/throttle error (429, timeout,
-            # connection drop) does NOT reach here: it is re-raised as a
-            # dataknobs exception below rather than triggering a second,
-            # wasteful full request.
-            logger.warning("Ollama native tools unsupported; falling back to prompt-based")
-
-            function_descriptions = json.dumps(functions, indent=2)
-
-            system_prompt = f"""You have access to these functions:
-{function_descriptions}
-
-To call a function, respond with JSON:
-{{"function": "name", "arguments": {{...}}}}"""
-
-            messages_with_system = [LLMMessage(role="system", content=system_prompt)] + list(
-                messages
-            )
-
-            llm_response = await self.complete(messages_with_system, **kwargs)
-
-            # Try to parse function call
-            try:
-                func_data = json.loads(llm_response.content)
-                if "function" in func_data:
-                    llm_response.function_call = {
-                        "name": func_data["function"],
-                        "arguments": func_data.get("arguments", {}),
-                    }
-            except json.JSONDecodeError:
-                pass
-
-            return llm_response
-
-        except Exception as exc:
-            # Transport / throttle / auth errors surface as dataknobs
-            # exceptions (RateLimitError, OperationError, ...) — never masked
-            # as a prompt-based fallback.
-            self._raise_translated(exc)
 
     def _build_prompt(self, messages: List[LLMMessage]) -> str:
         """Build prompt from messages."""

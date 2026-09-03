@@ -129,6 +129,42 @@ response = multi_tool_response([
 # len(response.tool_calls) == 2
 ```
 
+### mock_tool_arguments
+
+Derive stand-in arguments from a tool's JSON schema, so a scripted tool call
+does not transcribe them by hand:
+
+```python
+from dataknobs_llm.testing import mock_tool_arguments, tool_call_response
+
+response = tool_call_response("search", mock_tool_arguments(SearchTool().schema))
+# response.tool_calls[0].parameters has one value per declared property
+```
+
+Values are derived from the seed and each property's path, so a given schema
+and seed always produce the same arguments — an assertion on them is stable
+across runs. `enum` members, nested `properties` and array `items` are
+honoured:
+
+```python
+args = mock_tool_arguments(
+    {
+        "type": "object",
+        "properties": {
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+            "days": {"type": "array", "items": {"type": "integer"}},
+        },
+    }
+)
+# args["unit"] is one of the two permitted values; args["days"] is a list[int]
+```
+
+Pass `seed="..."` to vary the values, or `required_only=True` to emit only the
+schema's `required` properties — useful for exercising a tool's handling of
+absent optionals. The values satisfy the schema's *shape* (declared type, enum
+membership, nesting) but not `format`, numeric bounds, or `pattern`; a tool
+enforcing those needs arguments written by hand.
+
 ### extraction_response
 
 Create a response for schema extraction (JSON content):

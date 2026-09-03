@@ -132,9 +132,6 @@ class TestLLMProviderFactory:
             async def embed(self, texts, **kwargs):
                 return []
 
-            async def function_call(self, messages, functions, **kwargs):
-                return None
-
             async def validate_model(self):
                 return True
 
@@ -296,27 +293,6 @@ class TestSyncProviderAdapter:
         assert isinstance(embeddings, list)
         assert len(embeddings) == 3
         assert all(len(emb) == 768 for emb in embeddings)
-
-        sync_adapter.close()
-
-    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
-    def test_adapter_function_call(self, sync_adapter):
-        """Test adapter function_call method."""
-        sync_adapter.initialize()
-
-        messages = [LLMMessage(role="user", content="Test")]
-        functions = [
-            {
-                "name": "test_func",
-                "parameters": {"type": "object", "properties": {"param": {"type": "string"}}},
-            }
-        ]
-
-        response = sync_adapter.function_call(messages, functions)
-
-        assert response.finish_reason == "function_call"
-        assert response.function_call is not None
-        assert response.function_call["name"] == "test_func"
 
         sync_adapter.close()
 

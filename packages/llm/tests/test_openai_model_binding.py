@@ -42,7 +42,6 @@ from dataknobs_llm.llm.utils import CostCalculator
 class _StubMessage:
     def __init__(self, content: str) -> None:
         self.content = content
-        self.function_call = None
 
 
 class _StubChoice:

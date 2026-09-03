@@ -264,115 +264,6 @@ async def test_echo_embed_custom_dim(echo_provider_custom):
 
 
 @pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-async def test_echo_function_call_basic(echo_provider):
-    """Test EchoProvider function_call basic usage."""
-    messages = [LLMMessage(role="user", content="What's the weather in NYC?")]
-    functions = [
-        {
-            "name": "get_weather",
-            "description": "Get weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string", "description": "City name"},
-                    "units": {"type": "string", "description": "Temperature units"},
-                },
-            },
-        }
-    ]
-
-    response = await echo_provider.function_call(messages, functions)
-
-    assert response.finish_reason == "function_call"
-    assert response.function_call is not None
-    assert response.function_call["name"] == "get_weather"
-    assert "location" in response.function_call["arguments"]
-    assert "units" in response.function_call["arguments"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-async def test_echo_function_call_mock_arguments(echo_provider):
-    """Test EchoProvider generates mock arguments by type."""
-    messages = [LLMMessage(role="user", content="Test function call")]
-    functions = [
-        {
-            "name": "test_function",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "str_param": {"type": "string"},
-                    "num_param": {"type": "number"},
-                    "int_param": {"type": "integer"},
-                    "bool_param": {"type": "boolean"},
-                    "array_param": {"type": "array"},
-                    "obj_param": {"type": "object"},
-                },
-            },
-        }
-    ]
-
-    response = await echo_provider.function_call(messages, functions)
-    args = response.function_call["arguments"]
-
-    assert isinstance(args["str_param"], str)
-    assert "mock_str_param_from_echo" in args["str_param"]
-    assert isinstance(args["num_param"], int)
-    assert isinstance(args["int_param"], int)
-    assert isinstance(args["bool_param"], bool)
-    assert isinstance(args["array_param"], list)
-    assert isinstance(args["obj_param"], dict)
-
-
-@pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-async def test_echo_function_call_deterministic(echo_provider):
-    """Test EchoProvider function calls are deterministic."""
-    messages = [LLMMessage(role="user", content="Same message")]
-    functions = [
-        {
-            "name": "test_func",
-            "parameters": {"type": "object", "properties": {"value": {"type": "number"}}},
-        }
-    ]
-
-    response1 = await echo_provider.function_call(messages, functions)
-    response2 = await echo_provider.function_call(messages, functions)
-
-    # Same input should produce same mock arguments
-    assert response1.function_call["arguments"] == response2.function_call["arguments"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-async def test_echo_function_call_no_functions(echo_provider):
-    """Test EchoProvider function_call with no functions falls back to complete."""
-    messages = [LLMMessage(role="user", content="Hello")]
-    response = await echo_provider.function_call(messages, [])
-
-    # Should fall back to regular complete
-    assert response.content == "Echo: Hello"
-    assert response.function_call is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-async def test_echo_function_call_multiple_functions(echo_provider):
-    """Test EchoProvider uses first function when multiple provided."""
-    messages = [LLMMessage(role="user", content="Test")]
-    functions = [
-        {"name": "first_function", "parameters": {"type": "object", "properties": {}}},
-        {"name": "second_function", "parameters": {"type": "object", "properties": {}}},
-    ]
-
-    response = await echo_provider.function_call(messages, functions)
-
-    # Should use first function
-    assert response.function_call["name"] == "first_function"
-
-
-@pytest.mark.asyncio
 async def test_echo_token_counting(echo_provider):
     """Test EchoProvider token counting."""
     # Test with different message lengths
@@ -476,11 +367,6 @@ async def test_echo_usage_in_integration():
         # Test embedding
         embedding = await provider.embed("test")
         assert len(embedding) == 768
-
-        # Test function calling
-        funcs = [{"name": "test", "parameters": {"type": "object", "properties": {}}}]
-        func_response = await provider.function_call(messages, funcs)
-        assert func_response.function_call["name"] == "test"
 
         # Test streaming
         chunks = []
