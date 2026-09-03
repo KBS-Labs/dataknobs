@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-03T16:51:37Z",
+  "timestamp": "2026-09-03T17:28:35Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/manager-conversation-types",
-  "git_commit": "e5eb45183ddd7e6d436e510eaf2a713d04e7e72d",
+  "git_branch": "sbk/flow-docs-match-the-code",
+  "git_commit": "e01062faba67d7e85c923b1169f166ad1bc42739",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
