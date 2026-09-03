@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-03T03:23:01Z",
+  "timestamp": "2026-09-03T03:47:44Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/toolcall-from-dict-normalizes",
-  "git_commit": "de047e9cc17aa6b84b71f8a347e0aa7fb4a635a5",
+  "git_commit": "9a0d6419a65590ae7e0c8bf2c466586770e29cbd",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
