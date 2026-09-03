@@ -1321,26 +1321,34 @@ class ConversationManager:
     ) -> AsyncIterator[ConversationNode]:
         """Execute a conversation flow using FSM.
 
-        This method executes a predefined conversation flow, yielding
-        conversation nodes as the flow progresses through states.
+        Each state of the flow *renders its prompt* — no completion is
+        requested — and the rendered text becomes one assistant node appended
+        to the conversation tree. The whole flow runs before the first node is
+        yielded, so this reports a finished run rather than streaming one.
 
         Args:
             flow: ConversationFlow definition
-            initial_params: Optional initial parameters for the flow
+            initial_params: Optional initial data for the flow. Every state's
+                render can read it, which is how a caller gets its own values
+                into the templates.
 
         Yields:
-            ConversationNode for each state in the flow
+            ConversationNode for each state the flow executed, in order, each
+            already persisted.
 
         Raises:
-            ValueError: If flow execution fails
+            ValueError: If the conversation has no state yet, or if the flow
+                run failed — the underlying ``OperationError`` is preserved as
+                ``__cause__``.
 
         Example:
             >>> from dataknobs_llm.conversations.flow import (
             ...     ConversationFlow, FlowState,
-            ...     keyword_condition
+            ...     always, keyword_condition
             ... )
             >>>
-            >>> # Define flow
+            >>> # Every transition target must be a declared state; the
+            >>> # condition deciding an arc sits under the same key.
             >>> flow = ConversationFlow(
             ...     name="support",
             ...     initial_state="greeting",
@@ -1349,13 +1357,17 @@ class ConversationManager:
             ...             prompt_name="support_greeting",
             ...             transitions={
             ...                 "help": "collect_issue",
-            ...                 "browse": "end"
+            ...                 "browse": "farewell"
             ...             },
             ...             transition_conditions={
             ...                 "help": keyword_condition(["help", "issue"]),
-            ...                 "browse": keyword_condition(["browse", "look"])
+            ...                 "browse": always()
             ...             }
-            ...         )
+            ...         ),
+            ...         "collect_issue": FlowState(
+            ...             prompt_name="ask_issue_details"
+            ...         ),
+            ...         "farewell": FlowState(prompt_name="support_farewell")
             ...     }
             ... )
             >>>

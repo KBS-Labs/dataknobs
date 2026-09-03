@@ -249,35 +249,49 @@ uv sync --all-packages
 
 ```python
 from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.conversations.flow import ConversationFlow, FlowState
+from dataknobs_llm.conversations.flow import (
+    ConversationFlow,
+    FlowState,
+    always,
+    keyword_condition,
+)
 
-# Define support flow
+# Define support flow. Each state names a prompt to render; each arc pairs a
+# condition name in `transitions` with the condition object that decides it.
 flow = ConversationFlow(
     name="customer_support",
     initial_state="greeting",
     states={
         "greeting": FlowState(
-            prompt="support_greeting",
-            transitions={
-                "need_help": "collect_issue",
-                "just_browsing": "end"
-            }
+            prompt_name="support_greeting",
+            transitions={"need_help": "collect_issue", "browsing": "farewell"},
+            transition_conditions={
+                "need_help": keyword_condition(["help", "problem"]),
+                "browsing": always(),          # last: the first match wins
+            },
         ),
         "collect_issue": FlowState(
-            prompt="ask_issue_details",
-            transitions={
-                "technical": "technical_support",
-                "billing": "billing_support"
-            }
+            prompt_name="ask_issue_details",
+            transitions={"technical": "technical_support", "billing": "billing_support"},
+            transition_conditions={
+                "technical": keyword_condition(["bug", "error"]),
+                "billing": keyword_condition(["charge", "refund"]),
+            },
         ),
-        # ... more states
+        # ... more states, ending in ones with no transitions
     }
 )
 
-# Execute flow
-manager = await ConversationManager.create(llm=llm, flow=flow)
-await manager.execute_flow()
+# Execute the flow, one assistant node per state
+manager = await ConversationManager.create(
+    llm=llm, prompt_builder=builder, storage=storage, system_prompt_name="support_agent"
+)
+async for node in manager.execute_flow(flow):
+    print(node.metadata["state"], "->", node.message.content)
 ```
+
+Flows need `dataknobs-llm[fsm]`. See [FSM-Based Flows](guides/flows.md) —
+in particular, that a flow state renders a prompt rather than calling the LLM.
 
 ### Prompt A/B Testing
 

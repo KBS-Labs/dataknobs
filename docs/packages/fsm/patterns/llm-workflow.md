@@ -38,7 +38,7 @@ The LLM package now provides equivalent functionality with improved APIs:
 # NEW - Use these instead
 from dataknobs_llm import create_llm_provider, LLMConfig
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
-from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, KeywordCondition
+from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, always
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 ```
 
@@ -85,20 +85,16 @@ flow = ConversationFlow(
     initial_state="step1",
     states={
         "step1": FlowState(
-            prompt="prompt1",
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "step2"}
+            prompt_name="prompt1",
+            transitions={"next": "step2"},
+            transition_conditions={"next": always()},
         ),
         "step2": FlowState(
-            prompt="prompt2",
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "step3"}
+            prompt_name="prompt2",
+            transitions={"next": "step3"},
+            transition_conditions={"next": always()},
         ),
-        "step3": FlowState(
-            prompt="prompt3",
-            transitions={},
-            next_states={}
-        )
+        "step3": FlowState(prompt_name="prompt3"),   # no transitions: terminal
     }
 )
 
@@ -106,8 +102,11 @@ manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
     storage=storage,
-    flow=flow
+    system_prompt_name="assistant",
 )
+
+async for node in manager.execute_flow(flow):
+    print(node.metadata["state"], "->", node.message.content)
 ```
 
 ### RAG (Retrieval-Augmented Generation)
@@ -176,23 +175,24 @@ cot_flow = ConversationFlow(
     initial_state="decompose",
     states={
         "decompose": FlowState(
-            prompt="break_down_problem",
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "reason"}
+            prompt_name="break_down_problem",
+            transitions={"next": "reason"},
+            transition_conditions={"next": always()},
         ),
         "reason": FlowState(
-            prompt="solve_steps",
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "synthesize"}
+            prompt_name="solve_steps",
+            transitions={"next": "synthesize"},
+            transition_conditions={"next": always()},
         ),
-        "synthesize": FlowState(
-            prompt="combine_solutions",
-            transitions={},
-            next_states={}
-        )
+        "synthesize": FlowState(prompt_name="combine_solutions"),
     }
 )
 ```
+
+A flow sequences *prompts*, not completions: each state renders its template
+and records the result. Where the old `WorkflowType.COT` had the model reason
+at each step, drive those turns with `manager.complete()` and use the flow for
+the shape around them.
 
 ## Complete Migration Example
 
@@ -238,7 +238,7 @@ result = await workflow.execute({"text": "..."})
 ```python
 from dataknobs_llm import create_llm_provider, LLMConfig
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
-from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, KeywordCondition
+from dataknobs_llm.conversations.flow import ConversationFlow, FlowState, always
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 from dataknobs_data.backends import AsyncMemoryDatabase
 from pathlib import Path
@@ -259,31 +259,35 @@ flow = ConversationFlow(
     initial_state="summarize",
     states={
         "summarize": FlowState(
-            prompt="summarize_text",  # prompts/user/summarize_text.yaml
-            transitions={"next": KeywordCondition([".*"])},
-            next_states={"next": "analyze"}
+            prompt_name="summarize_text",  # prompts/user/summarize_text.yaml
+            transitions={"next": "analyze"},
+            transition_conditions={"next": always()},
         ),
         "analyze": FlowState(
-            prompt="analyze_summary",  # prompts/user/analyze_summary.yaml
-            transitions={},
-            next_states={}
-        )
+            prompt_name="analyze_summary",  # prompts/user/analyze_summary.yaml
+        ),
     }
 )
 
-# Create manager and execute
+# Create the manager; the flow is passed to execute_flow, not to create()
 manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
     storage=storage,
-    flow=flow
+    system_prompt_name="analyst",
 )
 
 await manager.add_message(role="user", prompt_name="summarize_text", params={"text": "..."})
-summary = await manager.execute_flow()
 
-# Analysis happens automatically in next flow state
+# Each state renders its prompt and becomes one assistant node
+async for node in manager.execute_flow(flow, initial_params={"text": "..."}):
+    print(node.metadata["state"], "->", node.message.content)
 ```
+
+A flow state renders a prompt; it does not call the LLM. Chaining states is how
+you script a fixed sequence of turns — see
+[FSM-Based Flows](../../llm/guides/flows.md) for what a flow does and does not
+do, and use `manager.complete()` for the turns that need a model to speak.
 
 ## Key Improvements in LLM Package
 

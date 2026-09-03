@@ -1,659 +1,489 @@
 # Conversation Flow Examples
 
-FSM-based conversation workflows and patterns.
+Runnable patterns for FSM-based conversation flows. Read
+[FSM-Based Flows](../guides/flows.md) first — in particular, that a flow state
+renders a prompt rather than calling the LLM, and that conditions test the text
+a state rendered.
 
-## Basic Flow
+Every example on this page uses `EchoProvider` and an in-memory prompt library,
+so each one runs as written with no API key and no files on disk.
 
-### Simple Two-State Flow
+## Setup
+
+All the snippets below assume this preamble.
 
 ```python
+import asyncio
+
+from dataknobs_common.exceptions import OperationError
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
 from dataknobs_llm.conversations.flow import (
+    CompositeCondition,
     ConversationFlow,
+    ConversationFlowAdapter,
     FlowState,
-    KeywordCondition
+    LLMClassifierCondition,
+    always,
+    context_condition,
+    keyword_condition,
 )
-from dataknobs_llm.conversations import (
-    ConversationManager,
-    DataknobsConversationStorage
-)
-from dataknobs_llm import create_llm_provider, LLMConfig
-from dataknobs_data.backends import AsyncMemoryDatabase
+from dataknobs_llm.llm import EchoProvider, LLMConfig
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 
-# Define flow
-flow = ConversationFlow(
-    name="simple_greeting",
-    initial_state="greeting",
-    states={
-        "greeting": FlowState(
-            prompt="greeting",
-            transitions={
-                "continue": KeywordCondition(["yes", "sure", "ok"])
-            },
-            next_states={"continue": "help"}
-        ),
-        "help": FlowState(
-            prompt="provide_help",
-            transitions={},
-            next_states={}
-        )
-    }
-)
+PROMPTS = {
+    "system": {"support_agent": {"template": "You are a support agent."}},
+    "user": {
+        "greeting": {"template": "Hello! What can I help you with today?"},
+        "collect_issue": {"template": "Tell me more about the {{category}} problem."},
+        "tech_support": {"template": "Let's troubleshoot. Have you restarted?"},
+        "billing_support": {"template": "I'll pull up your billing records."},
+        "farewell": {"template": "Glad I could help. Goodbye!"},
+        "with_state": {"template": "state={{state}} loop={{loop_count}}"},
+    },
+}
 
-# Execute flow
-config = LLMConfig(provider="openai", api_key="your-key")
-llm = create_llm_provider(config)
 
-db = AsyncMemoryDatabase()
-storage = DataknobsConversationStorage(db)
+def make_builder() -> AsyncPromptBuilder:
+    return AsyncPromptBuilder(library=ConfigPromptLibrary(PROMPTS))
 
-manager = await ConversationManager.create(
-    llm=llm,
-    prompt_builder=builder,
-    storage=storage,
-    flow=flow
-)
 
-await manager.execute_flow()
+def make_llm() -> EchoProvider:
+    return EchoProvider(
+        LLMConfig(provider="echo", model="echo", options={"echo_prefix": ""})
+    )
 ```
 
-### Branching Flow
+## A linear flow
+
+Two states, one unconditional arc. `always()` is the condition for a step that
+should simply happen next.
 
 ```python
 flow = ConversationFlow(
-    name="support_routing",
+    name="short",
     initial_state="greeting",
     states={
         "greeting": FlowState(
-            prompt="support_greeting",
-            transitions={
-                "technical": KeywordCondition(["bug", "error", "crash"]),
-                "billing": KeywordCondition(["payment", "bill", "charge"]),
-                "general": KeywordCondition(["question", "help", "info"])
-            },
-            next_states={
-                "technical": "tech_support",
-                "billing": "billing_support",
-                "general": "general_help"
-            }
+            prompt_name="greeting",
+            transitions={"go": "farewell"},
+            transition_conditions={"go": always()},
         ),
-        "tech_support": FlowState(
-            prompt="tech_support_prompt",
-            transitions={},
-            next_states={}
-        ),
-        "billing_support": FlowState(
-            prompt="billing_support_prompt",
-            transitions={},
-            next_states={}
-        ),
-        "general_help": FlowState(
-            prompt="general_help_prompt",
-            transitions={},
-            next_states={}
-        )
-    }
+        "farewell": FlowState(prompt_name="farewell"),
+    },
 )
+
+adapter = ConversationFlowAdapter(flow=flow, prompt_builder=make_builder())
+final = await adapter.execute()
+
+assert adapter.execution_state.history == [
+    ("greeting", "Hello! What can I help you with today?"),
+    ("farewell", "Glad I could help. Goodbye!"),
+]
+assert final["response"] == "Glad I could help. Goodbye!"
+assert final["state"] == "farewell"
 ```
 
-## Customer Support Flow
+## Routing on what a state rendered
 
-### Complete Support Workflow
+The `collect_issue` template interpolates `category`, and the arcs out of it
+match keywords in the *rendered* text. Setting `prompt_params={"category":
+"billing"}` therefore chooses the branch.
 
 ```python
-from dataknobs_llm.conversations.flow import (
-    ConversationFlow,
-    FlowState,
-    KeywordCondition,
-    RegexCondition,
-    SentimentCondition
+def routing_flow(category: str) -> ConversationFlow:
+    return ConversationFlow(
+        name="customer_support",
+        initial_state="greeting",
+        states={
+            "greeting": FlowState(
+                prompt_name="greeting",
+                transitions={"has_issue": "collect_issue"},
+                transition_conditions={"has_issue": always()},
+            ),
+            "collect_issue": FlowState(
+                prompt_name="collect_issue",
+                prompt_params={"category": category},
+                transitions={
+                    "technical": "tech_support",
+                    "billing": "billing_support",
+                },
+                transition_conditions={
+                    "technical": keyword_condition(["bug", "error", "crash"]),
+                    "billing": keyword_condition(["billing", "charge", "refund"]),
+                },
+            ),
+            "tech_support": FlowState(prompt_name="tech_support"),
+            "billing_support": FlowState(prompt_name="billing_support"),
+        },
+    )
+
+
+adapter = ConversationFlowAdapter(flow=routing_flow("billing"), prompt_builder=make_builder())
+await adapter.execute({"customer_id": "c-42"})
+
+assert [state for state, _ in adapter.execution_state.history] == [
+    "greeting",
+    "collect_issue",
+    "billing_support",
+]
+```
+
+Routing on the *user's* words instead means putting them where a template can
+render them — pass them as initial data and interpolate them into the state's
+prompt.
+
+## Routing on data, not text
+
+`context_condition` ignores the response and applies a predicate to the run
+context. `initial_context` seeds that context, and is merged into the flow's
+data as well.
+
+```python
+flow = ConversationFlow(
+    name="tiered",
+    initial_state="greeting",
+    initial_context={"customer_tier": "gold"},
+    states={
+        "greeting": FlowState(
+            prompt_name="greeting",
+            transitions={"priority": "tech_support", "standard": "farewell"},
+            transition_conditions={
+                "priority": context_condition(lambda ctx: ctx.get("customer_tier") == "gold"),
+                "standard": context_condition(lambda ctx: ctx.get("customer_tier") != "gold"),
+            },
+        ),
+        "tech_support": FlowState(prompt_name="tech_support"),
+        "farewell": FlowState(prompt_name="farewell"),
+    },
 )
 
-support_flow = ConversationFlow(
-    name="customer_support",
-    initial_state="greeting",
+adapter = ConversationFlowAdapter(flow=flow, prompt_builder=make_builder())
+final = await adapter.execute()
+
+assert [state for state, _ in adapter.execution_state.history] == ["greeting", "tech_support"]
+assert final["customer_tier"] == "gold"
+```
+
+## Combining conditions
+
+`CompositeCondition` evaluates every member — there is no short-circuit — and
+combines with `"and"` or `"or"`.
+
+```python
+gold_refund = CompositeCondition(
+    conditions=[
+        keyword_condition(["billing", "refund"]),
+        context_condition(lambda ctx: ctx.get("customer_tier") == "gold"),
+    ],
+    operator="and",
+)
+
+assert await gold_refund.evaluate("I'll pull up your billing records.", {"customer_tier": "gold"})
+assert not await gold_refund.evaluate("I'll pull up your billing records.", {"customer_tier": "free"})
+```
+
+## Stopping a loop
+
+A state that transitions to itself needs a ceiling. `max_loops` bounds one
+state; `max_total_loops` bounds the whole run. Either one tripping fails the
+run, and `stop_reason` says which.
+
+```python
+flow = ConversationFlow(
+    name="looping",
+    initial_state="ask",
     states={
-        # Initial greeting
-        "greeting": FlowState(
-            prompt="support_greeting",
-            transitions={
-                "need_help": KeywordCondition([
-                    "help", "problem", "issue", "question"
-                ]),
-                "complaint": SentimentCondition("negative", threshold=0.7),
-                "just_browsing": KeywordCondition(["browse", "look", "info"])
-            },
-            next_states={
-                "need_help": "classify_issue",
-                "complaint": "escalate",
-                "just_browsing": "provide_info"
-            }
-        ),
-
-        # Classify the issue
-        "classify_issue": FlowState(
-            prompt="ask_issue_type",
-            transitions={
-                "technical": KeywordCondition([
-                    "bug", "error", "crash", "not working", "broken"
-                ]),
-                "account": KeywordCondition([
-                    "account", "login", "password", "access"
-                ]),
-                "billing": KeywordCondition([
-                    "payment", "bill", "charge", "refund", "pricing"
-                ]),
-                "feature": KeywordCondition([
-                    "feature", "how to", "tutorial", "guide"
-                ])
-            },
-            next_states={
-                "technical": "technical_support",
-                "account": "account_support",
-                "billing": "billing_support",
-                "feature": "feature_help"
-            }
-        ),
-
-        # Technical support path
-        "technical_support": FlowState(
-            prompt="tech_troubleshooting",
-            transitions={
-                "resolved": KeywordCondition(["fixed", "solved", "working"]),
-                "escalate": KeywordCondition(["still", "not working", "persist"]),
-            },
-            next_states={
-                "resolved": "satisfaction_check",
-                "escalate": "escalate"
-            }
-        ),
-
-        # Account support
-        "account_support": FlowState(
-            prompt="account_assistance",
-            transitions={
-                "resolved": KeywordCondition(["fixed", "solved", "access"]),
-                "security": KeywordCondition(["hacked", "security", "suspicious"])
-            },
-            next_states={
-                "resolved": "satisfaction_check",
-                "security": "security_escalation"
-            }
-        ),
-
-        # Billing support
-        "billing_support": FlowState(
-            prompt="billing_assistance",
-            transitions={
-                "refund": KeywordCondition(["refund", "money back"]),
-                "clarified": KeywordCondition(["understand", "clear", "thanks"])
-            },
-            next_states={
-                "refund": "process_refund",
-                "clarified": "satisfaction_check"
-            }
-        ),
-
-        # Feature help
-        "feature_help": FlowState(
-            prompt="feature_explanation",
-            transitions={
-                "understood": KeywordCondition(["got it", "understand", "clear"]),
-                "more_help": KeywordCondition(["more", "else", "another"])
-            },
-            next_states={
-                "understood": "satisfaction_check",
-                "more_help": "classify_issue"
-            }
-        ),
-
-        # Escalation
-        "escalate": FlowState(
-            prompt="escalate_to_human",
-            transitions={},
-            next_states={}
-        ),
-
-        # Security escalation
-        "security_escalation": FlowState(
-            prompt="security_protocol",
-            transitions={},
-            next_states={}
-        ),
-
-        # Process refund
-        "process_refund": FlowState(
-            prompt="refund_process",
-            transitions={
-                "accepted": KeywordCondition(["yes", "ok", "proceed"])
-            },
-            next_states={"accepted": "satisfaction_check"}
-        ),
-
-        # General info
-        "provide_info": FlowState(
-            prompt="general_information",
-            transitions={
-                "need_help": KeywordCondition(["help", "question"])
-            },
-            next_states={"need_help": "classify_issue"}
-        ),
-
-        # Final satisfaction check
-        "satisfaction_check": FlowState(
-            prompt="satisfaction_survey",
-            transitions={},
-            next_states={}
+        "ask": FlowState(
+            prompt_name="with_state",
+            max_loops=2,
+            transitions={"again": "ask"},
+            transition_conditions={"again": always()},
         )
     },
-    max_loops=3  # Prevent infinite loops
 )
+
+adapter = ConversationFlowAdapter(flow=flow, prompt_builder=make_builder())
+
+try:
+    await adapter.execute()
+except OperationError as exc:
+    print(exc)   # Conversation flow 'looping' failed: Max loops exceeded for state ask
+
+assert adapter.get_execution_summary()["stop_reason"] == "Max loops exceeded for state ask"
+# Two renders happened; the third entry tripped the guard before rendering.
+assert len(adapter.execution_state.history) == 2
+assert adapter.execution_state.loop_counts["ask"] == 3
 ```
 
-## Sales Qualification Flow
+## Hooks
 
-### Lead Qualification
-
-```python
-from dataknobs_llm.conversations.flow import LLMClassifierCondition
-
-sales_flow = ConversationFlow(
-    name="sales_qualification",
-    initial_state="introduction",
-    states={
-        # Introduction
-        "introduction": FlowState(
-            prompt="sales_intro",
-            transitions={
-                "interested": SentimentCondition("positive", threshold=0.6),
-                "not_interested": SentimentCondition("negative", threshold=0.6),
-                "neutral": KeywordCondition(["maybe", "not sure", "thinking"])
-            },
-            next_states={
-                "interested": "qualify_budget",
-                "not_interested": "polite_close",
-                "neutral": "build_interest"
-            }
-        ),
-
-        # Build interest
-        "build_interest": FlowState(
-            prompt="value_proposition",
-            transitions={
-                "interested": SentimentCondition("positive", threshold=0.5),
-                "still_unsure": KeywordCondition(["unsure", "thinking"])
-            },
-            next_states={
-                "interested": "qualify_budget",
-                "still_unsure": "nurture"
-            }
-        ),
-
-        # Qualify budget
-        "qualify_budget": FlowState(
-            prompt="ask_budget",
-            transitions={
-                "has_budget": KeywordCondition([
-                    "budget", "allocated", "approved", "ready"
-                ]),
-                "no_budget": KeywordCondition([
-                    "no budget", "not approved", "need approval"
-                ]),
-                "price_concern": KeywordCondition(["expensive", "cost", "price"])
-            },
-            next_states={
-                "has_budget": "qualify_authority",
-                "no_budget": "nurture",
-                "price_concern": "address_pricing"
-            }
-        ),
-
-        # Address pricing concerns
-        "address_pricing": FlowState(
-            prompt="pricing_justification",
-            transitions={
-                "convinced": SentimentCondition("positive", threshold=0.6),
-                "still_expensive": KeywordCondition(["still", "too much"])
-            },
-            next_states={
-                "convinced": "qualify_authority",
-                "still_expensive": "nurture"
-            }
-        ),
-
-        # Qualify authority
-        "qualify_authority": FlowState(
-            prompt="ask_decision_maker",
-            transitions={
-                "is_decision_maker": KeywordCondition([
-                    "yes", "I am", "me", "I decide"
-                ]),
-                "not_decision_maker": KeywordCondition([
-                    "not me", "manager", "team", "need approval"
-                ])
-            },
-            next_states={
-                "is_decision_maker": "qualify_need",
-                "not_decision_maker": "involve_stakeholders"
-            }
-        ),
-
-        # Qualify need
-        "qualify_need": FlowState(
-            prompt="assess_need",
-            transitions={
-                "urgent": KeywordCondition(["urgent", "asap", "soon", "now"]),
-                "planned": KeywordCondition(["planning", "next quarter", "future"])
-            },
-            next_states={
-                "urgent": "schedule_demo",
-                "planned": "nurture_timeline"
-            }
-        ),
-
-        # Schedule demo
-        "schedule_demo": FlowState(
-            prompt="demo_scheduling",
-            transitions={
-                "scheduled": RegexCondition(
-                    r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b"  # Date pattern
-                )
-            },
-            next_states={"scheduled": "confirm_demo"}
-        ),
-
-        # Confirm demo
-        "confirm_demo": FlowState(
-            prompt="demo_confirmation",
-            transitions={},
-            next_states={}
-        ),
-
-        # Involve stakeholders
-        "involve_stakeholders": FlowState(
-            prompt="stakeholder_engagement",
-            transitions={},
-            next_states={}
-        ),
-
-        # Nurture (not ready)
-        "nurture": FlowState(
-            prompt="nurture_campaign",
-            transitions={},
-            next_states={}
-        ),
-
-        # Nurture with timeline
-        "nurture_timeline": FlowState(
-            prompt="follow_up_timeline",
-            transitions={},
-            next_states={}
-        ),
-
-        # Polite close
-        "polite_close": FlowState(
-            prompt="thank_you_close",
-            transitions={},
-            next_states={}
-        )
-    }
-)
-```
-
-## Onboarding Flow
-
-### User Onboarding
+`on_enter` runs before the state's prompt is rendered, `on_exit` after. Both are
+awaited with `(state_name, data, context)`, so both must be `async def`, and
+both are wrapped: an exception in a hook is logged and the flow continues.
 
 ```python
-onboarding_flow = ConversationFlow(
-    name="user_onboarding",
-    initial_state="welcome",
-    states={
-        "welcome": FlowState(
-            prompt="onboarding_welcome",
-            transitions={
-                "ready": KeywordCondition(["ready", "start", "begin", "yes"])
-            },
-            next_states={"ready": "collect_info"}
-        ),
+visited: list[tuple[str, str]] = []
 
-        "collect_info": FlowState(
-            prompt="collect_user_info",
-            transitions={
-                "info_provided": LLMClassifierCondition(
-                    llm=llm,
-                    classification_prompt="Does this message contain user information? {{text}}",
-                    target_class="yes"
-                )
-            },
-            next_states={"info_provided": "set_preferences"}
-        ),
 
-        "set_preferences": FlowState(
-            prompt="preference_questions",
-            transitions={
-                "preferences_set": KeywordCondition(["done", "finished", "set"])
-            },
-            next_states={"preferences_set": "feature_tour"}
-        ),
+async def record_enter(state_name, data, context):
+    visited.append(("enter", state_name))
 
-        "feature_tour": FlowState(
-            prompt="feature_overview",
-            transitions={
-                "continue_tour": KeywordCondition(["next", "continue", "more"]),
-                "skip_tour": KeywordCondition(["skip", "later", "no"])
-            },
-            next_states={
-                "continue_tour": "feature_demo",
-                "skip_tour": "completion"
-            }
-        ),
 
-        "feature_demo": FlowState(
-            prompt="interactive_demo",
-            transitions={
-                "understood": KeywordCondition(["got it", "understand", "clear"]),
-                "more_help": KeywordCondition(["help", "explain", "confused"])
-            },
-            next_states={
-                "understood": "completion",
-                "more_help": "additional_help"
-            }
-        ),
+async def record_exit(state_name, data, context):
+    visited.append(("exit", state_name))
 
-        "additional_help": FlowState(
-            prompt="detailed_help",
-            transitions={
-                "ready_now": KeywordCondition(["ready", "understand", "thanks"])
-            },
-            next_states={"ready_now": "completion"}
-        ),
 
-        "completion": FlowState(
-            prompt="onboarding_complete",
-            transitions={},
-            next_states={}
-        )
-    }
-)
-```
-
-## Advanced Patterns
-
-### Loop Detection
-
-```python
-# Flow with loop prevention
-interview_flow = ConversationFlow(
-    name="interview",
-    initial_state="start",
-    states={
-        "start": FlowState(
-            prompt="interview_start",
-            transitions={"continue": KeywordCondition(["yes"])},
-            next_states={"continue": "question_1"}
-        ),
-        "question_1": FlowState(
-            prompt="ask_question_1",
-            transitions={
-                "answered": KeywordCondition([".*"]),  # Any answer
-                "skip": KeywordCondition(["skip", "pass"])
-            },
-            next_states={
-                "answered": "question_2",
-                "skip": "question_2"
-            }
-        ),
-        "question_2": FlowState(
-            prompt="ask_question_2",
-            transitions={
-                "answered": KeywordCondition([".*"]),
-                "back": KeywordCondition(["back", "previous"])  # Can loop
-            },
-            next_states={
-                "answered": "question_3",
-                "back": "question_1"  # Potential loop
-            }
-        ),
-        "question_3": FlowState(
-            prompt="ask_question_3",
-            transitions={
-                "done": KeywordCondition(["done", "finished"])
-            },
-            next_states={"done": "end"}
-        ),
-        "end": FlowState(
-            prompt="interview_end",
-            transitions={},
-            next_states={}
-        )
-    },
-    max_loops=3  # Prevent infinite loops
-)
-```
-
-### Dynamic State Selection
-
-```python
-class DynamicFlowState(FlowState):
-    """State that selects next state dynamically."""
-
-    async def get_next_state(self, user_input, context):
-        # Use LLM to determine next state
-        classification = await llm.acomplete(f"""
-        Based on this user input: "{user_input}"
-        And this context: {context}
-
-        What should the next state be? Choose from:
-        - technical_support
-        - billing_support
-        - general_help
-
-        Answer with just the state name.
-        """)
-
-        return classification.content.strip()
-
-dynamic_flow = ConversationFlow(
-    name="dynamic_routing",
+flow = ConversationFlow(
+    name="hooked",
     initial_state="greeting",
     states={
-        "greeting": DynamicFlowState(
-            prompt="greeting",
-            transitions={"auto": KeywordCondition([".*"])},
-            next_states={"auto": "dynamic"}  # Determined at runtime
+        "greeting": FlowState(
+            prompt_name="greeting",
+            on_enter=record_enter,
+            on_exit=record_exit,
+            transitions={"go": "farewell"},
+            transition_conditions={"go": always()},
         ),
-        # ... other states
-    }
+        "farewell": FlowState(
+            prompt_name="farewell", on_enter=record_enter, on_exit=record_exit
+        ),
+    },
 )
+
+await ConversationFlowAdapter(flow=flow, prompt_builder=make_builder()).execute()
+
+assert visited == [
+    ("enter", "greeting"),
+    ("exit", "greeting"),
+    ("enter", "farewell"),
+    ("exit", "farewell"),
+]
 ```
 
-### State with Context Accumulation
+Mutating the `context` dictionary a hook receives is how a flow accumulates
+state across its own steps — it is the same dictionary the next state's
+conditions and render will see.
+
+## Branching with an LLM
+
+`LLMClassifierCondition` is the one condition that calls a provider. Pass the
+provider to the adapter as `llm=`; the condition finds it in the run context.
 
 ```python
-class ContextAccumulatingFlow:
-    def __init__(self, flow, manager):
-        self.flow = flow
-        self.manager = manager
-        self.context = {}
+llm = make_llm()
 
-    async def execute_with_context(self):
-        current_state = self.flow.initial_state
+flow = ConversationFlow(
+    name="classified",
+    initial_state="greeting",
+    states={
+        "greeting": FlowState(
+            prompt_name="greeting",
+            transitions={"escalate": "tech_support", "close": "farewell"},
+            transition_conditions={
+                "escalate": LLMClassifierCondition(
+                    classifier_prompt=(
+                        "Does this message describe a technical problem? "
+                        "Answer with one word, yes or no.\n\n{{response}}"
+                    ),
+                    expected_value="yes",
+                ),
+                "close": always(),
+            },
+        ),
+        "tech_support": FlowState(prompt_name="tech_support"),
+        "farewell": FlowState(prompt_name="farewell"),
+    },
+)
 
-        while current_state:
-            state = self.flow.states[current_state]
-
-            # Render prompt with accumulated context
-            await self.manager.add_message(
-                role="user",
-                prompt_name=state.prompt,
-                params={"context": self.context}
-            )
-
-            response = await self.manager.complete()
-
-            # Extract information from response
-            self.context.update(
-                self._extract_context(response.content)
-            )
-
-            # Determine next state
-            current_state = await self._next_state(
-                state,
-                response.content
-            )
-
-    def _extract_context(self, response):
-        # Extract key information from response
-        # (e.g., user name, preferences, issues mentioned)
-        return {}
-
-    async def _next_state(self, state, user_input):
-        # Determine next state based on transitions
-        for transition_name, condition in state.transitions.items():
-            if await condition.evaluate(user_input):
-                return state.next_states[transition_name]
-        return None
+adapter = ConversationFlowAdapter(flow=flow, prompt_builder=make_builder(), llm=llm)
+await adapter.execute()
+await llm.close()
 ```
 
-## Conversation Persistence with Flows
+The completion is stripped, lower-cased, and compared to `expected_value` for
+exact equality — so the prompt has to ask for a single word. Without a provider
+in context and without `llm_config`, `evaluate` raises `ValueError`.
 
-### Save and Resume Flow
+## Through a conversation
+
+`ConversationManager.execute_flow()` writes one assistant node per state into
+the conversation tree and yields them. The conversation must already have
+state, so create the manager with a system prompt or add a message first.
 
 ```python
-from dataknobs_llm.conversations import DataknobsConversationStorage
-from dataknobs_data.backends import AsyncMemoryDatabase
+async def run_through_a_conversation():
+    llm = make_llm()
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=make_builder(),
+        storage=DataknobsConversationStorage(AsyncMemoryDatabase()),
+        system_prompt_name="support_agent",
+    )
 
-# Create with persistence
-db = AsyncMemoryDatabase()
-storage = DataknobsConversationStorage(db)
+    async for node in manager.execute_flow(routing_flow("billing")):
+        print(node.metadata["state"], "->", node.message.content)
 
-manager = await ConversationManager.create(
-    llm=llm,
-    prompt_builder=builder,
-    flow=support_flow,
-    storage=storage,
-    conversation_id="user123-support-session1"
+    history = await manager.get_history()
+    assert [m.role for m in history] == ["system", "assistant", "assistant", "assistant"]
+    await llm.close()
+
+
+asyncio.run(run_through_a_conversation())
+```
+
+Output:
+
+```
+greeting -> Hello! What can I help you with today?
+collect_issue -> Tell me more about the billing problem.
+billing_support -> I'll pull up your billing records.
+```
+
+## Handling a failed flow
+
+`execute_flow` converts the adapter's `OperationError` into a `ValueError`,
+keeping the original as `__cause__`. The most common cause is a state with no
+matching arc — a dead end is a failure, not a graceful stop.
+
+```python
+async def handle_a_failure():
+    llm = make_llm()
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=make_builder(),
+        storage=DataknobsConversationStorage(AsyncMemoryDatabase()),
+        system_prompt_name="support_agent",
+    )
+
+    dead_end = ConversationFlow(
+        name="dead_end",
+        initial_state="greeting",
+        states={
+            "greeting": FlowState(
+                prompt_name="greeting",
+                transitions={"never": "farewell"},
+                transition_conditions={"never": keyword_condition(["no-such-word"])},
+            ),
+            "farewell": FlowState(prompt_name="farewell"),
+        },
+    )
+
+    try:
+        async for _node in manager.execute_flow(dead_end):
+            pass
+    except ValueError as exc:
+        print(exc)                       # Flow execution failed: ... No valid transitions from state: greeting
+        print(type(exc.__cause__))       # <class 'dataknobs_common.exceptions.OperationError'>
+        print(exc.__cause__.context)     # {'flow': 'dead_end', 'state': 'greeting'}
+
+    await llm.close()
+
+
+asyncio.run(handle_a_failure())
+```
+
+To let a state end the conversation instead, make it terminal — give it no
+`transitions` — or add a final `always()` arc to a terminal state.
+
+## Persisting and resuming
+
+Flow nodes are written to storage as they are yielded, so a flow run survives a
+restart like any other conversation. Resume with
+`ConversationManager.resume()`, not `create()` — `create()` starts a new
+conversation whatever id you give it.
+
+```python
+async def persist_and_resume():
+    db = AsyncMemoryDatabase()          # swap for any dataknobs-data backend
+    storage = DataknobsConversationStorage(db)
+    llm = make_llm()
+    builder = make_builder()
+
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="support_agent",
+        conversation_id="support-session-1",
+    )
+    async for _node in manager.execute_flow(routing_flow("billing")):
+        pass
+
+    resumed = await ConversationManager.resume(
+        conversation_id="support-session-1",
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+    )
+    assert len(await resumed.get_history()) == 4     # system + three flow states
+
+    async for _node in resumed.execute_flow(routing_flow("billing")):
+        pass
+    assert len(await resumed.get_history()) == 7
+
+    await llm.close()
+
+
+asyncio.run(persist_and_resume())
+```
+
+Each run appends to the same branch, so the second run's nodes are children of
+the first run's last node.
+
+## Validating before you run
+
+```python
+flow = ConversationFlow(
+    name="warned",
+    initial_state="greeting",
+    states={
+        "greeting": FlowState(
+            prompt_name="greeting",
+            transitions={"go": "farewell"},
+            transition_conditions={"go": always()},
+        ),
+        "farewell": FlowState(prompt_name="farewell"),
+        "orphan": FlowState(prompt_name="tech_support"),
+    },
 )
 
-# Start flow
-await manager.execute_flow()
+assert flow.validate_flow() == [
+    "State 'orphan' is unreachable",
+    "State 'farewell' has no exit transitions (potential dead end)",
+    "State 'orphan' has no exit transitions (potential dead end)",
+]
+```
 
-# Later, resume from same point
-manager = await ConversationManager.create(
-    llm=llm,
-    prompt_builder=builder,
-    flow=support_flow,
-    storage=storage,
-    conversation_id="user123-support-session1"  # Loads existing state
+Every terminal state produces a "potential dead end" warning; that one is about
+shape, not correctness.
+
+The structural errors are raised at construction instead:
+
+```python
+FlowState(prompt_name="greeting", transitions={"go": "farewell"})
+# ValueError: Transition 'go' has no corresponding condition
+
+FlowState(prompt_name="")
+# ValueError: prompt_name is required
+
+ConversationFlow(
+    name="bad",
+    initial_state="a",
+    states={
+        "a": FlowState(
+            prompt_name="greeting",
+            transitions={"go": "nowhere"},
+            transition_conditions={"go": always()},
+        )
+    },
 )
-
-# Continue from where we left off
-await manager.execute_flow()
+# ValueError: State 'a' transitions to unknown state 'nowhere'
 ```
 
 ## See Also
 
-- [FSM-Based Flows Guide](../guides/flows.md) - Detailed guide
-- [Conversation Management](../guides/conversations.md) - Core concepts
-- [FSM Package](../../fsm/index.md) - Underlying FSM framework
-- [Basic Usage Examples](basic-usage.md) - Simple conversations
+- [FSM-Based Flows](../guides/flows.md) — the reference guide
+- [FSM-Based Conversation Flow](fsm-conversation-flow.md) — one complete program
+- [Conversation Management](../guides/conversations.md) — branching and persistence
+- [Basic Usage](basic-usage.md) — conversations without a flow
