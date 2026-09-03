@@ -206,6 +206,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises `ResourceError` and re-exports `TransformError` / `ValidationError`
   from it.
 
+- **`mock_tool_arguments()`** (`dataknobs_llm.testing`) derives stand-in
+  arguments from a tool's JSON schema, so a test scripting a tool call does not
+  transcribe them by hand:
+  `tool_call_response(tool.name, mock_tool_arguments(tool.schema))`. Values are
+  derived from a seed and the property's path, so a given schema and seed
+  always produce the same arguments; `enum` members, nested `properties` and
+  array `items` are honoured, and `required_only=True` emits only the required
+  properties. It replaces — and generalizes past `EchoProvider` — the schema
+  synthesis that the removed `function_call()` carried (see Removed).
+
 - **`dataknobs-structures` is now declared.** `Tree` backs `ConversationState`
   and is imported at module scope by `conversations/manager.py` and
   `conversations/storage.py`, so every subpackage — including a bare
@@ -239,6 +249,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumers need. `LLMMessage.function_call` is a different field — the
   assistant-message wire format — and is unaffected, as is the
   `LLMConfig.function_call` request parameter.
+
+- **`EchoProvider`'s schema-derived mock arguments.** Its `function_call()`
+  override generated a deterministic value per declared property from the
+  function's JSON schema, which nothing on the `complete(tools=...)` path ever
+  offered. The capability is back as `mock_tool_arguments()` (see Added),
+  where it is a pure function of the schema rather than provider behaviour, so
+  any provider double — or a consumer's own test — can use it.
 
 - **Prompt-based tool-calling fallback.** Ollama and Anthropic answered a
   "model does not support native tools" 400 by re-issuing the request with a
