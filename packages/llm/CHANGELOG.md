@@ -225,7 +225,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `None` rather than `[]` for a turn with no calls. An empty vendor call id
   becomes `None`, which it already did on two of the six paths.
 
+- **Cost tracking has never recorded a cost.** `Tree.children` is `None` at a
+  leaf rather than an empty list, and `ConversationManager.get_total_cost()`
+  iterated it directly — so the walk raised `TypeError` on the first leaf it
+  reached, which is every branch. `complete()` calls that walk inside a
+  `try/except Exception` that logs and continues, so each completion recorded
+  `Failed to calculate cost: 'NoneType' object is not iterable` and stored
+  neither `cost_usd` nor `cumulative_cost_usd` on the assistant node, while
+  reporting success. `get_cost_by_branch()` had the same gap on a node id that
+  runs deeper than the tree. Both walks now stop at the bottom, and a
+  completion stores the cost it calculated.
+
+- **A turn whose state disappeared reported an attribute, not a reason.**
+  `stream_complete()` yields to its consumer between validating the state and
+  finalizing the turn, so a `reset()` in between left finalization reaching
+  through `None` for a tree node — `AttributeError: 'NoneType' object has no
+  attribute 'get_current_node'`, after handing that same `None` to every
+  post-response middleware, which declares a `ConversationState`. The turn
+  helpers now ask for the state they require and report its absence with the
+  reason `complete()` has always given.
+
 ### Added
+
+- **`rag_config_from_dict()`**, exported from `dataknobs_llm.prompts`. RAG
+  settings arrive as plain mappings — from YAML, from a bot's configuration,
+  from a keyword argument — and `RAGConfig` is a `total=False` `TypedDict`, so
+  the known keys have to be picked out. The prompt libraries already did this
+  privately; the function is now the one place the recognized key set is
+  stated, and `ConversationManager.add_message(rag_configs=...)` parses through
+  it instead of forwarding whatever it was handed.
 
 - **`fsm` extra.** `dataknobs-fsm` backs `dataknobs_llm.fsm_integration`
   (`LLMResource`, `AsyncLLMResource`, `LLMSession`, `LLMProvider`, the FSM

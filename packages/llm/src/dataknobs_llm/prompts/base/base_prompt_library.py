@@ -10,7 +10,14 @@ from typing import Any
 import logging
 
 from .abstract_prompt_library import AbstractPromptLibrary
-from .types import PromptTemplateDict, MessageIndex, RAGConfig, ValidationConfig, ValidationLevel
+from .types import (
+    MessageIndex,
+    PromptTemplateDict,
+    RAGConfig,
+    ValidationConfig,
+    ValidationLevel,
+    rag_config_from_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,28 +263,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         Returns:
             RAGConfig dictionary
         """
-        rag_config: RAGConfig = {
-            "adapter_name": data.get("adapter_name", ""),
-            "query": data.get("query", ""),
-        }
-
-        # Add optional fields
-        if "k" in data:
-            rag_config["k"] = data["k"]
-
-        if "filters" in data:
-            rag_config["filters"] = data["filters"]
-
-        if "placeholder" in data:
-            rag_config["placeholder"] = data["placeholder"]
-
-        if "header" in data:
-            rag_config["header"] = data["header"]
-
-        if "item_template" in data:
-            rag_config["item_template"] = data["item_template"]
-
-        return rag_config
+        return rag_config_from_dict(data)
 
     def _parse_prompt_template(self, data: Any) -> PromptTemplateDict:
         """Parse prompt template from various formats.
