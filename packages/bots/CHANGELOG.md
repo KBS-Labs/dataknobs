@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.13.1 - 2026-09-03
 
+#### Changed
+- raised the `dataknobs-llm` floor to `>=0.10.0`
+
 ## v0.13.0 - 2026-09-02
 
 ### Added

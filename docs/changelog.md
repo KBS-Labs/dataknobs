@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Documented
 - the conversation-flow pages describe the shipped API — seven published pages taught a `FlowState` shape, a `ConversationManager.create(flow=...)` parameter and an `execute_flow()` returning a response, none of which has ever existed. They now state the thing the old pages inverted: a flow state renders its prompt rather than calling the LLM. Every code block on the two example pages is executed as written before publication
 
-### dataknobs-bots [0.13.0]
+### dataknobs-bots [0.13.1]
 
 #### Changed
 - raised the `dataknobs-llm` floor to `>=0.10.0`
