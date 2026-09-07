@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_common.hierarchy`**, the structure axis: what a node's parents
+  and children are, and the walks over them. A hierarchy is read-only,
+  key-addressed and **multi-parent-tolerant** — `parents(node_id)` returns a
+  sequence and never a single node, because an open-world relation yields a DAG
+  and a structure that silently picks one parent out of two is a lie the caller
+  cannot detect.
+
+  `Hierarchy` and `AsyncHierarchy` are `@runtime_checkable` protocols over four
+  members, generic in the key with `str` **defaulted** — so a bare `Hierarchy`
+  is `Hierarchy[str]` and reads as it always did, while an object tree with no
+  id at all can bind the parameter to its own node type and share the same
+  walks. The walks never inspect a key; they only hash one.
+
+  `ancestors(hierarchy, node_id)` and `async_ancestors(...)` return every node
+  above the anchor, nearest first, excluding it, deduplicated, and terminating
+  on cyclic data — the visited set is unconditional, because data may be cyclic
+  whatever an acyclicity claim says. **Both flavours are one implementation.**
+  Because the asynchronous protocol returns a `Sequence` rather than an async
+  iterable, a walk awaits nothing in the middle of its own logic: each is
+  written once as a flavour-free generator, and only the two drivers are
+  twinned. Their number does not grow when a walk is added, and the
+  asynchronous one fetches a whole level per round of concurrency rather than a
+  node.
+
+- **`dataknobs_common.taxonomy`**, one relation of a vocabulary reified as a
+  walkable axis. `Taxonomy` and `AsyncTaxonomy` hold a definition and three
+  backings — structure, content, and the assertions the edges were made of —
+  and no copy of any of them, so a rebuild beneath one is visible on the next
+  read. `walk()` yields every node at or under an anchor, breadth first, each
+  one once, bounded by `max_depth`.
+
+- **`Ontology.taxonomy(name)`** and its asynchronous twin, building that axis
+  from three fields the ontology already holds and **no consumer input** — the
+  structure is its own assertions read for one relation, the content is its
+  entity source, and the assertions travel along so a cursor over the axis can
+  later report the edge it walked rather than only its endpoints. It is a plain
+  `def` on the asynchronous twin, which constructs and awaits nothing.
+
+  It refuses, **naming the axis**, a definition asking for something the
+  ontology cannot supply. `materialization.content: materialized` is a copy of
+  every entity on the axis and needs a store to hold it; a vocabulary loaded
+  from a file binds none. The refusal fires where the caller asked for the axis
+  rather than at the first walk, which is a call site with no idea why it
+  failed. The shipped defaults — structure copied, content live — are exactly
+  the pair that needs no store.
+
+  `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
+  `dataknobs_common.ontology.hierarchy`, are what answer the structure axis
+  over a vocabulary: `parents(x)` is `find(subject=x, relation=…)` read for its
+  objects and `children(x)` the mirrored query, with nothing cached. They live
+  beside the ontology rather than beside the protocol they satisfy, because
+  they are made of ontology types — the same rule that puts a database-backed
+  hierarchy in `dataknobs-data`.
+
+- **`object_entity_id(term)`** in `dataknobs_common.ontology.sources`, beside
+  `relation_id`: the entity an assertion's object points at, or `None` for a
+  literal. Public because two readers now ask it, and a second copy of *what
+  counts as an entity object* is a rule that can disagree with itself.
+
 - **`dataknobs_common.ontology`**, a vocabulary of entities, the relations
   between them, and the axes they form. An ontology here is a **value**: it
   holds sources rather than entities, owns no lifecycle, and its accessors are
@@ -63,6 +122,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot live there. `dataknobs_data.fields` registers `VectorField` for
   `VECTOR` and `SPARSE_VECTOR` on import; a type with no registered class
   builds the class `from_dict` was called on.
+
+### Changed
+
+- **`dataknobs-common` declares one dependency**, `typing-extensions`, scoped by
+  marker to Python below 3.13. PEP 696 type-parameter defaults are `typing`'s
+  only from 3.13 while `requires-python` is `>=3.12`, and
+  `dataknobs_common.hierarchy` needs one at *runtime* rather than only for type
+  checking. A 3.13 install already resolves to nothing, and the entry deletes
+  itself when the floor rises. It is pure typing support and declares no
+  dependencies of its own, so the base install still installs no third-party
+  code.
 
 ### Fixed
 

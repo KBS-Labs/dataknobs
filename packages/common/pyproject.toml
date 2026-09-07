@@ -7,7 +7,18 @@ authors = [
     { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+# The package's posture is zero hard dependencies -- every optional backend
+# below is lazy-imported behind an extra. This one entry is the exception and
+# it is scoped so that it is not an exception for long: PEP 696 type-parameter
+# defaults are ``typing``'s only from 3.13, and ``dataknobs_common.hierarchy``
+# needs one at *runtime* rather than only for type checking (``typing.TypeVar``
+# raises on ``default=``). The marker means a 3.13 install already resolves to
+# nothing, and the ``sys.version_info`` branch at the use site deletes the
+# import the day ``requires-python`` rises. typing-extensions is PSF-2.0 --
+# permissive, no copyleft obligation -- and pulls in nothing of its own.
+dependencies = [
+    "typing-extensions>=4.4.0; python_full_version < '3.13'",
+]
 
 [project.optional-dependencies]
 # Optional ``.env`` / ``.project_vars`` fallback layer for

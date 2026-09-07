@@ -155,6 +155,19 @@ def default_normalizer(form: str) -> str:
     return form.strip().casefold()
 
 
+def object_entity_id(term: Term) -> str | None:
+    """The entity id an assertion object points at, or None for a literal.
+
+    Public beside :func:`relation_id` for the same reason: two readers ask this
+    question -- the index below, and the assertion-backed hierarchy that walks
+    one relation's edges -- and a second copy of *what counts as an entity
+    object* is a rule that can disagree with itself.
+    """
+    if isinstance(term, EntityRef):
+        return term.entity_id
+    return None
+
+
 def relation_id(relation: RelationRef) -> str:
     """The id of a relation given either an id or the definition itself.
 
@@ -353,7 +366,7 @@ class _AssertionIndex:
         for assertion in self.assertions:
             self.by_id[assertion.id] = assertion
             self.by_subject.setdefault(assertion.subject, []).append(assertion)
-            object_id = _object_entity_id(assertion.object)
+            object_id = object_entity_id(assertion.object)
             if object_id is not None:
                 self.by_object.setdefault(object_id, []).append(assertion)
 
@@ -368,7 +381,7 @@ class _AssertionIndex:
     ) -> list[Assertion]:
         if subject is not None:
             candidates: Sequence[Assertion] = self.by_subject.get(subject, [])
-        elif object_ is not None and (oid := _object_entity_id(object_)) is not None:
+        elif object_ is not None and (oid := object_entity_id(object_)) is not None:
             candidates = self.by_object.get(oid, [])
         else:
             candidates = self.assertions
@@ -417,13 +430,6 @@ class _AssertionIndex:
             if matches:
                 found[key] = matches
         return found
-
-
-def _object_entity_id(term: Term) -> str | None:
-    """The entity id an assertion object points at, or None for a literal."""
-    if isinstance(term, EntityRef):
-        return term.entity_id
-    return None
 
 
 class MappingAssertionSource:
