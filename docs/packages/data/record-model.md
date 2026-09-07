@@ -2,6 +2,8 @@
 
 The Record class is the fundamental data structure in the DataKnobs data package, representing a single data entity with fields, metadata, and a unique identifier.
 
+`Record`, `Field` and `FieldType` are *defined* in `dataknobs-common`, because they are pure data and a package that declares no dependencies can hold them. `dataknobs-data` re-exports all three, so every import on this page resolves to the same objects `dataknobs_common` exports and nothing here needs changing. `VectorField` is `dataknobs-data`'s own — it needs `numpy` at runtime.
+
 ## Overview
 
 The Record model provides:
@@ -318,6 +320,12 @@ print(record.fields["data"].value["key"])  # Still original value
 copy_with_id = record.copy(deep=True)
 print(copy_with_id.id == record.id)  # True - ID is preserved
 ```
+
+A deep copy preserves each field's class, not just its value: a `VectorField`
+comes back a `VectorField` with its `dimensions`, `source_field`, `model_name`
+and `model_version` intact. `Record.copy` gets that from `Field.copy`, which
+copies through the instance rather than reconstructing a `Field`, so a
+consumer's own `Field` subclass survives a copy without writing an override.
 
 ### Merge Operations
 

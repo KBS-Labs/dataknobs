@@ -1,16 +1,22 @@
-"""Field type definitions and metadata for structured data records.
+"""Vector field type, and the record field vocabulary re-exported.
 
-This module defines field types, validation, and metadata structures used by
-Record objects to represent typed data fields with constraints and transformations.
+``FieldType``, ``Field`` and the field-type registry are defined in
+:mod:`dataknobs_common.fields`. They are re-exported here so that
+``from dataknobs_data.fields import Field`` keeps resolving, and because
+``VectorField`` -- which needs ``numpy`` and therefore cannot live in
+``dataknobs-common`` -- subclasses ``Field``.
 """
 
 from __future__ import annotations
 
-import copy
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
 from typing import TYPE_CHECKING, Any
+
+from dataknobs_common.fields import (
+    Field,
+    FieldType,
+    field_type_backends,
+    register_field_class,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -18,272 +24,13 @@ if TYPE_CHECKING:
 else:
     from typing import Callable
 
-
-class FieldType(Enum):
-    """Enumeration of supported field types.
-
-    Defines the data types that can be stored in Record fields. Field types enable
-    type validation, schema enforcement, and backend-specific optimizations.
-
-    Attributes:
-        STRING: Short text (< 1000 chars)
-        TEXT: Long text content
-        INTEGER: Whole numbers
-        FLOAT: Decimal numbers
-        BOOLEAN: True/False values
-        DATETIME: Date and time values
-        JSON: Structured JSON data (dicts, lists)
-        BINARY: Binary data (bytes)
-        VECTOR: Dense vector embeddings for similarity search
-        SPARSE_VECTOR: Sparse vector representations
-
-    Example:
-        ```python
-        from dataknobs_data import Field, FieldType
-
-        # Create typed fields
-        name_field = Field(name="name", value="Alice", type=FieldType.STRING)
-        age_field = Field(name="age", value=30, type=FieldType.INTEGER)
-        tags_field = Field(name="tags", value=["python", "data"], type=FieldType.JSON)
-
-        # Auto-detection (type is inferred from value)
-        auto_field = Field(name="score", value=95.5)  # Auto-detected as FLOAT
-        ```
-    """
-
-    STRING = "string"
-    INTEGER = "integer"
-    FLOAT = "float"
-    BOOLEAN = "boolean"
-    DATETIME = "datetime"
-    JSON = "json"
-    BINARY = "binary"
-    TEXT = "text"
-    VECTOR = "vector"
-    SPARSE_VECTOR = "sparse_vector"
-
-
-@dataclass
-class Field:
-    """Represents a single field in a record.
-
-    A Field encapsulates a named value along with its type and optional metadata.
-    Field types are automatically detected if not explicitly provided.
-
-    Attributes:
-        name: The field name
-        value: The field value (can be any Python type)
-        type: The field type (auto-detected if None)
-        metadata: Optional metadata dictionary
-
-    Example:
-        ```python
-        from dataknobs_data import Field, FieldType
-
-        # Auto-detected type
-        name = Field(name="name", value="Alice")
-        print(name.type)  # FieldType.STRING
-
-        # Explicit type
-        score = Field(name="score", value=95.5, type=FieldType.FLOAT)
-
-        # With metadata
-        vector = Field(
-            name="embedding",
-            value=[0.1, 0.2, 0.3],
-            type=FieldType.VECTOR,
-            metadata={"dimensions": 3, "model": "text-embedding-3-small"}
-        )
-
-        # Validation
-        is_valid = name.validate()  # True
-
-        # Type conversion
-        str_score = score.convert_to(FieldType.STRING)
-        print(str_score.value)  # "95.5"
-        ```
-    """
-
-    name: str
-    value: Any
-    type: FieldType | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        """Auto-detect type if not provided."""
-        if self.type is None:
-            self.type = self._detect_type(self.value)
-
-    def _detect_type(self, value: Any) -> FieldType:
-        """Detect the field type from the value.
-
-        Args:
-            value: The value to analyze
-
-        Returns:
-            The detected FieldType
-
-        Example:
-            ```python
-            field = Field(name="data", value=[1, 2, 3])
-            detected_type = field._detect_type([1, 2, 3])
-            print(detected_type)  # FieldType.JSON
-            ```
-        """
-        if value is None:
-            return FieldType.STRING
-        elif isinstance(value, bool):
-            return FieldType.BOOLEAN
-        elif isinstance(value, int):
-            return FieldType.INTEGER
-        elif isinstance(value, float):
-            return FieldType.FLOAT
-        elif isinstance(value, datetime):
-            return FieldType.DATETIME
-        elif isinstance(value, (dict, list)):
-            return FieldType.JSON
-        elif isinstance(value, bytes):
-            return FieldType.BINARY
-        elif isinstance(value, str):
-            if len(value) > 1000:
-                return FieldType.TEXT
-            return FieldType.STRING
-        else:
-            return FieldType.JSON
-
-    def copy(self) -> Field:
-        """Create a deep copy of the field."""
-        return Field(
-            name=self.name,
-            value=copy.deepcopy(self.value),
-            type=self.type,
-            metadata=copy.deepcopy(self.metadata),
-        )
-
-    def validate(self) -> bool:
-        """Validate that the value matches the field type.
-
-        Returns:
-            True if the value is valid for the field type, False otherwise
-
-        Example:
-            ```python
-            # Valid field
-            age = Field(name="age", value=30, type=FieldType.INTEGER)
-            print(age.validate())  # True
-
-            # Invalid field (wrong type for value)
-            bad_field = Field(name="count", value="not a number", type=FieldType.INTEGER)
-            print(bad_field.validate())  # False
-            ```
-        """
-        if self.value is None:
-            return True
-
-        type_validators = {
-            FieldType.STRING: lambda v: isinstance(v, str),
-            FieldType.INTEGER: lambda v: isinstance(v, int) and not isinstance(v, bool),
-            FieldType.FLOAT: lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
-            FieldType.BOOLEAN: lambda v: isinstance(v, bool),
-            FieldType.DATETIME: lambda v: isinstance(v, datetime),
-            FieldType.JSON: lambda v: isinstance(v, (dict, list)),
-            FieldType.BINARY: lambda v: isinstance(v, bytes),
-            FieldType.TEXT: lambda v: isinstance(v, str),
-        }
-
-        if self.type is None:
-            return True
-        validator = type_validators.get(self.type)
-        if validator:
-            return validator(self.value)
-        return True
-
-    def convert_to(self, target_type: FieldType) -> Field:
-        """Convert the field to a different type.
-
-        Args:
-            target_type: The target FieldType to convert to
-
-        Returns:
-            A new Field with the converted value and type
-
-        Raises:
-            ValueError: If conversion is not possible or fails
-
-        Example:
-            ```python
-            # Integer to string
-            age = Field(name="age", value=30, type=FieldType.INTEGER)
-            age_str = age.convert_to(FieldType.STRING)
-            print(age_str.value)  # "30"
-
-            # String to integer
-            count = Field(name="count", value="42", type=FieldType.STRING)
-            count_int = count.convert_to(FieldType.INTEGER)
-            print(count_int.value)  # 42
-            ```
-        """
-        if self.type == target_type:
-            return self
-
-        converters: dict[tuple[FieldType, FieldType], Callable[[Any], Any]] = {
-            (FieldType.INTEGER, FieldType.STRING): str,
-            (FieldType.INTEGER, FieldType.FLOAT): float,
-            (FieldType.FLOAT, FieldType.STRING): str,
-            (FieldType.FLOAT, FieldType.INTEGER): int,
-            (FieldType.BOOLEAN, FieldType.STRING): lambda v: "true" if v else "false",
-            (FieldType.BOOLEAN, FieldType.INTEGER): int,
-            (FieldType.STRING, FieldType.INTEGER): int,
-            (FieldType.STRING, FieldType.FLOAT): float,
-            (FieldType.STRING, FieldType.BOOLEAN): lambda v: v.lower() in ("true", "1", "yes"),
-            (FieldType.STRING, FieldType.TEXT): lambda v: v,
-            (FieldType.TEXT, FieldType.STRING): lambda v: v,
-        }
-
-        if self.type is None:
-            raise ValueError(f"Cannot convert {self.name} from None to {target_type}")
-
-        converter_key = (self.type, target_type)
-        if converter_key in converters:
-            try:
-                converter = converters[converter_key]
-                new_value = converter(self.value)
-                return Field(
-                    name=self.name, value=new_value, type=target_type, metadata=self.metadata.copy()
-                )
-            except (ValueError, TypeError) as e:
-                raise ValueError(
-                    f"Cannot convert {self.name} from {self.type} to {target_type}: {e}"
-                ) from e
-        else:
-            raise ValueError(f"No converter available from {self.type} to {target_type}")
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert the field to a dictionary representation."""
-        return {
-            "name": self.name,
-            "value": self.value,
-            "type": self.type.value if self.type else None,
-            "metadata": self.metadata,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Field:
-        """Create a field from a dictionary representation."""
-        field_type = None
-        if data.get("type"):
-            field_type = FieldType(data["type"])
-
-        # Handle vector fields specially
-        if field_type in (FieldType.VECTOR, FieldType.SPARSE_VECTOR):
-            return VectorField.from_dict(data)
-
-        return cls(
-            name=data["name"],
-            value=data["value"],
-            type=field_type,
-            metadata=data.get("metadata", {}),
-        )
+__all__ = [
+    "Field",
+    "FieldType",
+    "VectorField",
+    "field_type_backends",
+    "register_field_class",
+]
 
 
 class VectorField(Field):
@@ -534,3 +281,7 @@ class VectorField(Field):
             model_version=model_info.get("version") if model_info else None,
             metadata=metadata,
         )
+
+
+register_field_class(FieldType.VECTOR, VectorField)
+register_field_class(FieldType.SPARSE_VECTOR, VectorField)

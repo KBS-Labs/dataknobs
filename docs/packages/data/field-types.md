@@ -4,6 +4,8 @@
 
 The DataKnobs data package provides a comprehensive type system for structured data fields. Each field in a Record has an associated type that determines validation rules and serialization behavior.
 
+`Field` and `FieldType` are *defined* in `dataknobs-common` and re-exported here, so the imports on this page are unchanged and resolve to the same objects. `VectorField` is `dataknobs-data`'s own, because it needs `numpy` at runtime.
+
 ## Available Field Types
 
 | FieldType | Python Type | Description | Example |
@@ -15,6 +17,9 @@ The DataKnobs data package provides a comprehensive type system for structured d
 | `DATETIME` | `datetime` | Date and time | `datetime.now()` |
 | `JSON` | `dict/list` | Structured data | `{"key": "value"}` |
 | `BINARY` | `bytes` | Binary data | `b"\x00\x01\x02"` |
+| `TEXT` | `str` | Long text (auto-detected above 1000 characters) | `"..."` |
+| `VECTOR` | `VectorField` | Dense embedding | `VectorField(value=[0.1, 0.2])` |
+| `SPARSE_VECTOR` | `VectorField` | Sparse embedding | `VectorField(value=[0.0, 1.0])` |
 
 ## Using Field Types
 
@@ -223,6 +228,49 @@ print(f"Temperature: {temperature_field.value}°{unit[0].upper()}")
 3. **Validate early** - catch type errors at field creation
 4. **Document metadata** - explain what metadata fields mean
 5. **Handle None values** - use Optional types where appropriate
+
+## Building Your Own Field Class
+
+`Field.from_dict` decides which class to build from a registry rather than from
+a list of types written into the base class, so a subclass is reached by having
+registered itself:
+
+```python
+from dataknobs_common import Field, FieldType, register_field_class
+
+
+class MoneyField(Field):
+    @classmethod
+    def from_dict(cls, data):
+        built = cls(
+            name=data["name"],
+            value=data["value"],
+            type=FieldType.FLOAT,
+            metadata=data.get("metadata", {}),
+        )
+        built.currency = data.get("metadata", {}).get("currency", "USD")
+        return built
+
+
+register_field_class(FieldType.FLOAT, MoneyField)
+
+field = Field.from_dict({"name": "price", "value": 9.99, "type": "float"})
+print(type(field).__name__)  # MoneyField
+```
+
+Registration happens at import of the module defining the subclass, and
+re-registering a type overwrites the prior class — so a module substituting one
+of the built-ins must be imported after it. `dataknobs_data.fields` registers
+`VectorField` for `VECTOR` and `SPARSE_VECTOR` when it is imported.
+
+A type with no registered class builds the class `from_dict` was called on.
+That is why `dataknobs_common.Field.from_dict` returns a plain `Field` for a
+vector payload in a process that never imported `dataknobs_data`: that package
+is where the class able to hold a vector lives.
+
+Two copies of a field are one class, too — `Field.copy()` copies through the
+instance, so `MoneyField(...).copy()` is a `MoneyField` with `currency` intact
+and needs no override.
 
 ## See Also
 

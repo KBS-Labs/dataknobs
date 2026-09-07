@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`dataknobs_common.ontology`**, a vocabulary of entities, the relations
+  between them, and the axes they form. An ontology here is a **value**: it
+  holds sources rather than entities, owns no lifecycle, and its accessors are
+  pure over its own fields, so it is safe to hold, share and pass without
+  anyone having to remember to close it.
+
+  Two doors load one. `load_ontology(path)` needs no database, no embedder and
+  no event loop — a file a person edited is already a list once read, and the
+  call is not `async`. `async_load_ontology(path)` returns the same vocabulary
+  with asynchronous sources, reading through `asyncio.to_thread` so the parse
+  never runs on the caller's loop. Neither forwards to the other; they meet at
+  `build_ontology(config)`, which validates and maps and binds nothing.
+
+  Both refuse a *live* source kind, naming the source, its kind, and what to
+  use instead. The refusal is about **ownership** rather than about what is
+  installed: binding a database source creates something that must be closed,
+  and a module-level function has no `close()`. So one config means one thing
+  in every environment.
+
+  The module ships `Entity`, `EntityType`, `RelationType`, `Assertion`,
+  `AttributeDef`, `Literal`, `EntityRef`, `SourceRef`, `Provenance` and
+  `TaxonomyDefinition`; `qualify()` / `split_qualified()` for namespaced ids;
+  four source protocols with sync and async twins; and four in-memory
+  concretes over an authored file. A hand-maintained nested tree with no `id`
+  anywhere gets one minted per node from its path, with the path kept as the
+  name — so renaming a node changes what it is called and not what it is.
+
+- **`Capability.ORIGIN_FETCH`**, declaring that a source can reach the backing
+  record an entity's `SourceRef` points at. Its absence is how an authored
+  vocabulary states that `fetch_origin` will answer `None` for every reference
+  it is handed — which a caller cannot otherwise tell apart from "no such
+  row". The `SourceRef` still travels out intact, so a consumer can spend it
+  on their own data even where we cannot.
+
+- **`Record`, `Field` and `FieldType` are `dataknobs-common`'s**, in the new
+  `dataknobs_common.records` and `dataknobs_common.fields` modules and exported
+  at package level. They are pure data — a typed value, a named collection of
+  them, and an enum — with no transport, no connection and no third-party
+  import, so they were the one part of the record model a package that declares
+  `dependencies = []` can hold. `dataknobs-data` re-exports all three from both
+  `dataknobs_data` and `dataknobs_data.records` / `dataknobs_data.fields`, so
+  every existing import keeps resolving to the same object.
+
+  `VectorField` stays in `dataknobs_data.fields`: it needs `numpy` at runtime,
+  and `dataknobs-common`'s base install declares no dependencies.
+
+- **`field_type_backends`**, a registry of `Field` subclasses keyed by
+  `FieldType` value, with `register_field_class()` to add one.
+  `Field.from_dict` consults it to decide which class to build. The dispatch it
+  replaces was a hardcoded pair of enum members inside the base class, which no
+  consumer could extend and which pointed `dataknobs-common` at a class that
+  cannot live there. `dataknobs_data.fields` registers `VectorField` for
+  `VECTOR` and `SPARSE_VECTOR` on import; a type with no registered class
+  builds the class `from_dict` was called on.
+
+### Fixed
+
+- **`Field.copy()` keeps the field's class.** It reconstructed a `Field`
+  by name, so a subclass came back as a plain `Field` with everything the
+  subclass added silently dropped — `VectorField` lost `dimensions`,
+  `source_field`, `model_name` and `model_version`. It now copies through the
+  instance, so every subclass is correct without an override.
+
 ## v3.2.0 - 2026-09-02
 
 ### Added
