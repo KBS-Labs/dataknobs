@@ -5,6 +5,7 @@ This package provides shared functionality used across all dataknobs packages:
 - **Exceptions**: Unified exception hierarchy with context support
 - **Expressions**: Safe expression evaluation engine with restricted builtins
 - **Registry**: Generic registry pattern for managing named items
+- **Records**: Typed fields and the records built from them
 - **Serialization**: Protocols and utilities for to_dict/from_dict patterns
 - **Retry**: Configurable retry execution with backoff strategies
 - **Transitions**: Stateless transition validation for status graphs
@@ -137,6 +138,12 @@ from dataknobs_common.exceptions import (
     TimeoutError,
     ValidationError,
 )
+from dataknobs_common.fields import (
+    Field,
+    FieldType,
+    field_type_backends,
+    register_field_class,
+)
 from dataknobs_common.imports import (
     ClassConstraint,
     dotted_path,
@@ -202,6 +209,7 @@ from dataknobs_common.transitions import (
     InvalidTransitionError,
     TransitionValidator,
 )
+from dataknobs_common.records import Record
 from dataknobs_common.registry import (
     AsyncRegistry,
     BackendRegistry,
@@ -399,6 +407,16 @@ __all__ = [
     "safe_join",
     "safe_join_or_raise",
     "safe_segment",
+    # Record fields
+    #
+    # The vocabulary a Record is made of, and the registry Field.from_dict
+    # dispatches through. `VectorField` is NOT here: it needs numpy at
+    # runtime, so it stays in `dataknobs_data.fields` and registers itself.
+    "Field",
+    "FieldType",
+    "Record",
+    "field_type_backends",
+    "register_field_class",
     # Discriminators
     "Discriminator",
     "AsyncDiscriminator",

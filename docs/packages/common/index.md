@@ -16,6 +16,7 @@ This package provides shared cross-cutting functionality used across all datakno
 
 - **Exception Framework**: Unified exception hierarchy with context support
 - **Registry Pattern**: Generic registries for managing named items
+- **Record Model**: `Field`, `FieldType` and `Record` — the typed data vocabulary `dataknobs-data` and its consumers are built on
 - **Serialization Protocol**: Standard interfaces for to_dict/from_dict patterns
 - **Retry**: Configurable retry execution with multiple backoff strategies
 - **Transitions**: Stateless transition validation for declarative status graphs

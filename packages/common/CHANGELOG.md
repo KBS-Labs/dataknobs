@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`Record`, `Field` and `FieldType` are `dataknobs-common`'s**, in the new
+  `dataknobs_common.records` and `dataknobs_common.fields` modules and exported
+  at package level. They are pure data — a typed value, a named collection of
+  them, and an enum — with no transport, no connection and no third-party
+  import, so they were the one part of the record model a package that declares
+  `dependencies = []` can hold. `dataknobs-data` re-exports all three from both
+  `dataknobs_data` and `dataknobs_data.records` / `dataknobs_data.fields`, so
+  every existing import keeps resolving to the same object.
+
+  `VectorField` stays in `dataknobs_data.fields`: it needs `numpy` at runtime,
+  and `dataknobs-common`'s base install declares no dependencies.
+
+- **`field_type_backends`**, a registry of `Field` subclasses keyed by
+  `FieldType` value, with `register_field_class()` to add one.
+  `Field.from_dict` consults it to decide which class to build. The dispatch it
+  replaces was a hardcoded pair of enum members inside the base class, which no
+  consumer could extend and which pointed `dataknobs-common` at a class that
+  cannot live there. `dataknobs_data.fields` registers `VectorField` for
+  `VECTOR` and `SPARSE_VECTOR` on import; a type with no registered class
+  builds the class `from_dict` was called on.
+
+### Fixed
+
+- **`Field.copy()` keeps the field's class.** It reconstructed a `Field`
+  by name, so a subclass came back as a plain `Field` with everything the
+  subclass added silently dropped — `VectorField` lost `dimensions`,
+  `source_field`, `model_name` and `model_version`. It now copies through the
+  instance, so every subclass is correct without an override.
+
 ## v3.2.0 - 2026-09-02
 
 ### Added

@@ -5,6 +5,7 @@ from datetime import datetime
 import pytest
 
 from dataknobs_data import Field, FieldType
+from dataknobs_data.fields import field_type_backends, register_field_class
 
 
 class TestFieldType:
@@ -135,3 +136,62 @@ class TestField:
         data_no_type = {"name": "age", "value": 25, "metadata": {}}
         field = Field.from_dict(data_no_type)
         assert field.type == FieldType.INTEGER
+
+
+class TestFieldTypeRegistry:
+    """The dispatch ``Field.from_dict`` performs is registered, not hardcoded."""
+
+    def test_builtin_vector_types_are_registered(self):
+        """dataknobs_data registers VectorField for both vector types on import."""
+        from dataknobs_data import VectorField
+
+        assert field_type_backends.get("vector") is VectorField
+        assert field_type_backends.get("sparse_vector") is VectorField
+
+    def test_unregistered_type_builds_the_class_asked_for(self):
+        """A type with no registered class is built as ``cls``, not refused."""
+        field = Field.from_dict({"name": "n", "value": "v", "type": "string"})
+
+        assert type(field) is Field
+
+    def test_consumer_subclass_is_reached_by_registering_it(self):
+        """A consumer's own Field subclass is dispatched to without a code change.
+
+        The extension point exists because the dispatch used to be a
+        hardcoded pair of enum members, which no consumer could extend.
+        """
+
+        class TaggedField(Field):
+            @classmethod
+            def from_dict(cls, data):
+                built = cls(
+                    name=data["name"],
+                    value=data["value"],
+                    type=FieldType(data["type"]) if data.get("type") else None,
+                    metadata=data.get("metadata", {}),
+                )
+                built.tag = "tagged"
+                return built
+
+        previous = field_type_backends.get_optional(FieldType.BINARY.value)
+        register_field_class(FieldType.BINARY, TaggedField)
+        try:
+            field = Field.from_dict({"name": "blob", "value": b"x", "type": "binary"})
+
+            assert isinstance(field, TaggedField)
+            assert field.tag == "tagged"
+        finally:
+            if previous is None:
+                field_type_backends.unregister(FieldType.BINARY.value)
+            else:
+                register_field_class(FieldType.BINARY, previous)
+
+    def test_subclass_from_dict_does_not_recurse_into_itself(self):
+        """Calling ``from_dict`` on the registered class builds it directly."""
+        from dataknobs_data import VectorField
+
+        field = VectorField.from_dict(
+            {"name": "e", "value": [0.1, 0.2], "type": "vector", "metadata": {}}
+        )
+
+        assert isinstance(field, VectorField)

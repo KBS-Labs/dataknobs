@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`Record`, `Field` and `FieldType` are now defined in `dataknobs-common`**
+  and re-exported here. `from dataknobs_data import Record`,
+  `from dataknobs_data.records import Record` and
+  `from dataknobs_data.fields import Field, FieldType` all keep resolving, to
+  the same objects `dataknobs_common` exports. Nothing downstream changes.
+
+  `VectorField` is unaffected and stays here — it needs `numpy` at runtime,
+  which `dataknobs-common` does not declare. It reaches `Field.from_dict` by
+  registering itself in `field_type_backends` for `VECTOR` and
+  `SPARSE_VECTOR`, which is also how a consumer's own `Field` subclass is
+  reached; `Field.from_dict` no longer names any subclass.
+
+### Fixed
+
+- **A copied `VectorField` is still a `VectorField`.** `Field.copy()`
+  reconstructed a plain `Field`, dropping `dimensions`, `source_field`,
+  `model_name` and `model_version`. `Record.copy(deep=True)` had hidden this
+  by rebuilding a `VectorField` by hand, so the loss only showed on a direct
+  `field.copy()`. The base is fixed and the hand-rolled branch is gone.
+
 ## v0.11.0 - 2026-09-02
 
 ### Added
