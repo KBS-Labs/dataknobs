@@ -2050,7 +2050,6 @@ dependencies = [
     { name = "dataknobs-structures" },
     { name = "dataknobs-utils" },
     { name = "more-itertools" },
-    { name = "nltk" },
     { name = "numpy" },
     { name = "pandas" },
 ]
@@ -2067,7 +2066,6 @@ requires-dist = [
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "more-itertools", specifier = ">=8.10.0" },
-    { name = "nltk", specifier = ">=3.10.3" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
 ]

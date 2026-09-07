@@ -152,7 +152,6 @@ This package depends on:
 - `dataknobs-common`
 - `dataknobs-structures`
 - `dataknobs-utils`
-- nltk
 
 ## License
 

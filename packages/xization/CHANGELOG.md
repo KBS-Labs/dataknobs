@@ -7,28 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Security
+### Removed
 
-- Bumped minimum `nltk` requirement from `>=3.10.2` to `>=3.10.3` to exclude
-  versions affected by 16 advisories fixed in 3.10.3 (highest CVSS 9.8:
-  PYSEC-2026-3749 / GHSA-m4rf-3fr8-xwx3): PYSEC-2026-3733, PYSEC-2026-3735,
-  PYSEC-2026-3736, PYSEC-2026-3737, PYSEC-2026-3738, PYSEC-2026-3739,
-  PYSEC-2026-3741, PYSEC-2026-3748, PYSEC-2026-3749, PYSEC-2026-3751,
-  PYSEC-2026-3752, PYSEC-2026-3790, GHSA-5gh2-94qg-qppq, GHSA-6hwm-xvph-95vm,
-  GHSA-ff5c-cp5c-9wjf and GHSA-vp2x-qp44-57v7. Surfaced by the floor resolve
-  step in the `dependency-update` workflow.
+- **`nltk` is no longer a *declared* dependency of this package.** No module
+  under `packages/xization/` has ever referenced `nltk` directly — not in the
+  package's whole history — so the declaration duplicated a floor this package
+  neither imports nor is in a position to justify.
 
-  One further advisory in the same batch is **not** cleared by the bump.
-  PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp / CVE-2026-81726 (CVSS 8.3) lets
-  nltk's model-artifact APIs read and write outside the roots nltk pathsec
-  allows, because they call raw `open()` on caller-controlled paths. OSV holds
-  two disagreeing records for it — the PYSEC record reports it fixed in
-  3.10.3, the GHSA record reports `last_affected: 3.10.3` and "not yet
-  patched" — and the GHSA record is the accurate one. It is accepted rather
-  than mitigated: none of the affected entry points
-  (`TransitionParser.train`/`parse`, `AveragedPerceptron.save`/`load`,
-  `PerceptronTagger.save_to_json`, `save_maxent_params`) is called anywhere in
-  this workspace.
+  This does not mean `nltk` goes away. `dataknobs_utils/__init__.py` imports
+  `resource_utils`, which imports `nltk` at module level, so any
+  `from dataknobs_utils import ...` in this package still pulls `nltk` in at
+  runtime. It arrives through `dataknobs-utils`, which declares
+  `nltk>=3.10.3` and actually calls it (`nltk.download`, `nltk.data.path`,
+  `nltk.corpus.wordnet`). Nothing changes at install time or import time; the
+  floor is simply stated once, by the package that imports it, instead of
+  being maintained in two places that had to be kept in step by hand.
+
+  The `nltk.*` entry in this package's `ignore_missing_imports` mypy override
+  is retained deliberately: mypy follows the import chain above into
+  `resource_utils`, and `nltk` ships no stubs.
 
 ## v2.2.1 - 2026-09-02
 
