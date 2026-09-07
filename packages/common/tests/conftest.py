@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
+from pathlib import Path
 
 import pytest
 
@@ -43,3 +44,45 @@ def new_dk_daemon_threads() -> Iterator[Callable[..., list[str]]]:
         return sorted(t.name for t in live_dk_daemon_threads(watched) if t not in baseline)
 
     yield _still_alive
+
+
+MAMMALS_DOCUMENT = """\
+ontology:
+  id: mammals
+  version: "1.0"
+
+  entity_types:
+    - id: Species
+      attributes:
+        - {name: latin_name, type: string, required: true}
+    - id: Breed
+      isa: Species
+
+  relation_types:
+    - id: isa
+      transitive: true
+
+  entities:
+    - {id: mammal, type: Species, name: Mammal}
+    - {id: dog,    type: Species, name: Dog, aliases: [Canine, "Domestic dog"]}
+    - {id: beagle, type: Breed,   name: Beagle, aliases: [Beagles],
+       source: {source_id: clinic_db, table: species, key: "sp-2291"}}
+
+  assertions:
+    - {subject: dog,    relation: isa, object: mammal}
+    - {subject: beagle, relation: isa, object: dog}
+"""
+"""The worked example, as a hand-edited file would carry it.
+
+Shared by the ontology suites rather than repeated in each: they assert
+different things *about the same document*, and six near-copies of a YAML
+block drift until the thing they are all supposedly loading is six things.
+"""
+
+
+@pytest.fixture
+def mammals_path(tmp_path: Path) -> Path:
+    """:data:`MAMMALS_DOCUMENT` written to disk."""
+    path = tmp_path / "mammals.yaml"
+    path.write_text(MAMMALS_DOCUMENT)
+    return path
