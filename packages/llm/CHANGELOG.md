@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Bumped minimum `transformers` requirement in the `embeddings` extra from
+  `>=5.5.0` to `>=5.10.0` to exclude versions affected by
+  GHSA-xrqw-3rrv-vx5w / CVE-2026-9856 (CVSS 7.1), an arbitrary file write via
+  path traversal in `PreTrainedTokenizerBase.save_pretrained()` and
+  `ProcessorMixin.save_pretrained()`: keys from the `chat_template` dict are
+  used directly as filenames, so a malicious Hub repository's
+  `tokenizer_config.json` can escape the save directory. Fixed in 5.10.0.
+
+  The flaw is not reachable from this package — `save_pretrained` is never
+  called here, and `transformers` enters only through the optional
+  `embeddings` extra — but the extra ships the dependency to consumers who do
+  call it, so the floor moves rather than the finding being accepted.
+  Surfaced by the floor resolve step in the `dependency-update` workflow.
+
 ## v0.10.0 - 2026-09-03
 
 ### Fixed

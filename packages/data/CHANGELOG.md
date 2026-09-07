@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Security
+
+- Recorded three further `chromadb` advisories against the existing
+  accepted-risk rationale on the `>=1.0.0` floor:
+  GHSA-36p7-vc44-83pf / CVE-2026-45833 (CVSS 9.4, code injection via a
+  malicious model repository with `trust_remote_code` on the collections
+  endpoint), GHSA-2wm9-hf6c-p5cr / CVE-2026-45830 (CVSS 8.8, missing
+  authorization lets any authenticated user read or write any tenant's
+  collection) and GHSA-xph7-9rjv-w5fr / CVE-2026-45831 (CVSS 8.8,
+  `SimpleRBACAuthorizationProvider` never checks which tenant, database or
+  collection a permission applies to). They join GHSA-f4j7-r4q5-qw2c /
+  PYSEC-2026-311 (CVSS 9.3), which the floor comment already carried.
+
+  No floor bump can clear any of them: all four affect 1.0.0 through 1.5.9 and
+  1.5.9 is still the latest release. All four are accepted on the same basis
+  as the original — each requires the Chroma server's HTTP API and its
+  tenant/RBAC layer, whereas `ChromaVectorStore` constructs only
+  `chromadb.PersistentClient` and `chromadb.Client`, and `HttpClient` appears
+  nowhere in this workspace. No version or dependency changed; this entry
+  records the widened basis for a decision that already stood.
+
 ### Changed
 
 - **`Record`, `Field` and `FieldType` are now defined in `dataknobs-common`**
