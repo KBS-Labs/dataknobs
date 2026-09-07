@@ -190,7 +190,7 @@ For advanced text processing:
 
 ```bash
 # NLP features
-pip install nltk>=3.8.0
+pip install nltk>=3.10.3
 pip install spacy>=3.5.0
 ```
 

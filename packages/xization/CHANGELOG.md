@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Removed
+
+- **`nltk` is no longer a *declared* dependency of this package.** No module
+  under `packages/xization/` has ever referenced `nltk` directly — not in the
+  package's whole history — so the declaration duplicated a floor this package
+  neither imports nor is in a position to justify.
+
+  This does not mean `nltk` goes away. `dataknobs_utils/__init__.py` imports
+  `resource_utils`, which imports `nltk` at module level, so any
+  `from dataknobs_utils import ...` in this package still pulls `nltk` in at
+  runtime. It arrives through `dataknobs-utils`, which declares
+  `nltk>=3.10.3` and actually calls it (`nltk.download`, `nltk.data.path`,
+  `nltk.corpus.wordnet`). Nothing changes at install time or import time; the
+  floor is simply stated once, by the package that imports it, instead of
+  being maintained in two places that had to be kept in step by hand.
+
+  The `nltk.*` entry in this package's `ignore_missing_imports` mypy override
+  is retained deliberately: mypy follows the import chain above into
+  `resource_utils`, and `nltk` ships no stubs.
+
 ## v2.2.1 - 2026-09-02
 
 ### Changed

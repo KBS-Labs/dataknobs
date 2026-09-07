@@ -226,7 +226,7 @@ dev = [
 ]
 docs = [
     "mkdocs>=1.5.0",
-    "mkdocs-material>=9.5.0",
+    "mkdocs-material>=9.7.7",
 ]
 all = [
     "dataknobs-mypackage[dev,docs]",
