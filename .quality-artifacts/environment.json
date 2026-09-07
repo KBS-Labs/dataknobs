@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-07T14:33:26Z",
+  "timestamp": "2026-09-07T16:07:43Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/hoist-record-field-to-common",
-  "git_commit": "ca24a52920d14c5a8b81481061184a61a399abce",
+  "git_branch": "sbk/ontology-vocabulary-loads",
+  "git_commit": "f29130ed68416c730367b46811a638cbc7a35da8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

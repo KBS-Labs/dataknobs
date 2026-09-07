@@ -85,6 +85,16 @@ class Capability(str, Enum):
     KEY_PATTERN_FILTERING = "key_pattern_filtering"
     CHANGE_SUBSCRIPTION = "change_subscription"
 
+    # ---- Origin reachability ----
+    # The source can reach the backing record an entity's ``SourceRef``
+    # points at. Declared rather than assumed, because the negative case is
+    # ordinary and useful: an authored vocabulary carries references into a
+    # consumer's production table that *they* can spend and we cannot, so a
+    # caller needs to learn that from ``describe()`` rather than from a
+    # ``fetch_origin`` that answers None for a reason it cannot distinguish
+    # from "no such row".
+    ORIGIN_FETCH = "origin_fetch"
+
     # ---- Scope projection ----
     SCOPE_PROJECTOR_READ_ONLY = "scope_projector_read_only"
 
@@ -147,6 +157,11 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
             {
                 Capability.KEY_PATTERN_FILTERING,
                 Capability.CHANGE_SUBSCRIPTION,
+            }
+        ),
+        "origin_reachability": frozenset(
+            {
+                Capability.ORIGIN_FETCH,
             }
         ),
         "scope_projection": frozenset(

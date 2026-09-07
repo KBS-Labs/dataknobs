@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_common.ontology`**, a vocabulary of entities, the relations
+  between them, and the axes they form. An ontology here is a **value**: it
+  holds sources rather than entities, owns no lifecycle, and its accessors are
+  pure over its own fields, so it is safe to hold, share and pass without
+  anyone having to remember to close it.
+
+  Two doors load one. `load_ontology(path)` needs no database, no embedder and
+  no event loop — a file a person edited is already a list once read, and the
+  call is not `async`. `async_load_ontology(path)` returns the same vocabulary
+  with asynchronous sources, reading through `asyncio.to_thread` so the parse
+  never runs on the caller's loop. Neither forwards to the other; they meet at
+  `build_ontology(config)`, which validates and maps and binds nothing.
+
+  Both refuse a *live* source kind, naming the source, its kind, and what to
+  use instead. The refusal is about **ownership** rather than about what is
+  installed: binding a database source creates something that must be closed,
+  and a module-level function has no `close()`. So one config means one thing
+  in every environment.
+
+  The module ships `Entity`, `EntityType`, `RelationType`, `Assertion`,
+  `AttributeDef`, `Literal`, `EntityRef`, `SourceRef`, `Provenance` and
+  `TaxonomyDefinition`; `qualify()` / `split_qualified()` for namespaced ids;
+  four source protocols with sync and async twins; and four in-memory
+  concretes over an authored file. A hand-maintained nested tree with no `id`
+  anywhere gets one minted per node from its path, with the path kept as the
+  name — so renaming a node changes what it is called and not what it is.
+
+- **`Capability.ORIGIN_FETCH`**, declaring that a source can reach the backing
+  record an entity's `SourceRef` points at. Its absence is how an authored
+  vocabulary states that `fetch_origin` will answer `None` for every reference
+  it is handed — which a caller cannot otherwise tell apart from "no such
+  row". The `SourceRef` still travels out intact, so a consumer can spend it
+  on their own data even where we cannot.
+
 - **`Record`, `Field` and `FieldType` are `dataknobs-common`'s**, in the new
   `dataknobs_common.records` and `dataknobs_common.fields` modules and exported
   at package level. They are pure data — a typed value, a named collection of

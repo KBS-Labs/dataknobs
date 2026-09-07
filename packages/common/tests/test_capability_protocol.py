@@ -56,3 +56,16 @@ def test_transactional_metadata_not_a_member() -> None:
         for members in CAPABILITY_FAMILIES.values()
         for cap in members
     )
+
+
+def test_every_capability_belongs_to_a_family() -> None:
+    """No member is left out of the family map.
+
+    Total coverage was already true of every member and enforced by nothing,
+    so a capability added without a family would have passed the whole suite
+    while being invisible to any reader who navigates by family. Checked as a
+    property rather than per member, so it stays true as members are added.
+    """
+    covered = {cap for members in CAPABILITY_FAMILIES.values() for cap in members}
+    orphans = sorted(cap.name for cap in Capability if cap not in covered)
+    assert not orphans, f"capabilities in no family: {orphans}"
