@@ -189,3 +189,199 @@ def test_the_core_refuses_grammar_but_not_ownership() -> None:
     parts = build_ontology(config)
 
     assert parts.source_specs[0]["kind"] == "record"
+
+
+# --------------------------------------------------------------------------
+# One id, one thing -- in every section that keys by id
+# --------------------------------------------------------------------------
+#
+# `entities:` was the only section that refused a duplicate. The check was
+# written inline there and never extracted, so the five sibling sections that
+# key by id inherited nothing and dropped a colliding row in silence. These
+# tests pin the whole class, not the one member that happened to be written.
+
+
+@DOORS
+def test_a_duplicate_entity_type_id_is_refused(door: Door) -> None:
+    """The same collision as `entities:`, one section over."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [
+                    {"id": "Species", "name": "Species"},
+                    {"id": "Species", "name": "Taxon"},
+                ],
+            }
+        )
+
+    assert "'Species'" in str(excinfo.value)
+    assert excinfo.value.context["section"] == "entity_types"
+
+
+@DOORS
+def test_a_duplicate_relation_type_id_is_refused(door: Door) -> None:
+    """A relation declared twice would silently keep the second one's inverse."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "relation_types": [
+                    {"id": "isa", "symmetric": False},
+                    {"id": "isa", "symmetric": True},
+                ],
+            }
+        )
+
+    assert "'isa'" in str(excinfo.value)
+    assert excinfo.value.context["section"] == "relation_types"
+
+
+@DOORS
+def test_a_duplicate_taxonomy_id_is_refused(door: Door) -> None:
+    """Two taxonomies, one id: the second's relation would win unannounced."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "taxonomies": [
+                    {"id": "tree", "relation": "isa"},
+                    {"id": "tree", "relation": "part_of"},
+                ],
+            }
+        )
+
+    assert "'tree'" in str(excinfo.value)
+    assert excinfo.value.context["section"] == "taxonomies"
+
+
+@DOORS
+def test_a_duplicate_assertion_id_is_refused(door: Door) -> None:
+    """Two identical edges mint one id, and the index would disagree with itself.
+
+    ``by_id`` keeps the last and ``by_subject`` keeps both, so a duplicate does
+    not merely lose a row -- it makes two lookups over the same store answer
+    differently about how many there are.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "assertions": [
+                    {"subject": "dog", "relation": "isa", "object": "mammal"},
+                    {"subject": "dog", "relation": "isa", "object": "mammal"},
+                ],
+            }
+        )
+
+    assert "'dog-isa-mammal'" in str(excinfo.value)
+    assert excinfo.value.context["section"] == "assertions"
+
+
+@DOORS
+def test_two_tree_nodes_that_mint_the_same_id_are_refused(door: Door) -> None:
+    """A minted id is a slug of the path, and two paths can slug the same.
+
+    Siblings named ``Late Fees`` and ``late-fees`` are different nodes to the
+    person editing the file and one node to the slug, so the second silently
+    replaced the first.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "sources": [
+                    {
+                        "id": "areas",
+                        "kind": "nested",
+                        "tree": {
+                            "name": "Billing",
+                            "children": [{"name": "Late Fees"}, {"name": "late-fees"}],
+                        },
+                    }
+                ],
+            }
+        )
+
+    assert "'billing/late-fees'" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# A malformed enum is a refusal, not a stray ValueError
+# --------------------------------------------------------------------------
+#
+# `ValidationError` does not descend from `ValueError`, so a caller holding
+# the documented contract -- `except ValidationError` around either door --
+# did not catch a bad `inference:` at all.
+
+
+@DOORS
+def test_an_unknown_inference_mode_is_refused(door: Door) -> None:
+    """Named, so the message says which value and which of the two words to use."""
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", "relation_types": [{"id": "isa", "inference": "sometimes"}]})
+
+    message = str(excinfo.value)
+    assert "'sometimes'" in message
+    assert "on_demand" in message
+    assert excinfo.value.context["field"] == "inference"
+
+
+@DOORS
+def test_an_unknown_materialization_mode_is_refused(door: Door) -> None:
+    """The same coercion, reached through a taxonomy rather than a relation."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "taxonomies": [
+                    {
+                        "id": "tree",
+                        "relation": "isa",
+                        "materialization": {"structure": "sometimes"},
+                    }
+                ],
+            }
+        )
+
+    assert "'sometimes'" in str(excinfo.value)
+    assert excinfo.value.context["field"] == "materialization.structure"
+
+
+# --------------------------------------------------------------------------
+# A reference is normalized the way the declaration was
+# --------------------------------------------------------------------------
+
+
+@DOORS
+def test_a_numeric_entity_type_id_can_still_be_referenced(door: Door) -> None:
+    """Unquoted digits are an int in YAML, and the declaration is str-keyed.
+
+    The refusal compared the raw reference against str-keyed declarations, so
+    ``isa: 100`` missed ``id: 100`` and a valid document was refused as
+    undeclared. Not refusing it is the assertion.
+    """
+    door(
+        {
+            "id": "x",
+            "entity_types": [{"id": 100, "name": "Root"}, {"id": 200, "isa": 100}],
+        }
+    )
+
+
+@DOORS
+def test_a_numeric_entity_id_can_still_be_named_by_a_tree(door: Door) -> None:
+    """The same mismatch on the declared-tree path."""
+    door(
+        {
+            "id": "x",
+            "entities": [{"id": 1, "type": "Node"}, {"id": 2, "type": "Node"}],
+            "sources": [
+                {
+                    "id": "areas",
+                    "kind": "nested",
+                    "tree": {"id": 1, "name": "Root", "children": [{"id": 2, "name": "Leaf"}]},
+                }
+            ],
+        }
+    )

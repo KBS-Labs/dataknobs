@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Container, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -92,9 +92,11 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         The validated parts, with sources still unbound
 
     Raises:
-        ValidationError: On a reserved or malformed id, a duplicate id, or an
-            ``isa`` naming a type the document does not declare. Every message
-            names the offending value
+        ValidationError: On a reserved or malformed id; on an id duplicated
+            within a section or across two of them; on two tree nodes minting
+            one id; on an unknown inference mode; or on an ``isa`` naming a
+            type the document does not declare. Every message names the
+            offending value
     """
     _refuse_reserved_id(config.id)
     _refuse_colon("ontology id", config.id)
@@ -120,6 +122,8 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         assertions.extend(minted_assertions)
     else:
         _refuse_undeclared_tree_nodes(source_specs, declared)
+
+    _refuse_duplicate_assertion_ids(assertions)
 
     return OntologyParts(
         id=config.id,
@@ -290,6 +294,58 @@ def _validate_source_ids(specs: tuple[Mapping[str, Any], ...]) -> None:
         seen.add(source_id)
 
 
+def _refuse_duplicate_id(claimed: Container[str], candidate: str, section: str) -> None:
+    """Refuse an id a section has already claimed.
+
+    Inline at the write, and it has to be there: a dict keyed by id has
+    already lost the first row by the time a pass over it could look. That is
+    why :func:`_refuse_duplicates`, which reads the built dicts, catches a
+    collision *between* two sections and none *within* one.
+    """
+    if candidate in claimed:
+        raise ValidationError(
+            f"duplicate id {candidate!r} in `{section}:`",
+            context={"id": candidate, "section": section},
+        )
+
+
+def _refuse_duplicate_assertion_ids(assertions: list[Assertion]) -> None:
+    """Refuse two assertions sharing one id, authored or minted.
+
+    A pass rather than an inline check, because a list keeps both rows and so
+    unlike the id-keyed sections nothing is lost before this can look. It runs
+    once over the combined set, so an authored id colliding with a minted one
+    is caught as readily as two authored ones.
+
+    What a duplicate costs is not one row. :class:`~.sources._AssertionIndex`
+    keys ``by_id`` by id and ``by_subject`` by subject, so a collision makes
+    two lookups over the same store disagree about how many assertions there
+    are.
+    """
+    seen: set[str] = set()
+    for assertion in assertions:
+        _refuse_duplicate_id(seen, assertion.id, "assertions")
+        seen.add(assertion.id)
+
+
+def _inference_mode(declared: Any, field: str) -> InferenceMode:
+    """Coerce a declared inference mode, naming an unknown one.
+
+    :class:`ValidationError` does not descend from ``ValueError``, so letting
+    the enum raise its own would escape a caller holding the contract both
+    doors document -- ``except ValidationError`` -- rather than being caught
+    by it.
+    """
+    try:
+        return InferenceMode(str(declared))
+    except ValueError as exc:
+        raise ValidationError(
+            f"{field} is {str(declared)!r}, which is not an inference mode. "
+            f"Modes: {sorted(mode.value for mode in InferenceMode)}",
+            context={"field": field, "value": declared},
+        ) from exc
+
+
 def _refuse_duplicates(
     entity_types: Mapping[str, EntityType],
     relation_types: Mapping[str, RelationType],
@@ -321,7 +377,7 @@ def _refuse_undeclared_isa(
 ) -> None:
     for row in rows:
         parent = row.get("isa")
-        if parent is not None and parent not in entity_types:
+        if parent is not None and str(parent) not in entity_types:
             raise ValidationError(
                 f"entity type {str(row.get('id'))!r} declares `isa: {parent!r}`, "
                 f"which no entity type in this document declares. Declared: "
@@ -362,7 +418,7 @@ def _refuse_undeclared_tree_nodes(
             spec.get("tree"), child_key, str(spec.get("name_key", "name"))
         ):
             node_id = node.get("id")
-            if node_id is None or node_id not in declared:
+            if node_id is None or str(node_id) not in declared:
                 raise ValidationError(
                     f"tree node {str(node_id)!r} in source "
                     f"{str(spec.get('id'))!r} names no declared entity. This "
@@ -382,6 +438,7 @@ def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
     for row in rows:
         type_id = str(row["id"])
         _refuse_colon("entity type id", type_id)
+        _refuse_duplicate_id(built, type_id, "entity_types")
         built[type_id] = EntityType(
             id=type_id,
             name=str(row.get("name", "")),
@@ -401,7 +458,7 @@ def _type_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
     metadata = dict(row.get("metadata", {}))
     parent = row.get("isa")
     if parent is not None:
-        metadata[ENTITY_TYPE_ISA_KEY] = parent
+        metadata[ENTITY_TYPE_ISA_KEY] = str(parent)
     return metadata
 
 
@@ -437,6 +494,7 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
     for row in rows:
         relation_id = str(row["id"])
         _refuse_colon("relation type id", relation_id)
+        _refuse_duplicate_id(built, relation_id, "relation_types")
         built[relation_id] = RelationType(
             id=relation_id,
             name=str(row.get("name", "")),
@@ -448,7 +506,9 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
             inverse_of=row.get("inverse_of"),
             symmetric=bool(row.get("symmetric", False)),
             transitive=bool(row.get("transitive", False)),
-            inference=InferenceMode(row.get("inference", InferenceMode.ON_DEMAND.value)),
+            inference=_inference_mode(
+                row.get("inference", InferenceMode.ON_DEMAND.value), "inference"
+            ),
         )
     return built
 
@@ -550,6 +610,7 @@ def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefini
     built: dict[str, TaxonomyDefinition] = {}
     for row in rows:
         taxonomy_id = str(row["id"])
+        _refuse_duplicate_id(built, taxonomy_id, "taxonomies")
         materialization = row.get("materialization", {})
         built[taxonomy_id] = TaxonomyDefinition(
             id=taxonomy_id,
@@ -558,11 +619,13 @@ def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefini
             description=row.get("description"),
             metadata=dict(row.get("metadata", {})),
             materialization=Materialization(
-                structure=InferenceMode(
-                    materialization.get("structure", InferenceMode.MATERIALIZED.value)
+                structure=_inference_mode(
+                    materialization.get("structure", InferenceMode.MATERIALIZED.value),
+                    "materialization.structure",
                 ),
-                content=InferenceMode(
-                    materialization.get("content", InferenceMode.ON_DEMAND.value)
+                content=_inference_mode(
+                    materialization.get("content", InferenceMode.ON_DEMAND.value),
+                    "materialization.content",
                 ),
             ),
         )
@@ -597,12 +660,24 @@ def _mint_nested(
         node_type = str(spec.get("type", source_id))
         relation = str(spec.get("relation", DEFAULT_NESTED_RELATION))
 
+        minted_from: dict[str, str] = {}
         for node, path in _walk_tree(spec.get("tree"), child_key, name_key):
-            node_id = _slug("/".join(path))
+            name = "/".join(path)
+            node_id = _slug(name)
+            if node_id in entities:
+                raise ValidationError(
+                    f"tree node {name!r} in source {source_id!r} mints id "
+                    f"{node_id!r}, which {minted_from.get(node_id, node_id)!r} "
+                    f"already minted. The slug collapses punctuation and case, "
+                    f"so two nodes a person reads as different can name one "
+                    f"entity",
+                    context={"source_id": source_id, "id": node_id, "path": name},
+                )
+            minted_from[node_id] = name
             entities[node_id] = Entity(
                 id=node_id,
                 type=node_type,
-                name="/".join(path),
+                name=name,
                 aliases=list(node.get("aliases", [])),
                 description=node.get("description"),
                 metadata=dict(node.get("metadata", {})),
