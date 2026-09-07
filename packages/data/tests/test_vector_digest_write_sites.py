@@ -502,7 +502,6 @@ VECTOR_FIELD_CONSTRUCTION_SITES = {
         "reads a stored document back and restores the metadata it carried, "
         "which is how a digest survives the round trip rather than being made"
     ),
-    ("records.py", "Record.copy"): "deep-copies the metadata it was given",
 }
 
 

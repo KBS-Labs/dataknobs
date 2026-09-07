@@ -207,6 +207,64 @@ class TestVectorField:
         assert restored.model_version == original.model_version
         assert np.allclose(restored.value, original.value)
 
+    def test_vector_field_copy_preserves_subclass(self):
+        """A copied VectorField is still a VectorField, with its own attributes.
+
+        Field.copy() hardcoded ``Field(...)`` and VectorField overrode nothing,
+        so the copy came back a plain Field with ``dimensions``,
+        ``source_field``, ``model_name`` and ``model_version`` silently
+        dropped. The test sits here rather than on Record.copy because
+        Record.copy(deep=True) open-coded the reconstruction and so passed
+        while the base class was wrong.
+        """
+        original = VectorField(
+            value=[0.1, 0.2, 0.3],
+            name="embedding",
+            source_field="text",
+            model_name="test-model",
+            model_version="1.0",
+        )
+
+        duplicate = original.copy()
+
+        assert isinstance(duplicate, VectorField)
+        assert duplicate.name == "embedding"
+        assert duplicate.dimensions == 3
+        assert duplicate.source_field == "text"
+        assert duplicate.model_name == "test-model"
+        assert duplicate.model_version == "1.0"
+        assert np.allclose(duplicate.value, original.value)
+
+        duplicate.value[0] = 9.0
+        assert np.allclose(original.value, [0.1, 0.2, 0.3])
+
+    def test_record_deep_copy_preserves_vector_field(self):
+        """Record.copy(deep=True) keeps a VectorField a VectorField.
+
+        Passed before Field.copy() became polymorphic, because the deep branch
+        reconstructed VectorField by hand. It is the regression guard for
+        deleting that branch.
+        """
+        record = Record(data={"text": "sample text"})
+        record.fields["embedding"] = VectorField(
+            value=[0.1, 0.2, 0.3],
+            name="embedding",
+            source_field="text",
+            model_name="test-model",
+            model_version="1.0",
+        )
+
+        copied = record.copy(deep=True).fields["embedding"]
+
+        assert isinstance(copied, VectorField)
+        assert copied.dimensions == 3
+        assert copied.source_field == "text"
+        assert copied.model_name == "test-model"
+        assert copied.model_version == "1.0"
+
+        copied.value[0] = 9.0
+        assert np.allclose(record.fields["embedding"].value, [0.1, 0.2, 0.3])
+
     def test_vector_field_in_record(self):
         """Test vector field integration with Record."""
         record = Record(

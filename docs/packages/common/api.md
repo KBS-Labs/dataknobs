@@ -31,6 +31,7 @@ in full in the [auto-generated reference](../../api/reference/common.md):
 
 | Module | What it provides |
 |---|---|
+| `fields`, `records` | `FieldType`, `Field` and `Record` — the typed data vocabulary — plus `field_type_backends`, the registry `Field.from_dict` dispatches through |
 | `events` | Event bus for pub/sub messaging (in-memory, PostgreSQL, Redis, SQS) |
 | `locks` | Distributed and in-process locks, and the lock backend registry |
 | `ratelimit` | Rate limiters, limits, and the rate-limiter backend registry |
