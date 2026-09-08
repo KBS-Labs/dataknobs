@@ -296,6 +296,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the colliding node. A collision *within* one tree was already correct and is
   unchanged. Neither case had a test at the ontology door; both do now.
 
+- **A missing required field in an ontology document is refused, not a
+  `KeyError`.** Every builder in the loader indexed its own required keys, so
+  a row omitting one raised `KeyError: 'type'` — naming the key, no section, no
+  row, and **not catchable by the documented contract**, since `KeyError` does
+  not descend from `ValidationError` and both doors list only `ValidationError`,
+  `ConfigLoadError` and `OSError`. It was the commonest authoring mistake there
+  is, and it escaped an `except ValidationError` around the door entirely. All
+  ten reads — across `entity_types:`, its `attributes:`, `relation_types:`,
+  `entities:`, `assertions:` and `taxonomies:` — now go through one reader that
+  refuses naming the section, the field, and the row: by its id where it has
+  one, and by the keys it does carry where the missing field *is* the id. The
+  refusal is the same shape as the one a malformed `inference:` already got,
+  which is what a missing key should have had all along.
+
 - **`Field.copy()` keeps the field's class.** It reconstructed a `Field`
   by name, so a subclass came back as a plain `Field` with everything the
   subclass added silently dropped — `VectorField` lost `dimensions`,
