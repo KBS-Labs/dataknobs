@@ -2,8 +2,8 @@
 
 Pure data. Nothing here opens a connection, reads a file or awaits, which is
 what places the module in ``dataknobs-common`` rather than beside a store --
-the package declares no dependencies, and every type below is a value a caller
-already holds.
+the package's only declared dependency is a marker-scoped typing backport, and
+every type below is a value a caller already holds.
 
 The two id constants are the root of the type system, and they are ordinary
 entity ids rather than a separate mechanism: an ``EntityType`` is an ``Entity``

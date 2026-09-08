@@ -124,7 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object.
 
   `VectorField` stays in `dataknobs_data.fields`: it needs `numpy` at runtime,
-  and `dataknobs-common`'s base install declares no dependencies.
+  and `dataknobs-common`'s only declared dependency is a marker-scoped typing
+  backport.
 
 - **`field_type_backends`**, a registry of `Field` subclasses keyed by
   `FieldType` value, with `register_field_class()` to add one.
@@ -143,8 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_common.hierarchy` needs one at *runtime* rather than only for type
   checking. A 3.13 install already resolves to nothing, and the entry deletes
   itself when the floor rises. It is pure typing support and declares no
-  dependencies of its own, so the base install still installs no third-party
-  code.
+  dependencies of its own, so a 3.12 install adds exactly one pure-typing
+  package and a 3.13 install adds nothing at all.
 
 ### Fixed
 

@@ -2,7 +2,7 @@
 
 The Record class is the fundamental data structure in the DataKnobs data package, representing a single data entity with fields, metadata, and a unique identifier.
 
-`Record`, `Field` and `FieldType` are *defined* in `dataknobs-common`, because they are pure data and a package that declares no dependencies can hold them. `dataknobs-data` re-exports all three, so every import on this page resolves to the same objects `dataknobs_common` exports and nothing here needs changing. `VectorField` is `dataknobs-data`'s own — it needs `numpy` at runtime.
+`Record`, `Field` and `FieldType` are *defined* in `dataknobs-common`, because they are pure data and a package whose only declared dependency is a marker-scoped typing backport can hold them. `dataknobs-data` re-exports all three, so every import on this page resolves to the same objects `dataknobs_common` exports and nothing here needs changing. `VectorField` is `dataknobs-data`'s own — it needs `numpy` at runtime.
 
 ## Overview
 

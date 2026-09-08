@@ -3,8 +3,9 @@
 This module defines field types, validation, and metadata structures used by
 Record objects to represent typed data fields with constraints and transformations.
 
-It holds no vector type. ``VectorField`` needs ``numpy`` at runtime and
-``dataknobs-common`` declares no dependencies, so it lives in
+It holds no vector type. ``VectorField`` needs ``numpy`` at runtime, and
+``dataknobs-common``'s only declared dependency is a marker-scoped typing
+backport -- ``numpy`` is not one it will take -- so the class lives in
 ``dataknobs_data.fields`` and reaches ``Field.from_dict`` by registering itself
 in :data:`field_type_backends`.
 """
@@ -322,7 +323,8 @@ construction to buy.
 A type with no entry builds the class ``from_dict`` was called on, which is
 the honest answer where the subclass is not importable: ``dataknobs_common``
 cannot construct a ``VectorField``, because that class needs ``numpy`` and
-``dataknobs-common`` declares no dependencies.
+``dataknobs-common``'s only declared dependency is a marker-scoped typing
+backport.
 """
 
 

@@ -17,8 +17,9 @@ tree satisfies them and inherits every walk without importing a vocabulary.
 - **Read-only, key-addressed, multi-parent-tolerant** — `parents()` returns a
   sequence and never a single node, because an open-world relation yields a DAG.
 - **Each walk is written once.** A traversal is a flavour-free generator; the
-  only twinned code is a pair of thirteen-line drivers, and their number does
-  not grow when a walk is added.
+  only twinned code is the driver pair, which is a fixed cost — it does not
+  grow when a walk is added. One public traversal ships today, so this is a
+  bet on the second, not a saving already banked.
 - **The key type is a parameter defaulting to `str`**, so a bare `Hierarchy`
   means `Hierarchy[str]` and an object tree with no ids at all can bind `K` to
   its own node type.
@@ -275,11 +276,20 @@ taxonomies:
   - id: species
     relation: isa
     materialization:
-      structure: materialized     # ids and edges — small, and the default
+      structure: materialized     # recorded, not yet acted on — see below
       content: on_demand          # reads through the entity source — the default
 ```
 
-`content: materialized` is a copy of every entity the axis covers, and it needs
+**`structure:` is recorded rather than acted on.** It is parsed onto the
+definition and you can read it back, but the axis `taxonomy()` returns is an
+`AssertionHierarchy`, which opens nothing and caches nothing — every call reads
+through the assertion source whichever mode the document declares. So
+`materialized` and `on_demand` behave identically today, and neither is
+refused. Declare it for the record if you like; do not read it as a
+performance knob yet.
+
+`content:` is the axis that *is* enforced. `content: materialized` is a copy of
+every entity the axis covers, and it needs
 somewhere to live. An ontology loaded from a file binds no such store, so
 asking for one is refused — naming the axis, at the call that asked for it,
 rather than at the first walk:

@@ -72,11 +72,15 @@ def _refuse_unbuildable_axis(definition: TaxonomyDefinition) -> None:
     read. The two axes are not alike in what a snapshot costs, and the shipped
     defaults are exactly the pair that costs nothing to hold:
 
-    * **structure** materialized is ids and edges -- small enough to sit in the
-      axis object itself, which is why it is the default and why an authored
-      vocabulary serves it with no store at all;
+    * **structure** materialized is ids and edges -- small enough that an
+      authored vocabulary serves the axis with no store at all, which is why it
+      is the default. It is **recorded rather than acted on**: the axis built
+      here is an ``AssertionHierarchy``, which opens nothing and caches nothing,
+      so both modes read through the source and neither is refused. Reading the
+      declaration back off the definition is the only thing it does today;
     * **content** materialized is a copy of every entity the axis covers, which
-      is the expensive one and needs somewhere to live.
+      is the expensive one, needs somewhere to live, and is refused below when
+      nothing can hold it.
 
     An ontology loaded from a hand-edited file binds no store, so a definition
     asking for a materialized content axis is asking for something it cannot be
