@@ -23,12 +23,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-# Private by name and shared by intent: the one implementation of "ask the
-# frontier in bulk where the backing offers it, else one node at a time". The
-# streaming walks below cannot go through the collecting core, but they must
-# not decide this again -- a second copy is how the two drift over which
-# backings get a per-level query.
-from dataknobs_common.hierarchy import _async_reply, _sync_reply
+# The walk core's frontier read: the one implementation of "ask the frontier in
+# bulk where the backing offers it, else one node at a time". The streaming
+# walks below cannot go through the collecting core, but they must not decide
+# this again -- a second copy is how the two drift over which backings get a
+# per-level query. Both this module and the drivers import it from the private
+# core, which is why it lives there rather than inside ``hierarchy``.
+from dataknobs_common._walk_core import _async_reply, _sync_reply
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
