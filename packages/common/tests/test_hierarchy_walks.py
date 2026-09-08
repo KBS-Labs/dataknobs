@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +30,8 @@ from dataknobs_common.hierarchy import (
     Hierarchy,
     ancestors,
     async_ancestors,
+    async_drive,
+    drive,
 )
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.hierarchy import (
@@ -255,6 +257,105 @@ async def test_the_async_axis_walks_the_same_vocabulary(mammals_path: Path) -> N
     assert await async_ancestors(structure, "beagle") == ("dog", "mammal")
     assert tuple(await structure.children("dog")) == ("beagle",)
     assert await structure.contains("beagle")
+
+
+class RaisesStopIteration:
+    """A hierarchy whose members raise ``StopIteration`` out of a plain ``def``.
+
+    Not a contrived shape: ``return next(r["parent"] for r in rows if ...)``
+    over a row set that does not contain ``node_id`` raises exactly this, and a
+    column-backed hierarchy is a case the guide invites.
+    """
+
+    def roots(self) -> Sequence[str]:
+        return (next(x for x in ()),)  # type: ignore[unreachable]
+
+    def parents(self, node_id: str) -> Sequence[str]:
+        return (next(x for x in ()),)  # type: ignore[unreachable]
+
+    def children(self, node_id: str) -> Sequence[str]:
+        return (next(x for x in ()),)  # type: ignore[unreachable]
+
+    def contains(self, node_id: str) -> bool:
+        return False
+
+
+class AsyncRaisesStopIteration:
+    """:class:`RaisesStopIteration`'s asynchronous twin."""
+
+    async def roots(self) -> Sequence[str]:
+        return (next(x for x in ()),)  # type: ignore[unreachable]
+
+    async def parents(self, node_id: str) -> Sequence[str]:
+        return (next(x for x in ()),)  # type: ignore[unreachable]
+
+    async def children(self, node_id: str) -> Sequence[str]:
+        return (next(x for x in ()),)  # type: ignore[unreachable]
+
+    async def contains(self, node_id: str) -> bool:
+        return False
+
+
+def _asking_for(member: str) -> Generator[
+    tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]
+]:
+    """A one-question walk, in the shape the guide invites a consumer to write."""
+    (reply,) = yield (member, ("anything",))
+    return tuple(reply)
+
+
+@pytest.mark.parametrize("member", ["roots", "parents", "children"])
+def test_a_collaborators_stop_iteration_never_reads_as_the_walk_finishing(
+    member: str,
+) -> None:
+    """A ``StopIteration`` out of the *hierarchy* must not end the walk quietly.
+
+    ``drive`` catches ``StopIteration`` to learn the walk's return value, and
+    the collaborator's calls sat inside that same ``try``. A hierarchy is
+    arbitrary consumer code and a plain ``def`` is not covered by PEP 479, so
+    one escaping ``roots()`` was indistinguishable from the generator returning:
+    ``drive`` returned ``stop.value`` -- ``None``, typed as the walk's result --
+    and the caller failed later at ``for x in None``, nowhere near the cause.
+
+    Parametrised over all three members because only ``roots`` was exposed. The
+    other two are protected *by accident*: their replies are built with
+    generator expressions, where PEP 479 does fire. Rewriting either as a list
+    comprehension would silently reinstate the defect, so all three are pinned.
+    """
+    with pytest.raises(RuntimeError, match="StopIteration"):
+        drive(RaisesStopIteration(), _asking_for(member))
+
+    with pytest.raises(RuntimeError, match="StopIteration"):
+        asyncio.run(async_drive(AsyncRaisesStopIteration(), _asking_for(member)))
+
+
+@pytest.mark.parametrize("member", ["roots", "parents", "children"])
+def test_both_flavours_fail_alike_on_a_collaborators_stop_iteration(
+    member: str,
+) -> None:
+    """The twins raise the *same* type, which is the property the pair rests on.
+
+    Before the fix they did not: for ``roots`` the synchronous driver returned
+    ``None`` while the asynchronous one raised ``RuntimeError`` from its own
+    coroutine frame. One algorithm behaving two ways by flavour is exactly what
+    this module's shape exists to prevent, so the differential is the assertion
+    that matters -- more than either surface's behaviour taken alone.
+    """
+    sync_raised: type[BaseException] | None = None
+    async_raised: type[BaseException] | None = None
+
+    try:
+        drive(RaisesStopIteration(), _asking_for(member))
+    except Exception as exc:  # the exception's type is what is being compared
+        sync_raised = type(exc)
+
+    try:
+        asyncio.run(async_drive(AsyncRaisesStopIteration(), _asking_for(member)))
+    except Exception as exc:  # the exception's type is what is being compared
+        async_raised = type(exc)
+
+    assert sync_raised is not None, "the synchronous driver answered instead of raising"
+    assert sync_raised is async_raised
 
 
 # --------------------------------------------------------------------------

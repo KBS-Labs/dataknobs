@@ -58,10 +58,9 @@ class Taxonomy:
         """Every node at or under ``from_id``, breadth first, each one once.
 
         From the axis's roots when ``from_id`` is omitted. The anchor is
-        **included** -- this is the whole axis from a point, not the strict
-        descendants, which is what the module-level ``descendants`` walk
-        answers. ``max_depth`` bounds how many levels are expanded, so ``0``
-        yields the seeds alone.
+        **included** -- this is the whole axis from a point rather than the
+        strict descendants of it. ``max_depth`` bounds how many levels are
+        expanded, so ``0`` yields the seeds alone.
 
         A streaming member, and the reason it is written against the protocol
         directly rather than through the shared walk core: the core collects

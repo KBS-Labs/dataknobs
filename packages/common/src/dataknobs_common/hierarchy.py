@@ -11,12 +11,15 @@ that choice is what makes everything below possible. Because ``parents()`` and
 ``children()`` hand back *values*, a walk needs to await nothing in the middle
 of its own logic: each traversal is written **once**, as a flavour-free
 generator that yields a request and receives the answer, and the only twinned
-code in this module is the pair of drivers that decide whether that answer needs
-awaiting. Two drivers, thirteen lines each, and their number does not grow when
-a ninth walk is added. Written as twins instead, the eight walks would be
-roughly sixty duplicated lines that grow with every addition -- which is the
-shape ``dataknobs_data``'s ``_search_with_complex_query`` still has today, 57
-lines in each flavour differing in three.
+code in this module is the driver pair that decides whether that answer needs
+awaiting.
+
+That pair is a **fixed** cost: it does not grow when a walk is added, which is
+the whole of the bet. State it as a bet rather than a saving, because one
+public traversal ships today -- ``ancestors`` -- and at one walk the
+arrangement costs more than a hand-twinned pair would. It pays from the second
+on, and the shape it exists to avoid is ``dataknobs_data``'s
+``_search_with_complex_query``: 57 lines in each flavour, differing in three.
 
 The key type is a parameter with ``str`` **defaulted**, so a bare ``Hierarchy``
 is ``Hierarchy[str]`` and reads as it always did. It exists because the walks
@@ -151,30 +154,70 @@ class AsyncHierarchy(Protocol, Generic[K]):
 # --------------------------------------------------------------------------
 
 
+def _sync_reply(
+    hierarchy: Hierarchy[_K], member: Member, node_ids: tuple[_K, ...]
+) -> tuple[Sequence[_K], ...]:
+    """Answer one request, guaranteeing no ``StopIteration`` escapes.
+
+    A ``Hierarchy`` is arbitrary consumer code, and a plain ``def`` ending in
+    ``next(r for r in rows if ...)`` raises ``StopIteration`` on a miss.
+    Reaching :func:`drive`'s ``except`` it would be read as "the walk
+    finished", so it is converted here into the ``RuntimeError`` PEP 479
+    already raises for the same mistake one frame further in -- which is what
+    :func:`async_drive` gets for free, its own coroutine frame performing the
+    conversion. Same failure, same type, in both flavours.
+    """
+    try:
+        if member == "roots":
+            return (hierarchy.roots(),)
+        if member == "parents":
+            return tuple(hierarchy.parents(node_id) for node_id in node_ids)
+        if member == "children":
+            return tuple(hierarchy.children(node_id) for node_id in node_ids)
+    except StopIteration as stop:
+        raise RuntimeError(
+            f"hierarchy {type(hierarchy).__name__}.{member}() raised StopIteration"
+        ) from stop
+    raise ValueError(f"unknown hierarchy member {member!r}")
+
+
 def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
     """Run a walk against a synchronous hierarchy.
 
-    ``StopIteration`` raised *inside* a core would be indistinguishable from
-    "the walk finished" if it could reach here. It cannot: PEP 479 converts a
-    ``StopIteration`` escaping a generator body into ``RuntimeError`` at the
-    frame boundary, so the only one this ever catches is the generator's own
-    return.
+    The ``except`` below must see the walk's own return and nothing else.
+    ``StopIteration`` from the *core* cannot reach it -- PEP 479 converts one
+    escaping a generator body into ``RuntimeError`` at the frame boundary --
+    and one from the *hierarchy* is converted by :func:`_sync_reply` before it
+    is raised, so the reply call is safe inside the ``try``.
     """
     try:
         member, node_ids = next(walk)
         while True:
-            if member == "roots":
-                reply: tuple[Sequence[_K], ...] = (hierarchy.roots(),)
-            elif member == "parents":
-                reply = tuple(hierarchy.parents(node_id) for node_id in node_ids)
-            else:
-                reply = tuple(hierarchy.children(node_id) for node_id in node_ids)
-            member, node_ids = walk.send(reply)
+            member, node_ids = walk.send(_sync_reply(hierarchy, member, node_ids))
     except StopIteration as stop:
         # ``StopIteration.value`` is typed ``Any`` by the standard library.
         # Not a suppression -- there is no finding to suppress; it is a
         # boundary the language does not type.
         return cast("_T", stop.value)
+
+
+async def _async_reply(
+    hierarchy: AsyncHierarchy[_K], member: Member, node_ids: tuple[_K, ...]
+) -> tuple[Sequence[_K], ...]:
+    """:func:`_sync_reply`'s twin, one round of concurrency per frontier.
+
+    No explicit ``StopIteration`` conversion here: this is a coroutine, so the
+    language performs it at this frame's boundary and a collaborator's
+    ``StopIteration`` surfaces as the same ``RuntimeError`` the synchronous
+    side raises by hand.
+    """
+    if member == "roots":
+        return (await hierarchy.roots(),)
+    if member == "parents":
+        return tuple(await asyncio.gather(*(hierarchy.parents(n) for n in node_ids)))
+    if member == "children":
+        return tuple(await asyncio.gather(*(hierarchy.children(n) for n in node_ids)))
+    raise ValueError(f"unknown hierarchy member {member!r}")
 
 
 async def async_drive(hierarchy: AsyncHierarchy[_K], walk: Walk[_K, _T]) -> _T:
@@ -187,13 +230,7 @@ async def async_drive(hierarchy: AsyncHierarchy[_K], walk: Walk[_K, _T]) -> _T:
     try:
         member, node_ids = next(walk)
         while True:
-            if member == "roots":
-                reply: tuple[Sequence[_K], ...] = (await hierarchy.roots(),)
-            elif member == "parents":
-                reply = tuple(await asyncio.gather(*(hierarchy.parents(n) for n in node_ids)))
-            else:
-                reply = tuple(await asyncio.gather(*(hierarchy.children(n) for n in node_ids)))
-            member, node_ids = walk.send(reply)
+            member, node_ids = walk.send(await _async_reply(hierarchy, member, node_ids))
     except StopIteration as stop:
         return cast("_T", stop.value)
 
@@ -211,7 +248,6 @@ def _levels(
     direction: Direction,
     *,
     exclude_seeds: bool,
-    max_depth: int | None = None,
 ) -> Walk[_K, tuple[tuple[_K, ...], ...]]:
     """Expand level by level, returning one tuple per level.
 
@@ -227,15 +263,16 @@ def _levels(
     * the seeds are excluded or included **at the boundary**, by the caller's
       flag, rather than by a rule inside the walk.
 
-    Levels rather than a flat tuple, because one of the compositions wants a
-    single level out of the middle and a flat return would force it to walk
-    twice.
+    Levels rather than a flat tuple because levels are what a frontier-at-a-time
+    expansion produces, and they are what makes the driver's one-round-per-depth
+    concurrency possible. Flattening is a composition's choice -- :func:`_flat`
+    is the only one taken today -- rather than a decision this primitive makes
+    on every caller's behalf.
     """
     seen = set(seeds)
     levels: list[tuple[_K, ...]] = [] if exclude_seeds else [seeds]
     frontier = seeds
-    depth = 0
-    while frontier and (max_depth is None or depth < max_depth):
+    while frontier:
         replies = yield (direction, frontier)
         fresh: list[_K] = []
         for reply in replies:
@@ -246,7 +283,6 @@ def _levels(
         if fresh:
             levels.append(tuple(fresh))
         frontier = tuple(fresh)
-        depth += 1
     return tuple(levels)
 
 
