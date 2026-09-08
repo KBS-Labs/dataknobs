@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-08T03:21:07Z",
+  "timestamp": "2026-09-08T03:35:39Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/ontology-structure-walks",
-  "git_commit": "8761f36cb656229f2bd44d08ffe8fb1ff3a83551",
+  "git_commit": "8fc4a204b3c407b7ec4712588feb6099935c442a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
