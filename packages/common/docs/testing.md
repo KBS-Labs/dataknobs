@@ -9,6 +9,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Configuration Factories](#configuration-factories)
 - [File Helpers](#file-helpers)
 - [Factory Parity Helpers](#factory-parity-helpers)
+- [Sync/Async Twin Parity](#syncasync-twin-parity)
 - [Error Text Disclosure Guard](#error-text-disclosure-guard)
 - [Async Blocking Detection](#async-blocking-detection)
 - [Declaring a Test Import Root](#declaring-a-test-import-root)
@@ -627,6 +628,78 @@ first two — together they pin both the dataclass↔ctor parity and the
 factory↔ctor parity, so drift in either direction fails the test. For a
 `StructuredConfigConsumer` adopter, `assert_structured_config_consumer`
 bundles them into a single call.
+
+---
+
+## Sync/Async Twin Parity
+
+A twinned API is two callables a caller is invited to treat as one. That
+invitation is honest only while the pair actually agrees. A keyword added to the
+asynchronous half and forgotten on the synchronous one fails nothing at the
+time — it surfaces later as flavour-agnostic code that is wrong against
+whichever half its author did not reach for.
+
+This is a different axis from the [factory parity
+helpers](#factory-parity-helpers) above. Those compare a config surface to a
+constructor; these compare one flavour to its twin.
+
+### `assert_twins_agree`
+
+```python
+from dataknobs_common.testing import assert_twins_agree
+
+assert_twins_agree(
+    ancestors,
+    async_ancestors,
+    async_only={"max_concurrency"},
+    flavour_typed={"hierarchy"},
+    compare_return=True,
+)
+```
+
+Asserts the two halves expose one surface: same parameter names, defaults and
+kinds, with each difference declared.
+
+| Keyword | Declares |
+|---|---|
+| `async_only` | Parameter names the asynchronous half may have and the synchronous half may not |
+| `flavour_typed` | Parameter names whose *annotation* differs because the parameter is itself flavoured — `Hierarchy[K]` against `AsyncHierarchy[K]` |
+| `compare_return` | Whether return annotations must match. `False` by default, because a streaming twin returns `Iterator[str]` against `AsyncIterator[str]` and comparing them asserts the flavour rather than the contract |
+| `label` | Prepended to failure messages, for a caller checking many pairs |
+
+**Both declarations are compared by equality, not as a subset.** The other
+guards on this page take a suppression list and need their own check that every
+entry still matches something, because a suppression whose site moved is a hole
+that reads as a clean scan. These need no such check: an entry naming a
+parameter since adopted, renamed or removed fails the assertion directly. Name
+the difference and a *second* one fails rather than quietly joining the first —
+which a tolerance of "at most one" would not do.
+
+**An async generator counts as the asynchronous half.**
+`inspect.iscoroutinefunction` is the obvious flavour check and the wrong one: an
+`async def` containing a `yield` is an async *generator*, for which it answers
+False. A streaming twin would then read as synchronous and fail on precisely the
+pair whose halves differ most.
+
+### `assert_twin_types_agree`
+
+```python
+from dataknobs_common.testing import assert_twin_types_agree
+
+assert_twin_types_agree(
+    Hierarchy,
+    AsyncHierarchy,
+    ("roots", "parents", "children", "contains"),
+    compare_return=True,
+)
+```
+
+The same check across the named members of two twinned types — the shape a
+protocol pair or a backend pair takes. Failures name the member.
+
+**Members are listed, not discovered.** A member added to one flavour and not
+the other is caught by the test that lists it; a comparison that walked whatever
+both types already had would go quiet on exactly that case.
 
 ---
 

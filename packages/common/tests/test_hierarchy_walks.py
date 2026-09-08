@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -38,6 +38,7 @@ from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
 )
+from dataknobs_common.testing import assert_twin_types_agree, assert_twins_agree
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -638,6 +639,14 @@ def test_patching_the_core_moves_both_flavours(
 # --------------------------------------------------------------------------
 
 
+#: Every member a hierarchy twin pair must expose identically.
+#:
+#: Listed rather than discovered, so that a member added to one flavour and not
+#: the other fails here. A comparison that walked whatever both already had
+#: would go quiet on exactly that case.
+_HIERARCHY_MEMBERS = ("roots", "parents", "children", "contains")
+
+
 @pytest.mark.parametrize(
     ("sync_type", "async_type"),
     [
@@ -646,21 +655,14 @@ def test_patching_the_core_moves_both_flavours(
     ],
 )
 def test_the_twins_expose_the_same_annotated_surface(sync_type: type, async_type: type) -> None:
-    """Same member names, same parameters, same annotations.
+    """Same member names, same parameters, same annotations, same return type.
 
-    Annotations rather than the whole signature: a twin's return type differs
-    by flavour where it streams, and comparing the rendered signature would
-    then compare the ``async`` rather than the contract.
+    ``compare_return=True`` because none of these members streams: each returns
+    the same type in both flavours, so a difference there is contract drift
+    rather than the flavour showing through. ``Taxonomy.walk`` is where that
+    stops being true, and its own test says so.
     """
-    for name in ("roots", "parents", "children", "contains"):
-        sync_member = getattr(sync_type, name)
-        async_member = getattr(async_type, name)
-        assert inspect.signature(sync_member).parameters.keys() == (
-            inspect.signature(async_member).parameters.keys()
-        ), name
-        assert sync_member.__annotations__ == async_member.__annotations__, name
-        assert not inspect.iscoroutinefunction(sync_member), name
-        assert inspect.iscoroutinefunction(async_member), name
+    assert_twin_types_agree(sync_type, async_type, _HIERARCHY_MEMBERS, compare_return=True)
 
 
 def test_the_concretes_satisfy_the_protocols_at_runtime(mammals_path: Path) -> None:
@@ -747,7 +749,9 @@ def test_both_flavours_refuse_a_spent_walk_alike() -> None:
         asyncio.run(async_drive(hierarchy, walk))
 
 
-class DelegatingWalk(Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]]):
+class DelegatingWalk(
+    Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]]
+):
     """A walk by protocol rather than by construction, wrapping a real one.
 
     ``Walk`` is spelled ``Generator[...]``, and ``collections.abc.Generator``
@@ -758,9 +762,7 @@ class DelegatingWalk(Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str],
 
     def __init__(
         self,
-        inner: Generator[
-            tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]
-        ],
+        inner: Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]],
     ) -> None:
         self._inner = inner
 
@@ -881,37 +883,37 @@ def test_a_bound_below_one_is_refused() -> None:
         asyncio.run(async_ancestors(probe, "a", max_concurrency=0))
 
 
-#: The one parameter the module-level twins may differ by, and the reason.
-#:
-#: ``max_concurrency`` bounds a frontier read that has no bulk member to use.
-#: The synchronous driver issues no concurrent calls, so the parameter would be
-#: inert there -- and a knob that does nothing is worse than an asymmetry that
-#: is stated. Named as a constant rather than skipped inline so that a *second*
-#: divergence fails this test rather than quietly joining the first.
-_ASYNC_ONLY_PARAMETERS = frozenset({"max_concurrency"})
-
-
 @pytest.mark.parametrize(
     ("sync_fn", "async_fn"),
     [(ancestors, async_ancestors), (drive, async_drive)],
     ids=["ancestors", "drive"],
 )
-def test_the_module_twins_differ_by_one_named_parameter(sync_fn: object, async_fn: object) -> None:
+def test_the_module_twins_differ_by_two_declared_things(
+    sync_fn: Callable[..., Any], async_fn: Callable[..., Any]
+) -> None:
     """The driving pair and the walk over it stay signature-compatible.
 
-    The taxonomy twins already carry this guard and the module-level ones did
-    not, so the same asymmetry was stated in one place and free in the other.
     A caller writing flavour-agnostic code against these four needs the
-    difference to be exactly one known parameter, not merely small.
+    difference to be exactly what is declared, not merely small. Two things are
+    declared and both are real:
+
+    ``max_concurrency`` bounds a frontier read with no bulk member to use, and
+    the synchronous driver issues no concurrent calls at all -- a knob that does
+    nothing is worse than an asymmetry that is stated. ``hierarchy`` is
+    flavoured by definition: each driver takes the protocol of its own flavour.
+
+    Both are compared by equality inside the guard, so a *second* divergence of
+    either kind fails here rather than quietly joining the first. That property
+    used to be argued by naming the set in a module constant; it is now a
+    property of the assertion, which is why the constant is gone.
     """
-    sync_params = inspect.signature(sync_fn).parameters  # type: ignore[arg-type]
-    async_params = inspect.signature(async_fn).parameters  # type: ignore[arg-type]
-
-    assert async_params.keys() - sync_params.keys() == _ASYNC_ONLY_PARAMETERS
-    assert sync_params.keys() - async_params.keys() == set()
-
-    for name, parameter in sync_params.items():
-        assert parameter.default == async_params[name].default, name
+    assert_twins_agree(
+        sync_fn,
+        async_fn,
+        async_only={"max_concurrency"},
+        flavour_typed={"hierarchy"},
+        compare_return=True,
+    )
 
 
 def test_an_empty_ancestors_does_not_distinguish_a_root_from_an_unknown_node() -> None:

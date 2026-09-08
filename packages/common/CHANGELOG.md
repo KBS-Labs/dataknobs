@@ -198,6 +198,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VECTOR` and `SPARSE_VECTOR` on import; a type with no registered class
   builds the class `from_dict` was called on.
 
+- **`assert_twins_agree` and `assert_twin_types_agree`** in
+  `dataknobs_common.testing`, a drift guard for a synchronous callable and its
+  asynchronous twin. A twinned API is two callables a caller is invited to treat
+  as one, and that invitation is honest only while the pair agrees — a keyword
+  added to one half and forgotten on the other fails nothing at the time, and
+  surfaces later as flavour-agnostic code that is wrong against whichever half
+  its author did not reach for. A different axis from the factory-parity
+  helpers next door, which compare a config surface to a constructor.
+
+  Each difference is **declared and compared by equality**: `async_only` for a
+  parameter only the asynchronous half takes, `flavour_typed` for one whose
+  annotation differs because the parameter is itself flavoured, `compare_return`
+  for whether the return annotations are contract or flavour. The other guards
+  in this package take suppression lists and must separately check that every
+  entry still matches something; equality gives that for free, so a declaration
+  naming a parameter since adopted, renamed or removed fails the assertion
+  rather than going quiet. Naming a difference is also what makes a *second* one
+  fail rather than join the first, which a tolerance of "at most one" would not.
+
+  An async generator counts as the asynchronous half.
+  `inspect.iscoroutinefunction` is the obvious flavour check and the wrong one —
+  an `async def` containing a `yield` is an async *generator*, for which it
+  answers False, so a streaming twin would read as synchronous and the check
+  would fail on the pair whose halves differ most.
+
 ### Changed
 
 - **`dataknobs-common` declares one dependency**, `typing-extensions`, scoped by
