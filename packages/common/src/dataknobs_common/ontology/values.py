@@ -202,7 +202,9 @@ class Ontology:
     taxonomies: Mapping[str, TaxonomyDefinition]
     describes: tuple[SourceDescription, ...]
 
-    #: The copied structure axes, keyed by taxonomy id.
+    #: The copied structure axes, keyed by the name the axis is reached
+    #: under -- the key in :attr:`taxonomies`, which an alias may spell
+    #: differently from ``definition.id``.
     #:
     #: One entry for every definition declaring ``materialization.structure:
     #: materialized``, and none for the rest -- an on-demand axis is built per

@@ -192,7 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idea why it failed.
 
   `Ontology` and `AsyncOntology` therefore carry a ninth field, `structures` —
-  the copied axes keyed by taxonomy id, empty for a vocabulary that declares no
+  the copied axes keyed as `taxonomies` is — by the name a definition is filed
+  under, not by `definition.id` — and empty for a vocabulary that declares no
   `materialized` structure, which is every vocabulary that says nothing.
 
   `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
