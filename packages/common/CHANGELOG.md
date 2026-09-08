@@ -68,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literal. Public because two readers now ask it, and a second copy of *what
   counts as an entity object* is a rule that can disagree with itself.
 
+- Everything in the three modules above is imported **by module path**. None of
+  it is re-exported from `dataknobs_common` or `dataknobs_common.ontology` yet
+  — including `object_entity_id`, which is public in its own module while
+  `relation_id` beside it is also on the package door. The constructs are still
+  gaining members, and a name on a door is a name consumers hold. The
+  [hierarchies and taxonomies guide](https://kbs-labs.github.io/dataknobs/packages/common/hierarchy/)
+  gives the import lines and a worked axis.
+
 - **`dataknobs_common.ontology`**, a vocabulary of entities, the relations
   between them, and the axes they form. An ontology here is a **value**: it
   holds sources rather than entities, owns no lifecycle, and its accessors are

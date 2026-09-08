@@ -68,6 +68,10 @@
         {
           "package": "guides/expressions.md",
           "site": "expressions.md"
+        },
+        {
+          "package": "guides/hierarchy.md",
+          "site": "hierarchy.md"
         }
       ],
       "site_only": [

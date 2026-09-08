@@ -91,6 +91,7 @@ nav:
       - packages/common/copying.md
       - packages/common/plugin-registry.md
       - packages/common/packs.md
+      - packages/common/hierarchy.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:

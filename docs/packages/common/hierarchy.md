@@ -1,0 +1,1 @@
+--8<-- "packages/common/docs/guides/hierarchy.md"

@@ -1,0 +1,325 @@
+# Hierarchies and Taxonomies
+
+`dataknobs_common.hierarchy` states what a *structure* is — what a node's
+parents and children are — and the traversals over it.
+`dataknobs_common.taxonomy` reifies one such structure as a walkable axis of a
+vocabulary, and `dataknobs_common.ontology.hierarchy` backs one with the
+assertions of a single relation.
+
+The three are separable on purpose: the protocols know nothing about
+ontologies, so a hierarchy over a `parent_id` column or an in-memory object
+tree satisfies them and inherits every walk without importing a vocabulary.
+
+## Overview
+
+- **Two protocols, one synchronous and one asynchronous** — `Hierarchy` and
+  `AsyncHierarchy`, four members each, both `@runtime_checkable`.
+- **Read-only, key-addressed, multi-parent-tolerant** — `parents()` returns a
+  sequence and never a single node, because an open-world relation yields a DAG.
+- **Each walk is written once.** A traversal is a flavour-free generator; the
+  only twinned code is a pair of thirteen-line drivers, and their number does
+  not grow when a walk is added.
+- **The key type is a parameter defaulting to `str`**, so a bare `Hierarchy`
+  means `Hierarchy[str]` and an object tree with no ids at all can bind `K` to
+  its own node type.
+- **`Taxonomy` holds no copy.** The sources are the authority, so a rebuild
+  beneath one is visible on the next read.
+
+## Where the names live
+
+Everything below is imported by module path. Nothing in this family is
+re-exported from `dataknobs_common` or `dataknobs_common.ontology` yet — the
+constructs are still gaining members, and a name exported from a package door
+is a name consumers hold:
+
+```python
+from dataknobs_common.hierarchy import (
+    AsyncHierarchy,
+    Hierarchy,
+    ancestors,
+    async_ancestors,
+    async_drive,
+    drive,
+)
+from dataknobs_common.ontology.hierarchy import AssertionHierarchy, AsyncAssertionHierarchy
+from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
+```
+
+## Quick start — an axis of a vocabulary
+
+A vocabulary declares an axis by naming the relation its edges are made of:
+
+```yaml
+ontology:
+  id: mammals
+  version: "1.1"
+
+  entity_types:
+    - id: Species
+    - id: Breed
+      isa: Species
+
+  relation_types:
+    - id: isa
+      transitive: true
+
+  entities:
+    - {id: mammal, type: Species, name: Mammal}
+    - {id: dog, type: Species, name: Dog}
+    - {id: retriever, type: Breed, name: Retriever}
+    - {id: beagle, type: Breed, name: Beagle}
+
+  assertions:
+    - {subject: dog, relation: isa, object: mammal}
+    - {subject: retriever, relation: isa, object: dog}
+    - {subject: beagle, relation: isa, object: dog}
+    # an attribute value is an assertion whose object is a literal
+    - {subject: dog, relation: lifespan_years, object: 12}
+
+  taxonomies:
+    - {id: species, name: Species, relation: isa}
+```
+
+`Ontology.taxonomy(name)` reaches it:
+
+```python
+from pathlib import Path
+
+from dataknobs_common.ontology import load_ontology
+
+onto = load_ontology(Path("mammals.yaml"))
+species = onto.taxonomy("species")
+
+assert tuple(species.walk()) == ("mammal", "dog", "retriever", "beagle")
+```
+
+It takes the name and nothing else. Every collaborator the axis needs — the
+structure, the entity source, the assertions — is a field the ontology already
+holds, which is what makes this an accessor rather than a factory: no store to
+bind, no event loop to be inside, no collaborator to construct first.
+
+The asynchronous twin is reached the same way and is deliberately *not*
+awaitable, because it constructs over fields already in hand:
+
+```python
+from dataknobs_common.ontology import async_load_ontology
+
+onto = await async_load_ontology(Path("mammals.yaml"))
+async_species = onto.taxonomy("species")    # no await — it builds, it does not fetch
+
+assert [node async for node in async_species.walk()] == [
+    "mammal", "dog", "retriever", "beagle",
+]
+```
+
+## The structure protocol
+
+Four members, and each exists to keep a specific pair of answers apart:
+
+| Member | Returns | |
+|---|---|---|
+| `roots()` | `Sequence[K]` | the nodes this axis leaves unplaced |
+| `parents(node_id)` | `Sequence[K]` | plural, always |
+| `children(node_id)` | `Sequence[K]` | |
+| `contains(node_id)` | `bool` | whether the axis knows the node at all |
+
+**`roots()` is not an extent.** It answers *which nodes this relation places
+under nothing*, which coincides with a type's membership only by accident. For
+the extent — every entity of a type, placed or not — ask the entity source
+(`EntitySource.by_type`).
+
+**`contains()` is why an empty `children()` is unambiguous.** *Nothing below
+this node* and *this node is not here* are opposite answers that an empty
+sequence alone cannot tell apart, so the question has its own member.
+
+**A literal object contributes no edge.** `dog lifespan_years 12` is a value,
+not a place in a structure, so an assertion whose object is not an entity is
+invisible to every member above.
+
+### `@runtime_checkable`, and what it does not reach
+
+Both protocols are runtime-checkable, so `isinstance(x, Hierarchy)` works —
+against the **bare** name, since `isinstance(x, Hierarchy[str])` raises
+`TypeError` as it does for every subscripted generic.
+
+The check compares member *names* and nothing else. A synchronous
+implementation therefore satisfies `AsyncHierarchy` at runtime; only the static
+check separates the flavours. Use `isinstance` to reject an object that is not
+a hierarchy at all, not to decide which flavour you are holding.
+
+## Walking
+
+`ancestors()` returns every node above one, nearest first, excluding the node
+itself:
+
+```python
+from dataknobs_common.hierarchy import ancestors, async_ancestors
+
+assert ancestors(species.structure, "beagle") == ("dog", "mammal")
+assert await async_ancestors(async_species.structure, "beagle") == ("dog", "mammal")
+```
+
+Two guarantees worth relying on: the visited set is unconditional, so a walk
+terminates on cyclic data whatever an acyclicity constraint claims; and results
+are deduplicated in walk order, so a DAG node reachable by several paths is
+still one entry.
+
+`Taxonomy.walk()` is the axis's own traversal — every node at or under a point,
+breadth first, **including** the anchor:
+
+```python
+tuple(species.walk())                              # from the roots
+tuple(species.walk(from_id="dog"))                 # ("dog", "retriever", "beagle")
+tuple(species.walk(from_id="dog", max_depth=0))    # ("dog",) — the anchor alone
+```
+
+It is a generator, so a caller that stops early does no work for the levels it
+never reached.
+
+### Writing a walk of your own
+
+`drive()` and `async_drive()` are the pair that makes a traversal
+flavour-agnostic, and they are usable directly. A walk is a generator that
+*yields a request* — a member name and the nodes to ask it about — and receives
+one sequence per node asked about:
+
+```python
+from dataknobs_common.hierarchy import async_drive, drive
+
+def _leaves():
+    """Every node with no children, from the roots."""
+    (roots,) = yield ("roots", ())
+    frontier, found = tuple(roots), []
+    seen = set(frontier)
+    while frontier:
+        replies = yield ("children", frontier)
+        fresh = []
+        for node_id, children in zip(frontier, replies, strict=True):
+            if not children:
+                found.append(node_id)
+            fresh.extend(c for c in children if c not in seen)
+        seen.update(fresh)
+        frontier = tuple(fresh)
+    return tuple(found)
+
+assert drive(species.structure, _leaves()) == ("retriever", "beagle")
+assert await async_drive(async_species.structure, _leaves()) == ("retriever", "beagle")
+```
+
+The generator contains no `await` and no knowledge of which flavour is driving
+it, and it is the same object in both calls above. The asynchronous driver
+gathers a whole frontier at once, so concurrency is per *depth* rather than per
+node — a property a hand-twinned walk gets only if someone remembers to write
+it into both copies.
+
+## The assertion backing
+
+`AssertionHierarchy` binds an assertion source to one relation. It opens
+nothing and caches nothing:
+
+```python
+from dataknobs_common.ontology.hierarchy import AssertionHierarchy
+
+structure = AssertionHierarchy(onto.assertions, "isa")
+
+assert structure.parents("beagle") == ("dog",)
+assert structure.children("dog") == ("retriever", "beagle")
+assert structure.contains("beagle") and not structure.contains("marmoset")
+```
+
+`parents(x)` is `find(subject=x, relation=…)` read for its entity objects;
+`children(x)` is the mirrored query, `find(object=x, relation=…)` read for its
+subjects. Because the source is the authority rather than a snapshot, a rebuild
+beneath the structure is visible immediately — which is what lets a long-lived
+axis hold the structure rather than a copy of it.
+
+It lives under `ontology/` rather than beside the protocol it satisfies:
+reading an edge means asking at runtime whether an assertion's object is an
+entity or a literal, and the general module may not import the vocabulary
+package to find out. A concrete goes where its dependency is — the same rule
+that puts a database-backed hierarchy in `dataknobs-data`.
+
+## What a taxonomy carries, and what it refuses
+
+`Taxonomy` has four fields: the `definition` it was declared by, the
+`structure`, the `entities` source, and the `assertions` the edges were made of.
+
+The last is optional, and `assertions is None` is a question worth asking: it
+distinguishes *this edge carries no annotation* from *this axis has no
+annotations to give*. A hierarchy built from a `parent_id` column has rows and
+no assertions at all.
+
+A definition may state a `materialization` per axis. The shipped defaults are
+exactly the pair that needs no store:
+
+```yaml
+taxonomies:
+  - id: species
+    relation: isa
+    materialization:
+      structure: materialized     # ids and edges — small, and the default
+      content: on_demand          # reads through the entity source — the default
+```
+
+`content: materialized` is a copy of every entity the axis covers, and it needs
+somewhere to live. An ontology loaded from a file binds no such store, so
+asking for one is refused — naming the axis, at the call that asked for it,
+rather than at the first walk:
+
+```python
+onto.taxonomy("species")
+# ValidationError: taxonomy 'species' declares `materialization.content:
+# materialized`, which is a copy of every entity on the axis and needs a store
+# to hold it; this ontology binds none. Use `content: on_demand`, which reads
+# through the entity source
+```
+
+An undeclared name is refused too, listing what *is* declared — the useful
+answer to a typo being the set it was nearly one of:
+
+```python
+onto.taxonomy("speceis")
+# NotFoundError: no taxonomy 'speceis' in this ontology. Declared: ['species']
+```
+
+Both refusals carry a `context` mapping (`taxonomy`, and `axis`/`declared`) for
+a caller handling them programmatically.
+
+## Keys that are not strings
+
+The walks never inspect a node id — they only hash one — so `K` is a type
+parameter bounded by `Hashable`, with `str` as its default:
+
+```python
+from dataknobs_common.hierarchy import Hierarchy, ancestors
+
+class IntTree:
+    """A hierarchy whose nodes are integers: n is the parent of 2n and 2n+1."""
+
+    def roots(self) -> tuple[int, ...]:
+        return (1,)
+
+    def parents(self, node_id: int) -> tuple[int, ...]:
+        return () if node_id <= 1 else (node_id // 2,)
+
+    def children(self, node_id: int) -> tuple[int, ...]:
+        return (2 * node_id, 2 * node_id + 1) if node_id < 8 else ()
+
+    def contains(self, node_id: int) -> bool:
+        return node_id >= 1
+
+tree: Hierarchy[int] = IntTree()
+above: tuple[int, ...] = ancestors(tree, 13)    # (6, 3, 1) — inferred from the hierarchy
+```
+
+Because the default is declared, a bare `Hierarchy` annotation still means
+`Hierarchy[str]`, so existing annotations read as they always did rather than
+silently widening to `Hierarchy[Any]`.
+
+!!! note "Python 3.12"
+
+    Type-parameter defaults ([PEP 696](https://peps.python.org/pep-0696/)) are
+    in `typing` only from 3.13, so on 3.12 this needs `typing-extensions` at
+    runtime. `dataknobs-common` declares it under a
+    `python_full_version < '3.13'` marker: a 3.13 install resolves to nothing,
+    and the import disappears when the supported floor rises.
