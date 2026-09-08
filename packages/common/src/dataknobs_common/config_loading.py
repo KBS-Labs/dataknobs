@@ -12,11 +12,12 @@ different consumers need different substitutors with different
 options. Pair with :func:`dataknobs_config.substitute_env_vars` at the
 consumer level when needed.
 
-PyYAML is lazy-imported inside helper bodies so ``dataknobs-common``
-keeps zero hard dependencies. Consumers that pass ``.yaml`` / ``.yml``
-files must declare ``pyyaml`` in their own dependencies (matches the
-existing pattern in ``dataknobs_xization.ingestion``). JSON support is
-built-in (stdlib).
+PyYAML is lazy-imported inside helper bodies, so it stays out of the
+base install and only a caller that actually reads a YAML document
+needs it. Consumers that pass ``.yaml`` / ``.yml`` files must declare it
+themselves -- either as ``dataknobs-common[yaml]``, which is the
+spelling this package's own doors are installed through, or as
+``pyyaml`` directly. JSON support is built-in (stdlib).
 
 Example:
     >>> from pathlib import Path

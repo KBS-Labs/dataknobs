@@ -26,6 +26,18 @@ dependencies = [
 # dotenv layer is silently skipped (os.environ + config still work),
 # so it stays opt-in to keep the base install lean.
 dotenv = ["python-dotenv>=1.0.0"]
+# YAML support for the shared config loader
+# (``dataknobs_common.config_loading.load_yaml_or_json``) and so for the
+# ontology doors that read through it (``load_ontology`` /
+# ``async_load_ontology`` given a ``.yaml`` path). PyYAML is
+# lazy-imported inside the helper bodies, so it adds nothing to the base
+# install declared above, and a caller who passes a mapping or a
+# ``.json`` path never needs it. The floor is the one
+# ``dataknobs-config``, ``dataknobs-bots``, ``dataknobs-llm`` and
+# ``dataknobs-fsm`` already pin, taken with their reason rather than
+# restated as a second one: 6.0 lacks cp312/cp313 wheels and source
+# build fails on Cython 3.
+yaml = ["pyyaml>=6.0.2"]
 # PostgreSQL LISTEN/NOTIFY EventBus (``PostgresEventBus`` / the
 # ``"postgres"`` backend). asyncpg is lazy-imported inside the backend
 # and its registry wrapper, so it adds nothing to the base install
