@@ -178,15 +178,23 @@ MATERIALIZED_STRUCTURE_DOCUMENT = _with_materialization("structure")
 
 @pytest.fixture
 def materialized_content_path(tmp_path: Path) -> Path:
-    """:data:`MATERIALIZED_CONTENT_DOCUMENT` written to disk."""
-    path = tmp_path / "mammals.yaml"
+    """:data:`MATERIALIZED_CONTENT_DOCUMENT` written to disk.
+
+    Its own filename, because ``tmp_path`` is per *test* and not per fixture:
+    a test requesting two of these fixtures under one name would get whichever
+    wrote last, twice, and every assertion comparing them would hold.
+    """
+    path = tmp_path / "materialized-content.yaml"
     path.write_text(MATERIALIZED_CONTENT_DOCUMENT)
     return path
 
 
 @pytest.fixture
 def materialized_structure_path(tmp_path: Path) -> Path:
-    """:data:`MATERIALIZED_STRUCTURE_DOCUMENT` written to disk."""
-    path = tmp_path / "mammals.yaml"
+    """:data:`MATERIALIZED_STRUCTURE_DOCUMENT` written to disk.
+
+    Its own filename, for the reason :func:`materialized_content_path` gives.
+    """
+    path = tmp_path / "materialized-structure.yaml"
     path.write_text(MATERIALIZED_STRUCTURE_DOCUMENT)
     return path

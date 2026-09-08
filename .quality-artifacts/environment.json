@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-08T21:30:54Z",
+  "timestamp": "2026-09-08T22:05:41Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/refuse-a-missing-required-field",
-  "git_commit": "6d85975f014f3c7a192eaf5f019bcd86425b06d3",
+  "git_branch": "sbk/materialized-structure-axis",
+  "git_commit": "7157dac9c49ebe4e640517757bda51992439f628",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

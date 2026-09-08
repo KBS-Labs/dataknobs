@@ -374,16 +374,31 @@ class Materialization:
     hierarchy beside an on-demand one. Text is omitted deliberately -- an index
     has no on-demand mode.
 
-    **Both default to the live read, because both live reads exist and neither
-    snapshot does.** A default is what a consumer gets for typing nothing, so a
-    default naming an unbuilt branch is a promise that cannot be kept quietly:
-    the axis handed back would be the live one under the other name. Asking for
-    either snapshot explicitly is refused at the accessor, naming the axis --
-    see :func:`~dataknobs_common.ontology.values._refuse_unbuildable_axis`.
+    **Both default to the live read, and the two defaults now have different
+    reasons.** ``structure: materialized`` is honoured -- a loader door takes
+    the copy once, at load -- so its default is a *choice*: the live read is
+    what a hand-edited vocabulary wants, because the source is small and the
+    freshness is free. ``content: materialized`` is a copy of every entity the
+    axis covers and needs a store to hold it, which a module-level door binds
+    none of; asking for it is refused at the accessor, naming the axis -- see
+    :func:`~dataknobs_common.ontology.values._refuse_a_materialized_content_axis`.
     """
 
     structure: InferenceMode = InferenceMode.ON_DEMAND
     content: InferenceMode = InferenceMode.ON_DEMAND
+
+    @property
+    def structure_is_copied(self) -> bool:
+        """Whether the structure axis is a snapshot rather than a live read.
+
+        A named predicate rather than the comparison written twice, because the
+        two readings of it are an *invariant pair*: a loader door builds a copy
+        for exactly the definitions that say yes here, and
+        :func:`~dataknobs_common.ontology.values._structure_for` demands one for
+        exactly those. Two spellings of one question is how a door and an
+        accessor come to disagree about which axes were copied.
+        """
+        return self.structure is InferenceMode.MATERIALIZED
 
 
 @dataclass

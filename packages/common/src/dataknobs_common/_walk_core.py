@@ -101,6 +101,24 @@ def _refuse_a_spent_walk(walk: Walk[_K, object]) -> None:
         )
 
 
+def _refuse_an_unusable_bound(max_concurrency: int) -> None:
+    """Refuse a frontier bound that cannot admit anybody.
+
+    A semaphore of zero admits nothing, so a walk given one waits forever
+    rather than failing -- which is why this is a refusal and not a clamp.
+
+    Shared rather than written at each site because there are now two, and they
+    are reached by *different* routes: :func:`_async_reply` validates on the way
+    to building the semaphore, and :meth:`AsyncMappingHierarchy.snapshot`
+    validates before a branch that never gets there. A backing that can answer
+    without a frontier -- bulk members, or ``parent_edges()`` -- is exactly the
+    one whose caller would otherwise have a deadlocking width silently accepted,
+    because nothing on their path ever looked at it.
+    """
+    if max_concurrency < 1:
+        raise ValueError(f"max_concurrency must be at least 1, got {max_concurrency}")
+
+
 def _sync_reply(
     hierarchy: Hierarchy[_K], member: Member, node_ids: tuple[_K, ...]
 ) -> tuple[Sequence[_K], ...]:
@@ -165,8 +183,7 @@ async def _async_reply(
     ``StopIteration`` surfaces as the same ``RuntimeError`` the synchronous
     side raises by hand.
     """
-    if max_concurrency < 1:
-        raise ValueError(f"max_concurrency must be at least 1, got {max_concurrency}")
+    _refuse_an_unusable_bound(max_concurrency)
     if member == "roots":
         return (await hierarchy.roots(),)
     if member in ("parents", "children"):

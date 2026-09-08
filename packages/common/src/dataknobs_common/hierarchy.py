@@ -58,6 +58,7 @@ from dataknobs_common._walk_core import (
     _async_reply,
     _parent_edges,
     _refuse_a_spent_walk,
+    _refuse_an_unusable_bound,
     _sync_reply,
 )
 
@@ -73,9 +74,11 @@ else:
 __all__ = [
     "DEFAULT_FRONTIER_CONCURRENCY",
     "AsyncBulkHierarchy",
+    "AsyncEnumerableHierarchy",
     "AsyncHierarchy",
     "AsyncMappingHierarchy",
     "BulkHierarchy",
+    "EnumerableHierarchy",
     "Hierarchy",
     "K",
     "MappingHierarchy",
@@ -258,6 +261,53 @@ class AsyncBulkHierarchy(AsyncHierarchy[K], Protocol):
 
     async def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
         """:meth:`AsyncHierarchy.children` for a whole frontier."""
+        ...
+
+
+@runtime_checkable
+class EnumerableHierarchy(Hierarchy[K], Protocol):
+    """A :class:`Hierarchy` that can say what it holds, not only what descends.
+
+    **The extent ``roots()`` is not.** A bare hierarchy offers no way to ask
+    what is in it: ``roots()`` is *the nodes this relation leaves unplaced*, so
+    the only enumeration available against the four members is to start there
+    and descend -- and a cyclic component with no root above it is unreachable
+    that way. The consequence is not academic. It lands on
+    :meth:`MappingHierarchy.snapshot`, whose copy would then *refuse an anchor
+    the axis it copied accepts*, because
+    :meth:`~dataknobs_common.taxonomy.Taxonomy.walk` refuses an unknown anchor
+    by asking ``contains``.
+
+    A backing that is holding its edges, or can fetch them in one query, is not
+    subject to that limit and this is where it says so. Optional and separate
+    for the same reason :class:`BulkHierarchy` is: requiring it on
+    :class:`Hierarchy` would break every implementation with only the four
+    members, including the hand-written one the guide invites -- and such an
+    implementation is *right* to lack it, since an axis behind a paged API may
+    genuinely have no way to answer.
+
+    One entry per node the axis knows, **including a node that appears only as
+    somebody's parent**, whose entry is empty. A mapping keyed by children
+    alone would omit exactly the nodes ``roots()`` reports, which is the half a
+    naive reading misses.
+    """
+
+    def parent_edges(self) -> Mapping[K, Sequence[K]]:
+        """Every node this axis knows, and what each is directly under."""
+        ...
+
+
+@runtime_checkable
+class AsyncEnumerableHierarchy(AsyncHierarchy[K], Protocol):
+    """:class:`EnumerableHierarchy`'s asynchronous twin, same contract.
+
+    ``async`` because a backing that answers this from a query has a round trip
+    to make, where one holding a mapping does not -- the same asymmetry every
+    member of the asynchronous protocol carries.
+    """
+
+    async def parent_edges(self) -> Mapping[K, Sequence[K]]:
+        """Every node this axis knows, and what each is directly under."""
         ...
 
 
@@ -454,6 +504,18 @@ class _MappingBacking(Generic[K]):
         """
         return node_id in self.parent_map or node_id in self.child_map
 
+    def _edges(self) -> Mapping[K, Sequence[K]]:
+        """Every node, and what each is directly under.
+
+        Built over :meth:`_nodes` rather than handed back as
+        :attr:`parent_map`, and the difference is the whole of what makes this
+        an *extent*: a node that appears only as somebody's parent is never a
+        key of that mapping, so returning it would omit precisely the nodes
+        ``roots()`` reports. A fresh dict also keeps a caller from holding this
+        backing's own mapping.
+        """
+        return {node_id: self._parents(node_id) for node_id in self._nodes()}
+
     def _parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
         return tuple(self._parents(node_id) for node_id in node_ids)
 
@@ -508,6 +570,10 @@ class MappingHierarchy(_MappingBacking[K]):
         """:meth:`children` for a whole frontier, one reply per node."""
         return self._children_many(node_ids)
 
+    def parent_edges(self) -> Mapping[K, Sequence[K]]:
+        """Every node this axis knows, and what each is directly under."""
+        return self._edges()
+
     @classmethod
     def from_nested(
         cls,
@@ -544,18 +610,29 @@ class MappingHierarchy(_MappingBacking[K]):
 
     @classmethod
     def snapshot(cls, hierarchy: Hierarchy[K]) -> MappingHierarchy[K]:
-        """A live axis walked once, kept as a mapping.
+        """A live axis read once, kept as a mapping.
 
         The cheap copy -- ids and edges, not content -- and the one thing a
         live axis cannot do: say what has changed since it was taken. Walking
         it afterwards asks the mapping rather than the backing.
 
-        **What a snapshot can see is what descends from ``roots()``.** A
-        :class:`Hierarchy` has no extent member, so this is the only enumeration
-        the protocol offers, and a cyclic component with no root above it is
-        therefore absent from the copy. That is a property of the protocol and
-        not of the walk; where it matters, ask the backing.
+        **How complete the copy is, is a property of the axis.** An axis that
+        implements :class:`EnumerableHierarchy` is asked what it holds and is
+        copied whole. One that does not is *descended from its roots*, which is
+        the only enumeration the four members offer -- and a cyclic component
+        with no root above it is unreachable that way, so it is absent from the
+        copy, and the copy then refuses an anchor the live axis accepts. Where
+        that matters, give the backing ``parent_edges()``.
+
+        The dispatch is written into both twins rather than into the drivers,
+        and the asymmetry is deliberate: a fourth :data:`Member` would be a
+        *capability* added to the driver pair, which the module docstring
+        prices as the expensive kind of change. Two three-line branches is the
+        cheaper shape, and it is the last place either flavour needs one.
         """
+        edges = getattr(hierarchy, "parent_edges", None)
+        if edges is not None:
+            return cls(dict(cast("Mapping[K, Sequence[K]]", edges())))
         return cls(drive(hierarchy, _parent_edges()))
 
 
@@ -593,6 +670,10 @@ class AsyncMappingHierarchy(_MappingBacking[K]):
         """:meth:`children` for a whole frontier, one reply per node."""
         return self._children_many(node_ids)
 
+    async def parent_edges(self) -> Mapping[K, Sequence[K]]:
+        """Every node this axis knows, and what each is directly under."""
+        return self._edges()
+
     @classmethod
     def from_nested(
         cls,
@@ -625,8 +706,14 @@ class AsyncMappingHierarchy(_MappingBacking[K]):
         function's meaning exactly -- see :data:`DEFAULT_FRONTIER_CONCURRENCY`.
         It is a keyword here for the same reason it is one on every other
         asynchronous entry point: only the caller knows what their backing is,
-        and a snapshot walks the *whole* axis rather than one branch of it.
+        and a snapshot walks the *whole* axis rather than one branch of it. An
+        axis that can enumerate never reaches the walk, so it never reaches the
+        bound either -- one query has no frontier to fan out over.
         """
+        _refuse_an_unusable_bound(max_concurrency)
+        edges = getattr(hierarchy, "parent_edges", None)
+        if edges is not None:
+            return cls(dict(cast("Mapping[K, Sequence[K]]", await edges())))
         return cls(await async_drive(hierarchy, _parent_edges(), max_concurrency=max_concurrency))
 
 

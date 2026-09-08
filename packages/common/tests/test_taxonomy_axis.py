@@ -11,18 +11,42 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from dataknobs_common.exceptions import NotFoundError, ValidationError
+from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
 )
+from dataknobs_common.ontology.model import (
+    InferenceMode,
+    Materialization,
+    TaxonomyDefinition,
+)
 from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
 from dataknobs_common.testing import assert_twins_agree
+
+#: The smallest loadable vocabulary: one edge, and no ``taxonomies:`` at all.
+#:
+#: The axis under test is supplied by hand, so a document declaring one would
+#: be a second definition of it that nothing reads.
+MINIMAL_DOCUMENT = {
+    "ontology": {
+        "id": "minimal",
+        "version": "1.0",
+        "entity_types": [{"id": "Species"}],
+        "entities": [
+            {"id": "dog", "type": "Species"},
+            {"id": "mammal", "type": "Species"},
+        ],
+        "assertions": [{"subject": "dog", "relation": "isa", "object": "mammal"}],
+    }
+}
 
 # --------------------------------------------------------------------------
 # Criterion 13 -- the axis is reachable, and it takes nothing but its name
@@ -133,27 +157,168 @@ def test_a_materialized_content_axis_is_refused_naming_the_axis(
     assert raised.value.context["axis"] == "content"
 
 
-def test_a_materialized_structure_axis_is_refused_naming_the_axis(
+def test_a_materialized_structure_axis_is_a_copy_taken_at_load(
     materialized_structure_path: Path,
 ) -> None:
-    """The snapshot branch is declared everywhere and taken by no door.
+    """``materialized`` is honoured rather than refused, and by the door.
 
-    ``MATERIALIZED`` structure is a snapshot with a build time; ``ON_DEMAND``
-    is the live read. The copy is now buildable --
-    ``MappingHierarchy.snapshot`` takes one from any axis -- so what a
-    definition asking for the snapshot is asking for is not a branch that does
-    not exist, but one this accessor does not reach for. The honest answer is
-    still to say so here rather than hand back the live axis under the other
-    name, and the message says which of the two it is.
+    The mode was refused for as long as nothing took the snapshot. Taking it at
+    load is the only place both flavours can: ``taxonomy()`` is a plain ``def``
+    on both twins while the asynchronous snapshot is ``async``, and it builds
+    afresh per call, so a copy taken there would be a new copy with a new build
+    time on every fetch.
     """
     onto = load_ontology(materialized_structure_path)
 
+    axis = onto.taxonomy("species")
+
+    assert isinstance(axis.structure, MappingHierarchy)
+    assert tuple(axis.walk()) == ("mammal", "dog", "retriever", "beagle", "golden_retriever")
+
+
+def test_a_materialized_axis_answers_what_the_live_one_answers(
+    mammals_v11_path: Path,
+    materialized_structure_path: Path,
+) -> None:
+    """One vocabulary, two modes, and the same axis under both.
+
+    The property that makes ``materialization`` a *freshness* decision rather
+    than a semantic one: what changes is when the edges were read, not which
+    edges they are. Asserted against the same document with the block flipped,
+    which is the only difference between the two files.
+    """
+    live = load_ontology(mammals_v11_path).taxonomy("species")
+    copied = load_ontology(materialized_structure_path).taxonomy("species")
+
+    assert tuple(copied.walk()) == tuple(live.walk())
+    for node in ("mammal", "dog", "retriever", "beagle", "golden_retriever"):
+        assert copied.structure.parents(node) == live.structure.parents(node)
+        assert copied.structure.children(node) == live.structure.children(node)
+        assert copied.structure.contains(node)
+    assert copied.structure.roots() == live.structure.roots()
+
+
+def test_a_materialized_axis_is_fixed_where_the_live_one_follows_its_source(
+    materialized_structure_path: Path,
+    mammals_v11_path: Path,
+) -> None:
+    """The one thing a copy is for: a build time the live read does not have.
+
+    Both ontologies are asked for their axis twice. The live one rebuilds from
+    the source each time, so a source that moved would move it; the materialized
+    one hands back the structure taken at load, so the two fetches are the same
+    object rather than two reads that happen to agree.
+    """
+    materialized = load_ontology(materialized_structure_path)
+    live = load_ontology(mammals_v11_path)
+
+    assert materialized.taxonomy("species").structure is materialized.taxonomy("species").structure
+    assert live.taxonomy("species").structure is not live.taxonomy("species").structure
+
+
+def test_a_materialized_axis_keeps_a_component_no_root_reaches() -> None:
+    """The copy is the axis, not the part of it a descent can reach.
+
+    ``isa`` is asserted, not constrained, so a document may name a cycle -- and
+    a cycle with nothing above it has no root, which is the enumeration a
+    descent starts from. Copying by descending would drop it, and the axis would
+    then refuse an anchor the same axis read live accepts. The assertion source
+    can say what it holds, so the copy asks it.
+    """
+    document = {
+        "ontology": {
+            "id": "loops",
+            "version": "1.0",
+            "entity_types": [{"id": "Node"}],
+            "entities": [
+                {"id": "a", "type": "Node", "name": "A"},
+                {"id": "b", "type": "Node", "name": "B"},
+            ],
+            "assertions": [
+                {"subject": "a", "relation": "isa", "object": "b"},
+                {"subject": "b", "relation": "isa", "object": "a"},
+            ],
+            "taxonomies": [
+                {
+                    "id": "loop",
+                    "relation": "isa",
+                    "materialization": {"structure": "materialized"},
+                }
+            ],
+        }
+    }
+
+    axis = load_ontology(document).taxonomy("loop")
+
+    assert axis.structure.roots() == ()
+    assert axis.structure.contains("a")
+    assert tuple(axis.walk(from_id="a")) == ("a", "b")
+
+
+@pytest.mark.asyncio
+async def test_the_async_door_materializes_the_same_axis(
+    materialized_structure_path: Path,
+) -> None:
+    """Same document, same copy, one ``await`` -- so the mode means one thing.
+
+    The asynchronous snapshot is a coroutine where the synchronous one is not,
+    which is why the copy is taken at the door: this is the only member of the
+    pair with somewhere to put the ``await``.
+    """
+    onto = await async_load_ontology(materialized_structure_path)
+
+    axis = onto.taxonomy("species")
+
+    assert isinstance(axis.structure, AsyncMappingHierarchy)
+    walked = [node async for node in axis.walk()]
+    assert tuple(walked) == ("mammal", "dog", "retriever", "beagle", "golden_retriever")
+
+
+def test_a_hand_built_ontology_that_declares_materialized_is_refused(
+    materialized_structure_path: Path,
+) -> None:
+    """The invariant the doors keep, asserted where it can be broken.
+
+    ``Ontology`` is a public dataclass, so a caller can build one directly and
+    hand it taxonomies whose definitions ask for a copy it carries none of.
+    Falling back to the live axis there is the silent downgrade the refusal
+    existed to prevent, so the accessor says so instead -- naming the axis, at
+    the call that asked for it.
+    """
+    loaded = load_ontology(materialized_structure_path)
+    hand_built = replace(loaded, structures={})
+
     with pytest.raises(ValidationError) as raised:
-        onto.taxonomy("species")
+        hand_built.taxonomy("species")
 
     assert "species" in str(raised.value)
     assert raised.value.context["taxonomy"] == "species"
     assert raised.value.context["axis"] == "structure"
+
+
+def test_a_copy_is_found_under_the_name_the_axis_was_asked_for() -> None:
+    """``structures`` is keyed like ``taxonomies``, not by ``definition.id``.
+
+    A loader door keys both the same way, so nothing it builds can tell the two
+    apart. ``taxonomies`` is a mapping a caller may build directly, though, and
+    a definition filed under an alias is reached by that alias -- so a copy
+    looked up by ``definition.id`` would be missing for exactly the ontology
+    that supplied it.
+    """
+    copied = MappingHierarchy({"dog": ("mammal",)})
+    onto = replace(
+        load_ontology(MINIMAL_DOCUMENT),
+        taxonomies={
+            "under_an_alias": TaxonomyDefinition(
+                id="species",
+                relation="isa",
+                materialization=Materialization(structure=InferenceMode.MATERIALIZED),
+            )
+        },
+        structures={"under_an_alias": copied},
+    )
+
+    assert onto.taxonomy("under_an_alias").structure is copied
 
 
 def test_the_default_axes_are_the_ones_that_exist(mammals_v11_path: Path) -> None:
@@ -177,24 +342,35 @@ def test_the_default_axes_are_the_ones_that_exist(mammals_v11_path: Path) -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "fixture_name",
-    ["materialized_content_path", "materialized_structure_path"],
+    ("fixture_name", "without_its_copies"),
+    [("materialized_content_path", False), ("materialized_structure_path", True)],
 )
 async def test_both_flavours_refuse_identically(
-    request: pytest.FixtureRequest, fixture_name: str
+    request: pytest.FixtureRequest, fixture_name: str, without_its_copies: bool
 ) -> None:
-    """One rule, and neither twin carries its own copy of it.
+    """One rule per refusal, and neither twin carries its own copy of either.
 
-    Over both refusals rather than one: the rule they share is
-    ``_refuse_unbuildable_axis``, so a second refusal added to only one twin
-    is exactly what this is here to catch.
+    Over both materialization refusals rather than one: they are
+    ``_refuse_a_materialized_content_axis`` and ``_structure_for``, and a
+    second refusal added to only one twin is exactly what this is here to
+    catch.
+
+    The structure case has to have its copies taken away first, because a
+    loader door supplies them -- which is the point of the parameter rather
+    than a detail of it: the refusal survives only for an ontology built by
+    hand, and it is still one rule read by two accessors.
     """
     path: Path = request.getfixturevalue(fixture_name)
+    sync_onto = load_ontology(path)
+    async_onto = await async_load_ontology(path)
+    if without_its_copies:
+        sync_onto = replace(sync_onto, structures={})
+        async_onto = replace(async_onto, structures={})
 
     with pytest.raises(ValidationError) as sync_raised:
-        load_ontology(path).taxonomy("species")
+        sync_onto.taxonomy("species")
     with pytest.raises(ValidationError) as async_raised:
-        (await async_load_ontology(path)).taxonomy("species")
+        async_onto.taxonomy("species")
 
     assert str(sync_raised.value) == str(async_raised.value)
     assert sync_raised.value.context == async_raised.value.context
