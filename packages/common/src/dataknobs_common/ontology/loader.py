@@ -22,7 +22,12 @@ from dataknobs_common._nested_core import _mint_tree, _walk_tree
 from dataknobs_common.config_loading import load_yaml_or_json
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.fields import FieldType
+from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy
 from dataknobs_common.ontology.config import OntologyConfig
+from dataknobs_common.ontology.hierarchy import (
+    AssertionHierarchy,
+    AsyncAssertionHierarchy,
+)
 from dataknobs_common.ontology.model import (
     Assertion,
     AttributeDef,
@@ -168,15 +173,20 @@ def load_ontology(
     """
     parts = _validated_parts(_read_config(source))
     entities = MappingEntitySource(parts.declared_entities, normalizer=normalizer)
+    assertions = MappingAssertionSource(parts.declared_assertions)
     return Ontology(
         id=parts.id,
         version=parts.version,
         entity_types=parts.entity_types,
         relation_types=parts.relation_types,
         entities=entities,
-        assertions=MappingAssertionSource(parts.declared_assertions),
+        assertions=assertions,
         taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
+        structures={
+            name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
+            for name, definition in _axes_to_copy(parts.taxonomies)
+        },
     )
 
 
@@ -213,15 +223,48 @@ async def async_load_ontology(
 
     parts = _validated_parts(config)
     entities = AsyncMappingEntitySource(parts.declared_entities, normalizer=normalizer)
+    assertions = AsyncMappingAssertionSource(parts.declared_assertions)
     return AsyncOntology(
         id=parts.id,
         version=parts.version,
         entity_types=parts.entity_types,
         relation_types=parts.relation_types,
         entities=entities,
-        assertions=AsyncMappingAssertionSource(parts.declared_assertions),
+        assertions=assertions,
         taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
+        structures={
+            name: await AsyncMappingHierarchy.snapshot(
+                AsyncAssertionHierarchy(assertions, definition.relation)
+            )
+            for name, definition in _axes_to_copy(parts.taxonomies)
+        },
+    )
+
+
+def _axes_to_copy(
+    taxonomies: Mapping[str, TaxonomyDefinition],
+) -> tuple[tuple[str, TaxonomyDefinition], ...]:
+    """The definitions whose structure axis this door must copy at load.
+
+    Shared by the doors rather than written into each. What each door does with
+    the answer *is* flavoured -- one snapshot is a coroutine and the other is
+    not -- but which axes to take is the same question, and it is the question
+    :func:`~dataknobs_common.ontology.values._structure_for` asks again on the
+    way out. Two spellings of it is how a door and an accessor come to disagree
+    about which axes were copied.
+
+    At load rather than at the accessor because that is the only place both
+    flavours can take a copy: ``taxonomy()`` is a plain ``def`` on both twins,
+    with nowhere to await the asynchronous snapshot, and it builds afresh on
+    every call -- so a copy taken there would be a new copy with a new build
+    time each time it was fetched, which is the one property a copy exists to
+    not have.
+    """
+    return tuple(
+        (name, definition)
+        for name, definition in taxonomies.items()
+        if definition.materialization.structure_is_copied
     )
 
 

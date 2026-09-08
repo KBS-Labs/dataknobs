@@ -513,31 +513,51 @@ copied = await AsyncMappingHierarchy.snapshot(
 ```
 
 `max_concurrency` means exactly what it means on every other asynchronous entry
-point here, and a snapshot walks the *whole* axis rather than one branch of it.
+point here, and a snapshot walks the *whole* axis rather than one branch of it —
+when it has to walk at all.
 
-**A snapshot sees what descends from `roots()`.** A `Hierarchy` has no extent
-member, so descending is the only enumeration the protocol offers — which means
-a cyclic component with no root above it is absent from the copy. That is a
-property of the protocol rather than of the walk, and where it matters, ask the
-backing.
+### How complete the copy is, is a property of the axis
 
-That absence is not only a gap in the mapping. `Taxonomy.walk` refuses an
-anchor its axis does not contain, so a taxonomy over the copy **refuses a walk
-the same taxonomy over the live axis performs**:
+`roots()` is not an extent, so the four members of `Hierarchy` offer exactly one
+way to enumerate an axis: start at the roots and descend. A cyclic component
+with nothing above it has no root, so a descent never reaches it and it is
+absent from the copy.
+
+That absence is not only a gap in the mapping. `Taxonomy.walk` refuses an anchor
+its axis does not contain, so a taxonomy over such a copy **refuses a walk the
+same taxonomy over the live axis performs** — a hole, not a shrink, and a
+*semantic* difference rather than only a freshness one.
+
+An axis that can say what it holds is not subject to that, and says so by
+implementing `EnumerableHierarchy`:
 
 ```python
-live = MappingHierarchy({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
-copied = MappingHierarchy.snapshot(live)
-
-live.contains("a")    # True  — 'a' is a node of the axis
-copied.contains("a")  # False — nothing descends to it from a root
+class EnumerableHierarchy(Hierarchy[K], Protocol):
+    def parent_edges(self) -> Mapping[K, Sequence[K]]: ...
 ```
 
-Everything the copy did reach answers as before; this is a hole, not a shrink.
-But it makes materializing a *semantic* choice and not only a freshness one, so
-if your relation can produce a component with nothing above it — a mutual `isa`,
-a `related_to` used as if it were a hierarchy — take the copy knowing that, or
-keep the live axis.
+One entry per node, including a node that only ever appears as somebody's
+parent, whose entry is empty. `snapshot` asks for it when it is there and
+descends when it is not, so the same call gives the complete copy from a backing
+that can enumerate and the root-reachable one from a backing that cannot:
+
+```python
+edges = {"dog": ("mammal",), "a": ("b",), "b": ("a",)}   # 'a' and 'b' are a
+                                                         # cycle with no root
+
+# a MappingHierarchy is holding its edges, so snapshot asks it for them
+MappingHierarchy.snapshot(MappingHierarchy(edges)).contains("a")   # True
+
+# a backing with only the four members — RowBackedAxis above — is descended
+MappingHierarchy.snapshot(row_backed_axis).contains("a")           # False
+```
+
+`MappingHierarchy`, `AsyncMappingHierarchy`, `AssertionHierarchy` and
+`AsyncAssertionHierarchy` all implement it — the first two hold their edges and
+the second two fetch them in one query, which is the query `roots()` already
+makes. Like `BulkHierarchy`, it is optional and separate for a reason: an axis
+behind a paged API may genuinely have no way to answer, and a hand-written
+hierarchy with only the four members stays a valid one.
 
 ## What a taxonomy carries, and what it refuses
 
@@ -561,28 +581,38 @@ taxonomies:
       content: on_demand          # reads the entities through the entity source
 ```
 
-**Both snapshots are refused, for different reasons.** `content: materialized`
-is a copy of every entity the axis covers and it needs somewhere to live — an
-ontology loaded from a file binds no such store. `structure: materialized` is
-the cheap copy, ids and edges, and what it lacks is not a store but an
-implementation: the axis `taxonomy()` returns is an `AssertionHierarchy`, which
-opens nothing and caches nothing, so it **is** the live read. Handing that back
-to a definition that asked for a snapshot would be answering under the wrong
-name, and a snapshot is wanted for the one thing a live axis cannot do — say
-what has changed since it was taken.
+**`structure: materialized` is honoured; `content: materialized` is refused.**
+The structure copy is ids and edges — cheap, and a loader door takes it for you:
 
-So the structure refusal is the temporary one, and it is now half spent:
-`MappingHierarchy.snapshot` builds exactly the copy that branch names, and
-`taxonomy()` does not yet reach for it on your behalf. Take one yourself and the
-axis you hold is the snapshot the mode describes:
-
-```python
-species = onto.taxonomy("species")                     # structure: on_demand
-copied = MappingHierarchy.snapshot(species.structure)  # the cheap copy, by hand
+```yaml
+taxonomies:
+  - id: species
+    relation: isa
+    materialization:
+      structure: materialized
 ```
 
-Either mode is refused naming the axis, at the call that asked for it, rather
-than at the first walk:
+```python
+species = onto.taxonomy("species")
+type(species.structure)      # MappingHierarchy — the copy, not the live read
+species.structure is onto.taxonomy("species").structure   # True
+```
+
+The copy is taken **once, at load**, and that location is forced rather than
+chosen. `taxonomy()` is a plain `def` on both flavours, so there is nowhere in
+it to await `AsyncMappingHierarchy.snapshot`; and it builds afresh on every
+call, so a copy taken there would be a new copy with a new build time each time
+you asked — the one property a copy exists not to have.
+
+Because the axis being copied can enumerate its edges, the copy is the whole
+axis rather than the part a descent reaches: a mutual `isa` survives being
+materialized. That is the [`EnumerableHierarchy`](#how-complete-the-copy-is-is-a-property-of-the-axis)
+route above, arriving where it matters.
+
+`content: materialized` is a copy of every entity the axis covers, and it needs
+somewhere to live — a door loading a hand-edited file binds no such store. It is
+refused naming the axis, at the call that asked for it, rather than at the first
+read:
 
 ```python
 onto.taxonomy("species")
@@ -591,6 +621,11 @@ onto.taxonomy("species")
 # to hold it; this ontology binds none. Use `content: on_demand`, which reads
 # through the entity source
 ```
+
+An `Ontology` built by hand rather than by a door carries no copies, so a
+definition declaring `structure: materialized` there is refused too — pass the
+axis in `structures={...}`, or declare `on_demand`. Substituting the live read
+would hand back a different object under the name the config used.
 
 An undeclared name is refused too, listing what *is* declared — the useful
 answer to a typo being the set it was nearly one of:

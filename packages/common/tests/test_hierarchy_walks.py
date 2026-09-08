@@ -27,9 +27,11 @@ import pytest
 from dataknobs_common import hierarchy as hierarchy_module
 from dataknobs_common.hierarchy import (
     AsyncBulkHierarchy,
+    AsyncEnumerableHierarchy,
     AsyncHierarchy,
     AsyncMappingHierarchy,
     BulkHierarchy,
+    EnumerableHierarchy,
     Hierarchy,
     MappingHierarchy,
     ancestors,
@@ -691,6 +693,31 @@ def test_the_bulk_twins_expose_the_same_annotated_surface(
     therefore where they can disagree.
     """
     assert_twin_types_agree(sync_type, async_type, _BULK_MEMBERS, compare_return=True)
+
+
+#: The member an enumerable pair adds. Listed for the reason the others are.
+_ENUMERABLE_MEMBERS = ("parent_edges",)
+
+
+@pytest.mark.parametrize(
+    ("sync_type", "async_type"),
+    [
+        (EnumerableHierarchy, AsyncEnumerableHierarchy),
+        (MappingHierarchy, AsyncMappingHierarchy),
+        (AssertionHierarchy, AsyncAssertionHierarchy),
+    ],
+)
+def test_the_enumerable_twins_expose_the_same_annotated_surface(
+    sync_type: type, async_type: type
+) -> None:
+    """Both adopters, because this member decides how complete a copy is.
+
+    A flavour whose ``parent_edges`` disagreed with its twin's would make
+    ``materialized`` mean one thing through the synchronous door and another
+    through the asynchronous one, which is the failure a parity check over a
+    capability is for.
+    """
+    assert_twin_types_agree(sync_type, async_type, _ENUMERABLE_MEMBERS, compare_return=True)
 
 
 def test_the_snapshot_constructors_are_twins() -> None:

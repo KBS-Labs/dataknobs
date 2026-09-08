@@ -20,9 +20,11 @@ import pytest
 from dataknobs_common.exceptions import NotFoundError, ValidationError
 from dataknobs_common.hierarchy import (
     AsyncBulkHierarchy,
+    AsyncEnumerableHierarchy,
     AsyncHierarchy,
     AsyncMappingHierarchy,
     BulkHierarchy,
+    EnumerableHierarchy,
     Hierarchy,
     MappingHierarchy,
     ancestors,
@@ -147,15 +149,18 @@ def test_the_bulk_members_reply_positionally_one_sequence_per_node() -> None:
     assert axis.children_many(("dog", "beagle")) == (("beagle", "retriever"), ())
 
 
-def test_both_flavours_satisfy_the_bulk_protocol_at_runtime() -> None:
+def test_both_flavours_satisfy_the_optional_protocols_at_runtime() -> None:
     """Opting in is a structural claim, so it is checked structurally.
 
-    The drivers dispatch on **presence** rather than on ``isinstance``, which is
-    what keeps the capability optional -- but a consumer typing against
-    ``BulkHierarchy`` is making the claim these assertions are about.
+    The drivers and ``snapshot`` dispatch on **presence** rather than on
+    ``isinstance``, which is what keeps both capabilities optional -- but a
+    consumer typing against ``BulkHierarchy`` or ``EnumerableHierarchy`` is
+    making the claim these assertions are about.
     """
     assert isinstance(MappingHierarchy(SPECIES), BulkHierarchy)
     assert isinstance(AsyncMappingHierarchy(SPECIES), AsyncBulkHierarchy)
+    assert isinstance(MappingHierarchy(SPECIES), EnumerableHierarchy)
+    assert isinstance(AsyncMappingHierarchy(SPECIES), AsyncEnumerableHierarchy)
 
 
 def test_the_bulk_members_agree_with_the_singular_ones() -> None:
@@ -167,14 +172,20 @@ def test_the_bulk_members_agree_with_the_singular_ones() -> None:
     assert axis.children_many(nodes) == tuple(axis.children(n) for n in nodes)
 
 
-def test_the_bound_is_validated_even_where_the_bulk_path_skips_it() -> None:
-    """A bulk backing never builds the semaphore -- and still checks the width.
+def test_the_bound_is_validated_on_every_path_that_skips_the_frontier() -> None:
+    """A backing that needs no frontier still has its width checked.
 
-    ``_async_reply`` returns on the bulk branch *before* the semaphore is
-    constructed, which is correct: there is nothing to bound in a dict lookup.
-    The validation is deliberately not on the far side of that branch, so a
-    caller cannot pass a deadlocking width and have it silently accepted because
-    their backing happened to offer bulk members.
+    Two paths reach a copy without ever building a semaphore, and each of them
+    is correct to: a bulk backing returns before ``_async_reply`` constructs
+    one, and an enumerable backing never enters the driver at all. Both are the
+    case where a deadlocking width would otherwise be *silently accepted*,
+    because nothing on the caller's path ever looked at it -- so the refusal is
+    deliberately upstream of both branches rather than beside the semaphore.
+
+    ``AsyncMappingHierarchy`` is both kinds of backing, so it takes the
+    outermost skip -- it is asked what it holds and never enters the driver.
+    That is what makes this the load-bearing case: the width it was handed is
+    now read by nothing else on the way.
     """
     axis = AsyncMappingHierarchy(SPECIES)
 
@@ -313,35 +324,35 @@ def test_a_snapshot_keeps_every_parent_of_a_node_that_has_two() -> None:
     assert snapshot.children("a") == ("b", "c")
 
 
-def test_a_snapshot_sees_what_descends_from_the_roots_and_says_so() -> None:
+def test_a_walk_only_axis_is_seen_only_from_its_roots_and_says_so() -> None:
     """The protocol's limit, pinned rather than left to be discovered.
 
-    A ``Hierarchy`` has no extent member -- ``roots()`` says as much in its own
-    docstring -- so descending is the only enumeration available and a cyclic
-    component with no root above it is invisible to it. Absent from the copy is
-    the honest outcome; asserting it is what keeps the docstring true.
+    A bare :class:`Hierarchy` has no extent member -- ``roots()`` says as much
+    in its own docstring -- so descending is the only enumeration available
+    against one, and a cyclic component with no root above it is invisible to
+    it. ``_MovingAxis`` is that bare case on purpose: it offers the four
+    members and nothing else, which is what the guide's hand-written axis
+    offers.
     """
-    orphaned_cycle = MappingHierarchy({"a": ("b",), "b": ("a",)})
+    orphaned_cycle: Hierarchy[str] = _MovingAxis({"a": ("b",), "b": ("a",)})
 
     assert orphaned_cycle.roots() == ()
     assert dict(MappingHierarchy.snapshot(orphaned_cycle).parent_map) == {}
 
 
-def test_a_snapshot_refuses_an_anchor_the_axis_it_copied_accepts() -> None:
+def test_a_walk_only_snapshot_refuses_an_anchor_the_axis_it_copied_accepts() -> None:
     """The absence above, arriving where a consumer actually meets it.
 
     ``Taxonomy.walk`` refuses an unknown anchor by asking ``contains``, so an
     unreachable component is not merely missing from the copy: the *materialized*
     axis refuses to anchor a walk the live axis performs. Same taxonomy, same
-    anchor, two answers, and what differs is which axis is underneath -- which
-    makes materialization a semantic choice rather than only a freshness one.
+    anchor, two answers, and what differs is which axis is underneath.
 
-    Pinned rather than fixed, because the protocol offers nothing to fix it
-    with: reaching ``a`` needs an extent member ``Hierarchy`` does not have, and
-    inventing one here would be a change to every backing rather than to this
-    copy. The guide says it beside the choice for the same reason.
+    Pinned rather than fixed, because there is nothing here to fix it with:
+    reaching ``a`` needs the axis to be able to say what it holds, and this one
+    cannot. An axis that *can* is the test below, and it does not lose ``a``.
     """
-    live = MappingHierarchy({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
+    live: Hierarchy[str] = _MovingAxis({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
     copied = MappingHierarchy.snapshot(live)
 
     assert tuple(_taxonomy_over(live).walk(from_id="a")) == ("a", "b")
@@ -350,6 +361,37 @@ def test_a_snapshot_refuses_an_anchor_the_axis_it_copied_accepts() -> None:
 
     # What the copy did reach is unaffected: this is a hole, not a shrink.
     assert tuple(_taxonomy_over(copied).walk(from_id="mammal")) == ("mammal", "dog")
+
+
+def test_an_axis_that_can_enumerate_is_copied_whole_cycle_and_all() -> None:
+    """The hole is a property of the *axis*, not of the copy.
+
+    ``parent_edges()`` is the extent ``roots()`` is not, and a backing offering
+    it is telling the snapshot it can do better than descend. A
+    ``MappingHierarchy`` is such a backing -- it is holding the edges -- so a
+    rootless cycle survives being copied, and the anchor the walk-only copy
+    above refuses is answered here.
+    """
+    live = MappingHierarchy({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
+
+    copied = MappingHierarchy.snapshot(live)
+
+    assert copied.contains("a") and copied.parents("a") == ("b",)
+    assert tuple(_taxonomy_over(copied).walk(from_id="a")) == ("a", "b")
+    assert tuple(_taxonomy_over(copied).walk(from_id="mammal")) == ("mammal", "dog")
+
+
+def test_enumerating_and_descending_agree_wherever_descending_reaches() -> None:
+    """The two routes are one answer, not two -- where both can see.
+
+    A snapshot taken by walking and one taken by enumerating must not differ on
+    rooted data, or ``parent_edges()`` would be a second implementation of the
+    axis rather than a cheaper read of it.
+    """
+    walked = MappingHierarchy.snapshot(_MovingAxis(DIAMOND))
+    enumerated = MappingHierarchy.snapshot(MappingHierarchy(DIAMOND))
+
+    assert dict(enumerated.parent_map) == dict(walked.parent_map)
 
 
 def test_a_snapshot_of_a_snapshot_is_the_same_axis() -> None:
@@ -402,3 +444,19 @@ def test_the_async_snapshot_walks_a_live_async_axis() -> None:
     assert isinstance(snapshot, AsyncMappingHierarchy)
     assert asyncio.run(snapshot.roots()) == ("mammal",)
     assert asyncio.run(snapshot.parents("beagle")) == ("dog",)
+
+
+def test_the_async_snapshot_enumerates_where_the_axis_offers_it() -> None:
+    """The twin makes the same choice, so a copy is not flavour-dependent.
+
+    An ontology loaded through the asynchronous door materializes its axes
+    through this path, and a rootless component surviving one flavour but not
+    the other would make ``materialized`` mean two things.
+    """
+    live = AsyncMappingHierarchy({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
+
+    copied = asyncio.run(AsyncMappingHierarchy.snapshot(live))
+
+    assert asyncio.run(copied.contains("a"))
+    assert asyncio.run(copied.parents("a")) == ("b",)
+    assert asyncio.run(copied.parents("dog")) == ("mammal",)

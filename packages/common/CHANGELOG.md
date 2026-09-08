@@ -73,6 +73,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order asked, an absent answer being an empty sequence rather than a missing
   slot. `AssertionHierarchy` implements both over `AssertionSource.find_many`.
 
+  `EnumerableHierarchy` and `AsyncEnumerableHierarchy` are optional in the same
+  way, adding `parent_edges()` — every node the axis knows and what each is
+  directly under. They exist because **`roots()` is not an extent**: the four
+  base members offer exactly one way to enumerate an axis, which is to start at
+  the roots and descend, so a cyclic component with nothing above it is
+  unreachable. That is not academic — it is what a copy of such an axis loses,
+  and a copy that lost it would then refuse an anchor the live axis accepts,
+  since `Taxonomy.walk` refuses an unknown anchor by asking `contains`. A
+  backing holding its edges, or able to fetch them in one query, is not subject
+  to the limit and this is where it says so. `MappingHierarchy`,
+  `AsyncMappingHierarchy`, `AssertionHierarchy` and `AsyncAssertionHierarchy`
+  all implement it; an axis behind a paged API may genuinely be unable to, which
+  is why it is optional rather than a fifth member of the base protocol.
+
 - **`MappingHierarchy` and `AsyncMappingHierarchy`**, in
   `dataknobs_common.hierarchy`: a structure axis **carried in memory** rather
   than read. They hold a node's parents as a mapping, open nothing, and are
@@ -86,12 +100,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes the shape a person maintains by hand — a nested document with no id
   field anywhere, where a node *is* its path — and mints one id per node as a
   slug of that path, keeping the path as the name so that renaming a node
-  changes what it is called and not what it is. **`snapshot(hierarchy)`** walks
+  changes what it is called and not what it is. **`snapshot(hierarchy)`** reads
   a live axis once and keeps the result: the cheap copy, ids and edges, which
   buys the one thing a live axis cannot do — say what has changed since it was
-  taken — at the cost of freshness. A snapshot sees what descends from
-  `roots()`, which is the only enumeration a `Hierarchy` offers, so a cyclic
-  component with no root above it is absent from the copy.
+  taken — at the cost of freshness. **How complete the copy is, is a property of
+  the axis**: one implementing `EnumerableHierarchy` is asked what it holds and
+  copied whole, and one offering only the four base members is descended from
+  its roots, so a cyclic component with no root above it is absent from that
+  copy. The `max_concurrency` bound is refused before either branch, because a
+  backing that answers without a frontier is exactly the one whose caller would
+  otherwise have a deadlocking width silently accepted.
 
   **`from_nested` mints the ids an ontology mints** for the same tree under a
   `kind: nested` source. The traversal, the slug and the collision refusal are
@@ -152,18 +170,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later report the edge it walked rather than only its endpoints. It is a plain
   `def` on the asynchronous twin, which constructs and awaits nothing.
 
-  It refuses, **naming the axis**, a definition asking for something the
-  ontology cannot supply. Both axes default to the live read, and both
-  snapshots are refused: `materialization.content: materialized` is a copy of
-  every entity on the axis and needs a store to hold it, and a vocabulary
-  loaded from a file binds none; `materialization.structure: materialized` is
-  the cheap copy — ids and edges — and the axis built here is one that reads
-  through its source, so handing it back would be answering under the wrong
-  name. That copy now exists: `MappingHierarchy.snapshot` below builds one from
-  any axis, and `taxonomy()` does not yet take one on your behalf — so the
-  refusal stands, and a consumer who wants the snapshot takes it themselves in
-  one call. The refusal fires where the caller asked for the axis rather than
-  at the first walk, which is a call site with no idea why it failed.
+  Both axes default to the live read, and the two `materialized` modes are
+  answered differently. **`materialization.structure: materialized` is
+  honoured** — the loader doors take the copy, once, at load, and `taxonomy()`
+  hands it back in the `structure` slot. That location is forced rather than
+  chosen: `taxonomy()` is a plain `def` on both flavours, so there is nowhere in
+  it to await the asynchronous snapshot, and it builds afresh on every call, so
+  a copy taken there would be a new copy with a new build time on every fetch.
+  The copied axis is the *whole* axis rather than the part a descent reaches,
+  because `AssertionHierarchy` can enumerate its edges — so a mutual `isa`
+  survives being materialized.
+
+  **`materialization.content: materialized` is refused, naming the axis** — it
+  is a copy of every entity on the axis and needs a store to hold it, and a
+  vocabulary loaded from a file binds none. So is a definition declaring
+  `structure: materialized` on an `Ontology` built directly rather than by a
+  door, which carries no copies: pass the axis in `structures={…}` or declare
+  `on_demand`, because substituting the live read would hand back a different
+  object under the name the config used. Either refusal fires where the caller
+  asked for the axis rather than at the first walk, which is a call site with no
+  idea why it failed.
+
+  `Ontology` and `AsyncOntology` therefore carry a ninth field, `structures` —
+  the copied axes keyed by taxonomy id, empty for a vocabulary that declares no
+  `materialized` structure, which is every vocabulary that says nothing.
 
   `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
   `dataknobs_common.ontology.hierarchy`, are what answer the structure axis

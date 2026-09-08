@@ -31,7 +31,7 @@ from dataknobs_common.ontology.model import EntityRef
 from dataknobs_common.ontology.sources import object_entity_id
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from dataknobs_common.ontology.model import Assertion, RelationRef
     from dataknobs_common.ontology.sources import AssertionSource, AsyncAssertionSource
@@ -69,6 +69,33 @@ def _children_of(assertions: Sequence[Assertion]) -> tuple[str, ...]:
     literal check is needed because a subject is always an entity id.
     """
     return _ordered(assertion.subject for assertion in assertions)
+
+
+def _parent_edges_of(edges: Sequence[Assertion]) -> dict[str, tuple[str, ...]]:
+    """Every node these edges mention, and what each is directly under.
+
+    The extent :meth:`AssertionHierarchy.roots` is not, which is what lets a
+    snapshot of this axis be the *whole* axis rather than the part a descent
+    from the roots reaches -- a cyclic component with nothing above it has no
+    root to be found from, and ``isa`` is asserted rather than constrained, so a
+    document may name one.
+
+    Every node gets an entry, including one that only ever appears as a parent;
+    its entry is empty, which is the same thing :meth:`roots` reports about it.
+    An assertion whose object is a literal contributes a node and no edge, for
+    the reason :func:`_parents_of` gives: ``dog lifespan_years 12`` is a value
+    rather than a place in a structure.
+    """
+    above: dict[str, list[str]] = {}
+    for edge in edges:
+        above.setdefault(edge.subject, [])
+        parent = object_entity_id(edge.object)
+        if parent is None:
+            continue
+        above.setdefault(parent, [])
+        if parent not in above[edge.subject]:
+            above[edge.subject].append(parent)
+    return {node_id: tuple(parents) for node_id, parents in above.items()}
 
 
 def _nodes_of(edges: Sequence[Assertion]) -> tuple[str, ...]:
@@ -145,6 +172,16 @@ class AssertionHierarchy:
             return True
         return bool(self.source.find(object=EntityRef(node_id), relation=self.relation))
 
+    def parent_edges(self) -> Mapping[str, Sequence[str]]:
+        """Every edge of this relation, in one query.
+
+        The member that makes a copy of this axis complete. It is one ``find``
+        for the whole relation -- the same query :meth:`roots` already makes --
+        rather than a descent, so what it can see does not depend on anything
+        being reachable from a root.
+        """
+        return _parent_edges_of(self.source.find(relation=self.relation))
+
 
 @dataclass(frozen=True)
 class AsyncAssertionHierarchy:
@@ -190,6 +227,10 @@ class AsyncAssertionHierarchy:
         found = await self.source.find(object=EntityRef(node_id), relation=self.relation)
         return bool(found)
 
+    async def parent_edges(self) -> Mapping[str, Sequence[str]]:
+        """:meth:`AssertionHierarchy.parent_edges`, awaited."""
+        return _parent_edges_of(await self.source.find(relation=self.relation))
+
 
 if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
 
@@ -202,8 +243,10 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
         """
         from dataknobs_common.hierarchy import (
             AsyncBulkHierarchy,
+            AsyncEnumerableHierarchy,
             AsyncHierarchy,
             BulkHierarchy,
+            EnumerableHierarchy,
             Hierarchy,
         )
         from dataknobs_common.ontology.sources import (
@@ -219,4 +262,8 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
         async_bulk: AsyncBulkHierarchy = AsyncAssertionHierarchy(
             AsyncMappingAssertionSource([]), "isa"
         )
-        del sync, asynchronous, bulk, async_bulk
+        enumerable: EnumerableHierarchy = AssertionHierarchy(MappingAssertionSource([]), "isa")
+        async_enumerable: AsyncEnumerableHierarchy = AsyncAssertionHierarchy(
+            AsyncMappingAssertionSource([]), "isa"
+        )
+        del sync, asynchronous, bulk, async_bulk, enumerable, async_enumerable
