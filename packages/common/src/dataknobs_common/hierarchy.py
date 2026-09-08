@@ -17,9 +17,13 @@ awaiting.
 That pair is a **fixed** cost: it does not grow when a walk is added, which is
 the whole of the bet. State it as a bet rather than a saving, because one
 public traversal ships today -- ``ancestors`` -- and at one walk the
-arrangement costs more than a hand-twinned pair would. It pays from the second
-on, and the shape it exists to avoid is ``dataknobs_data``'s
-``_search_with_complex_query``: 57 lines in each flavour, differing in three.
+arrangement costs more than a hand-twinned pair would. What it buys from the
+second walk on is a lower *marginal* cost rather than a lower total: the pair
+is paid once, but it is not small, and it grows when a **capability** is added
+to it -- bulk frontier dispatch did -- where a walk added *over* it does not.
+That distinction is the bet. The shape it exists to avoid is
+``dataknobs_data``'s ``_search_with_complex_query``: 57 lines in each flavour,
+differing in three.
 
 The key type is a parameter with ``str`` **defaulted**, so a bare ``Hierarchy``
 is ``Hierarchy[str]`` and reads as it always did. It exists because the walks
