@@ -159,6 +159,14 @@ def load_ontology(
     Raises:
         ValidationError: For any refusal in :func:`build_ontology`, and for a
             live source kind this door cannot own
+        ConfigLoadError: For any refusal in reading ``source`` as a
+            document -- an unrecognised extension, a payload that will not
+            parse, a root that is not a mapping, or YAML with PyYAML not
+            installed (it ships in this package's ``yaml`` extra).
+            Reachable only when ``source`` is a ``Path``: a caller who
+            passes the document itself never reaches the read
+        OSError: From that same read, for a path that cannot be opened --
+            ``FileNotFoundError`` when it is not there
     """
     parts = _validated_parts(_read_config(source))
     entities = MappingEntitySource(parts.declared_entities, normalizer=normalizer)
@@ -193,6 +201,9 @@ async def async_load_ontology(
 
     Raises:
         ValidationError: Exactly as :func:`load_ontology`
+        ConfigLoadError: Exactly as :func:`load_ontology`, propagated out of
+            the offloaded read
+        OSError: Exactly as :func:`load_ontology`, likewise
     """
     # The read is the only blocking thing either door does, so it is the only
     # thing offloaded -- and only when there is a read: a caller who already
@@ -620,7 +631,7 @@ def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefini
             metadata=dict(row.get("metadata", {})),
             materialization=Materialization(
                 structure=_inference_mode(
-                    materialization.get("structure", InferenceMode.MATERIALIZED.value),
+                    materialization.get("structure", InferenceMode.ON_DEMAND.value),
                     "materialization.structure",
                 ),
                 content=_inference_mode(

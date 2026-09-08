@@ -7,7 +7,18 @@ authors = [
     { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+# The package's posture is zero hard dependencies -- every optional backend
+# below is lazy-imported behind an extra. This one entry is the exception and
+# it is scoped so that it is not an exception for long: PEP 696 type-parameter
+# defaults are ``typing``'s only from 3.13, and ``dataknobs_common.hierarchy``
+# needs one at *runtime* rather than only for type checking (``typing.TypeVar``
+# raises on ``default=``). The marker means a 3.13 install already resolves to
+# nothing, and the ``sys.version_info`` branch at the use site deletes the
+# import the day ``requires-python`` rises. typing-extensions is PSF-2.0 --
+# permissive, no copyleft obligation -- and pulls in nothing of its own.
+dependencies = [
+    "typing-extensions>=4.4.0; python_full_version < '3.13'",
+]
 
 [project.optional-dependencies]
 # Optional ``.env`` / ``.project_vars`` fallback layer for
@@ -15,27 +26,39 @@ dependencies = []
 # dotenv layer is silently skipped (os.environ + config still work),
 # so it stays opt-in to keep the base install lean.
 dotenv = ["python-dotenv>=1.0.0"]
+# YAML support for the shared config loader
+# (``dataknobs_common.config_loading.load_yaml_or_json``) and so for the
+# ontology doors that read through it (``load_ontology`` /
+# ``async_load_ontology`` given a ``.yaml`` path). PyYAML is
+# lazy-imported inside the helper bodies, so it adds nothing to the base
+# install declared above, and a caller who passes a mapping or a
+# ``.json`` path never needs it. The floor is the one
+# ``dataknobs-config``, ``dataknobs-bots``, ``dataknobs-llm`` and
+# ``dataknobs-fsm`` already pin, taken with their reason rather than
+# restated as a second one: 6.0 lacks cp312/cp313 wheels and source
+# build fails on Cython 3.
+yaml = ["pyyaml>=6.0.2"]
 # PostgreSQL LISTEN/NOTIFY EventBus (``PostgresEventBus`` / the
 # ``"postgres"`` backend). asyncpg is lazy-imported inside the backend
-# and its registry wrapper, so the base install stays
-# ``dependencies = []``.
+# and its registry wrapper, so it adds nothing to the base install
+# declared above.
 postgres = ["asyncpg>=0.29.0"]
 # The ``redis`` driver, used by the Redis pub/sub EventBus
 # (``RedisEventBus`` / the ``"redis"`` backend) and the pyrate
-# Redis-bucket rate limiter. Lazy-imported at each use site, so the
-# base install stays ``dependencies = []``.
+# Redis-bucket rate limiter. Lazy-imported at each use site, so it adds
+# nothing to the base install declared above.
 redis = ["redis>=5.0.0"]
 # Async AWS transport for the shared session factory
 # (``dataknobs_common.aws.create_aioboto3_session``), used by every AWS
 # consumer: SqsEventBus and the S3 data backends today, and future AWS
 # services (e.g. a bedrock-runtime LLM provider). aioboto3 is
-# lazy-imported inside the factory's worker thread, so the base install
-# stays ``dependencies = []`` and importing ``dataknobs_common.aws``
-# never requires it.
+# lazy-imported inside the factory's worker thread, so it adds nothing
+# to the base install declared above and importing
+# ``dataknobs_common.aws`` never requires it.
 aws = ["aioboto3>=12.0.0"]
 # AWS SQS-backed EventBus (``SqsEventBus`` / the ``"sqs"`` backend).
-# Lazy-imported inside the backend and its registry wrapper, so the
-# base install stays ``dependencies = []`` and importing
+# Lazy-imported inside the backend and its registry wrapper, so it adds
+# nothing to the base install declared above and importing
 # ``dataknobs_common.events`` never requires aioboto3. SqsEventBus routes
 # through the shared session factory, so this composes the ``aws``
 # transport extra rather than re-pinning aioboto3 (single source of the

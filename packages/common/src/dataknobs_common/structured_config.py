@@ -1195,8 +1195,8 @@ ConfigClassResolver = Callable[[Mapping[str, Any]], ConfigClassResolution]
 
 #: Process-global registry of section resolvers, keyed by binding name (the
 #: value side of a :attr:`StructuredConfig._polymorphic_fields` entry). The
-#: registry-of-registries seam: ``dataknobs-common`` owns it but
-#: (``dependencies = []``) cannot populate it, so each package that owns a
+#: registry-of-registries seam: ``dataknobs-common`` owns it but cannot
+#: populate it, depending on no sibling package, so each package that owns a
 #: polymorphic section registers its resolver eagerly at import (e.g.
 #: ``dataknobs-data`` registers ``"vector_store"``). The string binding plus a
 #: runtime registration is what keeps adoption coupling-free — a parent config

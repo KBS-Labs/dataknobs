@@ -13,12 +13,28 @@ So the guard runs in a fresh interpreter and asks what actually got imported.
 
 from __future__ import annotations
 
+import importlib.metadata
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+#: The one entry the base install may declare, and the only one it ever has.
+#:
+#: PEP 696 type-parameter defaults are ``typing``'s only from 3.13 while
+#: ``requires-python`` is >=3.12, and ``dataknobs_common.hierarchy`` needs one
+#: at *runtime* -- ``typing.TypeVar`` raises on ``default=``. So the marker
+#: scopes it to the versions that cannot do without it, a 3.13 install already
+#: resolves to nothing, and the entry deletes itself when the floor rises.
+#:
+#: It does not weaken what this file is guarding. The constraint is that
+#: installing this package pulls in no third-party *code*: typing-extensions is
+#: pure typing support, declares no dependencies of its own, and reaches
+#: nothing at runtime. The three tests below are where the real teeth are --
+#: they ask a fresh interpreter what actually got imported.
+TYPING_BACKPORT = "typing-extensions>=4.4.0; python_full_version < '3.13'"
 
 
 def _run(script: str) -> subprocess.CompletedProcess[str]:
@@ -36,11 +52,35 @@ def _run(script: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_the_base_install_declares_no_dependencies() -> None:
-    """The constraint the rest of this file is enforcing, read from the source."""
+def test_the_base_install_declares_nothing_but_the_typing_backport() -> None:
+    """The constraint the rest of this file is enforcing, read from the source.
+
+    Both spellings pass, and that is deliberate: the empty list is where this
+    package was and where it returns the day ``requires-python`` reaches 3.13.
+    A *second* entry fails, which is the ratchet -- the guard still refuses the
+    thing it was written to refuse, and this is not a door left open.
+    """
     manifest = tomllib.loads((PACKAGE_ROOT / "pyproject.toml").read_text())
 
-    assert manifest["project"]["dependencies"] == []
+    assert manifest["project"]["dependencies"] in ([], [TYPING_BACKPORT])
+
+
+def test_the_typing_backport_pulls_in_nothing_of_its_own() -> None:
+    """Declaring it must not put third-party *code* on a consumer's path.
+
+    The letter of the old assertion was ``dependencies == []``; its purpose was
+    that installing this package installs nothing else. That purpose is what
+    gets asserted here, so relaxing the letter costs nothing: typing-extensions
+    declares no dependencies at all, so the base install grows by one pure
+    typing module and by nothing behind it.
+
+    Read from the installed metadata rather than recalled, and asked in the
+    direction that could be inconvenient -- a release that grew a dependency
+    would fail this rather than being taken on trust.
+    """
+    requires = importlib.metadata.metadata("typing_extensions").get_all("Requires-Dist")
+
+    assert not requires, requires
 
 
 def test_importing_records_does_not_import_dataknobs_data() -> None:

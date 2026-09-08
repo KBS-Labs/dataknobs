@@ -1433,6 +1433,9 @@ dev = [
 name = "dataknobs-common"
 version = "3.2.0"
 source = { editable = "packages/common" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
 
 [package.optional-dependencies]
 aws = [
@@ -1449,6 +1452,9 @@ redis = [
 ]
 sqs = [
     { name = "aioboto3" },
+]
+yaml = [
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -1472,9 +1478,11 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29.0" },
     { name = "dataknobs-common", extras = ["aws"], marker = "extra == 'sqs'", editable = "packages/common" },
     { name = "python-dotenv", marker = "extra == 'dotenv'", specifier = ">=1.0.0" },
+    { name = "pyyaml", marker = "extra == 'yaml'", specifier = ">=6.0.2" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'", specifier = ">=4.4.0" },
 ]
-provides-extras = ["dotenv", "postgres", "redis", "aws", "sqs"]
+provides-extras = ["dotenv", "yaml", "postgres", "redis", "aws", "sqs"]
 
 [package.metadata.requires-dev]
 dev = [

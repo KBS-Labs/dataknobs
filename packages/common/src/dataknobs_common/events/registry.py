@@ -26,8 +26,8 @@ backend) and the four built-in backend factories.
 
 Each built-in wrapper imports its concrete backend *lazily* (inside the
 factory call) so importing this module never pulls optional backend
-dependencies (asyncpg, redis, aioboto3) at module load time, preserving
-the ``dependencies = []`` base install.
+dependencies (asyncpg, redis, aioboto3) at module load time, so the base
+install carries no backend driver.
 """
 
 from __future__ import annotations

@@ -104,8 +104,8 @@ def __getattr__(name: str) -> object:
     """Lazily expose ``SqsEventBus`` (PEP 562).
 
     Importing it eagerly would pull the optional ``aioboto3`` dependency
-    at ``dataknobs_common.events`` import time, breaking the
-    ``dependencies = []`` base install. This defers the import to first
+    at ``dataknobs_common.events`` import time, putting a backend driver
+    in the base install. This defers the import to first
     attribute access. The registry's ``"sqs"`` factory lazy-imports
     independently, so ``create_event_bus({"backend": "sqs"})`` works even
     if this top-level symbol is never touched.

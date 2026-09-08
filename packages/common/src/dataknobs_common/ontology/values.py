@@ -16,6 +16,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.exceptions import NotFoundError, ValidationError
+from dataknobs_common.ontology.hierarchy import (
+    AssertionHierarchy,
+    AsyncAssertionHierarchy,
+)
+from dataknobs_common.ontology.model import InferenceMode
+from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -33,6 +41,84 @@ if TYPE_CHECKING:
         EntitySource,
         SourceDescription,
     )
+
+
+def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> TaxonomyDefinition:
+    """The definition this ontology declares under ``name``.
+
+    Refuses an undeclared name listing what *is* declared: the caller asked for
+    an axis by a name they typed, and the useful answer to a typo is the set it
+    was nearly one of.
+
+    Shared by both flavours rather than written into each -- the refusals
+    either twin makes are the same refusals, and a rule a twin re-implements is
+    a rule that drifts.
+    """
+    definition = taxonomies.get(name)
+    if definition is None:
+        raise NotFoundError(
+            f"no taxonomy {name!r} in this ontology. Declared: {sorted(taxonomies)}",
+            context={"taxonomy": name, "declared": sorted(taxonomies)},
+        )
+    _refuse_unbuildable_axis(definition)
+    return definition
+
+
+def _refuse_unbuildable_axis(definition: TaxonomyDefinition) -> None:
+    """Refuse an axis whose materialization names a branch nothing here builds.
+
+    ``Materialization`` is per axis and reuses ``InferenceMode``: a
+    ``MATERIALIZED`` axis is a snapshot with a build time rather than a live
+    read. Both axes have a live implementation and neither has a snapshot, so
+    both modes are refused -- for different reasons, which is why the messages
+    differ:
+
+    * **content** materialized is a copy of every entity the axis covers. It is
+      the expensive one and needs somewhere to live; an ontology loaded from a
+      hand-edited file binds no store, so it is asking for something it cannot
+      be given;
+    * **structure** materialized is ids and edges -- the cheap copy, and cheap
+      enough that a store is not what it lacks. What it lacks is an
+      implementation: the axis built here is an ``AssertionHierarchy``, which
+      opens nothing and caches nothing, so it *is* the live read. Handing it
+      back for a definition that asked for a snapshot would be answering under
+      the wrong name.
+
+    Both are refused **naming the axis**, and refused here -- where the caller
+    asked for the axis and can act on the answer -- rather than at the first
+    walk, which is a call site with no idea why it failed.
+
+    The structure refusal is temporary by construction, and is lifted by
+    whatever first builds a snapshot. Until then it is the only thing standing
+    between a consumer and a silent downgrade, because the alternative to
+    refusing is prose saying the mode is recorded but not acted on -- a
+    sentence that has already been copied into its own opposite once.
+    """
+    if definition.materialization.content is InferenceMode.MATERIALIZED:
+        raise ValidationError(
+            f"taxonomy {definition.id!r} declares `materialization.content: "
+            f"materialized`, which is a copy of every entity on the axis and "
+            f"needs a store to hold it; this ontology binds none. Use "
+            f"`content: on_demand`, which reads through the entity source",
+            context={
+                "taxonomy": definition.id,
+                "axis": "content",
+                "mode": InferenceMode.MATERIALIZED.value,
+            },
+        )
+    if definition.materialization.structure is InferenceMode.MATERIALIZED:
+        raise ValidationError(
+            f"taxonomy {definition.id!r} declares `materialization.structure: "
+            f"materialized`, which is a snapshot of the axis's ids and edges "
+            f"taken at build time; nothing here builds one. Use "
+            f"`structure: on_demand`, which reads the edges through the "
+            f"assertion source",
+            context={
+                "taxonomy": definition.id,
+                "axis": "structure",
+                "mode": InferenceMode.MATERIALIZED.value,
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -91,6 +177,27 @@ class Ontology:
         """The ids matching this form, by way of :attr:`entities`."""
         return self.entities.by_surface_form(form)
 
+    def taxonomy(self, name: str) -> Taxonomy:
+        """The axis this ontology declares under ``name``, built.
+
+        Built from three fields this object already holds and **no consumer
+        input**, which is what keeps it an accessor rather than a factory: the
+        structure is this ontology's assertions read for one relation, the
+        content is its entity source, and the assertions travel along so a
+        cursor over the axis can report the edge it walked.
+
+        Refuses, naming the axis, a definition whose ``materialization`` asks
+        for something this ontology cannot supply -- see
+        :func:`_refuse_unbuildable_axis`.
+        """
+        definition = _definition(self.taxonomies, name)
+        return Taxonomy(
+            definition=definition,
+            structure=AssertionHierarchy(self.assertions, definition.relation),
+            entities=self.entities,
+            assertions=self.assertions,
+        )
+
 
 @dataclass(frozen=True)
 class AsyncOntology:
@@ -118,3 +225,19 @@ class AsyncOntology:
     async def by_surface_form(self, form: str) -> frozenset[str]:
         """The ids matching this form, by way of :attr:`entities`."""
         return await self.entities.by_surface_form(form)
+
+    def taxonomy(self, name: str) -> AsyncTaxonomy:
+        """The axis this ontology declares under ``name``, built.
+
+        A plain ``def`` on this twin, and deliberately: it constructs over
+        fields the object is already holding and awaits nothing. Making it
+        awaitable would cost every caller an ``await`` for a lookup and three
+        assignments.
+        """
+        definition = _definition(self.taxonomies, name)
+        return AsyncTaxonomy(
+            definition=definition,
+            structure=AsyncAssertionHierarchy(self.assertions, definition.relation),
+            entities=self.entities,
+            assertions=self.assertions,
+        )
