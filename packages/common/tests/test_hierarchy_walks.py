@@ -431,7 +431,16 @@ class AsyncBulkParents:
 
 
 class ConcurrencyProbe:
-    """An asynchronous hierarchy that records how many calls overlap."""
+    """An asynchronous hierarchy that records how many calls overlap.
+
+    **Singular-only, and that is load-bearing rather than incidental.** The
+    frontier read returns on the bulk path *before* the bound is constructed --
+    a backing answering a whole level in one call has nothing to bound -- so a
+    ``max_concurrency`` test written against a backing that offers
+    ``parents_many`` measures nothing and passes. Every bound test below uses
+    this class for that reason. Give it bulk members and they all go quiet
+    without failing.
+    """
 
     def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
         self._inner = MappingParents(parents)
@@ -601,14 +610,27 @@ def test_patching_the_core_moves_both_flavours(
     traversal would return the same answer on the day it was written and drift
     a year later, silently, which is the failure this shape exists to catch.
     """
+    sentinel = object()
 
     def sentinel_walk(node_id: str) -> object:
-        return iter(())  # a walk that asks nothing and returns None
+        """A walk that asks nothing and returns a value nothing else produces.
+
+        A generator rather than ``iter(())``, and returning a sentinel rather
+        than ``None``, for the same reason in both halves: ``None`` out of an
+        empty iterator is an answer the *unpatched* driver could also give, so
+        it proves the surfaces agree rather than that the patch was reached.
+        """
+
+        def _asks_nothing() -> object:
+            return sentinel
+            yield  # unreachable, and what makes this a generator
+
+        return _asks_nothing()
 
     monkeypatch.setattr(hierarchy_module, "_ancestors", sentinel_walk)
 
-    assert ancestors(MappingParents(CYCLIC_PARENTS), "f") is None
-    assert asyncio.run(async_ancestors(AsyncMappingParents(CYCLIC_PARENTS), "f")) is None
+    assert ancestors(MappingParents(CYCLIC_PARENTS), "f") is sentinel
+    assert asyncio.run(async_ancestors(AsyncMappingParents(CYCLIC_PARENTS), "f")) is sentinel
 
 
 # --------------------------------------------------------------------------
@@ -683,3 +705,102 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
     )
 
     assert result.stdout.strip() == "False"
+
+
+# --------------------------------------------------------------------------
+# The walk's own exhaustion, and the width of a frontier read
+# --------------------------------------------------------------------------
+
+
+def test_driving_a_spent_walk_is_refused_rather_than_answered() -> None:
+    """A second drive of one generator must not answer ``None`` as a result.
+
+    A walk is single-use and the drivers did not say so. ``drive`` opens with
+    ``next(walk)``; on an exhausted generator that raises ``StopIteration``
+    with ``value=None``, which the driver's own ``except`` reads as the walk
+    returning and hands back cast to the declared type. The caller then holds a
+    ``None`` typed ``tuple[str, ...]`` and fails at ``for x in None``, nowhere
+    near the driver that produced it.
+
+    Distinct from the collaborator's ``StopIteration`` pinned above, which is
+    an exception raised by the *hierarchy*. This is the walk's own exhaustion,
+    which is not an error condition anywhere else -- so it is checked before
+    the ``try`` rather than converted inside it.
+    """
+    hierarchy = MappingParents({"a": (), "b": ("a",)})
+    walk = _asking_for("parents")
+
+    assert drive(hierarchy, walk) == ()
+
+    with pytest.raises(RuntimeError, match="already been driven"):
+        drive(hierarchy, walk)
+
+
+def test_both_flavours_refuse_a_spent_walk_alike() -> None:
+    """The twins raise the same type, which is the property the pair rests on."""
+    hierarchy = AsyncMappingParents({"a": (), "b": ("a",)})
+    walk = _asking_for("parents")
+
+    assert asyncio.run(async_drive(hierarchy, walk)) == ()
+
+    with pytest.raises(RuntimeError, match="already been driven"):
+        asyncio.run(async_drive(hierarchy, walk))
+
+
+#: A level wider than any sensible fan-out bound, so an unbounded gather and a
+#: bounded one are distinguishable by overlap alone.
+_WIDE_LEVEL = 64
+
+_VERY_WIDE_PARENTS: Mapping[str, tuple[str, ...]] = {
+    "root": (),
+    **{f"n{i}": ("root",) for i in range(_WIDE_LEVEL)},
+    "deep": tuple(f"n{i}" for i in range(_WIDE_LEVEL)),
+}
+
+
+def test_a_wide_frontier_is_gathered_within_a_bound() -> None:
+    """Concurrency is capped by configuration rather than by the data's shape.
+
+    ``_async_reply`` gathered one call per node over the whole frontier, so how
+    hard a walk hits a backing was a property of the *tree* -- a node with ten
+    thousand children issued ten thousand concurrent calls into whatever the
+    backing was. The bulk path does not help: a backing offering
+    ``parents_many`` gets one call, so the unbounded path was exactly the one
+    taken by backings least able to absorb it.
+    """
+    probe = ConcurrencyProbe(_VERY_WIDE_PARENTS)
+
+    asyncio.run(async_ancestors(probe, "deep"))
+
+    assert probe.widest_overlap > 1, "the level must still be gathered, not serialised"
+    assert probe.widest_overlap < _WIDE_LEVEL, (
+        f"{probe.widest_overlap} calls overlapped over a {_WIDE_LEVEL}-node level: "
+        f"the fan-out is the width of the data rather than of a bound"
+    )
+
+
+def test_the_bound_is_the_callers_to_set() -> None:
+    """The width is an argument, not a constant the core holds.
+
+    The walk core deliberately carries no configuration, so the bound is
+    threaded in from the driver rather than read there -- which is what lets a
+    caller who knows their backing raise or lower it.
+    """
+    probe = ConcurrencyProbe(_VERY_WIDE_PARENTS)
+
+    asyncio.run(async_ancestors(probe, "deep", max_concurrency=4))
+
+    assert probe.widest_overlap <= 4
+
+
+def test_a_bound_below_one_is_refused() -> None:
+    """A width of zero would deadlock rather than serialise.
+
+    ``asyncio.Semaphore(0)`` never admits anyone, so an unchecked zero turns a
+    walk into a hang -- the one failure mode worse than the unbounded fan-out
+    the bound was added to stop.
+    """
+    probe = ConcurrencyProbe(WIDE_PARENTS)
+
+    with pytest.raises(ValueError, match="max_concurrency"):
+        asyncio.run(async_ancestors(probe, "a", max_concurrency=0))
