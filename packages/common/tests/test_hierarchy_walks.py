@@ -804,3 +804,55 @@ def test_a_bound_below_one_is_refused() -> None:
 
     with pytest.raises(ValueError, match="max_concurrency"):
         asyncio.run(async_ancestors(probe, "a", max_concurrency=0))
+
+
+#: The one parameter the module-level twins may differ by, and the reason.
+#:
+#: ``max_concurrency`` bounds a frontier read that has no bulk member to use.
+#: The synchronous driver issues no concurrent calls, so the parameter would be
+#: inert there -- and a knob that does nothing is worse than an asymmetry that
+#: is stated. Named as a constant rather than skipped inline so that a *second*
+#: divergence fails this test rather than quietly joining the first.
+_ASYNC_ONLY_PARAMETERS = frozenset({"max_concurrency"})
+
+
+@pytest.mark.parametrize(
+    ("sync_fn", "async_fn"),
+    [(ancestors, async_ancestors), (drive, async_drive)],
+    ids=["ancestors", "drive"],
+)
+def test_the_module_twins_differ_by_one_named_parameter(sync_fn: object, async_fn: object) -> None:
+    """The driving pair and the walk over it stay signature-compatible.
+
+    The taxonomy twins already carry this guard and the module-level ones did
+    not, so the same asymmetry was stated in one place and free in the other.
+    A caller writing flavour-agnostic code against these four needs the
+    difference to be exactly one known parameter, not merely small.
+    """
+    sync_params = inspect.signature(sync_fn).parameters  # type: ignore[arg-type]
+    async_params = inspect.signature(async_fn).parameters  # type: ignore[arg-type]
+
+    assert async_params.keys() - sync_params.keys() == _ASYNC_ONLY_PARAMETERS
+    assert sync_params.keys() - async_params.keys() == set()
+
+    for name, parameter in sync_params.items():
+        assert parameter.default == async_params[name].default, name
+
+
+def test_an_empty_ancestors_does_not_distinguish_a_root_from_an_unknown_node() -> None:
+    """The ambiguity the docstring documents, pinned so it stays documented.
+
+    ``Taxonomy.walk`` refuses an anchor its axis does not contain and this does
+    not, which is a real difference between two neighbouring surfaces. It is
+    defensible -- ``walk`` includes its anchor, so an unknown one is emitted as
+    a term of the axis, where this excludes it and returns nothing false -- but
+    a reader who met the refusal first will expect it here. Pinning the
+    behaviour keeps the difference deliberate: change it and this test says so.
+    """
+    hierarchy = MappingParents({"root": (), "child": ("root",)})
+
+    assert ancestors(hierarchy, "root") == ()
+    assert ancestors(hierarchy, "nonesuch") == ()
+
+    assert hierarchy.contains("root")
+    assert not hierarchy.contains("nonesuch")

@@ -307,6 +307,17 @@ def ancestors(hierarchy: Hierarchy[K], node_id: K) -> tuple[K, ...]:
 
     Excludes ``node_id`` itself, terminates on cyclic data, and returns each
     node once. ``K`` is inferred from ``hierarchy``.
+
+    **An empty result means either a root or an unknown node**, and this does
+    not refuse the second — unlike
+    :meth:`~dataknobs_common.taxonomy.Taxonomy.walk`, which refuses an anchor
+    its axis does not contain. The difference is recoverability rather than
+    taste. ``walk`` *includes* its anchor, so an unknown one is emitted as a
+    term of the axis and the caller receives a wrong answer they cannot
+    detect. This excludes its anchor, so nothing false is returned: the answer
+    is ambiguous, not incorrect, and ``hierarchy.contains(node_id)`` — a member
+    every backing must implement — resolves it in one call. Ask it first where
+    the distinction matters.
     """
     return drive(hierarchy, _ancestors(node_id))
 
@@ -323,6 +334,9 @@ async def async_ancestors(
     implementation of the walk, and a test asserts that patching the core moves
     both surfaces. ``max_concurrency`` is forwarded to the driver; the
     synchronous twin has no counterpart because it issues no concurrent calls.
+
+    An empty result carries the same ambiguity :func:`ancestors` describes, and
+    is resolved the same way.
     """
     return await async_drive(hierarchy, _ancestors(node_id), max_concurrency=max_concurrency)
 

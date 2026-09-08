@@ -229,6 +229,21 @@ terminates on cyclic data whatever an acyclicity constraint claims; and results
 are deduplicated in walk order, so a DAG node reachable by several paths is
 still one entry.
 
+An empty result means **either a root or a node the axis does not have**, and
+`ancestors` does not refuse the second — unlike `Taxonomy.walk` below, which
+refuses an anchor its axis does not contain. The difference is recoverability:
+`walk` includes its anchor, so an unknown one would be emitted as a term of the
+axis and the caller could not detect it, where `ancestors` excludes its anchor
+and returns nothing false. The answer is ambiguous rather than wrong, and
+`contains()` resolves it in one call:
+
+```python
+assert ancestors(species.structure, "mammal") == ()      # a root
+assert ancestors(species.structure, "marmoset") == ()    # not in the axis
+assert species.structure.contains("mammal")
+assert not species.structure.contains("marmoset")
+```
+
 `Taxonomy.walk()` is the axis's own traversal — every node at or under a point,
 breadth first, **including** the anchor:
 
