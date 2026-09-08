@@ -136,6 +136,10 @@ from dataknobs_common.testing.threads import (
     dk_daemon_thread_names,
     live_dk_daemon_threads,
 )
+from dataknobs_common.testing.twin_parity import (
+    assert_twin_types_agree,
+    assert_twins_agree,
+)
 
 __all__ = [
     "DK_AITER_PUMP_THREAD",
@@ -156,6 +160,8 @@ __all__ = [
     "assert_polymorphic_bindings_resolve",
     "assert_structured_config_consumer",
     "assert_structured_config_roundtrip",
+    "assert_twin_types_agree",
+    "assert_twins_agree",
     "blocking_error_type",
     "create_test_json_files",
     "create_test_markdown_files",

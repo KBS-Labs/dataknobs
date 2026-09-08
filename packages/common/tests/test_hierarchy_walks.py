@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -38,6 +38,7 @@ from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
 )
+from dataknobs_common.testing import assert_twin_types_agree, assert_twins_agree
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -431,7 +432,16 @@ class AsyncBulkParents:
 
 
 class ConcurrencyProbe:
-    """An asynchronous hierarchy that records how many calls overlap."""
+    """An asynchronous hierarchy that records how many calls overlap.
+
+    **Singular-only, and that is load-bearing rather than incidental.** The
+    frontier read returns on the bulk path *before* the bound is constructed --
+    a backing answering a whole level in one call has nothing to bound -- so a
+    ``max_concurrency`` test written against a backing that offers
+    ``parents_many`` measures nothing and passes. Every bound test below uses
+    this class for that reason. Give it bulk members and they all go quiet
+    without failing.
+    """
 
     def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
         self._inner = MappingParents(parents)
@@ -601,19 +611,40 @@ def test_patching_the_core_moves_both_flavours(
     traversal would return the same answer on the day it was written and drift
     a year later, silently, which is the failure this shape exists to catch.
     """
+    sentinel = object()
 
     def sentinel_walk(node_id: str) -> object:
-        return iter(())  # a walk that asks nothing and returns None
+        """A walk that asks nothing and returns a value nothing else produces.
+
+        A generator rather than ``iter(())``, and returning a sentinel rather
+        than ``None``, for the same reason in both halves: ``None`` out of an
+        empty iterator is an answer the *unpatched* driver could also give, so
+        it proves the surfaces agree rather than that the patch was reached.
+        """
+
+        def _asks_nothing() -> object:
+            return sentinel
+            yield  # unreachable, and what makes this a generator
+
+        return _asks_nothing()
 
     monkeypatch.setattr(hierarchy_module, "_ancestors", sentinel_walk)
 
-    assert ancestors(MappingParents(CYCLIC_PARENTS), "f") is None
-    assert asyncio.run(async_ancestors(AsyncMappingParents(CYCLIC_PARENTS), "f")) is None
+    assert ancestors(MappingParents(CYCLIC_PARENTS), "f") is sentinel
+    assert asyncio.run(async_ancestors(AsyncMappingParents(CYCLIC_PARENTS), "f")) is sentinel
 
 
 # --------------------------------------------------------------------------
 # Parity, the protocol check, and the key parameter
 # --------------------------------------------------------------------------
+
+
+#: Every member a hierarchy twin pair must expose identically.
+#:
+#: Listed rather than discovered, so that a member added to one flavour and not
+#: the other fails here. A comparison that walked whatever both already had
+#: would go quiet on exactly that case.
+_HIERARCHY_MEMBERS = ("roots", "parents", "children", "contains")
 
 
 @pytest.mark.parametrize(
@@ -624,21 +655,14 @@ def test_patching_the_core_moves_both_flavours(
     ],
 )
 def test_the_twins_expose_the_same_annotated_surface(sync_type: type, async_type: type) -> None:
-    """Same member names, same parameters, same annotations.
+    """Same member names, same parameters, same annotations, same return type.
 
-    Annotations rather than the whole signature: a twin's return type differs
-    by flavour where it streams, and comparing the rendered signature would
-    then compare the ``async`` rather than the contract.
+    ``compare_return=True`` because none of these members streams: each returns
+    the same type in both flavours, so a difference there is contract drift
+    rather than the flavour showing through. ``Taxonomy.walk`` is where that
+    stops being true, and its own test says so.
     """
-    for name in ("roots", "parents", "children", "contains"):
-        sync_member = getattr(sync_type, name)
-        async_member = getattr(async_type, name)
-        assert inspect.signature(sync_member).parameters.keys() == (
-            inspect.signature(async_member).parameters.keys()
-        ), name
-        assert sync_member.__annotations__ == async_member.__annotations__, name
-        assert not inspect.iscoroutinefunction(sync_member), name
-        assert inspect.iscoroutinefunction(async_member), name
+    assert_twin_types_agree(sync_type, async_type, _HIERARCHY_MEMBERS, compare_return=True)
 
 
 def test_the_concretes_satisfy_the_protocols_at_runtime(mammals_path: Path) -> None:
@@ -683,3 +707,229 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
     )
 
     assert result.stdout.strip() == "False"
+
+
+# --------------------------------------------------------------------------
+# The walk's own exhaustion, and the width of a frontier read
+# --------------------------------------------------------------------------
+
+
+def test_driving_a_spent_walk_is_refused_rather_than_answered() -> None:
+    """A second drive of one generator must not answer ``None`` as a result.
+
+    A walk is single-use and the drivers did not say so. ``drive`` opens with
+    ``next(walk)``; on an exhausted generator that raises ``StopIteration``
+    with ``value=None``, which the driver's own ``except`` reads as the walk
+    returning and hands back cast to the declared type. The caller then holds a
+    ``None`` typed ``tuple[str, ...]`` and fails at ``for x in None``, nowhere
+    near the driver that produced it.
+
+    Distinct from the collaborator's ``StopIteration`` pinned above, which is
+    an exception raised by the *hierarchy*. This is the walk's own exhaustion,
+    which is not an error condition anywhere else -- so it is checked before
+    the ``try`` rather than converted inside it.
+    """
+    hierarchy = MappingParents({"a": (), "b": ("a",)})
+    walk = _asking_for("parents")
+
+    assert drive(hierarchy, walk) == ()
+
+    with pytest.raises(RuntimeError, match="already been driven"):
+        drive(hierarchy, walk)
+
+
+def test_both_flavours_refuse_a_spent_walk_alike() -> None:
+    """The twins raise the same type, which is the property the pair rests on."""
+    hierarchy = AsyncMappingParents({"a": (), "b": ("a",)})
+    walk = _asking_for("parents")
+
+    assert asyncio.run(async_drive(hierarchy, walk)) == ()
+
+    with pytest.raises(RuntimeError, match="already been driven"):
+        asyncio.run(async_drive(hierarchy, walk))
+
+
+class DelegatingWalk(
+    Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]]
+):
+    """A walk by protocol rather than by construction, wrapping a real one.
+
+    ``Walk`` is spelled ``Generator[...]``, and ``collections.abc.Generator``
+    is satisfiable by a class -- so this is what a consumer reaching for an
+    instrumented or filtered walk writes first. The drivers themselves would
+    drive it: they only ever ``next`` and ``send``, which this forwards.
+    """
+
+    def __init__(
+        self,
+        inner: Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]],
+    ) -> None:
+        self._inner = inner
+
+    def send(self, value: tuple[Sequence[str], ...]) -> tuple[str, tuple[str, ...]]:
+        return self._inner.send(value)
+
+    def throw(self, *args: object, **kwargs: object) -> tuple[str, tuple[str, ...]]:
+        return self._inner.throw(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def test_driving_a_suspended_walk_is_refused_rather_than_answered() -> None:
+    """A walk stopped mid-question is refused, and exhaustion does not cover it.
+
+    The guard reads ``!= GEN_CREATED`` rather than ``== GEN_CLOSED``, and this
+    is the half of that which a second drive of a finished walk cannot reach.
+    It is also the worse half: an exhausted walk sends ``None`` where a
+    *result* belongs, where a suspended one sends ``None`` where the reply to
+    its outstanding question belongs -- so it would answer, out of a frontier
+    it never read, rather than fail.
+
+    Both flavours are asserted against the *same* suspended walk, which the
+    first refusal leaves untouched: the guard runs before the driver's opening
+    ``next``, so nothing has advanced it.
+    """
+    walk = _asking_for("parents")
+
+    assert next(walk) == ("parents", ("anything",))
+    assert inspect.getgeneratorstate(walk) == inspect.GEN_SUSPENDED
+
+    with pytest.raises(RuntimeError, match=inspect.GEN_SUSPENDED):
+        drive(MappingParents({"a": (), "b": ("a",)}), walk)
+
+    with pytest.raises(RuntimeError, match=inspect.GEN_SUSPENDED):
+        asyncio.run(async_drive(AsyncMappingParents({"a": (), "b": ("a",)}), walk))
+
+    assert inspect.getgeneratorstate(walk) == inspect.GEN_SUSPENDED
+
+
+def test_a_walk_that_is_not_a_generator_is_refused_by_kind() -> None:
+    """The freshness check needs a generator *object*, and says so itself.
+
+    ``inspect.getgeneratorstate`` reads ``gi_running`` off its argument, so a
+    ``Walk`` satisfying the alias without being a generator reached it and
+    raised ``AttributeError`` naming a CPython slot -- a failure that tells the
+    caller nothing about walks. The drivers would otherwise have driven this
+    one, so the refusal is a real narrowing and belongs where it can be read:
+    a ``TypeError`` naming the kind wanted and the one-line way to get it.
+
+    Silently skipping the check for what it cannot inspect was the other
+    candidate. It reopens the ``None``-as-a-result hazard precisely for the
+    walks the driver cannot warn about, which is the wrong direction.
+    """
+    walk = DelegatingWalk(_asking_for("parents"))
+
+    with pytest.raises(TypeError, match="generator"):
+        drive(MappingParents({"a": (), "b": ("a",)}), walk)
+
+    with pytest.raises(TypeError, match="generator"):
+        asyncio.run(async_drive(AsyncMappingParents({"a": (), "b": ("a",)}), walk))
+
+
+#: A level wider than any sensible fan-out bound, so an unbounded gather and a
+#: bounded one are distinguishable by overlap alone.
+_WIDE_LEVEL = 64
+
+_VERY_WIDE_PARENTS: Mapping[str, tuple[str, ...]] = {
+    "root": (),
+    **{f"n{i}": ("root",) for i in range(_WIDE_LEVEL)},
+    "deep": tuple(f"n{i}" for i in range(_WIDE_LEVEL)),
+}
+
+
+def test_a_wide_frontier_is_gathered_within_a_bound() -> None:
+    """Concurrency is capped by configuration rather than by the data's shape.
+
+    ``_async_reply`` gathered one call per node over the whole frontier, so how
+    hard a walk hits a backing was a property of the *tree* -- a node with ten
+    thousand children issued ten thousand concurrent calls into whatever the
+    backing was. The bulk path does not help: a backing offering
+    ``parents_many`` gets one call, so the unbounded path was exactly the one
+    taken by backings least able to absorb it.
+    """
+    probe = ConcurrencyProbe(_VERY_WIDE_PARENTS)
+
+    asyncio.run(async_ancestors(probe, "deep"))
+
+    assert probe.widest_overlap > 1, "the level must still be gathered, not serialised"
+    assert probe.widest_overlap < _WIDE_LEVEL, (
+        f"{probe.widest_overlap} calls overlapped over a {_WIDE_LEVEL}-node level: "
+        f"the fan-out is the width of the data rather than of a bound"
+    )
+
+
+def test_the_bound_is_the_callers_to_set() -> None:
+    """The width is an argument, not a constant the core holds.
+
+    The walk core deliberately carries no configuration, so the bound is
+    threaded in from the driver rather than read there -- which is what lets a
+    caller who knows their backing raise or lower it.
+    """
+    probe = ConcurrencyProbe(_VERY_WIDE_PARENTS)
+
+    asyncio.run(async_ancestors(probe, "deep", max_concurrency=4))
+
+    assert probe.widest_overlap <= 4
+
+
+def test_a_bound_below_one_is_refused() -> None:
+    """A width of zero would deadlock rather than serialise.
+
+    ``asyncio.Semaphore(0)`` never admits anyone, so an unchecked zero turns a
+    walk into a hang -- the one failure mode worse than the unbounded fan-out
+    the bound was added to stop.
+    """
+    probe = ConcurrencyProbe(WIDE_PARENTS)
+
+    with pytest.raises(ValueError, match="max_concurrency"):
+        asyncio.run(async_ancestors(probe, "a", max_concurrency=0))
+
+
+@pytest.mark.parametrize(
+    ("sync_fn", "async_fn"),
+    [(ancestors, async_ancestors), (drive, async_drive)],
+    ids=["ancestors", "drive"],
+)
+def test_the_module_twins_differ_by_two_declared_things(
+    sync_fn: Callable[..., Any], async_fn: Callable[..., Any]
+) -> None:
+    """The driving pair and the walk over it stay signature-compatible.
+
+    A caller writing flavour-agnostic code against these four needs the
+    difference to be exactly what is declared, not merely small. Two things are
+    declared and both are real:
+
+    ``max_concurrency`` bounds a frontier read with no bulk member to use, and
+    the synchronous driver issues no concurrent calls at all -- a knob that does
+    nothing is worse than an asymmetry that is stated. ``hierarchy`` is
+    flavoured by definition: each driver takes the protocol of its own flavour.
+
+    Both are compared by equality inside the guard, so a *second* divergence of
+    either kind fails here rather than quietly joining the first. That property
+    used to be argued by naming the set in a module constant; it is now a
+    property of the assertion, which is why the constant is gone.
+    """
+    assert_twins_agree(
+        sync_fn,
+        async_fn,
+        async_only={"max_concurrency"},
+        flavour_typed={"hierarchy"},
+        compare_return=True,
+    )
+
+
+def test_an_empty_ancestors_does_not_distinguish_a_root_from_an_unknown_node() -> None:
+    """The ambiguity the docstring documents, pinned so it stays documented.
+
+    ``Taxonomy.walk`` refuses an anchor its axis does not contain and this does
+    not, which is a real difference between two neighbouring surfaces. It is
+    defensible -- ``walk`` includes its anchor, so an unknown one is emitted as
+    a term of the axis, where this excludes it and returns nothing false -- but
+    a reader who met the refusal first will expect it here. Pinning the
+    behaviour keeps the difference deliberate: change it and this test says so.
+    """
+    hierarchy = MappingParents({"root": (), "child": ("root",)})
+
+    assert ancestors(hierarchy, "root") == ()
+    assert ancestors(hierarchy, "nonesuch") == ()
+
+    assert hierarchy.contains("root")
+    assert not hierarchy.contains("nonesuch")

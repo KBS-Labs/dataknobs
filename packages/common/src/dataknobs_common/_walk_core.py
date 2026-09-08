@@ -5,7 +5,7 @@ paragraph is satisfied by two twins that each implement the paragraph -- so
 what is shared here is *code both flavours call*, not a rule both flavours
 follow.
 
-Two shared cores live here, and they are shared with different callers:
+Three shared cores live here, and they are shared with different callers:
 
 * the **algorithms** -- ``_levels`` and the walks composed from it -- which
   :mod:`dataknobs_common.hierarchy`'s public wrappers drive;
@@ -14,7 +14,11 @@ Two shared cores live here, and they are shared with different callers:
   streaming walk calls too. That walk cannot go through the collecting core,
   because streaming would widen the core's request type for every walk that
   does not stream; sharing this one step is what stops it drifting from the
-  drivers over which backings answer a level in one query.
+  drivers over which backings answer a level in one query;
+* the **freshness check** -- ``_refuse_a_spent_walk`` -- which both drivers
+  make before their opening ``next``. Shared for the reason every refusal here
+  is: a rule a twin re-implements is a rule that drifts, and the twins' whole
+  claim is that they behave alike.
 
 Both consumers import from here, which is why this is a sibling of
 ``hierarchy.py`` rather than something inside it: a private name reached out
@@ -28,6 +32,8 @@ the reverse. The protocols are annotations here and nothing more.
 from __future__ import annotations
 
 import asyncio
+import inspect
+import types
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -40,6 +46,58 @@ if TYPE_CHECKING:
         Walk,
         _K,
     )
+
+
+def _refuse_a_spent_walk(walk: Walk[_K, object]) -> None:
+    """Refuse a walk that is not fresh, before a driver's first ``next``.
+
+    A walk is a generator and therefore single-use, and the drivers did not say
+    so. ``drive`` opens with ``next(walk)`` inside the ``try`` whose ``except
+    StopIteration`` learns the walk's return value -- so an already-exhausted
+    generator raised ``StopIteration(value=None)`` there and was read as *the
+    walk finished*, handing the caller ``None`` cast to the declared result
+    type. The failure then surfaced wherever that value was next used.
+
+    A *suspended* walk is refused too, and for a worse reason than exhaustion:
+    resuming one mid-traversal sends ``None`` where the reply to its
+    outstanding question belongs, so it would answer rather than fail.
+
+    A walk that is not a generator *object* is refused first, and by kind. The
+    state this reads lives on the generator itself, so a ``Walk`` satisfying the
+    alias structurally -- a class implementing ``collections.abc.Generator``,
+    which the drivers would otherwise drive, since they only ever ``next`` and
+    ``send`` -- reached ``inspect.getgeneratorstate`` and raised
+    ``AttributeError`` naming a CPython slot.
+
+    Refusing it narrows what the drivers accept, and the narrowing is the point.
+    Skipping the check for what it cannot inspect was the other candidate: it
+    reopens the ``None``-as-a-result hazard above for exactly the walks the
+    driver would be unable to warn about, which is the wrong direction to fail
+    in. So the kind is part of the contract, and the message carries the
+    one-line way to keep a delegating walk -- a generator function using
+    ``yield from`` is a generator, where a class is not.
+
+    Shared by both drivers rather than written into each -- the refusals either
+    twin makes are the same refusals, and a rule a twin re-implements is a rule
+    that drifts. Deliberately not folded into the ``StopIteration`` conversion
+    below: that converts an exception raised by the *hierarchy*, where this is
+    the walk's own state, which is not an error condition anywhere else.
+    """
+    if not isinstance(walk, types.GeneratorType):
+        raise TypeError(
+            f"a walk must be a generator object, not {type(walk).__name__}; "
+            f"the drivers read a walk's state to refuse a spent one, and only "
+            f"a generator carries it. Write a delegating walk as a generator "
+            f"function -- 'def wrapped(): return (yield from inner)' -- rather "
+            f"than as a class"
+        )
+
+    state = inspect.getgeneratorstate(walk)
+    if state != inspect.GEN_CREATED:
+        raise RuntimeError(
+            f"this walk has already been driven (generator state {state}); "
+            f"a walk is single-use, so build a fresh one per drive"
+        )
 
 
 def _sync_reply(
@@ -78,20 +136,36 @@ def _sync_reply(
 
 
 async def _async_reply(
-    hierarchy: AsyncHierarchy[_K], member: Member, node_ids: tuple[_K, ...]
+    hierarchy: AsyncHierarchy[_K],
+    member: Member,
+    node_ids: tuple[_K, ...],
+    *,
+    max_concurrency: int,
 ) -> tuple[Sequence[_K], ...]:
-    """:func:`_sync_reply`'s twin: bulk where offered, else one round of
-    concurrency per frontier.
+    """:func:`_sync_reply`'s twin: bulk where offered, else a *bounded* round
+    of concurrency per frontier.
 
     ``gather`` runs one round trip per node concurrently; ``children_many``
     is one *query* for the level. The second is what a row-backed hierarchy
     wants, and concurrency does not substitute for it.
+
+    ``max_concurrency`` is an argument with no default rather than a constant
+    read here, which is the whole of why this module still holds no
+    configuration: the number is policy, it lives with the public surface, and
+    a caller who knows their backing can move it. Without a bound the fan-out
+    was the width of the *level* -- a property of the data -- so a node with
+    ten thousand children issued ten thousand concurrent calls into whatever
+    the backing was. The bulk path never had the problem, which means the
+    unbounded path was exactly the one taken by backings least able to absorb
+    it.
 
     No explicit ``StopIteration`` conversion here: this is a coroutine, so the
     language performs it at this frame's boundary and a collaborator's
     ``StopIteration`` surfaces as the same ``RuntimeError`` the synchronous
     side raises by hand.
     """
+    if max_concurrency < 1:
+        raise ValueError(f"max_concurrency must be at least 1, got {max_concurrency}")
     if member == "roots":
         return (await hierarchy.roots(),)
     if member in ("parents", "children"):
@@ -99,7 +173,13 @@ async def _async_reply(
         if bulk is not None:
             return tuple(await bulk(node_ids))
         one = hierarchy.parents if member == "parents" else hierarchy.children
-        return tuple(await asyncio.gather(*(one(n) for n in node_ids)))
+        limit = asyncio.Semaphore(max_concurrency)
+
+        async def _bounded(node_id: _K) -> Sequence[_K]:
+            async with limit:
+                return await one(node_id)
+
+        return tuple(await asyncio.gather(*(_bounded(n) for n in node_ids)))
     raise ValueError(f"unknown hierarchy member {member!r}")
 
 

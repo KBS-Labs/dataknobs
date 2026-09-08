@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Generic, Literal, Protocol, cast, runtime_chec
 from dataknobs_common._walk_core import (
     _ancestors,
     _async_reply,
+    _refuse_a_spent_walk,
     _sync_reply,
 )
 
@@ -57,6 +58,7 @@ else:
     from typing_extensions import TypeVar
 
 __all__ = [
+    "DEFAULT_FRONTIER_CONCURRENCY",
     "AsyncBulkHierarchy",
     "AsyncHierarchy",
     "BulkHierarchy",
@@ -67,6 +69,30 @@ __all__ = [
     "async_drive",
     "drive",
 ]
+
+#: How many singular calls an asynchronous frontier read may have outstanding.
+#:
+#: A bound is needed because without one the fan-out is the width of the
+#: *level*, which is a property of the data rather than of anything anyone
+#: configured: a node with ten thousand children issued ten thousand concurrent
+#: calls into whatever the backing was. A backing offering the bulk members
+#: takes one call and never had the problem, so the unbounded path was the one
+#: taken by exactly the backings least able to absorb it.
+#:
+#: The number is a default rather than a limit -- every entry point below takes
+#: ``max_concurrency``, because only the caller knows what their backing is.
+#:
+#: It is deliberately small, and sized against what this repository actually
+#: ships rather than against a general intuition: ``dataknobs-data``'s
+#: asynchronous Postgres pool defaults to ``max_size=5`` and its pgvector store
+#: to ``pool_max_size=10``. A walk should not be the thing that saturates a pool
+#: it does not own, so the default stays in that order of magnitude -- while
+#: being comfortably above 1, so a wide level is still gathered rather than
+#: serialised one node at a time.
+#:
+#: A caller who knows their backing should set it. That is the whole reason it
+#: is a keyword on every entry point rather than a constant read in the core.
+DEFAULT_FRONTIER_CONCURRENCY = 8
 
 #: A node key. Defaults to ``str``, which is what every ontology-backed
 #: hierarchy uses; the bound is ``Hashable`` because hashing is the only thing
@@ -91,6 +117,13 @@ Ask = tuple[Member, tuple[_K, ...]]
 #: A walk: a generator that yields an :data:`Ask`, receives one reply per node
 #: asked about, and finally returns its result. It contains no ``await`` and no
 #: knowledge of which flavour is driving it.
+#:
+#: A generator *object*, and the drivers enforce it. They refuse a walk that is
+#: not fresh, and a walk's freshness lives on the generator -- so a class
+#: implementing ``collections.abc.Generator`` satisfies this alias but is
+#: refused by :func:`drive` and :func:`async_drive` with a ``TypeError``. Write
+#: a walk that wraps another as a generator function delegating with ``yield
+#: from``, which is one, rather than as a class, which is not.
 Walk = Generator[Ask[_K], tuple[Sequence[_K], ...], _T]
 
 
@@ -226,7 +259,15 @@ def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
     escaping a generator body into ``RuntimeError`` at the frame boundary --
     and one from the *hierarchy* is converted by :func:`_sync_reply` before it
     is raised, so the reply call is safe inside the ``try``.
+
+    The walk's own state is checked *before* the ``try``, for the same reason:
+    a spent generator raises ``StopIteration(value=None)`` from the opening
+    ``next``, which lands in that ``except`` and reads as the walk finishing.
+    That check pins the walk's *kind* as well -- the state it reads exists only
+    on a generator object -- so a :data:`Walk` written as a class is refused
+    with ``TypeError`` rather than driven.
     """
+    _refuse_a_spent_walk(walk)
     try:
         member, node_ids = next(walk)
         while True:
@@ -238,17 +279,30 @@ def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
         return cast("_T", stop.value)
 
 
-async def async_drive(hierarchy: AsyncHierarchy[_K], walk: Walk[_K, _T]) -> _T:
+async def async_drive(
+    hierarchy: AsyncHierarchy[_K],
+    walk: Walk[_K, _T],
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+) -> _T:
     """Run a walk against an asynchronous hierarchy.
 
     One round of concurrency **per depth** rather than per node, because the
     core asks for a whole frontier at a time. A twinned walk gets that only if
     somebody remembers to write it into each copy.
+
+    ``max_concurrency`` bounds that round where the backing offers no bulk
+    members; see :data:`DEFAULT_FRONTIER_CONCURRENCY` for why a bound is not
+    optional. It is a keyword here and a constant nowhere the core can read,
+    which is what keeps the walk core free of configuration.
     """
+    _refuse_a_spent_walk(walk)
     try:
         member, node_ids = next(walk)
         while True:
-            member, node_ids = walk.send(await _async_reply(hierarchy, member, node_ids))
+            member, node_ids = walk.send(
+                await _async_reply(hierarchy, member, node_ids, max_concurrency=max_concurrency)
+            )
     except StopIteration as stop:
         return cast("_T", stop.value)
 
@@ -263,18 +317,38 @@ def ancestors(hierarchy: Hierarchy[K], node_id: K) -> tuple[K, ...]:
 
     Excludes ``node_id`` itself, terminates on cyclic data, and returns each
     node once. ``K`` is inferred from ``hierarchy``.
+
+    **An empty result means either a root or an unknown node**, and this does
+    not refuse the second — unlike
+    :meth:`~dataknobs_common.taxonomy.Taxonomy.walk`, which refuses an anchor
+    its axis does not contain. The difference is recoverability rather than
+    taste. ``walk`` *includes* its anchor, so an unknown one is emitted as a
+    term of the axis and the caller receives a wrong answer they cannot
+    detect. This excludes its anchor, so nothing false is returned: the answer
+    is ambiguous, not incorrect, and ``hierarchy.contains(node_id)`` — a member
+    every backing must implement — resolves it in one call. Ask it first where
+    the distinction matters.
     """
     return drive(hierarchy, _ancestors(node_id))
 
 
-async def async_ancestors(hierarchy: AsyncHierarchy[K], node_id: K) -> tuple[K, ...]:
+async def async_ancestors(
+    hierarchy: AsyncHierarchy[K],
+    node_id: K,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+) -> tuple[K, ...]:
     """:func:`ancestors` over an asynchronous hierarchy.
 
     The same generator drives both flavours -- this is not a second
     implementation of the walk, and a test asserts that patching the core moves
-    both surfaces.
+    both surfaces. ``max_concurrency`` is forwarded to the driver; the
+    synchronous twin has no counterpart because it issues no concurrent calls.
+
+    An empty result carries the same ambiguity :func:`ancestors` describes, and
+    is resolved the same way.
     """
-    return await async_drive(hierarchy, _ancestors(node_id))
+    return await async_drive(hierarchy, _ancestors(node_id), max_concurrency=max_concurrency)
 
 
 if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run

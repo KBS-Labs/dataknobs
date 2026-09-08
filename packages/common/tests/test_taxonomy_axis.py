@@ -22,6 +22,7 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
+from dataknobs_common.testing import assert_twins_agree
 
 # --------------------------------------------------------------------------
 # Criterion 13 -- the axis is reachable, and it takes nothing but its name
@@ -216,19 +217,30 @@ def test_an_undeclared_axis_is_refused_listing_what_is_declared(
 
 
 def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
-    """Same fields, same parameters; the annotations differ only by flavour."""
+    """Same fields, same walk surface; the one difference is declared.
+
+    ``max_concurrency`` bounds a frontier read with no bulk member to use, and
+    the synchronous walk issues no concurrent calls at all -- a knob that does
+    nothing is worse than an asymmetry that is stated. The guard compares that
+    set by equality, so a second divergence fails rather than joining it.
+
+    No ``compare_return``: this pair is the one that streams, so its return
+    annotations differ by flavour (``Iterator[str]`` against
+    ``AsyncIterator[str]``) and asserting on them would pin the flavour rather
+    than the contract. The hierarchy members, which do not stream, are checked
+    the other way.
+    """
     sync_fields = Taxonomy.__dataclass_fields__
     async_fields = AsyncTaxonomy.__dataclass_fields__
 
     assert list(sync_fields) == list(async_fields)
 
-    sync_walk = inspect.signature(Taxonomy.walk)
-    async_walk = inspect.signature(AsyncTaxonomy.walk)
-    assert sync_walk.parameters.keys() == async_walk.parameters.keys()
-    for name, parameter in sync_walk.parameters.items():
-        assert parameter.default == async_walk.parameters[name].default, name
-        if name != "self":
-            assert parameter.annotation == async_walk.parameters[name].annotation, name
+    assert_twins_agree(
+        Taxonomy.walk,
+        AsyncTaxonomy.walk,
+        async_only={"max_concurrency"},
+        label="Taxonomy.walk",
+    )
 
 
 def test_the_axis_carries_the_assertions_it_was_built_from(
@@ -265,3 +277,75 @@ def test_taxonomy_does_not_import_the_ontology_package() -> None:
     )
 
     assert result.stdout.strip() == "False"
+
+
+# --------------------------------------------------------------------------
+# The anchor, and the member that was declared to answer for it
+# --------------------------------------------------------------------------
+
+
+def test_an_anchor_the_axis_does_not_contain_is_refused(mammals_v11_path: Path) -> None:
+    """An unknown ``from_id`` is refused rather than yielded back.
+
+    The anchor is *included* in the output by design, so seeding the frontier
+    with it unchecked emits an id the axis does not contain as though it were a
+    term of the axis -- and the caller cannot tell the difference, because a
+    walk is exactly what they asked for.
+
+    Yielding nothing was the other candidate and is the worse one. It collapses
+    *nothing below this node* into *this node is not here*, which are the two
+    answers ``Hierarchy.contains`` says in its own docstring it exists to keep
+    apart. An axis that owns that member and then destroys the distinction in
+    the one walk that needs it is refuting itself.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    assert not axis.structure.contains("marmoset")
+
+    with pytest.raises(NotFoundError) as raised:
+        tuple(axis.walk(from_id="marmoset"))
+
+    assert "marmoset" in str(raised.value)
+    assert raised.value.context["anchor"] == "marmoset"
+    assert raised.value.context["taxonomy"] == "species"
+
+
+@pytest.mark.asyncio
+async def test_both_flavours_refuse_an_unknown_anchor_alike(
+    mammals_v11_path: Path,
+) -> None:
+    """The twins refuse with the same type and the same words.
+
+    The differential rather than either surface alone: one algorithm behaving
+    two ways by flavour is what this pair's shape exists to prevent, and a
+    check written into one streaming walk and forgotten in the other is the
+    specific way that happens here -- the two walks are twinned by hand.
+    """
+    onto = load_ontology(mammals_v11_path)
+    async_onto = await async_load_ontology(mammals_v11_path)
+
+    with pytest.raises(NotFoundError) as sync_raised:
+        tuple(onto.taxonomy("species").walk(from_id="marmoset"))
+
+    with pytest.raises(NotFoundError) as async_raised:
+        [node async for node in async_onto.taxonomy("species").walk(from_id="marmoset")]
+
+    assert str(sync_raised.value) == str(async_raised.value)
+    assert sync_raised.value.context == async_raised.value.context
+
+
+def test_a_known_anchor_still_walks(mammals_v11_path: Path) -> None:
+    """The check costs the walk nothing it was already answering.
+
+    Pinned beside the refusal because a containment check placed wrongly --
+    against the entity source rather than the structure, say -- would refuse
+    every anchor and still satisfy the test above.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    assert tuple(axis.walk(from_id="dog")) == (
+        "dog",
+        "retriever",
+        "beagle",
+        "golden_retriever",
+    )

@@ -33,6 +33,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asynchronous one fetches a whole level per round of concurrency rather than a
   node.
 
+  `drive(hierarchy, walk)` and `async_drive(...)` take a **fresh** walk and
+  refuse a spent one. A driver learns a walk's result from the `StopIteration`
+  a generator raises when it returns, so an exhausted walk raised the same
+  exception carrying `None` — which would be handed back typed as the walk's
+  declared result and fail somewhere else entirely. A generator that is
+  suspended mid-traversal is refused too, and for a worse reason: resuming one
+  would send `None` where the answer to its outstanding question belongs, so it
+  would answer rather than fail.
+
+  A walk must also *be* a generator object, and the same check pins it: the
+  freshness it reads lives on the generator, so a `Walk` that satisfies
+  `collections.abc.Generator` as a class is refused with `TypeError` naming the
+  one-line way to keep a delegating walk — a generator function using `yield
+  from`, which is a generator where a class is not.
+
+  Where a backing offers no bulk members, that per-level concurrency is
+  **bounded** by `max_concurrency`, defaulting to
+  `DEFAULT_FRONTIER_CONCURRENCY`. Without a bound the fan-out is the width of
+  the level, which is a property of the data rather than of anything anyone
+  configured: a node with ten thousand children would issue ten thousand
+  concurrent calls into whatever the backing is. The default is small and sized
+  against what dataknobs ships — `dataknobs-data`'s asynchronous Postgres pool
+  defaults to five connections — on the reasoning that a walk should not be the
+  thing that saturates a pool it does not own. `async_drive`,
+  `async_ancestors` and `AsyncTaxonomy.walk` all take the keyword — the walk
+  core itself holds no configuration, so the number is threaded in rather than
+  read there.
+
   `BulkHierarchy` and `AsyncBulkHierarchy` are **optional** protocols adding
   `parents_many` / `children_many`, for a backing that can answer a whole level
   in one query. Every walk here asks about a frontier, and `AssertionSource`
@@ -53,7 +81,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one once, bounded by `max_depth`. It streams, so it does not go through the
   collecting walk core — but it shares the step that reads a frontier, so both
   flavours get whatever the drivers get: one bulk query where the backing
-  offers one, one round of concurrency per level where it does not.
+  offers one, one bounded round of concurrency per level where it does not.
+
+  A `from_id` the structure axis does not contain is **refused**, naming the
+  anchor and the axis. The anchor is included in the output by design, so
+  seeding a walk with it unchecked would emit an id the axis does not contain
+  as though it were a term of the axis, and the caller could not tell — a walk
+  is exactly what they asked for. Yielding nothing would be worse still: it
+  collapses *nothing below this node* into *this node is not here*, the two
+  answers `Hierarchy.contains` exists to keep apart. This is the walk that asks
+  it.
+
+  Both types pin the node key to `str`. The hierarchy protocols are generic
+  because the walks only hash a key, but a taxonomy carries the *content* axis
+  as well, and that is an `EntitySource` addressed by `str` because an `Entity`
+  has a `str` id — so a generic structure axis here would permit an
+  integer-keyed hierarchy beside an entity lookup that cannot be asked about an
+  integer. The pin is spelled `Hierarchy[str]` rather than left bare so that it
+  reads as the boundary it is.
 
 - **`Ontology.taxonomy(name)`** and its asynchronous twin, building that axis
   from three fields the ontology already holds and **no consumer input** — the
@@ -152,6 +197,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot live there. `dataknobs_data.fields` registers `VectorField` for
   `VECTOR` and `SPARSE_VECTOR` on import; a type with no registered class
   builds the class `from_dict` was called on.
+
+- **`assert_twins_agree` and `assert_twin_types_agree`** in
+  `dataknobs_common.testing`, a drift guard for a synchronous callable and its
+  asynchronous twin. A twinned API is two callables a caller is invited to treat
+  as one, and that invitation is honest only while the pair agrees — a keyword
+  added to one half and forgotten on the other fails nothing at the time, and
+  surfaces later as flavour-agnostic code that is wrong against whichever half
+  its author did not reach for. A different axis from the factory-parity
+  helpers next door, which compare a config surface to a constructor.
+
+  Each difference is **declared and compared by equality**: `async_only` for a
+  parameter only the asynchronous half takes, `flavour_typed` for one whose
+  annotation differs because the parameter is itself flavoured, `compare_return`
+  for whether the return annotations are contract or flavour. The other guards
+  in this package take suppression lists and must separately check that every
+  entry still matches something; equality gives that for free, so a declaration
+  naming a parameter since adopted, renamed or removed fails the assertion
+  rather than going quiet. Naming a difference is also what makes a *second* one
+  fail rather than join the first, which a tolerance of "at most one" would not.
+
+  An async generator counts as the asynchronous half.
+  `inspect.iscoroutinefunction` is the obvious flavour check and the wrong one —
+  an `async def` containing a `yield` is an async *generator*, for which it
+  answers False, so a streaming twin would read as synchronous and the check
+  would fail on the pair whose halves differ most.
 
 ### Changed
 

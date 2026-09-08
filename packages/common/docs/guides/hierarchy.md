@@ -39,8 +39,9 @@ need if you are deciding what to build on.
 
 **Settled, waiting only on the door.** `Hierarchy`, `AsyncHierarchy`,
 `BulkHierarchy`, `AsyncBulkHierarchy`, `ancestors`, `async_ancestors`,
-`AssertionHierarchy` and `AsyncAssertionHierarchy` are complete, and their
-signatures are not expected to move. They are absent from the door because the
+`DEFAULT_FRONTIER_CONCURRENCY`, `AssertionHierarchy` and
+`AsyncAssertionHierarchy` are complete, and their signatures are not expected
+to move. They are absent from the door because the
 release that opens it has not happened — not because anything about them is
 unsettled.
 
@@ -57,6 +58,7 @@ later releases. What ships now will not change shape.
 
 ```python
 from dataknobs_common.hierarchy import (
+    DEFAULT_FRONTIER_CONCURRENCY,
     AsyncBulkHierarchy,
     AsyncHierarchy,
     BulkHierarchy,
@@ -129,8 +131,8 @@ awaitable, because it constructs over fields already in hand:
 ```python
 from dataknobs_common.ontology import async_load_ontology
 
-onto = await async_load_ontology(Path("mammals.yaml"))
-async_species = onto.taxonomy("species")    # no await — it builds, it does not fetch
+async_onto = await async_load_ontology(Path("mammals.yaml"))
+async_species = async_onto.taxonomy("species")    # no await — it builds, it does not fetch
 
 assert [node async for node in async_species.walk()] == [
     "mammal", "dog", "retriever", "beagle",
@@ -227,6 +229,21 @@ terminates on cyclic data whatever an acyclicity constraint claims; and results
 are deduplicated in walk order, so a DAG node reachable by several paths is
 still one entry.
 
+An empty result means **either a root or a node the axis does not have**, and
+`ancestors` does not refuse the second — unlike `Taxonomy.walk` below, which
+refuses an anchor its axis does not contain. The difference is recoverability:
+`walk` includes its anchor, so an unknown one would be emitted as a term of the
+axis and the caller could not detect it, where `ancestors` excludes its anchor
+and returns nothing false. The answer is ambiguous rather than wrong, and
+`contains()` resolves it in one call:
+
+```python
+assert ancestors(species.structure, "mammal") == ()      # a root
+assert ancestors(species.structure, "marmoset") == ()    # not in the axis
+assert species.structure.contains("mammal")
+assert not species.structure.contains("marmoset")
+```
+
 `Taxonomy.walk()` is the axis's own traversal — every node at or under a point,
 breadth first, **including** the anchor:
 
@@ -238,6 +255,24 @@ tuple(species.walk(from_id="dog", max_depth=0))    # ("dog",) — the anchor alo
 
 It is a generator, so a caller that stops early does no work for the levels it
 never reached.
+
+An anchor the axis does not contain is **refused**, not walked:
+
+```python
+from dataknobs_common.exceptions import NotFoundError
+
+try:
+    tuple(species.walk(from_id="marmoset"))
+except NotFoundError as refusal:
+    assert refusal.context == {"taxonomy": "species", "anchor": "marmoset"}
+```
+
+Because the anchor is included in the output, seeding a walk with it unchecked
+would emit an id the axis does not contain as though it were a term of the
+axis, and the caller could not tell — a walk is exactly what they asked for.
+Yielding nothing instead would be worse: it collapses *nothing below this node*
+into *this node is not here*, which are the two answers `contains()` exists to
+keep apart. This is the walk that asks it.
 
 ### Writing a walk of your own
 
@@ -270,10 +305,77 @@ assert await async_drive(async_species.structure, _leaves()) == ("retriever", "b
 ```
 
 The generator contains no `await` and no knowledge of which flavour is driving
-it, and it is the same object in both calls above. The asynchronous driver
-gathers a whole frontier at once, so concurrency is per *depth* rather than per
-node — a property a hand-twinned walk gets only if someone remembers to write
-it into both copies.
+it: `_leaves` is one definition and both drivers run it.
+
+**Build a fresh walk per drive.** Note the two `_leaves()` calls above — a walk
+is a generator and therefore single-use, and handing a spent one back to a
+driver raises `RuntimeError` rather than answering:
+
+```python
+walk = _leaves()
+drive(species.structure, walk)
+drive(species.structure, walk)      # RuntimeError: this walk has already been driven
+```
+
+The refusal exists because the alternative was silent. A driver learns a walk's
+result from the `StopIteration` the generator raises when it returns, so a walk
+that was *already* exhausted raised the same exception with `value=None` — and
+the driver handed that `None` back typed as the walk's declared result, to fail
+somewhere else entirely.
+
+A walk left *suspended* part-way through is refused too, and for a worse reason
+than exhaustion: resuming one sends `None` where the reply to its outstanding
+question belongs, so it would answer out of a frontier it never read rather
+than fail.
+
+**Write a walk that wraps another as a generator function, not as a class.**
+The freshness the drivers read lives on the generator object, so a walk that
+satisfies `Generator` structurally — a class forwarding `send` and `throw` — is
+refused with `TypeError` instead. `yield from` keeps the wrapper a generator,
+and hands back the inner walk's result to do as you like with:
+
+```python
+def _leaves_sorted():
+    """`_leaves`, ordered — a generator function, and so still a walk."""
+    return tuple(sorted((yield from _leaves())))
+
+assert drive(species.structure, _leaves_sorted()) == ("beagle", "retriever")
+```
+
+### How wide a frontier read gets
+
+The asynchronous driver gathers a whole frontier at once, so concurrency is per
+*depth* rather than per node — a property a hand-twinned walk gets only if
+someone remembers to write it into both copies.
+
+That fan-out is bounded, and the bound is yours to set:
+
+```python
+from dataknobs_common.hierarchy import DEFAULT_FRONTIER_CONCURRENCY
+
+assert DEFAULT_FRONTIER_CONCURRENCY == 8            # what you get for saying nothing
+
+await async_ancestors(async_species.structure, "beagle", max_concurrency=4)
+await async_drive(async_species.structure, _leaves(), max_concurrency=4)
+
+async for node_id in async_species.walk(max_concurrency=4):
+    ...
+```
+
+Without a bound the width of the fan-out is the width of the *level*, which is
+a property of the data rather than of anything anyone configured: a node with
+ten thousand children issues ten thousand concurrent calls into whatever the
+backing is.
+
+`DEFAULT_FRONTIER_CONCURRENCY` is deliberately small, sized against what
+dataknobs itself ships — the asynchronous Postgres pool in `dataknobs-data`
+defaults to five connections and the pgvector store to ten — on the reasoning
+that a walk should not be the thing that saturates a pool it does not own. Set
+it yourself when you know your backing; that is what the keyword is for.
+
+A backing that implements the bulk members never had the problem — it gets one
+call per level — which is why the bound matters most for the plain
+`parents`/`children` pair, the one a hand-written hierarchy starts with.
 
 ## The assertion backing
 
@@ -387,6 +489,14 @@ above: tuple[int, ...] = ancestors(tree, 13)    # (6, 3, 1) — inferred from th
 Because the default is declared, a bare `Hierarchy` annotation still means
 `Hierarchy[str]`, so existing annotations read as they always did rather than
 silently widening to `Hierarchy[Any]`.
+
+**A `Taxonomy` pins the key to `str`, and this is a boundary rather than an
+oversight.** The parameter serves the walks and the module-level drivers, which
+only ever hash a node id. A taxonomy is both axes at once, and its content axis
+is an `EntitySource` addressed by `str` because an `Entity` has a `str` id — so
+a generic structure axis inside one would let you hold an integer-keyed
+hierarchy beside an entity lookup that cannot be asked about an integer. Widen
+it and the content side has to move first, or explicitly stay behind.
 
 !!! note "Python 3.12"
 
