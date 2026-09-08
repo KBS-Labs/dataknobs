@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-08T22:05:41Z",
+  "timestamp": "2026-09-08T23:15:54Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/materialized-structure-axis",
-  "git_commit": "7157dac9c49ebe4e640517757bda51992439f628",
+  "git_branch": "sbk/polarity-imports-and-id-members",
+  "git_commit": "339e1d984fb2436418b6a6cf7c0c1bc5908af0a5",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
