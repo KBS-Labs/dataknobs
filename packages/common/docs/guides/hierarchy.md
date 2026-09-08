@@ -539,7 +539,6 @@ if your relation can produce a component with nothing above it — a mutual `isa
 a `related_to` used as if it were a hierarchy — take the copy knowing that, or
 keep the live axis.
 
-
 ## What a taxonomy carries, and what it refuses
 
 `Taxonomy` has four fields: the `definition` it was declared by, the
