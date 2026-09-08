@@ -147,23 +147,33 @@ def mammals_v11_path(tmp_path: Path) -> Path:
     return path
 
 
-MATERIALIZED_CONTENT_DOCUMENT = MAMMALS_V11_DOCUMENT.replace(
-    "    - {id: species, name: Species, relation: isa}\n",
-    """\
+def _with_materialization(axis: str) -> str:
+    """:data:`MAMMALS_V11_DOCUMENT` with one axis of the block flipped.
+
+    Derived from the v1.1 document rather than written out again: the one thing
+    under test is the ``materialization:`` block, and a second full copy of the
+    document would let the two drift on everything else.
+
+    One axis at a time, because each is refused *naming the axis* -- a document
+    asking for both proves only that one of the two refusals fired first.
+    """
+    return MAMMALS_V11_DOCUMENT.replace(
+        "    - {id: species, name: Species, relation: isa}\n",
+        f"""\
     - id: species
       name: Species
       relation: isa
       materialization:
-        structure: materialized
-        content: materialized
+        {axis}: materialized
 """,
-)
-"""The v1.1 vocabulary whose axis asks for a copy nothing here can hold.
+    )
 
-Derived from :data:`MAMMALS_V11_DOCUMENT` rather than written out again: the
-one thing under test is the ``materialization:`` block, and a second full copy
-of the document would let the two drift on everything else.
-"""
+
+MATERIALIZED_CONTENT_DOCUMENT = _with_materialization("content")
+"""The v1.1 vocabulary whose axis asks for a copy nothing here can hold."""
+
+MATERIALIZED_STRUCTURE_DOCUMENT = _with_materialization("structure")
+"""The v1.1 vocabulary whose axis asks for a snapshot nothing here builds."""
 
 
 @pytest.fixture
@@ -171,4 +181,12 @@ def materialized_content_path(tmp_path: Path) -> Path:
     """:data:`MATERIALIZED_CONTENT_DOCUMENT` written to disk."""
     path = tmp_path / "mammals.yaml"
     path.write_text(MATERIALIZED_CONTENT_DOCUMENT)
+    return path
+
+
+@pytest.fixture
+def materialized_structure_path(tmp_path: Path) -> Path:
+    """:data:`MATERIALIZED_STRUCTURE_DOCUMENT` written to disk."""
+    path = tmp_path / "mammals.yaml"
+    path.write_text(MATERIALIZED_STRUCTURE_DOCUMENT)
     return path

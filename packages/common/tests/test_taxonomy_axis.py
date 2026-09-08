@@ -132,27 +132,61 @@ def test_a_materialized_content_axis_is_refused_naming_the_axis(
     assert raised.value.context["axis"] == "content"
 
 
-def test_the_default_materialization_is_buildable(mammals_v11_path: Path) -> None:
-    """The shipped defaults are exactly the pair that needs no store.
+def test_a_materialized_structure_axis_is_refused_naming_the_axis(
+    materialized_structure_path: Path,
+) -> None:
+    """The snapshot branch is declared everywhere and built nowhere.
 
-    Stated as its own test because it is the half the refusal could break:
-    ``structure`` defaults to ``materialized`` -- ids and edges, small enough
-    to hold -- and a refusal keyed on *any* materialized axis would reject
-    every hand-edited vocabulary in the plan.
+    ``MATERIALIZED`` structure is a snapshot with a build time; ``ON_DEMAND``
+    is the live read. Only the live one exists, so a definition asking for the
+    snapshot is asking for a branch that is not there -- and the honest answer
+    is to say so at the accessor rather than hand back the live axis under the
+    other name.
+    """
+    onto = load_ontology(materialized_structure_path)
+
+    with pytest.raises(ValidationError) as raised:
+        onto.taxonomy("species")
+
+    assert "species" in str(raised.value)
+    assert raised.value.context["taxonomy"] == "species"
+    assert raised.value.context["axis"] == "structure"
+
+
+def test_the_default_axes_are_the_ones_that_exist(mammals_v11_path: Path) -> None:
+    """A vocabulary that declares no ``materialization:`` still builds.
+
+    The half a refusal is most likely to break, and it is the half the caller
+    never types: both defaults must name a branch that exists, or every
+    hand-edited file in the plan is refused for asking nothing.
+
+    ``structure`` defaults to the live read because that is what the axis
+    built here *is* -- an ``AssertionHierarchy``, which opens nothing and
+    caches nothing. A default naming the snapshot would be a default no
+    consumer could get.
     """
     definition = load_ontology(mammals_v11_path).taxonomies["species"]
 
-    assert definition.materialization.structure.value == "materialized"
+    assert definition.materialization.structure.value == "on_demand"
     assert definition.materialization.content.value == "on_demand"
     assert tuple(load_ontology(mammals_v11_path).taxonomy("species").walk())
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["materialized_content_path", "materialized_structure_path"],
+)
 async def test_both_flavours_refuse_identically(
-    materialized_content_path: Path,
+    request: pytest.FixtureRequest, fixture_name: str
 ) -> None:
-    """One rule, and neither twin carries its own copy of it."""
-    path = materialized_content_path
+    """One rule, and neither twin carries its own copy of it.
+
+    Over both refusals rather than one: the rule they share is
+    ``_refuse_unbuildable_axis``, so a second refusal added to only one twin
+    is exactly what this is here to catch.
+    """
+    path: Path = request.getfixturevalue(fixture_name)
 
     with pytest.raises(ValidationError) as sync_raised:
         load_ontology(path).taxonomy("species")

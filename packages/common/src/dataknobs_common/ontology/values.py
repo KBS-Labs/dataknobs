@@ -65,28 +65,34 @@ def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> Taxo
 
 
 def _refuse_unbuildable_axis(definition: TaxonomyDefinition) -> None:
-    """Refuse an axis whose materialization needs something nothing here holds.
+    """Refuse an axis whose materialization names a branch nothing here builds.
 
     ``Materialization`` is per axis and reuses ``InferenceMode``: a
     ``MATERIALIZED`` axis is a snapshot with a build time rather than a live
-    read. The two axes are not alike in what a snapshot costs, and the shipped
-    defaults are exactly the pair that costs nothing to hold:
+    read. Both axes have a live implementation and neither has a snapshot, so
+    both modes are refused -- for different reasons, which is why the messages
+    differ:
 
-    * **structure** materialized is ids and edges -- small enough that an
-      authored vocabulary serves the axis with no store at all, which is why it
-      is the default. It is **recorded rather than acted on**: the axis built
-      here is an ``AssertionHierarchy``, which opens nothing and caches nothing,
-      so both modes read through the source and neither is refused. Reading the
-      declaration back off the definition is the only thing it does today;
-    * **content** materialized is a copy of every entity the axis covers, which
-      is the expensive one, needs somewhere to live, and is refused below when
-      nothing can hold it.
+    * **content** materialized is a copy of every entity the axis covers. It is
+      the expensive one and needs somewhere to live; an ontology loaded from a
+      hand-edited file binds no store, so it is asking for something it cannot
+      be given;
+    * **structure** materialized is ids and edges -- the cheap copy, and cheap
+      enough that a store is not what it lacks. What it lacks is an
+      implementation: the axis built here is an ``AssertionHierarchy``, which
+      opens nothing and caches nothing, so it *is* the live read. Handing it
+      back for a definition that asked for a snapshot would be answering under
+      the wrong name.
 
-    An ontology loaded from a hand-edited file binds no store, so a definition
-    asking for a materialized content axis is asking for something it cannot be
-    given. It is refused **naming the axis**, and refused here -- where the
-    caller asked for the axis and can act on the answer -- rather than at the
-    first walk, which is a call site with no idea why it failed.
+    Both are refused **naming the axis**, and refused here -- where the caller
+    asked for the axis and can act on the answer -- rather than at the first
+    walk, which is a call site with no idea why it failed.
+
+    The structure refusal is temporary by construction, and is lifted by
+    whatever first builds a snapshot. Until then it is the only thing standing
+    between a consumer and a silent downgrade, because the alternative to
+    refusing is prose saying the mode is recorded but not acted on -- a
+    sentence that has already been copied into its own opposite once.
     """
     if definition.materialization.content is InferenceMode.MATERIALIZED:
         raise ValidationError(
@@ -97,6 +103,19 @@ def _refuse_unbuildable_axis(definition: TaxonomyDefinition) -> None:
             context={
                 "taxonomy": definition.id,
                 "axis": "content",
+                "mode": InferenceMode.MATERIALIZED.value,
+            },
+        )
+    if definition.materialization.structure is InferenceMode.MATERIALIZED:
+        raise ValidationError(
+            f"taxonomy {definition.id!r} declares `materialization.structure: "
+            f"materialized`, which is a snapshot of the axis's ids and edges "
+            f"taken at build time; nothing here builds one. Use "
+            f"`structure: on_demand`, which reads the edges through the "
+            f"assertion source",
+            context={
+                "taxonomy": definition.id,
+                "axis": "structure",
                 "mode": InferenceMode.MATERIALIZED.value,
             },
         )

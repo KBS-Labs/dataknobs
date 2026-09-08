@@ -63,14 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `def` on the asynchronous twin, which constructs and awaits nothing.
 
   It refuses, **naming the axis**, a definition asking for something the
-  ontology cannot supply. `materialization.content: materialized` is a copy of
-  every entity on the axis and needs a store to hold it; a vocabulary loaded
-  from a file binds none. The refusal fires where the caller asked for the axis
-  rather than at the first walk, which is a call site with no idea why it
-  failed. `materialization.structure` is parsed and defaulted but **not acted
-  on**: the axis built here reads through its source in either mode, so the
-  declaration is recorded rather than honoured, and the guide says so at the
-  point a reader would otherwise assume it works.
+  ontology cannot supply. Both axes default to the live read, and both
+  snapshots are refused: `materialization.content: materialized` is a copy of
+  every entity on the axis and needs a store to hold it, and a vocabulary
+  loaded from a file binds none; `materialization.structure: materialized` is
+  the cheap copy — ids and edges — and what it lacks is not a store but an
+  implementation, the axis built here being one that reads through its source.
+  The refusal fires where the caller asked for the axis rather than at the
+  first walk, which is a call site with no idea why it failed.
 
   `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
   `dataknobs_common.ontology.hierarchy`, are what answer the structure axis

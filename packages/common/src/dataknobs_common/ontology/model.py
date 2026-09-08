@@ -373,9 +373,16 @@ class Materialization:
     Per axis rather than per taxonomy: one ontology may hold a materialized
     hierarchy beside an on-demand one. Text is omitted deliberately -- an index
     has no on-demand mode.
+
+    **Both default to the live read, because both live reads exist and neither
+    snapshot does.** A default is what a consumer gets for typing nothing, so a
+    default naming an unbuilt branch is a promise that cannot be kept quietly:
+    the axis handed back would be the live one under the other name. Asking for
+    either snapshot explicitly is refused at the accessor, naming the axis --
+    see :func:`~dataknobs_common.ontology.values._refuse_unbuildable_axis`.
     """
 
-    structure: InferenceMode = InferenceMode.MATERIALIZED
+    structure: InferenceMode = InferenceMode.ON_DEMAND
     content: InferenceMode = InferenceMode.ON_DEMAND
 
 

@@ -631,7 +631,7 @@ def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefini
             metadata=dict(row.get("metadata", {})),
             materialization=Materialization(
                 structure=_inference_mode(
-                    materialization.get("structure", InferenceMode.MATERIALIZED.value),
+                    materialization.get("structure", InferenceMode.ON_DEMAND.value),
                     "materialization.structure",
                 ),
                 content=_inference_mode(

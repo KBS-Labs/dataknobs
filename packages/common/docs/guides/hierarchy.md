@@ -312,30 +312,30 @@ distinguishes *this edge carries no annotation* from *this axis has no
 annotations to give*. A hierarchy built from a `parent_id` column has rows and
 no assertions at all.
 
-A definition may state a `materialization` per axis. The shipped defaults are
-exactly the pair that needs no store:
+A definition may state a `materialization` per axis. Both defaults are the live
+read, which is also what a file gets for declaring nothing:
 
 ```yaml
 taxonomies:
   - id: species
     relation: isa
     materialization:
-      structure: materialized     # recorded, not yet acted on — see below
-      content: on_demand          # reads through the entity source — the default
+      structure: on_demand        # reads the edges through the assertion source
+      content: on_demand          # reads the entities through the entity source
 ```
 
-**`structure:` is recorded rather than acted on.** It is parsed onto the
-definition and you can read it back, but the axis `taxonomy()` returns is an
-`AssertionHierarchy`, which opens nothing and caches nothing — every call reads
-through the assertion source whichever mode the document declares. So
-`materialized` and `on_demand` behave identically today, and neither is
-refused. Declare it for the record if you like; do not read it as a
-performance knob yet.
+**Both snapshots are refused, for different reasons.** `content: materialized`
+is a copy of every entity the axis covers and it needs somewhere to live — an
+ontology loaded from a file binds no such store. `structure: materialized` is
+the cheap copy, ids and edges, and what it lacks is not a store but an
+implementation: the axis `taxonomy()` returns is an `AssertionHierarchy`, which
+opens nothing and caches nothing, so it **is** the live read. Handing that back
+to a definition that asked for a snapshot would be answering under the wrong
+name, and a snapshot is wanted for the one thing a live axis cannot do — say
+what has changed since it was taken.
 
-`content:` is the axis that *is* enforced. `content: materialized` is a copy of
-every entity the axis covers, and it needs
-somewhere to live. An ontology loaded from a file binds no such store, so
-asking for one is refused — naming the axis, at the call that asked for it,
+So the structure refusal is the temporary one: it lifts when something builds a
+snapshot. Either is refused naming the axis, at the call that asked for it,
 rather than at the first walk:
 
 ```python
