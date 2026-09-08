@@ -69,30 +69,40 @@ def _refuse_unbuildable_axis(definition: TaxonomyDefinition) -> None:
 
     ``Materialization`` is per axis and reuses ``InferenceMode``: a
     ``MATERIALIZED`` axis is a snapshot with a build time rather than a live
-    read. Both axes have a live implementation and neither has a snapshot, so
-    both modes are refused -- for different reasons, which is why the messages
-    differ:
+    read. Both axes have a live implementation and both modes are refused, but
+    no longer for the same reason -- which is why the messages differ, and why
+    only one of the two is still waiting on something to be written:
 
     * **content** materialized is a copy of every entity the axis covers. It is
       the expensive one and needs somewhere to live; an ontology loaded from a
       hand-edited file binds no store, so it is asking for something it cannot
       be given;
     * **structure** materialized is ids and edges -- the cheap copy, and cheap
-      enough that a store is not what it lacks. What it lacks is an
-      implementation: the axis built here is an ``AssertionHierarchy``, which
-      opens nothing and caches nothing, so it *is* the live read. Handing it
-      back for a definition that asked for a snapshot would be answering under
-      the wrong name.
+      enough that a store is not what it lacks. It no longer lacks an
+      implementation either: :meth:`.MappingHierarchy.snapshot` builds exactly
+      this copy from any axis. What it lacks is the *wiring*, and the axis built
+      here is why -- an ``AssertionHierarchy`` opens nothing and caches nothing,
+      so it *is* the live read, and handing it back for a definition that asked
+      for a snapshot would be answering under the wrong name.
 
     Both are refused **naming the axis**, and refused here -- where the caller
     asked for the axis and can act on the answer -- rather than at the first
     walk, which is a call site with no idea why it failed.
 
-    The structure refusal is temporary by construction, and is lifted by
-    whatever first builds a snapshot. Until then it is the only thing standing
-    between a consumer and a silent downgrade, because the alternative to
-    refusing is prose saying the mode is recorded but not acted on -- a
-    sentence that has already been copied into its own opposite once.
+    The structure refusal is temporary by construction. What lifts it is the
+    *door* taking the copy, not the copy existing -- and where the door can take
+    it is forced rather than chosen: ``taxonomy()`` is a plain ``def`` on both
+    twins while the asynchronous snapshot is ``async``, so the only place both
+    flavours can take one without changing a published signature is at load,
+    once per materialized definition. Taking it inside ``taxonomy()`` fails on
+    a second count as well: the method builds afresh on every call, so a
+    materialized axis fetched twice would be two snapshots with two build times
+    and nothing saying so.
+
+    Until that lands, refusing is the only thing standing between a consumer and
+    a silent downgrade, because the alternative to refusing is prose saying the
+    mode is recorded but not acted on -- a sentence that has already been copied
+    into its own opposite once.
     """
     if definition.materialization.content is InferenceMode.MATERIALIZED:
         raise ValidationError(
@@ -110,9 +120,10 @@ def _refuse_unbuildable_axis(definition: TaxonomyDefinition) -> None:
         raise ValidationError(
             f"taxonomy {definition.id!r} declares `materialization.structure: "
             f"materialized`, which is a snapshot of the axis's ids and edges "
-            f"taken at build time; nothing here builds one. Use "
-            f"`structure: on_demand`, which reads the edges through the "
-            f"assertion source",
+            f"taken at build time; this ontology does not take one for you. "
+            f"Use `structure: on_demand`, which reads the edges through the "
+            f"assertion source -- and if you want the copy, take it yourself "
+            f"with `MappingHierarchy.snapshot(onto.taxonomy(...).structure)`",
             context={
                 "taxonomy": definition.id,
                 "axis": "structure",
