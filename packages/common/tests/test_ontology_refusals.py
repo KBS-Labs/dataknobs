@@ -385,3 +385,70 @@ def test_a_numeric_entity_id_can_still_be_named_by_a_tree(door: Door) -> None:
             ],
         }
     )
+
+
+# --------------------------------------------------------------------------
+#
+# The slug collision, which had no test at either door. It fires from shared
+# minting code that `MappingHierarchy.from_nested` calls too -- so the pair
+# below is what keeps the two doors' vocabularies one vocabulary, and the
+# cross-source case is what kept a message honest that used to name nothing.
+
+
+@DOORS
+def test_two_paths_in_one_tree_that_slug_to_one_id_are_refused(door: Door) -> None:
+    """The slug collapses punctuation and case, so a reader sees two nodes."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "sources": [
+                    {
+                        "id": "areas",
+                        "kind": "nested",
+                        "tree": {
+                            "name": "Billing",
+                            "children": [{"name": "Late Fees"}, {"name": "late-fees"}],
+                        },
+                    }
+                ],
+            }
+        )
+
+    assert "'billing/late-fees'" in str(excinfo.value)
+    assert "'Billing/Late Fees'" in str(excinfo.value)
+    assert excinfo.value.context["source_id"] == "areas"
+
+
+@DOORS
+def test_a_collision_between_two_trees_names_the_tree_that_got_there_first(
+    door: Door,
+) -> None:
+    """The message named the id back at you, which answered nothing.
+
+    Two nested sources mint into one entity store, and the collision check has
+    always spanned them -- but the map from id to the path that minted it was
+    rebuilt per source, so a *cross-source* collision found nothing in it and
+    fell back to printing the id a second time: ``mints id 'billing', which
+    'billing' already minted``. The one thing the reader needed, which of the
+    other trees to go and look at, was the one thing absent.
+
+    Now that both doors mint through one core, the map is threaded across
+    sources and the message names the colliding node. Pinned here because it is
+    the half of the refusal no test reached, which is how it stayed wrong.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "sources": [
+                    {"id": "left", "kind": "nested", "tree": {"name": "Billing"}},
+                    {"id": "right", "kind": "nested", "tree": {"name": "billing!"}},
+                ],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "which 'Billing' already minted" in message
+    assert "which 'billing' already minted" not in message
+    assert excinfo.value.context["source_id"] == "right"

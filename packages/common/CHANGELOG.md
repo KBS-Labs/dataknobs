@@ -285,6 +285,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A slug collision between two nested sources names the tree it collided
+  with.** Two `kind: nested` sources mint into one entity store and the
+  collision check has always spanned them, but the map from minted id back to
+  the path that minted it was rebuilt per source — so a cross-source collision
+  found nothing in it and printed the id a second time: `mints id 'billing',
+  which 'billing' already minted`. The one thing the reader needed, which other
+  tree to go and look at, was the one thing missing. Both doors now mint
+  through one core with that map threaded across sources, so the message names
+  the colliding node. A collision *within* one tree was already correct and is
+  unchanged. Neither case had a test at the ontology door; both do now.
+
 - **`Field.copy()` keeps the field's class.** It reconstructed a `Field`
   by name, so a subclass came back as a plain `Field` with everything the
   subclass added silently dropped — `VectorField` lost `dimensions`,

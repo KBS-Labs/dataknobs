@@ -521,6 +521,24 @@ a cyclic component with no root above it is absent from the copy. That is a
 property of the protocol rather than of the walk, and where it matters, ask the
 backing.
 
+That absence is not only a gap in the mapping. `Taxonomy.walk` refuses an
+anchor its axis does not contain, so a taxonomy over the copy **refuses a walk
+the same taxonomy over the live axis performs**:
+
+```python
+live = MappingHierarchy({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
+copied = MappingHierarchy.snapshot(live)
+
+live.contains("a")    # True  — 'a' is a node of the axis
+copied.contains("a")  # False — nothing descends to it from a root
+```
+
+Everything the copy did reach answers as before; this is a hole, not a shrink.
+But it makes materializing a *semantic* choice and not only a freshness one, so
+if your relation can produce a component with nothing above it — a mutual `isa`,
+a `related_to` used as if it were a hierarchy — take the copy knowing that, or
+keep the live axis.
+
 
 ## What a taxonomy carries, and what it refuses
 

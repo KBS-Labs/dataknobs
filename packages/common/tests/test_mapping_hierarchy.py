@@ -60,9 +60,19 @@ def _axis(parent_map: dict[str, tuple[str, ...]]) -> Taxonomy:
     source is the honest backing rather than a stub: there is no content in this
     test and pretending otherwise would be the thing to explain.
     """
+    return _taxonomy_over(MappingHierarchy(parent_map))
+
+
+def _taxonomy_over(structure: Hierarchy[str]) -> Taxonomy:
+    """The same taxonomy over whichever axis is being asked about.
+
+    Separate from :func:`_axis` because one test needs a taxonomy over an axis
+    it did *not* build from a mapping literal -- a snapshot -- and building the
+    definition twice is how the two stop being the same taxonomy.
+    """
     return Taxonomy(
         definition=TaxonomyDefinition(id="species", relation="isa"),
-        structure=MappingHierarchy(parent_map),
+        structure=structure,
         entities=MappingEntitySource({}),
     )
 
@@ -315,6 +325,31 @@ def test_a_snapshot_sees_what_descends_from_the_roots_and_says_so() -> None:
 
     assert orphaned_cycle.roots() == ()
     assert dict(MappingHierarchy.snapshot(orphaned_cycle).parent_map) == {}
+
+
+def test_a_snapshot_refuses_an_anchor_the_axis_it_copied_accepts() -> None:
+    """The absence above, arriving where a consumer actually meets it.
+
+    ``Taxonomy.walk`` refuses an unknown anchor by asking ``contains``, so an
+    unreachable component is not merely missing from the copy: the *materialized*
+    axis refuses to anchor a walk the live axis performs. Same taxonomy, same
+    anchor, two answers, and what differs is which axis is underneath -- which
+    makes materialization a semantic choice rather than only a freshness one.
+
+    Pinned rather than fixed, because the protocol offers nothing to fix it
+    with: reaching ``a`` needs an extent member ``Hierarchy`` does not have, and
+    inventing one here would be a change to every backing rather than to this
+    copy. The guide says it beside the choice for the same reason.
+    """
+    live = MappingHierarchy({"dog": ("mammal",), "a": ("b",), "b": ("a",)})
+    copied = MappingHierarchy.snapshot(live)
+
+    assert tuple(_taxonomy_over(live).walk(from_id="a")) == ("a", "b")
+    with pytest.raises(NotFoundError):
+        tuple(_taxonomy_over(copied).walk(from_id="a"))
+
+    # What the copy did reach is unaffected: this is a hole, not a shrink.
+    assert tuple(_taxonomy_over(copied).walk(from_id="mammal")) == ("mammal", "dog")
 
 
 def test_a_snapshot_of_a_snapshot_is_the_same_axis() -> None:
