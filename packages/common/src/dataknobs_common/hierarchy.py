@@ -15,15 +15,17 @@ code in this module is the driver pair that decides whether that answer needs
 awaiting.
 
 That pair is a **fixed** cost: it does not grow when a walk is added, which is
-the whole of the bet. State it as a bet rather than a saving, because one
-public traversal ships today -- ``ancestors`` -- and at one walk the
-arrangement costs more than a hand-twinned pair would. What it buys from the
-second walk on is a lower *marginal* cost rather than a lower total: the pair
-is paid once, but it is not small, and it grows when a **capability** is added
-to it -- bulk frontier dispatch did -- where a walk added *over* it does not.
-That distinction is the bet. The shape it exists to avoid is
-``dataknobs_data``'s ``_search_with_complex_query``: 57 lines in each flavour,
-differing in three.
+the whole of the bet. It was stated as a bet rather than a saving because one
+traversal shipped -- ``ancestors`` -- and at one walk the arrangement costs
+more than a hand-twinned pair would. The second has since arrived: the walk
+behind :meth:`MappingHierarchy.snapshot` is a generator in the core, driven by
+both constructors, and it cost one generator rather than a pair. What the
+arrangement buys is a lower *marginal* cost rather than a lower total -- the
+pair is paid once, it is not small, and it grows when a **capability** is added
+to it (bulk frontier dispatch did) where a walk added *over* it does not. That
+distinction is the bet, and it is the part to keep watching. The shape it
+exists to avoid is ``dataknobs_data``'s ``_search_with_complex_query``: 57
+lines in each flavour, differing in three.
 
 The key type is a parameter with ``str`` **defaulted**, so a bare ``Hierarchy``
 is ``Hierarchy[str]`` and reads as it always did. It exists because the walks
@@ -34,16 +36,27 @@ at all can bind ``K`` to its own node type and share the same traversals.
 from __future__ import annotations
 
 import sys
-from collections.abc import Generator, Hashable, Sequence
-from typing import TYPE_CHECKING, Generic, Literal, Protocol, cast, runtime_checkable
+from collections.abc import Generator, Hashable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    Protocol,
+    cast,
+    runtime_checkable,
+)
 
 # The algorithms and the frontier read live in the private sibling: a core that
 # is only a paragraph is satisfied by two twins that each implement it, so what
 # is shared is code both flavours call. The runtime dependency runs this way
 # only -- the core names these protocols in annotations and nothing more.
+from dataknobs_common._nested_core import _mint_tree
 from dataknobs_common._walk_core import (
     _ancestors,
     _async_reply,
+    _parent_edges,
     _refuse_a_spent_walk,
     _sync_reply,
 )
@@ -61,9 +74,11 @@ __all__ = [
     "DEFAULT_FRONTIER_CONCURRENCY",
     "AsyncBulkHierarchy",
     "AsyncHierarchy",
+    "AsyncMappingHierarchy",
     "BulkHierarchy",
     "Hierarchy",
     "K",
+    "MappingHierarchy",
     "ancestors",
     "async_ancestors",
     "async_drive",
@@ -351,6 +366,270 @@ async def async_ancestors(
     return await async_drive(hierarchy, _ancestors(node_id), max_concurrency=max_concurrency)
 
 
+# --------------------------------------------------------------------------
+# The mapping backings -- a structure carried in memory
+# --------------------------------------------------------------------------
+
+
+def _invert(parent_map: Mapping[K, Sequence[K]]) -> dict[K, tuple[K, ...]]:
+    """A child mapping from a parent mapping.
+
+    Once, at construction. ``children()`` over a parent mapping *is* this
+    inversion, and doing it per call makes a downward walk quadratic in the
+    size of the axis -- which is the walk a snapshot takes, so the cost would
+    land on the constructor that exists to make walking cheap.
+    """
+    children: dict[K, list[K]] = {}
+    for node_id, above in parent_map.items():
+        for parent_id in above:
+            children.setdefault(parent_id, []).append(node_id)
+    return {parent_id: tuple(below) for parent_id, below in children.items()}
+
+
+def _nested_parent_map(tree: Any, child_key: str, name_key: str) -> dict[str, tuple[str, ...]]:
+    """A parent mapping from a nested tree, keyed by the ids the path mints.
+
+    The keys are :mod:`dataknobs_common._nested_core`'s and not this module's,
+    which is the whole point of that core: a document read through an ontology's
+    ``kind: nested`` and the same tree held in memory here mint one set of ids,
+    so a consumer holding both is holding one vocabulary rather than two.
+    """
+    return {
+        minted.id: () if minted.parent_id is None else (minted.parent_id,)
+        for minted in _mint_tree(tree, child_key=child_key, name_key=name_key)
+    }
+
+
+@dataclass(frozen=True)
+class _MappingBacking(Generic[K]):
+    """The mapping, its inversion, and the six answers computed from them.
+
+    Shared by the twins below rather than written into each, for the reason
+    every shared thing here is shared: a rule a twin re-implements is a rule
+    that drifts, and ``contains`` in particular is now a *refusal's evidence*
+    -- :meth:`~dataknobs_common.taxonomy.Taxonomy.walk` refuses an anchor its
+    axis does not contain by asking it. Two implementations of that answer is
+    two chances to make the refusal fire on a node that is genuinely there.
+
+    Not public and not a base anyone should reach for: it is the body of two
+    classes, and the classes are the surface.
+    """
+
+    #: A node's parents. **Not named ``parents``**: a dataclass field and a
+    #: protocol member may not share a name, and ``parents`` is a member. The
+    #: caller's spelling is unchanged, because the argument was always
+    #: positional.
+    parent_map: Mapping[K, Sequence[K]]
+
+    #: :func:`_invert` of :attr:`parent_map`, computed once at construction.
+    child_map: Mapping[K, Sequence[K]] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "child_map", _invert(self.parent_map))
+
+    def _nodes(self) -> tuple[K, ...]:
+        """Every node this axis knows, in a stable order.
+
+        A key of either mapping. The second half is the one a naive reading
+        misses: a node that appears **only as a parent** is never a key of
+        ``parent_map``, and it is as much a term of the axis as any other.
+        """
+        return tuple(dict.fromkeys((*self.parent_map, *self.child_map)))
+
+    def _roots(self) -> Sequence[K]:
+        return tuple(node_id for node_id in self._nodes() if not self.parent_map.get(node_id))
+
+    def _parents(self, node_id: K) -> Sequence[K]:
+        return tuple(self.parent_map.get(node_id, ()))
+
+    def _children(self, node_id: K) -> Sequence[K]:
+        return tuple(self.child_map.get(node_id, ()))
+
+    def _contains(self, node_id: K) -> bool:
+        """Exactly the set a walk can reach: a key, or a value under any key.
+
+        The inversion is what makes that one lookup rather than a scan --
+        ``child_map`` is keyed by every node that appears as somebody's parent,
+        which is precisely the second half of the set.
+        """
+        return node_id in self.parent_map or node_id in self.child_map
+
+    def _parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        return tuple(self._parents(node_id) for node_id in node_ids)
+
+    def _children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        return tuple(self._children(node_id) for node_id in node_ids)
+
+
+@dataclass(frozen=True)
+class MappingHierarchy(_MappingBacking[K]):
+    """A structure carried in memory: a node's parents, as a mapping.
+
+    The hierarchy for a vocabulary somebody typed, or holds, or has just
+    finished walking. It opens nothing, so it lives beside the protocols rather
+    than with a backing package -- a concrete goes where its dependency is, and
+    this one has none.
+
+    It implements :class:`BulkHierarchy` as well as :class:`Hierarchy`, because
+    one dict lookup per node is the cheapest ``parents_many`` there is and
+    declining to offer it would be the decision needing an argument.
+
+    Three ways in, and each answers a different question::
+
+        MappingHierarchy({"beagle": ("dog",), "dog": ("mammal",)})   # carried
+        MappingHierarchy.from_nested({"name": "Billing", "children": [...]})
+        MappingHierarchy.snapshot(live_axis)
+
+    ``roots()`` is *every node with no parents*, which includes a node that
+    appears only as somebody's parent and is never a key.
+    """
+
+    def roots(self) -> Sequence[K]:
+        """The nodes this axis has with no parent."""
+        return self._roots()
+
+    def parents(self, node_id: K) -> Sequence[K]:
+        """The nodes ``node_id`` is directly under."""
+        return self._parents(node_id)
+
+    def children(self, node_id: K) -> Sequence[K]:
+        """The nodes directly under ``node_id``."""
+        return self._children(node_id)
+
+    def contains(self, node_id: K) -> bool:
+        """Whether this axis knows the node at all."""
+        return self._contains(node_id)
+
+    def parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`parents` for a whole frontier, one reply per node."""
+        return self._parents_many(node_ids)
+
+    def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`children` for a whole frontier, one reply per node."""
+        return self._children_many(node_ids)
+
+    @classmethod
+    def from_nested(
+        cls,
+        tree: Any,
+        *,
+        child_key: str = "children",
+        name_key: str = "name",
+    ) -> MappingHierarchy[str]:
+        """A hierarchy from a nested tree, keyed by the ids the paths mint.
+
+        The shape a person maintains by hand: a node *is* its path, and there is
+        no id field anywhere. The id is a slug of the path and is stable across
+        a rename, because a name that renamed itself would re-key every
+        descendant of a renamed interior node at once.
+
+        Keyed by ``str`` whatever ``K`` this is called on, since a minted id is
+        a slug. Two paths that slug to one id are refused, naming both -- the
+        slug collapses punctuation and case, so ``Late Fees`` and ``late-fees``
+        are two nodes to the person editing the file and one to the slug.
+
+        Args:
+            tree: A mapping, or a list of them for a forest. ``None`` is empty.
+            child_key: Where a node keeps its children.
+            name_key: Where a node keeps its name.
+
+        Returns:
+            A hierarchy over the minted ids -- **the same ids** an ontology
+            gives the same tree under ``kind: nested``.
+
+        Raises:
+            ValidationError: On two paths that slug to one id.
+        """
+        return MappingHierarchy(_nested_parent_map(tree, child_key, name_key))
+
+    @classmethod
+    def snapshot(cls, hierarchy: Hierarchy[K]) -> MappingHierarchy[K]:
+        """A live axis walked once, kept as a mapping.
+
+        The cheap copy -- ids and edges, not content -- and the one thing a
+        live axis cannot do: say what has changed since it was taken. Walking
+        it afterwards asks the mapping rather than the backing.
+
+        **What a snapshot can see is what descends from ``roots()``.** A
+        :class:`Hierarchy` has no extent member, so this is the only enumeration
+        the protocol offers, and a cyclic component with no root above it is
+        therefore absent from the copy. That is a property of the protocol and
+        not of the walk; where it matters, ask the backing.
+        """
+        return cls(drive(hierarchy, _parent_edges()))
+
+
+@dataclass(frozen=True)
+class AsyncMappingHierarchy(_MappingBacking[K]):
+    """The same mapping, in an :class:`AsyncHierarchy`-shaped slot.
+
+    It awaits nothing, and that is the point rather than an oversight: a
+    consumer typed against :class:`AsyncHierarchy` -- because the *rest* of
+    their vocabulary is by-reference -- still needs something hand-built to put
+    in the slot, and hand-writing one per test is what this exists to stop.
+    """
+
+    async def roots(self) -> Sequence[K]:
+        """The nodes this axis has with no parent."""
+        return self._roots()
+
+    async def parents(self, node_id: K) -> Sequence[K]:
+        """The nodes ``node_id`` is directly under."""
+        return self._parents(node_id)
+
+    async def children(self, node_id: K) -> Sequence[K]:
+        """The nodes directly under ``node_id``."""
+        return self._children(node_id)
+
+    async def contains(self, node_id: K) -> bool:
+        """Whether this axis knows the node at all."""
+        return self._contains(node_id)
+
+    async def parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`parents` for a whole frontier, one reply per node."""
+        return self._parents_many(node_ids)
+
+    async def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`children` for a whole frontier, one reply per node."""
+        return self._children_many(node_ids)
+
+    @classmethod
+    def from_nested(
+        cls,
+        tree: Any,
+        *,
+        child_key: str = "children",
+        name_key: str = "name",
+    ) -> AsyncMappingHierarchy[str]:
+        """:meth:`MappingHierarchy.from_nested`, into an asynchronous slot.
+
+        A plain ``def``, and deliberately: a tree held in memory has nothing to
+        await, so making this awaitable would cost every caller an ``await``
+        for a traversal of their own data.
+        """
+        return AsyncMappingHierarchy(_nested_parent_map(tree, child_key, name_key))
+
+    @classmethod
+    async def snapshot(
+        cls,
+        hierarchy: AsyncHierarchy[K],
+        *,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    ) -> AsyncMappingHierarchy[K]:
+        """:meth:`MappingHierarchy.snapshot`, over a live asynchronous axis.
+
+        ``async`` where the nested constructor is not, because this one reads
+        the axis: the awaiting is real here and absent there.
+
+        ``max_concurrency`` is forwarded to :func:`async_drive` and carries that
+        function's meaning exactly -- see :data:`DEFAULT_FRONTIER_CONCURRENCY`.
+        It is a keyword here for the same reason it is one on every other
+        asynchronous entry point: only the caller knows what their backing is,
+        and a snapshot walks the *whole* axis rather than one branch of it.
+        """
+        return cls(await async_drive(hierarchy, _parent_edges(), max_concurrency=max_concurrency))
+
+
 if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
     from typing import assert_type
 
@@ -376,4 +655,14 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
         def _inferred(hierarchy: Hierarchy[int]) -> None:
             assert_type(ancestors(hierarchy, 3), "tuple[int, ...]")
 
-        del _bare, _bare_async, _inferred
+        def _bare_concrete(axis: MappingHierarchy, async_axis: AsyncMappingHierarchy) -> None:
+            """The concretes inherit the default, and would lose it silently.
+
+            ``_MappingBacking`` is where ``K`` is declared for both, so a
+            parameter list that stopped naming it here would widen an
+            unannotated backing to ``Any`` with nothing to report it.
+            """
+            assert_type(axis.roots(), "Sequence[str]")
+            assert_type(async_axis.parent_map, "Mapping[str, Sequence[str]]")
+
+        del _bare, _bare_async, _inferred, _bare_concrete

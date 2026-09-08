@@ -7,8 +7,9 @@ follow.
 
 Three shared cores live here, and they are shared with different callers:
 
-* the **algorithms** -- ``_levels`` and the walks composed from it -- which
-  :mod:`dataknobs_common.hierarchy`'s public wrappers drive;
+* the **algorithms** -- ``_levels``, the walks composed from it, and
+  ``_parent_edges`` -- which :mod:`dataknobs_common.hierarchy`'s public
+  wrappers and its snapshot constructors drive;
 * the **frontier read** -- ``_sync_reply`` / ``_async_reply`` -- which the
   drivers call, and which :class:`~dataknobs_common.taxonomy.Taxonomy`'s
   streaming walk calls too. That walk cannot go through the collecting core,
@@ -238,3 +239,42 @@ def _flat(levels: tuple[tuple[_K, ...], ...]) -> tuple[_K, ...]:
 def _ancestors(node_id: _K) -> Walk[_K, tuple[_K, ...]]:
     """Every node above this one, nearest first, excluding the node itself."""
     return _flat((yield from _levels((node_id,), "parents", exclude_seeds=True)))
+
+
+def _parent_edges() -> Walk[_K, dict[_K, tuple[_K, ...]]]:
+    """Every edge the axis has, as a parent mapping, by descending from roots.
+
+    The walk behind a snapshot. It is written here, as a walk over the shared
+    core, rather than twinned into the two constructors that take one -- which
+    is the arrangement ``hierarchy``'s module docstring calls the bet: a walk
+    added *over* the drivers costs one generator, where a capability added *to*
+    them costs a pair.
+
+    Descending is the only enumeration a :class:`Hierarchy` offers. There is no
+    extent member -- ``roots()`` says so in its own docstring -- so what a
+    snapshot can see is what is reachable downward from the roots. **A cyclic
+    component with no root above it is therefore not in the snapshot**, and
+    that is a property of the protocol rather than of this walk: nothing here
+    can name a node no member mentions.
+
+    Deduplication is unconditional, like :func:`_levels`: a node is expanded
+    once however many parents reach it, while *every* parent that reaches it is
+    kept -- because a DAG node with two parents is the case the whole structure
+    axis exists to represent, and dropping one would make the snapshot a
+    different shape from the axis it copied.
+    """
+    (roots,) = yield ("roots", ())
+    parents: dict[_K, list[_K]] = {node_id: [] for node_id in roots}
+    frontier = tuple(parents)
+    while frontier:
+        replies = yield ("children", frontier)
+        fresh: list[_K] = []
+        for node_id, children in zip(frontier, replies, strict=True):
+            for child in children:
+                if child not in parents:
+                    parents[child] = []
+                    fresh.append(child)
+                if node_id not in parents[child]:
+                    parents[child].append(node_id)
+        frontier = tuple(fresh)
+    return {node_id: tuple(above) for node_id, above in parents.items()}

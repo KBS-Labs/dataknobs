@@ -105,6 +105,7 @@ These exist for use by dataknobs tests AND all consuming projects:
 | Event bus | `InMemoryEventBus` | `dataknobs-common` |
 | Rate limiter | `InMemoryRateLimiter` - sliding window, per-category rates, weighted ops | `dataknobs-common` |
 | Pytest markers | `@requires_ollama`, `@requires_faiss`, `@requires_redis` | `dataknobs-common` |
+| Sync/async twin parity | `assert_twins_agree` (one pair), `assert_twin_types_agree` (named members of two twinned types) - one guard for a twin pair's surface, with each stated difference declared | `dataknobs-common` |
 
 If a new testing construct is needed, **add it to the appropriate dataknobs package** for cross-project reuse.
 

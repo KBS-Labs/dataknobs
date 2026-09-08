@@ -136,13 +136,15 @@ def test_a_materialized_content_axis_is_refused_naming_the_axis(
 def test_a_materialized_structure_axis_is_refused_naming_the_axis(
     materialized_structure_path: Path,
 ) -> None:
-    """The snapshot branch is declared everywhere and built nowhere.
+    """The snapshot branch is declared everywhere and taken by no door.
 
     ``MATERIALIZED`` structure is a snapshot with a build time; ``ON_DEMAND``
-    is the live read. Only the live one exists, so a definition asking for the
-    snapshot is asking for a branch that is not there -- and the honest answer
-    is to say so at the accessor rather than hand back the live axis under the
-    other name.
+    is the live read. The copy is now buildable --
+    ``MappingHierarchy.snapshot`` takes one from any axis -- so what a
+    definition asking for the snapshot is asking for is not a branch that does
+    not exist, but one this accessor does not reach for. The honest answer is
+    still to say so here rather than hand back the live axis under the other
+    name, and the message says which of the two it is.
     """
     onto = load_ontology(materialized_structure_path)
 

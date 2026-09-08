@@ -14,11 +14,11 @@ the only place a shared implementation can actually live.
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Container, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common._nested_core import _mint_tree, _walk_tree
 from dataknobs_common.config_loading import load_yaml_or_json
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.fields import FieldType
@@ -65,8 +65,6 @@ AUTHORED_SOURCE_KINDS = frozenset({"inline", "nested"})
 #: What a nested source's parent-child edges are asserted as, absent a
 #: ``relation:`` of its own.
 DEFAULT_NESTED_RELATION = "isa"
-
-_SLUG_SEPARATORS = re.compile(r"[^a-z0-9/]+")
 
 #: Where an entity type's declared ``isa:`` parent is kept for now.
 #:
@@ -653,89 +651,49 @@ def _mint_nested(
 ) -> tuple[dict[str, Entity], list[Assertion]]:
     """Mint an id per node of every nested tree, with the path as the name.
 
-    A hand-maintained tree has no id field anywhere: a node *is* its path. But
-    a path is a name, and a name renames itself when someone edits the file --
-    which would re-key every descendant of a renamed interior node at once. So
-    the id is a slug of the path taken at first load and the path becomes the
-    ``name``, which means renaming a node changes what it is called and not
-    what it is.
+    The traversal, the slug and the collision refusal are
+    :func:`~dataknobs_common._nested_core._mint_tree`'s, shared with
+    :meth:`~dataknobs_common.hierarchy.MappingHierarchy.from_nested` so that one
+    document read through either door mints one set of keys. What is this
+    function's own is what the minted nodes become here: entities of a declared
+    type, and one assertion per parent edge.
+
+    ``claimed`` is threaded across every spec, so two trees in one document that
+    slug to a shared id are refused as a collision rather than the second
+    silently replacing the first.
     """
     entities: dict[str, Entity] = {}
     assertions: list[Assertion] = []
+    claimed: dict[str, str] = {}
     for spec in specs:
         if str(spec.get("kind", "")) != "nested":
             continue
         source_id = str(spec.get("id", ""))
-        child_key = str(spec.get("child_key", "children"))
-        name_key = str(spec.get("name_key", "name"))
         node_type = str(spec.get("type", source_id))
         relation = str(spec.get("relation", DEFAULT_NESTED_RELATION))
 
-        minted_from: dict[str, str] = {}
-        for node, path in _walk_tree(spec.get("tree"), child_key, name_key):
-            name = "/".join(path)
-            node_id = _slug(name)
-            if node_id in entities:
-                raise ValidationError(
-                    f"tree node {name!r} in source {source_id!r} mints id "
-                    f"{node_id!r}, which {minted_from.get(node_id, node_id)!r} "
-                    f"already minted. The slug collapses punctuation and case, "
-                    f"so two nodes a person reads as different can name one "
-                    f"entity",
-                    context={"source_id": source_id, "id": node_id, "path": name},
-                )
-            minted_from[node_id] = name
-            entities[node_id] = Entity(
-                id=node_id,
+        for minted in _mint_tree(
+            spec.get("tree"),
+            child_key=str(spec.get("child_key", "children")),
+            name_key=str(spec.get("name_key", "name")),
+            source=source_id,
+            claimed=claimed,
+        ):
+            entities[minted.id] = Entity(
+                id=minted.id,
                 type=node_type,
-                name=name,
-                aliases=list(node.get("aliases", [])),
-                description=node.get("description"),
-                metadata=dict(node.get("metadata", {})),
+                name=minted.name,
+                aliases=list(minted.node.get("aliases", [])),
+                description=minted.node.get("description"),
+                metadata=dict(minted.node.get("metadata", {})),
             )
-            if len(path) > 1:
-                parent_id = _slug("/".join(path[:-1]))
+            if minted.parent_id is not None:
                 assertions.append(
                     Assertion(
-                        id=f"{node_id}-{relation}-{parent_id}",
-                        subject=node_id,
+                        id=f"{minted.id}-{relation}-{minted.parent_id}",
+                        subject=minted.id,
                         relation=relation,
-                        object=EntityRef(entity_id=parent_id),
+                        object=EntityRef(entity_id=minted.parent_id),
                     )
                 )
     return entities, assertions
-
-
-def _walk_tree(
-    tree: Any, child_key: str, name_key: str
-) -> list[tuple[Mapping[str, Any], list[str]]]:
-    """Every node of a nested tree, paired with its path from the root.
-
-    Depth-first and iterative. A tree a person maintains is not deep, but a
-    recursive walk would turn a malformed self-referential document into a
-    stack overflow rather than a refusal.
-    """
-    if tree is None:
-        return []
-    roots = tree if isinstance(tree, list) else [tree]
-    found: list[tuple[Mapping[str, Any], list[str]]] = []
-    stack: list[tuple[Any, list[str]]] = [(node, []) for node in reversed(roots)]
-    while stack:
-        node, prefix = stack.pop()
-        if not isinstance(node, Mapping):
-            continue
-        path = [*prefix, str(node.get(name_key, node.get("id", "")))]
-        found.append((node, path))
-        children = node.get(child_key) or []
-        stack.extend((child, path) for child in reversed(children))
-    return found
-
-
-def _slug(text: str) -> str:
-    """A stable id from a path: lower-cased, with separators collapsed.
-
-    ``/`` survives because it is the path separator and carries the structure;
-    everything else non-alphanumeric becomes a single ``-``.
-    """
-    collapsed = _SLUG_SEPARATORS.sub("-", text.lower()).strip("-")
-    return "/".join(part.strip("-") for part in collapsed.split("/"))
