@@ -461,8 +461,8 @@ fast.
 #### Registering a resolver (`config_registries`)
 
 `config_registries` is a process-global `Registry[ConfigClassResolver]`
-that `dataknobs-common` owns but (having `dependencies = []`) cannot
-populate — the **registry-of-registries** seam. Each package that owns a
+that `dataknobs-common` owns but cannot populate, depending on no
+sibling package — the **registry-of-registries** seam. Each package that owns a
 polymorphic section registers its resolver eagerly at import. A resolver
 maps the section's raw dict to its concrete config class (`None` for an
 unknown discriminator, or `SKIP_VALIDATION` when the discriminator is

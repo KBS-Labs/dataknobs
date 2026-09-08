@@ -16,8 +16,8 @@ individual host/port/database/user/password keys, ``DATABASE_URL``, and
 ``asyncpg`` is an *optional* dependency (the existing ``postgres``
 extra, shared with ``PostgresEventBus``) and is imported lazily inside
 the methods, so importing this module — and ``dataknobs_common.locks``
-— never requires asyncpg and the base install stays
-``dependencies = []``.
+— never requires asyncpg and the base install carries no backend
+driver.
 
 Liveness vs. fencing:
 

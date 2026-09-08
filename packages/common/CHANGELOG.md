@@ -114,10 +114,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_common.records` and `dataknobs_common.fields` modules and exported
   at package level. They are pure data — a typed value, a named collection of
   them, and an enum — with no transport, no connection and no third-party
-  import, so they were the one part of the record model a package that declares
-  `dependencies = []` can hold. `dataknobs-data` re-exports all three from both
-  `dataknobs_data` and `dataknobs_data.records` / `dataknobs_data.fields`, so
-  every existing import keeps resolving to the same object.
+  import, so they were the one part of the record model `dataknobs-common`
+  could take on without adding a dependency. `dataknobs-data` re-exports all
+  three from both `dataknobs_data` and `dataknobs_data.records` /
+  `dataknobs_data.fields`, so every existing import keeps resolving to the same
+  object.
 
   `VectorField` stays in `dataknobs_data.fields`: it needs `numpy` at runtime,
   and `dataknobs-common`'s base install declares no dependencies.
