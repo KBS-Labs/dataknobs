@@ -296,9 +296,9 @@ class AsyncRaisesStopIteration:
         return False
 
 
-def _asking_for(member: str) -> Generator[
-    tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]
-]:
+def _asking_for(
+    member: str,
+) -> Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]]:
     """A one-question walk, in the shape the guide invites a consumer to write."""
     (reply,) = yield (member, ("anything",))
     return tuple(reply)
