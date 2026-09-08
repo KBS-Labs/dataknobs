@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-08T19:48:53Z",
+  "timestamp": "2026-09-08T21:30:54Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/mapping-hierarchy-backings",
-  "git_commit": "a8db3b7c368c001e7cc6d31b27412c45befb2798",
+  "git_branch": "sbk/refuse-a-missing-required-field",
+  "git_commit": "6d85975f014f3c7a192eaf5f019bcd86425b06d3",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
