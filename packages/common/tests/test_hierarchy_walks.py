@@ -747,6 +747,81 @@ def test_both_flavours_refuse_a_spent_walk_alike() -> None:
         asyncio.run(async_drive(hierarchy, walk))
 
 
+class DelegatingWalk(Generator[tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]]):
+    """A walk by protocol rather than by construction, wrapping a real one.
+
+    ``Walk`` is spelled ``Generator[...]``, and ``collections.abc.Generator``
+    is satisfiable by a class -- so this is what a consumer reaching for an
+    instrumented or filtered walk writes first. The drivers themselves would
+    drive it: they only ever ``next`` and ``send``, which this forwards.
+    """
+
+    def __init__(
+        self,
+        inner: Generator[
+            tuple[str, tuple[str, ...]], tuple[Sequence[str], ...], tuple[str, ...]
+        ],
+    ) -> None:
+        self._inner = inner
+
+    def send(self, value: tuple[Sequence[str], ...]) -> tuple[str, tuple[str, ...]]:
+        return self._inner.send(value)
+
+    def throw(self, *args: object, **kwargs: object) -> tuple[str, tuple[str, ...]]:
+        return self._inner.throw(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def test_driving_a_suspended_walk_is_refused_rather_than_answered() -> None:
+    """A walk stopped mid-question is refused, and exhaustion does not cover it.
+
+    The guard reads ``!= GEN_CREATED`` rather than ``== GEN_CLOSED``, and this
+    is the half of that which a second drive of a finished walk cannot reach.
+    It is also the worse half: an exhausted walk sends ``None`` where a
+    *result* belongs, where a suspended one sends ``None`` where the reply to
+    its outstanding question belongs -- so it would answer, out of a frontier
+    it never read, rather than fail.
+
+    Both flavours are asserted against the *same* suspended walk, which the
+    first refusal leaves untouched: the guard runs before the driver's opening
+    ``next``, so nothing has advanced it.
+    """
+    walk = _asking_for("parents")
+
+    assert next(walk) == ("parents", ("anything",))
+    assert inspect.getgeneratorstate(walk) == inspect.GEN_SUSPENDED
+
+    with pytest.raises(RuntimeError, match=inspect.GEN_SUSPENDED):
+        drive(MappingParents({"a": (), "b": ("a",)}), walk)
+
+    with pytest.raises(RuntimeError, match=inspect.GEN_SUSPENDED):
+        asyncio.run(async_drive(AsyncMappingParents({"a": (), "b": ("a",)}), walk))
+
+    assert inspect.getgeneratorstate(walk) == inspect.GEN_SUSPENDED
+
+
+def test_a_walk_that_is_not_a_generator_is_refused_by_kind() -> None:
+    """The freshness check needs a generator *object*, and says so itself.
+
+    ``inspect.getgeneratorstate`` reads ``gi_running`` off its argument, so a
+    ``Walk`` satisfying the alias without being a generator reached it and
+    raised ``AttributeError`` naming a CPython slot -- a failure that tells the
+    caller nothing about walks. The drivers would otherwise have driven this
+    one, so the refusal is a real narrowing and belongs where it can be read:
+    a ``TypeError`` naming the kind wanted and the one-line way to get it.
+
+    Silently skipping the check for what it cannot inspect was the other
+    candidate. It reopens the ``None``-as-a-result hazard precisely for the
+    walks the driver cannot warn about, which is the wrong direction.
+    """
+    walk = DelegatingWalk(_asking_for("parents"))
+
+    with pytest.raises(TypeError, match="generator"):
+        drive(MappingParents({"a": (), "b": ("a",)}), walk)
+
+    with pytest.raises(TypeError, match="generator"):
+        asyncio.run(async_drive(AsyncMappingParents({"a": (), "b": ("a",)}), walk))
+
+
 #: A level wider than any sensible fan-out bound, so an unbounded gather and a
 #: bounded one are distinguishable by overlap alone.
 _WIDE_LEVEL = 64

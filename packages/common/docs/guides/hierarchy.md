@@ -323,6 +323,25 @@ that was *already* exhausted raised the same exception with `value=None` — and
 the driver handed that `None` back typed as the walk's declared result, to fail
 somewhere else entirely.
 
+A walk left *suspended* part-way through is refused too, and for a worse reason
+than exhaustion: resuming one sends `None` where the reply to its outstanding
+question belongs, so it would answer out of a frontier it never read rather
+than fail.
+
+**Write a walk that wraps another as a generator function, not as a class.**
+The freshness the drivers read lives on the generator object, so a walk that
+satisfies `Generator` structurally — a class forwarding `send` and `throw` — is
+refused with `TypeError` instead. `yield from` keeps the wrapper a generator,
+and hands back the inner walk's result to do as you like with:
+
+```python
+def _leaves_sorted():
+    """`_leaves`, ordered — a generator function, and so still a walk."""
+    return tuple(sorted((yield from _leaves())))
+
+assert drive(species.structure, _leaves_sorted()) == ("beagle", "retriever")
+```
+
 ### How wide a frontier read gets
 
 The asynchronous driver gathers a whole frontier at once, so concurrency is per

@@ -117,6 +117,13 @@ Ask = tuple[Member, tuple[_K, ...]]
 #: A walk: a generator that yields an :data:`Ask`, receives one reply per node
 #: asked about, and finally returns its result. It contains no ``await`` and no
 #: knowledge of which flavour is driving it.
+#:
+#: A generator *object*, and the drivers enforce it. They refuse a walk that is
+#: not fresh, and a walk's freshness lives on the generator -- so a class
+#: implementing ``collections.abc.Generator`` satisfies this alias but is
+#: refused by :func:`drive` and :func:`async_drive` with a ``TypeError``. Write
+#: a walk that wraps another as a generator function delegating with ``yield
+#: from``, which is one, rather than as a class, which is not.
 Walk = Generator[Ask[_K], tuple[Sequence[_K], ...], _T]
 
 
@@ -256,6 +263,9 @@ def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
     The walk's own state is checked *before* the ``try``, for the same reason:
     a spent generator raises ``StopIteration(value=None)`` from the opening
     ``next``, which lands in that ``except`` and reads as the walk finishing.
+    That check pins the walk's *kind* as well -- the state it reads exists only
+    on a generator object -- so a :data:`Walk` written as a class is refused
+    with ``TypeError`` rather than driven.
     """
     _refuse_a_spent_walk(walk)
     try:

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import types
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -61,12 +62,36 @@ def _refuse_a_spent_walk(walk: Walk[_K, object]) -> None:
     resuming one mid-traversal sends ``None`` where the reply to its
     outstanding question belongs, so it would answer rather than fail.
 
+    A walk that is not a generator *object* is refused first, and by kind. The
+    state this reads lives on the generator itself, so a ``Walk`` satisfying the
+    alias structurally -- a class implementing ``collections.abc.Generator``,
+    which the drivers would otherwise drive, since they only ever ``next`` and
+    ``send`` -- reached ``inspect.getgeneratorstate`` and raised
+    ``AttributeError`` naming a CPython slot.
+
+    Refusing it narrows what the drivers accept, and the narrowing is the point.
+    Skipping the check for what it cannot inspect was the other candidate: it
+    reopens the ``None``-as-a-result hazard above for exactly the walks the
+    driver would be unable to warn about, which is the wrong direction to fail
+    in. So the kind is part of the contract, and the message carries the
+    one-line way to keep a delegating walk -- a generator function using
+    ``yield from`` is a generator, where a class is not.
+
     Shared by both drivers rather than written into each -- the refusals either
     twin makes are the same refusals, and a rule a twin re-implements is a rule
     that drifts. Deliberately not folded into the ``StopIteration`` conversion
     below: that converts an exception raised by the *hierarchy*, where this is
     the walk's own state, which is not an error condition anywhere else.
     """
+    if not isinstance(walk, types.GeneratorType):
+        raise TypeError(
+            f"a walk must be a generator object, not {type(walk).__name__}; "
+            f"the drivers read a walk's state to refuse a spent one, and only "
+            f"a generator carries it. Write a delegating walk as a generator "
+            f"function -- 'def wrapped(): return (yield from inner)' -- rather "
+            f"than as a class"
+        )
+
     state = inspect.getgeneratorstate(walk)
     if state != inspect.GEN_CREATED:
         raise RuntimeError(

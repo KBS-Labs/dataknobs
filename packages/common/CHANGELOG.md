@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would send `None` where the answer to its outstanding question belongs, so it
   would answer rather than fail.
 
+  A walk must also *be* a generator object, and the same check pins it: the
+  freshness it reads lives on the generator, so a `Walk` that satisfies
+  `collections.abc.Generator` as a class is refused with `TypeError` naming the
+  one-line way to keep a delegating walk — a generator function using `yield
+  from`, which is a generator where a class is not.
+
   Where a backing offers no bulk members, that per-level concurrency is
   **bounded** by `max_concurrency`, defaulting to
   `DEFAULT_FRONTIER_CONCURRENCY`. Without a bound the fan-out is the width of
