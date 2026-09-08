@@ -26,8 +26,12 @@ import pytest
 
 from dataknobs_common import hierarchy as hierarchy_module
 from dataknobs_common.hierarchy import (
+    AsyncBulkHierarchy,
     AsyncHierarchy,
+    AsyncMappingHierarchy,
+    BulkHierarchy,
     Hierarchy,
+    MappingHierarchy,
     ancestors,
     async_ancestors,
     async_drive,
@@ -652,6 +656,7 @@ _HIERARCHY_MEMBERS = ("roots", "parents", "children", "contains")
     [
         (Hierarchy, AsyncHierarchy),
         (AssertionHierarchy, AsyncAssertionHierarchy),
+        (MappingHierarchy, AsyncMappingHierarchy),
     ],
 )
 def test_the_twins_expose_the_same_annotated_surface(sync_type: type, async_type: type) -> None:
@@ -663,6 +668,62 @@ def test_the_twins_expose_the_same_annotated_surface(sync_type: type, async_type
     stops being true, and its own test says so.
     """
     assert_twin_types_agree(sync_type, async_type, _HIERARCHY_MEMBERS, compare_return=True)
+
+
+#: The two members a bulk pair adds. Listed for the reason the four are.
+_BULK_MEMBERS = ("parents_many", "children_many")
+
+
+@pytest.mark.parametrize(
+    ("sync_type", "async_type"),
+    [
+        (BulkHierarchy, AsyncBulkHierarchy),
+        (MappingHierarchy, AsyncMappingHierarchy),
+    ],
+)
+def test_the_bulk_twins_expose_the_same_annotated_surface(
+    sync_type: type, async_type: type
+) -> None:
+    """The optional capability is twinned on the same terms as the required one.
+
+    Checked on the protocol pair *and* on the first non-assertion adopter of it,
+    because a concrete is where the two halves are written out by hand and
+    therefore where they can disagree.
+    """
+    assert_twin_types_agree(sync_type, async_type, _BULK_MEMBERS, compare_return=True)
+
+
+def test_the_snapshot_constructors_are_twins() -> None:
+    """One stated difference, and it is the one every async entry point has.
+
+    ``max_concurrency`` bounds a frontier read with no bulk member to use, and
+    the synchronous driver issues no concurrent calls at all. ``hierarchy`` is
+    flavoured by definition. The return type differs by flavour too -- each
+    lands in its own slot -- so ``compare_return`` stays off here where the
+    member comparisons above have it on.
+    """
+    assert_twins_agree(
+        MappingHierarchy.snapshot,
+        AsyncMappingHierarchy.snapshot,
+        async_only={"max_concurrency"},
+        flavour_typed={"hierarchy"},
+    )
+
+
+def test_the_nested_constructors_take_the_same_arguments() -> None:
+    """Both are plain ``def``, so the twin guard is the wrong instrument.
+
+    ``assert_twins_agree`` refuses a synchronous "async half", which is exactly
+    right and exactly why it cannot be used here: a tree held in memory has
+    nothing to await, so making the asynchronous constructor awaitable would
+    cost every caller an ``await`` for a traversal of their own data. What still
+    has to hold is that the two take the same arguments, so that is asserted
+    directly.
+    """
+    assert not inspect.iscoroutinefunction(AsyncMappingHierarchy.from_nested)
+    assert inspect.signature(MappingHierarchy.from_nested).parameters == (
+        inspect.signature(AsyncMappingHierarchy.from_nested).parameters
+    )
 
 
 def test_the_concretes_satisfy_the_protocols_at_runtime(mammals_path: Path) -> None:

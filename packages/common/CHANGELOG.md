@@ -73,6 +73,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order asked, an absent answer being an empty sequence rather than a missing
   slot. `AssertionHierarchy` implements both over `AssertionSource.find_many`.
 
+- **`MappingHierarchy` and `AsyncMappingHierarchy`**, in
+  `dataknobs_common.hierarchy`: a structure axis **carried in memory** rather
+  than read. They hold a node's parents as a mapping, open nothing, and are
+  therefore the concrete that sits beside the protocols rather than with a
+  backing package. Both implement the bulk protocols as well as the base ones,
+  because one dict lookup per node is the cheapest `parents_many` there is and
+  declining to offer it would be the decision needing an argument.
+
+  Three ways in, and each answers a different question. `MappingHierarchy(
+  {"beagle": ("dog",)})` carries edges you already have. **`from_nested(tree)`**
+  takes the shape a person maintains by hand — a nested document with no id
+  field anywhere, where a node *is* its path — and mints one id per node as a
+  slug of that path, keeping the path as the name so that renaming a node
+  changes what it is called and not what it is. **`snapshot(hierarchy)`** walks
+  a live axis once and keeps the result: the cheap copy, ids and edges, which
+  buys the one thing a live axis cannot do — say what has changed since it was
+  taken — at the cost of freshness. A snapshot sees what descends from
+  `roots()`, which is the only enumeration a `Hierarchy` offers, so a cyclic
+  component with no root above it is absent from the copy.
+
+  **`from_nested` mints the ids an ontology mints** for the same tree under a
+  `kind: nested` source. The traversal, the slug and the collision refusal are
+  one implementation both doors call, so a consumer who reads a document one way
+  and holds the same tree the other holds one vocabulary rather than two —
+  including the refusal, since a slug collapses punctuation and case and two
+  paths that reach one id are refused naming both.
+
+  `contains()` answers for **every node a walk can reach** — a key of the
+  mapping, or a value under any key. A node that appears only as somebody's
+  parent is a term of the axis like any other, and this is not a nicety:
+  `Taxonomy.walk(from_id=…)` refuses an unknown anchor by asking `contains`, so
+  a backing answering on keys alone would refuse a node that is genuinely there
+  and name the caller's anchor for it. `roots()` is every node with no parents,
+  on the same set. The inversion behind `children()` is taken once at
+  construction, because a downward walk is what makes an inversion-per-call
+  quadratic.
+
+  The asynchronous twin awaits nothing, and that is the point rather than an
+  oversight: a consumer typed against `AsyncHierarchy` — because the rest of
+  their vocabulary is by-reference — still needs something hand-built to put in
+  the slot. Its `from_nested` is a plain `def` for the same reason, since a tree
+  held in memory has nothing to await; its `snapshot` is `async`, because that
+  one really does read the axis, and takes `max_concurrency` like every other
+  asynchronous entry point here.
+
 - **`dataknobs_common.taxonomy`**, one relation of a vocabulary reified as a
   walkable axis. `Taxonomy` and `AsyncTaxonomy` hold a definition and three
   backings — structure, content, and the assertions the edges were made of —
@@ -112,10 +157,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshots are refused: `materialization.content: materialized` is a copy of
   every entity on the axis and needs a store to hold it, and a vocabulary
   loaded from a file binds none; `materialization.structure: materialized` is
-  the cheap copy — ids and edges — and what it lacks is not a store but an
-  implementation, the axis built here being one that reads through its source.
-  The refusal fires where the caller asked for the axis rather than at the
-  first walk, which is a call site with no idea why it failed.
+  the cheap copy — ids and edges — and the axis built here is one that reads
+  through its source, so handing it back would be answering under the wrong
+  name. That copy now exists: `MappingHierarchy.snapshot` below builds one from
+  any axis, and `taxonomy()` does not yet take one on your behalf — so the
+  refusal stands, and a consumer who wants the snapshot takes it themselves in
+  one call. The refusal fires where the caller asked for the axis rather than
+  at the first walk, which is a call site with no idea why it failed.
 
   `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
   `dataknobs_common.ontology.hierarchy`, are what answer the structure axis
@@ -135,7 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — including `object_entity_id`, which is public in its own module while
   `relation_id` beside it is also on the package door. A name on a door is a
   name consumers hold, and what holds each of these back is not one reason:
-  most are settled and waiting only on the release that opens the door,
+  most are settled and waiting only on the release that opens the door —
+  `MappingHierarchy` and `AsyncMappingHierarchy` among them — while
   `drive` / `async_drive` are complete but under an open proposal to widen the
   core they take, and the two taxonomy types are still gaining members. The
   [hierarchies and taxonomies guide](https://kbs-labs.github.io/dataknobs/packages/common/hierarchy/)

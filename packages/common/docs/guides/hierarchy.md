@@ -197,9 +197,12 @@ Two things the drivers rely on:
   see.
 
 `AssertionHierarchy` implements both, over `AssertionSource.find_many`, which
-is where the capability already existed. Concurrency does not substitute for
-this: `gather` runs one round trip per node at the same time, while
-`children_many` is one query for the level.
+is where the capability already existed. So does `MappingHierarchy` below, where
+a level is one dict lookup per node — which makes it the cheapest possible
+implementation of the pair, and the reason declining to offer it would be the
+decision needing an argument. Concurrency does not substitute for either:
+`gather` runs one round trip per node at the same time, while `children_many` is
+one query for the level.
 
 ### `@runtime_checkable`, and what it does not reach
 
@@ -404,6 +407,121 @@ entity or a literal, and the general module may not import the vocabulary
 package to find out. A concrete goes where its dependency is — the same rule
 that puts a database-backed hierarchy in `dataknobs-data`.
 
+## The mapping backing
+
+`AssertionHierarchy` reads its edges. `MappingHierarchy` *holds* them — a
+node's parents, as a mapping — which is the axis for a vocabulary somebody
+typed, or holds in memory, or has just finished walking. It opens nothing, so
+it lives beside the protocols rather than with a backing package:
+
+```python
+from dataknobs_common.hierarchy import (
+    AsyncMappingHierarchy,
+    MappingHierarchy,
+    ancestors,
+)
+
+species = MappingHierarchy({"dog": ("mammal",), "beagle": ("dog",)})
+
+assert species.roots() == ("mammal",)
+assert ancestors(species, "beagle") == ("dog", "mammal")
+assert species.contains("mammal")           # a value under a key is in the axis
+```
+
+The argument is positional, and the field behind it is called `parent_map`
+rather than `parents`: a dataclass field and a protocol member may not share a
+name, and `parents` is a member.
+
+**`roots()` is every node with no parents, and `contains()` is every node the
+walks can reach** — a key of the mapping, *or* a value under any key. `mammal`
+above is never a key, and both members answer for it. That is not a nicety:
+`Taxonomy.walk(from_id=...)` refuses an unknown anchor by asking `contains`, so
+a backing answering on keys alone would refuse a node that is genuinely there
+and name the caller's anchor for it.
+
+The inversion behind `children()` is computed once, at construction, rather than
+per call — a downward walk over a parent mapping is the case that would make an
+inversion-per-call quadratic.
+
+`AsyncMappingHierarchy` is the same mapping in an `AsyncHierarchy`-shaped slot.
+It awaits nothing, and that is the point rather than an oversight: a consumer
+typed against the asynchronous protocol — because the *rest* of their vocabulary
+is by-reference — still needs something hand-built to put in the slot.
+
+### From a tree somebody maintains by hand
+
+A nested file has no id field anywhere: a node *is* its path.
+`from_nested` mints one id per node, as a slug of the path:
+
+```python
+areas = MappingHierarchy.from_nested(
+    {
+        "name": "Billing",
+        "children": [
+            {"name": "Invoices", "children": [{"name": "Late Fees"}]},
+            {"name": "Refunds"},
+        ],
+    }
+)
+
+assert areas.roots() == ("billing",)
+assert areas.parents("billing/invoices/late-fees") == ("billing/invoices",)
+```
+
+The id is a slug of the path *taken once* and the path becomes the name, so
+renaming a node changes what it is called and not what it is — which is what
+keeps a rename from re-keying every descendant of a renamed interior node.
+
+**These are the same ids an ontology mints for the same tree** under a
+`kind: nested` source. The traversal, the slug and the collision refusal are one
+implementation that both doors call, so a consumer who loads a document one way
+and holds the same tree the other is holding one vocabulary rather than two.
+A path is not a key, though, so two paths can slug to one id — `Late Fees` and
+`late-fees` are two nodes to the person editing the file and one to the slug —
+and that is refused, naming both.
+
+`tree` takes a list for a forest, and `child_key` / `name_key` take a file's own
+spelling:
+
+```python
+MappingHierarchy.from_nested([{"name": "One"}, {"name": "Two"}])
+MappingHierarchy.from_nested(doc, child_key="sub", name_key="title")
+```
+
+### From a live axis, walked once
+
+`snapshot` copies an axis into a mapping: ids and edges, not content.
+
+```python
+live = AssertionHierarchy(onto.assertions, "isa")
+copied = MappingHierarchy.snapshot(live)
+
+assert copied.parents("beagle") == live.parents("beagle")
+```
+
+Walking `copied` afterwards asks the mapping rather than the backing. What that
+buys is the one thing a live axis cannot do — say what has changed since it was
+taken — and what it costs is freshness: a rebuild beneath `live` is invisible to
+`copied`, deliberately.
+
+The asynchronous twin is `async`, because this one really does read the axis:
+
+```python
+copied = await AsyncMappingHierarchy.snapshot(
+    async_species.structure, max_concurrency=4
+)
+```
+
+`max_concurrency` means exactly what it means on every other asynchronous entry
+point here, and a snapshot walks the *whole* axis rather than one branch of it.
+
+**A snapshot sees what descends from `roots()`.** A `Hierarchy` has no extent
+member, so descending is the only enumeration the protocol offers — which means
+a cyclic component with no root above it is absent from the copy. That is a
+property of the protocol rather than of the walk, and where it matters, ask the
+backing.
+
+
 ## What a taxonomy carries, and what it refuses
 
 `Taxonomy` has four fields: the `definition` it was declared by, the
@@ -436,9 +554,18 @@ to a definition that asked for a snapshot would be answering under the wrong
 name, and a snapshot is wanted for the one thing a live axis cannot do — say
 what has changed since it was taken.
 
-So the structure refusal is the temporary one: it lifts when something builds a
-snapshot. Either is refused naming the axis, at the call that asked for it,
-rather than at the first walk:
+So the structure refusal is the temporary one, and it is now half spent:
+`MappingHierarchy.snapshot` builds exactly the copy that branch names, and
+`taxonomy()` does not yet reach for it on your behalf. Take one yourself and the
+axis you hold is the snapshot the mode describes:
+
+```python
+species = onto.taxonomy("species")                     # structure: on_demand
+copied = MappingHierarchy.snapshot(species.structure)  # the cheap copy, by hand
+```
+
+Either mode is refused naming the axis, at the call that asked for it, rather
+than at the first walk:
 
 ```python
 onto.taxonomy("species")
@@ -485,6 +612,19 @@ class IntTree:
 tree: Hierarchy[int] = IntTree()
 above: tuple[int, ...] = ancestors(tree, 13)    # (6, 3, 1) — inferred from the hierarchy
 ```
+
+`MappingHierarchy` is generic in `K` too, so a hierarchy over integers need not
+be written out at all:
+
+```python
+from dataknobs_common.hierarchy import MappingHierarchy
+
+powers: Hierarchy[int] = MappingHierarchy({2: (1,), 3: (1,), 4: (2,), 5: (2,)})
+assert ancestors(powers, 4) == (2, 1)
+```
+
+`from_nested` is the exception, and it is keyed by `str` whatever it is called
+on: a minted id is a slug, and a slug is a string.
 
 Because the default is declared, a bare `Hierarchy` annotation still means
 `Hierarchy[str]`, so existing annotations read as they always did rather than

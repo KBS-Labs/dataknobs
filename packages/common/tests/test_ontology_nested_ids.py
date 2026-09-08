@@ -65,6 +65,26 @@ def test_the_tree_edges_are_asserted() -> None:
     assert edges[0].object.entity_id == "billing/invoices"
 
 
+def test_the_minted_assertion_ids_are_pinned() -> None:
+    """The exact ids one document mints, asserted rather than implied.
+
+    Everything about minting -- the traversal, the slug, the collision refusal
+    -- is shared with ``MappingHierarchy.from_nested`` so that one tree read
+    through either door yields one vocabulary. Sharing it moved the code, and a
+    slug rule that shifts by one character silently re-keys every entity already
+    minted and every assertion made against them. The failure is invisible in
+    any test that only asks whether the document loaded, so the ids and the
+    assertion ids are written out here.
+    """
+    onto = load_ontology(PRODUCT_AREAS)
+
+    assert {a.id for a in onto.assertions.find(relation="isa")} == {
+        "billing/invoices-isa-billing",
+        "billing/invoices/late-fees-isa-billing/invoices",
+        "billing/refunds-isa-billing",
+    }
+
+
 def test_a_root_gets_no_parent_edge() -> None:
     onto = load_ontology(PRODUCT_AREAS)
 
