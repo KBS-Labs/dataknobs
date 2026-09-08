@@ -452,3 +452,87 @@ def test_a_collision_between_two_trees_names_the_tree_that_got_there_first(
     assert "which 'Billing' already minted" in message
     assert "which 'billing' already minted" not in message
     assert excinfo.value.context["source_id"] == "right"
+
+
+# --------------------------------------------------------------------------
+# A missing required field is a refusal, not a stray KeyError
+# --------------------------------------------------------------------------
+#
+# The same defect as the stray `ValueError` above, and it fails the contract
+# the same way: `KeyError` does not descend from `ValidationError`, so a
+# caller holding the documented `Raises:` -- which lists ValidationError,
+# ConfigLoadError and OSError -- caught nothing at all for the commonest
+# authoring mistake there is. Every section had it, because every builder
+# indexed its required keys directly instead of reading them through one
+# place that could refuse.
+
+#: One entry per required field the loader reads, and the document that omits
+#: it. Listed exhaustively rather than sampled: the reason there were ten of
+#: these is that each was written on its own, so a table is the only form that
+#: fails when the eleventh is added the old way.
+_MISSING_FIELDS = [
+    ("entity_types", "id", {"entity_types": [{"name": "Species"}]}),
+    (
+        "entity_types.attributes",
+        "name",
+        {"entity_types": [{"id": "Species", "attributes": [{"type": "string"}]}]},
+    ),
+    ("relation_types", "id", {"relation_types": [{"transitive": True}]}),
+    ("entities", "id", {"entities": [{"type": "Species", "name": "Dog"}]}),
+    ("entities", "type", {"entities": [{"id": "dog", "name": "Dog"}]}),
+    ("assertions", "subject", {"assertions": [{"relation": "isa", "object": "mammal"}]}),
+    ("assertions", "relation", {"assertions": [{"subject": "dog", "object": "mammal"}]}),
+    ("assertions", "object", {"assertions": [{"subject": "dog", "relation": "isa"}]}),
+    ("taxonomies", "id", {"taxonomies": [{"relation": "isa"}]}),
+    ("taxonomies", "relation", {"taxonomies": [{"id": "species"}]}),
+]
+
+
+@DOORS
+@pytest.mark.parametrize(
+    ("section", "missing", "body"),
+    _MISSING_FIELDS,
+    ids=[f"{section}.{missing}" for section, missing, _ in _MISSING_FIELDS],
+)
+def test_a_missing_required_field_is_refused_naming_the_section(
+    door: Door, section: str, missing: str, body: Mapping[str, Any]
+) -> None:
+    """Named field, named section, and catchable by the documented contract."""
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", **body})
+
+    message = str(excinfo.value)
+    assert repr(missing) in message
+    assert f"`{section}:`" in message
+    assert excinfo.value.context["section"] == section
+    assert excinfo.value.context["field"] == missing
+
+
+@DOORS
+def test_the_refusal_names_the_row_by_its_id_where_it_has_one(door: Door) -> None:
+    """A fifty-entity file needs to say *which* row, not only which field.
+
+    The id is the handle a document author has, so it is the one the message
+    uses -- ``KeyError: 'type'`` sent them to bisect the file instead.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", "entities": [{"id": "beagle", "name": "Beagle"}]})
+
+    assert "'beagle'" in str(excinfo.value)
+    assert excinfo.value.context["id"] == "beagle"
+
+
+@DOORS
+def test_the_refusal_falls_back_to_the_keys_a_row_does_have(door: Door) -> None:
+    """The case with no handle: the missing field *is* the id.
+
+    Listing what the row does carry is what makes it findable anyway, and it
+    is the only identifying thing left. An assertion row reaches this branch
+    too, since assertions mint their ids rather than declaring them.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", "entities": [{"type": "Species", "name": "Beagle"}]})
+
+    message = str(excinfo.value)
+    assert "type" in message
+    assert "name" in message

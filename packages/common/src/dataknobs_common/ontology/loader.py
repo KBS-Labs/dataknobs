@@ -90,11 +90,11 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         The validated parts, with sources still unbound
 
     Raises:
-        ValidationError: On a reserved or malformed id; on an id duplicated
-            within a section or across two of them; on two tree nodes minting
-            one id; on an unknown inference mode; or on an ``isa`` naming a
-            type the document does not declare. Every message names the
-            offending value
+        ValidationError: On a row omitting a field its section requires; on a
+            reserved or malformed id; on an id duplicated within a section or
+            across two of them; on two tree nodes minting one id; on an unknown
+            inference mode; or on an ``isa`` naming a type the document does
+            not declare. Every message names the offending value
     """
     _refuse_reserved_id(config.id)
     _refuse_colon("ontology id", config.id)
@@ -442,10 +442,44 @@ def _refuse_undeclared_tree_nodes(
 # --------------------------------------------------------------------------
 
 
+def _required(row: Mapping[str, Any], key: str, section: str) -> Any:
+    """The value at ``key``, or a refusal naming the section and the row.
+
+    One reader for every required field the loader has, because a bare
+    ``row[key]`` raises ``KeyError`` -- which does **not** descend from
+    ``ValidationError``, so a caller holding either door's documented
+    ``Raises:`` caught nothing at all for the commonest authoring mistake there
+    is. That is the same defect :func:`_inference_mode` exists to prevent for a
+    malformed enum, arriving through a missing key rather than a bad value.
+
+    It was in every section for one reason: each builder indexed its own keys,
+    so the refusal had ten places to be written and was written in none. A
+    shared reader is what makes the eleventh required field inherit the
+    behaviour instead of repeating the omission.
+
+    **The message identifies the row, not only the field.** ``KeyError:
+    'type'`` against a fifty-entity file sends the author to bisect it. The id
+    is the handle they have, so it is the one used -- and where the missing
+    field *is* the id, the keys the row does carry are what is left to find it
+    by. An assertion row reaches that branch as a matter of course, since
+    assertions mint their ids rather than declaring them.
+    """
+    if key in row:
+        return row[key]
+    row_id = row.get("id")
+    handle = (
+        f"row {row_id!r}" if key != "id" and row_id is not None else f"a row carrying {sorted(row)}"
+    )
+    raise ValidationError(
+        f"`{section}:` {handle} declares no {key!r}",
+        context={"section": section, "field": key, "id": row_id},
+    )
+
+
 def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
     built: dict[str, EntityType] = {}
     for row in rows:
-        type_id = str(row["id"])
+        type_id = str(_required(row, "id", "entity_types"))
         _refuse_colon("entity type id", type_id)
         _refuse_duplicate_id(built, type_id, "entity_types")
         built[type_id] = EntityType(
@@ -474,7 +508,7 @@ def _type_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
 def _build_attribute(row: Mapping[str, Any]) -> AttributeDef:
     declared = row.get("type")
     return AttributeDef(
-        name=str(row["name"]),
+        name=str(_required(row, "name", "entity_types.attributes")),
         value_type=str(declared) if declared is not None else "string",
         field_type=_field_type(declared),
         entity_type=row.get("entity_type"),
@@ -501,7 +535,7 @@ def _field_type(declared: Any) -> FieldType | None:
 def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationType]:
     built: dict[str, RelationType] = {}
     for row in rows:
-        relation_id = str(row["id"])
+        relation_id = str(_required(row, "id", "relation_types"))
         _refuse_colon("relation type id", relation_id)
         _refuse_duplicate_id(built, relation_id, "relation_types")
         built[relation_id] = RelationType(
@@ -525,7 +559,7 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
 def _build_entities(rows: list[Mapping[str, Any]]) -> dict[str, Entity]:
     built: dict[str, Entity] = {}
     for row in rows:
-        entity_id = str(row["id"])
+        entity_id = str(_required(row, "id", "entities"))
         _refuse_colon("entity id", entity_id)
         if entity_id in built:
             raise ValidationError(
@@ -534,7 +568,7 @@ def _build_entities(rows: list[Mapping[str, Any]]) -> dict[str, Entity]:
             )
         built[entity_id] = Entity(
             id=entity_id,
-            type=str(row["type"]),
+            type=str(_required(row, "type", "entities")),
             name=str(row.get("name", "")),
             aliases=list(row.get("aliases", [])),
             description=row.get("description"),
@@ -565,9 +599,9 @@ def _build_source_ref(row: Mapping[str, Any] | None) -> SourceRef | None:
 def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
     built: list[Assertion] = []
     for row in rows:
-        subject = str(row["subject"])
-        relation = str(row["relation"])
-        obj = _build_term(row["object"])
+        subject = str(_required(row, "subject", "assertions"))
+        relation = str(_required(row, "relation", "assertions"))
+        obj = _build_term(_required(row, "object", "assertions"))
         built.append(
             Assertion(
                 id=str(row.get("id") or _mint_assertion_id(subject, relation, obj)),
@@ -618,12 +652,12 @@ def _mint_assertion_id(subject: str, relation: str, obj: Term) -> str:
 def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefinition]:
     built: dict[str, TaxonomyDefinition] = {}
     for row in rows:
-        taxonomy_id = str(row["id"])
+        taxonomy_id = str(_required(row, "id", "taxonomies"))
         _refuse_duplicate_id(built, taxonomy_id, "taxonomies")
         materialization = row.get("materialization", {})
         built[taxonomy_id] = TaxonomyDefinition(
             id=taxonomy_id,
-            relation=str(row["relation"]),
+            relation=str(_required(row, "relation", "taxonomies")),
             name=str(row.get("name", "")),
             description=row.get("description"),
             metadata=dict(row.get("metadata", {})),
