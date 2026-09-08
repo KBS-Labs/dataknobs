@@ -536,3 +536,120 @@ def test_the_refusal_falls_back_to_the_keys_a_row_does_have(door: Door) -> None:
     message = str(excinfo.value)
     assert "type" in message
     assert "name" in message
+
+
+# --------------------------------------------------------------------------
+# Criterion 24 -- a key only a later version reads is refused, not dropped
+# --------------------------------------------------------------------------
+#
+# These four used to load and be discarded, which from the author's chair is
+# indistinguishable from being honoured: a relation type declaring
+# `cardinality: many_to_many` reported no error and constrained nothing.
+# Refusing is what makes the deferral legible -- and it is the discipline the
+# refusals above already apply, which is to name the offending thing and say
+# where what you asked for lives.
+
+#: One entry per key phase 2 brings, and a document that carries it.
+#:
+#: Listed exhaustively rather than sampled, for the reason the missing-field
+#: table is: the fifth key must fail here if it is added the old way.
+_PHASE_2_KEYS = [
+    (
+        "assertions",
+        "condition",
+        {
+            "assertions": [
+                {
+                    "subject": "dog",
+                    "relation": "isa",
+                    "object": "mammal",
+                    "condition": {"kind": "temporal", "valid_from": "2024-01-01"},
+                }
+            ]
+        },
+    ),
+    (
+        "relation_types",
+        "cardinality",
+        {"relation_types": [{"id": "sold_by", "cardinality": "many_to_many"}]},
+    ),
+    (
+        "relation_types",
+        "condition",
+        {"relation_types": [{"id": "sold_by", "condition": {"kind": "temporal"}}]},
+    ),
+    (
+        "relation_types",
+        "constraints",
+        {"relation_types": [{"id": "isa", "constraints": [{"kind": "acyclic"}]}]},
+    ),
+]
+
+
+@DOORS
+@pytest.mark.parametrize(
+    ("section", "key", "body"),
+    _PHASE_2_KEYS,
+    ids=[f"{section}.{key}" for section, key, _ in _PHASE_2_KEYS],
+)
+def test_a_phase_2_key_is_refused_naming_the_key_and_the_version(
+    door: Door, section: str, key: str, body: Mapping[str, Any]
+) -> None:
+    """Named key, named version, from both doors.
+
+    The version half is what separates this from an "unsupported key" error:
+    the author asked a specific question, and the useful answer says which
+    version answers it rather than that this one does not.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", **body})
+
+    message = str(excinfo.value)
+    assert repr(key) in message
+    assert "phase 2" in message
+    assert excinfo.value.context["section"] == section
+    assert excinfo.value.context["field"] == key
+    assert excinfo.value.context["version"] == "phase 2"
+
+
+@DOORS
+def test_the_phase_2_refusal_names_the_row_it_is_about(door: Door) -> None:
+    """A fifty-relation file needs to say which row, the way a missing field does.
+
+    The same handle either refusal uses, because a document author meets one
+    way of being pointed at a line rather than one per section.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", "relation_types": [{"id": "sold_by", "cardinality": "one_to_many"}]})
+
+    assert "'sold_by'" in str(excinfo.value)
+    assert excinfo.value.context["id"] == "sold_by"
+
+
+@DOORS
+def test_an_unknown_polarity_is_refused(door: Door) -> None:
+    """The coercion `_inference_mode` already had, on the enum a document gained.
+
+    A stray ``ValueError`` from the enum would escape a caller holding either
+    door's documented ``Raises:``, which is the defect one shared reader for
+    every authored enum exists to stop repeating.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "assertions": [
+                    {
+                        "subject": "whale",
+                        "relation": "isa",
+                        "object": "fish",
+                        "polarity": "maybe",
+                    }
+                ],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'maybe'" in message
+    assert "negated" in message
+    assert excinfo.value.context["field"] == "polarity"

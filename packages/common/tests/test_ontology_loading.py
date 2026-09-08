@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from dataknobs_common.ontology import Ontology, load_ontology
+from dataknobs_common.ontology import Ontology, async_load_ontology, load_ontology
 from dataknobs_common.ontology.sources import MappingAssertionSource, MappingEntitySource
 
 
@@ -97,3 +97,53 @@ def test_an_entity_with_no_name_answers_to_its_id() -> None:
     onto = load_ontology({"id": "x", "entities": [{"id": "dog", "type": "Species"}]})
 
     assert onto.entity("dog").name == "dog"
+
+
+# --------------------------------------------------------------------------
+# Criterion 25 -- `imports:` survives the load, carried and never followed
+# --------------------------------------------------------------------------
+
+#: A vocabulary that declares another one's namespace comes into scope.
+#:
+#: The imported ontology is deliberately not in scope here: a file authored
+#: for a registry must still load at the file door, or it cannot be tested
+#: until the registry exists.
+IMPORTING_DOCUMENT = {
+    "id": "breeds",
+    "imports": ["mammals"],
+    "entities": [{"id": "beagle", "type": "Breed"}],
+}
+
+
+def test_imports_survive_the_load() -> None:
+    """The config field shipped and the value field did not, so the list was
+    read out of the document and dropped on the way out -- leaving the
+    component that resolves across an import unable to see what to resolve
+    against.
+    """
+    onto = load_ontology(IMPORTING_DOCUMENT)
+
+    assert onto.imports == ("mammals",)
+
+
+def test_an_import_is_carried_and_not_followed() -> None:
+    """Resolving across one needs a second ontology in scope, which a door
+    loading a single file does not have. Carrying the list is the whole of
+    what this door owes.
+    """
+    onto = load_ontology(IMPORTING_DOCUMENT)
+
+    assert onto.entity("dog") is None
+    assert onto.entity("beagle") is not None
+
+
+def test_a_document_with_no_imports_carries_an_empty_tuple() -> None:
+    """Absent is empty rather than None, so a reader never branches on it."""
+    assert load_ontology({"id": "x"}).imports == ()
+
+
+def test_the_async_door_carries_imports_too() -> None:
+    """A field, not a flavour: a list of ids has nothing to await."""
+    onto = asyncio.run(async_load_ontology(IMPORTING_DOCUMENT))
+
+    assert onto.imports == ("mammals",)

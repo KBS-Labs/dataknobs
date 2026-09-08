@@ -15,7 +15,9 @@ from dataknobs_common.ontology import (
     Assertion,
     EntityRef,
     Literal,
+    Polarity,
     RelationType,
+    async_load_ontology,
     load_ontology,
 )
 from dataknobs_common.ontology.sources import (
@@ -199,3 +201,97 @@ def test_a_literal_object_is_read_from_a_mapping() -> None:
 
     parent = onto.assertions.find(subject="beagle", relation="isa")[0]
     assert parent.object == EntityRef("dog")
+
+
+# --------------------------------------------------------------------------
+# Criterion 23 -- a stated negation loads, and a query can select on it
+# --------------------------------------------------------------------------
+#
+# One criterion and not two on purpose. A loader that reads `polarity:` is
+# worth nothing if no query can select on it, and a parameter is worth nothing
+# if the loader discards what it would select; splitting them lets either half
+# pass alone.
+
+#: A vocabulary that says one thing it does *not* believe.
+#:
+#: An ontology is open world -- an assertion nobody wrote is unknown, not
+#: false -- so *a whale is not a fish* is a fact a document has to be able to
+#: state rather than one it can imply by omission.
+NEGATION_DOCUMENT = {
+    "id": "mammals",
+    "assertions": [
+        {"subject": "dog", "relation": "isa", "object": "mammal"},
+        {"subject": "whale", "relation": "isa", "object": "fish", "polarity": "negated"},
+    ],
+}
+
+
+def test_an_authored_negation_survives_the_load() -> None:
+    """The key used to be read by nothing and dropped, which is worse than
+    refusing it: the file said *not* and the vocabulary held the positive.
+    """
+    onto = load_ontology(NEGATION_DOCUMENT)
+
+    stated = onto.assertions.get("whale-isa-fish")
+    assert stated is not None
+    assert stated.polarity is Polarity.NEGATED
+
+
+def test_a_row_that_says_nothing_is_asserted() -> None:
+    """The default is what every assertion written before the field meant."""
+    onto = load_ontology(NEGATION_DOCUMENT)
+
+    assert onto.assertions.get("dog-isa-mammal").polarity is Polarity.ASSERTED
+
+
+def test_find_selects_on_polarity() -> None:
+    """Given, it narrows; omitted, it does not constrain.
+
+    The omitted case is the one worth pinning: a caller asking *what does this
+    vocabulary say about x* wants the negation in the answer, and only a
+    caller walking a structure wants it gone.
+    """
+    onto = load_ontology(NEGATION_DOCUMENT)
+
+    asserted = onto.assertions.find(relation="isa", polarity=Polarity.ASSERTED)
+    assert [a.subject for a in asserted] == ["dog"]
+
+    negated = onto.assertions.find(relation="isa", polarity=Polarity.NEGATED)
+    assert [a.subject for a in negated] == ["whale"]
+
+    assert [a.subject for a in onto.assertions.find(relation="isa")] == ["dog", "whale"]
+
+
+def test_find_many_selects_on_polarity_too() -> None:
+    """The bulk form filters identically, and a key left with no matches goes.
+
+    Both members take the parameter because both are read members of the
+    protocol -- a bulk form that ignored it would make the answer depend on
+    which shape of query a caller happened to use.
+    """
+    onto = load_ontology(NEGATION_DOCUMENT)
+
+    both = onto.assertions.find_many(subjects=["dog", "whale"], relation="isa")
+    assert sorted(both) == ["dog", "whale"]
+
+    asserted = onto.assertions.find_many(
+        subjects=["dog", "whale"], relation="isa", polarity=Polarity.ASSERTED
+    )
+    assert sorted(asserted) == ["dog"]
+
+
+@pytest.mark.asyncio
+async def test_the_async_twin_selects_on_polarity_the_same() -> None:
+    """The parameter is on both protocol twins, awaited on one of them."""
+    onto = await async_load_ontology(NEGATION_DOCUMENT)
+
+    stated = await onto.assertions.get("whale-isa-fish")
+    assert stated.polarity is Polarity.NEGATED
+
+    asserted = await onto.assertions.find(relation="isa", polarity=Polarity.ASSERTED)
+    assert [a.subject for a in asserted] == ["dog"]
+
+    bulk = await onto.assertions.find_many(
+        subjects=["dog", "whale"], relation="isa", polarity=Polarity.ASSERTED
+    )
+    assert sorted(bulk) == ["dog"]

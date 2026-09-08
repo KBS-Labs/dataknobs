@@ -527,3 +527,128 @@ def test_a_known_anchor_still_walks(mammals_v11_path: Path) -> None:
         "beagle",
         "golden_retriever",
     )
+
+
+# --------------------------------------------------------------------------
+# Criterion 27 -- a negated edge is not walked
+# --------------------------------------------------------------------------
+#
+# One test and not four. Absent from `parents` and `children`, absent from the
+# bulk forms, a root where the only parent edge is negated, `contains` False
+# for a node named only by negated edges, and absent from a snapshot -- every
+# one of them follows from one sentence: an axis is made of ASSERTED edges
+# between entities.
+#
+# Its red state is created by the change it guards. Until an assertion can
+# carry a polarity there is no input that reproduces it, which is why it could
+# be a review note for as long as it was and not a failing test.
+
+#: Five ``isa`` edges, one of which the document states as a negation.
+#:
+#: ``whale`` is the case worth having: it is named by an asserted edge (as
+#: ``orca``'s parent) so it is on the axis, and its own only parent edge is
+#: negated -- which is what makes *is it a root* a real question rather than
+#: *is it here at all*. ``fish`` is the other case: named by nothing but the
+#: negation.
+NEGATED_EDGE_DOCUMENT = {
+    "id": "mammals",
+    "entity_types": [{"id": "Species"}],
+    "entities": [
+        {"id": "mammal", "type": "Species"},
+        {"id": "dog", "type": "Species"},
+        {"id": "cat", "type": "Species"},
+        {"id": "beagle", "type": "Species"},
+        {"id": "whale", "type": "Species"},
+        {"id": "orca", "type": "Species"},
+        {"id": "fish", "type": "Species"},
+    ],
+    "assertions": [
+        {"subject": "dog", "relation": "isa", "object": "mammal"},
+        {"subject": "cat", "relation": "isa", "object": "mammal"},
+        {"subject": "beagle", "relation": "isa", "object": "dog"},
+        {"subject": "orca", "relation": "isa", "object": "whale"},
+        {"subject": "whale", "relation": "isa", "object": "fish", "polarity": "negated"},
+    ],
+}
+
+
+def test_a_negated_edge_is_not_a_parent_or_a_child() -> None:
+    """The direct reads, and a positive control beside each.
+
+    The control is not decoration: a filter that returned nothing at all would
+    satisfy the two negative assertions on its own.
+    """
+    onto = load_ontology(NEGATED_EDGE_DOCUMENT)
+    axis = AssertionHierarchy(onto.assertions, "isa")
+
+    assert axis.parents("whale") == ()
+    assert axis.parents("dog") == ("mammal",)
+    assert axis.children("fish") == ()
+    assert axis.children("dog") == ("beagle",)
+
+
+def test_a_negated_edge_is_absent_from_the_bulk_reads_too() -> None:
+    """A frontier read is what a walk actually calls, so it is where a missing
+    filter would do its damage.
+    """
+    onto = load_ontology(NEGATED_EDGE_DOCUMENT)
+    axis = AssertionHierarchy(onto.assertions, "isa")
+
+    assert axis.parents_many(["whale", "dog"]) == ((), ("mammal",))
+    assert axis.children_many(["fish", "dog"]) == ((), ("beagle",))
+
+
+def test_a_node_whose_only_parent_edge_is_negated_is_a_root() -> None:
+    """It has no asserted parent, and ``roots()`` is *the nodes this relation
+    leaves unplaced*. Reporting ``whale`` as placed would report a placement
+    no edge makes.
+    """
+    onto = load_ontology(NEGATED_EDGE_DOCUMENT)
+
+    assert sorted(AssertionHierarchy(onto.assertions, "isa").roots()) == ["mammal", "whale"]
+
+
+def test_a_node_named_only_by_a_negated_edge_is_absent() -> None:
+    """``contains`` keeps *nothing below this node* apart from *this node is
+    not here*, and a negation places nothing -- so ``fish`` is not on the axis
+    at all, the way a literal object is not.
+    """
+    onto = load_ontology(NEGATED_EDGE_DOCUMENT)
+    axis = AssertionHierarchy(onto.assertions, "isa")
+
+    assert axis.contains("fish") is False
+    assert axis.contains("whale") is True
+
+
+def test_a_negated_edge_is_absent_from_a_snapshot() -> None:
+    """A copy that held edges the live read excludes would be a different
+    shape from the axis it copies, which is the one property a copy exists to
+    not have.
+    """
+    onto = load_ontology(NEGATED_EDGE_DOCUMENT)
+    axis = AssertionHierarchy(onto.assertions, "isa")
+
+    edges = axis.parent_edges()
+    assert "fish" not in edges
+    assert edges["whale"] == ()
+
+    copied = MappingHierarchy.snapshot(axis)
+    assert copied.contains("fish") is False
+    assert sorted(copied.roots()) == ["mammal", "whale"]
+
+
+@pytest.mark.asyncio
+async def test_the_async_twin_declines_a_negated_edge_alike() -> None:
+    """The twins write the filter out twice, because they share no runtime
+    code -- so the assertion that they agree is written out too.
+    """
+    onto = await async_load_ontology(NEGATED_EDGE_DOCUMENT)
+    axis = AsyncAssertionHierarchy(onto.assertions, "isa")
+
+    assert await axis.parents("whale") == ()
+    assert await axis.parents("dog") == ("mammal",)
+    assert await axis.children("fish") == ()
+    assert await axis.parents_many(["whale", "dog"]) == ((), ("mammal",))
+    assert sorted(await axis.roots()) == ["mammal", "whale"]
+    assert await axis.contains("fish") is False
+    assert "fish" not in await axis.parent_edges()

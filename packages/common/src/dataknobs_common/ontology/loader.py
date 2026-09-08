@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Container, Mapping
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from dataknobs_common._nested_core import _mint_tree, _walk_tree
 from dataknobs_common.config_loading import load_yaml_or_json
@@ -37,6 +38,7 @@ from dataknobs_common.ontology.model import (
     InferenceMode,
     Literal,
     Materialization,
+    Polarity,
     RelationType,
     SourceRef,
     TaxonomyDefinition,
@@ -52,6 +54,11 @@ from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyPa
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+#: Whichever enum a document is declaring a member of. Bound to ``Enum``
+#: because :func:`_declared_enum` calls the type and iterates its members, and
+#: to nothing narrower because it does neither of those things per enum.
+_E = TypeVar("_E", bound=Enum)
 
 #: An ontology may not claim this id: it names the built-in pseudo-ontology
 #: that ``dk:EntityType`` and ``dk:RelationType`` belong to.
@@ -98,8 +105,10 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         ValidationError: On a row omitting a field its section requires; on a
             reserved or malformed id; on an id duplicated within a section or
             across two of them; on two tree nodes minting one id; on an unknown
-            inference mode; or on an ``isa`` naming a type the document does
-            not declare. Every message names the offending value
+            inference mode or polarity; on a key only a later version reads --
+            ``condition:``, ``cardinality:``, ``constraints:`` -- which is
+            refused rather than dropped; or on an ``isa`` naming a type the
+            document does not declare. Every message names the offending value
     """
     _refuse_reserved_id(config.id)
     _refuse_colon("ontology id", config.id)
@@ -134,6 +143,7 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         entity_types=entity_types,
         relation_types=relation_types,
         taxonomies=_build_taxonomies(config.taxonomies),
+        imports=tuple(config.imports),
         declared_entities=declared,
         declared_assertions=tuple(assertions),
         source_specs=source_specs,
@@ -187,6 +197,7 @@ def load_ontology(
             name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
             for name, definition in _axes_to_copy(parts.taxonomies)
         },
+        imports=parts.imports,
     )
 
 
@@ -239,6 +250,7 @@ async def async_load_ontology(
             )
             for name, definition in _axes_to_copy(parts.taxonomies)
         },
+        imports=parts.imports,
     )
 
 
@@ -380,22 +392,38 @@ def _refuse_duplicate_assertion_ids(assertions: list[Assertion]) -> None:
         seen.add(assertion.id)
 
 
-def _inference_mode(declared: Any, field: str) -> InferenceMode:
-    """Coerce a declared inference mode, naming an unknown one.
+def _declared_enum(enum_type: type[_E], declared: Any, field: str, *, noun: str, plural: str) -> _E:
+    """Coerce a member of ``enum_type`` out of authored text, naming a miss.
 
     :class:`ValidationError` does not descend from ``ValueError``, so letting
     the enum raise its own would escape a caller holding the contract both
     doors document -- ``except ValidationError`` -- rather than being caught
     by it.
+
+    That is a property of **every** enum a document can spell, not of the
+    first one that needed it. Written once for the same reason
+    :func:`_required` is: the second reader of an authored enum is where two
+    ways of refusing start to differ, and it arrived the day a document could
+    say ``polarity: negated``.
     """
     try:
-        return InferenceMode(str(declared))
+        return enum_type(str(declared))
     except ValueError as exc:
         raise ValidationError(
-            f"{field} is {str(declared)!r}, which is not an inference mode. "
-            f"Modes: {sorted(mode.value for mode in InferenceMode)}",
+            f"{field} is {str(declared)!r}, which is not {noun}. "
+            f"{plural}: {sorted(str(member.value) for member in enum_type)}",
             context={"field": field, "value": declared},
         ) from exc
+
+
+def _inference_mode(declared: Any, field: str) -> InferenceMode:
+    """The declared inference mode, or a refusal naming what was written."""
+    return _declared_enum(InferenceMode, declared, field, noun="an inference mode", plural="Modes")
+
+
+def _polarity(declared: Any, field: str) -> Polarity:
+    """The declared polarity, or a refusal naming what was written."""
+    return _declared_enum(Polarity, declared, field, noun="a polarity", plural="Polarities")
 
 
 def _refuse_duplicates(
@@ -509,14 +537,70 @@ def _required(row: Mapping[str, Any], key: str, section: str) -> Any:
     """
     if key in row:
         return row[key]
-    row_id = row.get("id")
-    handle = (
-        f"row {row_id!r}" if key != "id" and row_id is not None else f"a row carrying {sorted(row)}"
-    )
     raise ValidationError(
-        f"`{section}:` {handle} declares no {key!r}",
-        context={"section": section, "field": key, "id": row_id},
+        f"`{section}:` {_row_handle(row, key)} declares no {key!r}",
+        context={"section": section, "field": key, "id": row.get("id")},
     )
+
+
+def _row_handle(row: Mapping[str, Any], key: str | None = None) -> str:
+    """How a refusal points at the row it is about.
+
+    The id, where the row has one and it is not the field being complained
+    about; otherwise the keys the row *does* carry, which is all that is left
+    to find it by. Shared by every refusal that is about a row rather than a
+    value, so a document author meets one way of being pointed at a line
+    rather than one per section.
+    """
+    row_id = row.get("id")
+    if key != "id" and row_id is not None:
+        return f"row {row_id!r}"
+    return f"a row carrying {sorted(row)}"
+
+
+#: Per section, the keys this version does not read and what each belongs to.
+#:
+#: Conditions, cardinality and constraints are one later piece of work: each
+#: needs an evaluator, and an evaluator needs a truth value for *unknown*,
+#: which widens every read member rather than adding a field. So they are
+#: deferred together, and named together here.
+_PHASE_2_KEYS: Mapping[str, Mapping[str, str]] = {
+    "assertions": {"condition": "conditional assertions arrive"},
+    "relation_types": {
+        "cardinality": "cardinality arrives",
+        "condition": "conditional assertions arrive",
+        "constraints": "constraints arrive",
+    },
+}
+
+
+def _refuse_a_phase_2_key(row: Mapping[str, Any], section: str) -> None:
+    """Refuse a key a later version reads, naming it and that version.
+
+    **Refusing is what makes a deferral legible.** These keys used to load and
+    be discarded, which from the author's chair is indistinguishable from
+    being honoured: a relation type declaring ``cardinality: one_to_many``
+    reported no error and constrained nothing. A dropped key and an
+    unsupported key have to look different, or the file says one thing and the
+    vocabulary means another.
+
+    Named per key rather than through one "unsupported key" message, because
+    the author asked a specific question and the useful answer says which
+    version answers it.
+    """
+    for key, arrival in _PHASE_2_KEYS[section].items():
+        if key in row:
+            raise ValidationError(
+                f"`{section}:` {_row_handle(row)} declares {key!r}, which this "
+                f"version does not read: {arrival} in phase 2. Remove the key -- "
+                f"one that loads and is discarded reads as one that is honoured",
+                context={
+                    "section": section,
+                    "field": key,
+                    "id": row.get("id"),
+                    "version": "phase 2",
+                },
+            )
 
 
 def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
@@ -581,6 +665,7 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
         relation_id = str(_required(row, "id", "relation_types"))
         _refuse_colon("relation type id", relation_id)
         _refuse_duplicate_id(built, relation_id, "relation_types")
+        _refuse_a_phase_2_key(row, "relation_types")
         built[relation_id] = RelationType(
             id=relation_id,
             name=str(row.get("name", "")),
@@ -645,6 +730,10 @@ def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
         subject = str(_required(row, "subject", "assertions"))
         relation = str(_required(row, "relation", "assertions"))
         obj = _build_term(_required(row, "object", "assertions"))
+        # After the required reads, as in `relation_types`: a row has to be
+        # well formed before it is worth telling its author which of its
+        # optional keys a later version reads.
+        _refuse_a_phase_2_key(row, "assertions")
         built.append(
             Assertion(
                 id=str(row.get("id") or _mint_assertion_id(subject, relation, obj)),
@@ -652,6 +741,7 @@ def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
                 relation=relation,
                 object=obj,
                 metadata=dict(row.get("metadata", {})),
+                polarity=_polarity(row.get("polarity", Polarity.ASSERTED.value), "polarity"),
             )
         )
     return built

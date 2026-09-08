@@ -223,6 +223,23 @@ class Literal:
 Term = EntityRef | Literal
 
 
+class Polarity(Enum):
+    """Whether an assertion states a fact or states its negation.
+
+    An ontology is open-world: an assertion nobody wrote is *unknown*, not
+    false. ``NEGATED`` is how a document says the other thing -- *this edge
+    does not hold* -- as a fact in its own right, with an id, a provenance and
+    a place in the file, rather than as the absence of one.
+
+    Two members and no evaluator. Deciding whether a *conditional* assertion
+    holds is a later question; stating a negation is this one, and the two are
+    separable because nothing evaluates a polarity -- a reader compares it.
+    """
+
+    ASSERTED = "asserted"
+    NEGATED = "negated"
+
+
 @dataclass
 class Assertion:
     """One stated fact: a subject, a relation, and what it relates to.
@@ -230,6 +247,10 @@ class Assertion:
     ``derived_from`` is empty for an authored assertion and carries the
     supporting ids for an inferred one, so a consumer can tell the two apart
     without asking where the assertion came from.
+
+    ``polarity`` is what makes *not* statable. It defaults to ``ASSERTED``, so
+    every assertion written before the field existed means what it always
+    meant, and a reader that ignores it reads a vocabulary of positives.
     """
 
     id: str
@@ -240,6 +261,10 @@ class Assertion:
     provenance: Provenance | None = None
     derived_from: tuple[str, ...] = ()
     stale: bool = False
+    #: Appended **last**, and that is load-bearing rather than tidy: this class
+    #: shipped with eight fields, and any earlier position would move
+    #: ``metadata`` under a caller who passes it positionally.
+    polarity: Polarity = Polarity.ASSERTED
 
 
 class QualifiedId(NamedTuple):

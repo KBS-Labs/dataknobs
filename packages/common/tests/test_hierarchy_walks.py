@@ -720,6 +720,23 @@ def test_the_enumerable_twins_expose_the_same_annotated_surface(
     assert_twin_types_agree(sync_type, async_type, _ENUMERABLE_MEMBERS, compare_return=True)
 
 
+#: The query pair every read on an assertion-backed axis goes through.
+#:
+#: Private, and checked anyway. It is the one place each twin says which
+#: relation it is and that a negated edge is not part of the axis -- written
+#: out twice because the twins share no runtime code -- so a difference here
+#: is the two flavours disagreeing about what the axis *contains*, which no
+#: public-surface comparison would report.
+_QUERY_MEMBERS = ("_find", "_find_many")
+
+
+def test_the_assertion_axis_query_helpers_are_twins() -> None:
+    """Same parameters, same annotations, same return type on both flavours."""
+    assert_twin_types_agree(
+        AssertionHierarchy, AsyncAssertionHierarchy, _QUERY_MEMBERS, compare_return=True
+    )
+
+
 def test_the_snapshot_constructors_are_twins() -> None:
     """One stated difference, and it is the one every async entry point has.
 

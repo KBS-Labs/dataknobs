@@ -21,6 +21,7 @@ from dataknobs_common.ontology.model import (
     Assertion,
     Entity,
     EntityRef,
+    Polarity,
     RelationRef,
     RelationType,
     SourceRef,
@@ -101,7 +102,15 @@ class AsyncEntitySource(Protocol):
 
 @runtime_checkable
 class AssertionSource(Protocol):
-    """Read access to assertions, synchronously."""
+    """Read access to assertions, synchronously.
+
+    ``polarity`` is on both read members from the start, and that is the one
+    decision here a later release could not take back. This is a
+    ``@runtime_checkable`` protocol a consumer satisfies structurally, so
+    widening it afterwards leaves ``isinstance`` passing while every call that
+    passes the new keyword raises ``TypeError`` against their implementation --
+    a migration for code we never see, to add a keyword they can ignore.
+    """
 
     def get(self, assertion_id: str) -> Assertion | None: ...
 
@@ -111,6 +120,7 @@ class AssertionSource(Protocol):
         subject: str | None = None,
         relation: RelationRef | None = None,
         object: Term | None = None,
+        polarity: Polarity | None = None,
     ) -> list[Assertion]: ...
 
     def find_many(
@@ -119,6 +129,7 @@ class AssertionSource(Protocol):
         subjects: Sequence[str] | None = None,
         objects: Sequence[str] | None = None,
         relation: RelationRef | None = None,
+        polarity: Polarity | None = None,
     ) -> dict[str, list[Assertion]]: ...
 
 
@@ -134,6 +145,7 @@ class AsyncAssertionSource(Protocol):
         subject: str | None = None,
         relation: RelationRef | None = None,
         object: Term | None = None,
+        polarity: Polarity | None = None,
     ) -> list[Assertion]: ...
 
     async def find_many(
@@ -142,6 +154,7 @@ class AsyncAssertionSource(Protocol):
         subjects: Sequence[str] | None = None,
         objects: Sequence[str] | None = None,
         relation: RelationRef | None = None,
+        polarity: Polarity | None = None,
     ) -> dict[str, list[Assertion]]: ...
 
 
@@ -355,6 +368,12 @@ class _AssertionIndex:
     is a sequence, and trusting keys to agree with ``Assertion.id`` is the kind
     of assumption that holds until one caller passes a dict built some other
     way.
+
+    **Matching lives here and nowhere else.** Both concretes below are
+    one-line forwards, so a criterion written into one of them -- ``polarity``
+    is the newest -- would have to be written into the other and would then be
+    two rules that can disagree. Neither flavour holds a matcher, which is why
+    a filter added to this class is added to both sources at once.
     """
 
     assertions: Sequence[Assertion]
@@ -378,6 +397,7 @@ class _AssertionIndex:
         subject: str | None,
         relation: RelationRef | None,
         object_: Term | None,
+        polarity: Polarity | None = None,
     ) -> list[Assertion]:
         if subject is not None:
             candidates: Sequence[Assertion] = self.by_subject.get(subject, [])
@@ -393,6 +413,7 @@ class _AssertionIndex:
             if (subject is None or assertion.subject == subject)
             and (wanted is None or relation_id(assertion.relation) == wanted)
             and (object_ is None or assertion.object == object_)
+            and (polarity is None or assertion.polarity is polarity)
         ]
 
     def find_many(
@@ -400,6 +421,7 @@ class _AssertionIndex:
         subjects: Sequence[str] | None,
         objects: Sequence[str] | None,
         relation: RelationRef | None,
+        polarity: Polarity | None = None,
     ) -> dict[str, list[Assertion]]:
         if (subjects is None) == (objects is None):
             raise ValueError(
@@ -422,7 +444,8 @@ class _AssertionIndex:
             matches = [
                 assertion
                 for assertion in index.get(key, [])
-                if wanted is None or relation_id(assertion.relation) == wanted
+                if (wanted is None or relation_id(assertion.relation) == wanted)
+                and (polarity is None or assertion.polarity is polarity)
             ]
             # A key with no matches is absent rather than empty: the caller
             # asked which of these have edges, and an empty list would answer
@@ -448,13 +471,21 @@ class MappingAssertionSource:
         subject: str | None = None,
         relation: RelationRef | None = None,
         object: Term | None = None,
+        polarity: Polarity | None = None,
     ) -> list[Assertion]:
         """Every assertion matching all of the criteria given.
 
-        A criterion left as None does not constrain. ``relation`` accepts
-        either an id or the definition itself, and matches on id either way.
+        A criterion left as None does not constrain -- ``polarity=None``
+        therefore returns negations alongside assertions, which is the right
+        default for a caller asking *what does this vocabulary say about x*
+        and the wrong one for a caller walking a structure. The walk asks for
+        ``ASSERTED``; see
+        :meth:`~dataknobs_common.ontology.hierarchy.AssertionHierarchy._find`.
+
+        ``relation`` accepts either an id or the definition itself, and matches
+        on id either way.
         """
-        return self._index.find(subject, relation, object)
+        return self._index.find(subject, relation, object, polarity)
 
     def find_many(
         self,
@@ -462,13 +493,14 @@ class MappingAssertionSource:
         subjects: Sequence[str] | None = None,
         objects: Sequence[str] | None = None,
         relation: RelationRef | None = None,
+        polarity: Polarity | None = None,
     ) -> dict[str, list[Assertion]]:
         """The bulk form: one call per axis, never one per node.
 
         Exactly one of ``subjects`` or ``objects``; the result is keyed by that
         axis, and a key with no matches is absent.
         """
-        return self._index.find_many(subjects, objects, relation)
+        return self._index.find_many(subjects, objects, relation, polarity)
 
 
 class AsyncMappingAssertionSource:
@@ -487,9 +519,10 @@ class AsyncMappingAssertionSource:
         subject: str | None = None,
         relation: RelationRef | None = None,
         object: Term | None = None,
+        polarity: Polarity | None = None,
     ) -> list[Assertion]:
         """Every assertion matching all of the criteria given."""
-        return self._index.find(subject, relation, object)
+        return self._index.find(subject, relation, object, polarity)
 
     async def find_many(
         self,
@@ -497,9 +530,10 @@ class AsyncMappingAssertionSource:
         subjects: Sequence[str] | None = None,
         objects: Sequence[str] | None = None,
         relation: RelationRef | None = None,
+        polarity: Polarity | None = None,
     ) -> dict[str, list[Assertion]]:
         """The bulk form -- see :meth:`MappingAssertionSource.find_many`."""
-        return self._index.find_many(subjects, objects, relation)
+        return self._index.find_many(subjects, objects, relation, polarity)
 
 
 if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
