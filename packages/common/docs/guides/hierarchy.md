@@ -20,6 +20,9 @@ tree satisfies them and inherits every walk without importing a vocabulary.
   only twinned code is the driver pair, which is a fixed cost — it does not
   grow when a walk is added. One public traversal ships today, so this is a
   bet on the second, not a saving already banked.
+- **A backing that can answer a whole level says so.** `BulkHierarchy` is an
+  optional protocol adding `children_many` / `parents_many`; the drivers use
+  them when they are there and fan out when they are not.
 - **The key type is a parameter defaulting to `str`**, so a bare `Hierarchy`
   means `Hierarchy[str]` and an object tree with no ids at all can bind `K` to
   its own node type.
@@ -35,10 +38,11 @@ reason each name is still waiting is not the same reason, which is what you
 need if you are deciding what to build on.
 
 **Settled, waiting only on the door.** `Hierarchy`, `AsyncHierarchy`,
-`ancestors`, `async_ancestors`, `AssertionHierarchy` and
-`AsyncAssertionHierarchy` are complete, and their signatures are not expected
-to move. They are absent from the door because the release that opens it has
-not happened — not because anything about them is unsettled.
+`BulkHierarchy`, `AsyncBulkHierarchy`, `ancestors`, `async_ancestors`,
+`AssertionHierarchy` and `AsyncAssertionHierarchy` are complete, and their
+signatures are not expected to move. They are absent from the door because the
+release that opens it has not happened — not because anything about them is
+unsettled.
 
 **Complete, with the shape still open.** `drive` and `async_drive` do what this
 page documents, and writing a walk of your own against them is what they are
@@ -53,7 +57,9 @@ later releases. What ships now will not change shape.
 
 ```python
 from dataknobs_common.hierarchy import (
+    AsyncBulkHierarchy,
     AsyncHierarchy,
+    BulkHierarchy,
     Hierarchy,
     ancestors,
     async_ancestors,
@@ -154,6 +160,44 @@ sequence alone cannot tell apart, so the question has its own member.
 **A literal object contributes no edge.** `dog lifespan_years 12` is a value,
 not a place in a structure, so an assertion whose object is not an entity is
 invisible to every member above.
+
+### Answering a whole level at once
+
+Every walk here asks about a **frontier**, not a node — that is what earns
+`async_drive` its one round of concurrency per depth. But `children(node_id)`
+is singular, so a backing that could answer a level in one query was being
+asked once per node with no way to say otherwise.
+
+`BulkHierarchy` and `AsyncBulkHierarchy` are how it says otherwise. They are
+**optional** and deliberately separate protocols: the singular pair stays
+sufficient, and an implementation that has only those four members is driven
+exactly as before.
+
+```python
+class RowBackedAxis:
+    def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        rows = self.db.query(
+            "select parent, id from nodes where parent = any(%s)", (list(node_ids),)
+        )                                        # one query for the level
+        by_parent: dict[str, list[str]] = {n: [] for n in node_ids}
+        for parent, node_id in rows:
+            by_parent[parent].append(node_id)
+        return tuple(by_parent[n] for n in node_ids)   # positional, one per node
+```
+
+Two things the drivers rely on:
+
+- **The reply is positional** — one sequence per node asked about, in the order
+  asked. A node with no answer contributes an empty sequence rather than being
+  dropped, because the walk pairs replies with the frontier it sent.
+- **Bulk and singular must agree.** The driver prefers the bulk member without
+  asking, so the two forms answering differently is a bug the caller cannot
+  see.
+
+`AssertionHierarchy` implements both, over `AssertionSource.find_many`, which
+is where the capability already existed. Concurrency does not substitute for
+this: `gather` runs one round trip per node at the same time, while
+`children_many` is one query for the level.
 
 ### `@runtime_checkable`, and what it does not reach
 

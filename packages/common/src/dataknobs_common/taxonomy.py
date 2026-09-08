@@ -23,6 +23,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+# Private by name and shared by intent: the one implementation of "ask the
+# frontier in bulk where the backing offers it, else one node at a time". The
+# streaming walks below cannot go through the collecting core, but they must
+# not decide this again -- a second copy is how the two drift over which
+# backings get a per-level query.
+from dataknobs_common.hierarchy import _async_reply, _sync_reply
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
@@ -62,11 +69,12 @@ class Taxonomy:
         strict descendants of it. ``max_depth`` bounds how many levels are
         expanded, so ``0`` yields the seeds alone.
 
-        A streaming member, and the reason it is written against the protocol
-        directly rather than through the shared walk core: the core collects
-        and returns, and a streaming core is a wider request type for a member
-        with its own consumers. That extension is measured and deliberately not
-        taken here.
+        A streaming member, and the reason it is not written through the shared
+        walk core: the core collects and returns, and a streaming core is a
+        wider request type for a member with its own consumers. That extension
+        is measured and deliberately not taken here. What it does share is the
+        step that reads a frontier, so this walk and the drivers cannot drift
+        over which backings answer a level in one query.
         """
         seen: set[str] = set()
         frontier = (from_id,) if from_id is not None else tuple(self.structure.roots())
@@ -81,9 +89,8 @@ class Taxonomy:
                 yield node_id
             if max_depth is not None and depth == max_depth:
                 return
-            frontier = tuple(
-                child for node_id in fresh for child in self.structure.children(node_id)
-            )
+            replies = _sync_reply(self.structure, "children", tuple(fresh))
+            frontier = tuple(child for reply in replies for child in reply)
             depth += 1
 
 
@@ -103,7 +110,10 @@ class AsyncTaxonomy:
 
         The same traversal, and it is duplicated for one reason: a streaming
         member cannot go through the shared collecting core without widening
-        that core's request type for every walk that does not stream.
+        that core's request type for every walk that does not stream. The
+        frontier read is shared, so this gets the driver's per-level behaviour
+        -- one bulk query where the backing offers one, concurrency where it
+        does not -- rather than a sequential await per node.
         """
         seen: set[str] = set()
         if from_id is not None:
@@ -121,8 +131,6 @@ class AsyncTaxonomy:
                 yield node_id
             if max_depth is not None and depth == max_depth:
                 return
-            children: list[str] = []
-            for node_id in fresh:
-                children.extend(await self.structure.children(node_id))
-            frontier = tuple(children)
+            replies = await _async_reply(self.structure, "children", tuple(fresh))
+            frontier = tuple(child for reply in replies for child in reply)
             depth += 1

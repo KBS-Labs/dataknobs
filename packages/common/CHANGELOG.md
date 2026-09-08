@@ -33,12 +33,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asynchronous one fetches a whole level per round of concurrency rather than a
   node.
 
+  `BulkHierarchy` and `AsyncBulkHierarchy` are **optional** protocols adding
+  `parents_many` / `children_many`, for a backing that can answer a whole level
+  in one query. Every walk here asks about a frontier, and `AssertionSource`
+  already offered a bulk form, but the singular `children(node_id)` in between
+  narrowed a frontier back to a node — so a row-backed hierarchy paid N queries
+  per level with no way to say otherwise from inside the protocol. The drivers
+  use the members when a backing has them and fan out when it does not, so an
+  implementation with only the original four members is driven exactly as
+  before. Replies are positional: one sequence per node asked about, in the
+  order asked, an absent answer being an empty sequence rather than a missing
+  slot. `AssertionHierarchy` implements both over `AssertionSource.find_many`.
+
 - **`dataknobs_common.taxonomy`**, one relation of a vocabulary reified as a
   walkable axis. `Taxonomy` and `AsyncTaxonomy` hold a definition and three
   backings — structure, content, and the assertions the edges were made of —
   and no copy of any of them, so a rebuild beneath one is visible on the next
   read. `walk()` yields every node at or under an anchor, breadth first, each
-  one once, bounded by `max_depth`.
+  one once, bounded by `max_depth`. It streams, so it does not go through the
+  collecting walk core — but it shares the step that reads a frontier, so both
+  flavours get whatever the drivers get: one bulk query where the backing
+  offers one, one round of concurrency per level where it does not.
 
 - **`Ontology.taxonomy(name)`** and its asynchronous twin, building that axis
   from three fields the ontology already holds and **no consumer input** — the
@@ -52,8 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every entity on the axis and needs a store to hold it; a vocabulary loaded
   from a file binds none. The refusal fires where the caller asked for the axis
   rather than at the first walk, which is a call site with no idea why it
-  failed. The shipped defaults — structure copied, content live — are exactly
-  the pair that needs no store.
+  failed. `materialization.structure` is parsed and defaulted but **not acted
+  on**: the axis built here reads through its source in either mode, so the
+  declaration is recorded rather than honoured, and the guide says so at the
+  point a reader would otherwise assume it works.
 
   `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
   `dataknobs_common.ontology.hierarchy`, are what answer the structure axis

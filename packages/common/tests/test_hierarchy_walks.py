@@ -358,6 +358,235 @@ def test_both_flavours_fail_alike_on_a_collaborators_stop_iteration(
     assert sync_raised is async_raised
 
 
+class CountingParents:
+    """A hierarchy that records how it was asked, with no bulk members."""
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        self._inner = MappingParents(parents)
+        self.singular_calls = 0
+
+    def roots(self) -> Sequence[str]:
+        return self._inner.roots()
+
+    def parents(self, node_id: str) -> Sequence[str]:
+        self.singular_calls += 1
+        return self._inner.parents(node_id)
+
+    def children(self, node_id: str) -> Sequence[str]:
+        self.singular_calls += 1
+        return self._inner.children(node_id)
+
+    def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+class BulkParents(CountingParents):
+    """The same, offering the optional frontier members."""
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        super().__init__(parents)
+        self.bulk_calls = 0
+        self.widest_frontier = 0
+
+    def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        self.bulk_calls += 1
+        self.widest_frontier = max(self.widest_frontier, len(node_ids))
+        return tuple(self._inner.parents(n) for n in node_ids)
+
+    def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        self.bulk_calls += 1
+        self.widest_frontier = max(self.widest_frontier, len(node_ids))
+        return tuple(self._inner.children(n) for n in node_ids)
+
+
+class AsyncBulkParents:
+    """An asynchronous hierarchy offering the optional frontier members."""
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        self._inner = MappingParents(parents)
+        self.bulk_calls = 0
+        self.singular_calls = 0
+
+    async def roots(self) -> Sequence[str]:
+        return self._inner.roots()
+
+    async def parents(self, node_id: str) -> Sequence[str]:
+        self.singular_calls += 1
+        return self._inner.parents(node_id)
+
+    async def children(self, node_id: str) -> Sequence[str]:
+        self.singular_calls += 1
+        return self._inner.children(node_id)
+
+    async def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        self.bulk_calls += 1
+        return tuple(self._inner.parents(n) for n in node_ids)
+
+    async def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        self.bulk_calls += 1
+        return tuple(self._inner.children(n) for n in node_ids)
+
+    async def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+class ConcurrencyProbe:
+    """An asynchronous hierarchy that records how many calls overlap."""
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        self._inner = MappingParents(parents)
+        self._in_flight = 0
+        self.widest_overlap = 0
+
+    async def _record(self) -> None:
+        self._in_flight += 1
+        self.widest_overlap = max(self.widest_overlap, self._in_flight)
+        await asyncio.sleep(0)  # a suspension point for the others to reach
+        self._in_flight -= 1
+
+    async def roots(self) -> Sequence[str]:
+        return self._inner.roots()
+
+    async def parents(self, node_id: str) -> Sequence[str]:
+        await self._record()
+        return self._inner.parents(node_id)
+
+    async def children(self, node_id: str) -> Sequence[str]:
+        await self._record()
+        return self._inner.children(node_id)
+
+    async def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+# A wide level: one root with four children, so a frontier read is visibly
+# different from four node reads.
+WIDE_PARENTS: Mapping[str, tuple[str, ...]] = {
+    "root": (),
+    "a": ("root",),
+    "b": ("root",),
+    "c": ("root",),
+    "d": ("root",),
+}
+
+
+def test_a_frontier_is_one_bulk_call_rather_than_one_call_per_node() -> None:
+    """A backing offering the optional members is asked once per level.
+
+    The protocol's request shape is a frontier and ``find_many``-style backings
+    answer a frontier, but ``Hierarchy`` only offered ``children(node_id)`` --
+    so the driver fanned a level back out to N calls and a row-backed hierarchy
+    paid N queries per level with no way to fix it from inside the protocol.
+    """
+    bulk = BulkParents(WIDE_PARENTS)
+
+    assert set(ancestors(bulk, "a")) == {"root"}
+    assert bulk.bulk_calls > 0
+    assert bulk.singular_calls == 0
+
+
+def test_a_backing_without_the_bulk_members_is_still_driven() -> None:
+    """The members are optional: the singular pair remains sufficient."""
+    plain = CountingParents(WIDE_PARENTS)
+
+    assert set(ancestors(plain, "a")) == {"root"}
+    assert plain.singular_calls > 0
+
+
+def test_the_bulk_reply_is_positional() -> None:
+    """One reply per node asked about, including nodes with no answer.
+
+    The walk zips replies against the frontier it sent, so a backing that
+    dropped empty answers would silently shift every later node's parents onto
+    the wrong id.
+    """
+    bulk = BulkParents(WIDE_PARENTS)
+
+    replies = bulk.parents_many(("a", "root", "b"))
+
+    assert len(replies) == 3
+    assert tuple(replies[1]) == ()
+
+
+def test_the_async_driver_asks_a_wide_level_concurrently() -> None:
+    """Without bulk members, a level is gathered rather than awaited in turn.
+
+    ``async_drive``'s stated benefit is one round of concurrency per depth. A
+    sequential await per node returns the same answer, so only overlap
+    distinguishes them.
+    """
+    probe = ConcurrencyProbe(WIDE_PARENTS)
+
+    asyncio.run(async_ancestors(probe, "a"))
+
+    assert probe.widest_overlap == 1, "one node per level here, so nothing to overlap"
+
+    wide = ConcurrencyProbe({**WIDE_PARENTS, "deep": ("a", "b", "c", "d")})
+    asyncio.run(async_ancestors(wide, "deep"))
+
+    assert wide.widest_overlap > 1, "a four-node level was awaited one at a time"
+
+
+def test_the_streaming_walk_shares_the_frontier_read(mammals_v11_path: Path) -> None:
+    """``Taxonomy.walk`` gets bulk too, rather than deciding it a second time.
+
+    It cannot go through the collecting core, so the risk is that the two drift
+    over which backings answer a level in one query. Sharing the frontier read
+    is what stops that.
+    """
+    onto = load_ontology(mammals_v11_path)
+    bulk = BulkParents({"dog": (), "retriever": ("dog",), "beagle": ("dog",)})
+    axis = onto.taxonomy("species")
+    axis.structure = bulk  # type: ignore[assignment]
+
+    assert set(axis.walk(from_id="dog")) == {"dog", "retriever", "beagle"}
+    assert bulk.bulk_calls > 0
+    assert bulk.singular_calls == 0
+
+
+def test_the_async_streaming_walk_shares_it_too(mammals_v11_path: Path) -> None:
+    """The asynchronous twin was reading a level one sequential await at a time.
+
+    Its own module sells per-depth behaviour and says a twinned walk gets it
+    only if somebody writes it into each copy. This is the copy that had not.
+    """
+
+    async def run() -> tuple[set[str], int, int]:
+        onto = await async_load_ontology(mammals_v11_path)
+        bulk = AsyncBulkParents({"dog": (), "retriever": ("dog",), "beagle": ("dog",)})
+        axis = onto.taxonomy("species")
+        axis.structure = bulk  # type: ignore[assignment]
+        seen = {node_id async for node_id in axis.walk(from_id="dog")}
+        return seen, bulk.bulk_calls, bulk.singular_calls
+
+    seen, bulk_calls, singular_calls = asyncio.run(run())
+
+    assert seen == {"dog", "retriever", "beagle"}
+    assert bulk_calls > 0
+    assert singular_calls == 0
+
+
+def test_the_assertion_axis_bulk_members_agree_with_the_singular_ones(
+    mammals_v11_path: Path,
+) -> None:
+    """The concrete's two forms answer the same thing for every node.
+
+    The bulk pair goes through ``find_many`` and the singular pair through
+    ``find``; agreement is the property that makes the optional members safe
+    for the driver to prefer without asking the caller.
+    """
+    onto = load_ontology(mammals_v11_path)
+    axis = AssertionHierarchy(onto.assertions, "isa")
+    nodes = ("dog", "retriever", "beagle", "mammal", "nonesuch")
+
+    assert tuple(tuple(r) for r in axis.parents_many(nodes)) == tuple(
+        tuple(axis.parents(n)) for n in nodes
+    )
+    assert tuple(tuple(r) for r in axis.children_many(nodes)) == tuple(
+        tuple(axis.children(n)) for n in nodes
+    )
+
+
 # --------------------------------------------------------------------------
 # The delegation -- one core, two surfaces
 # --------------------------------------------------------------------------

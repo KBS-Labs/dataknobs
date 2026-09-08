@@ -62,6 +62,15 @@ def _parents_of(assertions: Sequence[Assertion]) -> tuple[str, ...]:
     )
 
 
+def _children_of(assertions: Sequence[Assertion]) -> tuple[str, ...]:
+    """The subjects of these assertions, deduplicated in order.
+
+    The mirror of :func:`_parents_of`: a child is an edge's subject, and no
+    literal check is needed because a subject is always an entity id.
+    """
+    return _ordered(assertion.subject for assertion in assertions)
+
+
 def _nodes_of(edges: Sequence[Assertion]) -> tuple[str, ...]:
     """Every node these edges mention, deduplicated in first-appearance order.
 
@@ -107,8 +116,23 @@ class AssertionHierarchy:
 
     def children(self, node_id: str) -> Sequence[str]:
         """The nodes directly under ``node_id``."""
-        edges = self.source.find(object=EntityRef(node_id), relation=self.relation)
-        return _ordered(edge.subject for edge in edges)
+        return _children_of(self.source.find(object=EntityRef(node_id), relation=self.relation))
+
+    def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        """:meth:`parents` for a whole frontier, in one query.
+
+        ``AssertionSource.find_many`` is the bulk form the singular member
+        cannot reach, so a level costs one call rather than one per node. The
+        reply is positional -- a node the query returned nothing for gets an
+        empty tuple, not a missing slot.
+        """
+        found = self.source.find_many(subjects=tuple(node_ids), relation=self.relation)
+        return tuple(_parents_of(found.get(node_id, [])) for node_id in node_ids)
+
+    def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        """:meth:`children` for a whole frontier, in one query."""
+        found = self.source.find_many(objects=tuple(node_ids), relation=self.relation)
+        return tuple(_children_of(found.get(node_id, [])) for node_id in node_ids)
 
     def contains(self, node_id: str) -> bool:
         """Whether any assertion of this relation names the node.
@@ -147,7 +171,17 @@ class AsyncAssertionHierarchy:
     async def children(self, node_id: str) -> Sequence[str]:
         """The nodes directly under ``node_id``."""
         edges = await self.source.find(object=EntityRef(node_id), relation=self.relation)
-        return _ordered(edge.subject for edge in edges)
+        return _children_of(edges)
+
+    async def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        """:meth:`AssertionHierarchy.parents_many`, awaited."""
+        found = await self.source.find_many(subjects=tuple(node_ids), relation=self.relation)
+        return tuple(_parents_of(found.get(node_id, [])) for node_id in node_ids)
+
+    async def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        """:meth:`AssertionHierarchy.children_many`, awaited."""
+        found = await self.source.find_many(objects=tuple(node_ids), relation=self.relation)
+        return tuple(_children_of(found.get(node_id, [])) for node_id in node_ids)
 
     async def contains(self, node_id: str) -> bool:
         """Whether any assertion of this relation names the node."""
@@ -166,7 +200,12 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
         the test tree is not -- the arrangement ``sources.py`` already uses for
         the source protocols.
         """
-        from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
+        from dataknobs_common.hierarchy import (
+            AsyncBulkHierarchy,
+            AsyncHierarchy,
+            BulkHierarchy,
+            Hierarchy,
+        )
         from dataknobs_common.ontology.sources import (
             AsyncMappingAssertionSource,
             MappingAssertionSource,
@@ -176,4 +215,8 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
         asynchronous: AsyncHierarchy = AsyncAssertionHierarchy(
             AsyncMappingAssertionSource([]), "isa"
         )
-        del sync, asynchronous
+        bulk: BulkHierarchy = AssertionHierarchy(MappingAssertionSource([]), "isa")
+        async_bulk: AsyncBulkHierarchy = AsyncAssertionHierarchy(
+            AsyncMappingAssertionSource([]), "isa"
+        )
+        del sync, asynchronous, bulk, async_bulk

@@ -44,7 +44,9 @@ else:
     from typing_extensions import TypeVar
 
 __all__ = [
+    "AsyncBulkHierarchy",
     "AsyncHierarchy",
+    "BulkHierarchy",
     "Hierarchy",
     "K",
     "ancestors",
@@ -149,6 +151,55 @@ class AsyncHierarchy(Protocol, Generic[K]):
         ...
 
 
+@runtime_checkable
+class BulkHierarchy(Hierarchy[K], Protocol):
+    """A :class:`Hierarchy` that can answer a whole frontier in one call.
+
+    **Optional, and deliberately a separate protocol.** Every walk here asks
+    about a frontier rather than a node -- :data:`Ask` carries a tuple -- so a
+    backing that can answer one query per level instead of one per node is
+    asking to be told. Requiring the members on :class:`Hierarchy` would break
+    every implementation that has only the singular pair, including the
+    hand-written one the guide invites, so the capability is declared where a
+    backing can opt into it and the drivers use it when it is there.
+
+    A row- or document-backed hierarchy is the case: ``N`` queries per level
+    against a database is the cost the singular members force, and it cannot be
+    fixed from inside them.
+
+    Each member returns **one sequence per node asked about, in the order
+    asked** -- a node with no answer contributes an empty sequence rather than
+    being dropped, because the reply is positional.
+    """
+
+    def parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`Hierarchy.parents` for a whole frontier, one reply per node."""
+        ...
+
+    def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`Hierarchy.children` for a whole frontier, one reply per node."""
+        ...
+
+
+@runtime_checkable
+class AsyncBulkHierarchy(AsyncHierarchy[K], Protocol):
+    """:class:`BulkHierarchy`'s asynchronous twin, with the same contract.
+
+    Worth having even though :func:`async_drive` already gathers per frontier:
+    ``gather`` gives one *round trip* per node run concurrently, where these
+    give one *query* for the level. A backing with a bulk read wants the
+    second, and concurrency does not substitute for it.
+    """
+
+    async def parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`AsyncHierarchy.parents` for a whole frontier."""
+        ...
+
+    async def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
+        """:meth:`AsyncHierarchy.children` for a whole frontier."""
+        ...
+
+
 # --------------------------------------------------------------------------
 # The two drivers -- the only twinned code here, and their count is constant
 # --------------------------------------------------------------------------
@@ -157,7 +208,13 @@ class AsyncHierarchy(Protocol, Generic[K]):
 def _sync_reply(
     hierarchy: Hierarchy[_K], member: Member, node_ids: tuple[_K, ...]
 ) -> tuple[Sequence[_K], ...]:
-    """Answer one request, guaranteeing no ``StopIteration`` escapes.
+    """Answer one request in bulk where the backing offers it, else one by one.
+
+    The single implementation of that rule: :class:`Taxonomy`'s streaming walk
+    calls it too rather than deciding again, so the carve-out walk cannot drift
+    from the driver on which backings get a per-level query.
+
+    It also guarantees no ``StopIteration`` escapes.
 
     A ``Hierarchy`` is arbitrary consumer code, and a plain ``def`` ending in
     ``next(r for r in rows if ...)`` raises ``StopIteration`` on a miss.
@@ -170,10 +227,12 @@ def _sync_reply(
     try:
         if member == "roots":
             return (hierarchy.roots(),)
-        if member == "parents":
-            return tuple(hierarchy.parents(node_id) for node_id in node_ids)
-        if member == "children":
-            return tuple(hierarchy.children(node_id) for node_id in node_ids)
+        if member in ("parents", "children"):
+            bulk = getattr(hierarchy, f"{member}_many", None)
+            if bulk is not None:
+                return tuple(bulk(node_ids))
+            one = hierarchy.parents if member == "parents" else hierarchy.children
+            return tuple(one(node_id) for node_id in node_ids)
     except StopIteration as stop:
         raise RuntimeError(
             f"hierarchy {type(hierarchy).__name__}.{member}() raised StopIteration"
@@ -204,7 +263,12 @@ def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
 async def _async_reply(
     hierarchy: AsyncHierarchy[_K], member: Member, node_ids: tuple[_K, ...]
 ) -> tuple[Sequence[_K], ...]:
-    """:func:`_sync_reply`'s twin, one round of concurrency per frontier.
+    """:func:`_sync_reply`'s twin: bulk where offered, else one round of
+    concurrency per frontier.
+
+    ``gather`` runs one round trip per node concurrently; ``children_many``
+    is one *query* for the level. The second is what a row-backed hierarchy
+    wants, and concurrency does not substitute for it.
 
     No explicit ``StopIteration`` conversion here: this is a coroutine, so the
     language performs it at this frame's boundary and a collaborator's
@@ -213,10 +277,12 @@ async def _async_reply(
     """
     if member == "roots":
         return (await hierarchy.roots(),)
-    if member == "parents":
-        return tuple(await asyncio.gather(*(hierarchy.parents(n) for n in node_ids)))
-    if member == "children":
-        return tuple(await asyncio.gather(*(hierarchy.children(n) for n in node_ids)))
+    if member in ("parents", "children"):
+        bulk = getattr(hierarchy, f"{member}_many", None)
+        if bulk is not None:
+            return tuple(await bulk(node_ids))
+        one = hierarchy.parents if member == "parents" else hierarchy.children
+        return tuple(await asyncio.gather(*(one(n) for n in node_ids)))
     raise ValueError(f"unknown hierarchy member {member!r}")
 
 
