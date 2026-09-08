@@ -27,10 +27,28 @@ tree satisfies them and inherits every walk without importing a vocabulary.
 
 ## Where the names live
 
-Everything below is imported by module path. Nothing in this family is
-re-exported from `dataknobs_common` or `dataknobs_common.ontology` yet — the
-constructs are still gaining members, and a name exported from a package door
-is a name consumers hold:
+Everything below is imported by module path. None of it is re-exported from
+`dataknobs_common` or `dataknobs_common.ontology` yet — a name on a package
+door is a name consumers hold, so it goes there once and deliberately. The
+reason each name is still waiting is not the same reason, which is what you
+need if you are deciding what to build on.
+
+**Settled, waiting only on the door.** `Hierarchy`, `AsyncHierarchy`,
+`ancestors`, `async_ancestors`, `AssertionHierarchy` and
+`AsyncAssertionHierarchy` are complete, and their signatures are not expected
+to move. They are absent from the door because the release that opens it has
+not happened — not because anything about them is unsettled.
+
+**Complete, with the shape still open.** `drive` and `async_drive` do what this
+page documents, and writing a walk of your own against them is what they are
+for. A wider core — one that also drives a streaming pair — has been
+prototyped and neither adopted nor rejected. Publishing the narrow form and
+widening it later would change a signature consumers had already written
+against, so it waits for that question to settle.
+
+**Still gaining members.** `Taxonomy` and `AsyncTaxonomy` carry one method
+today, `walk()`, out of the nine they are planned to hold; the rest arrive in
+later releases. What ships now will not change shape.
 
 ```python
 from dataknobs_common.hierarchy import (

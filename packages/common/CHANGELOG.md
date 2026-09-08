@@ -71,10 +71,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Everything in the three modules above is imported **by module path**. None of
   it is re-exported from `dataknobs_common` or `dataknobs_common.ontology` yet
   — including `object_entity_id`, which is public in its own module while
-  `relation_id` beside it is also on the package door. The constructs are still
-  gaining members, and a name on a door is a name consumers hold. The
+  `relation_id` beside it is also on the package door. A name on a door is a
+  name consumers hold, and what holds each of these back is not one reason:
+  most are settled and waiting only on the release that opens the door,
+  `drive` / `async_drive` are complete but under an open proposal to widen the
+  core they take, and the two taxonomy types are still gaining members. The
   [hierarchies and taxonomies guide](https://kbs-labs.github.io/dataknobs/packages/common/hierarchy/)
-  gives the import lines and a worked axis.
+  gives the import lines, which name is in which group, and a worked axis.
 
 - **`dataknobs_common.ontology`**, a vocabulary of entities, the relations
   between them, and the axes they form. An ontology here is a **value**: it
