@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-09T01:37:57Z",
+  "timestamp": "2026-09-09T03:24:40Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/polarity-imports-and-id-members",
-  "git_commit": "87a447df0ccf18ff28217338bcf2b607ae69139b",
+  "git_branch": "sbk/anchored-view",
+  "git_commit": "1526628964e0cd18f4018590b88f86da10f9478c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
