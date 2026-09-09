@@ -259,6 +259,26 @@ from dataknobs_common.hierarchy import ancestors
 assert ancestors(axis.structure, here.node) == ("retriever", "dog", "mammal")
 ```
 
+A walk you write yourself may key its `seen` set on the cursors rather than on
+bare ids — they hash, and two cursors over one axis collide exactly when they
+name the same node, which is the property such a set needs:
+
+```python
+seen: set[TaxonomyView] = set()
+frontier = [here]
+while frontier:
+    node = frontier.pop()
+    if node in seen:
+        continue
+    seen.add(node)
+    frontier.extend(node.children())
+```
+
+Cursors over two *separately built* axes never compare equal, even when both
+came from the same ontology and name the same node — the axis is compared by
+identity. Build the axis once and walk from it, which `at()` already encourages
+by being the only door.
+
 Nothing on either cursor is named `granularity`: whether a placement is specific
 enough is the consumer's conclusion, drawn from `is_leaf()` and `children()`,
 and the word belongs to a projection policy over a match set.

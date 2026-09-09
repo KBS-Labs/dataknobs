@@ -17,7 +17,8 @@ Four claims:
 from __future__ import annotations
 
 import inspect
-from dataclasses import replace
+from collections.abc import Hashable
+from dataclasses import FrozenInstanceError, replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -153,6 +154,64 @@ def test_the_structural_members_answer_over_the_declared_axis(axis: Taxonomy) ->
     assert all(isinstance(below, TaxonomyView) for below in here.children())
     assert here.at("beagle").parents()[0] == axis.at("dog")
 
+
+# --------------------------------------------------------------------------
+# A cursor is a value, and a value hashes
+# --------------------------------------------------------------------------
+
+
+def test_the_cursor_hashes_so_a_walk_can_key_a_seen_set_on_it(axis: Taxonomy) -> None:
+    """``hash()`` answers rather than raising, which ``Hashable`` already promised.
+
+    A frozen dataclass gets a generated ``__hash__``, so ``isinstance(view,
+    Hashable)`` was ``True`` before this was true -- the type passed the check
+    and raised at the call, because the generated hash hashes the field tuple
+    and :class:`Taxonomy` was not frozen. That is the shape worth a test: not
+    an absent capability, which a caller discovers by reading, but a promised
+    one that fails only when exercised.
+
+    The cost is paid by whoever writes the walk the guide defers -- every walk
+    in this module carries ``seen: set[...]``, and keying it on the cursor
+    rather than the bare id is the obvious reading of a type sold as a value.
+    """
+    here = axis.at("dog")
+
+    assert isinstance(here, Hashable)
+    assert hash(here) == hash(axis.at("dog"))
+    assert len({axis.at("dog"), axis.at("dog"), axis.at("beagle")}) == 2
+
+    seen: set[TaxonomyView] = set()
+    frontier = [axis.at("mammal")]
+    while frontier:
+        node = frontier.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        frontier.extend(node.children())
+    assert {view.node for view in seen} == {
+        "mammal",
+        "dog",
+        "retriever",
+        "golden_retriever",
+        "beagle",
+    }
+
+
+def test_the_axis_it_holds_is_frozen_and_compared_by_identity(axis: Taxonomy) -> None:
+    """Both halves of what makes the cursor hashable, asserted where they live.
+
+    Frozen is the half a reader expects. Identity is the half that does the
+    work: field-wise equality would generate a ``__hash__`` reaching
+    ``definition.metadata``, and a dict does not hash however frozen its
+    owner is. Two separately built axes over one ontology are therefore not
+    equal, which is the price and is asserted here rather than left implicit.
+    """
+    with pytest.raises(FrozenInstanceError):
+        axis.structure = MappingHierarchy({})  # type: ignore[misc]
+
+    assert replace(axis, assertions=None).assertions is None
+    assert axis == axis
+    assert axis != replace(axis)
 
 # --------------------------------------------------------------------------
 # Criterion 17 -- the forwards, one patch per flavour

@@ -226,7 +226,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Assertion`** that put it there, one pair per assertion, so one call gives
   both the annotation and a position to keep walking from. The cursor holds
   the structure rather than a copy, owns nothing, and two views over one axis
-  are equal exactly when they name the same node.
+  are equal exactly when they name the same node. Cursors **hash**, so a walk
+  a consumer writes can key its visited set on them rather than on bare ids.
+  Reaching that meant comparing the axis by identity: `Taxonomy` and
+  `AsyncTaxonomy` are frozen and identity-compared, because field-wise
+  equality generates a `__hash__` that reaches `definition.metadata` — a dict,
+  unhashable however frozen its owner is — and a cursor that satisfies
+  `isinstance(view, Hashable)` and then raises at the call is worse than one
+  that never claimed to. The cost is that two *separately built* axes over one
+  ontology no longer compare equal; `Ontology.taxonomy()` builds on each call,
+  so hold the axis you walk from.
 
   **A node that is not here is neither a root nor a leaf.** `is_root()` and
   `is_leaf()` are `False` wherever `exists()` is `False`, because an absent

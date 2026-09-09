@@ -87,7 +87,7 @@ def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: str) -> NoReturn:
     )
 
 
-@dataclass
+@dataclass(frozen=True, eq=False)
 class Taxonomy:
     """One relation of a vocabulary, walkable, with synchronous backings.
 
@@ -112,6 +112,14 @@ class Taxonomy:
     bare so that it reads as one. Moving it is a design question with a
     prerequisite: the content side has to become generic first, or explicitly
     stay behind.
+
+    **Frozen, and compared by identity.** Frozen because nothing mutates a
+    built axis: swapping a backing is :func:`dataclasses.replace`, which says
+    at the call site that a second axis now exists. Identity because
+    :class:`TaxonomyView` is frozen too and therefore hashes what it holds:
+    field-wise equality would generate a ``__hash__`` that reaches
+    ``definition.metadata`` and raises, and no amount of freezing fixes a dict.
+    See :class:`TaxonomyView` for why that trade is the cheap one.
     """
 
     definition: TaxonomyDefinition
@@ -169,13 +177,16 @@ class Taxonomy:
         return TaxonomyView(self, node_id)
 
 
-@dataclass
+@dataclass(frozen=True, eq=False)
 class AsyncTaxonomy:
     """The asynchronous twin. Same four fields, asynchronous backings.
 
     The key is pinned to ``str`` here too, for the reason
     :class:`Taxonomy` states: a taxonomy carries the content axis as well as
-    the structure one, and the content axis is ``str``-addressed.
+    the structure one, and the content axis is ``str``-addressed. Frozen and
+    identity-compared for the reason it states as well -- a difference here
+    would be one :func:`assert_twin_types_agree` cannot see, since it reads
+    members and these are decisions about the type.
     """
 
     definition: TaxonomyDefinition
@@ -281,6 +292,20 @@ class TaxonomyView:
     The two edge members are the reason this class exists over
     ``HierarchyView``: they read the assertions the edges were made of, which
     a bare ``Hierarchy`` has none of.
+
+    **The axis is compared by identity, and that is what makes this hashable.**
+    A frozen dataclass hashes its field tuple, so a cursor can only hash if the
+    axis it holds can. Two of a taxonomy's four fields cannot be made to:
+    ``definition`` carries a ``metadata`` dict, and a ``MappingHierarchy``
+    structure carries two more, so freezing them would leave ``__hash__``
+    generated and still raising -- promising the capability at ``isinstance``
+    and failing at the call. Identity closes that for every backing at once,
+    and it costs nothing that was being used: an axis is *built* by
+    :meth:`Ontology.taxonomy` from a definition, and it is the definition that
+    this module calls the value.
+
+    So two cursors are equal exactly when they name the same node **of the same
+    built axis**, which is the sentence this class was already documented by.
     """
 
     taxonomy: Taxonomy
