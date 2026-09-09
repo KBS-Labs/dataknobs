@@ -93,6 +93,7 @@ nav:
       - packages/common/packs.md
       - packages/common/hierarchy.md
       - packages/common/anchored-view.md
+      - packages/common/entity-resolution.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:

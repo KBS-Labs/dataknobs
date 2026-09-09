@@ -19,10 +19,20 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
+# Re-exported, not used here: this module is a published import path for these
+# three and stayed one when they moved. The redundant-alias spelling of a
+# re-export is what `PLC0414` declines, so the directive names `F401` instead.
+from dataknobs_common.entity_resolution.values import (  # noqa: F401
+    CompatibilityVerdict,
+    ResolutionRef,
+    Scoring,
+)
 from dataknobs_common.fields import Field, FieldType
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
+
+    from dataknobs_common.entity_resolution.values import ResolutionRef
 
 #: The root of the type lattice, and its own type.
 DK_ENTITY_TYPE = "dk:EntityType"
@@ -37,28 +47,28 @@ class InferenceMode(Enum):
     ON_DEMAND = "on_demand"
 
 
-class Scoring(Enum):
-    """What kind of number a match score is.
-
-    A cascade's candidates are heterogeneous by construction -- an exact hit
-    and a vector neighbour are not the same measurement -- so the kind travels
-    with each piece of evidence rather than being declared once per result.
-    """
-
-    DECLARED = "declared"
-    RANK_FUSED = "rank_fused"
-    NORMALIZED = "normalized"
-    NATIVE = "native"
-    DECAYED = "decayed"
-
-
-class CompatibilityVerdict(Enum):
-    """Whether a stored corpus was produced by the model now asking of it."""
-
-    COMPATIBLE = "compatible"
-    INCOMPATIBLE = "incompatible"
-    UNVERIFIABLE = "unverifiable"
-    UNKNOWN = "unknown"
+# `Scoring`, `CompatibilityVerdict` and `ResolutionRef` were declared here and
+# now live in `dataknobs_common/entity_resolution/values.py`, re-exported by
+# this package's `__init__` **and by this module** so every existing import
+# keeps working and keeps resolving to the same object.
+#
+# Both spellings, because both shipped: a caller who wrote
+# `from dataknobs_common.ontology.model import Scoring` reached a real module
+# path, and a re-export on the package door alone leaves that one raising
+# `ImportError` while the claim above reads as though it did not.
+#
+# The re-export at the top of this module closes nothing: this direction -- the
+# vocabulary reaching the resolution family -- is the one that is allowed, and
+# `values` reaches back only under `TYPE_CHECKING`.
+#
+# They moved because a second family *constructs* them at runtime -- a rung
+# building evidence, a cascade building a result -- and a runtime import from
+# that family into this one closes a cycle through `ontology/__init__`, which
+# imports the loader, which builds a cascade. That failure is by import
+# **order**, so a suite importing this package first would never see it.
+#
+# Placement follows the dependency rather than the family: these three are the
+# only types here a resolver has to construct.
 
 
 @dataclass(frozen=True)
@@ -73,25 +83,6 @@ class SourceRef:
     kind: str
     locator: Mapping[str, Any]
     projection_id: str | None = None
-
-
-@dataclass(frozen=True)
-class ResolutionRef:
-    """What an entity-valued attribute was resolved on.
-
-    Identifiers and numbers. No handle, no I/O: the discipline
-    :class:`SourceRef` applies to a database row, applied to a search. It
-    identifies a resolution; it does not reproduce one.
-    """
-
-    query: str
-    entity_id: str
-    score: float
-    scoring: Scoring
-    compatibility: CompatibilityVerdict
-    corpus: Mapping[str, Any]
-    signals: Mapping[str, float] = field(default_factory=dict)
-    runners_up: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)
