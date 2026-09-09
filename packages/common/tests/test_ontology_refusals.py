@@ -15,6 +15,7 @@ import pytest
 
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import async_load_ontology, build_ontology, load_ontology
+from dataknobs_common.ontology import loader as loader_module
 from dataknobs_common.ontology.config import OntologyConfig
 
 
@@ -610,6 +611,31 @@ def test_a_phase_2_key_is_refused_naming_the_key_and_the_version(
     assert excinfo.value.context["section"] == section
     assert excinfo.value.context["field"] == key
     assert excinfo.value.context["version"] == "phase 2"
+
+
+def test_the_refusal_cases_are_the_loader_table() -> None:
+    """The cases above are the loader's table, not a copy free to drift from it.
+
+    The comment on the list claims the fifth key must fail here if it is added
+    the old way, and nothing made that true: a key added to the loader's table
+    and not to this one was exercised by nothing at all, so the claim held
+    only as long as one author remembered both halves.
+
+    It catches the other direction too, which is the more useful half. Only
+    ``relation_types`` and ``assertions`` call the refusal; a *section* added
+    to the loader's table -- ``entity_types``, say -- gets a case here to
+    satisfy this, and that case then fails, because no builder there refuses
+    anything. An entry that names a key nothing checks surfaces as a red test
+    rather than as a key that quietly loads and is discarded.
+    """
+    declared = {
+        (section, key)
+        for section, keys in loader_module._PHASE_2_KEYS.items()
+        for key in keys
+    }
+    exercised = {(section, key) for section, key, _ in _PHASE_2_KEYS}
+
+    assert exercised == declared
 
 
 @DOORS

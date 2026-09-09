@@ -564,6 +564,16 @@ def _row_handle(row: Mapping[str, Any], key: str | None = None) -> str:
 #: needs an evaluator, and an evaluator needs a truth value for *unknown*,
 #: which widens every read member rather than adding a field. So they are
 #: deferred together, and named together here.
+#:
+#: **A section is here only because its builder calls the refusal.** The shape
+#: reads as though it covered every section, and it does not: entity types,
+#: entities and taxonomies reach no such check, having no deferred key yet.
+#: So adding a section here is not sufficient -- its builder has to call
+#: :func:`_refuse_a_phase_2_key` as well, or the entry is inert and the key
+#: goes on loading and being discarded, which is the one thing this guard
+#: exists to end. ``test_the_refusal_cases_are_the_loader_table`` in
+#: ``test_ontology_refusals.py`` is what makes that omission a red test
+#: rather than a silent no-op.
 _PHASE_2_KEYS: Mapping[str, Mapping[str, str]] = {
     "assertions": {"condition": "conditional assertions arrive"},
     "relation_types": {

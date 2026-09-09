@@ -166,14 +166,15 @@ def _localize(ontology_id: str, qualified_id: str) -> str:
     to an ontology or it does not, and that is not a question a flavour
     changes.
 
-    **It needs no source set, and saying why is the point.** Whether the
-    middle segment names a declared source decides how
+    **It needs no source set, and saying why is the point.** The answer is
+    always the remainder after the ontology segment -- ``partition(":")[2]``,
+    the slice below -- and no source set can change it. Whether the middle
+    segment names a declared source decides how
     :func:`~dataknobs_common.ontology.model.split_qualified` *parses* the id;
     it does not decide what this returns, because both readings put that
-    segment on the local side of the ontology segment. So the answer is
-    everything after the first ``:`` either way -- a bare local id for the
-    single-source case, and the source segment kept where one applies, which
-    is the space :attr:`Ontology.entities` speaks.
+    segment on the local side of the ontology segment. So a bare local id
+    comes back for the single-source case, and the source segment is kept
+    where one applies, which is the space :attr:`Ontology.entities` speaks.
 
     Nothing is constructed here: the return is a slice of the argument. A
     caller who wants the three parts still asks the parser for them, with the
