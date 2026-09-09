@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from dataknobs_common.entity_resolution.protocols import MembershipOracle
+
 __all__ = [
     "CompatibilityVerdict",
     "Coverage",
@@ -33,6 +35,7 @@ __all__ = [
     "Within",
     "within_admits",
     "within_axes",
+    "within_memberships",
 ]
 
 
@@ -319,6 +322,40 @@ def within_axes(within: Within) -> Mapping[str, frozenset[str]]:
             for axis, value in within.items()
         }
     return {TAXONOMY_ID_KEY: frozenset(within)}
+
+
+def within_memberships(entity: Any, source: Any = None) -> Mapping[str, str]:
+    """What one entity **is**, per scope axis -- the one projection.
+
+    Every place a scope is applied reads membership through here: the cascade,
+    which makes the ruling, and the rung-side narrowing on both flavours. That
+    is the whole point of publishing it. Three private copies of this
+    projection shipped once, agreeing by construction because each read
+    ``Entity.type`` -- and a divergence between them could only appear on a
+    *second* axis, which is exactly where the suite's only assertion was
+    negative. Nothing would have reported it.
+
+    ``entity`` is untyped for the reason the rest of this family is: naming
+    ``Entity`` at runtime would close a cycle through ``ontology/__init__``.
+
+    Args:
+        entity: Anything carrying ``type``.
+        source: The source the entity came from. When it satisfies
+            :class:`~dataknobs_common.entity_resolution.protocols.MembershipOracle`
+            it is asked instead, which is how a source that knows more than a
+            type about its entities makes a multi-axis scope mean something.
+            The dispatch lives here rather than at each call site so that
+            supplying an oracle cannot reintroduce the divergence this function
+            exists to remove.
+
+    Returns:
+        Axis name to the one id the entity has on that axis. The default names
+        exactly one axis, because ``describe().declares`` is what a source
+        publishes as its scope terms and it names types.
+    """
+    if isinstance(source, MembershipOracle):
+        return source.memberships(entity)
+    return {TAXONOMY_ID_KEY: entity.type}
 
 
 def within_admits(axes: Mapping[str, frozenset[str]], memberships: Mapping[str, str]) -> bool:

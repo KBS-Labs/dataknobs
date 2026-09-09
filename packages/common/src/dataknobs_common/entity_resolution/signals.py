@@ -18,13 +18,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.entity_resolution.values import (
-    TAXONOMY_ID_KEY,
     EntityCandidate,
     EvidenceKind,
     MatchEvidence,
     Scoring,
     within_admits,
     within_axes,
+    within_memberships,
 )
 from dataknobs_common.text import default_normalizer
 
@@ -36,7 +36,9 @@ if TYPE_CHECKING:
 __all__ = [
     "AliasSignal",
     "AsyncAliasSignal",
+    "AsyncDeclaredSignal",
     "AsyncExactNormalizedSignal",
+    "DeclaredSignal",
     "ExactNormalizedSignal",
 ]
 
@@ -85,12 +87,26 @@ def _ordered(hits: frozenset[str], k: int) -> list[str]:
     return sorted(hits)[:k]
 
 
-class _DeclaredSignal:
-    """What both synchronous rungs share: everything but the index they ask.
+class DeclaredSignal:
+    """What every synchronous rung shares: everything but the index it asks.
 
-    The two differ in one expression. Writing that as two classes with two
-    copies of the constructor, the name, the filter handling and the candidate
-    construction is how a fix to one of them stops being a fix to the other.
+    The two shipped rungs differ in one expression. Writing that as two classes
+    with two copies of the constructor, the name, the filter handling and the
+    candidate construction is how a fix to one of them stops being a fix to the
+    other -- and the same argument reaches a consumer's rung, which is why this
+    is published rather than private.
+
+    **Subclass this to write a rung.** Set :attr:`key` and implement
+    :meth:`_hits`; everything else -- the constructor, ``name``, ``narrows()``,
+    the rung-side narrowing and the batch loop -- comes with it. In particular
+    the narrowing comes with it *correct*: it is a superset filter, and
+    :meth:`~dataknobs_common.entity_resolution.MatchSignal.narrows` explains
+    why getting that direction wrong is the one mistake nothing downstream can
+    recover. A rung written against the bare
+    :class:`~dataknobs_common.entity_resolution.MatchSignal` protocol gets no
+    such help, so prefer this base and keep the protocol for the case it cannot
+    serve -- a rung whose backing is not a dictionary lookup, or one that
+    already has a superclass.
     """
 
     #: The registered key, and the string the evidence carries as its
@@ -124,6 +140,21 @@ class _DeclaredSignal:
         return True
 
     def _hits(self, query: str) -> frozenset[str]:
+        """The ids this rung proposes for an already-folded query -- **the hook**.
+
+        The one member a subclass supplies. It stays underscored although the
+        class is published: it is called by :meth:`candidates` and never by a
+        consumer of the rung, so it is the extension point rather than part of
+        the rung's surface.
+
+        Args:
+            query: Folded by this rung's normalizer already. Do not fold again.
+
+        Returns:
+            Every id that matches. Ordering and the cut to ``k`` are
+            :meth:`candidates`'s job, and the scope is the cascade's -- return
+            what matches and let the layers above decide.
+        """
         raise NotImplementedError
 
     def candidates(
@@ -145,7 +176,7 @@ class _DeclaredSignal:
         return [self.candidates(query, k, filter=filter) for query in queries]
 
 
-class ExactNormalizedSignal(_DeclaredSignal):
+class ExactNormalizedSignal(DeclaredSignal):
     """Match a folded query against any form the vocabulary carries."""
 
     key = "exact"
@@ -154,7 +185,7 @@ class ExactNormalizedSignal(_DeclaredSignal):
         return self._entities.by_surface_form(query)
 
 
-class AliasSignal(_DeclaredSignal):
+class AliasSignal(DeclaredSignal):
     """Match a folded query against **alias** forms specifically."""
 
     key = "alias"
@@ -163,8 +194,12 @@ class AliasSignal(_DeclaredSignal):
         return self._entities.by_alias_form(query)
 
 
-class _AsyncDeclaredSignal:
-    """The asynchronous twin's shared half.
+class AsyncDeclaredSignal:
+    """The asynchronous twin's shared half -- **subclass this** for an async rung.
+
+    :class:`DeclaredSignal`'s argument applies unchanged: set :attr:`key`,
+    implement ``_hits``, and the constructor, ``name``, ``narrows()``, the
+    superset-filter narrowing and the batch loop come with it.
 
     ``name`` and ``narrows()`` stay synchronous: neither reaches for data, and
     making them awaitable would cost every caller an ``await`` for nothing.
@@ -216,7 +251,7 @@ class _AsyncDeclaredSignal:
         return [await self.candidates(query, k, filter=filter) for query in queries]
 
 
-class AsyncExactNormalizedSignal(_AsyncDeclaredSignal):
+class AsyncExactNormalizedSignal(AsyncDeclaredSignal):
     """:class:`ExactNormalizedSignal` over an asynchronous source."""
 
     key = "exact"
@@ -225,7 +260,7 @@ class AsyncExactNormalizedSignal(_AsyncDeclaredSignal):
         return await self._entities.by_surface_form(query)
 
 
-class AsyncAliasSignal(_AsyncDeclaredSignal):
+class AsyncAliasSignal(AsyncDeclaredSignal):
     """:class:`AliasSignal` over an asynchronous source."""
 
     key = "alias"
@@ -245,12 +280,22 @@ def _admitted(
     the query comes back short of ``k`` when the vocabulary could have filled
     it. Narrowing here is what makes the rung's ``k`` mean ``k``.
 
-    So it is an optimisation and is allowed to be wrong; the cascade overrules
-    it either way. What it is **not** allowed to be is a *second reading of the
-    scope* -- so the rule itself is
-    :func:`~dataknobs_common.entity_resolution.values.within_admits`, the same
-    published function the cascade applies, rather than a set intersection that
-    agrees with it today.
+    So it is an optimisation -- but **only in one direction**. It may
+    over-admit freely and must never under-admit: a **superset filter**, not a
+    second reading of the scope. ``_admits`` filters what a rung *produced*, so
+    it can only remove; a rung that admits too much is overruled, while a rung
+    that admits too little never hands the candidate over and nothing
+    downstream recovers it.
+
+    **The general form, since it is not specific to this pair:** a downstream
+    filter cannot recover what an upstream one removed, so in any two-stage
+    filter the upstream stage must be a superset filter. The asymmetry holds
+    even when both stages call the same function -- which is why the rule
+    itself is
+    :func:`~dataknobs_common.entity_resolution.values.within_admits` over
+    :func:`~dataknobs_common.entity_resolution.values.within_memberships`, the
+    same two published functions the cascade applies, rather than a projection
+    that agrees with the cascade's today.
     """
     axes = within_axes(filter)
     if not axes:
@@ -259,7 +304,7 @@ def _admitted(
     return frozenset(
         entity_id
         for entity_id, entity in found.items()
-        if within_admits(axes, {TAXONOMY_ID_KEY: entity.type})
+        if within_admits(axes, within_memberships(entity, entities))
     )
 
 
@@ -274,5 +319,5 @@ async def _async_admitted(
     return frozenset(
         entity_id
         for entity_id, entity in found.items()
-        if within_admits(axes, {TAXONOMY_ID_KEY: entity.type})
+        if within_admits(axes, within_memberships(entity, entities))
     )

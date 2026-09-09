@@ -36,8 +36,8 @@ from dataknobs_common.entity_resolution.values import (
     Within,
     within_admits,
     within_axes,
+    within_memberships,
 )
-from dataknobs_common.entity_resolution.values import TAXONOMY_ID_KEY
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -231,21 +231,11 @@ def _offered(
     return rung_filter if rung.narrows() else None
 
 
-def _memberships(entity: Any) -> Mapping[str, str]:
-    """What one entity is, per scope axis.
-
-    One axis on this path, because ``describe().declares`` is what an entity
-    source publishes as its scope terms and it names types. A source that
-    declares more axes gives this function more to say without changing
-    anything that calls it.
-    """
-    return {TAXONOMY_ID_KEY: entity.type}
-
-
 def _admits(
     found: Mapping[str, Any],
     produced: Sequence[EntityCandidate],
     axes: Mapping[str, frozenset[str]],
+    source: Any = None,
 ) -> tuple[EntityCandidate, ...]:
     """The candidates a scope admits, decided against **the cascade's** source.
 
@@ -264,7 +254,7 @@ def _admits(
         candidate
         for candidate in produced
         if candidate.entity_id in found
-        and within_admits(axes, _memberships(found[candidate.entity_id]))
+        and within_admits(axes, within_memberships(found[candidate.entity_id], source))
     )
 
 
@@ -303,7 +293,7 @@ class CascadingResolver:
             scoped: Sequence[EntityCandidate] = produced
             if axes:
                 found = self._entities.get_many([c.entity_id for c in produced])
-                scoped = _admits(found, produced, axes)
+                scoped = _admits(found, produced, axes, self._entities)
             state = merge_rung(state, scoped, signal=rung.name, kind=_batch_kind(scoped))
         return finish(state, compatibility=None)
 
@@ -326,7 +316,7 @@ class CascadingResolver:
             )
             if axes:
                 found = self._entities.get_many([c.entity_id for batch in batches for c in batch])
-                batches = [_admits(found, batch, axes) for batch in batches]
+                batches = [_admits(found, batch, axes, self._entities) for batch in batches]
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
 
@@ -364,7 +354,7 @@ class AsyncCascadingResolver:
             scoped: Sequence[EntityCandidate] = produced
             if axes:
                 found = await self._entities.get_many([c.entity_id for c in produced])
-                scoped = _admits(found, produced, axes)
+                scoped = _admits(found, produced, axes, self._entities)
             state = merge_rung(state, scoped, signal=rung.name, kind=_batch_kind(scoped))
         return finish(state, compatibility=None)
 
@@ -385,7 +375,7 @@ class AsyncCascadingResolver:
                 found = await self._entities.get_many(
                     [c.entity_id for batch in batches for c in batch]
                 )
-                batches = [_admits(found, batch, axes) for batch in batches]
+                batches = [_admits(found, batch, axes, self._entities) for batch in batches]
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
 

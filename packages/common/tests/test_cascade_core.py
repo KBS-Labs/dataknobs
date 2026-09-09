@@ -22,24 +22,29 @@ from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncAliasSignal,
     AsyncCascadingResolver,
+    AsyncDeclaredSignal,
     AsyncEntityResolver,
     AsyncExactNormalizedSignal,
     AsyncMatchSignal,
     BridgedEntityResolver,
     CascadeState,
     CascadingResolver,
+    DeclaredSignal,
     EntityCandidate,
     EntityResolver,
     EvidenceKind,
     ExactNormalizedSignal,
     MatchEvidence,
     MatchSignal,
+    MembershipOracle,
     TAXONOMY_ID_KEY,
     Scoring,
     cascade as cascade_module,
+    signals as signals_module,
 )
 from dataknobs_common.ontology import (
     AsyncMappingEntitySource,
+    Entity,
     MappingEntitySource,
     async_load_ontology,
     load_ontology,
@@ -189,6 +194,11 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
             ["candidates", "candidates_many"],
         ),
         (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many"]),
+        (
+            DeclaredSignal,
+            AsyncDeclaredSignal,
+            ["candidates", "candidates_many"],
+        ),
     ],
 )
 def test_the_twins_expose_one_surface(
@@ -537,3 +547,107 @@ def test_a_miss_reports_what_it_could_not_place(mammals_path: Path) -> None:
     miss = resolver.resolve("wombat", k=5)
     assert miss.coverage.matched == ()
     assert miss.coverage.unmatched == ("wombat",)
+
+
+class TwoAxisSource(MappingEntitySource):
+    """A source that answers for its own entities, on more than one axis.
+
+    A real implementation of
+    :class:`~dataknobs_common.entity_resolution.MembershipOracle` rather than a
+    stub, because the question the test below asks is *what does a source with
+    a second axis make possible*, and a source that answers it by existing is
+    also the cheapest proof that the seam is reachable from outside.
+
+    The second axis is read off ``metadata``, which is where a hand-edited
+    vocabulary would put it.
+    """
+
+    def memberships(self, entity: Entity) -> dict[str, str]:
+        placed = {TAXONOMY_ID_KEY: entity.type}
+        habitat = entity.metadata.get("habitat")
+        if habitat is not None:
+            placed["habitat"] = str(habitat)
+        return placed
+
+
+def two_axis_resolver() -> CascadingResolver:
+    """One entity on two axes, and a cascade over it."""
+    source = TwoAxisSource(
+        {"beagle": Entity(id="beagle", type="Breed", name="Beagle", metadata={"habitat": "forest"})}
+    )
+    return CascadingResolver([ExactNormalizedSignal(source)], source)
+
+
+def test_a_two_axis_scope_can_still_admit() -> None:
+    """A POSITIVE result under a TWO-AXIS scope -- the shape the suite lacked.
+
+    Every other scoped assertion here is either one-axis or negative, and that
+    combination cannot see the defect this guards. The three copies of the
+    membership projection agreed on ``taxonomy_id`` **by construction**, since
+    each read ``Entity.type``; a divergence between them could therefore only
+    appear on a *second* axis, where the only assertion was ``== []``. A
+    negative assertion is satisfied by returning less, so the rung-side
+    narrowing could silently start dropping everything and nothing here would
+    have failed.
+
+    This is the one shape that fails on that divergence: it needs both axes to
+    survive **both** filters -- the rung's narrowing and the cascade's ruling
+    -- so a projection that loses an axis at either site turns this ``==
+    ["beagle"]`` into ``== []``.
+    """
+    resolver = two_axis_resolver()
+
+    def placed(within: Any) -> list[str]:
+        return [c.entity_id for c in resolver.resolve("beagle", k=5, within=within).candidates]
+
+    # The positive the suite did not have: two axes, both satisfied.
+    assert placed({TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}) == ["beagle"]
+
+    # And the negatives that make it a two-axis claim rather than a one-axis
+    # one that happens to carry a second key: either axis alone refuses it.
+    assert placed({TAXONOMY_ID_KEY: "Breed", "habitat": "tundra"}) == []
+    assert placed({TAXONOMY_ID_KEY: "Species", "habitat": "forest"}) == []
+
+
+def test_the_rung_may_over_admit_but_never_under_admit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The superset-filter discipline, in the direction that cannot be recovered.
+
+    ``_admits`` filters what a rung *produced*, so it can only remove. A rung
+    that admits too much is overruled; a rung that admits too little never
+    hands the candidate over and nothing downstream recovers it. Both halves
+    are asserted, because the claim is an asymmetry and stating only the
+    forgiving half is how it got written down wrong the first time.
+    """
+    resolver = two_axis_resolver()
+    scope = {TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}
+
+    def placed() -> list[str]:
+        return [c.entity_id for c in resolver.resolve("beagle", k=5, within=scope).candidates]
+
+    assert placed() == ["beagle"], "the unpatched control: this scope admits"
+
+    # Over-admitting: the rung ignores the scope entirely. The cascade rules.
+    monkeypatch.setattr(signals_module, "_admitted", lambda entities, hits, filter: hits)
+    assert placed() == ["beagle"]
+
+    # Under-admitting: the rung drops what the scope admits. Unrecoverable.
+    monkeypatch.setattr(signals_module, "_admitted", lambda entities, hits, filter: frozenset())
+    assert placed() == []
+
+
+def test_the_membership_oracle_has_no_twin_on_purpose() -> None:
+    """One protocol for both flavours, declared rather than left to be noticed.
+
+    Every other member of this family that reaches for data is twinned, so a
+    single-flavour protocol is the kind of asymmetry the parity list above
+    exists to make somebody state out loud. The reason is ``describe()``'s: an
+    oracle reads an entity the **caller already holds** and touches no backing,
+    so an awaitable form would cost every caller an ``await`` and buy nothing.
+    The asynchronous cascade consults this same synchronous member.
+
+    Asserted rather than written in a docstring alone, because the obvious
+    maintenance move -- adding ``AsyncMembershipOracle`` for symmetry -- would
+    otherwise land without anyone revisiting why there is only one.
+    """
+    assert not inspect.iscoroutinefunction(MembershipOracle.memberships)
+    assert not hasattr(entity_resolution, "AsyncMembershipOracle")

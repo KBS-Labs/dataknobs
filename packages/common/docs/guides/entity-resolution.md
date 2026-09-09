@@ -151,9 +151,22 @@ under a rung-side drop two rungs could disagree and nothing would notice.
 A rung that declares `narrows()` is still *offered* the scope, and may use it
 to return `k` candidates already inside it — otherwise a rung asked for `k`
 hands back `k` unscoped candidates that the cascade then thins, and the query
-comes back short. That is an optimisation and is allowed to be wrong. Both it
-and the cascade apply the same published function, `within_admits`, so there
-is one reading of a scope rather than two that agree today.
+comes back short.
+
+That narrowing is an optimisation, but **only in one direction**. A rung may
+**over-admit freely and must never under-admit** — it is a superset filter, not
+a second reading of the scope. The cascade rules on what a rung *produced*, so
+it can only remove: too much is corrected, too little is lost. A candidate the
+rung withholds is one nothing downstream can recover, so when in doubt a rung
+should return it and let the cascade decide.
+
+The general form is worth stating on its own, because it is not specific to
+this pair: **a downstream filter cannot recover what an upstream one removed,
+so in any two-stage filter the upstream stage must be a superset filter.** The
+asymmetry survives even when both stages call the same functions — and here
+they do: rung and cascade both apply `within_admits` over
+`within_memberships`, so there is one reading of a scope and one projection of
+what an entity is, rather than copies that agree today.
 
 ## Both flavours, and one core
 
@@ -193,16 +206,40 @@ rather than one per call.
 
 ## Writing your own rung
 
-A rung is anything satisfying `MatchSignal`: a `name`, a `narrows()`, and the
-two `candidates` members. Register it under the key consumers will write as
-`kind:`, and the evidence it produces carries that same key — so a caller
-reading `evidence.signal` can correlate a hit back to what they configured.
+**Start from `DeclaredSignal`.** Set `key`, implement `_hits`, and everything
+else arrives with it: the constructor, `name`, `narrows()`, the batch loop, and
+the rung-side narrowing — the last of these already a superset filter, which is
+the one part of a rung that is easy to get wrong in the direction nothing
+downstream can recover.
 
 ```python
-from dataknobs_common.entity_resolution import signal_backends
+from dataknobs_common.entity_resolution import DeclaredSignal, signal_backends
+
+
+class MyRung(DeclaredSignal):
+    key = "my_rung"
+
+    def _hits(self, query: str) -> frozenset[str]:
+        # `query` is already folded by this rung's normalizer.
+        # Return everything that matches; ordering, the cut to `k` and the
+        # scope are decided above you.
+        return self._entities.by_surface_form(query)
+
 
 signal_backends.register("my_rung", MyRung)
 ```
+
+`AsyncDeclaredSignal` is the same for a rung that reaches for data — one
+`async def _hits`, everything else shared.
+
+The bare `MatchSignal` protocol stays the escape hatch, for a rung the base
+cannot serve: one whose backing is not a dictionary lookup, or one that already
+has a superclass. Satisfying it means a `name`, a `narrows()` and the two
+`candidates` members — and writing the batch loop and the narrowing yourself,
+correctly, including that `narrows()` promise. Either way, register it under
+the key consumers will write as `kind:`; the evidence it produces carries that
+same key, so a caller reading `evidence.signal` can correlate a hit back to
+what they configured.
 
 Registering also clears an *unavailable* mark. A rung that exists in only one
 flavour is declared in the other with a reason, so asking the synchronous

@@ -19,19 +19,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from dataknobs_common.entity_resolution.values import (
         EntityCandidate,
         ResolutionResult,
         Within,
     )
+    from dataknobs_common.ontology.model import Entity
 
 __all__ = [
     "AsyncEntityResolver",
     "AsyncMatchSignal",
     "EntityResolver",
     "MatchSignal",
+    "MembershipOracle",
 ]
 
 
@@ -53,9 +55,20 @@ class MatchSignal(Protocol):
     def narrows(self) -> bool:
         """Whether this rung can honour a filter.
 
-        A rung that cannot must say so rather than accepting a scope and
-        ignoring it, which returns candidates from outside it while looking
-        like it worked.
+        A rung that cannot must say so rather than silently ignoring a scope
+        it was handed -- it is offered a filter only if it answers ``True``.
+
+        **Answering ``True`` is a promise in one direction only.** A rung that
+        narrows may **over-admit freely and must never under-admit**: a
+        superset filter, not a second reading of the scope. The cascade rules
+        on every candidate a rung produces and can only *remove*, so returning
+        too much is corrected and returning too little is not -- a candidate
+        the rung withholds is one nothing downstream can recover. When in
+        doubt, return it and let the cascade decide.
+
+        Narrowing is therefore an optimisation: it keeps a rung's ``k`` meaning
+        ``k`` under a scope, rather than handing over ``k`` unscoped candidates
+        the cascade then thins.
         """
         ...
 
@@ -69,7 +82,16 @@ class MatchSignal(Protocol):
         """The batch form, for a corpus rather than a turn.
 
         A rung with no real batch path loops :meth:`candidates`; one that can
-        ask its backing a single question for many queries overrides this.
+        ask its backing a single question for many queries answers it directly.
+
+        **This protocol carries no implementation of that loop** -- a Protocol
+        member is a shape, so a rung written against this alone must write the
+        loop itself.
+        :class:`~dataknobs_common.entity_resolution.DeclaredSignal` is where the
+        loop actually lives, along with the constructor, ``name``,
+        ``narrows()`` and the rung-side narrowing; subclassing it is the
+        shorter path to a correct rung, and this protocol is the escape hatch
+        for a rung it cannot serve.
         """
         ...
 
@@ -124,3 +146,38 @@ class AsyncEntityResolver(Protocol):
     async def resolve_many(
         self, names: Sequence[str], *, k: int = 5, within: Within = None
     ) -> list[ResolutionResult]: ...
+
+
+@runtime_checkable
+class MembershipOracle(Protocol):
+    """A source that answers what an entity **is**, per scope axis.
+
+    The library derives membership from ``Entity.type`` -- see
+    :func:`~dataknobs_common.entity_resolution.values.within_memberships`,
+    which is the published default and stays the answer for a source that does
+    not satisfy this. Satisfying it is how a source that knows more than a type
+    about its entities -- a state, a tenant, a jurisdiction -- says so, and
+    thereby makes a multi-axis ``within`` scope mean something.
+
+    **A separate protocol rather than a member on**
+    :class:`~dataknobs_common.ontology.sources.EntitySource`. That protocol is
+    ``@runtime_checkable`` and consumers satisfy it structurally, so widening
+    it would leave ``isinstance`` passing against implementations we never see
+    while every call carrying the new member raised ``AttributeError``. A
+    source that does not satisfy *this* protocol is simply never asked, so
+    nothing migrates and no existing source changes.
+
+    **One protocol, not a twin pair**, and deliberately so: like
+    ``EntitySource.describe``, this reads an entity the caller already holds
+    and touches no backing. An awaitable form would cost every caller an
+    ``await`` and buy nothing, so the asynchronous cascade consults this same
+    synchronous member.
+
+    Returns:
+        Axis name to the one id the entity has on that axis. An axis left out
+        is an axis the entity declares nothing on, which
+        :func:`~dataknobs_common.entity_resolution.values.within_admits` reads
+        as *excluded* rather than *unconstrained*.
+    """
+
+    def memberships(self, entity: Entity) -> Mapping[str, str]: ...

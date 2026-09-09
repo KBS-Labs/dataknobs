@@ -44,6 +44,7 @@ from dataknobs_common.entity_resolution.protocols import (
     AsyncMatchSignal,
     EntityResolver,
     MatchSignal,
+    MembershipOracle,
 )
 from dataknobs_common.entity_resolution.registry import (
     async_signal_backends,
@@ -52,7 +53,9 @@ from dataknobs_common.entity_resolution.registry import (
 from dataknobs_common.entity_resolution.signals import (
     AliasSignal,
     AsyncAliasSignal,
+    AsyncDeclaredSignal,
     AsyncExactNormalizedSignal,
+    DeclaredSignal,
     ExactNormalizedSignal,
 )
 from dataknobs_common.entity_resolution.values import (
@@ -68,15 +71,18 @@ from dataknobs_common.entity_resolution.values import (
     Within,
     within_admits,
     within_axes,
+    within_memberships,
 )
 
 __all__ = [
     "TAXONOMY_ID_KEY",
     "AliasSignal",
     "AsyncAliasSignal",
+    "AsyncDeclaredSignal",
     "AsyncCascadingResolver",
     "AsyncEntityResolver",
     "AsyncExactNormalizedSignal",
+    "DeclaredSignal",
     "AsyncMatchSignal",
     "BridgedEntityResolver",
     "CascadeState",
@@ -89,6 +95,7 @@ __all__ = [
     "ExactNormalizedSignal",
     "MatchEvidence",
     "MatchSignal",
+    "MembershipOracle",
     "ResolutionRef",
     "ResolutionResult",
     "Scoring",
@@ -99,4 +106,5 @@ __all__ = [
     "signal_backends",
     "within_admits",
     "within_axes",
+    "within_memberships",
 ]
