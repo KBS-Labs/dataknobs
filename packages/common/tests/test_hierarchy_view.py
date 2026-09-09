@@ -34,6 +34,7 @@ from dataknobs_common.hierarchy import (
 from dataknobs_common.ontology import (
     AsyncMappingAssertionSource,
     MappingAssertionSource,
+    RelationType,
     async_load_ontology,
     load_ontology,
 )
@@ -265,6 +266,43 @@ def test_a_cursor_hashes_over_every_backing_this_package_ships(
     assert hash(view) == hash(same)
     assert {view, same} == {view}
     assert len({view, view.at("no_such_node")}) == 2
+
+
+def test_a_relation_given_as_its_definition_withholds_the_hash(mammals_path: Path) -> None:
+    """The boundary above, reached from inside the package rather than outside it.
+
+    ``AssertionHierarchy.relation`` is a ``RelationRef`` -- an id *or* the
+    definition -- and :func:`relation_id` is why a read accepts either. The
+    hash does not. A ``RelationType`` is an ``Entity``: a plain dataclass with
+    equality on, so its ``__hash__`` is ``None`` and it is *honestly*
+    unhashable, which is one of the answers this package already gives. Hold
+    one as the field of a frozen dataclass and the honesty inverts, because
+    the outer type regenerates a hash over it.
+
+    So the qualifier on the parametrised test above is load-bearing: those
+    four hash *as a document builds them*, because the loader writes the
+    relation through ``str()``. Building the definition in code is a supported
+    door that reaches the same shape, which is why the guide and both cursor
+    docstrings name it rather than claiming the pair hashes unconditionally.
+
+    This pins a boundary rather than a fix -- the sentence and the behaviour
+    have to move together, so a later decision to give this pair one of the
+    two coherent answers fails here and takes the prose with it.
+    """
+    edges = load_ontology(mammals_path).assertions.find(relation="isa")
+    isa = RelationType(id="isa")
+    assert not isinstance(isa, Hashable)  # honest, while it is held on its own
+
+    axis = AssertionHierarchy(MappingAssertionSource(edges), isa)
+    assert axis.parents("dog") == ("mammal",)  # the read accepts the definition
+
+    for view in (
+        HierarchyView(axis, "dog"),
+        AsyncHierarchyView(AsyncAssertionHierarchy(AsyncMappingAssertionSource(edges), isa), "dog"),
+    ):
+        assert isinstance(view, Hashable)  # promised by frozen alone, as ever
+        with pytest.raises(TypeError, match="unhashable type: 'RelationType'"):
+            hash(view)
 
 
 @dataclasses.dataclass(frozen=True)

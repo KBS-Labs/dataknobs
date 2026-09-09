@@ -459,9 +459,15 @@ class HierarchyView(Generic[K]):
     :class:`Hierarchy` and the key. So the capability is reported here rather
     than required, and either field can withhold it.
 
-    Every backing this package ships gives it -- both mapping twins are
-    compared by identity for that purpose, and the assertion-backed pair holds
-    two objects that hash as any object does -- and ``str`` keys give it. A
+    Every backing this package ships gives it *as a document builds one*:
+    both mapping twins are compared by identity for that purpose, and the
+    assertion-backed pair holds a source that hashes as any object does over a
+    relation the loader writes as an id. Hand that pair a
+    :class:`~dataknobs_common.ontology.model.RelationType` instead -- which
+    reads correctly, since :func:`~dataknobs_common.ontology.sources.relation_id`
+    accepts either -- and it withholds the hash: a ``RelationType`` is an
+    ``Entity``, honestly unhashable, and a field of a frozen dataclass is
+    where that honesty inverts. ``str`` keys give it. A
     structure of your own that does not, or a key type of your own that does
     not, makes a cursor over it answer ``isinstance(view, Hashable)`` with
     ``True`` and raise at ``hash()``. **The ``Hashable`` bound on ``K`` does
@@ -520,9 +526,10 @@ class AsyncHierarchyView(Generic[K]):
     constructs rather than reads -- the same rule that makes
     :meth:`AsyncMappingHierarchy.from_nested` a plain ``def``.
 
-    It hashes on the same terms :class:`HierarchyView` states, from both of the
-    same fields: both asynchronous backings this package ships hash, and so
-    does a ``str`` key.
+    It hashes on the same terms :class:`HierarchyView` states, from both of
+    the same fields and with the same one caveat: as a document builds them,
+    both asynchronous backings this package ships hash, and so does a ``str``
+    key.
     """
 
     structure: AsyncHierarchy[K]

@@ -249,9 +249,15 @@ what they hold does**. The cursor reports that capability rather than requiring
 it: `HierarchyView` is frozen, so its hash is its **field tuple**, which is the
 `Hierarchy` *and* the key, and either can withhold it.
 
-Everything shipped here gives it. The two mapping twins are compared by
-identity, so their `dict` fields are never reached; the assertion-backed pair
-holds two objects that hash the way any object does; and a `str` key hashes.
+Everything shipped here gives it, as a document builds it. The two mapping
+twins are compared by identity, so their `dict` fields are never reached; the
+assertion-backed pair holds a source that hashes the way any object does over
+a relation the loader writes as an id; and a `str` key hashes. Build that pair
+in code with a `RelationType` for its relation rather than the id — reads
+accept either, and `relation_id` is why — and it withholds the hash for the
+same reason one level in: a `RelationType` is an `Entity`, honestly
+unhashable, and holding one in a frozen dataclass's field is what turns an
+honest `False` into a raise.
 A structure of your own will not, if it is a frozen dataclass over a `dict` —
 and neither will a **key** of your own of that shape, which is the half worth
 saying out loud, because the `Hashable` bound on the key parameter does not
