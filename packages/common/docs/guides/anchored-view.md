@@ -245,15 +245,21 @@ assert HierarchyView(MappingHierarchy({3: (2,), 2: (1,), 1: ()}), 3).parents()[0
 
 Both structural cursors hash, so a walk can key a `seen` set on them the way
 the taxonomy cursor's section below does — **and they hash exactly as far as
-the structure does**. That is a property of the backing rather than a caveat
-about the cursor: `HierarchyView` is frozen, so its hash is its field tuple,
-and the first field is whichever `Hierarchy` you passed. Every backing shipped
-here gives it. The two mapping twins are compared by identity, so their `dict`
-fields are never reached; the assertion-backed pair holds two objects that hash
-the way any object does. A backing of your own will not, if it is a frozen
-dataclass over a `dict` — and it fails in the shape worth knowing about,
-answering `isinstance(view, Hashable)` with `True` and raising at `hash(view)`.
-Declare such a backing `eq=False`, or hold its edges in something hashable.
+what they hold does**. The cursor reports that capability rather than requiring
+it: `HierarchyView` is frozen, so its hash is its **field tuple**, which is the
+`Hierarchy` *and* the key, and either can withhold it.
+
+Everything shipped here gives it. The two mapping twins are compared by
+identity, so their `dict` fields are never reached; the assertion-backed pair
+holds two objects that hash the way any object does; and a `str` key hashes.
+A structure of your own will not, if it is a frozen dataclass over a `dict` —
+and neither will a **key** of your own of that shape, which is the half worth
+saying out loud, because the `Hashable` bound on the key parameter does not
+catch it: such a type satisfies the bound and raises, so the bound documents
+the requirement rather than enforcing it. Either way it fails in the same
+shape, answering `isinstance(view, Hashable)` with `True` and raising at
+`hash(view)`. Declare such a type `eq=False`, or hold its contents in something
+hashable.
 
 The cost is the axis's cost, one level down: two mappings holding the same
 edges are no longer equal to each other. Ask `parent_edges()` on both when that

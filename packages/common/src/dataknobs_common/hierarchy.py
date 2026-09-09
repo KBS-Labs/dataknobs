@@ -454,16 +454,21 @@ class HierarchyView(Generic[K]):
     children*. ``exists()`` is what does, and it is safe to call alone.
 
     **It hashes, so a walk can key its visited set on it -- and it hashes
-    exactly as far as its structure does.** Frozen means a generated
-    ``__hash__`` over the field tuple, and the first field is whatever
-    :class:`Hierarchy` the caller passed, so the capability is the backing's to
-    give. Every backing this package ships gives it: both mapping twins are
+    exactly as far as what it holds does.** Frozen means a generated
+    ``__hash__`` over the **field tuple**, which is both fields: the
+    :class:`Hierarchy` and the key. So the capability is reported here rather
+    than required, and either field can withhold it.
+
+    Every backing this package ships gives it -- both mapping twins are
     compared by identity for that purpose, and the assertion-backed pair holds
-    two objects that hash as any object does. A backing of your own that does
-    not -- a plain frozen dataclass over a ``dict``, say -- makes a cursor over
-    it answer ``isinstance(view, Hashable)`` with ``True`` and raise at
-    ``hash()``, which is the one failure worth knowing about here. Declare it
-    ``eq=False``, or hold its edges in something hashable.
+    two objects that hash as any object does -- and ``str`` keys give it. A
+    structure of your own that does not, or a key type of your own that does
+    not, makes a cursor over it answer ``isinstance(view, Hashable)`` with
+    ``True`` and raise at ``hash()``. **The ``Hashable`` bound on ``K`` does
+    not catch the key half**: a frozen dataclass over a ``dict`` satisfies the
+    bound and raises, so the bound documents the requirement rather than
+    enforcing it. Declare such a type ``eq=False``, or hold its contents in
+    something hashable.
 
     Generic in the key with ``str`` defaulted, like the protocol it holds, so
     a bare ``HierarchyView`` is ``HierarchyView[str]``.
@@ -515,9 +520,9 @@ class AsyncHierarchyView(Generic[K]):
     constructs rather than reads -- the same rule that makes
     :meth:`AsyncMappingHierarchy.from_nested` a plain ``def``.
 
-    It hashes on the same terms :class:`HierarchyView` states, and against the
-    same backings: the property belongs to the structure, and both asynchronous
-    backings this package ships have it.
+    It hashes on the same terms :class:`HierarchyView` states, from both of the
+    same fields: both asynchronous backings this package ships hash, and so
+    does a ``str`` key.
     """
 
     structure: AsyncHierarchy[K]

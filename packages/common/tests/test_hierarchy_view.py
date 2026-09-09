@@ -267,6 +267,64 @@ def test_a_cursor_hashes_over_every_backing_this_package_ships(
     assert len({view, view.at("no_such_node")}) == 2
 
 
+@dataclasses.dataclass(frozen=True)
+class _Labelled:
+    """A frozen dataclass over a ``dict``: the shape that answers and raises.
+
+    One class in both roles, because the point is that the role does not
+    matter -- it is a legal key and a legal (if empty) structure, and a cursor
+    holding it in either field fails identically.
+    """
+
+    name: str
+    labels: dict[str, str]
+
+    def roots(self) -> Sequence[str]:
+        return ()
+
+    def parents(self, node_id: object) -> Sequence[str]:
+        return ()
+
+    def children(self, node_id: object) -> Sequence[str]:
+        return ()
+
+    def contains(self, node_id: object) -> bool:
+        return False
+
+
+def test_the_limit_is_both_fields_and_the_key_bound_does_not_catch_it() -> None:
+    """A cursor hashes as far as *what it holds* does -- and it holds two things.
+
+    The generated ``__hash__`` is over the **field tuple**, so the structure
+    and the key each carry a veto. The key half is the one that reads as
+    impossible: ``K`` is bound to ``Hashable``, and a frozen dataclass over a
+    ``dict`` satisfies that bound while raising when hashed -- so the bound
+    documents the requirement rather than enforcing it, and a consumer binding
+    ``K`` to such a type type-checks cleanly and fails at the call.
+
+    Pinned as the stated **limit** rather than as a defect: what is asserted
+    here is exactly what the class docstring and the guide promise, so a
+    sentence that widened the promise without the code widening with it fails
+    here.
+    """
+    unhashable = _Labelled("billing", {"team": "core"})
+
+    assert isinstance(unhashable, Hashable)
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        hash(unhashable)
+
+    from_the_structure = HierarchyView(unhashable, "billing")
+    assert isinstance(from_the_structure, Hashable)
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        hash(from_the_structure)
+
+    from_the_key = HierarchyView(MappingHierarchy(BILLING), unhashable)
+    assert isinstance(hash(from_the_key.structure), int)
+    assert isinstance(from_the_key, Hashable)
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        hash(from_the_key)
+
+
 def test_a_walk_keys_its_seen_set_on_cursors_over_a_mapping_a_consumer_holds() -> None:
     """The guide's deferred walk, run over the guide's own worked backing.
 

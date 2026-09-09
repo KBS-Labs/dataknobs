@@ -243,9 +243,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parent_map` on the other — dicts, unhashable however frozen their owner is
   — and a cursor that satisfies `isinstance(view, Hashable)` and then raises
   at the call is worse than one that never claimed to. **A structural cursor
-  hashes exactly as far as its structure does**, which is the one thing to
-  know when the structure is your own: a frozen dataclass over a `dict` puts
-  that shape back, and `eq=False` takes it out again. The cost is that two
+  hashes exactly as far as what it holds does** — the capability is reported,
+  not required, and the field tuple is the structure *and* the key. That is the
+  thing to know when either is your own: a frozen dataclass over a `dict` puts
+  the shape back from either side, `eq=False` takes it out again, and the
+  `Hashable` bound on the key parameter does not catch it, since such a type
+  satisfies the bound and raises. The cost is that two
   *separately built* axes over one ontology no longer compare equal, and
   neither do two mappings holding the same edges; `Ontology.taxonomy()` builds
   on each call, so hold the axis you walk from, and ask `parent_edges()` when
