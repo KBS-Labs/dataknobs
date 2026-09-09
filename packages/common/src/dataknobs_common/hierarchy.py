@@ -459,15 +459,10 @@ class HierarchyView(Generic[K]):
     :class:`Hierarchy` and the key. So the capability is reported here rather
     than required, and either field can withhold it.
 
-    Every backing this package ships gives it *as a document builds one*:
-    both mapping twins are compared by identity for that purpose, and the
-    assertion-backed pair holds a source that hashes as any object does over a
-    relation the loader writes as an id. Hand that pair a
-    :class:`~dataknobs_common.ontology.model.RelationType` instead -- which
-    reads correctly, since :func:`~dataknobs_common.ontology.sources.relation_id`
-    accepts either -- and it withholds the hash: a ``RelationType`` is an
-    ``Entity``, honestly unhashable, and a field of a frozen dataclass is
-    where that honesty inverts. ``str`` keys give it. A
+    Every backing this package ships gives it: both mapping twins are
+    compared by identity for that purpose, and the assertion-backed pair holds
+    a source that hashes as any object does over a relation it canonicalises
+    to an id. ``str`` keys give it. A
     structure of your own that does not, or a key type of your own that does
     not, makes a cursor over it answer ``isinstance(view, Hashable)`` with
     ``True`` and raise at ``hash()``. **The ``Hashable`` bound on ``K`` does
@@ -526,10 +521,9 @@ class AsyncHierarchyView(Generic[K]):
     constructs rather than reads -- the same rule that makes
     :meth:`AsyncMappingHierarchy.from_nested` a plain ``def``.
 
-    It hashes on the same terms :class:`HierarchyView` states, from both of
-    the same fields and with the same one caveat: as a document builds them,
-    both asynchronous backings this package ships hash, and so does a ``str``
-    key.
+    It hashes on the same terms :class:`HierarchyView` states, from both of the
+    same fields: both asynchronous backings this package ships hash, and so
+    does a ``str`` key.
     """
 
     structure: AsyncHierarchy[K]
@@ -627,6 +621,16 @@ class _MappingBacking(Generic[K]):
     is the trade :class:`~dataknobs_common.ontology.taxonomy.Taxonomy` already
     took, for the same reason, and it costs nothing that was being used: two
     mappings holding the same edges are compared with ``parent_edges()``.
+
+    **Forced rather than chosen**, which is the part worth keeping when this
+    looks like a restriction to lift. The mapping is the caller's, held by
+    reference: its contents move under this object, so a hash derived from
+    them would change while a cursor over it sits in the very ``seen`` set the
+    hash exists to serve -- the hash invariant broken in the one place it is
+    load-bearing. ``child_map`` is inverted once at construction besides, so
+    after a caller mutates, ``parents()`` moves and ``children()`` does not.
+    This was never a value. Restoring field-wise equality would reintroduce
+    both defects at once.
 
     ``eq=False`` **on this class does not travel to a subclass.**
     ``@dataclass`` regenerates ``__eq__`` on every class it decorates, and a

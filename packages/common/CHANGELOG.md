@@ -234,8 +234,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both the annotation and a position to keep walking from. The cursor holds
   the structure rather than a copy, owns nothing, and two views over one axis
   are equal exactly when they name the same node. Cursors **hash — over every
-  backing this package ships, as a document builds one**, so a walk a consumer
-  writes can key its visited set on them rather than on bare ids. Reaching
+  backing this package ships**, so a walk a consumer writes can key its
+  visited set on them rather than on bare ids. Reaching
   that meant comparing the thing a cursor holds by identity, on both halves:
   `Taxonomy` and `AsyncTaxonomy` are frozen and identity-compared, and so are
   `MappingHierarchy` and `AsyncMappingHierarchy`, because field-wise equality
@@ -248,11 +248,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thing to know when either is your own: a frozen dataclass over a `dict` puts
   the shape back from either side, `eq=False` takes it out again, and the
   `Hashable` bound on the key parameter does not catch it, since such a type
-  satisfies the bound and raises. The one *shipped* structure that can still
-  withhold it is an assertion-backed axis handed a `RelationType` for its
-  relation rather than the id a document writes: reads accept either, but a
-  `RelationType` is an `Entity`, honestly unhashable, and a frozen dataclass's
-  field is where that honesty inverts. The cost is that two
+  satisfies the bound and raises. On the mapping twins that identity is
+  *forced*, not chosen: they hold the mapping you passed, so a value-derived
+  hash would move when you mutate it, in the set the hash exists to serve.
+  `AssertionHierarchy` and `AsyncAssertionHierarchy` reach the same place by
+  the other route — they hold a handle and a **name**, so they now
+  canonicalise it (`relation_id`) at construction, and compare by the identity
+  of the source and the value of the relation. Naming a relation by its
+  `RelationType` rather than its id therefore builds the same axis, where it
+  used to build one that read alike, compared unequal, and withheld the hash.
+  The cost is that two
   *separately built* axes over one ontology no longer compare equal, and
   neither do two mappings holding the same edges; `Ontology.taxonomy()` builds
   on each call, so hold the axis you walk from, and ask `parent_edges()` when

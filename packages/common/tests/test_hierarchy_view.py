@@ -231,12 +231,7 @@ BILLING = {"late-fees": ("billing",), "refunds": ("billing",), "billing": ()}
 
 
 def _cursor_over(backing: str, path: Path) -> HierarchyView[str] | AsyncHierarchyView[str]:
-    """A cursor over the named backing, anchored somewhere it exists.
-
-    The assertion-backed pair gets its relation as an **id** -- the form a
-    document produces, and a load-bearing choice rather than an incidental
-    one: the definition is equally legal in that field and withholds the hash.
-    """
+    """A cursor over the named backing, anchored somewhere it exists."""
     if backing == "MappingHierarchy":
         return HierarchyView(MappingHierarchy(BILLING), "billing")
     if backing == "AsyncMappingHierarchy":
@@ -264,10 +259,9 @@ def test_a_cursor_hashes_over_every_backing_this_package_ships(
     Asserted over every backing rather than one, because the promise is made
     once, in the cursor's own docstring and the guide, for all of them.
 
-    *As a document builds one*, which is the qualifier those two carry and
-    this test relies on: :func:`_cursor_over` hands the assertion-backed pair
-    its relation as an **id**, the form the loader writes. Handed the
-    definition instead it withholds the hash, which the test below pins.
+    Either spelling of a relation reaches the same axis, which the test below
+    pins: :func:`_cursor_over` hands the assertion-backed pair an **id**, and
+    the definition would name the same one.
     """
     view = _cursor_over(backing, mammals_path)
     same = view.at(view.node)
@@ -278,41 +272,59 @@ def test_a_cursor_hashes_over_every_backing_this_package_ships(
     assert len({view, view.at("no_such_node")}) == 2
 
 
-def test_a_relation_given_as_its_definition_withholds_the_hash(mammals_path: Path) -> None:
-    """The boundary above, reached from inside the package rather than outside it.
+def test_a_relation_given_as_its_definition_names_the_same_axis(mammals_path: Path) -> None:
+    """``RelationRef`` is two spellings of one name; the axis keeps the canonical one.
 
-    ``AssertionHierarchy.relation`` is a ``RelationRef`` -- an id *or* the
-    definition -- and :func:`relation_id` is why a read accepts either. The
-    hash does not. A ``RelationType`` is an ``Entity``: a plain dataclass with
-    equality on, so its ``__hash__`` is ``None`` and it is *honestly*
-    unhashable, which is one of the answers this package already gives. Hold
-    one as the field of a frozen dataclass and the honesty inverts, because
-    the outer type regenerates a hash over it.
+    :func:`relation_id` is where this package decides which spelling it was
+    handed, and its own docstring says *every comparison goes through here
+    rather than each site deciding what it was handed*. The two members
+    ``@dataclass`` generates are comparisons, and they went through nothing:
+    an axis named by the definition read identically to one named by the id
+    and compared unequal to it, while a ``RelationType`` -- an ``Entity``,
+    honestly unhashable -- withheld the hash a frozen field tuple promises.
 
-    So the qualifier on the parametrised test above is load-bearing: those
-    four hash *as a document builds them*, because the loader writes the
-    relation through ``str()``. Building the definition in code is a supported
-    door that reaches the same shape, which is why the guide and both cursor
-    docstrings name it rather than claiming the pair hashes unconditionally.
-
-    This pins a boundary rather than a fix -- the sentence and the behaviour
-    have to move together, so a later decision to give this pair one of the
-    two coherent answers fails here and takes the prose with it.
+    Canonicalised at construction, both spellings name one axis. That is the
+    rule the other backings already follow, said for a field shape they do not
+    have: **compare by the identity of what you hold, and the value of what
+    you name.** The mapping twins hold a live mapping and nothing else, so
+    identity is the whole of it; this pair holds a handle and a name, so the
+    handle is compared by identity and the name by value -- which is only
+    coherent once the name has one spelling.
     """
     edges = load_ontology(mammals_path).assertions.find(relation="isa")
+    source = MappingAssertionSource(edges)
     isa = RelationType(id="isa")
     assert not isinstance(isa, Hashable)  # honest, while it is held on its own
 
-    axis = AssertionHierarchy(MappingAssertionSource(edges), isa)
-    assert axis.parents("dog") == ("mammal",)  # the read accepts the definition
+    by_id = AssertionHierarchy(source, "isa")
+    by_definition = AssertionHierarchy(source, isa)
 
-    for view in (
-        HierarchyView(axis, "dog"),
-        AsyncHierarchyView(AsyncAssertionHierarchy(AsyncMappingAssertionSource(edges), isa), "dog"),
-    ):
-        assert isinstance(view, Hashable)  # promised by frozen alone, as ever
-        with pytest.raises(TypeError, match="unhashable type: 'RelationType'"):
-            hash(view)
+    assert by_definition.relation == "isa"  # the door still takes either
+    assert by_id.parents("dog") == by_definition.parents("dog") == ("mammal",)
+    assert by_id == by_definition
+    assert HierarchyView(by_id, "dog") == HierarchyView(by_definition, "dog")
+    assert hash(HierarchyView(by_id, "dog")) == hash(HierarchyView(by_definition, "dog"))
+
+
+@pytest.mark.asyncio
+async def test_the_async_axis_canonicalises_its_relation_too(mammals_path: Path) -> None:
+    """The twin, canonicalising on its own account because no base does it for it.
+
+    The mapping side needed ``eq=False`` written on all three of its
+    decorators; this pair has no shared body at all, so the same obligation
+    arrives from the other direction and is asserted rather than assumed.
+    """
+    edges = load_ontology(mammals_path).assertions.find(relation="isa")
+    source = AsyncMappingAssertionSource(edges)
+
+    by_id = AsyncAssertionHierarchy(source, "isa")
+    by_definition = AsyncAssertionHierarchy(source, RelationType(id="isa"))
+
+    assert by_definition.relation == "isa"
+    assert await by_id.parents("dog") == await by_definition.parents("dog") == ("mammal",)
+    assert by_id == by_definition
+    assert AsyncHierarchyView(by_id, "dog") == AsyncHierarchyView(by_definition, "dog")
+    assert hash(AsyncHierarchyView(by_id, "dog")) == hash(AsyncHierarchyView(by_definition, "dog"))
 
 
 @dataclasses.dataclass(frozen=True)

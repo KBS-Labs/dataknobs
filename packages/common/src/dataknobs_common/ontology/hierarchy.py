@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypedDict
 
 from dataknobs_common.ontology.model import EntityRef, Polarity
-from dataknobs_common.ontology.sources import object_entity_id
+from dataknobs_common.ontology.sources import object_entity_id, relation_id
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -153,10 +153,30 @@ class AssertionHierarchy:
     mirrored query, not the same one. Both go through :meth:`_find`, which
     supplies this axis's relation to :func:`edge_criteria`, where *asserted*
     is decided once for every reader of an axis, inside this module and out.
+
+    **The relation is canonicalised at construction.** ``RelationRef`` is two
+    spellings of one name -- an id, or the definition itself -- and
+    :func:`~dataknobs_common.ontology.sources.relation_id` is where this
+    package decides which it was handed. Every *read* went through it. The two
+    members ``@dataclass`` generates did not, so an axis named by the
+    definition read identically to one named by the id, compared unequal to
+    it, and withheld the hash a frozen field tuple promises -- a
+    ``RelationType`` is an :class:`~dataknobs_common.ontology.model.Entity`,
+    honestly unhashable, and a field is where that honesty inverts.
+
+    Normalised here, this axis follows the rule the whole family follows, for
+    a field shape none of the others has: **compare by the identity of what
+    you hold, and the value of what you name.** The handle is the source,
+    compared by identity as any object is; the name is the relation, compared
+    by value -- which is only coherent once the name has one spelling. The
+    door still takes either, and :attr:`relation` hands back the id.
     """
 
     source: AssertionSource
     relation: RelationRef
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "relation", relation_id(self.relation))
 
     def _find(
         self, *, subject: str | None = None, object: Term | None = None
@@ -271,6 +291,15 @@ class AsyncAssertionHierarchy:
 
     source: AsyncAssertionSource
     relation: RelationRef
+
+    def __post_init__(self) -> None:
+        """Canonicalise the relation, on this class's own account.
+
+        The twins share no body, so there is no base to inherit this from --
+        the same obligation the mapping side meets by writing ``eq=False`` on
+        each of its three decorators, arrived at from the other direction.
+        """
+        object.__setattr__(self, "relation", relation_id(self.relation))
 
     async def _find(
         self, *, subject: str | None = None, object: Term | None = None
