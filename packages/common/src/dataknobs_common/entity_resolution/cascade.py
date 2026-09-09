@@ -325,9 +325,7 @@ class CascadingResolver:
                 names, k, filter=_offered(rung, rung_filter)
             )
             if axes:
-                found = self._entities.get_many(
-                    [c.entity_id for batch in batches for c in batch]
-                )
+                found = self._entities.get_many([c.entity_id for batch in batches for c in batch])
                 batches = [_admits(found, batch, axes) for batch in batches]
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
@@ -341,9 +339,7 @@ class AsyncCascadingResolver:
     :func:`merge_rung` and :func:`finish` are module functions.
     """
 
-    def __init__(
-        self, rungs: Sequence[AsyncMatchSignal], entities: AsyncEntitySource
-    ) -> None:
+    def __init__(self, rungs: Sequence[AsyncMatchSignal], entities: AsyncEntitySource) -> None:
         """Args:
         rungs: In the order they are asked. The order is the policy.
         entities: The authority a ``within`` scope is decided against.

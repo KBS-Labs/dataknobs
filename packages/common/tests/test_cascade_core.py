@@ -153,13 +153,15 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
         return state
 
     def sync_result() -> tuple[EntityCandidate, ...]:
-        return CascadingResolver([StubSignal("a", [("x", 1.0)])], NO_ENTITIES).resolve("q").candidates
+        return (
+            CascadingResolver([StubSignal("a", [("x", 1.0)])], NO_ENTITIES).resolve("q").candidates
+        )
 
     def async_result() -> tuple[EntityCandidate, ...]:
         return asyncio.run(
-            AsyncCascadingResolver(
-                [AsyncStubSignal("a", [("x", 1.0)])], NO_ENTITIES_ASYNC
-            ).resolve("q")
+            AsyncCascadingResolver([AsyncStubSignal("a", [("x", 1.0)])], NO_ENTITIES_ASYNC).resolve(
+                "q"
+            )
         ).candidates
 
     # Unpatched first, and this half is the test. "Both went empty" is also

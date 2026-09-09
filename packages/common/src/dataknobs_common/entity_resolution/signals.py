@@ -276,5 +276,3 @@ async def _async_admitted(
         for entity_id, entity in found.items()
         if within_admits(axes, {TAXONOMY_ID_KEY: entity.type})
     )
-
-
