@@ -18,10 +18,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.entity_resolution.values import (
+    TAXONOMY_ID_KEY,
     EntityCandidate,
     EvidenceKind,
     MatchEvidence,
     Scoring,
+    within_admits,
+    within_axes,
 )
 from dataknobs_common.text import default_normalizer
 
@@ -234,44 +237,44 @@ class AsyncAliasSignal(_AsyncDeclaredSignal):
 def _admitted(
     entities: EntitySource, hits: frozenset[str], filter: dict[str, Any] | None
 ) -> frozenset[str]:
-    """The hits a filter admits.
+    """The hits a filter admits -- a rung-side **narrowing**, not the ruling.
 
-    **Union within one axis, conjunction across them** -- a filter naming two
-    axes admits only what is in both, which is the only reading under which a
-    consumer scoped to a kind *and* a state can say so.
+    The cascade decides what a scope admits, against its own source. This runs
+    first, inside the rung, for one reason: a rung asked for ``k`` that returns
+    ``k`` unscoped candidates hands the cascade a batch it will then thin, and
+    the query comes back short of ``k`` when the vocabulary could have filled
+    it. Narrowing here is what makes the rung's ``k`` mean ``k``.
 
-    On this path an axis's values are entity types, because
-    ``describe().declares`` is what an entity source publishes as its scope
-    terms and it names types. An axis value naming nothing declared admits
-    nothing, rather than being ignored: a mis-keyed filter that silently
-    matched everything is the failure this refuses to have.
+    So it is an optimisation and is allowed to be wrong; the cascade overrules
+    it either way. What it is **not** allowed to be is a *second reading of the
+    scope* -- so the rule itself is
+    :func:`~dataknobs_common.entity_resolution.values.within_admits`, the same
+    published function the cascade applies, rather than a set intersection that
+    agrees with it today.
     """
-    if not filter:
+    axes = within_axes(filter)
+    if not axes:
         return hits
-    for values in filter.values():
-        admitted: set[str] = set()
-        for value in _as_values(values):
-            admitted |= entities.by_type(value)
-        hits = hits & admitted
-    return hits
+    found = entities.get_many(sorted(hits))
+    return frozenset(
+        entity_id
+        for entity_id, entity in found.items()
+        if within_admits(axes, {TAXONOMY_ID_KEY: entity.type})
+    )
 
 
 async def _async_admitted(
     entities: AsyncEntitySource, hits: frozenset[str], filter: dict[str, Any] | None
 ) -> frozenset[str]:
     """:func:`_admitted` over an asynchronous source."""
-    if not filter:
+    axes = within_axes(filter)
+    if not axes:
         return hits
-    for values in filter.values():
-        admitted: set[str] = set()
-        for value in _as_values(values):
-            admitted |= await entities.by_type(value)
-        hits = hits & admitted
-    return hits
+    found = await entities.get_many(sorted(hits))
+    return frozenset(
+        entity_id
+        for entity_id, entity in found.items()
+        if within_admits(axes, {TAXONOMY_ID_KEY: entity.type})
+    )
 
 
-def _as_values(values: Any) -> tuple[str, ...]:
-    """One axis's values, whether it was given one or several."""
-    if isinstance(values, str):
-        return (values,)
-    return tuple(values)

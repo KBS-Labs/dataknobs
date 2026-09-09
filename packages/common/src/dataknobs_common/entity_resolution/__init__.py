@@ -9,10 +9,10 @@ is simply asked first, and the composition is the policy::
         AliasSignal, CascadingResolver, ExactNormalizedSignal,
     )
 
-    resolver = CascadingResolver([
-        ExactNormalizedSignal(onto.entities),
-        AliasSignal(onto.entities),
-    ])
+    resolver = CascadingResolver(
+        [ExactNormalizedSignal(onto.entities), AliasSignal(onto.entities)],
+        onto.entities,          # the authority a `within` scope is decided against
+    )
     result = resolver.resolve("beagles", k=5)
     result.candidates[0].entity_id            # "beagle"
     result.explain("beagle")[0].signal        # "alias" -- which rung, and why

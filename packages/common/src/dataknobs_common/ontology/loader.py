@@ -936,7 +936,7 @@ def build_resolver(
     """
     section = _read_config(config).resolver
     _refuse_async_only_rungs(section)
-    return CascadingResolver(_sync_rungs(section, ontology))
+    return CascadingResolver(_sync_rungs(section, ontology), ontology.entities)
 
 
 async def async_build_resolver(
@@ -970,7 +970,7 @@ async def async_build_resolver(
         read = await asyncio.to_thread(_read_config, config)
     else:
         read = _read_config(config)
-    return AsyncCascadingResolver(_async_rungs(read.resolver, ontology))
+    return AsyncCascadingResolver(_async_rungs(read.resolver, ontology), ontology.entities)
 
 
 def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...] | None:

@@ -128,6 +128,33 @@ The mapping form is `AND`-ed **across keys** and unioned **within one**, so a
 consumer whose scope is a kind *and* a state can say so. The bare forms are
 sugar for the default axis and mean exactly what they always meant.
 
+**The axis name is load-bearing.** A candidate is admitted on an axis only if
+it declares something there, so a scope naming an axis the source does not
+publish admits nothing — rather than the forgiving reading, where a candidate
+silent on an axis passes every filter on it. What a source publishes is
+`describe().declares`, and an entity source publishes one axis:
+
+```python
+from dataknobs_common.entity_resolution import TAXONOMY_ID_KEY
+
+assert resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed"}).candidates
+assert not resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed",
+                                              "habitat": "forest"}).candidates
+```
+
+**The cascade decides this, not the rungs.** It holds the entity source it was
+built with, and that source is the single authority: a rung answering with an
+entity its own backing calls a `Breed` is overruled if the cascade's source
+disagrees. `MatchSignal` does not require two rungs to share a backing, so
+under a rung-side drop two rungs could disagree and nothing would notice.
+
+A rung that declares `narrows()` is still *offered* the scope, and may use it
+to return `k` candidates already inside it — otherwise a rung asked for `k`
+hands back `k` unscoped candidates that the cascade then thins, and the query
+comes back short. That is an optimisation and is allowed to be wrong. Both it
+and the cascade apply the same published function, `within_admits`, so there
+is one reading of a scope rather than two that agree today.
+
 ## Both flavours, and one core
 
 `AsyncCascadingResolver` is the twin for rungs that reach for data. It is not a

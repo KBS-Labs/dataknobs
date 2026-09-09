@@ -34,8 +34,10 @@ from dataknobs_common.entity_resolution.values import (
     ResolutionResult,
     Scoring,
     Within,
+    within_admits,
     within_axes,
 )
+from dataknobs_common.entity_resolution.values import TAXONOMY_ID_KEY
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -46,6 +48,7 @@ if TYPE_CHECKING:
         AsyncMatchSignal,
         MatchSignal,
     )
+    from dataknobs_common.ontology.sources import AsyncEntitySource, EntitySource
 
 __all__ = [
     "AsyncCascadingResolver",
@@ -214,6 +217,57 @@ def _rung_filter(within: Within) -> dict[str, Any] | None:
     return {axis: sorted(admitted) for axis, admitted in axes.items()}
 
 
+def _offered(
+    rung: MatchSignal | AsyncMatchSignal, rung_filter: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The filter to hand a rung -- only one that declared it can honour it.
+
+    ``narrows()`` is a rung's own statement, and handing a scope to a rung
+    that answered ``False`` is the caller ignoring it. Now that the cascade
+    rules on the scope itself, what passes here is purely the rung's chance to
+    return ``k`` candidates that are already inside it, so a rung declining is
+    a cost and never a correctness question.
+    """
+    return rung_filter if rung.narrows() else None
+
+
+def _memberships(entity: Any) -> Mapping[str, str]:
+    """What one entity is, per scope axis.
+
+    One axis on this path, because ``describe().declares`` is what an entity
+    source publishes as its scope terms and it names types. A source that
+    declares more axes gives this function more to say without changing
+    anything that calls it.
+    """
+    return {TAXONOMY_ID_KEY: entity.type}
+
+
+def _admits(
+    found: Mapping[str, Any],
+    produced: Sequence[EntityCandidate],
+    axes: Mapping[str, frozenset[str]],
+) -> tuple[EntityCandidate, ...]:
+    """The candidates a scope admits, decided against **the cascade's** source.
+
+    The drop is here rather than in the rungs because the cascade is the one
+    component both flavours run, and because ``MatchSignal`` does not require
+    two rungs to share a backing: under a rung-side drop, two rungs could
+    disagree about whether an entity is in a type and nothing would notice.
+    Here there is one authority, so a rung that answers differently -- or
+    ignores the filter entirely -- is overruled rather than believed.
+
+    An id the source does not carry is dropped under a scope. It cannot be
+    shown to be inside one, and admitting what cannot be checked is the
+    failure this whole path exists to refuse.
+    """
+    return tuple(
+        candidate
+        for candidate in produced
+        if candidate.entity_id in found
+        and within_admits(axes, _memberships(found[candidate.entity_id]))
+    )
+
+
 class CascadingResolver:
     """Ask rungs in order until ``k`` is filled.
 
@@ -222,11 +276,15 @@ class CascadingResolver:
     lookup and there is nothing to await.
     """
 
-    def __init__(self, rungs: Sequence[MatchSignal]) -> None:
+    def __init__(self, rungs: Sequence[MatchSignal], entities: EntitySource) -> None:
         """Args:
         rungs: In the order they are asked. The order is the policy.
+        entities: The authority a ``within`` scope is decided against. Held
+            by the cascade rather than consulted through the rungs, so one
+            answer governs however many backings the rungs have between them.
         """
         self._rungs = tuple(rungs)
+        self._entities = entities
 
     @property
     def rungs(self) -> tuple[MatchSignal, ...]:
@@ -236,12 +294,17 @@ class CascadingResolver:
     def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult:
         """Place one string, with every rung's reason for each candidate."""
         state = CascadeState(query=name, k=k)
+        axes = within_axes(within)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if state.saturated():
                 break
-            produced = rung.candidates(name, k, filter=rung_filter)
-            state = merge_rung(state, produced, signal=rung.name, kind=_batch_kind(produced))
+            produced = rung.candidates(name, k, filter=_offered(rung, rung_filter))
+            scoped: Sequence[EntityCandidate] = produced
+            if axes:
+                found = self._entities.get_many([c.entity_id for c in produced])
+                scoped = _admits(found, produced, axes)
+            state = merge_rung(state, scoped, signal=rung.name, kind=_batch_kind(scoped))
         return finish(state, compatibility=None)
 
     def resolve_many(
@@ -253,11 +316,19 @@ class CascadingResolver:
         batch path spends one round trip rather than one per query.
         """
         states = [CascadeState(query=name, k=k) for name in names]
+        axes = within_axes(within)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if all(state.saturated() for state in states):
                 break
-            batches = rung.candidates_many(names, k, filter=rung_filter)
+            batches: Sequence[Sequence[EntityCandidate]] = rung.candidates_many(
+                names, k, filter=_offered(rung, rung_filter)
+            )
+            if axes:
+                found = self._entities.get_many(
+                    [c.entity_id for batch in batches for c in batch]
+                )
+                batches = [_admits(found, batch, axes) for batch in batches]
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
 
@@ -270,11 +341,15 @@ class AsyncCascadingResolver:
     :func:`merge_rung` and :func:`finish` are module functions.
     """
 
-    def __init__(self, rungs: Sequence[AsyncMatchSignal]) -> None:
+    def __init__(
+        self, rungs: Sequence[AsyncMatchSignal], entities: AsyncEntitySource
+    ) -> None:
         """Args:
         rungs: In the order they are asked. The order is the policy.
+        entities: The authority a ``within`` scope is decided against.
         """
         self._rungs = tuple(rungs)
+        self._entities = entities
 
     @property
     def rungs(self) -> tuple[AsyncMatchSignal, ...]:
@@ -284,12 +359,17 @@ class AsyncCascadingResolver:
     async def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult:
         """Place one string, with every rung's reason for each candidate."""
         state = CascadeState(query=name, k=k)
+        axes = within_axes(within)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if state.saturated():
                 break
-            produced = await rung.candidates(name, k, filter=rung_filter)
-            state = merge_rung(state, produced, signal=rung.name, kind=_batch_kind(produced))
+            produced = await rung.candidates(name, k, filter=_offered(rung, rung_filter))
+            scoped: Sequence[EntityCandidate] = produced
+            if axes:
+                found = await self._entities.get_many([c.entity_id for c in produced])
+                scoped = _admits(found, produced, axes)
+            state = merge_rung(state, scoped, signal=rung.name, kind=_batch_kind(scoped))
         return finish(state, compatibility=None)
 
     async def resolve_many(
@@ -297,11 +377,19 @@ class AsyncCascadingResolver:
     ) -> list[ResolutionResult]:
         """The bulk form, for a corpus rather than a turn."""
         states = [CascadeState(query=name, k=k) for name in names]
+        axes = within_axes(within)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if all(state.saturated() for state in states):
                 break
-            batches = await rung.candidates_many(names, k, filter=rung_filter)
+            batches: Sequence[Sequence[EntityCandidate]] = await rung.candidates_many(
+                names, k, filter=_offered(rung, rung_filter)
+            )
+            if axes:
+                found = await self._entities.get_many(
+                    [c.entity_id for batch in batches for c in batch]
+                )
+                batches = [_admits(found, batch, axes) for batch in batches]
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
 

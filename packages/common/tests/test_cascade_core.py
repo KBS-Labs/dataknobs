@@ -34,10 +34,16 @@ from dataknobs_common.entity_resolution import (
     ExactNormalizedSignal,
     MatchEvidence,
     MatchSignal,
+    TAXONOMY_ID_KEY,
     Scoring,
     cascade as cascade_module,
 )
-from dataknobs_common.ontology import async_load_ontology, load_ontology
+from dataknobs_common.ontology import (
+    AsyncMappingEntitySource,
+    MappingEntitySource,
+    async_load_ontology,
+    load_ontology,
+)
 from dataknobs_common.testing import (
     assert_no_leaked_bridge_threads,
     assert_twin_types_agree,
@@ -46,6 +52,16 @@ from dataknobs_common.testing import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
+
+
+#: A source holding nothing, for the tests whose rungs are stubs.
+#:
+#: Sound because an unscoped ``resolve`` never consults the cascade's source at
+#: all: the authority is asked only when ``within`` names an axis, and these
+#: tests are about ordering, saturation and provenance. A stub's entity ids are
+#: chosen for those questions and are in no vocabulary.
+NO_ENTITIES = MappingEntitySource({})
+NO_ENTITIES_ASYNC = AsyncMappingEntitySource({})
 
 
 class StubSignal:
@@ -137,11 +153,13 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
         return state
 
     def sync_result() -> tuple[EntityCandidate, ...]:
-        return CascadingResolver([StubSignal("a", [("x", 1.0)])]).resolve("q").candidates
+        return CascadingResolver([StubSignal("a", [("x", 1.0)])], NO_ENTITIES).resolve("q").candidates
 
     def async_result() -> tuple[EntityCandidate, ...]:
         return asyncio.run(
-            AsyncCascadingResolver([AsyncStubSignal("a", [("x", 1.0)])]).resolve("q")
+            AsyncCascadingResolver(
+                [AsyncStubSignal("a", [("x", 1.0)])], NO_ENTITIES_ASYNC
+            ).resolve("q")
         ).candidates
 
     # Unpatched first, and this half is the test. "Both went empty" is also
@@ -214,7 +232,8 @@ def test_one_candidate_two_rungs_two_evidences(mammals_path: Path) -> None:
     """
     ontology = load_ontology(mammals_path)
     resolver = CascadingResolver(
-        [ExactNormalizedSignal(ontology.entities), AliasSignal(ontology.entities)]
+        [ExactNormalizedSignal(ontology.entities), AliasSignal(ontology.entities)],
+        ontology.entities,
     )
 
     result = resolver.resolve("beagles", k=5)
@@ -227,7 +246,7 @@ def test_one_candidate_two_rungs_two_evidences(mammals_path: Path) -> None:
 def test_explain_refuses_an_id_that_is_not_a_candidate(mammals_path: Path) -> None:
     """``()`` is a real answer for a real candidate, so it cannot mean *absent*."""
     ontology = load_ontology(mammals_path)
-    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)])
+    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
 
     result = resolver.resolve("beagles", k=5)
 
@@ -245,7 +264,7 @@ def test_position_is_fixed_by_the_first_rung_that_produced_an_id() -> None:
     first = StubSignal("first", [("a", 0.1)])
     second = StubSignal("second", [("b", 0.9), ("a", 0.9)])
 
-    result = CascadingResolver([first, second]).resolve("q", k=5)
+    result = CascadingResolver([first, second], NO_ENTITIES).resolve("q", k=5)
 
     assert [c.entity_id for c in result.candidates] == ["a", "b"]
     assert result.candidates[0].score == pytest.approx(0.1)
@@ -261,7 +280,7 @@ def test_a_rung_is_not_consulted_once_k_is_filled() -> None:
     first = StubSignal("first", [("a", 1.0), ("b", 1.0)])
     second = StubSignal("second", [("c", 1.0)])
 
-    result = CascadingResolver([first, second]).resolve("q", k=2)
+    result = CascadingResolver([first, second], NO_ENTITIES).resolve("q", k=2)
 
     assert [c.entity_id for c in result.candidates] == ["a", "b"]
 
@@ -288,7 +307,7 @@ def test_a_rung_is_asked_for_k_rather_than_for_the_remainder() -> None:
     first = RecordingSignal("first", [("a", 1.0)])
     second = RecordingSignal("second", [("b", 1.0)])
 
-    CascadingResolver([first, second]).resolve("q", k=5)
+    CascadingResolver([first, second], NO_ENTITIES).resolve("q", k=5)
 
     assert seen == [5, 5]
 
@@ -297,7 +316,8 @@ def test_resolve_many_answers_each_query_independently(mammals_path: Path) -> No
     """The bulk form is the same cascade, once per query."""
     ontology = load_ontology(mammals_path)
     resolver = CascadingResolver(
-        [ExactNormalizedSignal(ontology.entities), AliasSignal(ontology.entities)]
+        [ExactNormalizedSignal(ontology.entities), AliasSignal(ontology.entities)],
+        ontology.entities,
     )
 
     results = resolver.resolve_many(["beagles", "canine", "nothing"], k=5)
@@ -316,7 +336,7 @@ def test_resolve_many_answers_each_query_independently(mammals_path: Path) -> No
 def test_within_keeps_only_what_the_named_type_admits(mammals_path: Path) -> None:
     """A scope names a set the vocabulary declares, and the rest is dropped."""
     ontology = load_ontology(mammals_path)
-    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)])
+    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
 
     assert [c.entity_id for c in resolver.resolve("beagle", k=5, within="Breed").candidates] == [
         "beagle"
@@ -324,21 +344,89 @@ def test_within_keeps_only_what_the_named_type_admits(mammals_path: Path) -> Non
     assert resolver.resolve("beagle", k=5, within="Species").candidates == ()
 
 
-def test_within_drops_by_conjunction_across_axes(mammals_path: Path) -> None:
-    """A mapping value keeps only what is in **every** named axis.
+def test_within_unions_within_an_axis_and_conjoins_across_them(mammals_path: Path) -> None:
+    """Both halves of the rule, against the axis this source actually declares.
 
-    Under the older reading the same value meant *any*, so a test written
-    against it passes on the wrong implementation -- which is why this asserts
-    the empty case rather than only the matching one.
+    An earlier version of this test used two invented axis names, ``a`` and
+    ``b``, and passed -- because the rung-side implementation it ran against
+    intersected ``by_type`` per key and never looked at the key. Under the
+    published predicate the axis name is load-bearing: what an entity declares
+    nothing on cannot admit it. So a scope must name an axis the source has,
+    and ``describe().declares`` publishes exactly one.
     """
     ontology = load_ontology(mammals_path)
-    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)])
+    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
 
-    both = resolver.resolve("beagle", k=5, within={"a": "Breed", "b": "Breed"})
-    assert [c.entity_id for c in both.candidates] == ["beagle"]
+    def placed(within: Any) -> list[str]:
+        return [c.entity_id for c in resolver.resolve("beagle", k=5, within=within).candidates]
 
-    conflicting = resolver.resolve("beagle", k=5, within={"a": "Breed", "b": "Species"})
-    assert conflicting.candidates == ()
+    # Union within one axis: either id admits.
+    assert placed({TAXONOMY_ID_KEY: ["Breed", "Species"]}) == ["beagle"]
+    assert placed({TAXONOMY_ID_KEY: "Breed"}) == ["beagle"]
+
+    # Conjunction across axes: a second axis this source declares nothing on
+    # excludes, rather than being ignored. The forgiving reading -- a candidate
+    # silent on an axis passing every filter on it -- is the one refused.
+    assert placed({TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}) == []
+    assert placed({TAXONOMY_ID_KEY: "Species"}) == []
+
+
+def test_the_cascade_overrules_a_rung_that_answers_outside_the_scope(
+    mammals_path: Path,
+) -> None:
+    """The reason the drop is the cascade's, asserted rather than stated.
+
+    ``MatchSignal`` does not require two rungs to share a backing, so a
+    rung-side drop lets a rung's own idea of what is in a type stand
+    unchallenged. Here the rung declares ``narrows()`` false and answers with a
+    ``Species`` under a ``Breed`` scope; the cascade decides against its own
+    source and overrules it.
+    """
+    ontology = load_ontology(mammals_path)
+    defiant = StubSignal("defiant", [("dog", 1.0)])
+    resolver = CascadingResolver([defiant], ontology.entities)
+
+    # Unscoped first, and this half is the test: "the scope dropped it" is also
+    # true of a rung that never answered.
+    assert [c.entity_id for c in resolver.resolve("anything", k=5).candidates] == ["dog"]
+
+    assert resolver.resolve("anything", k=5, within="Breed").candidates == ()
+
+
+def test_a_filter_is_offered_only_to_a_rung_that_declares_it_narrows(
+    mammals_path: Path,
+) -> None:
+    """``narrows()`` is a rung's statement and the cascade honours it.
+
+    Handing a scope to a rung that answered ``False`` would be the caller
+    ignoring the declaration. It is safe either way now -- the cascade rules on
+    the scope regardless -- which is precisely why it has to be asserted: a
+    correctness bug here would no longer show up as a wrong answer.
+    """
+    ontology = load_ontology(mammals_path)
+    offered: dict[str, Any] = {}
+
+    class Declaring(StubSignal):
+        def __init__(self, name: str, narrowing: bool) -> None:
+            super().__init__(name, [("beagle", 1.0)])
+            self._narrowing = narrowing
+
+        def narrows(self) -> bool:
+            return self._narrowing
+
+        def candidates(
+            self, query: str, k: int, *, filter: dict[str, Any] | None = None
+        ) -> list[EntityCandidate]:
+            offered[self.name] = filter
+            return StubSignal.candidates(self, query, k, filter=filter)
+
+    resolver = CascadingResolver(
+        [Declaring("narrowing", True), Declaring("blunt", False)], ontology.entities
+    )
+    resolver.resolve("beagle", k=5, within="Breed")
+
+    assert offered["narrowing"] == {TAXONOMY_ID_KEY: ["Breed"]}
+    assert offered["blunt"] is None
 
 
 # --------------------------------------------------------------------------
@@ -355,7 +443,8 @@ def test_the_bridge_resolves_from_inside_a_running_loop(mammals_path: Path) -> N
             [
                 AsyncExactNormalizedSignal(ontology.entities),
                 AsyncAliasSignal(ontology.entities),
-            ]
+            ],
+            ontology.entities,
         )
         with BridgedEntityResolver(inner) as bridged:
             result = bridged.resolve("beagles", k=5)
@@ -437,7 +526,7 @@ def test_a_miss_reports_what_it_could_not_place(mammals_path: Path) -> None:
     should add, and they are only visible here.
     """
     ontology = load_ontology(mammals_path)
-    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)])
+    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
 
     hit = resolver.resolve("beagle", k=5)
     assert hit.coverage.matched == ("beagle",)
