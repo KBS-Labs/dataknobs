@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-09T22:09:50Z",
+  "timestamp": "2026-09-09T22:42:38Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "105775b3b83690347b5472c47bb11c202361212845bdffcabac075d9e9e0f3d5",
-    "common": "19cb13b474ff5b3895e73ff188dda8c8c7fc6c90762f33e52131261dd29b5e91",
+    "common": "4ca08a51ceb32f4c14891b05557144ba139fc17e98655fd88341994e1ccba521",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
     "data": "e34c0240bd34e1d42cbff00a07f142dbd2ce29c58a969c351b26017b070a58e6",
     "fsm": "c723cacf89d2e524bba40fc6ea9bdec458dc29e880bddc58842b546f974047e1",
@@ -33,41 +33,41 @@
   "workspace_hashes": {
     "toolchain": "f4af59f8ebf8606a3168894bdfb9abac35ac4db56e1797b4271df85ce9e30bb3",
     "workspace_tests": "81d980b23d7ba538f9efb3ada5aafb5b06bc9a01941ef73308ec213fc0d484cd",
-    "docs": "3d6bb35d150380cf922873e763b39fb054fdc364adf07479e28e038c514a1d34"
+    "docs": "56063495f7de959204ee7f9c90608e1781c3d5350c3cc2c00b6fddf52f25600b"
   },
-  "total_seconds": 384,
+  "total_seconds": 381,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 6
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 101
+      "duration_seconds": 99
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 27
+      "duration_seconds": 26
     },
     "documentation_versions": {
       "status": "pass",
