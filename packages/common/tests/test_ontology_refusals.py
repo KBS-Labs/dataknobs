@@ -629,9 +629,7 @@ def test_the_refusal_cases_are_the_loader_table() -> None:
     rather than as a key that quietly loads and is discarded.
     """
     declared = {
-        (section, key)
-        for section, keys in loader_module._PHASE_2_KEYS.items()
-        for key in keys
+        (section, key) for section, keys in loader_module._PHASE_2_KEYS.items() for key in keys
     }
     exercised = {(section, key) for section, key, _ in _PHASE_2_KEYS}
 
