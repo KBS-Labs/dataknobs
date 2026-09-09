@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-09T16:17:26Z",
+  "timestamp": "2026-09-09T19:09:30Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "105775b3b83690347b5472c47bb11c202361212845bdffcabac075d9e9e0f3d5",
-    "common": "021e09d32bdd328ea3f8e1c9a172681b924c89d5768121d4e284d12ef7d7bb1d",
+    "common": "940ef29184b1813f3f9e863a543e3ad1064bc774c2cd289c1beb46d4e45ba556",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
     "data": "e34c0240bd34e1d42cbff00a07f142dbd2ce29c58a969c351b26017b070a58e6",
     "fsm": "c723cacf89d2e524bba40fc6ea9bdec458dc29e880bddc58842b546f974047e1",
@@ -33,9 +33,9 @@
   "workspace_hashes": {
     "toolchain": "f4af59f8ebf8606a3168894bdfb9abac35ac4db56e1797b4271df85ce9e30bb3",
     "workspace_tests": "81d980b23d7ba538f9efb3ada5aafb5b06bc9a01941ef73308ec213fc0d484cd",
-    "docs": "da5788b9e7be823320d7ae4cd9a23b56cd586c14229828146a6c70f06b59066f"
+    "docs": "2a45280a72cdfc3a6f12e6a48fc15340d7dca9788e1d4eac1851a2afce487ab7"
   },
-  "total_seconds": 353,
+  "total_seconds": 360,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -60,7 +60,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 84
+      "duration_seconds": 89
     },
     "documentation": {
       "status": "pass",
@@ -74,7 +74,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -87,7 +87,7 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 129,
+      "duration_seconds": 130,
       "workspace_guards_seconds": 65
     },
     "integration_tests": {
