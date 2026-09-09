@@ -243,6 +243,22 @@ assert view.at("late-fees").is_leaf()
 assert HierarchyView(MappingHierarchy({3: (2,), 2: (1,), 1: ()}), 3).parents()[0].node == 2
 ```
 
+Both structural cursors hash, so a walk can key a `seen` set on them the way
+the taxonomy cursor's section below does — **and they hash exactly as far as
+the structure does**. That is a property of the backing rather than a caveat
+about the cursor: `HierarchyView` is frozen, so its hash is its field tuple,
+and the first field is whichever `Hierarchy` you passed. Every backing shipped
+here gives it. The two mapping twins are compared by identity, so their `dict`
+fields are never reached; the assertion-backed pair holds two objects that hash
+the way any object does. A backing of your own will not, if it is a frozen
+dataclass over a `dict` — and it fails in the shape worth knowing about,
+answering `isinstance(view, Hashable)` with `True` and raising at `hash(view)`.
+Declare such a backing `eq=False`, or hold its edges in something hashable.
+
+The cost is the axis's cost, one level down: two mappings holding the same
+edges are no longer equal to each other. Ask `parent_edges()` on both when that
+is the question.
+
 The asynchronous twins — `AsyncHierarchyView`, `AsyncTaxonomyView`, and `at()`
 on `AsyncTaxonomy` — have the same members, every one `async def` except
 `at()`, which constructs rather than reads and so awaits nothing.
@@ -277,7 +293,9 @@ while frontier:
 Cursors over two *separately built* axes never compare equal, even when both
 came from the same ontology and name the same node — the axis is compared by
 identity. Build the axis once and walk from it, which `at()` already encourages
-by being the only door.
+by being the only door. A `set[HierarchyView[str]]` works the same way over
+a bare structure, on the one condition [the section above](#the-same-cursor-over-a-bare-hierarchy)
+states.
 
 Nothing on either cursor is named `granularity`: whether a placement is specific
 enough is the consumer's conclusion, drawn from `is_leaf()` and `children()`,

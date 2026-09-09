@@ -524,9 +524,19 @@ def test_a_known_anchor_still_walks(mammals_v11_path: Path) -> None:
 # one of them follows from one sentence: an axis is made of ASSERTED edges
 # between entities.
 #
-# Its red state is created by the change it guards. Until an assertion can
-# carry a polarity there is no input that reproduces it, which is why it could
-# be a review note for as long as it was and not a failing test.
+# It was red before the change it guards, and the note that used to stand here
+# said the opposite. These tests take a DOCUMENT, not an `Assertion`: a
+# document could always write `polarity: negated`, the loader dropped it, and a
+# walk that then places `whale` under `fish` IS the red state. Measured against
+# the tree before an assertion could carry a polarity, every assertion below
+# fails, with no `Polarity` import anywhere. What the change created is the
+# PASS state.
+#
+# The correction is kept rather than quietly deleted, because it is the lesson:
+# *this cannot be written as a failing test yet* is itself a claim, and the way
+# to check it is to run the test. It was written without running it. Run it red
+# first -- which is what the reproduce-first rule already asks for, and what
+# would have caught this one.
 
 #: Five ``isa`` edges, one of which the document states as a negation.
 #:

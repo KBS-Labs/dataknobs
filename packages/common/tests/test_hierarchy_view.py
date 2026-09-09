@@ -19,17 +19,24 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import inspect
-from collections.abc import Sequence
+from collections.abc import Hashable, Sequence
 from typing import TYPE_CHECKING
 
 import pytest
 
 from dataknobs_common.hierarchy import (
     AsyncHierarchyView,
+    AsyncMappingHierarchy,
     HierarchyView,
     MappingHierarchy,
+    _MappingBacking,
 )
-from dataknobs_common.ontology import async_load_ontology, load_ontology
+from dataknobs_common.ontology import (
+    AsyncMappingAssertionSource,
+    MappingAssertionSource,
+    async_load_ontology,
+    load_ontology,
+)
 from dataknobs_common.ontology.hierarchy import AssertionHierarchy, AsyncAssertionHierarchy
 from dataknobs_common.ontology.taxonomy import AsyncTaxonomyView, TaxonomyView
 from dataknobs_common.testing import assert_twin_types_agree
@@ -196,6 +203,135 @@ def test_a_view_reads_the_structure_beneath_it_rather_than_a_copy() -> None:
 
     assert view.is_leaf() is False
     assert [below.node for below in view.children()] == ["beagle"]
+
+
+# --------------------------------------------------------------------------
+# A cursor a walk can key a set on
+# --------------------------------------------------------------------------
+
+
+#: Every backing this package ships, by name, both flavours of each.
+#:
+#: The parametrisation *is* the test. A frozen cursor gets a generated
+#: ``__hash__`` over its field tuple, and the first field is whatever the
+#: caller handed it -- so whether a cursor hashes is a property of the
+#: **backing**, not of the cursor. A test written against the one backing that
+#: happened to hash is the test that was here when two that did not shipped
+#: beside it.
+_SHIPPED_BACKINGS = (
+    "MappingHierarchy",
+    "AsyncMappingHierarchy",
+    "AssertionHierarchy",
+    "AsyncAssertionHierarchy",
+)
+
+#: The mapping the guide's own worked example builds.
+BILLING = {"late-fees": ("billing",), "refunds": ("billing",), "billing": ()}
+
+
+def _cursor_over(backing: str, path: Path) -> HierarchyView[str] | AsyncHierarchyView[str]:
+    """A cursor over the named backing, anchored somewhere it exists."""
+    if backing == "MappingHierarchy":
+        return HierarchyView(MappingHierarchy(BILLING), "billing")
+    if backing == "AsyncMappingHierarchy":
+        return AsyncHierarchyView(AsyncMappingHierarchy(BILLING), "billing")
+    edges = load_ontology(path).assertions.find(relation="isa")
+    if backing == "AssertionHierarchy":
+        return HierarchyView(AssertionHierarchy(MappingAssertionSource(edges), "isa"), "dog")
+    return AsyncHierarchyView(
+        AsyncAssertionHierarchy(AsyncMappingAssertionSource(edges), "isa"), "dog"
+    )
+
+
+@pytest.mark.parametrize("backing", _SHIPPED_BACKINGS)
+def test_a_cursor_hashes_over_every_backing_this_package_ships(
+    backing: str, mammals_path: Path
+) -> None:
+    """``hash()`` answers rather than raising, which ``Hashable`` already promised.
+
+    The shape worth a test is not an absent capability -- a caller discovers
+    that by reading -- but a promised one that fails only when exercised:
+    ``isinstance(view, Hashable)`` is ``True`` for a frozen cursor whatever it
+    holds, so a backing whose own hash reaches a ``dict`` passes the check and
+    raises at the call.
+
+    Asserted over every backing rather than one, because the promise is made
+    once, in the cursor's own docstring and the guide, for all of them.
+    """
+    view = _cursor_over(backing, mammals_path)
+    same = view.at(view.node)
+
+    assert isinstance(view, Hashable)
+    assert hash(view) == hash(same)
+    assert {view, same} == {view}
+    assert len({view, view.at("no_such_node")}) == 2
+
+
+def test_a_walk_keys_its_seen_set_on_cursors_over_a_mapping_a_consumer_holds() -> None:
+    """The guide's deferred walk, run over the guide's own worked backing.
+
+    The three fences it is made of are each well-formed; what was wrong was
+    the sequence, and only running them in order shows it. Kept here as the
+    executable form of that page's ``seen: set[...]`` walk.
+    """
+    seen: set[HierarchyView[str]] = set()
+    frontier = [HierarchyView(MappingHierarchy(BILLING), "billing")]
+    while frontier:
+        node = frontier.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        frontier.extend(node.children())
+
+    assert sorted(view.node for view in seen) == ["billing", "late-fees", "refunds"]
+
+
+def test_a_materialized_axis_hands_back_a_structure_a_cursor_can_hash(
+    materialized_structure_path: Path,
+) -> None:
+    """The reach that is nobody's hand-built example: a document asking for a copy.
+
+    An axis declaring ``materialization.structure: materialized`` is given a
+    :class:`MappingHierarchy` by the loader, so ``axis.structure`` is a carried
+    backing for every such axis a document declares -- reached without a
+    consumer ever naming the class, and read through the structure rather than
+    through the axis cursor, which was fixed on the axis.
+    """
+    axis = load_ontology(materialized_structure_path).taxonomy("species")
+
+    assert isinstance(axis.structure, MappingHierarchy)
+    assert hash(HierarchyView(axis.structure, "dog")) == hash(HierarchyView(axis.structure, "dog"))
+
+
+def test_no_mapping_twin_gets_its_hash_by_inheriting_the_shared_body() -> None:
+    """Each twin's own decorator carries ``eq=False``; the base's does not travel.
+
+    ``@dataclass(frozen=True)`` on a subclass regenerates ``__eq__`` and, with
+    it, a field-wise ``__hash__`` -- so a twin declared without ``eq=False``
+    reaches ``parent_map`` again however the shared body is declared. That is
+    the trap this asserts against: the property reads as inherited and is not.
+    Enumerated rather than listed, so a third twin added later fails here
+    rather than at a consumer's ``hash()``.
+    """
+    bodies = (_MappingBacking, *_MappingBacking.__subclasses__())
+
+    assert len(bodies) >= 3
+    for cls in bodies:
+        assert cls.__hash__ is object.__hash__, f"{cls.__name__} hashes its fields"
+
+
+def test_the_mapping_twins_are_compared_by_identity_which_is_the_price() -> None:
+    """The cost of the line above, asserted where it lands rather than left implicit.
+
+    Two separately built mappings holding the same edges are no longer equal,
+    the way two separately built axes are not. Nothing in this package compared
+    two of them, and a consumer wanting *same edges* has ``parent_edges()``.
+    """
+    held = MappingHierarchy(BILLING)
+
+    assert held in {held}
+    assert held != MappingHierarchy(BILLING)
+    assert held.parent_edges() == MappingHierarchy(BILLING).parent_edges()
 
 
 # --------------------------------------------------------------------------
