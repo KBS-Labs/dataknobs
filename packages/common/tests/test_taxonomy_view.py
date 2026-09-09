@@ -203,15 +203,18 @@ def test_the_axis_it_holds_is_frozen_and_compared_by_identity(axis: Taxonomy) ->
     Frozen is the half a reader expects. Identity is the half that does the
     work: field-wise equality would generate a ``__hash__`` reaching
     ``definition.metadata``, and a dict does not hash however frozen its
-    owner is. Two separately built axes over one ontology are therefore not
-    equal, which is the price and is asserted here rather than left implicit.
+    owner is. Under identity the axis hashes the way any object does, which
+    is what the cursor's field-tuple hash reaches for. Two separately built
+    axes over one ontology are therefore not equal, which is the price and is
+    asserted here rather than left implicit.
     """
     with pytest.raises(FrozenInstanceError):
         axis.structure = MappingHierarchy({})  # type: ignore[misc]
 
     assert replace(axis, assertions=None).assertions is None
-    assert axis == axis
+    assert axis in {axis}
     assert axis != replace(axis)
+
 
 # --------------------------------------------------------------------------
 # Criterion 17 -- the forwards, one patch per flavour
