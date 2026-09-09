@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.entity_resolution.protocols import AliasFormSource, AsyncAliasFormSource
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
     EvidenceKind,
@@ -26,7 +27,6 @@ from dataknobs_common.entity_resolution.values import (
     within_axes,
     within_memberships,
 )
-from dataknobs_common.text import default_normalizer
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -71,6 +71,26 @@ def _candidate(entity_id: str, signal: str, query: str) -> EntityCandidate:
             ),
         ),
     )
+
+
+def _folded(query: str, normalizer: Callable[[str], str] | None) -> str:
+    """The query as the rung will ask it -- folded only if one was handed over.
+
+    **No normalizer means no fold here.** The source folds every form it
+    indexed and folds a lookup on the way in, so a rung that folded as well
+    ran a second, different fold over an answer the vocabulary had already
+    decided. That was invisible while both folds agreed -- which they do for
+    any vocabulary spelled in lower case -- and unreachable the moment they
+    did not: an index built with ``str.strip`` holds ``Beagles``, a rung
+    pre-folding to ``beagles`` could never reach it, and no spelling of the
+    query could.
+
+    Handing one is therefore the opt-in this parameter always described: a
+    caller who wants to match *differently* from the way the index was built
+    prepends their own fold, and gets exactly one more fold than the source
+    performs.
+    """
+    return query if normalizer is None else normalizer(query)
 
 
 def _ordered(hits: frozenset[str], k: int) -> list[str]:
@@ -122,13 +142,14 @@ class DeclaredSignal:
     ) -> None:
         """Args:
         entities: The vocabulary to match against.
-        normalizer: How the query is folded before lookup. Defaults to
-            strip-and-casefold. A source folds the forms it indexed with a
-            normalizer of its own; handing a different one here is how a
-            caller matches more loosely than the index was built for.
+        normalizer: An **extra** fold, applied before the source's own.
+            ``None``, the default, means this rung does not fold at all and
+            the source's fold is the only one -- see :func:`_folded` for why
+            a second default fold could not be right. Handing one is how a
+            caller matches differently from the way the index was built.
         """
         self._entities = entities
-        self._normalizer = normalizer or default_normalizer
+        self._normalizer = normalizer
 
     @property
     def name(self) -> str:
@@ -148,7 +169,11 @@ class DeclaredSignal:
         the rung's surface.
 
         Args:
-            query: Folded by this rung's normalizer already. Do not fold again.
+            query: The query, folded by this rung's own normalizer if it was
+                given one and otherwise untouched. It is **not** folded to
+                the index's spelling -- a source that folds does that when
+                asked, and a subclass reading a backing that does not fold is
+                the one that must.
 
         Returns:
             Every id that matches. Ordering and the cut to ``k`` are
@@ -161,7 +186,7 @@ class DeclaredSignal:
         self, query: str, k: int, *, filter: dict[str, Any] | None = None
     ) -> list[EntityCandidate]:
         """At most ``k`` entities whose forms match this query."""
-        hits = _admitted(self._entities, self._hits(self._normalizer(query)), filter)
+        hits = _admitted(self._entities, self._hits(_folded(query, self._normalizer)), filter)
         return [_candidate(entity_id, self.key, query) for entity_id in _ordered(hits, k)]
 
     def candidates_many(
@@ -186,11 +211,21 @@ class ExactNormalizedSignal(DeclaredSignal):
 
 
 class AliasSignal(DeclaredSignal):
-    """Match a folded query against **alias** forms specifically."""
+    """Match a query against **alias** forms specifically.
+
+    Reporting alias forms is an optional capability -- see
+    :class:`~dataknobs_common.entity_resolution.AliasFormSource` for why it is
+    a protocol of its own rather than a member every entity source owes. A
+    source that does not answer for them yields a rung that matches nothing,
+    which is what *this vocabulary declares no aliases* means, rather than an
+    ``AttributeError`` from inside a cascade.
+    """
 
     key = "alias"
 
     def _hits(self, query: str) -> frozenset[str]:
+        if not isinstance(self._entities, AliasFormSource):
+            return frozenset()
         return self._entities.by_alias_form(query)
 
 
@@ -218,10 +253,11 @@ class AsyncDeclaredSignal:
     ) -> None:
         """Args:
         entities: The vocabulary to match against.
-        normalizer: How the query is folded before lookup.
+        normalizer: An **extra** fold, applied before the source's own.
+            ``None``, the default, means the source's fold is the only one.
         """
         self._entities = entities
-        self._normalizer = normalizer or default_normalizer
+        self._normalizer = normalizer
 
     @property
     def name(self) -> str:
@@ -240,7 +276,7 @@ class AsyncDeclaredSignal:
     ) -> list[EntityCandidate]:
         """At most ``k`` entities whose forms match this query."""
         hits = await _async_admitted(
-            self._entities, await self._hits(self._normalizer(query)), filter
+            self._entities, await self._hits(_folded(query, self._normalizer)), filter
         )
         return [_candidate(entity_id, self.key, query) for entity_id in _ordered(hits, k)]
 
@@ -266,6 +302,8 @@ class AsyncAliasSignal(AsyncDeclaredSignal):
     key = "alias"
 
     async def _hits(self, query: str) -> frozenset[str]:
+        if not isinstance(self._entities, AsyncAliasFormSource):
+            return frozenset()
         return await self._entities.by_alias_form(query)
 
 

@@ -21,6 +21,7 @@ from enum import Enum
 from typing import Any
 
 from dataknobs_common.entity_resolution.protocols import MembershipOracle
+from dataknobs_common.exceptions import ValidationError
 
 __all__ = [
     "CompatibilityVerdict",
@@ -33,8 +34,10 @@ __all__ = [
     "Scoring",
     "TAXONOMY_ID_KEY",
     "Within",
+    "refuse_unknown_axes",
     "within_admits",
     "within_axes",
+    "within_axis_names",
     "within_memberships",
 ]
 
@@ -350,12 +353,67 @@ def within_memberships(entity: Any, source: Any = None) -> Mapping[str, str]:
 
     Returns:
         Axis name to the one id the entity has on that axis. The default names
-        exactly one axis, because ``describe().declares`` is what a source
-        publishes as its scope terms and it names types.
+        exactly one axis; :func:`within_axis_names` is the reader for which
+        axes a given source answers on.
     """
     if isinstance(source, MembershipOracle):
         return source.memberships(entity)
     return {TAXONOMY_ID_KEY: entity.type}
+
+
+def within_axis_names(source: Any = None) -> frozenset[str]:
+    """The axis names a source can be scoped on -- **the legal set**.
+
+    A source satisfying
+    :class:`~dataknobs_common.entity_resolution.protocols.MembershipOracle`
+    answers for itself; every other source publishes the one axis
+    :func:`within_memberships` projects.
+
+    This is the reader
+    :attr:`~dataknobs_common.ontology.sources.SourceDescription.declares` was
+    twice described as being. ``declares`` holds the type ids a source
+    carries -- one axis's *values*, not the set of axis names -- so it could
+    never have answered this question.
+    """
+    if isinstance(source, MembershipOracle):
+        return frozenset(source.axes())
+    return frozenset({TAXONOMY_ID_KEY})
+
+
+def refuse_unknown_axes(axes: Mapping[str, frozenset[str]], source: Any = None) -> None:
+    """Refuse a scope naming an axis the source does not publish.
+
+    **Because the quiet answer is indistinguishable from a correct one.**
+    :func:`within_admits` reads an axis a candidate declares nothing on as
+    *excluded*, which is the right reading for an entity and the wrong one for
+    a typo: ``{"taxonomy": "Breed"}`` admits no candidate and returns nothing,
+    exactly as a correctly spelled scope over a vocabulary holding no ``Breed``
+    does. One of those is the caller's mistake and the other is the
+    vocabulary's state, and nothing in the result says which.
+
+    Refusing the more forgiving reading was already this family's rule: a
+    mis-keyed filter that silently matched *everything* is the failure the
+    conjunctive reading exists to refuse. Matching nothing instead is quieter,
+    not better -- so the axis name is checked where it enters rather than left
+    to mean something by accident.
+
+    Args:
+        axes: The scope, from :func:`within_axes`.
+        source: The authority the scope will be decided against.
+
+    Raises:
+        ValidationError: Naming the axes asked for that this source does not
+            publish, and the ones it does.
+    """
+    published = within_axis_names(source)
+    unknown = sorted(set(axes) - published)
+    if not unknown:
+        return
+    raise ValidationError(
+        f"within names {'axes' if len(unknown) > 1 else 'an axis'} this source does "
+        f"not publish: {unknown}. Axes it publishes: {sorted(published)}",
+        context={"unknown": unknown, "published": sorted(published)},
+    )
 
 
 def within_admits(axes: Mapping[str, frozenset[str]], memberships: Mapping[str, str]) -> bool:

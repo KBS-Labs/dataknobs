@@ -124,6 +124,33 @@ def test_the_moved_types_are_one_object_in_a_fresh_interpreter() -> None:
     assert result.stdout.split() == ["True", "True", "True"]
 
 
+def test_the_module_path_the_moved_types_shipped_under_still_resolves() -> None:
+    """Both spellings kept working, because both were reachable before the move.
+
+    A caller who wrote ``from dataknobs_common.ontology.model import Scoring``
+    named a real module, and a re-export on the package door alone leaves that
+    import raising ``ImportError`` while the door's own claim -- every existing
+    import still works -- reads as though it did not. The module-path spelling
+    is the one nothing in this repository uses, which is exactly why it needs
+    an assertion rather than a reader's confidence.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from dataknobs_common.ontology.model import Scoring, CompatibilityVerdict, "
+            "ResolutionRef; import dataknobs_common.entity_resolution as e; "
+            "print(Scoring is e.Scoring, CompatibilityVerdict is e.CompatibilityVerdict, "
+            "ResolutionRef is e.ResolutionRef)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.split() == ["True", "True", "True"]
+
+
 def test_a_rung_built_here_satisfies_the_protocol_and_produces_a_candidate() -> None:
     """The other half of the criterion: not merely importable, but usable.
 

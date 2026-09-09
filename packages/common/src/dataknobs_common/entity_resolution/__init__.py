@@ -15,7 +15,7 @@ is simply asked first, and the composition is the policy::
     )
     result = resolver.resolve("beagles", k=5)
     result.candidates[0].entity_id            # "beagle"
-    result.explain("beagle")[0].signal        # "alias" -- which rung, and why
+    result.explain("beagle")[0].signal        # "exact" -- which rung, and why
 
 Every candidate carries its evidence, so *why did this win* is answerable
 without re-running the query, and a stored resolution can still tell a
@@ -40,6 +40,8 @@ from dataknobs_common.entity_resolution.cascade import (
     merge_rung,
 )
 from dataknobs_common.entity_resolution.protocols import (
+    AliasFormSource,
+    AsyncAliasFormSource,
     AsyncEntityResolver,
     AsyncMatchSignal,
     EntityResolver,
@@ -69,12 +71,16 @@ from dataknobs_common.entity_resolution.values import (
     ResolutionResult,
     Scoring,
     Within,
+    refuse_unknown_axes,
     within_admits,
     within_axes,
+    within_axis_names,
     within_memberships,
 )
 
 __all__ = [
+    "AliasFormSource",
+    "AsyncAliasFormSource",
     "TAXONOMY_ID_KEY",
     "AliasSignal",
     "AsyncAliasSignal",
@@ -104,7 +110,9 @@ __all__ = [
     "finish",
     "merge_rung",
     "signal_backends",
+    "refuse_unknown_axes",
     "within_admits",
     "within_axes",
+    "within_axis_names",
     "within_memberships",
 ]

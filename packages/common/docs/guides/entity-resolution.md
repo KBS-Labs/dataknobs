@@ -13,8 +13,9 @@ accommodation.
 
 ## Where the names live
 
-Imported by module path, like the rest of this family, and on no package door
-yet.
+Imported from this family's own door. Not from `dataknobs_common`'s: the
+package's top-level door imports nothing from here, which is what keeps a rung
+free of the vocabulary package.
 
 ```python
 from dataknobs_common.entity_resolution import (
@@ -30,8 +31,7 @@ from dataknobs_common.entity_resolution import (
 ```python
 from pathlib import Path
 
-from dataknobs_common.ontology import load_ontology
-from dataknobs_common.ontology.loader import build_resolver
+from dataknobs_common.ontology import build_resolver, load_ontology
 
 onto = load_ontology(Path("mammals.yaml"))
 resolver = build_resolver(Path("mammals.yaml"), onto)   # no store, no loop
@@ -129,17 +129,37 @@ consumer whose scope is a kind *and* a state can say so. The bare forms are
 sugar for the default axis and mean exactly what they always meant.
 
 **The axis name is load-bearing.** A candidate is admitted on an axis only if
-it declares something there, so a scope naming an axis the source does not
-publish admits nothing — rather than the forgiving reading, where a candidate
-silent on an axis passes every filter on it. What a source publishes is
-`describe().declares`, and an entity source publishes one axis:
+it declares something there, so a candidate silent on a named axis is excluded
+rather than passing every filter on it.
+
+That reading is right for an entity and wrong for a typo, which is why a scope
+naming an axis the source does not publish is **refused** rather than answered
+with nothing: an empty result is what a correctly spelled scope over a
+vocabulary holding none of that type returns too, and nothing in it says which
+happened.
 
 ```python
-from dataknobs_common.entity_resolution import TAXONOMY_ID_KEY
+from dataknobs_common.entity_resolution import TAXONOMY_ID_KEY, within_axis_names
 
+assert within_axis_names(onto.entities) == frozenset({TAXONOMY_ID_KEY})
 assert resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed"}).candidates
-assert not resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed",
-                                              "habitat": "forest"}).candidates
+
+resolver.resolve("beagle", within={"habitat": "forest"})   # ValidationError
+```
+
+An ordinary entity source publishes exactly one axis. A source that knows more
+than a type about its entities publishes more by satisfying
+`MembershipOracle` — `memberships()` says what one entity *is*, and `axes()`
+says which names may be asked, which is what makes the second axis both
+answerable and spell-checkable:
+
+```python
+class Habitats(MappingEntitySource):
+    def memberships(self, entity):
+        return {TAXONOMY_ID_KEY: entity.type, "habitat": entity.metadata["habitat"]}
+
+    def axes(self):
+        return frozenset({TAXONOMY_ID_KEY, "habitat"})
 ```
 
 **The cascade decides this, not the rungs.** It holds the entity source it was

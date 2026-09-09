@@ -23,6 +23,10 @@ than about what is installed: binding a database source creates something that
 must be closed, and a module-level function has no ``close()``.
 """
 
+from dataknobs_common.entity_resolution.protocols import (
+    AliasFormSource,
+    AsyncAliasFormSource,
+)
 from dataknobs_common.entity_resolution.values import (
     CompatibilityVerdict,
     ResolutionRef,
@@ -34,8 +38,10 @@ from dataknobs_common.ontology.loader import (
     DEFAULT_NESTED_RELATION,
     ENTITY_TYPE_ISA_KEY,
     RESERVED_ONTOLOGY_ID,
+    async_build_resolver,
     async_load_ontology,
     build_ontology,
+    build_resolver,
     load_ontology,
 )
 from dataknobs_common.ontology.model import (
@@ -89,8 +95,10 @@ __all__ = [
     "DK_RELATION_TYPE",
     "ENTITY_TYPE_ISA_KEY",
     "RESERVED_ONTOLOGY_ID",
+    "AliasFormSource",
     "Assertion",
     "AssertionSource",
+    "AsyncAliasFormSource",
     "AsyncAssertionSource",
     "AsyncEntitySource",
     "AsyncMappingAssertionSource",
@@ -126,8 +134,10 @@ __all__ = [
     "TaxonomyDefinition",
     "Term",
     "TreeProjection",
+    "async_build_resolver",
     "async_load_ontology",
     "build_ontology",
+    "build_resolver",
     "default_normalizer",
     "load_ontology",
     "qualify",

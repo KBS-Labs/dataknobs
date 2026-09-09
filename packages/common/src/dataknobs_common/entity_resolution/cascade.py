@@ -34,6 +34,7 @@ from dataknobs_common.entity_resolution.values import (
     ResolutionResult,
     Scoring,
     Within,
+    refuse_unknown_axes,
     within_admits,
     within_axes,
     within_memberships,
@@ -78,6 +79,19 @@ class CascadeState:
     evidence: Mapping[str, tuple[MatchEvidence, ...]] = field(default_factory=dict)
     """Every rung's reason, per id, in the order the rungs were asked."""
 
+    record: Mapping[str, EntityCandidate] = field(default_factory=dict)
+    """The candidate object the **rung of record** returned, per id.
+
+    Held rather than rebuilt, because a candidate carries more than its
+    evidence does: :attr:`EntityCandidate.score` is a field precisely so that
+    it can differ from ``evidence[0].score`` -- a phase downstream carries a
+    number no rung produced -- and a subclass carries fields this module has
+    never heard of. Reconstructing from the evidence discards both.
+
+    Written only on first sight, so *earliest rung wins* is unchanged: a later
+    rung seeing the same id appends its evidence and does not become the
+    record."""
+
     def saturated(self) -> bool:
         """Whether ``k`` is filled, and no further rung need be asked."""
         return len(self.order) >= self.k
@@ -116,6 +130,7 @@ def merge_rung(
     """
     order = list(state.order)
     evidence = dict(state.evidence)
+    record = dict(state.record)
 
     for candidate in produced:
         stamped = _stamp(candidate, signal=signal, kind=kind)
@@ -126,8 +141,9 @@ def merge_rung(
             continue
         order.append(candidate.entity_id)
         evidence[candidate.entity_id] = stamped
+        record[candidate.entity_id] = candidate
 
-    return replace(state, order=tuple(order), evidence=evidence)
+    return replace(state, order=tuple(order), evidence=evidence, record=record)
 
 
 #: What kind of number a rung that supplied none would have produced.
@@ -163,6 +179,9 @@ def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -
 
     A candidate's score is its **rung of record's** -- the first rung that
     produced it -- because no later rung re-scores what an earlier one placed.
+    That candidate is carried through rather than rebuilt, which is what keeps
+    a score the rung set itself and a subclass's own type and fields; only its
+    evidence is replaced, with every rung's reason in the order asked.
 
     Args:
         state: What the loop ended holding.
@@ -173,11 +192,7 @@ def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -
             nobody looked is the failure this field exists to prevent.
     """
     candidates = tuple(
-        EntityCandidate(
-            entity_id=entity_id,
-            score=state.evidence[entity_id][0].score,
-            evidence=state.evidence[entity_id],
-        )
+        replace(state.record[entity_id], evidence=state.evidence[entity_id])
         for entity_id in state.order
     )
     matched = tuple(
@@ -193,7 +208,12 @@ def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -
     # miss that says nothing about what it could not place is the quiet
     # failure this field exists to make loud. A caller maintaining a
     # vocabulary reads exactly this to find the next entry to add.
-    unmatched = () if matched or not state.query else (state.query,)
+    # Keyed off the candidates rather than off ``matched``, which is a
+    # projection of them: ``_stamp`` leaves ``matched_text`` empty for a
+    # candidate that carried no evidence of its own, so a rung returning one
+    # produced a result that reported the entity *and* reported the query as
+    # placeable nowhere.
+    unmatched = () if candidates or not state.query else (state.query,)
     return ResolutionResult(
         candidates=candidates,
         query=state.query,
@@ -215,6 +235,25 @@ def _rung_filter(within: Within) -> dict[str, Any] | None:
     if not axes:
         return None
     return {axis: sorted(admitted) for axis, admitted in axes.items()}
+
+
+def _axes(within: Within, source: Any) -> Mapping[str, frozenset[str]]:
+    """The scope, checked against what the authority publishes -- the boundary.
+
+    One function rather than two lines at four call sites, for the reason the
+    rest of this module is shaped that way: a check written once per flavour
+    is a check that can come to differ per flavour, and the bulk forms are
+    where it would go unnoticed longest.
+
+    Raises:
+        ValidationError: For an axis this source does not publish. Refusing
+            here rather than answering is
+            :func:`~dataknobs_common.entity_resolution.values.refuse_unknown_axes`'s
+            argument, not this function's.
+    """
+    axes = within_axes(within)
+    refuse_unknown_axes(axes, source)
+    return axes
 
 
 def _offered(
@@ -284,7 +323,7 @@ class CascadingResolver:
     def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult:
         """Place one string, with every rung's reason for each candidate."""
         state = CascadeState(query=name, k=k)
-        axes = within_axes(within)
+        axes = _axes(within, self._entities)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if state.saturated():
@@ -306,7 +345,7 @@ class CascadingResolver:
         batch path spends one round trip rather than one per query.
         """
         states = [CascadeState(query=name, k=k) for name in names]
-        axes = within_axes(within)
+        axes = _axes(within, self._entities)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if all(state.saturated() for state in states):
@@ -345,7 +384,7 @@ class AsyncCascadingResolver:
     async def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult:
         """Place one string, with every rung's reason for each candidate."""
         state = CascadeState(query=name, k=k)
-        axes = within_axes(within)
+        axes = _axes(within, self._entities)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if state.saturated():
@@ -363,7 +402,7 @@ class AsyncCascadingResolver:
     ) -> list[ResolutionResult]:
         """The bulk form, for a corpus rather than a turn."""
         states = [CascadeState(query=name, k=k) for name in names]
-        axes = within_axes(within)
+        axes = _axes(within, self._entities)
         rung_filter = _rung_filter(within)
         for rung in self._rungs:
             if all(state.saturated() for state in states):

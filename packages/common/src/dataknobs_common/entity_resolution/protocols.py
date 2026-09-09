@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Collection, Mapping, Sequence
 
     from dataknobs_common.entity_resolution.values import (
         EntityCandidate,
@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from dataknobs_common.ontology.model import Entity
 
 __all__ = [
+    "AliasFormSource",
+    "AsyncAliasFormSource",
     "AsyncEntityResolver",
     "AsyncMatchSignal",
     "EntityResolver",
@@ -181,3 +183,72 @@ class MembershipOracle(Protocol):
     """
 
     def memberships(self, entity: Entity) -> Mapping[str, str]: ...
+
+    def axes(self) -> Collection[str]:
+        """Every axis name this source can answer on -- **the legal set**.
+
+        A scope naming an axis outside this is refused at the cascade's
+        boundary rather than answered. It has to be, because
+        :meth:`memberships` reads a missing axis as *excluded*: a mistyped
+        axis name matched nothing and returned an empty result, which is what
+        a correctly spelled scope over an empty vocabulary returns too. The
+        caller cannot tell those apart, and the reading they will reach for is
+        the one that is not their fault.
+
+        This is what
+        :attr:`~dataknobs_common.ontology.sources.SourceDescription.declares`
+        was described as being and is not: ``declares`` holds the type ids a
+        source carries, which is one axis's *values* rather than the set of
+        axis names.
+
+        A source that does not satisfy this protocol publishes exactly
+        ``{TAXONOMY_ID_KEY}``, which is what the bare ``within`` spellings
+        mean and is why they can never be refused.
+
+        Returns:
+            The axis names, including ``TAXONOMY_ID_KEY`` where
+            :meth:`memberships` still answers on it -- this is the whole set,
+            not the additions.
+        """
+        ...
+
+
+@runtime_checkable
+class AliasFormSource(Protocol):
+    """A source that can report which of its entities declare an **alias** form.
+
+    Optional, and separate for the reason
+    :class:`~dataknobs_common.ontology.sources.EntitySource` gives for not
+    growing members: that protocol is ``@runtime_checkable`` and consumers
+    satisfy it structurally, so a member added to it turns every
+    implementation we never see from conforming into non-conforming, silently
+    and at once. A member on a *separate* protocol costs those implementations
+    nothing -- a source that does not satisfy this is simply not asked.
+
+    **A default body would not have rescued them.** A Protocol's method body
+    runs for an explicit subclass and for nothing else: ``isinstance`` and
+    ``hasattr`` both stay ``False`` for a structural conformer, so a default
+    fixes the type checker's complaint while leaving the runtime break exactly
+    where it was -- half a fix that reads like a whole one.
+
+    :class:`~dataknobs_common.entity_resolution.AliasSignal` checks for this
+    and falls back to *declares no aliases*, so a source without it yields an
+    empty rung rather than an ``AttributeError``.
+    """
+
+    def by_alias_form(self, form: str) -> frozenset[str]: ...
+
+
+@runtime_checkable
+class AsyncAliasFormSource(Protocol):
+    """:class:`AliasFormSource` for a source that reaches for data.
+
+    ``isinstance`` cannot tell this from its twin -- a runtime-checkable
+    protocol compares member *names*, and both spell it ``by_alias_form`` --
+    which costs nothing here: each flavour's rung holds a source of its own
+    flavour already, and the check it makes is *does this source answer for
+    alias forms at all*. The pair exists for the type checker, which does
+    distinguish them, and for a reader looking for the asynchronous spelling.
+    """
+
+    async def by_alias_form(self, form: str) -> frozenset[str]: ...

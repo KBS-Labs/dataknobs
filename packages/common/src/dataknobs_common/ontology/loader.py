@@ -204,7 +204,6 @@ def load_ontology(
     """
     config = _read_config(source)
     parts = _validated_parts(config)
-    _refuse_async_only_rungs(config.resolver)
     entities = MappingEntitySource(parts.declared_entities, normalizer=normalizer)
     assertions = MappingAssertionSource(parts.declared_assertions)
     return Ontology(
@@ -1003,12 +1002,20 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
     constructed and identically whether or not a package that implements such
     a rung has been imported.
 
-    This is the first refusal in this module that is *not* shared by both
-    doors, and the asymmetry is the point rather than an oversight:
-    :func:`_validated_parts` refuses what **neither** door can own, and this
-    refuses what **one** door cannot build. The other door must accept the
-    very thing refused here -- that is what the message tells the caller to
-    go and do.
+    **Called by :func:`build_resolver` alone, and by neither loader.** The
+    subject of this refusal is *this door cannot build that rung*, which is
+    false of a door that builds no rung: an :class:`Ontology` is a value, and
+    a caller loading one for its entity types would otherwise be refused over
+    a ``resolver:`` section it never reads. The cost is that such a caller is
+    no longer told early; the refusal still arrives in full at the first call
+    that proposes to build the thing.
+
+    This is the first refusal in this module that is *not* shared by a door
+    and its twin, and the asymmetry is the point rather than an oversight.
+    The two pairs are different pairs: :func:`_validated_parts` refuses what
+    **neither loader** can own, and this refuses what **one build door**
+    cannot build. :func:`async_build_resolver` must accept the very thing
+    refused here -- that is what the message tells the caller to go and do.
     """
     for spec in _rung_specs(section) or ():
         kind = str(spec.get("kind", ""))
@@ -1016,9 +1023,9 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
         if reason is None:
             continue
         raise ValidationError(
-            f"rung kind {kind!r} cannot be built by this loader: {reason}. "
-            f"Load this ontology through async_build_resolver, reached with "
-            f"async_load_ontology, which builds one. Kinds this loader "
+            f"rung kind {kind!r} cannot be built by this door: {reason}. "
+            f"Build it with async_build_resolver, over an ontology from "
+            f"async_load_ontology, which builds one. Kinds this door "
             f"builds: {sorted(signal_backends.list_keys())}",
             context={"kind": kind, "reason": reason},
         )
@@ -1059,10 +1066,14 @@ def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:
     the rung which produced them. *Nothing configured* cannot mean *nothing
     built* without that assertion having nothing to be true of.
 
-    The rungs inherit the loader's normalizer without being handed one: they
-    fold a query with the default, and the source folded its forms with
-    whatever ``load_ontology`` was given, so a lookup matches the way that
-    ontology was loaded.
+    The rungs inherit the loader's normalizer without being handed one --
+    because they do not fold at all. The source folded its forms with whatever
+    ``load_ontology`` was given and folds a lookup the same way, so a query
+    reaching it matches exactly the way that ontology was loaded. A rung
+    folding first would be a *second*, different fold over an answer the
+    vocabulary had already decided, and this is the door that cannot pass the
+    right one down: an ``Ontology`` is a value, and the normalizer it was
+    built with is not on it.
     """
     return [
         ExactNormalizedSignal(ontology.entities),

@@ -42,6 +42,7 @@ from dataknobs_common.entity_resolution import (
     cascade as cascade_module,
     signals as signals_module,
 )
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import (
     AsyncMappingEntitySource,
     Entity,
@@ -356,31 +357,52 @@ def test_within_keeps_only_what_the_named_type_admits(mammals_path: Path) -> Non
     assert resolver.resolve("beagle", k=5, within="Species").candidates == ()
 
 
-def test_within_unions_within_an_axis_and_conjoins_across_them(mammals_path: Path) -> None:
-    """Both halves of the rule, against the axis this source actually declares.
+def test_within_unions_within_an_axis_and_conjoins_across_them() -> None:
+    """Both halves of the rule, on a source that publishes both axes.
 
-    An earlier version of this test used two invented axis names, ``a`` and
-    ``b``, and passed -- because the rung-side implementation it ran against
-    intersected ``by_type`` per key and never looked at the key. Under the
-    published predicate the axis name is load-bearing: what an entity declares
-    nothing on cannot admit it. So a scope must name an axis the source has,
-    and ``describe().declares`` publishes exactly one.
+    An earlier version used two invented axis names, ``a`` and ``b``, and
+    passed -- because the rung-side implementation it ran against intersected
+    ``by_type`` per key and never looked at the key. Under the published
+    predicate the axis name is load-bearing, so a scope must name an axis the
+    source actually publishes; one that does not is now refused rather than
+    answered with nothing.
+
+    That refusal is why this runs against a
+    :class:`~dataknobs_common.entity_resolution.MembershipOracle`. The
+    conjunctive half could previously be asserted only *negatively* -- a
+    second axis excluded because no source could publish one -- and a negative
+    assertion is satisfied by a scope that admits nothing for any reason at
+    all. Here both readings are asserted in the direction that fails if the
+    rule is wrong.
     """
-    ontology = load_ontology(mammals_path)
-    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
+    source = TwoAxisSource(
+        {
+            "beagle": Entity(
+                id="beagle", type="Breed", name="Beagle", metadata={"habitat": "forest"}
+            ),
+            "dog": Entity(id="dog", type="Species", name="Dog"),
+        }
+    )
+    resolver = CascadingResolver([ExactNormalizedSignal(source)], source)
 
-    def placed(within: Any) -> list[str]:
-        return [c.entity_id for c in resolver.resolve("beagle", k=5, within=within).candidates]
+    def placed(query: str, within: Any) -> list[str]:
+        return [c.entity_id for c in resolver.resolve(query, k=5, within=within).candidates]
 
     # Union within one axis: either id admits.
-    assert placed({TAXONOMY_ID_KEY: ["Breed", "Species"]}) == ["beagle"]
-    assert placed({TAXONOMY_ID_KEY: "Breed"}) == ["beagle"]
+    assert placed("beagle", {TAXONOMY_ID_KEY: ["Breed", "Species"]}) == ["beagle"]
+    assert placed("dog", {TAXONOMY_ID_KEY: ["Breed", "Species"]}) == ["dog"]
+    assert placed("beagle", {TAXONOMY_ID_KEY: "Breed"}) == ["beagle"]
+    assert placed("beagle", {TAXONOMY_ID_KEY: "Species"}) == []
 
-    # Conjunction across axes: a second axis this source declares nothing on
-    # excludes, rather than being ignored. The forgiving reading -- a candidate
-    # silent on an axis passing every filter on it -- is the one refused.
-    assert placed({TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}) == []
-    assert placed({TAXONOMY_ID_KEY: "Species"}) == []
+    # Conjunction across axes: admitted only where both hold.
+    assert placed("beagle", {TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}) == ["beagle"]
+    assert placed("beagle", {TAXONOMY_ID_KEY: "Species", "habitat": "forest"}) == []
+    assert placed("beagle", {TAXONOMY_ID_KEY: "Breed", "habitat": "desert"}) == []
+
+    # An entity silent on a named axis is excluded, rather than passing every
+    # filter on it. ``dog`` declares no habitat, so a scope naming one leaves
+    # it out even though its type admits.
+    assert placed("dog", {TAXONOMY_ID_KEY: "Species", "habitat": "forest"}) == []
 
 
 def test_the_cascade_overrules_a_rung_that_answers_outside_the_scope(
@@ -569,6 +591,9 @@ class TwoAxisSource(MappingEntitySource):
             placed["habitat"] = str(habitat)
         return placed
 
+    def axes(self) -> frozenset[str]:
+        return frozenset({TAXONOMY_ID_KEY, "habitat"})
+
 
 def two_axis_resolver() -> CascadingResolver:
     """One entity on two axes, and a cascade over it."""
@@ -651,3 +676,321 @@ def test_the_membership_oracle_has_no_twin_on_purpose() -> None:
     """
     assert not inspect.iscoroutinefunction(MembershipOracle.memberships)
     assert not hasattr(entity_resolution, "AsyncMembershipOracle")
+
+
+class AsyncTwoAxisSource(AsyncMappingEntitySource):
+    """:class:`TwoAxisSource` over an asynchronous source.
+
+    ``memberships`` and ``axes`` stay synchronous on this twin as well: the
+    oracle reads an entity the caller already holds, so there is nothing to
+    await and the asynchronous cascade consults the same member.
+    """
+
+    def memberships(self, entity: Entity) -> dict[str, str]:
+        placed = {TAXONOMY_ID_KEY: entity.type}
+        habitat = entity.metadata.get("habitat")
+        if habitat is not None:
+            placed["habitat"] = str(habitat)
+        return placed
+
+    def axes(self) -> frozenset[str]:
+        return frozenset({TAXONOMY_ID_KEY, "habitat"})
+
+
+def async_two_axis_resolver() -> AsyncCascadingResolver:
+    """:func:`two_axis_resolver` over an asynchronous source."""
+    source = AsyncTwoAxisSource(
+        {"beagle": Entity(id="beagle", type="Breed", name="Beagle", metadata={"habitat": "forest"})}
+    )
+    return AsyncCascadingResolver([AsyncExactNormalizedSignal(source)], source)
+
+
+def test_a_scope_naming_an_axis_the_source_does_not_publish_is_refused(
+    mammals_path: Path,
+) -> None:
+    """A mis-keyed axis is refused rather than answered with nothing.
+
+    ``within_admits`` reads an axis a candidate declares nothing on as
+    *excluded*, which is the right reading for an entity and the wrong one for
+    a typo: ``{"taxonomy": "Breed"}`` matched no candidate and returned ``()``,
+    which is exactly what a correct scope over an empty vocabulary returns. The
+    caller cannot tell those apart, and the one they will assume is the one
+    that is not their fault.
+
+    The refusal names both halves -- what was asked for and what this source
+    publishes -- because a caller who mistyped an axis needs the spelling, not
+    the fact that they were wrong.
+    """
+    onto = load_ontology(mammals_path)
+    resolver = CascadingResolver([ExactNormalizedSignal(onto.entities)], onto.entities)
+
+    with pytest.raises(ValidationError) as raised:
+        resolver.resolve("beagle", within={"taxonomy": "Breed"})
+
+    message = str(raised.value)
+    assert "taxonomy" in message
+    assert TAXONOMY_ID_KEY in message
+
+
+def test_the_bare_scope_forms_are_never_refused(mammals_path: Path) -> None:
+    """The sugar names the one axis every source publishes, so it always passes.
+
+    Without this the refusal above is satisfied by refusing everything, and the
+    two spellings a caller most often writes are the ones that would break.
+    """
+    onto = load_ontology(mammals_path)
+    resolver = CascadingResolver([ExactNormalizedSignal(onto.entities)], onto.entities)
+
+    assert [c.entity_id for c in resolver.resolve("beagle", within="Breed").candidates] == [
+        "beagle"
+    ]
+    assert [
+        c.entity_id for c in resolver.resolve("beagle", within=["Breed", "Species"]).candidates
+    ] == ["beagle"]
+    assert [
+        c.entity_id
+        for c in resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed"}).candidates
+    ] == ["beagle"]
+
+
+def test_a_source_that_publishes_an_axis_makes_it_askable() -> None:
+    """What the legal set is *for*: an oracle widens it, and only it can.
+
+    The same scope refused above is answered here, by a source that says it
+    knows the axis. That is the whole seam -- the legal set is the source's
+    answer rather than a constant -- and it is why the refusal cannot simply
+    be a check against ``taxonomy_id``.
+    """
+    resolver = two_axis_resolver()
+
+    admitted = resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed", "habitat": "forest"})
+    assert [c.entity_id for c in admitted.candidates] == ["beagle"]
+
+    with pytest.raises(ValidationError):
+        resolver.resolve("beagle", within={"habitatt": "forest"})
+
+
+def test_resolve_many_refuses_the_same_scope(mammals_path: Path) -> None:
+    """The bulk form is a boundary too, and it was the one with no assertion."""
+    onto = load_ontology(mammals_path)
+    resolver = CascadingResolver([ExactNormalizedSignal(onto.entities)], onto.entities)
+
+    with pytest.raises(ValidationError):
+        resolver.resolve_many(["beagle", "dog"], within={"taxonomy": "Breed"})
+
+
+def test_the_async_flavour_refuses_and_admits_the_same_scopes() -> None:
+    """The asynchronous half of the scope path, which had no test at all.
+
+    ``AsyncCascadingResolver.resolve_many``, ``_async_admitted`` and the
+    ``await self._entities.get_many(...)`` branch were never executed by this
+    suite: the async resolver appeared only in a list of types and in the
+    bridge test, which resolves unscoped. ``assert_twin_types_agree`` compares
+    signatures, so nothing here was checking that the twin *behaves* the same
+    -- and the scope ruling is the most delicate thing both flavours share.
+    """
+
+    async def exercise() -> None:
+        resolver = async_two_axis_resolver()
+
+        admitted = await resolver.resolve(
+            "beagle", within={TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}
+        )
+        assert [c.entity_id for c in admitted.candidates] == ["beagle"]
+
+        outside = await resolver.resolve("beagle", within={"habitat": "desert"})
+        assert [c.entity_id for c in outside.candidates] == []
+
+        batch = await resolver.resolve_many(["beagle", "wombat"], within={"habitat": "forest"})
+        assert [[c.entity_id for c in result.candidates] for result in batch] == [["beagle"], []]
+
+        with pytest.raises(ValidationError):
+            await resolver.resolve("beagle", within={"habitatt": "forest"})
+
+        with pytest.raises(ValidationError):
+            await resolver.resolve_many(["beagle"], within={"habitatt": "forest"})
+
+    asyncio.run(exercise())
+
+
+class DecayRung:
+    """A rung whose candidate score is not its evidence's score.
+
+    The case :attr:`EntityCandidate.score`'s own docstring is written about --
+    *"a subclass one phase on carries a score no rung produced, a fused-or-
+    native number multiplied by a hop decay"* -- and therefore the one shape
+    that can tell whether the cascade carries a candidate through or rebuilds
+    it from the evidence.
+    """
+
+    @property
+    def name(self) -> str:
+        return "decay"
+
+    def narrows(self) -> bool:
+        return False
+
+    def candidates(
+        self, query: str, k: int, *, filter: dict[str, Any] | None = None
+    ) -> list[EntityCandidate]:
+        return [
+            EntityCandidate(
+                entity_id="beagle",
+                score=0.42,
+                evidence=(
+                    MatchEvidence(
+                        signal="decay",
+                        kind=EvidenceKind.INFERRED,
+                        score=0.83,
+                        scoring=Scoring.DECAYED,
+                        matched_text="beagle",
+                    ),
+                ),
+            )
+        ]
+
+    def candidates_many(
+        self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
+    ) -> list[list[EntityCandidate]]:
+        return [self.candidates(query, k, filter=filter) for query in queries]
+
+
+def test_the_cascade_returns_the_score_the_rung_gave(mammals_path: Path) -> None:
+    """A candidate's own score survives the cascade, rather than its evidence's.
+
+    ``finish`` rebuilt every candidate as ``score=evidence[0].score``, which is
+    precisely the move :attr:`EntityCandidate.score` exists to refuse -- one
+    layer up, where the dataclass cannot defend itself. A decay rung's 0.42
+    came back as 0.83, so ``ranked()`` and ``as_distribution()`` both read the
+    undecayed number and ``Scoring.DECAYED`` could never describe a candidate
+    the cascade returned.
+    """
+    onto = load_ontology(mammals_path)
+    resolver = CascadingResolver([DecayRung()], onto.entities)
+
+    candidate = resolver.resolve("beagle").candidates[0]
+
+    assert candidate.score == 0.42
+    assert candidate.evidence[0].score == 0.83
+    assert candidate.evidence[0].scoring is Scoring.DECAYED
+
+
+def test_a_candidate_subclass_survives_the_cascade(mammals_path: Path) -> None:
+    """And the type comes through, which rebuilding also lost.
+
+    ``EntityCandidate`` is documented as a base a later phase subclasses. A
+    cascade that reconstructs returns the base and drops whatever the subclass
+    added, so a phase downstream of the cascade could not receive its own type
+    back from it.
+    """
+
+    @dataclasses.dataclass(frozen=True)
+    class FusedCandidate(EntityCandidate):
+        fused_from: tuple[str, ...] = ()
+
+    class FusingRung(DecayRung):
+        @property
+        def name(self) -> str:
+            return "fusing"
+
+        def candidates(
+            self, query: str, k: int, *, filter: dict[str, Any] | None = None
+        ) -> list[EntityCandidate]:
+            return [FusedCandidate(entity_id="beagle", score=0.5, fused_from=("a", "b"))]
+
+    onto = load_ontology(mammals_path)
+    resolver = CascadingResolver([FusingRung()], onto.entities)
+
+    candidate = resolver.resolve("beagle").candidates[0]
+
+    assert isinstance(candidate, FusedCandidate)
+    assert candidate.fused_from == ("a", "b")
+
+
+def test_a_query_that_placed_something_is_not_reported_unmatched(mammals_path: Path) -> None:
+    """``unmatched`` keys off the candidates, not off a projection of them.
+
+    It was derived from ``matched_text``, which ``_stamp`` leaves empty for a
+    candidate that carried no evidence of its own -- the case ``merge_rung``'s
+    ``kind`` parameter exists to serve. So a rung returning a bare candidate
+    produced a result that reported the entity **and** reported the query as
+    placeable nowhere, and the guide teaches ``coverage.unmatched`` as the
+    signal for what to add to a vocabulary next.
+    """
+
+    class BareRung(DecayRung):
+        @property
+        def name(self) -> str:
+            return "bare"
+
+        def candidates(
+            self, query: str, k: int, *, filter: dict[str, Any] | None = None
+        ) -> list[EntityCandidate]:
+            return [EntityCandidate(entity_id="beagle", score=1.0)]
+
+    onto = load_ontology(mammals_path)
+    result = CascadingResolver([BareRung()], onto.entities).resolve("beagle")
+
+    assert [c.entity_id for c in result.candidates] == ["beagle"]
+    assert result.coverage.unmatched == ()
+
+
+class AliaslessSource:
+    """A source that conforms to :class:`EntitySource` and reports no aliases.
+
+    A real implementation delegating to the shipped
+    :class:`MappingEntitySource` for every member it has, and simply not
+    having the optional one -- which is what an out-of-tree source written
+    against the protocol looks like. Hiding a member from a subclass would not
+    do: the question is what happens to a class that never had it.
+    """
+
+    def __init__(self, entities: dict[str, Entity]) -> None:
+        self._inner = MappingEntitySource(entities)
+
+    def get(self, entity_id: str) -> Entity | None:
+        return self._inner.get(entity_id)
+
+    def get_many(self, entity_ids: Sequence[str]) -> dict[str, Entity]:
+        return self._inner.get_many(entity_ids)
+
+    def fetch_origin(self, ref: Any) -> Any:
+        return self._inner.fetch_origin(ref)
+
+    def fetch_origins(self, refs: Sequence[Any]) -> Any:
+        return self._inner.fetch_origins(refs)
+
+    def describe(self) -> Any:
+        return self._inner.describe()
+
+    def by_surface_form(self, form: str) -> frozenset[str]:
+        return self._inner.by_surface_form(form)
+
+    def by_type(self, type_id: str) -> frozenset[str]:
+        return self._inner.by_type(type_id)
+
+
+def test_a_source_without_alias_forms_still_conforms_and_still_resolves() -> None:
+    """Reporting alias forms is optional, and a source lacking it is not broken.
+
+    Both halves matter and they fail differently. Conformance is what the
+    member being on a *separate* protocol buys -- as a member of
+    ``EntitySource`` this class would have stopped conforming the day it was
+    added, without changing. And the rung has to degrade rather than raise:
+    ``AliasSignal`` is in the default composition every unconfigured document
+    gets, so a source that cannot answer it would take down a cascade that
+    never asked for aliases at all.
+    """
+    from dataknobs_common.ontology import AliasFormSource, EntitySource
+
+    source = AliaslessSource({"beagle": Entity(id="beagle", type="Breed", name="Beagle")})
+
+    assert isinstance(source, EntitySource)
+    assert not isinstance(source, AliasFormSource)
+
+    resolver = CascadingResolver([ExactNormalizedSignal(source), AliasSignal(source)], source)
+    result = resolver.resolve("beagle")
+
+    assert [c.entity_id for c in result.candidates] == ["beagle"]
+    assert [e.signal for e in result.explain("beagle")] == ["exact"]
+    assert AliasSignal(source).candidates("beagle", 5) == []

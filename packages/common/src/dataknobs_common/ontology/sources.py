@@ -60,7 +60,18 @@ class SourceDescription:
 
 @runtime_checkable
 class EntitySource(Protocol):
-    """Read access to entities, synchronously."""
+    """Read access to entities, synchronously.
+
+    **Reporting alias forms is not here**, although
+    :class:`MappingEntitySource` answers for them:
+    :class:`~dataknobs_common.entity_resolution.AliasFormSource` carries that
+    member, and a rung wanting it checks for that protocol. This one is
+    ``@runtime_checkable`` and consumers satisfy it structurally, so every
+    member added to it turns an implementation we never see from conforming
+    into non-conforming at once -- which is the migration the warning on
+    :class:`AssertionSource` refuses to impose, and it is stricter for a
+    member than for a keyword.
+    """
 
     def get(self, entity_id: str) -> Entity | None: ...
 
@@ -74,14 +85,16 @@ class EntitySource(Protocol):
 
     def by_surface_form(self, form: str) -> frozenset[str]: ...
 
-    def by_alias_form(self, form: str) -> frozenset[str]: ...
-
     def by_type(self, type_id: str) -> frozenset[str]: ...
 
 
 @runtime_checkable
 class AsyncEntitySource(Protocol):
     """The same members with ``async`` added to those that reach for data.
+
+    Alias forms are absent here too, for the reason :class:`EntitySource`
+    gives; :class:`~dataknobs_common.entity_resolution.AsyncAliasFormSource`
+    is where that member lives.
 
     ``describe`` stays synchronous on both twins: it answers from
     configuration and touches no backend, so making it awaitable would buy
@@ -99,8 +112,6 @@ class AsyncEntitySource(Protocol):
     def describe(self) -> SourceDescription: ...
 
     async def by_surface_form(self, form: str) -> frozenset[str]: ...
-
-    async def by_alias_form(self, form: str) -> frozenset[str]: ...
 
     async def by_type(self, type_id: str) -> frozenset[str]: ...
 

@@ -69,9 +69,34 @@ class _RecordingEntitySource:
         self.calls.append(("by_surface_form", form))
         return frozenset({"sentinel"})
 
+    def by_alias_form(self, form: str) -> frozenset[str]:
+        self.calls.append(("by_alias_form", form))
+        return self._inner.by_alias_form(form)
+
     def by_type(self, type_id: str) -> frozenset[str]:
         self.calls.append(("by_type", type_id))
         return self._inner.by_type(type_id)
+
+
+def test_the_double_conforms_to_the_protocol_it_stands_in_for() -> None:
+    """The guard whose absence is why widening the protocol broke this quietly.
+
+    A member added to :class:`EntitySource` turns every structural conformer
+    from conforming into non-conforming at once, and a double that implements
+    the members it happens to need reports nothing: nothing in this file calls
+    ``isinstance``, so the suite stayed green while the double had stopped
+    satisfying the protocol it exists to stand in for. That is the same break
+    a consumer's own source would take, discovered here or discovered by them.
+
+    :class:`~dataknobs_common.ontology.MappingEntitySource` carries this
+    assertion already; the double had none, which is exactly the gap.
+    """
+    from dataknobs_common.ontology import AliasFormSource, EntitySource
+
+    double = _RecordingEntitySource({"dog": Entity(id="dog", type="Species")})
+
+    assert isinstance(double, EntitySource)
+    assert isinstance(double, AliasFormSource)
 
 
 def test_entity_invokes_the_sources_get(mammals_path: Path) -> None:

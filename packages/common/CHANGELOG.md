@@ -422,6 +422,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers False, so a streaming twin would read as synchronous and the check
   would fail on the pair whose halves differ most.
 
+- **`dataknobs_common.entity_resolution`**, the placement family: turning a
+  string into ranked entities, with the reason each one won. It lives in the
+  dependency-free package and imports nothing from `dataknobs_common.ontology`
+  and nothing from `dataknobs-data`, so building a rung over a vocabulary
+  someone typed costs no database, no embedder and no event loop.
+
+  `MatchSignal` and `AsyncMatchSignal` are one rung of a cascade;
+  `EntityResolver` and `AsyncEntityResolver` are the cascade. `DeclaredSignal`
+  and `AsyncDeclaredSignal` are the base to subclass — set `key`, implement
+  `_hits`, and the constructor, `name`, `narrows()`, the batch loop and the
+  rung-side narrowing come with it, the last of them *correct*: it is a
+  superset filter, which is the one direction a rung may be wrong in, because
+  the cascade rules on everything a rung produces and can only remove.
+  `ExactNormalizedSignal` and `AliasSignal` ship over an authored vocabulary,
+  in both flavours.
+
+  `CascadingResolver` asks its rungs in order until `k` is filled. Position is
+  fixed by the first rung that produced an id and by nothing later; a rung
+  seeing an id again appends its evidence and moves nothing; every candidate
+  carries the evidence of every rung that proposed it, so `explain(entity_id)`
+  answers *why did this win* without re-running the query. A candidate is
+  carried through rather than rebuilt, so a score a rung set itself survives
+  the cascade, as does an `EntityCandidate` subclass's own type and fields.
+
+  `within` scopes a resolution: a set id, a collection of them, or a mapping
+  from scope axis to either — `AND`-ed across axes, unioned within one. The
+  **cascade** decides it, against the entity source it holds, so two rungs with
+  different backings cannot disagree about what an entity is. A rung declares
+  through `narrows()` whether it can honour a filter and is offered one only if
+  it can. An axis a source does not publish is **refused** rather than answered
+  with nothing, because an empty result is what a correctly spelled scope over
+  a vocabulary holding none of that type returns too. `MembershipOracle` is how
+  a source that knows more than a type about its entities publishes further
+  axes — `memberships()` says what one entity is, `axes()` says which names may
+  be asked.
+
+  `signal_backends` and `async_signal_backends` look a rung up by the name a
+  consumer writes as `kind:`. Two registries rather than one, because a
+  runtime-checkable protocol compares member *names* and both flavours spell it
+  `candidates`, so a single guard could not tell the twins apart. A
+  wrong-flavour registration is refused at registration for a class factory and
+  at `create()` for a callable one — never at the caller's `await`. A rung that
+  exists in one flavour only is *declared* in the other with a reason, which
+  `PluginRegistry.unavailable_reason(key)` reads, so asking for it says why
+  rather than "unknown key". Registering a conforming rung clears the mark.
+
+  `build_resolver` and `async_build_resolver` build the cascade a document
+  configures. A second function rather than something `load_ontology` returns,
+  because an `Ontology` is a value with no lifecycle and nowhere to put a
+  runtime. Silence builds the declared order; an empty `rungs:` list builds a
+  cascade that matches nothing, and the two are deliberately different. The
+  build door refuses a rung kind it cannot build, naming the kind and the door
+  that can; the loaders refuse nothing on a resolver's behalf, since a caller
+  reading a vocabulary for its entity types builds no cascade.
+
+- **`AliasFormSource` and `AsyncAliasFormSource`**, an optional protocol
+  carrying `by_alias_form`. Reporting which entities declare a form as an
+  *alias* specifically is a capability a source may or may not have, and it is
+  separate from `EntitySource` because that protocol is `@runtime_checkable`
+  and consumers satisfy it structurally: a member added there turns every
+  implementation we never see from conforming into non-conforming at once. A
+  source without it yields an `AliasSignal` that matches nothing, which is what
+  *this vocabulary declares no aliases* means.
+
 ### Changed
 
 - **`dataknobs-common` declares one dependency**, `typing-extensions`, scoped by

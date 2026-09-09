@@ -8,6 +8,7 @@ to what was and was not reached.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -15,7 +16,7 @@ import yaml
 
 from dataknobs_common.entity_resolution import EntityCandidate, signal_backends
 from dataknobs_common.exceptions import ValidationError
-from dataknobs_common.ontology import load_ontology
+from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.loader import build_resolver
 
 if TYPE_CHECKING:
@@ -94,11 +95,12 @@ def restored_registry() -> Iterator[None]:
 def test_a_rung_the_sync_flavour_cannot_build_is_refused(
     mammals_path: Path, tmp_path: Path
 ) -> None:
-    """Criterion 16: refused by the door, naming the kind and the way out."""
+    """Criterion 16: refused by the **build** door, naming the kind and the way out."""
     path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
+    ontology = load_ontology(path)
 
     with pytest.raises(ValidationError) as raised:
-        load_ontology(path)
+        build_resolver(path, ontology)
 
     message = str(raised.value)
     assert "semantic" in message
@@ -118,7 +120,7 @@ def test_the_refusal_constructs_nothing(mammals_path: Path, tmp_path: Path) -> N
     before = CountingSignal.built
 
     with pytest.raises(ValidationError):
-        load_ontology(path)
+        build_resolver(path, load_ontology(path))
 
     assert CountingSignal.built == before
 
@@ -138,7 +140,7 @@ def test_the_refusal_holds_with_dataknobs_data_imported(mammals_path: Path, tmp_
     path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
 
     with pytest.raises(ValidationError):
-        load_ontology(path)
+        build_resolver(path, load_ontology(path))
 
 
 def test_registering_a_synchronous_rung_makes_the_door_accept_its_kind(
@@ -217,3 +219,31 @@ def test_a_conforming_rung_is_accepted_by_its_own_registry(restored_registry: No
     built = signal_backends.create(config={"kind": "semantic"})
 
     assert isinstance(built, CountingSignal)
+
+
+def test_a_loader_does_not_refuse_a_rung_it_never_builds(
+    mammals_path: Path, tmp_path: Path
+) -> None:
+    """Loading a vocabulary is not proposing to build a cascade over it.
+
+    The refusal's subject is *this door cannot build that rung*, which is
+    false of a door that builds no rung: an ``Ontology`` is a value, and a
+    caller reading one for its entity types -- a validator, an exporter, a
+    migration -- was being refused over a ``resolver:`` section it never read.
+
+    The cost is stated rather than hidden: such a caller is no longer told
+    early. It is told in full at the first call that proposes to build the
+    thing, which the test above asserts, and which is the only call for which
+    the message is true.
+
+    Both loaders, because the claim ``async_load_ontology`` makes in its own
+    docstring -- the same file and the same refusals -- is only worth as much
+    as something checking it.
+    """
+    path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
+
+    ontology = load_ontology(path)
+    assert ontology.entity("beagle").name == "Beagle"
+
+    asynchronous = asyncio.run(async_load_ontology(path))
+    assert asynchronous.id == ontology.id

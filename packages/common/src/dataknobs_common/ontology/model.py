@@ -19,6 +19,14 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
+# Re-exported, not used here: this module is a published import path for these
+# three and stayed one when they moved. The redundant-alias spelling of a
+# re-export is what `PLC0414` declines, so the directive names `F401` instead.
+from dataknobs_common.entity_resolution.values import (  # noqa: F401
+    CompatibilityVerdict,
+    ResolutionRef,
+    Scoring,
+)
 from dataknobs_common.fields import Field, FieldType
 
 if TYPE_CHECKING:
@@ -41,8 +49,17 @@ class InferenceMode(Enum):
 
 # `Scoring`, `CompatibilityVerdict` and `ResolutionRef` were declared here and
 # now live in `dataknobs_common/entity_resolution/values.py`, re-exported by
-# this package's `__init__` so every existing import keeps working and keeps
-# resolving to the same object.
+# this package's `__init__` **and by this module** so every existing import
+# keeps working and keeps resolving to the same object.
+#
+# Both spellings, because both shipped: a caller who wrote
+# `from dataknobs_common.ontology.model import Scoring` reached a real module
+# path, and a re-export on the package door alone leaves that one raising
+# `ImportError` while the claim above reads as though it did not.
+#
+# The re-export at the top of this module closes nothing: this direction -- the
+# vocabulary reaching the resolution family -- is the one that is allowed, and
+# `values` reaches back only under `TYPE_CHECKING`.
 #
 # They moved because a second family *constructs* them at runtime -- a rung
 # building evidence, a cascade building a result -- and a runtime import from
