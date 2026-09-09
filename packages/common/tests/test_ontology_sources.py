@@ -181,7 +181,7 @@ def test_the_concretes_are_recognised_as_their_protocols() -> None:
     assert isinstance(AsyncMappingAssertionSource([]), AsyncAssertionSource)
 
 
-def test_every_optional_source_protocol_is_reachable_beside_the_required_one() -> None:
+def test_every_source_side_protocol_is_reachable_beside_the_required_one() -> None:
     """A capability a source may add is published where a source author looks.
 
     The optional protocols are *declared* in the resolution family, which is
@@ -190,15 +190,66 @@ def test_every_optional_source_protocol_is_reachable_beside_the_required_one() -
     and not a statement about who implements them -- the implementor is a
     source author, and they read this door.
 
-    Asserted as a set rather than one name at a time, because the failure this
-    guards is an **asymmetry**: two of these three were re-exported here and
-    the third was not, which is invisible while each is only ever checked on
-    its own.
+    **Derived from the family rather than listed here, because the failure
+    this guards is a missing name and a list cannot hold one.** What went
+    wrong once was publishing the protocols someone happened to be writing
+    instead of the class they belong to; a literal of today's names reproduces
+    that mistake exactly, passing for a protocol added next quarter and never
+    re-exported. So the family is the input, and only the *rung* side is
+    written down -- which is short, closed, and the half that never grows for
+    a source-author reason.
+
+    It therefore fails on a new protocol of **either** kind: a source-side one
+    until the door re-exports it, and a rung-side one until it is named below.
+    That second failure is the point rather than a nuisance. Adding a protocol
+    is where its audience is decided, the decision is one line beside a list
+    whose whole subject is that decision, and a guard that could not ask would
+    go on reporting green for the case it exists to catch.
+
+    Relabelling one is refused too, in the direction that happens by accident:
+    a name moved into the exclusion below while still on the door fails, so
+    the list cannot be used to switch the guard off for a protocol somebody
+    half-remembered as rung-side. Removing it from the door *and* relabelling
+    it in one change still passes -- but that is two deliberate edits making a
+    decision, and a guard should not litigate a decision somebody made on
+    purpose.
     """
     import dataknobs_common.ontology as door
     from dataknobs_common.entity_resolution import protocols
 
-    optional = {"AliasFormSource", "AsyncAliasFormSource", "MembershipOracle"}
+    #: Implemented by a rung or by a cascade, never by an entity source, so a
+    #: source author has no reason to look for these on the vocabulary door.
+    #:
+    #: **This list claims two things and both are asserted below**: that these
+    #: are owed nothing here, *and* that they are therefore absent from this
+    #: door. Checking only the first makes the list a way to switch the guard
+    #: off -- move a name in and everything still reports green, which is the
+    #: original defect re-armed by one plausible-looking line. Checking the
+    #: second means a name is either on the door or excluded from it, never
+    #: quietly both.
+    not_source_side = {
+        "MatchSignal",
+        "AsyncMatchSignal",
+        "EntityResolver",
+        "AsyncEntityResolver",
+    }
 
-    assert optional <= set(door.__all__)
-    assert all(getattr(door, name) is getattr(protocols, name) for name in optional)
+    declared = {
+        name
+        for name, obj in vars(protocols).items()
+        if isinstance(obj, type) and obj.__module__ == protocols.__name__
+    }
+    assert declared == set(protocols.__all__), (
+        "a protocol the module declares but does not export would be invisible "
+        "to the derivation below, so the two must agree first"
+    )
+
+    owed = declared - not_source_side
+    assert owed, (
+        "every assertion below is an absence over this set, and an absence "
+        "over an empty set reads exactly like a clean result"
+    )
+
+    assert not owed - set(door.__all__)
+    assert not not_source_side & set(door.__all__)
+    assert all(getattr(door, name) is getattr(protocols, name) for name in owed)
