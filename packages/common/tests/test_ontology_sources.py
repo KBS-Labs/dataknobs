@@ -179,3 +179,26 @@ def test_the_concretes_are_recognised_as_their_protocols() -> None:
     assert isinstance(AsyncMappingEntitySource({}), AsyncEntitySource)
     assert isinstance(MappingAssertionSource([]), AssertionSource)
     assert isinstance(AsyncMappingAssertionSource([]), AsyncAssertionSource)
+
+
+def test_every_optional_source_protocol_is_reachable_beside_the_required_one() -> None:
+    """A capability a source may add is published where a source author looks.
+
+    The optional protocols are *declared* in the resolution family, which is
+    forced: a rung checks them at runtime, and reaching into the vocabulary
+    package from there closes a cycle. That is an implementation constraint
+    and not a statement about who implements them -- the implementor is a
+    source author, and they read this door.
+
+    Asserted as a set rather than one name at a time, because the failure this
+    guards is an **asymmetry**: two of these three were re-exported here and
+    the third was not, which is invisible while each is only ever checked on
+    its own.
+    """
+    import dataknobs_common.ontology as door
+    from dataknobs_common.entity_resolution import protocols
+
+    optional = {"AliasFormSource", "AsyncAliasFormSource", "MembershipOracle"}
+
+    assert optional <= set(door.__all__)
+    assert all(getattr(door, name) is getattr(protocols, name) for name in optional)
