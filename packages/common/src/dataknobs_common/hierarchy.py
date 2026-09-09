@@ -453,6 +453,24 @@ class HierarchyView(Generic[K]):
     ``False`` no longer separates *absent* from *has both parents and
     children*. ``exists()`` is what does, and it is safe to call alone.
 
+    **It hashes, so a walk can key its visited set on it -- and it hashes
+    exactly as far as what it holds does.** Frozen means a generated
+    ``__hash__`` over the **field tuple**, which is both fields: the
+    :class:`Hierarchy` and the key. So the capability is reported here rather
+    than required, and either field can withhold it.
+
+    Every backing this package ships gives it: both mapping twins are
+    compared by identity for that purpose, and the assertion-backed pair holds
+    a source that hashes as any object does over a relation it canonicalises
+    to an id. ``str`` keys give it. A
+    structure of your own that does not, or a key type of your own that does
+    not, makes a cursor over it answer ``isinstance(view, Hashable)`` with
+    ``True`` and raise at ``hash()``. **The ``Hashable`` bound on ``K`` does
+    not catch the key half**: a frozen dataclass over a ``dict`` satisfies the
+    bound and raises, so the bound documents the requirement rather than
+    enforcing it. Declare such a type ``eq=False``, or hold its contents in
+    something hashable.
+
     Generic in the key with ``str`` defaulted, like the protocol it holds, so
     a bare ``HierarchyView`` is ``HierarchyView[str]``.
     """
@@ -502,6 +520,10 @@ class AsyncHierarchyView(Generic[K]):
     Every one is ``async def`` bar :meth:`at`, which awaits nothing because it
     constructs rather than reads -- the same rule that makes
     :meth:`AsyncMappingHierarchy.from_nested` a plain ``def``.
+
+    It hashes on the same terms :class:`HierarchyView` states, from both of the
+    same fields: both asynchronous backings this package ships hash, and so
+    does a ``str`` key.
     """
 
     structure: AsyncHierarchy[K]
@@ -576,7 +598,7 @@ def _nested_parent_map(tree: Any, child_key: str, name_key: str) -> dict[str, tu
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class _MappingBacking(Generic[K]):
     """The mapping, its inversion, and the six answers computed from them.
 
@@ -589,6 +611,35 @@ class _MappingBacking(Generic[K]):
 
     Not public and not a base anyone should reach for: it is the body of two
     classes, and the classes are the surface.
+
+    **Compared by identity, and every twin's own decorator has to say so.**
+    A backing holding a ``Mapping`` cannot be hashed field-wise -- a dict does
+    not hash however frozen its owner is -- and a cursor over it inherits that:
+    :class:`HierarchyView` is frozen, so its generated ``__hash__`` reaches
+    whatever structure it was handed, and a backing that raises there makes the
+    cursor promise the capability at ``isinstance`` and fail at the call. That
+    is the trade :class:`~dataknobs_common.ontology.taxonomy.Taxonomy` already
+    took, for the same reason, and it costs nothing that was being used: two
+    mappings holding the same edges are compared with ``parent_edges()``.
+
+    **Forced rather than chosen**, which is the part worth keeping when this
+    looks like a restriction to lift. The mapping is the caller's, held by
+    reference: its contents move under this object, so a hash derived from
+    them would change while a cursor over it sits in the very ``seen`` set the
+    hash exists to serve -- the hash invariant broken in the one place it is
+    load-bearing. ``child_map`` is inverted once at construction besides, so
+    after a caller mutates, ``parents()`` moves and ``children()`` does not.
+    This was never a value. Restoring field-wise equality would reintroduce
+    both defects at once.
+
+    ``eq=False`` **on this class does not travel to a subclass.**
+    ``@dataclass`` regenerates ``__eq__`` on every class it decorates, and a
+    frozen dataclass with ``eq=True`` gets the field-wise ``__hash__`` back
+    with it -- so a twin declared ``@dataclass(frozen=True)`` reaches
+    ``parent_map`` again however this body is declared. Each twin below
+    therefore carries the flag itself, and a test enumerates the subclasses so
+    that a third added without it fails there rather than at a consumer's
+    ``hash()``.
     """
 
     #: A node's parents. **Not named ``parents``**: a dataclass field and a
@@ -649,7 +700,7 @@ class _MappingBacking(Generic[K]):
         return tuple(self._children(node_id) for node_id in node_ids)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MappingHierarchy(_MappingBacking[K]):
     """A structure carried in memory: a node's parents, as a mapping.
 
@@ -670,6 +721,10 @@ class MappingHierarchy(_MappingBacking[K]):
 
     ``roots()`` is *every node with no parents*, which includes a node that
     appears only as somebody's parent and is never a key.
+
+    Frozen and **compared by identity** -- ``eq=False`` written here rather
+    than inherited, for the reason :class:`_MappingBacking` states. It is what
+    lets a cursor over this backing be put in a set.
     """
 
     def roots(self) -> Sequence[K]:
@@ -762,7 +817,7 @@ class MappingHierarchy(_MappingBacking[K]):
         return cls(drive(hierarchy, _parent_edges()))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AsyncMappingHierarchy(_MappingBacking[K]):
     """The same mapping, in an :class:`AsyncHierarchy`-shaped slot.
 
@@ -770,6 +825,10 @@ class AsyncMappingHierarchy(_MappingBacking[K]):
     consumer typed against :class:`AsyncHierarchy` -- because the *rest* of
     their vocabulary is by-reference -- still needs something hand-built to put
     in the slot, and hand-writing one per test is what this exists to stop.
+
+    ``eq=False`` here too, and written out for the same reason: a difference
+    between the twins on this point is one :func:`assert_twin_types_agree`
+    cannot see, since it reads members and this is a decision about the type.
     """
 
     async def roots(self) -> Sequence[K]:

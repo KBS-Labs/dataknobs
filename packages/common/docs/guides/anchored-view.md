@@ -243,6 +243,33 @@ assert view.at("late-fees").is_leaf()
 assert HierarchyView(MappingHierarchy({3: (2,), 2: (1,), 1: ()}), 3).parents()[0].node == 2
 ```
 
+Both structural cursors hash, so a walk can key a `seen` set on them the way
+the taxonomy cursor's section below does — **and they hash exactly as far as
+what they hold does**. The cursor reports that capability rather than requiring
+it: `HierarchyView` is frozen, so its hash is its **field tuple**, which is the
+`Hierarchy` *and* the key, and either can withhold it.
+
+Everything shipped here gives it, and each for its own reason. The two
+mapping twins are compared by identity, so their `dict` fields are never
+reached — forced rather than chosen, since they hold the mapping *you* passed:
+a hash derived from it would move when you mutate it, while a cursor over it
+sits in the `seen` set the hash exists to serve. The assertion-backed pair
+holds a source that hashes the way any object does over a relation it
+canonicalises to an id, so naming a relation by its `RelationType` rather than
+its id builds the same axis rather than a second one. And a `str` key hashes.
+A structure of your own will not, if it is a frozen dataclass over a `dict` —
+and neither will a **key** of your own of that shape, which is the half worth
+saying out loud, because the `Hashable` bound on the key parameter does not
+catch it: such a type satisfies the bound and raises, so the bound documents
+the requirement rather than enforcing it. Either way it fails in the same
+shape, answering `isinstance(view, Hashable)` with `True` and raising at
+`hash(view)`. Declare such a type `eq=False`, or hold its contents in something
+hashable.
+
+The cost is the axis's cost, one level down: two mappings holding the same
+edges are no longer equal to each other. Ask `parent_edges()` on both when that
+is the question.
+
 The asynchronous twins — `AsyncHierarchyView`, `AsyncTaxonomyView`, and `at()`
 on `AsyncTaxonomy` — have the same members, every one `async def` except
 `at()`, which constructs rather than reads and so awaits nothing.
@@ -274,10 +301,16 @@ while frontier:
     frontier.extend(node.children())
 ```
 
-Cursors over two *separately built* axes never compare equal, even when both
-came from the same ontology and name the same node — the axis is compared by
-identity. Build the axis once and walk from it, which `at()` already encourages
-by being the only door.
+An axis is compared by the identity of what it holds and the value of what it
+names. A `Taxonomy` holds a definition and three handles, so identity is the
+whole of it: cursors over two *separately built* taxonomies never compare
+equal, even when both came from the same ontology and name the same node. Hold
+the axis you walk from — not because a second build always compares unequal
+(an assertion-backed axis over one source and one relation does compare equal,
+by that same rule) but because `Ontology.taxonomy()` builds on each call,
+which `at()` already encourages by being the only door. A
+`set[HierarchyView[str]]` works the same way over a bare structure, on the one
+condition [the section above](#the-same-cursor-over-a-bare-hierarchy) states.
 
 Nothing on either cursor is named `granularity`: whether a placement is specific
 enough is the consumer's conclusion, drawn from `is_leaf()` and `children()`,

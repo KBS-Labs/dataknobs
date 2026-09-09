@@ -118,6 +118,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including the refusal, since a slug collapses punctuation and case and two
   paths that reach one id are refused naming both.
 
+  Both are frozen and **compared by identity**, which is what lets a cursor
+  over either be put in a set: a mapping field cannot be hashed, so field-wise
+  equality would leave `HierarchyView` promising a hash at `isinstance` and
+  raising at the call. The flag is written on each twin rather than on the body
+  they share, because `@dataclass` regenerates `__eq__` — and the field-wise
+  `__hash__` with it — on every class it decorates.
+
   `contains()` answers for **every node a walk can reach** — a key of the
   mapping, or a value under any key. A node that appears only as somebody's
   parent is a term of the axis like any other, and this is not a nicety:
@@ -226,16 +233,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Assertion`** that put it there, one pair per assertion, so one call gives
   both the annotation and a position to keep walking from. The cursor holds
   the structure rather than a copy, owns nothing, and two views over one axis
-  are equal exactly when they name the same node. Cursors **hash**, so a walk
-  a consumer writes can key its visited set on them rather than on bare ids.
-  Reaching that meant comparing the axis by identity: `Taxonomy` and
-  `AsyncTaxonomy` are frozen and identity-compared, because field-wise
-  equality generates a `__hash__` that reaches `definition.metadata` — a dict,
-  unhashable however frozen its owner is — and a cursor that satisfies
-  `isinstance(view, Hashable)` and then raises at the call is worse than one
-  that never claimed to. The cost is that two *separately built* axes over one
-  ontology no longer compare equal; `Ontology.taxonomy()` builds on each call,
-  so hold the axis you walk from.
+  are equal exactly when they name the same node. Cursors **hash — over every
+  backing this package ships**, so a walk a consumer writes can key its
+  visited set on them rather than on bare ids. Reaching
+  that meant comparing the thing a cursor holds by identity, on both halves:
+  `Taxonomy` and `AsyncTaxonomy` are frozen and identity-compared, and so are
+  `MappingHierarchy` and `AsyncMappingHierarchy`, because field-wise equality
+  generates a `__hash__` that reaches `definition.metadata` on the one and
+  `parent_map` on the other — dicts, unhashable however frozen their owner is
+  — and a cursor that satisfies `isinstance(view, Hashable)` and then raises
+  at the call is worse than one that never claimed to. **A structural cursor
+  hashes exactly as far as what it holds does** — the capability is reported,
+  not required, and the field tuple is the structure *and* the key. That is the
+  thing to know when either is your own: a frozen dataclass over a `dict` puts
+  the shape back from either side, `eq=False` takes it out again, and the
+  `Hashable` bound on the key parameter does not catch it, since such a type
+  satisfies the bound and raises. On the mapping twins that identity is
+  *forced*, not chosen: they hold the mapping you passed, so a value-derived
+  hash would move when you mutate it, in the set the hash exists to serve.
+  `AssertionHierarchy` and `AsyncAssertionHierarchy` reach the same place by
+  the other route — they hold a handle and a **name**, so they now
+  canonicalise it (`relation_id`) at construction, and compare by the identity
+  of the source and the value of the relation. Naming a relation by its
+  `RelationType` rather than its id therefore builds the same axis, where it
+  used to build one that read alike, compared unequal, and withheld the hash.
+  The cost is that two
+  *separately built* axes over one ontology no longer compare equal, and
+  neither do two mappings holding the same edges; `Ontology.taxonomy()` builds
+  on each call, so hold the axis you walk from, and ask `parent_edges()` when
+  the question is whether two mappings carry the same edges.
 
   **A node that is not here is neither a root nor a leaf.** `is_root()` and
   `is_leaf()` are `False` wherever `exists()` is `False`, because an absent
