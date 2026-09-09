@@ -27,6 +27,7 @@ from dataknobs_common.ontology.model import (
     SourceRef,
     Term,
 )
+from dataknobs_common.text import default_normalizer
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -73,6 +74,8 @@ class EntitySource(Protocol):
 
     def by_surface_form(self, form: str) -> frozenset[str]: ...
 
+    def by_alias_form(self, form: str) -> frozenset[str]: ...
+
     def by_type(self, type_id: str) -> frozenset[str]: ...
 
 
@@ -96,6 +99,8 @@ class AsyncEntitySource(Protocol):
     def describe(self) -> SourceDescription: ...
 
     async def by_surface_form(self, form: str) -> frozenset[str]: ...
+
+    async def by_alias_form(self, form: str) -> frozenset[str]: ...
 
     async def by_type(self, type_id: str) -> frozenset[str]: ...
 
@@ -158,16 +163,6 @@ class AsyncAssertionSource(Protocol):
     ) -> dict[str, list[Assertion]]: ...
 
 
-def default_normalizer(form: str) -> str:
-    """Fold a surface form for lookup: strip, then case-fold.
-
-    ``casefold`` rather than ``lower`` because it folds more than ASCII --
-    a vocabulary in German should match ``STRASSE`` against ``straße``, and
-    ``lower`` does not.
-    """
-    return form.strip().casefold()
-
-
 def object_entity_id(term: Term) -> str | None:
     """The entity id an assertion object points at, or None for a literal.
 
@@ -202,23 +197,41 @@ class _EntityIndex:
     legitimately share a form. That ambiguity is declared by the vocabulary,
     so it survives to the caller rather than being resolved here by a rule
     nobody wrote down.
+
+    **Aliases are indexed twice**, into the folded map every form goes into
+    and into a map of their own. The first is what an exact-form lookup wants
+    and cannot distinguish; the second is what a rung matching *alias forms
+    specifically* needs, and it cannot be reconstructed from the first --
+    ``by_form`` cannot report which of an entity's three kinds of form
+    matched. Reconstructing it in the caller, by fetching each hit and folding
+    its aliases again, would put the vocabulary's own answer in the matcher's
+    hands, which is the arrangement the frozenset above exists to avoid.
     """
 
     entities: Mapping[str, Entity]
     normalizer: Callable[[str], str] = default_normalizer
     by_form: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
+    by_alias: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_type: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         forms: dict[str, set[str]] = {}
+        aliases: dict[str, set[str]] = {}
         types: dict[str, set[str]] = {}
         for entity_id, entity in self.entities.items():
-            for form in (entity_id, entity.name, *entity.aliases):
+            for form in (entity_id, entity.name):
                 if not form:
                     continue
                 forms.setdefault(self.normalizer(form), set()).add(entity_id)
+            for form in entity.aliases:
+                if not form:
+                    continue
+                folded = self.normalizer(form)
+                forms.setdefault(folded, set()).add(entity_id)
+                aliases.setdefault(folded, set()).add(entity_id)
             types.setdefault(entity.type, set()).add(entity_id)
         self.by_form = {form: frozenset(ids) for form, ids in forms.items()}
+        self.by_alias = {form: frozenset(ids) for form, ids in aliases.items()}
         self.by_type = {type_id: frozenset(ids) for type_id, ids in types.items()}
 
     def get(self, entity_id: str) -> Entity | None:
@@ -234,6 +247,9 @@ class _EntityIndex:
 
     def surface_form(self, form: str) -> frozenset[str]:
         return self.by_form.get(self.normalizer(form), frozenset())
+
+    def alias_form(self, form: str) -> frozenset[str]:
+        return self.by_alias.get(self.normalizer(form), frozenset())
 
     def of_type(self, type_id: str) -> frozenset[str]:
         return self.by_type.get(type_id, frozenset())
@@ -300,9 +316,23 @@ class MappingEntitySource:
         """The ids of entities whose id, name or alias matches this form.
 
         The entity's own id, never an alias's -- an alias is a string a person
-        typed, not a thing the vocabulary names.
+        typed, not a thing the vocabulary names. Which of the three matched is
+        not reported here; :meth:`by_alias_form` is the member that asks the
+        narrower question.
         """
         return self._index.surface_form(form)
+
+    def by_alias_form(self, form: str) -> frozenset[str]:
+        """The ids of entities carrying this form as an **alias**.
+
+        A subset of :meth:`by_surface_form`, and a subset the caller could not
+        compute: that member folds an entity's id, name and aliases together
+        and cannot say which matched. A rung matching alias forms
+        specifically asks this instead of fetching each hit and folding its
+        aliases a second time -- the vocabulary declares which forms are
+        aliases, so the matcher does not have to decide it again.
+        """
+        return self._index.alias_form(form)
 
     def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type."""
@@ -349,6 +379,14 @@ class AsyncMappingEntitySource:
     async def by_surface_form(self, form: str) -> frozenset[str]:
         """The ids of entities whose id, name or alias matches this form."""
         return self._index.surface_form(form)
+
+    async def by_alias_form(self, form: str) -> frozenset[str]:
+        """The ids of entities carrying this form as an alias.
+
+        See :meth:`MappingEntitySource.by_alias_form` for why this is a member
+        rather than something a caller reconstructs.
+        """
+        return self._index.alias_form(form)
 
     async def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type."""

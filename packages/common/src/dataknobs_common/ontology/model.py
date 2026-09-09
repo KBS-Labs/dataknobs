@@ -24,6 +24,8 @@ from dataknobs_common.fields import Field, FieldType
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
 
+    from dataknobs_common.entity_resolution.values import ResolutionRef
+
 #: The root of the type lattice, and its own type.
 DK_ENTITY_TYPE = "dk:EntityType"
 #: An ordinary instance of the root, naming the kind a relation is.
@@ -37,28 +39,19 @@ class InferenceMode(Enum):
     ON_DEMAND = "on_demand"
 
 
-class Scoring(Enum):
-    """What kind of number a match score is.
-
-    A cascade's candidates are heterogeneous by construction -- an exact hit
-    and a vector neighbour are not the same measurement -- so the kind travels
-    with each piece of evidence rather than being declared once per result.
-    """
-
-    DECLARED = "declared"
-    RANK_FUSED = "rank_fused"
-    NORMALIZED = "normalized"
-    NATIVE = "native"
-    DECAYED = "decayed"
-
-
-class CompatibilityVerdict(Enum):
-    """Whether a stored corpus was produced by the model now asking of it."""
-
-    COMPATIBLE = "compatible"
-    INCOMPATIBLE = "incompatible"
-    UNVERIFIABLE = "unverifiable"
-    UNKNOWN = "unknown"
+# `Scoring`, `CompatibilityVerdict` and `ResolutionRef` were declared here and
+# now live in `dataknobs_common/entity_resolution/values.py`, re-exported by
+# this package's `__init__` so every existing import keeps working and keeps
+# resolving to the same object.
+#
+# They moved because a second family *constructs* them at runtime -- a rung
+# building evidence, a cascade building a result -- and a runtime import from
+# that family into this one closes a cycle through `ontology/__init__`, which
+# imports the loader, which builds a cascade. That failure is by import
+# **order**, so a suite importing this package first would never see it.
+#
+# Placement follows the dependency rather than the family: these three are the
+# only types here a resolver has to construct.
 
 
 @dataclass(frozen=True)
@@ -73,25 +66,6 @@ class SourceRef:
     kind: str
     locator: Mapping[str, Any]
     projection_id: str | None = None
-
-
-@dataclass(frozen=True)
-class ResolutionRef:
-    """What an entity-valued attribute was resolved on.
-
-    Identifiers and numbers. No handle, no I/O: the discipline
-    :class:`SourceRef` applies to a database row, applied to a search. It
-    identifies a resolution; it does not reproduce one.
-    """
-
-    query: str
-    entity_id: str
-    score: float
-    scoring: Scoring
-    compatibility: CompatibilityVerdict
-    corpus: Mapping[str, Any]
-    signals: Mapping[str, float] = field(default_factory=dict)
-    runners_up: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True)

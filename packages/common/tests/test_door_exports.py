@@ -7,9 +7,9 @@ the published page whether or not the list mentions it. A construct that is
 still being designed can therefore reach consumers through an import line
 nobody read as an export.
 
-These tests assert the two agree, at both doors — the package's own and the
-ontology subpackage's — so that publishing a name stays a deliberate act with
-one obvious spelling.
+These tests assert the two agree, at every door — the package's own and the
+two subpackages' — so that publishing a name stays a deliberate act with one
+obvious spelling.
 
 **Why submodules are excluded rather than listed.** ``from .async_iter import
 …`` binds ``async_iter`` on the package as a side effect, so ``dir()`` carries
@@ -34,12 +34,17 @@ from typing import TYPE_CHECKING
 import pytest
 
 import dataknobs_common
+import dataknobs_common.entity_resolution
 import dataknobs_common.ontology
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-DOORS = [dataknobs_common, dataknobs_common.ontology]
+DOORS = [
+    dataknobs_common,
+    dataknobs_common.ontology,
+    dataknobs_common.entity_resolution,
+]
 
 
 def _public_bindings(door: ModuleType) -> set[str]:
@@ -83,6 +88,16 @@ def test_a_door_binds_exactly_what_it_declares(door: ModuleType) -> None:
     """
     bound = _public_bindings(door)
     declared = _declared(door)
+
+    # Both assertions below compare two sets for an empty difference, and two
+    # empty sets satisfy both. So a door whose `__all__` vanished, or a DOORS
+    # entry naming a module that binds nothing, would report clean in both
+    # directions -- a check reporting green because it read nothing, which is
+    # the one failure a guard must not have. The control is here rather than
+    # in a test of its own because it is a property of the *measurement*, not
+    # of either question asked of it.
+    assert bound, f"{door.__name__} binds no public names; the comparison below is vacuous"
+    assert declared, f"{door.__name__}.__all__ is empty; the comparison below is vacuous"
 
     assert bound - declared == set(), (
         f"{sorted(bound - declared)} are bound on {door.__name__} but absent "
@@ -134,6 +149,7 @@ def test_the_version_is_the_only_dunder_a_door_declares() -> None:
     """
     assert [n for n in dataknobs_common.__all__ if n.startswith("_")] == ["__version__"]
     assert [n for n in dataknobs_common.ontology.__all__ if n.startswith("_")] == []
+    assert [n for n in dataknobs_common.entity_resolution.__all__ if n.startswith("_")] == []
 
 
 def _a_door_binding_a_foreign_module() -> ModuleType:

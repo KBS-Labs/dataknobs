@@ -76,6 +76,10 @@
         {
           "package": "guides/anchored-view.md",
           "site": "anchored-view.md"
+        },
+        {
+          "package": "guides/entity-resolution.md",
+          "site": "entity-resolution.md"
         }
       ],
       "site_only": [

@@ -2214,6 +2214,38 @@ class PluginRegistry(Generic[T]):
         with self._lock:
             return key in self._factories or key in self._unavailable
 
+    def unavailable_reason(self, key: str) -> str | None:
+        """Why this key cannot be created here, if that is why it cannot.
+
+        :meth:`is_registered` answers "can I build this?" and :meth:`is_known`
+        "do I recognise the name?"; neither answers **why not**, and until
+        this existed the reason :meth:`declare_unavailable` records was
+        readable only by calling :meth:`create` and reading the exception.
+
+        That is too late for the caller this is for. A door validating a
+        config wants to refuse a plugin it cannot build *before* building
+        anything -- so a refusal computed from a declared key holds with
+        nothing constructed, which is the property that distinguishes a
+        validation-time refusal from a failed build. Reaching the sentence
+        through the failure is exactly what such a caller must not do.
+
+        Args:
+            key: Key to look up. Aliases are accepted.
+
+        Returns:
+            The recorded reason, or ``None`` -- both when the key is
+            creatable and when it is unknown. Those two are distinguished by
+            :meth:`is_known`, as they already are elsewhere on this class:
+            one reader per question, rather than a sentinel doing two jobs.
+        """
+        self._ensure_initialized()
+        key = self._canon(key)
+
+        with self._lock:
+            declared = self._unavailable.get(key)
+
+        return None if declared is None else declared.reason
+
     def load_declared_type(self, key: str) -> type | None:
         """The class of a plugin that cannot be created here, if reachable.
 

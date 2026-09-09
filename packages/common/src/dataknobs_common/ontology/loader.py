@@ -21,6 +21,20 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from dataknobs_common._nested_core import _mint_tree, _walk_tree
 from dataknobs_common.config_loading import load_yaml_or_json
+from dataknobs_common.entity_resolution.cascade import (
+    AsyncCascadingResolver,
+    CascadingResolver,
+)
+from dataknobs_common.entity_resolution.registry import (
+    async_signal_backends,
+    signal_backends,
+)
+from dataknobs_common.entity_resolution.signals import (
+    AliasSignal,
+    AsyncAliasSignal,
+    AsyncExactNormalizedSignal,
+    ExactNormalizedSignal,
+)
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.fields import FieldType
 from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy
@@ -54,6 +68,13 @@ from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyPa
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from dataknobs_common.entity_resolution.protocols import (
+        AsyncEntityResolver,
+        AsyncMatchSignal,
+        EntityResolver,
+        MatchSignal,
+    )
 
 #: Whichever enum a document is declaring a member of. Bound to ``Enum``
 #: because :func:`_declared_enum` calls the type and iterates its members, and
@@ -181,7 +202,9 @@ def load_ontology(
         OSError: From that same read, for a path that cannot be opened --
             ``FileNotFoundError`` when it is not there
     """
-    parts = _validated_parts(_read_config(source))
+    config = _read_config(source)
+    parts = _validated_parts(config)
+    _refuse_async_only_rungs(config.resolver)
     entities = MappingEntitySource(parts.declared_entities, normalizer=normalizer)
     assertions = MappingAssertionSource(parts.declared_assertions)
     return Ontology(
@@ -874,3 +897,182 @@ def _mint_nested(
                     )
                 )
     return entities, assertions
+
+
+# --------------------------------------------------------------------------
+# The runtime -- a second function, because a loaded ontology is a value
+# --------------------------------------------------------------------------
+
+
+def build_resolver(
+    config: Path | Mapping[str, Any],
+    ontology: Ontology,
+) -> EntityResolver:
+    """Build the placement cascade a document configures.
+
+    A second function rather than something :func:`load_ontology` returns,
+    because an ``Ontology`` is a **value**: it owns no lifecycle and has
+    nowhere to put a runtime. A caller wanting both makes two calls and holds
+    two objects, which is the price of the value staying a value.
+
+    The first argument is what :func:`load_ontology` takes, so the two read as
+    siblings and a caller can pass the path it already has. That means the
+    document is read twice, which is likewise what a pure value costs: nothing
+    retains the document it came from, so something has to supply it again.
+
+    Args:
+        config: A path to a YAML or JSON document, or the document itself --
+            the same argument :func:`load_ontology` takes.
+        ontology: The loaded vocabulary the rungs match against.
+
+    Returns:
+        A synchronous resolver over the configured rungs.
+
+    Raises:
+        ValidationError: For a ``resolver:`` section naming a rung this
+            flavour cannot build
+        ConfigLoadError: For any refusal in reading ``config`` as a document
+        OSError: From that same read
+    """
+    section = _read_config(config).resolver
+    _refuse_async_only_rungs(section)
+    return CascadingResolver(_sync_rungs(section, ontology))
+
+
+async def async_build_resolver(
+    config: Path | Mapping[str, Any],
+    ontology: AsyncOntology,
+) -> AsyncEntityResolver:
+    """:func:`build_resolver` for a cascade whose rungs reach for data.
+
+    The remedy the synchronous door's refusal names. A refusal whose remedy
+    builds nothing is not a remedy, which is why this ships in the same
+    increment as the refusal that points at it.
+
+    ``async`` because the read is offloaded, exactly as
+    :func:`async_load_ontology` offloads it. The prefix names the flavour of
+    what is built as much as the callability of the builder -- both are true
+    here.
+
+    Args:
+        config: A path to a YAML or JSON document, or the document itself.
+        ontology: The loaded vocabulary the rungs match against.
+
+    Returns:
+        An asynchronous resolver over the configured rungs.
+
+    Raises:
+        ValidationError: For a ``resolver:`` section this door cannot build
+        ConfigLoadError: For any refusal in reading ``config`` as a document
+        OSError: From that same read
+    """
+    if isinstance(config, Path):
+        read = await asyncio.to_thread(_read_config, config)
+    else:
+        read = _read_config(config)
+    return AsyncCascadingResolver(_async_rungs(read.resolver, ontology))
+
+
+def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...] | None:
+    """The rungs a ``resolver:`` section declares, or ``None`` for silence.
+
+    ``None`` and ``()`` are different answers and the difference is
+    load-bearing. A document declaring no ``resolver:`` at all has said
+    nothing, and gets the default composition. A document declaring
+    ``rungs: []`` has written a composition -- an empty one -- and gets a
+    cascade that misses everything, because the composition *is* the policy
+    and a consumer who wants no rungs must be able to say so.
+    """
+    if section is None:
+        return None
+    rungs = section.get("rungs")
+    if rungs is None:
+        return ()
+    if not isinstance(rungs, list):
+        raise ValidationError(
+            f"`resolver.rungs:` must be a list, got {type(rungs).__name__}",
+            context={"rungs": rungs},
+        )
+    return tuple(rungs)
+
+
+def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
+    """Refuse a rung kind this door cannot build.
+
+    Computed from the declared **kind** alone, so it holds with nothing
+    constructed and identically whether or not a package that implements such
+    a rung has been imported.
+
+    This is the first refusal in this module that is *not* shared by both
+    doors, and the asymmetry is the point rather than an oversight:
+    :func:`_validated_parts` refuses what **neither** door can own, and this
+    refuses what **one** door cannot build. The other door must accept the
+    very thing refused here -- that is what the message tells the caller to
+    go and do.
+    """
+    for spec in _rung_specs(section) or ():
+        kind = str(spec.get("kind", ""))
+        reason = signal_backends.unavailable_reason(kind)
+        if reason is None:
+            continue
+        raise ValidationError(
+            f"rung kind {kind!r} cannot be built by this loader: {reason}. "
+            f"Load this ontology through async_build_resolver, reached with "
+            f"async_load_ontology, which builds one. Kinds this loader "
+            f"builds: {sorted(signal_backends.list_keys())}",
+            context={"kind": kind, "reason": reason},
+        )
+
+
+def _sync_rungs(section: Mapping[str, Any] | None, ontology: Ontology) -> list[MatchSignal]:
+    """The synchronous rungs a section configures, or the default composition."""
+    specs = _rung_specs(section)
+    if specs is None:
+        return _default_sync_rungs(ontology)
+    return [
+        signal_backends.create(config={**spec, "entities": ontology.entities}) for spec in specs
+    ]
+
+
+def _async_rungs(
+    section: Mapping[str, Any] | None, ontology: AsyncOntology
+) -> list[AsyncMatchSignal]:
+    """The asynchronous rungs a section configures, or the default composition."""
+    specs = _rung_specs(section)
+    if specs is None:
+        return _default_async_rungs(ontology)
+    return [
+        async_signal_backends.create(config={**spec, "entities": ontology.entities})
+        for spec in specs
+    ]
+
+
+def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:
+    """What a document that configures nothing gets.
+
+    The cascade's declared order minus the rung that needs an index: exact,
+    then alias, and no vector leg because a synchronous cascade has none to
+    fall back to.
+
+    Silence has to build *something*, because the worked call site loads a
+    file declaring no ``resolver:`` and then asserts on candidates that report
+    the rung which produced them. *Nothing configured* cannot mean *nothing
+    built* without that assertion having nothing to be true of.
+
+    The rungs inherit the loader's normalizer without being handed one: they
+    fold a query with the default, and the source folded its forms with
+    whatever ``load_ontology`` was given, so a lookup matches the way that
+    ontology was loaded.
+    """
+    return [
+        ExactNormalizedSignal(ontology.entities),
+        AliasSignal(ontology.entities),
+    ]
+
+
+def _default_async_rungs(ontology: AsyncOntology) -> list[AsyncMatchSignal]:
+    """:func:`_default_sync_rungs`' twin."""
+    return [
+        AsyncExactNormalizedSignal(ontology.entities),
+        AsyncAliasSignal(ontology.entities),
+    ]
