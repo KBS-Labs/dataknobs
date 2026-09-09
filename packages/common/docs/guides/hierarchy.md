@@ -395,11 +395,62 @@ assert structure.children("dog") == ("retriever", "beagle")
 assert structure.contains("beagle") and not structure.contains("marmoset")
 ```
 
-`parents(x)` is `find(subject=x, relation=…)` read for its entity objects;
-`children(x)` is the mirrored query, `find(object=x, relation=…)` read for its
-subjects. Because the source is the authority rather than a snapshot, a rebuild
-beneath the structure is visible immediately — which is what lets a long-lived
-axis hold the structure rather than a copy of it.
+`parents(x)` is `find(subject=x, …)` read for its entity objects; `children(x)`
+is the mirrored query, `find(object=x, …)` read for its subjects. Because the
+source is the authority rather than a snapshot, a rebuild beneath the structure
+is visible immediately — which is what lets a long-lived axis hold the structure
+rather than a copy of it.
+
+Neither call names the relation itself. Both go through one private query
+helper per flavour, which is where the axis says which relation it is and that
+a negated edge is not part of it — so a member added to the class later cannot
+omit either by writing a `find(…)` that looks complete.
+
+### A stated negation is not an edge
+
+A vocabulary is open-world: an assertion nobody wrote is *unknown*, not false.
+So a document that wants to say *a whale is not a fish* says it, as an
+assertion with a polarity of its own:
+
+```python
+from dataknobs_common.ontology import load_ontology
+
+negations = load_ontology(
+    {
+        "id": "sea",
+        "assertions": [
+            {"subject": "orca", "relation": "isa", "object": "whale"},
+            {"subject": "whale", "relation": "isa", "object": "fish",
+             "polarity": "negated"},
+        ],
+    }
+)
+sea = AssertionHierarchy(negations.assertions, "isa")
+```
+
+An axis is made of **asserted** edges, so it does not walk that one:
+
+```python
+assert sea.parents("whale") == ()          # not ("fish",)
+assert sea.children("fish") == ()
+assert sea.roots() == ("whale",)           # no asserted parent, so unplaced
+assert not sea.contains("fish")            # named by nothing but the negation
+assert "fish" not in sea.parent_edges()    # and so absent from a snapshot
+```
+
+All five follow from that one sentence. `roots()` is *the nodes this relation
+leaves unplaced*, and reporting `whale` as placed would report a placement no
+edge makes; `contains` is what keeps *nothing below this node* apart from *this
+node is not here*, and a negation places nothing — the same way a literal
+object does not.
+
+The negation is still in the vocabulary, and a query that does not narrow finds
+it. That is the point of stating one:
+
+```python
+stated = negations.assertions.find(subject="whale", relation="isa")
+assert [assertion.polarity.value for assertion in stated] == ["negated"]
+```
 
 It lives under `ontology/` rather than beside the protocol it satisfies:
 reading an edge means asking at runtime whether an assertion's object is an

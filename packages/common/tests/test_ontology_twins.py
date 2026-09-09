@@ -10,6 +10,7 @@ someone editing one door.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -100,17 +101,10 @@ def test_a_patched_core_changes_what_both_doors_return(
     real_build = loader_module.build_ontology
 
     def renaming_build(config: Any) -> OntologyParts:
-        parts = real_build(config)
-        return OntologyParts(
-            id="patched",
-            version=parts.version,
-            entity_types=parts.entity_types,
-            relation_types=parts.relation_types,
-            taxonomies=parts.taxonomies,
-            declared_entities=parts.declared_entities,
-            declared_assertions=parts.declared_assertions,
-            source_specs=parts.source_specs,
-        )
+        # ``replace`` rather than a field-by-field rebuild: what this test is
+        # about is the door using what came back, and a hand-written copy
+        # makes it fail on the day a field is added instead.
+        return replace(real_build(config), id="patched")
 
     monkeypatch.setattr(loader_module, "build_ontology", renaming_build)
 

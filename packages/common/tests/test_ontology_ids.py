@@ -8,6 +8,13 @@ meant.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+from dataclasses import replace
+
+import pytest
+
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.fields import FieldType
 from dataknobs_common.ontology import (
     DK_ENTITY_TYPE,
@@ -15,12 +22,16 @@ from dataknobs_common.ontology import (
     Entity,
     EntityType,
     Literal,
+    Ontology,
     QualifiedId,
     RelationType,
     TaxonomyDefinition,
+    async_load_ontology,
+    load_ontology,
     qualify,
     split_qualified,
 )
+from dataknobs_common.ontology.sources import SourceDescription
 
 
 def test_qualify_builds_both_forms() -> None:
@@ -115,3 +126,86 @@ def test_a_literals_metadata_is_copied_into_the_field() -> None:
     projected.metadata["unit"] = "lb"
 
     assert literal.metadata == {"unit": "kg"}
+
+
+# --------------------------------------------------------------------------
+# Criterion 26 -- the two members an ontology has that the free pair cannot
+# --------------------------------------------------------------------------
+
+
+def _retail() -> Ontology:
+    """A single-source ontology, which is what every authored vocabulary is."""
+    return load_ontology({"id": "retail", "entities": [{"id": "cat-1183", "type": "Item"}]})
+
+
+def test_the_members_round_trip_a_local_id() -> None:
+    """Out through ``qualify``, back through ``localize``, unchanged."""
+    onto = _retail()
+
+    assert onto.qualify("cat-1183") == "retail:cat-1183"
+    assert onto.localize(onto.qualify("cat-1183")) == "cat-1183"
+    assert onto.entity(onto.localize("retail:cat-1183")) is not None
+
+
+def test_qualify_composes_the_free_function_rather_than_a_second_spelling() -> None:
+    """One builder for a namespaced id, because a malformed one is unfixable
+    once it has been written into stored data.
+    """
+    onto = _retail()
+
+    assert onto.qualify("cat-1183") == qualify("retail", "cat-1183")
+    assert onto.qualify("cat-1183", "catalog") == qualify("retail", "cat-1183", "catalog")
+
+
+def test_localize_refuses_another_ontologys_id_naming_both() -> None:
+    """The half that earns these members their place over the free functions.
+
+    ``split_qualified`` parses for nobody in particular, so it cannot know
+    that ``wholesale:cat-1183`` is not this ontology's to look up. An ontology
+    can.
+    """
+    onto = _retail()
+
+    with pytest.raises(ValidationError) as excinfo:
+        onto.localize("wholesale:cat-1183")
+
+    message = str(excinfo.value)
+    assert "'wholesale:cat-1183'" in message
+    assert "'retail'" in message
+    assert excinfo.value.context["ontology"] == "retail"
+
+
+def test_localize_refuses_an_id_that_is_not_qualified_at_all() -> None:
+    """A bare local id is what ``entity()`` takes, so it is not what this takes."""
+    with pytest.raises(ValidationError):
+        _retail().localize("cat-1183")
+
+
+def test_localize_keeps_the_source_segment_for_a_multi_source_ontology() -> None:
+    """The assertion the name invites the wrong guess about.
+
+    ``localize`` returns the id in *this ontology's* space, which is the bare
+    local id exactly when the ontology binds one source. Bind two and the
+    space ``entities`` speaks carries the source segment, because that is what
+    a layered source routes on.
+    """
+    onto = replace(
+        _retail(),
+        describes=(
+            SourceDescription("catalog", "memory", None, {}, frozenset()),
+            SourceDescription("warehouse", "memory", None, {}, frozenset()),
+        ),
+    )
+
+    assert onto.localize("retail:catalog:cat-1183") == "catalog:cat-1183"
+
+
+def test_the_async_twin_has_the_same_two_members() -> None:
+    """Neither awaits: both read fields the value is already holding."""
+    onto = asyncio.run(
+        async_load_ontology({"id": "retail", "entities": [{"id": "cat-1183", "type": "Item"}]})
+    )
+
+    assert onto.qualify("cat-1183") == "retail:cat-1183"
+    assert onto.localize("retail:cat-1183") == "cat-1183"
+    assert not inspect.iscoroutinefunction(type(onto).localize)

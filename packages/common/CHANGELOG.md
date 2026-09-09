@@ -191,18 +191,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked for the axis rather than at the first walk, which is a call site with no
   idea why it failed.
 
-  `Ontology` and `AsyncOntology` therefore carry a ninth field, `structures` —
+  `Ontology` and `AsyncOntology` therefore carry a further field, `structures` —
   the copied axes keyed as `taxonomies` is — by the name a definition is filed
   under, not by `definition.id` — and empty for a vocabulary that declares no
   `materialized` structure, which is every vocabulary that says nothing.
 
   `AssertionHierarchy` and `AsyncAssertionHierarchy`, in
   `dataknobs_common.ontology.hierarchy`, are what answer the structure axis
-  over a vocabulary: `parents(x)` is `find(subject=x, relation=…)` read for its
-  objects and `children(x)` the mirrored query, with nothing cached. They live
-  beside the ontology rather than beside the protocol they satisfy, because
-  they are made of ontology types — the same rule that puts a database-backed
-  hierarchy in `dataknobs-data`.
+  over a vocabulary: `parents(x)` is `find(subject=x, …)` read for its objects
+  and `children(x)` the mirrored query, with nothing cached. **An axis is made
+  of asserted edges**, so an edge the document states as `polarity: negated` is
+  not walked — it is absent from `parents`, `children` and both bulk forms, the
+  node it would have placed is reported as a root, `contains` answers `False`
+  for a node named only by negated edges, and a snapshot does not hold it. Each
+  flavour decides that once, in one private query helper every read goes
+  through, rather than at each of its eight call sites — which is what keeps a
+  member added later from omitting it by writing a `find(…)` that looks
+  complete. They live beside the ontology rather than beside the protocol they
+  satisfy, because they are made of ontology types — the same rule that puts a
+  database-backed hierarchy in `dataknobs-data`.
 
 - **`object_entity_id(term)`** in `dataknobs_common.ontology.sources`, beside
   `relation_id`: the entity an assertion's object points at, or `None` for a
@@ -247,6 +254,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concretes over an authored file. A hand-maintained nested tree with no `id`
   anywhere gets one minted per node from its path, with the path kept as the
   name — so renaming a node changes what it is called and not what it is.
+
+  **A vocabulary can state a negation.** `Polarity` has two members, an
+  assertion carries one defaulting to `ASSERTED`, and `find` / `find_many` on
+  both `AssertionSource` twins take `polarity=` to select on it — omitted, it
+  does not constrain, so a caller asking what the vocabulary says about a
+  subject gets the negation too. The parameter is on the protocol from the
+  first release deliberately: these are `@runtime_checkable` protocols a
+  consumer satisfies structurally, and adding a keyword later leaves
+  `isinstance` passing while every call carrying it raises `TypeError` against
+  their implementation. The matching happens once, in the index both mapping
+  concretes forward to, so the two flavours cannot disagree about it.
+
+  **A key only a later version reads is refused rather than dropped** —
+  `condition:` on an assertion, and `cardinality:` / `condition:` /
+  `constraints:` on a relation type — naming the key, the row and the version
+  that has it. Silently discarding them made *deferred* and *honoured*
+  indistinguishable from the author's chair: a relation type declaring
+  `cardinality: many_to_many` reported no error and constrained nothing. An
+  unknown `polarity:` is refused the way an unknown `inference:` already was,
+  through one reader every authored enum now goes through, so the refusal is
+  a `ValidationError` a caller holding either door's documented contract
+  actually catches.
+
+  **`imports:` survives the load**, as `tuple[str, ...]` on `OntologyParts` and
+  both ontology flavours. It is carried and never followed: resolving a
+  reference across an import needs a second vocabulary in scope, which a door
+  loading one file does not have — but dropping the list left the component
+  that *does* have one unable to see what to resolve against.
+
+  **`qualify()` and `localize()`** are members on both flavours, because they
+  know the ontology's own id. `qualify` composes the free function rather than
+  spelling a namespaced id a second way; `localize` returns an id in this
+  ontology's space — the bare local id for a single-source vocabulary, the
+  source segment kept for a multi-source one, since that is the space
+  `entities` speaks — and **refuses an id belonging to another ontology,
+  naming both**, which is the one thing the free `split_qualified()` cannot do
+  because it does not know whose ids it is parsing.
 
 - **`Capability.ORIGIN_FETCH`**, declaring that a source can reach the backing
   record an entity's `SourceRef` points at. Its absence is how an authored

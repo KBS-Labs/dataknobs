@@ -5,7 +5,7 @@ and nothing a source must be opened for -- it is what validation produces, and
 it is flavour-neutral because the only flavour-specific part of construction is
 binding sources.
 
-:class:`Ontology` and :class:`AsyncOntology` differ in exactly three of nine
+:class:`Ontology` and :class:`AsyncOntology` differ in exactly three of ten
 fields, and all three differ the same way -- a flavoured backing in a
 flavour-shaped slot. That is not a coincidence to be tidied away: an ontology
 **holds sources, not entities**, so one shape serves both modes and the flavour
@@ -22,7 +22,7 @@ from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
 )
-from dataknobs_common.ontology.model import InferenceMode
+from dataknobs_common.ontology.model import InferenceMode, qualify as _qualify
 from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
 
 if TYPE_CHECKING:
@@ -159,11 +159,47 @@ def _structure_for(
     return copied
 
 
+def _localize(ontology_id: str, qualified_id: str) -> str:
+    """``qualified_id`` in ``ontology_id``'s own space, or a refusal.
+
+    Shared by both flavours, for :func:`_definition`'s reason: an id belongs
+    to an ontology or it does not, and that is not a question a flavour
+    changes.
+
+    **It needs no source set, and saying why is the point.** The answer is
+    always the remainder after the ontology segment -- ``partition(":")[2]``,
+    the slice below -- and no source set can change it. Whether the middle
+    segment names a declared source decides how
+    :func:`~dataknobs_common.ontology.model.split_qualified` *parses* the id;
+    it does not decide what this returns, because both readings put that
+    segment on the local side of the ontology segment. So a bare local id
+    comes back for the single-source case, and the source segment is kept
+    where one applies, which is the space :attr:`Ontology.entities` speaks.
+
+    Nothing is constructed here: the return is a slice of the argument. A
+    caller who wants the three parts still asks the parser for them, with the
+    declared set it needs -- ``split_qualified(qid, {d.source_id for d in
+    onto.describes})``.
+    """
+    declared_by, separator, remainder = qualified_id.partition(":")
+    if not separator or declared_by != ontology_id:
+        raise ValidationError(
+            f"{qualified_id!r} is not an id of ontology {ontology_id!r}: its "
+            f"ontology segment is {declared_by!r}",
+            context={
+                "qualified_id": qualified_id,
+                "ontology": ontology_id,
+                "declared_by": declared_by,
+            },
+        )
+    return remainder
+
+
 @dataclass(frozen=True)
 class OntologyParts:
     """A validated config, mapped onto values, with no source bound yet.
 
-    Five of :class:`Ontology`'s nine fields verbatim, plus the declared rows
+    Six of :class:`Ontology`'s ten fields verbatim, plus the declared rows
     and the still-unbound ``sources:`` specs. The four it omits are all
     downstream of binding: the two sources, the descriptions a door derives
     from them, and the structure axes a door copies once they exist.
@@ -179,6 +215,7 @@ class OntologyParts:
     entity_types: Mapping[str, EntityType]
     relation_types: Mapping[str, RelationType]
     taxonomies: Mapping[str, TaxonomyDefinition]
+    imports: tuple[str, ...]
     declared_entities: Mapping[str, Entity]
     declared_assertions: tuple[Assertion, ...]
     source_specs: tuple[Mapping[str, Any], ...]
@@ -213,6 +250,14 @@ class Ontology:
     #: it with any :class:`~dataknobs_common.hierarchy.Hierarchy`, and is
     #: refused at :meth:`taxonomy` if they declare a copy and supply none.
     structures: Mapping[str, Hierarchy[str]] = field(default_factory=dict)
+
+    #: The ontology ids this vocabulary declares as ``imports:``, **carried
+    #: and never followed**. Resolving a reference across an import needs a
+    #: second ontology in scope, which a door loading one file does not have;
+    #: dropping the list left the component that *does* have one unable to see
+    #: what to resolve against, so it travels even though nothing here spends
+    #: it.
+    imports: tuple[str, ...] = ()
 
     def entity(self, entity_id: str) -> Entity | None:
         """The entity with this id, by way of :attr:`entities`.
@@ -256,10 +301,37 @@ class Ontology:
             assertions=self.assertions,
         )
 
+    def qualify(self, local_id: str, source_id: str | None = None) -> str:
+        """This ontology's external id for ``local_id``.
+
+        Fills the ontology segment from :attr:`id` and composes the rest
+        through the free
+        :func:`~dataknobs_common.ontology.model.qualify`, which is where the
+        spelling of a namespaced id lives. An ``f"{a}:{b}"`` here would be a
+        second spelling of it, and a malformed id is unfixable once it is
+        written into stored data.
+        """
+        return _qualify(self.id, local_id, source_id)
+
+    def localize(self, qualified_id: str) -> str:
+        """``qualified_id`` in this ontology's own space -- what :meth:`entity` takes.
+
+        For a single-source ontology that is the bare local id, which is every
+        authored vocabulary; for a multi-source one it keeps the source
+        segment, because that is the space :attr:`entities` speaks. The name
+        invites the first reading, so the second is stated here and asserted
+        in a test rather than left to be discovered.
+
+        Refuses an id belonging to another ontology, **naming both**. That
+        refusal is what these two members have that the free functions do not:
+        only an ontology knows whose ids it is parsing. See :func:`_localize`.
+        """
+        return _localize(self.id, qualified_id)
+
 
 @dataclass(frozen=True)
 class AsyncOntology:
-    """The same eight fields, with asynchronous backings.
+    """The same ten fields, with asynchronous backings.
 
     ``entities`` is an :class:`~dataknobs_common.ontology.sources.AsyncEntitySource`
     and ``assertions`` an
@@ -278,6 +350,9 @@ class AsyncOntology:
 
     #: :attr:`Ontology.structures`, in an asynchronous slot.
     structures: Mapping[str, AsyncHierarchy[str]] = field(default_factory=dict)
+
+    #: :attr:`Ontology.imports`, unflavoured -- a list of ids awaits nothing.
+    imports: tuple[str, ...] = ()
 
     async def entity(self, entity_id: str) -> Entity | None:
         """The entity with this id, by way of :attr:`entities`."""
@@ -309,3 +384,17 @@ class AsyncOntology:
             entities=self.entities,
             assertions=self.assertions,
         )
+
+    def qualify(self, local_id: str, source_id: str | None = None) -> str:
+        """:meth:`Ontology.qualify`, unflavoured.
+
+        A plain ``def`` on this twin as well, and for the same reason
+        :meth:`taxonomy` is one: it reads two fields and awaits nothing, so
+        making it awaitable would cost every caller an ``await`` for a string
+        concatenation.
+        """
+        return _qualify(self.id, local_id, source_id)
+
+    def localize(self, qualified_id: str) -> str:
+        """:meth:`Ontology.localize`, unflavoured."""
+        return _localize(self.id, qualified_id)

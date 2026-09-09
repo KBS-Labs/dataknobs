@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-08T22:05:41Z",
+  "timestamp": "2026-09-09T01:37:57Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "105775b3b83690347b5472c47bb11c202361212845bdffcabac075d9e9e0f3d5",
-    "common": "4d0957b2342d5208c49459e221380ed999a38f67ffcf261f3d510312b278806b",
+    "common": "9ea7635078b50cd966ce74d4831059c8b0e08c6b6df44022ac03113923860c71",
     "config": "30895cfb558b0a798c73cfa923da7e75ec76b3c3eacea9bc68861e28fe146347",
     "data": "e34c0240bd34e1d42cbff00a07f142dbd2ce29c58a969c351b26017b070a58e6",
     "fsm": "c723cacf89d2e524bba40fc6ea9bdec458dc29e880bddc58842b546f974047e1",
@@ -33,21 +33,21 @@
   "workspace_hashes": {
     "toolchain": "f4af59f8ebf8606a3168894bdfb9abac35ac4db56e1797b4271df85ce9e30bb3",
     "workspace_tests": "81d980b23d7ba538f9efb3ada5aafb5b06bc9a01941ef73308ec213fc0d484cd",
-    "docs": "760cd6fecddcacf09b77b15888a4a83f5a69a540725991d2c0fe05784e225c43"
+    "docs": "c2918249a4122ea48703def5587696f8ebaa15dad7eed80b76981b68f8a2aac0"
   },
-  "total_seconds": 353,
+  "total_seconds": 357,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 4
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
@@ -60,7 +60,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 85
+      "duration_seconds": 88
     },
     "documentation": {
       "status": "pass",
@@ -88,13 +88,13 @@
       "exit_code": 0,
       "skipped": false,
       "duration_seconds": 129,
-      "workspace_guards_seconds": 64
+      "workspace_guards_seconds": 65
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 102
+      "duration_seconds": 104
     }
   }
 }
