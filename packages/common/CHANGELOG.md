@@ -235,9 +235,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the structure rather than a copy, owns nothing, and two views over one axis
   are equal exactly when they name the same node. Cursors **hash — over every
   backing this package ships, as a document builds one**, so a walk a consumer
-  writes can key its visited set on them rather than on bare ids. Reaching that meant comparing
-  the thing a cursor holds by identity, on both halves: `Taxonomy` and
-  `AsyncTaxonomy` are frozen and identity-compared, and so are
+  writes can key its visited set on them rather than on bare ids. Reaching
+  that meant comparing the thing a cursor holds by identity, on both halves:
+  `Taxonomy` and `AsyncTaxonomy` are frozen and identity-compared, and so are
   `MappingHierarchy` and `AsyncMappingHierarchy`, because field-wise equality
   generates a `__hash__` that reaches `definition.metadata` on the one and
   `parent_map` on the other — dicts, unhashable however frozen their owner is

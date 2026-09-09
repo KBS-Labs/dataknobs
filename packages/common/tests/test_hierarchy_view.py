@@ -231,7 +231,12 @@ BILLING = {"late-fees": ("billing",), "refunds": ("billing",), "billing": ()}
 
 
 def _cursor_over(backing: str, path: Path) -> HierarchyView[str] | AsyncHierarchyView[str]:
-    """A cursor over the named backing, anchored somewhere it exists."""
+    """A cursor over the named backing, anchored somewhere it exists.
+
+    The assertion-backed pair gets its relation as an **id** -- the form a
+    document produces, and a load-bearing choice rather than an incidental
+    one: the definition is equally legal in that field and withholds the hash.
+    """
     if backing == "MappingHierarchy":
         return HierarchyView(MappingHierarchy(BILLING), "billing")
     if backing == "AsyncMappingHierarchy":
@@ -258,6 +263,11 @@ def test_a_cursor_hashes_over_every_backing_this_package_ships(
 
     Asserted over every backing rather than one, because the promise is made
     once, in the cursor's own docstring and the guide, for all of them.
+
+    *As a document builds one*, which is the qualifier those two carry and
+    this test relies on: :func:`_cursor_over` hands the assertion-backed pair
+    its relation as an **id**, the form the loader writes. Handed the
+    definition instead it withholds the hash, which the test below pins.
     """
     view = _cursor_over(backing, mammals_path)
     same = view.at(view.node)
