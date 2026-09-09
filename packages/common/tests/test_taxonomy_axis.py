@@ -28,7 +28,7 @@ from dataknobs_common.ontology.model import (
     Materialization,
     TaxonomyDefinition,
 )
-from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
+from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 from dataknobs_common.testing import assert_twins_agree
 
 #: The smallest loadable vocabulary: one edge, and no ``taxonomies:`` at all.
@@ -440,21 +440,6 @@ def test_the_axis_carries_the_assertions_it_was_built_from(
         entities=onto.entities,
     )
     assert unannotated.assertions is None
-
-
-def test_taxonomy_does_not_import_the_ontology_package() -> None:
-    """The general module stands without the specific package behind it."""
-    import subprocess
-    import sys
-
-    probe = (
-        "import sys, dataknobs_common.taxonomy; print('dataknobs_common.ontology' in sys.modules)"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
-    )
-
-    assert result.stdout.strip() == "False"
 
 
 # --------------------------------------------------------------------------

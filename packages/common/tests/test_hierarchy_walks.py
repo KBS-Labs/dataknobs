@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable, Generator, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -552,8 +553,7 @@ def test_the_streaming_walk_shares_the_frontier_read(mammals_v11_path: Path) -> 
     """
     onto = load_ontology(mammals_v11_path)
     bulk = BulkParents({"dog": (), "retriever": ("dog",), "beagle": ("dog",)})
-    axis = onto.taxonomy("species")
-    axis.structure = bulk  # type: ignore[assignment]
+    axis = replace(onto.taxonomy("species"), structure=bulk)
 
     assert set(axis.walk(from_id="dog")) == {"dog", "retriever", "beagle"}
     assert bulk.bulk_calls > 0
@@ -570,8 +570,7 @@ def test_the_async_streaming_walk_shares_it_too(mammals_v11_path: Path) -> None:
     async def run() -> tuple[set[str], int, int]:
         onto = await async_load_ontology(mammals_v11_path)
         bulk = AsyncBulkParents({"dog": (), "retriever": ("dog",), "beagle": ("dog",)})
-        axis = onto.taxonomy("species")
-        axis.structure = bulk  # type: ignore[assignment]
+        axis = replace(onto.taxonomy("species"), structure=bulk)
         seen = {node_id async for node_id in axis.walk(from_id="dog")}
         return seen, bulk.bulk_calls, bulk.singular_calls
 
@@ -798,14 +797,16 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
 
     A runtime edge back would close a cycle through ``ontology/__init__``,
     which imports the values module that imports this one. Checkable, so it is
-    checked rather than left as a convention.
+    checked rather than left as a convention. The taxonomy module was in this
+    probe once and is not now: it lives under ``ontology/``, because its
+    cursor needs the model at runtime -- the same reason the assertion backing
+    does.
     """
     import subprocess
     import sys
 
     probe = (
-        "import sys, dataknobs_common.hierarchy, dataknobs_common.taxonomy; "
-        "print('dataknobs_common.ontology' in sys.modules)"
+        "import sys, dataknobs_common.hierarchy; print('dataknobs_common.ontology' in sys.modules)"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True

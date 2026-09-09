@@ -72,6 +72,10 @@
         {
           "package": "guides/hierarchy.md",
           "site": "hierarchy.md"
+        },
+        {
+          "package": "guides/anchored-view.md",
+          "site": "anchored-view.md"
         }
       ],
       "site_only": [

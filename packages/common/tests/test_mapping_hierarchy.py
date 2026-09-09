@@ -33,7 +33,7 @@ from dataknobs_common.hierarchy import (
 from dataknobs_common.ontology import load_ontology
 from dataknobs_common.ontology.model import TaxonomyDefinition
 from dataknobs_common.ontology.sources import MappingEntitySource
-from dataknobs_common.taxonomy import Taxonomy
+from dataknobs_common.ontology.taxonomy import Taxonomy
 
 #: A parent mapping whose top node appears **only as a parent**.
 #:

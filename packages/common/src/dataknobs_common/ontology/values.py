@@ -23,7 +23,7 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.ontology.model import InferenceMode, qualify as _qualify
-from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
+from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

@@ -136,11 +136,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one really does read the axis, and takes `max_concurrency` like every other
   asynchronous entry point here.
 
-- **`dataknobs_common.taxonomy`**, one relation of a vocabulary reified as a
-  walkable axis. `Taxonomy` and `AsyncTaxonomy` hold a definition and three
-  backings — structure, content, and the assertions the edges were made of —
-  and no copy of any of them, so a rebuild beneath one is visible on the next
-  read. `walk()` yields every node at or under an anchor, breadth first, each
+- **`dataknobs_common.ontology.taxonomy`**, one relation of a vocabulary
+  reified as a walkable axis. `Taxonomy` and `AsyncTaxonomy` hold a definition
+  and three backings — structure, content, and the assertions the edges were
+  made of — and no copy of any of them, so a rebuild beneath one is visible on
+  the next read. The module sits beside the assertion backing rather than
+  beside the protocols it holds: its cursor needs the ontology model at
+  runtime, and a concrete goes where its dependency is. `walk()` yields every node at or under an anchor, breadth first, each
   one once, bounded by `max_depth`. It streams, so it does not go through the
   collecting walk core — but it shares the step that reads a frontier, so both
   flavours get whatever the drivers get: one bulk query where the backing
@@ -203,13 +205,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of asserted edges**, so an edge the document states as `polarity: negated` is
   not walked — it is absent from `parents`, `children` and both bulk forms, the
   node it would have placed is reported as a root, `contains` answers `False`
-  for a node named only by negated edges, and a snapshot does not hold it. Each
-  flavour decides that once, in one private query helper every read goes
-  through, rather than at each of its eight call sites — which is what keeps a
-  member added later from omitting it by writing a `find(…)` that looks
-  complete. They live beside the ontology rather than beside the protocol they
+  for a node named only by negated edges, and a snapshot does not hold it. That
+  decision has one home, **`edge_criteria(relation)`** beside them — *this
+  relation, asserted*, as criteria to unpack into either `find` — which every
+  read of both flavours goes through rather than restating at each of its eight
+  call sites, and which the taxonomy cursor and a consumer reading an axis's
+  edges straight from the source can unpack too. Criteria rather than a read,
+  so it has no flavour and is written once. They live beside the ontology rather than beside the protocol they
   satisfy, because they are made of ontology types — the same rule that puts a
   database-backed hierarchy in `dataknobs-data`.
+
+- **The anchored view** — `Taxonomy.at(node_id)` and its twin return a cursor
+  over the axis: `TaxonomyView` and `AsyncTaxonomyView` in
+  `dataknobs_common.ontology.taxonomy`, and `HierarchyView` /
+  `AsyncHierarchyView` in `dataknobs_common.hierarchy` for a bare structure
+  with no vocabulary behind it, generic in the key the way the protocol is.
+  Six questions from one node — `exists`, `is_root`, `is_leaf`, `parents`,
+  `children` and `at` to re-anchor — and, on the taxonomy cursor, two more:
+  `parent_edges()` and `child_edges()` return the neighbour cursor **and the
+  `Assertion`** that put it there, one pair per assertion, so one call gives
+  both the annotation and a position to keep walking from. The cursor holds
+  the structure rather than a copy, owns nothing, and two views over one axis
+  are equal exactly when they name the same node. Cursors **hash**, so a walk
+  a consumer writes can key its visited set on them rather than on bare ids.
+  Reaching that meant comparing the axis by identity: `Taxonomy` and
+  `AsyncTaxonomy` are frozen and identity-compared, because field-wise
+  equality generates a `__hash__` that reaches `definition.metadata` — a dict,
+  unhashable however frozen its owner is — and a cursor that satisfies
+  `isinstance(view, Hashable)` and then raises at the call is worse than one
+  that never claimed to. The cost is that two *separately built* axes over one
+  ontology no longer compare equal; `Ontology.taxonomy()` builds on each call,
+  so hold the axis you walk from.
+
+  **A node that is not here is neither a root nor a leaf.** `is_root()` and
+  `is_leaf()` are `False` wherever `exists()` is `False`, because an absent
+  node has an empty `children()` too and a consumer deciding whether a
+  placement is specific enough to act on would otherwise read *not here* as
+  *fully specified* — on a public vocabulary whose `isa` axis named 92 of 170
+  terms, that was 46% of it. The door does not check containment, on either
+  flavour: the view answers `exists()` for itself, and checking on the
+  asynchronous twin would drag a plain accessor into the loop. `walk()` still
+  refuses an unknown anchor, because a walk includes it.
+
+  `()` from the edge members means *nothing is written on any edge here* —
+  true of a root, an absent node, a parent nothing annotates, and a taxonomy
+  whose `assertions` is `None`, which `taxonomy.assertions is None` tells
+  apart. A stated negation is never a pair: the edge read narrows through
+  `edge_criteria` the way the structure does, so a document stating both
+  polarities on one edge hands back the asserted one. Every structural member
+  of the taxonomy cursor forwards to the hierarchy cursor and re-walks nothing,
+  and a test patches each forward to keep it so. `at()` is a plain `def` on
+  every twin. The three walks and `entity()` are declared and arrive later; the
+  [anchored view guide](https://kbs-labs.github.io/dataknobs/packages/common/anchored-view/)
+  has the worked cursor.
 
 - **`object_entity_id(term)`** in `dataknobs_common.ontology.sources`, beside
   `relation_id`: the entity an assertion's object points at, or `None` for a
@@ -224,7 +272,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most are settled and waiting only on the release that opens the door —
   `MappingHierarchy` and `AsyncMappingHierarchy` among them — while
   `drive` / `async_drive` are complete but under an open proposal to widen the
-  core they take, and the two taxonomy types are still gaining members. The
+  core they take, and the two taxonomy types and the four cursors are still
+  gaining members. The
   [hierarchies and taxonomies guide](https://kbs-labs.github.io/dataknobs/packages/common/hierarchy/)
   gives the import lines, which name is in which group, and a worked axis.
 

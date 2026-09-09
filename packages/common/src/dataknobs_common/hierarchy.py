@@ -76,10 +76,12 @@ __all__ = [
     "AsyncBulkHierarchy",
     "AsyncEnumerableHierarchy",
     "AsyncHierarchy",
+    "AsyncHierarchyView",
     "AsyncMappingHierarchy",
     "BulkHierarchy",
     "EnumerableHierarchy",
     "Hierarchy",
+    "HierarchyView",
     "K",
     "MappingHierarchy",
     "ancestors",
@@ -275,7 +277,7 @@ class EnumerableHierarchy(Hierarchy[K], Protocol):
     that way. The consequence is not academic. It lands on
     :meth:`MappingHierarchy.snapshot`, whose copy would then *refuse an anchor
     the axis it copied accepts*, because
-    :meth:`~dataknobs_common.taxonomy.Taxonomy.walk` refuses an unknown anchor
+    :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.walk` refuses an unknown anchor
     by asking ``contains``.
 
     A backing that is holding its edges, or can fetch them in one query, is not
@@ -385,7 +387,7 @@ def ancestors(hierarchy: Hierarchy[K], node_id: K) -> tuple[K, ...]:
 
     **An empty result means either a root or an unknown node**, and this does
     not refuse the second — unlike
-    :meth:`~dataknobs_common.taxonomy.Taxonomy.walk`, which refuses an anchor
+    :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.walk`, which refuses an anchor
     its axis does not contain. The difference is recoverability rather than
     taste. ``walk`` *includes* its anchor, so an unknown one is emitted as a
     term of the axis and the caller receives a wrong answer they cannot
@@ -414,6 +416,130 @@ async def async_ancestors(
     is resolved the same way.
     """
     return await async_drive(hierarchy, _ancestors(node_id), max_concurrency=max_concurrency)
+
+
+# --------------------------------------------------------------------------
+# The anchored view -- a cursor over one node
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HierarchyView(Generic[K]):
+    """One :class:`Hierarchy`, one node. A cursor, not a node.
+
+    It owns nothing and copies nothing: the structure is the caller's, and two
+    views over one hierarchy are equal iff they name the same node. There is no
+    state between calls, so nothing is cached and nothing needs invalidating
+    when the structure beneath it changes -- a view obtained before a rebuild
+    and used after it reads the new structure. That is why it holds the
+    hierarchy rather than a snapshot of it, and why it can be frozen at all.
+
+    **No member below has an algorithm of its own.** ``exists``, ``parents``
+    and ``children`` each invoke one protocol member and re-wrap; ``is_root``
+    and ``is_leaf`` invoke ``exists`` and one more; ``at`` constructs. The
+    walks -- ``ancestors``, ``descendants``, ``paths_to_root`` -- are not on it
+    yet, and ``roots`` never will be: it is the protocol's, asked as
+    ``view.structure.roots()``.
+
+    **A node that is not here is neither a root nor a leaf.** ``is_root()`` and
+    ``is_leaf()`` are ``False`` wherever ``exists()`` is ``False``, and that
+    guard is the whole reason they are not one line each. Without it
+    ``is_leaf()`` answers *fully specified* about a node the structure has
+    never heard of -- an absent node has an empty ``children()`` too -- and a
+    consumer deciding whether a placement is specific enough to act on would
+    decline to ask a narrowing question on exactly the terms it knows nothing
+    about. Measured on a public vocabulary whose ``isa`` axis named 92 of its
+    170 terms, that was 46% of it. The cost, accepted: after the guard,
+    ``False`` no longer separates *absent* from *has both parents and
+    children*. ``exists()`` is what does, and it is safe to call alone.
+
+    Generic in the key with ``str`` defaulted, like the protocol it holds, so
+    a bare ``HierarchyView`` is ``HierarchyView[str]``.
+    """
+
+    structure: Hierarchy[K]
+    node: K
+
+    def exists(self) -> bool:
+        """Whether the structure knows this node at all."""
+        return self.structure.contains(self.node)
+
+    def is_root(self) -> bool:
+        """Present, with nothing above it. ``False`` for an absent node."""
+        return self.exists() and not self.structure.parents(self.node)
+
+    def is_leaf(self) -> bool:
+        """Present, with nothing below it. ``False`` for an absent node."""
+        return self.exists() and not self.structure.children(self.node)
+
+    def parents(self) -> tuple[HierarchyView[K], ...]:
+        """One view per node directly above this one. Plural, always."""
+        return tuple(
+            HierarchyView(self.structure, above) for above in self.structure.parents(self.node)
+        )
+
+    def children(self) -> tuple[HierarchyView[K], ...]:
+        """One view per node directly below this one."""
+        return tuple(
+            HierarchyView(self.structure, below) for below in self.structure.children(self.node)
+        )
+
+    def at(self, node_id: K) -> HierarchyView[K]:
+        """Re-anchor at another node of the same structure.
+
+        Constructs rather than reads, so it checks nothing: the view it
+        returns answers :meth:`exists` itself, at the point a caller asks,
+        which is what keeps *nothing below this node* and *this node is not
+        here* apart.
+        """
+        return HierarchyView(self.structure, node_id)
+
+
+@dataclass(frozen=True)
+class AsyncHierarchyView(Generic[K]):
+    """The twin: the same six members over an :class:`AsyncHierarchy`.
+
+    Every one is ``async def`` bar :meth:`at`, which awaits nothing because it
+    constructs rather than reads -- the same rule that makes
+    :meth:`AsyncMappingHierarchy.from_nested` a plain ``def``.
+    """
+
+    structure: AsyncHierarchy[K]
+    node: K
+
+    async def exists(self) -> bool:
+        """Whether the structure knows this node at all."""
+        return await self.structure.contains(self.node)
+
+    async def is_root(self) -> bool:
+        """Present, with nothing above it. ``False`` for an absent node."""
+        if not await self.exists():
+            return False
+        return not await self.structure.parents(self.node)
+
+    async def is_leaf(self) -> bool:
+        """Present, with nothing below it. ``False`` for an absent node."""
+        if not await self.exists():
+            return False
+        return not await self.structure.children(self.node)
+
+    async def parents(self) -> tuple[AsyncHierarchyView[K], ...]:
+        """One view per node directly above this one. Plural, always."""
+        return tuple(
+            AsyncHierarchyView(self.structure, above)
+            for above in await self.structure.parents(self.node)
+        )
+
+    async def children(self) -> tuple[AsyncHierarchyView[K], ...]:
+        """One view per node directly below this one."""
+        return tuple(
+            AsyncHierarchyView(self.structure, below)
+            for below in await self.structure.children(self.node)
+        )
+
+    def at(self, node_id: K) -> AsyncHierarchyView[K]:
+        """:meth:`HierarchyView.at`, and a plain ``def`` for the same reason."""
+        return AsyncHierarchyView(self.structure, node_id)
 
 
 # --------------------------------------------------------------------------
@@ -457,7 +583,7 @@ class _MappingBacking(Generic[K]):
     Shared by the twins below rather than written into each, for the reason
     every shared thing here is shared: a rule a twin re-implements is a rule
     that drifts, and ``contains`` in particular is now a *refusal's evidence*
-    -- :meth:`~dataknobs_common.taxonomy.Taxonomy.walk` refuses an anchor its
+    -- :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.walk` refuses an anchor its
     axis does not contain by asking it. Two implementations of that answer is
     two chances to make the refusal fire on a node that is genuinely there.
 
@@ -752,4 +878,10 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
             assert_type(axis.roots(), "Sequence[str]")
             assert_type(async_axis.parent_map, "Mapping[str, Sequence[str]]")
 
-        del _bare, _bare_async, _inferred, _bare_concrete
+        def _bare_view(view: HierarchyView, async_view: AsyncHierarchyView) -> None:
+            """The cursors inherit the default the same way."""
+            assert_type(view, "HierarchyView[str]")
+            assert_type(view.parents(), "tuple[HierarchyView[str], ...]")
+            assert_type(async_view.node, "str")
+
+        del _bare, _bare_async, _inferred, _bare_concrete, _bare_view
