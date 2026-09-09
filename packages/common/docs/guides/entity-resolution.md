@@ -112,6 +112,10 @@ rather than a verdict — an absence is not a falsehood — and it is how a
 vocabulary gets maintained: the phrases users ask about and the vocabulary does
 not carry are the next entries somebody should add.
 
+Its third field, `beyond_authority`, holds entity **ids** rather than query
+text, and belongs to the scope path — see [Scoping a
+resolution](#scoping-a-resolution).
+
 ## Scoping a resolution
 
 `within` takes a set id, a collection of them, or a mapping from a scope axis
@@ -167,6 +171,40 @@ built with, and that source is the single authority: a rung answering with an
 entity its own backing calls a `Breed` is overruled if the cascade's source
 disagrees. `MatchSignal` does not require two rungs to share a backing, so
 under a rung-side drop two rungs could disagree and nothing would notice.
+
+Not sharing that backing also means a rung can answer with an id the authority
+does not carry at all — an index gone stale against the vocabulary, which is an
+operational fact rather than a bug. Such a candidate is **dropped**, because
+nothing can show it is inside the scope; but the drop is **reported**, because
+an empty result whose `unmatched` names the query is also what a correctly
+spelled scope over a vocabulary lacking the phrase returns, and only one of
+those is the caller's to fix.
+
+```python
+from dataknobs_common.entity_resolution import CascadingResolver, ExactNormalizedSignal
+from dataknobs_common.ontology import Entity, MappingEntitySource
+
+# A rung reading an index that still carries an entity the vocabulary does not.
+stale = MappingEntitySource({"quokka": Entity(id="quokka", type="Breed", name="Quokka")})
+across = CascadingResolver([ExactNormalizedSignal(stale)], onto.entities)
+
+scoped = across.resolve("quokka", k=5, within="Breed")
+assert scoped.candidates == ()                          # dropped: nothing can check it
+assert scoped.coverage.unmatched == ("quokka",)         # true of a plain miss too
+assert scoped.coverage.beyond_authority == ("quokka",)  # only this says which id
+
+assert across.resolve("quokka", k=5).coverage.beyond_authority == ()
+```
+
+That last line is the rule the field turns on: **empty wherever nothing was
+scoped.** An unscoped resolution asks the authority nothing, so there is no
+check to have failed, and reporting one that was never made is the same kind of
+claim the field exists to refuse. A candidate the source *does* carry and the
+scope rejects stays out of it too — that drop was made, not skipped.
+
+Refusing instead was considered and rejected. An unknown *axis* is refused
+because it has no innocent reading; an unknown *id* has one, and refusing would
+fail every scoped query until somebody rebuilt an index.
 
 A rung that declares `narrows()` is still *offered* the scope, and may use it
 to return `k` candidates already inside it — otherwise a rung asked for `k`

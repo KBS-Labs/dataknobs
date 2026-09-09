@@ -427,6 +427,181 @@ def test_the_cascade_overrules_a_rung_that_answers_outside_the_scope(
     assert resolver.resolve("anything", k=5, within="Breed").candidates == ()
 
 
+def test_an_id_the_authority_cannot_check_is_named_rather_than_silently_dropped(
+    mammals_path: Path,
+) -> None:
+    """The cross-source drop stays, and stops looking like a vocabulary miss.
+
+    A candidate whose id the cascade's own source does not carry is still
+    dropped under a scope -- it cannot be shown to be inside one, and admitting
+    what cannot be checked is what this path exists to refuse. What the drop
+    must not do is *report* like a miss. Without this field the caller gets an
+    empty result whose ``unmatched`` names the query, which is exactly what a
+    correctly spelled scope over a vocabulary lacking the phrase returns; the
+    two are then the same answer, and only one of them is the caller's fault.
+
+    Unscoped first, for the reason the neighbouring overrule test gives for its
+    own pair: "the scope dropped it" is also true of a rung that never
+    answered. That half is also the assertion that nothing is reported where
+    nothing was checked -- the source lacks ``wombat`` there too.
+    """
+    ontology = load_ontology(mammals_path)
+    stray = StubSignal("stray", [("wombat", 1.0)])
+    resolver = CascadingResolver([stray], ontology.entities)
+
+    unscoped = resolver.resolve("anything", k=5)
+    assert [c.entity_id for c in unscoped.candidates] == ["wombat"]
+    assert unscoped.coverage.beyond_authority == ()
+
+    scoped = resolver.resolve("anything", k=5, within="Breed")
+    assert scoped.candidates == ()
+    assert scoped.coverage.beyond_authority == ("wombat",)
+    # The half a caller previously got on its own, and could not read.
+    assert scoped.coverage.unmatched == ("anything",)
+
+
+def test_a_candidate_the_scope_merely_excludes_is_not_reported_as_uncheckable(
+    mammals_path: Path,
+) -> None:
+    """The two drops are different, and only one of them is a report.
+
+    ``dog`` is in the vocabulary and is a ``Species``; under a ``Breed`` scope
+    it is dropped because the scope was applied and said no. That is a correct,
+    silent answer. Naming it here would turn the field into *dropped* rather
+    than *could not be checked*, at which point it says nothing a caller can
+    act on -- every scoped query would report its own exclusions back.
+    """
+    ontology = load_ontology(mammals_path)
+    resolver = CascadingResolver([StubSignal("defiant", [("dog", 1.0)])], ontology.entities)
+
+    result = resolver.resolve("anything", k=5, within="Breed")
+
+    assert result.candidates == ()
+    assert result.coverage.beyond_authority == ()
+
+
+def test_two_rungs_naming_the_same_unchecked_id_report_it_once(
+    mammals_path: Path,
+) -> None:
+    """Accumulated across rungs, in first-seen order, without duplicates.
+
+    ``matched`` is built the same way and for the same reason: a field read to
+    decide what a vocabulary is missing is unusable if an id appears once per
+    rung that happened to produce it. ``quokka`` is here so the order being
+    asserted is a real one rather than a single element.
+    """
+    ontology = load_ontology(mammals_path)
+    resolver = CascadingResolver(
+        [
+            StubSignal("first", [("wombat", 1.0), ("quokka", 0.9)]),
+            StubSignal("second", [("wombat", 0.8)]),
+        ],
+        ontology.entities,
+    )
+
+    result = resolver.resolve("anything", k=5, within="Breed")
+
+    assert result.coverage.beyond_authority == ("wombat", "quokka")
+
+
+def test_a_filled_k_does_not_truncate_what_went_unchecked(
+    mammals_path: Path,
+) -> None:
+    """``k`` caps the candidate list and reaches nothing else.
+
+    An unchecked id never enters the order, so the cap that thins the order
+    cannot thin it. Here one rung fills ``k=1`` with an admitted candidate and
+    names two ids the authority does not carry in the same breath; both are
+    reported, and the candidate list is still one long.
+    """
+
+    class Ungenerous(StubSignal):
+        """A rung answering with everything it has, whatever ``k`` says.
+
+        Permitted, and the reason the cascade caps rather than trusting: a
+        rung asked for ``k`` may return more than the state has room for. A
+        rung that truncates to ``k`` itself -- which :class:`StubSignal` does
+        -- cannot pose this question at all, since the ids past the cap are
+        never produced.
+        """
+
+        def candidates(
+            self, query: str, k: int, *, filter: dict[str, Any] | None = None
+        ) -> list[EntityCandidate]:
+            return StubSignal.candidates(self, query, len(self._hits), filter=filter)
+
+    ontology = load_ontology(mammals_path)
+    resolver = CascadingResolver(
+        [Ungenerous("mixed", [("beagle", 1.0), ("wombat", 0.9), ("quokka", 0.8)])],
+        ontology.entities,
+    )
+
+    result = resolver.resolve("anything", k=1, within="Breed")
+
+    assert [c.entity_id for c in result.candidates] == ["beagle"]
+    assert result.coverage.beyond_authority == ("wombat", "quokka")
+
+
+def test_the_bulk_form_reports_an_unchecked_id_against_its_own_query(
+    mammals_path: Path,
+) -> None:
+    """One ``get_many`` covers the whole batch, and the report is still per query.
+
+    The batch path asks the authority once for every id across every query, so
+    the pairing back to a query is the thing that can be got wrong here and
+    nowhere else. The rung is backed by a *different* source than the cascade
+    holds, which is the shape the ruling is about rather than a stub standing
+    in for it.
+    """
+    ontology = load_ontology(mammals_path)
+    elsewhere = MappingEntitySource(
+        {
+            "wombat": Entity(id="wombat", type="Breed", name="Wombat"),
+            "beagle": Entity(id="beagle", type="Breed", name="Beagle"),
+        }
+    )
+    resolver = CascadingResolver([ExactNormalizedSignal(elsewhere)], ontology.entities)
+
+    wombat, beagle = resolver.resolve_many(["wombat", "beagle"], k=5, within="Breed")
+
+    assert wombat.candidates == ()
+    assert wombat.coverage.beyond_authority == ("wombat",)
+    assert [c.entity_id for c in beagle.candidates] == ["beagle"]
+    assert beagle.coverage.beyond_authority == ()
+
+
+def test_the_async_flavour_reports_an_unchecked_id_the_same_way(
+    mammals_path: Path,
+) -> None:
+    """Both flavours, both forms -- the twin has its own ``get_many`` branch.
+
+    The ``await self._entities.get_many(...)`` lines are written once per
+    flavour, so an accumulator threaded through one of them is not thereby
+    threaded through the other.
+    """
+
+    async def exercise() -> None:
+        source = AsyncMappingEntitySource(
+            {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+        )
+        resolver = AsyncCascadingResolver([AsyncStubSignal("stray", [("wombat", 1.0)])], source)
+
+        single = await resolver.resolve("anything", k=5, within="Breed")
+        assert single.candidates == ()
+        assert single.coverage.beyond_authority == ("wombat",)
+
+        unscoped = await resolver.resolve("anything", k=5)
+        assert unscoped.coverage.beyond_authority == ()
+
+        batch = await resolver.resolve_many(["anything", "other"], k=5, within="Breed")
+        assert [result.coverage.beyond_authority for result in batch] == [
+            ("wombat",),
+            ("wombat",),
+        ]
+
+    asyncio.run(exercise())
+
+
 def test_a_filter_is_offered_only_to_a_rung_that_declares_it_narrows(
     mammals_path: Path,
 ) -> None:

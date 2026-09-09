@@ -92,6 +92,17 @@ class CascadeState:
     rung seeing the same id appends its evidence and does not become the
     record."""
 
+    beyond_authority: tuple[str, ...] = ()
+    """Ids the scope could not be applied to, accumulated across the rungs.
+
+    Reaches the caller as
+    :attr:`~dataknobs_common.entity_resolution.values.Coverage.beyond_authority`,
+    where the whole argument for it is written. Held here because a resolution
+    is many rungs and the report is one field.
+
+    Not a second ``order``: nothing here entered the candidate list, so ``k``
+    never reaches it and :meth:`saturated` never reads it."""
+
     def saturated(self) -> bool:
         """Whether ``k`` is filled, and no further rung need be asked."""
         return len(self.order) >= self.k
@@ -218,7 +229,9 @@ def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -
         candidates=candidates,
         query=state.query,
         compatibility=compatibility if compatibility is not None else CompatibilityVerdict.UNKNOWN,
-        coverage=Coverage(matched=matched, unmatched=unmatched),
+        coverage=Coverage(
+            matched=matched, unmatched=unmatched, beyond_authority=state.beyond_authority
+        ),
     )
 
 
@@ -275,7 +288,7 @@ def _admits(
     produced: Sequence[EntityCandidate],
     axes: Mapping[str, frozenset[str]],
     source: Any = None,
-) -> tuple[EntityCandidate, ...]:
+) -> tuple[tuple[EntityCandidate, ...], tuple[str, ...]]:
     """The candidates a scope admits, decided against **the cascade's** source.
 
     The drop is here rather than in the rungs because the cascade is the one
@@ -288,12 +301,65 @@ def _admits(
     An id the source does not carry is dropped under a scope. It cannot be
     shown to be inside one, and admitting what cannot be checked is the
     failure this whole path exists to refuse.
+
+    Returns:
+        The survivors, and beside them the ids the check could not be made
+        for. Both come out of one pass here rather than from a set difference
+        recomputed at each of the four call sites -- the same rule that put
+        the membership projection in one place, one flavour over.
     """
-    return tuple(
-        candidate
-        for candidate in produced
-        if candidate.entity_id in found
-        and within_admits(axes, within_memberships(found[candidate.entity_id], source))
+    return (
+        tuple(
+            candidate
+            for candidate in produced
+            if candidate.entity_id in found
+            and within_admits(axes, within_memberships(found[candidate.entity_id], source))
+        ),
+        tuple(
+            dict.fromkeys(
+                candidate.entity_id for candidate in produced if candidate.entity_id not in found
+            )
+        ),
+    )
+
+
+def _with_beyond(state: CascadeState, beyond: Sequence[str]) -> CascadeState:
+    """The state, carrying these unchecked ids as well as the ones it held.
+
+    ``dict.fromkeys`` for the reason ``matched`` uses it: first-seen order
+    kept, duplicates gone, so two rungs answering with the same unknown id is
+    one entry rather than one per rung.
+
+    Deliberately **not** folded into :func:`merge_rung`. That function's
+    docstring says it is the only thing that decides position, and it is doing
+    real work; an accumulator touching neither order nor evidence would dilute
+    the sentence for no gain.
+    """
+    if not beyond:
+        return state
+    return replace(state, beyond_authority=tuple(dict.fromkeys((*state.beyond_authority, *beyond))))
+
+
+def _scope_batch(
+    states: Sequence[CascadeState],
+    batches: Sequence[Sequence[EntityCandidate]],
+    *,
+    found: Mapping[str, Any],
+    axes: Mapping[str, frozenset[str]],
+    source: Any,
+) -> tuple[list[CascadeState], list[tuple[EntityCandidate, ...]]]:
+    """Rule on one rung's batch answer, per query.
+
+    Shared between the flavours for the reason the rest of the core is: the
+    bulk forms ask the authority **once** for every id across every query, so
+    pairing an unchecked id back to the query that produced it is the thing
+    that can be got wrong here and nowhere else. Written twice, it could come
+    to be got wrong in one flavour only.
+    """
+    ruled = [_admits(found, batch, axes, source) for batch in batches]
+    return (
+        [_with_beyond(state, beyond) for state, (_, beyond) in zip(states, ruled, strict=True)],
+        [admitted for admitted, _ in ruled],
     )
 
 
@@ -332,7 +398,8 @@ class CascadingResolver:
             scoped: Sequence[EntityCandidate] = produced
             if axes:
                 found = self._entities.get_many([c.entity_id for c in produced])
-                scoped = _admits(found, produced, axes, self._entities)
+                scoped, beyond = _admits(found, produced, axes, self._entities)
+                state = _with_beyond(state, beyond)
             state = merge_rung(state, scoped, signal=rung.name, kind=_batch_kind(scoped))
         return finish(state, compatibility=None)
 
@@ -355,7 +422,9 @@ class CascadingResolver:
             )
             if axes:
                 found = self._entities.get_many([c.entity_id for batch in batches for c in batch])
-                batches = [_admits(found, batch, axes, self._entities) for batch in batches]
+                states, batches = _scope_batch(
+                    states, batches, found=found, axes=axes, source=self._entities
+                )
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
 
@@ -393,7 +462,8 @@ class AsyncCascadingResolver:
             scoped: Sequence[EntityCandidate] = produced
             if axes:
                 found = await self._entities.get_many([c.entity_id for c in produced])
-                scoped = _admits(found, produced, axes, self._entities)
+                scoped, beyond = _admits(found, produced, axes, self._entities)
+                state = _with_beyond(state, beyond)
             state = merge_rung(state, scoped, signal=rung.name, kind=_batch_kind(scoped))
         return finish(state, compatibility=None)
 
@@ -414,7 +484,9 @@ class AsyncCascadingResolver:
                 found = await self._entities.get_many(
                     [c.entity_id for batch in batches for c in batch]
                 )
-                batches = [_admits(found, batch, axes, self._entities) for batch in batches]
+                states, batches = _scope_batch(
+                    states, batches, found=found, axes=axes, source=self._entities
+                )
             states = _merge_batch(states, batches, signal=rung.name)
         return [finish(state, compatibility=None) for state in states]
 

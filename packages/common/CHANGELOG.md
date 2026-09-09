@@ -458,6 +458,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   axes — `memberships()` says what one entity is, `axes()` says which names may
   be asked.
 
+  A rung need not share the cascade's backing, so it can answer with an id that
+  backing does not carry — a stale index, which is an operational fact rather
+  than a bug. Such a candidate is **dropped**, since nothing can show it is
+  inside the scope, and **named** in `Coverage.beyond_authority`, so *narrowed
+  to nothing* and *could not be checked* stop being one answer. That field
+  holds entity ids rather than query text, accumulates across a resolution's
+  rungs without duplicates, and is empty wherever nothing was scoped: an
+  unscoped resolution asks the authority nothing, and reporting a check that
+  was never made is the claim the field exists to refuse. An unknown *axis* is
+  refused rather than reported because it has no innocent reading; an unknown
+  *id* has one, and refusing would fail every scoped query until somebody
+  rebuilt an index.
+
   `signal_backends` and `async_signal_backends` look a rung up by the name a
   consumer writes as `kind:`. Two registries rather than one, because a
   runtime-checkable protocol compares member *names* and both flavours spell it

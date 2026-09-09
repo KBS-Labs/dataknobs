@@ -187,6 +187,38 @@ class Coverage:
     does not cover are the next entries somebody should add.
     """
 
+    beyond_authority: tuple[str, ...] = ()
+    """Entity **ids** a rung produced that the scope could not be applied to.
+
+    Not query text, which is what the two fields above hold -- two id spaces
+    in one dataclass need the names to carry the difference, and *authority*
+    is this family's word for the source a ``within`` scope is decided
+    against.
+
+    A rung need not share the cascade's backing, so it can answer with an id
+    that backing does not carry. Under a scope such a candidate is dropped:
+    it cannot be shown to be inside one, and admitting what cannot be checked
+    is what the scope path exists to refuse. Reporting it is what keeps the
+    drop from *reading* as a vocabulary miss -- an empty result whose
+    ``unmatched`` names the query is also what a correctly spelled scope over
+    a vocabulary lacking the phrase returns, and only one of those is the
+    caller's to fix. The usual cause is an index gone stale against the
+    vocabulary, which is an operational fact rather than a bug, and is why
+    this reports rather than refuses.
+
+    **Empty where nothing was scoped**, always: an unscoped resolution asks
+    the authority nothing, so there is no check to have failed. Reporting one
+    that was never made is the same class of claim this field exists to
+    refuse.
+
+    **Not the ordinary exclusion.** A candidate the authority *does* carry and
+    the scope rejects is a correct, silent drop and never appears here.
+
+    Accumulated across the rungs of one resolution, first-seen order, without
+    duplicates. Untouched by ``k``: these never enter the order, so nothing
+    about saturation reaches them.
+    """
+
 
 @dataclass(frozen=True)
 class ResolutionResult:
