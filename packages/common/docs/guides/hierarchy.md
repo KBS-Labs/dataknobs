@@ -2,9 +2,9 @@
 
 `dataknobs_common.hierarchy` states what a *structure* is — what a node's
 parents and children are — and the traversals over it.
-`dataknobs_common.taxonomy` reifies one such structure as a walkable axis of a
-vocabulary, and `dataknobs_common.ontology.hierarchy` backs one with the
-assertions of a single relation.
+`dataknobs_common.ontology.taxonomy` reifies one such structure as a walkable
+axis of a vocabulary, and `dataknobs_common.ontology.hierarchy` backs one with
+the assertions of a single relation.
 
 The three are separable on purpose: the protocols know nothing about
 ontologies, so a hierarchy over a `parent_id` column or an in-memory object
@@ -52,9 +52,10 @@ prototyped and neither adopted nor rejected. Publishing the narrow form and
 widening it later would change a signature consumers had already written
 against, so it waits for that question to settle.
 
-**Still gaining members.** `Taxonomy` and `AsyncTaxonomy` carry one method
-today, `walk()`, out of the nine they are planned to hold; the rest arrive in
-later releases. What ships now will not change shape.
+**Still gaining members.** `Taxonomy` and `AsyncTaxonomy` carry two methods
+today, `walk()` and `at()`, out of the nine they are planned to hold; the rest
+arrive in later releases. What ships now will not change shape. The cursor
+`at()` returns has a page of its own — [The Anchored View](anchored-view.md).
 
 ```python
 from dataknobs_common.hierarchy import (
@@ -69,7 +70,7 @@ from dataknobs_common.hierarchy import (
     drive,
 )
 from dataknobs_common.ontology.hierarchy import AssertionHierarchy, AsyncAssertionHierarchy
-from dataknobs_common.taxonomy import AsyncTaxonomy, Taxonomy
+from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 ```
 
 ## Quick start — an axis of a vocabulary
@@ -450,6 +451,19 @@ it. That is the point of stating one:
 ```python
 stated = negations.assertions.find(subject="whale", relation="isa")
 assert [assertion.polarity.value for assertion in stated] == ["negated"]
+```
+
+The narrowing an axis applies has one home, `edge_criteria`: *this relation,
+asserted*, as criteria you unpack into either `find` rather than a polarity
+you write by hand. Both flavours of the assertion backing read through it, the
+taxonomy cursor's edge members read through it, and a consumer reading an
+axis's edges straight from the source can too:
+
+```python
+from dataknobs_common.ontology.hierarchy import edge_criteria
+
+assert negations.assertions.find(subject="whale", **edge_criteria("isa")) == []
+assert [a.subject for a in negations.assertions.find(**edge_criteria("isa"))] == ["orca"]
 ```
 
 It lives under `ontology/` rather than beside the protocol it satisfies:

@@ -50,7 +50,7 @@ def test_importing_the_structure_axis_does_not_import_dataknobs_data() -> None:
     result = _run(
         "import sys\n"
         "import dataknobs_common.hierarchy\n"
-        "import dataknobs_common.taxonomy\n"
+        "import dataknobs_common.ontology.taxonomy\n"
         "import dataknobs_common._walk_core\n"
         "import dataknobs_common._nested_core\n" + _LEAK_CHECK
     )

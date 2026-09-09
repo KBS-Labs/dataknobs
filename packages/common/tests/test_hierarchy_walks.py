@@ -798,14 +798,16 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
 
     A runtime edge back would close a cycle through ``ontology/__init__``,
     which imports the values module that imports this one. Checkable, so it is
-    checked rather than left as a convention.
+    checked rather than left as a convention. The taxonomy module was in this
+    probe once and is not now: it lives under ``ontology/``, because its
+    cursor needs the model at runtime -- the same reason the assertion backing
+    does.
     """
     import subprocess
     import sys
 
     probe = (
-        "import sys, dataknobs_common.hierarchy, dataknobs_common.taxonomy; "
-        "print('dataknobs_common.ontology' in sys.modules)"
+        "import sys, dataknobs_common.hierarchy; print('dataknobs_common.ontology' in sys.modules)"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True

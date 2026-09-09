@@ -25,7 +25,7 @@ goes where its dependency is, not beside its protocol.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from dataknobs_common.ontology.model import EntityRef, Polarity
 from dataknobs_common.ontology.sources import object_entity_id
@@ -36,7 +36,37 @@ if TYPE_CHECKING:
     from dataknobs_common.ontology.model import Assertion, RelationRef, Term
     from dataknobs_common.ontology.sources import AssertionSource, AsyncAssertionSource
 
-__all__ = ["AssertionHierarchy", "AsyncAssertionHierarchy"]
+__all__ = ["AssertionHierarchy", "AsyncAssertionHierarchy", "EdgeCriteria", "edge_criteria"]
+
+
+class EdgeCriteria(TypedDict):
+    """The two criteria that select the edges of one axis -- :func:`edge_criteria`."""
+
+    relation: RelationRef
+    polarity: Polarity
+
+
+def edge_criteria(relation: RelationRef) -> EdgeCriteria:
+    """The criteria that select the edges of an axis: this relation, **asserted**.
+
+    Unpack it into a read rather than writing the two keywords::
+
+        source.find(subject="beagle", **edge_criteria("isa"))
+        source.find_many(subjects=frontier, **edge_criteria("isa"))
+
+    *An axis is made of asserted edges between entities* is one decision, and
+    this is its one home. The two concretes below read through it, the
+    taxonomy cursor's edge members read through it from another module, and a
+    consumer building an axis over ``onto.assertions.find(relation="isa")``
+    reaches the same narrowing by unpacking the same criteria -- where writing
+    ``polarity=`` at each site is how a reader added later omits it silently,
+    and a query that does not narrow returns a stated negation as an edge.
+
+    A function returning criteria rather than one performing the read, so it
+    has no flavour: the synchronous and asynchronous twins share it the way
+    every walk shares the core, without sharing a line of runtime code.
+    """
+    return {"relation": relation, "polarity": Polarity.ASSERTED}
 
 
 def _ordered(node_ids: Iterable[str]) -> tuple[str, ...]:
@@ -120,8 +150,9 @@ class AssertionHierarchy:
 
     ``parents(x)`` is ``find(subject=x, ...)`` read for its objects;
     ``children(x)`` is ``find(object=x, ...)`` read for its subjects -- the
-    mirrored query, not the same one. Both go through :meth:`_find`, which is
-    where this axis says which relation it is and which polarity counts.
+    mirrored query, not the same one. Both go through :meth:`_find`, which
+    supplies this axis's relation to :func:`edge_criteria`, where *asserted*
+    is decided once for every reader of an axis, inside this module and out.
     """
 
     source: AssertionSource
@@ -132,34 +163,27 @@ class AssertionHierarchy:
     ) -> Sequence[Assertion]:
         """Every **asserted** edge of this relation matching the criteria.
 
-        The one place this axis decides two things: which relation it is, and
-        that a negated edge is not part of it. Every read below goes through
-        here, so a member added later cannot omit either by writing a
-        ``self.source.find(...)`` that looks complete -- which is exactly how
-        :meth:`parent_edges`, the newest of them, would have arrived
-        unfiltered.
+        Every read below goes through here, and this goes through
+        :func:`edge_criteria` -- so a member added later cannot omit the
+        relation or the polarity by writing a ``self.source.find(...)`` that
+        looks complete, which is exactly how :meth:`parent_edges`, the newest
+        of them, would have arrived unfiltered. The narrowing itself is not
+        this method's: it is the function's, so a reader outside this class
+        narrows the same way by unpacking the same criteria.
 
         The module already shared its *result* side -- :func:`_parents_of`,
         :func:`_children_of`, :func:`_nodes_of`, :func:`_parent_edges_of` --
         and shared nothing on the query side, which is why one decision was
-        written at eight call sites per flavour.
+        once written at eight call sites per flavour.
         """
-        return self.source.find(
-            subject=subject,
-            object=object,
-            relation=self.relation,
-            polarity=Polarity.ASSERTED,
-        )
+        return self.source.find(subject=subject, object=object, **edge_criteria(self.relation))
 
     def _find_many(
         self, *, subjects: Sequence[str] | None = None, objects: Sequence[str] | None = None
     ) -> Mapping[str, Sequence[Assertion]]:
         """:meth:`_find`'s bulk form, narrowed identically."""
         return self.source.find_many(
-            subjects=subjects,
-            objects=objects,
-            relation=self.relation,
-            polarity=Polarity.ASSERTED,
+            subjects=subjects, objects=objects, **edge_criteria(self.relation)
         )
 
     def roots(self) -> Sequence[str]:
@@ -241,8 +265,8 @@ class AsyncAssertionHierarchy:
 
     Its :meth:`_find` pair is written out rather than shared with the
     synchronous twin's: the twins share no runtime code, because one awaits
-    and the other cannot. Two places is the floor here; sixteen was the
-    alternative.
+    and the other cannot. What they do share is :func:`edge_criteria`, which
+    performs no read and so has no flavour.
     """
 
     source: AsyncAssertionSource
@@ -253,10 +277,7 @@ class AsyncAssertionHierarchy:
     ) -> Sequence[Assertion]:
         """:meth:`AssertionHierarchy._find`, awaited."""
         return await self.source.find(
-            subject=subject,
-            object=object,
-            relation=self.relation,
-            polarity=Polarity.ASSERTED,
+            subject=subject, object=object, **edge_criteria(self.relation)
         )
 
     async def _find_many(
@@ -264,10 +285,7 @@ class AsyncAssertionHierarchy:
     ) -> Mapping[str, Sequence[Assertion]]:
         """:meth:`AssertionHierarchy._find_many`, awaited."""
         return await self.source.find_many(
-            subjects=subjects,
-            objects=objects,
-            relation=self.relation,
-            polarity=Polarity.ASSERTED,
+            subjects=subjects, objects=objects, **edge_criteria(self.relation)
         )
 
     async def roots(self) -> Sequence[str]:

@@ -11,7 +11,7 @@ Three shared cores live here, and they are shared with different callers:
   ``_parent_edges`` -- which :mod:`dataknobs_common.hierarchy`'s public
   wrappers and its snapshot constructors drive;
 * the **frontier read** -- ``_sync_reply`` / ``_async_reply`` -- which the
-  drivers call, and which :class:`~dataknobs_common.taxonomy.Taxonomy`'s
+  drivers call, and which :class:`~dataknobs_common.ontology.taxonomy.Taxonomy`'s
   streaming walk calls too. That walk cannot go through the collecting core,
   because streaming would widen the core's request type for every walk that
   does not stream; sharing this one step is what stops it drifting from the

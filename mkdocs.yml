@@ -92,6 +92,7 @@ nav:
       - packages/common/plugin-registry.md
       - packages/common/packs.md
       - packages/common/hierarchy.md
+      - packages/common/anchored-view.md
       - packages/common/testing.md
       - packages/common/api.md
     - Config:
