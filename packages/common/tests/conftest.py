@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from dataknobs_common.testing import live_dk_daemon_threads
+from dataknobs_common.testing import declare_import_root, live_dk_daemon_threads
+
+# This directory, so its shared helper module (``_dataclass_sweep``) imports by
+# bare name. pytest's prepend import mode already inserts a rootdir without an
+# ``__init__.py``, which is how the fsm suite's helpers were reached until an
+# ``__init__.py`` there made the mechanism ambiguous and broke them. Declaring
+# it says out loud what the imports below depend on.
+declare_import_root(__file__)
 
 
 @pytest.fixture
