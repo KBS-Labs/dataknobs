@@ -31,35 +31,45 @@ tree satisfies them and inherits every walk without importing a vocabulary.
 
 ## Where the names live
 
-Everything below is imported by module path. None of it is re-exported from
-`dataknobs_common` or `dataknobs_common.ontology` yet — a name on a package
-door is a name consumers hold, so it goes there once and deliberately. The
-reason each name is still waiting is not the same reason, which is what you
-need if you are deciding what to build on.
+On the package door. Everything in the three groups below is importable from
+`dataknobs_common` directly, and from the module that defines it — the same
+names either way, so a line already spelling the module path keeps working.
 
-**Settled, waiting only on the door.** `Hierarchy`, `AsyncHierarchy`,
-`BulkHierarchy`, `AsyncBulkHierarchy`, `ancestors`, `async_ancestors`,
-`DEFAULT_FRONTIER_CONCURRENCY`, `AssertionHierarchy` and
-`AsyncAssertionHierarchy` are complete, and their signatures are not expected
-to move. They are absent from the door because the
-release that opens it has not happened — not because anything about them is
-unsettled.
+**The protocols, and what implements them.** `Hierarchy` and `AsyncHierarchy`
+are the four-member core — `roots`, `parents`, `children`, `contains`.
+`BulkHierarchy` and `AsyncBulkHierarchy` add a batched frontier read, bounded
+by `DEFAULT_FRONTIER_CONCURRENCY`; `EnumerableHierarchy` and
+`AsyncEnumerableHierarchy` add enumeration for a backing that can afford it.
+Both pairs are optional: a walk uses one when the structure it was handed
+implements it and takes the singular path when it does not. `MappingHierarchy`
+and `AsyncMappingHierarchy` are the concretes over edges already in memory, and
+`AssertionHierarchy` and `AsyncAssertionHierarchy` are the ones over a
+vocabulary's assertions.
 
-**Complete, with the shape still open.** `drive` and `async_drive` do what this
-page documents, and writing a walk of your own against them is what they are
-for. A wider core — one that also drives a streaming pair — has been
-prototyped and neither adopted nor rejected. Publishing the narrow form and
-widening it later would change a signature consumers had already written
-against, so it waits for that question to settle.
+**The walks, and the core they are written against.** `ancestors` and
+`async_ancestors` are module-level functions generic over `Hierarchy`, not
+methods on it — implementing the protocol earns every walk and overrides none.
+`drive` and `async_drive` are that core exposed, which is what you write a walk
+of your own against; `Ask`, `Member` and `Walk` are the three types its
+protocol is spelled in.
 
-**Still gaining members.** `Taxonomy` and `AsyncTaxonomy` carry two methods
-today, `walk()` and `at()`, out of the nine they are planned to hold; the rest
-arrive in later releases. What ships now will not change shape. The cursor
-`at()` returns has a page of its own — [The Anchored View](anchored-view.md).
+**Still gaining members, and on the door anyway.** `Taxonomy` and
+`AsyncTaxonomy` carry two methods today, `walk()` and `at()`, out of the nine
+they are planned to hold; the rest arrive in later releases. What ships now
+will not change shape, and adding a member to a class breaks nobody — so the
+promise a door makes is one the missing members do not put at risk. You rarely
+need the taxonomy import at all, since `onto.taxonomy("species")` hands one
+back; it is there so you can write the type down. `HierarchyView` and
+`AsyncHierarchyView` are on the door for a stronger reason: nothing published
+returns or constructs one, so the import is the only way to put a cursor over a
+`Hierarchy` of your own. The cursor `at()` returns has a page of its own —
+[The Anchored View](anchored-view.md).
 
 ```python
-from dataknobs_common.hierarchy import (
+from dataknobs_common import (
     DEFAULT_FRONTIER_CONCURRENCY,
+    AssertionHierarchy,
+    AsyncAssertionHierarchy,
     AsyncBulkHierarchy,
     AsyncHierarchy,
     BulkHierarchy,
@@ -69,8 +79,12 @@ from dataknobs_common.hierarchy import (
     async_drive,
     drive,
 )
-from dataknobs_common.ontology.hierarchy import AssertionHierarchy, AsyncAssertionHierarchy
-from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
+from dataknobs_common import (
+    AsyncHierarchyView,
+    AsyncTaxonomy,
+    HierarchyView,
+    Taxonomy,
+)
 ```
 
 ## Quick start — an axis of a vocabulary
@@ -222,7 +236,7 @@ a hierarchy at all, not to decide which flavour you are holding.
 itself:
 
 ```python
-from dataknobs_common.hierarchy import ancestors, async_ancestors
+from dataknobs_common import ancestors, async_ancestors
 
 assert ancestors(species.structure, "beagle") == ("dog", "mammal")
 assert await async_ancestors(async_species.structure, "beagle") == ("dog", "mammal")
@@ -263,7 +277,7 @@ never reached.
 An anchor the axis does not contain is **refused**, not walked:
 
 ```python
-from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common import NotFoundError
 
 try:
     tuple(species.walk(from_id="marmoset"))
@@ -286,7 +300,7 @@ flavour-agnostic, and they are usable directly. A walk is a generator that
 one sequence per node asked about:
 
 ```python
-from dataknobs_common.hierarchy import async_drive, drive
+from dataknobs_common import async_drive, drive
 
 def _leaves():
     """Every node with no children, from the roots."""
@@ -355,7 +369,7 @@ someone remembers to write it into both copies.
 That fan-out is bounded, and the bound is yours to set:
 
 ```python
-from dataknobs_common.hierarchy import DEFAULT_FRONTIER_CONCURRENCY
+from dataknobs_common import DEFAULT_FRONTIER_CONCURRENCY
 
 assert DEFAULT_FRONTIER_CONCURRENCY == 8            # what you get for saying nothing
 
@@ -387,7 +401,7 @@ call per level — which is why the bound matters most for the plain
 nothing and caches nothing:
 
 ```python
-from dataknobs_common.ontology.hierarchy import AssertionHierarchy
+from dataknobs_common import AssertionHierarchy
 
 structure = AssertionHierarchy(onto.assertions, "isa")
 
@@ -460,7 +474,7 @@ taxonomy cursor's edge members read through it, and a consumer reading an
 axis's edges straight from the source can too:
 
 ```python
-from dataknobs_common.ontology.hierarchy import edge_criteria
+from dataknobs_common import edge_criteria
 
 assert negations.assertions.find(subject="whale", **edge_criteria("isa")) == []
 assert [a.subject for a in negations.assertions.find(**edge_criteria("isa"))] == ["orca"]
@@ -480,7 +494,7 @@ typed, or holds in memory, or has just finished walking. It opens nothing, so
 it lives beside the protocols rather than with a backing package:
 
 ```python
-from dataknobs_common.hierarchy import (
+from dataknobs_common import (
     AsyncMappingHierarchy,
     MappingHierarchy,
     ancestors,
@@ -709,7 +723,7 @@ The walks never inspect a node id — they only hash one — so `K` is a type
 parameter bounded by `Hashable`, with `str` as its default:
 
 ```python
-from dataknobs_common.hierarchy import Hierarchy, ancestors
+from dataknobs_common import Hierarchy, ancestors
 
 class IntTree:
     """A hierarchy whose nodes are integers: n is the parent of 2n and 2n+1."""
@@ -734,7 +748,7 @@ above: tuple[int, ...] = ancestors(tree, 13)    # (6, 3, 1) — inferred from th
 be written out at all:
 
 ```python
-from dataknobs_common.hierarchy import MappingHierarchy
+from dataknobs_common import MappingHierarchy
 
 powers: Hierarchy[int] = MappingHierarchy({2: (1,), 3: (1,), 4: (2,), 5: (2,)})
 assert ancestors(powers, 4) == (2, 1)

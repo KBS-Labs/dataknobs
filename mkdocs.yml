@@ -91,6 +91,7 @@ nav:
       - packages/common/copying.md
       - packages/common/plugin-registry.md
       - packages/common/packs.md
+      - packages/common/ontology.md
       - packages/common/hierarchy.md
       - packages/common/anchored-view.md
       - packages/common/entity-resolution.md

@@ -13,14 +13,23 @@ in it to go stale.
 
 ## Where the names live
 
-Imported by module path, like the rest of this family, and on no package door
-yet: `HierarchyView` carries six of its nine planned members and `TaxonomyView`
-eight of twelve, and a name goes on a door once. A consumer rarely imports the
-cursors at all — `at()` constructs them — so these lines are for annotations.
+On the package door, with the rest of this family. These four are still
+unfinished — `HierarchyView` carries six of its nine planned members and
+`TaxonomyView` eight of twelve — and are published anyway, because adding a
+member to a class breaks nobody while withholding the name costs a consumer
+something real. For the taxonomy cursors that cost is an annotation: `at()`
+hands you one, and the import only lets you write down what you hold. For
+`HierarchyView` it is the whole capability — nothing published returns or
+constructs one, so over a `Hierarchy` of your own the import is the only door
+in.
 
 ```python
-from dataknobs_common.hierarchy import AsyncHierarchyView, HierarchyView
-from dataknobs_common.ontology.taxonomy import AsyncTaxonomyView, TaxonomyView
+from dataknobs_common import (
+    AsyncHierarchyView,
+    AsyncTaxonomyView,
+    HierarchyView,
+    TaxonomyView,
+)
 ```
 
 ## The door, and the move
@@ -205,7 +214,7 @@ into either `find`. Use it yourself wherever you read an axis's edges straight
 from the assertion source, rather than writing the polarity by hand:
 
 ```python
-from dataknobs_common.ontology.hierarchy import edge_criteria
+from dataknobs_common import edge_criteria
 
 edges = contradiction.assertions.find(subject="beagle", **edge_criteria("isa"))
 assert [assertion.id for assertion in edges] == ["yes"]
@@ -232,7 +241,7 @@ tree, a mapping — gets the same six questions from `HierarchyView`, generic in
 the key the way the protocol is, with `str` defaulted:
 
 ```python
-from dataknobs_common.hierarchy import HierarchyView, MappingHierarchy
+from dataknobs_common import HierarchyView, MappingHierarchy
 
 billing = MappingHierarchy({"late-fees": ("billing",), "refunds": ("billing",), "billing": ()})
 view = HierarchyView(billing, "billing")
@@ -281,7 +290,7 @@ The three walks — `ancestors()`, `descendants()`, `paths_to_root()` — and
 walk from a view's node with the module-level walks:
 
 ```python
-from dataknobs_common.hierarchy import ancestors
+from dataknobs_common import ancestors
 
 assert ancestors(axis.structure, here.node) == ("retriever", "dog", "mammal")
 ```

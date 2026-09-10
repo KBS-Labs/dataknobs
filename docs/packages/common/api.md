@@ -7,7 +7,7 @@ Curated reference for the most-used parts of the `dataknobs-common` package.
 This page covers a selection — the exception hierarchy, the four registries,
 serialization, metadata, retry, transitions and lifecycle — with worked
 examples and the surrounding rationale. It is deliberately not exhaustive:
-`dataknobs_common` exports roughly two hundred names, and the auto-generated
+`dataknobs_common` exports around three hundred names, and the auto-generated
 reference above is the complete one. When the two disagree, the generated page
 is built from the source and wins.
 
@@ -43,6 +43,7 @@ in full in the [auto-generated reference](../../api/reference/common.md):
 | `callbacks`, `async_iter`, `sync_bridge` | Callback registries, sync-iterator offloading, and the sync/async bridge |
 | `expressions` | Safe expression evaluation over a restricted builtin set |
 | `imports`, `copying`, `bounded_cache`, `aws` | Dotted-path resolution, structure copying, an LRU cache, and the shared aioboto3 session |
+| `ontology`, `hierarchy`, `entity_resolution`, `text` | An authored vocabulary and what reads it: `load_ontology`, the entity and assertion sources, the structural protocols and the walks over them, and the resolution cascade |
 | `testing` | Test utilities, skip markers, and configuration factories |
 
 ## Exceptions Module

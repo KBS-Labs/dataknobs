@@ -5,6 +5,21 @@ observable in a process that has already imported everything. The first is
 that the family does not import the vocabulary package; the second is that it
 does not import the data package. They are different claims with different
 reasons, and each is asserted per submodule rather than once on the package.
+
+**They are measured through two different probes, and the difference is the
+point.** ``dataknobs_common``'s own door publishes the vocabulary surface, so
+it imports ``dataknobs_common.ontology`` -- and importing any submodule of a
+package runs that package's ``__init__`` first. A probe that lets the door run
+therefore reports the vocabulary as reached no matter what this family does,
+which is a probe that has stopped being able to see its own subject.
+
+So the vocabulary claim is measured with the door **stubbed**: the parent is
+placed in ``sys.modules`` as a bare module carrying only the real
+``__path__``, which is enough for the submodule machinery and leaves
+``__init__`` unrun. What that measures is this family's own import closure,
+which is what the claim was always about. The database claim keeps the
+door-running probe, because *that* claim is about what a consumer pays and the
+consumer pays for the door.
 """
 
 from __future__ import annotations
@@ -31,6 +46,22 @@ SUBMODULES = [
 ]
 
 
+#: Put the package door in ``sys.modules`` without running it.
+#:
+#: A module object carrying the real ``__path__`` is all the import machinery
+#: needs to resolve ``dataknobs_common.<name>``; because the parent is already
+#: in ``sys.modules``, its ``__init__`` is never executed. Everything the
+#: probe then reports was reached by the module under test, not by the door.
+STUB_THE_DOOR = (
+    "import importlib, importlib.util, sys, types; "
+    "_spec = importlib.util.find_spec('dataknobs_common'); "
+    "_stub = types.ModuleType('dataknobs_common'); "
+    "_stub.__path__ = list(_spec.submodule_search_locations); "
+    "_stub.__spec__ = _spec; "
+    "sys.modules['dataknobs_common'] = _stub; "
+)
+
+
 def imported_modules(statement: str) -> set[str]:
     """The modules a fresh interpreter has after running ``statement``."""
     result = subprocess.run(
@@ -54,6 +85,45 @@ def imported_modules(statement: str) -> set[str]:
     return reached
 
 
+def imported_by_the_module_alone(module: str) -> set[str]:
+    """The modules ``module`` reaches, with the package door stubbed out.
+
+    The positive control is different here, and has to be. Its sibling checks
+    that ``dataknobs_common`` was reached, which under a stub is true before
+    the probe imports anything at all -- so this one checks that the module
+    under test really loaded, and that the door really did not run.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"{STUB_THE_DOOR}"
+            f"importlib.import_module({module!r}); "
+            "print(hasattr(sys.modules['dataknobs_common'], '__all__')); "
+            "print('\\n'.join(sys.modules))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    door_ran, _, rest = result.stdout.partition("\n")
+    reached = set(rest.split())
+
+    # Belt to the stub's braces. Installing the stub before any import means
+    # ``__init__`` cannot run, so this cannot fail as written -- it is here to
+    # name the invariant at the point that depends on it, not as coverage.
+    assert door_ran.strip() == "False", (
+        f"the door ran during the probe for {module!r}; everything it imports "
+        f"would be attributed to the module under test"
+    )
+    # This one is load-bearing: it is what makes an absence below a measurement.
+    assert module in reached, (
+        f"the probe for {module!r} did not load it; an absence asserted over "
+        f"this measurement would be vacuous"
+    )
+    return reached
+
+
 @pytest.mark.parametrize("module", ["dataknobs_common.entity_resolution", *SUBMODULES])
 def test_the_family_does_not_import_the_vocabulary_package(module: str) -> None:
     """The edge whose absence keeps this graph acyclic.
@@ -63,10 +133,51 @@ def test_the_family_does_not_import_the_vocabulary_package(module: str) -> None:
     that loop -- and it would fail on import **order**, so a suite that
     happens to import the vocabulary first stays green while the other order
     is broken. This is the assertion that does not care about order.
+
+    Measured with the door stubbed, for the reason in this module's docstring:
+    the door imports the vocabulary, so a probe that runs it answers a
+    question about ``dataknobs_common/__init__.py`` and not about this family.
     """
-    reached = imported_modules(f"import {module}")
+    reached = imported_by_the_module_alone(module)
 
     assert not {name for name in reached if name.startswith("dataknobs_common.ontology")}
+
+
+def test_the_stubbed_probe_still_sees_a_vocabulary_import() -> None:
+    """The control for the assertion above, on a module that must fail it.
+
+    A negative measured through a broken probe reads exactly like a negative
+    measured through a working one. So the control has to exercise the thing
+    the negative rests on -- that the probe reports what the module under test
+    reaches **transitively** -- and asserting that importing a module loads
+    that module would not: it restates ``module in reached`` above and holds
+    even for a probe that can see nothing else.
+
+    ``ontology.taxonomy`` is therefore probed and the vocabulary modules it was
+    **not** handed are what is asserted. Every name below arrives through an
+    import chain, and ``hierarchy`` crosses out of the vocabulary package
+    entirely, so a stub that disabled the measurement rather than the door
+    shows up here as an empty set.
+    """
+    reached = imported_by_the_module_alone("dataknobs_common.ontology.taxonomy")
+
+    assert {"dataknobs_common.ontology.values", "dataknobs_common.ontology.model"} <= reached
+    assert "dataknobs_common.hierarchy" in reached
+
+
+def test_the_door_reaches_the_vocabulary_and_that_is_what_the_stub_hides() -> None:
+    """What the stub costs, stated rather than left as an absence.
+
+    Publishing the vocabulary on ``dataknobs_common``'s door means importing
+    anything from this package imports the vocabulary too. The family's
+    independence is therefore a property of the **module graph** and not of
+    the process, and this is the test that says so out loud -- so that the
+    stubbed probe above reads as a narrowed question rather than a weakened
+    one.
+    """
+    reached = imported_modules("import dataknobs_common.entity_resolution")
+
+    assert "dataknobs_common.ontology" in reached
 
 
 @pytest.mark.parametrize("module", ["dataknobs_common.entity_resolution", *SUBMODULES])
@@ -77,6 +188,12 @@ def test_a_rung_needs_no_database_package(module: str) -> None:
     of putting this family in the dependency-free package is that building one
     costs nothing. Trivial to satisfy in this leg and **not** trivial to keep,
     which is why it is a test rather than an observation.
+
+    **Door-running probe, deliberately.** Its sibling above stubs the door
+    because the door imports the vocabulary; nothing about that argument
+    applies here, and this claim is about what a consumer pays -- who pays for
+    the door. Measured this way it covers the whole package, which is strictly
+    the stronger reading of *costs nothing*.
     """
     reached = imported_modules(f"import {module}")
 
@@ -97,8 +214,18 @@ def test_both_import_orders_succeed(order: str) -> None:
     The arrangement this leg replaced imported cleanly one way round and
     raised ``ImportError`` the other. A test written in the passing order
     would have reported green on it.
+
+    **Stubbed, or the parametrization measures one thing twice.** The door
+    imports both packages, so whichever name is written first runs
+    ``dataknobs_common/__init__`` to completion and settles the order before
+    either statement's own imports resolve -- leaving the second name a
+    ``sys.modules`` hit under both ids. With the door stubbed the written
+    order is the executed one: ``vocabulary-first`` starts ``ontology`` and
+    reaches the family mid-initialization, ``family-first`` completes the
+    family and then starts ``ontology``. Those are the two shapes the
+    replaced arrangement told apart, which is what this test is for.
     """
-    imported_modules(order)
+    imported_modules(f"{STUB_THE_DOOR}{order}")
 
 
 def test_the_moved_types_are_one_object_in_a_fresh_interpreter() -> None:

@@ -29,6 +29,10 @@ than in the ontology model, and the normalizer they fold with lives in
 :mod:`dataknobs_common.text`. An edge back would close a cycle through
 ``ontology/__init__``, which fails on import *order* -- so a suite that
 happens to import one side first stays green while the other is broken.
+
+A property of the module graph, not of the process: ``dataknobs_common``
+publishes the vocabulary on its own door, so importing anything from the
+package imports :mod:`dataknobs_common.ontology` as well.
 """
 
 from dataknobs_common.entity_resolution.cascade import (

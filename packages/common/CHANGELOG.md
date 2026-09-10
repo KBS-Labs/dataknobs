@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The vocabulary surface is on the package door.** `dataknobs_common` now
+  exports the ontology family, the structural protocols and their walks, and
+  the resolution cascade — 110 names, taking the package's `__all__` from 205
+  to 315. Every one of them was already importable by module path; what
+  changes is that they are now a promise this package keeps rather than a path
+  that happened to work. Nothing is renamed and nothing shadows an existing
+  export: the two sets are disjoint, checked against both the `__all__` and the
+  file's own bindings, since a name published by an import line the list never
+  mentions is the collision the list cannot see.
+
+  A door publishes twice — through `__all__`, and through the module object the
+  API reference renders from — so the discipline is that a construct held back
+  is not imported either. `dataknobs_common.ontology`'s own door gains six
+  with the same change — `AssertionHierarchy` and `AsyncAssertionHierarchy`,
+  and the four taxonomy types below — taking it from 58 to 64, and `Ask`,
+  `Member` and `Walk` join `dataknobs_common.hierarchy`'s.
+
+- **`Taxonomy`, `AsyncTaxonomy`, `TaxonomyView`, `AsyncTaxonomyView`,
+  `HierarchyView` and `AsyncHierarchyView` are published**, on
+  `dataknobs_common` and — for the four taxonomy types — on
+  `dataknobs_common.ontology` as well. Each still gains members and is
+  published anyway: adding a member to a class breaks nobody, so the promise a
+  door makes is one the remaining members do not put at risk, while withholding
+  the name cost a consumer something real. For the taxonomy types that cost was
+  an annotation — `onto.taxonomy("species")` already returns one, so the import
+  only let you write its type down. For the cursors it was the capability
+  itself: nothing exported returns or constructs a `HierarchyView`, so without
+  the import there was no way to put one over a `Hierarchy` of your own.
+
+- **Three constructs are on the resolution family's door and not on this
+  package's.** `CascadeState`, `merge_rung` and `finish` are exported from
+  `dataknobs_common.entity_resolution`, where the cascade lives, and are
+  deliberately not carried up to `dataknobs_common`. They are the cascade's
+  internals: a consumer adds a rung by implementing `MatchSignal` and
+  registering it in `signal_backends`, both of which are exported, never by
+  calling `merge_rung`.
+
+- **A guide for the vocabulary family**, `docs/guides/ontology.md`, carrying a
+  worked example end to end: a hand-written YAML vocabulary, then loading it,
+  reading a surface form back to an entity, walking an axis to its root,
+  reading what the vocabulary asserts, asking the source whether it can reach
+  the backing a `SourceRef` names before spending one, and placing the same
+  phrase with a ranked resolver. The page's
+  input and its call site are executed by a workspace test that asserts both
+  are character-identical to what the page publishes, so a page that goes wrong
+  takes the suite with it rather than misleading a reader.
+
 - **`dataknobs_common.hierarchy`**, the structure axis: what a node's parents
   and children are, and the walks over them. A hierarchy is read-only,
   key-addressed and **multi-parent-tolerant** — `parents(node_id)` returns a
@@ -564,6 +611,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
+
+- **`MembershipOracle`'s return documentation reaches the rendered reference.**
+  The `Returns:` block describing what `memberships()` answers with sat in the
+  protocol's *class* docstring, where a class returns nothing — so the site's
+  generated reference dropped it, and a strict build reported four warnings
+  against it. It now sits on `memberships()`. Nothing rendered the class until
+  this release put the name on the package door, which is why a docstring
+  written against a convention it did not follow went unreported: a docstring
+  nothing renders is a docstring nothing checks.
 
 - **A slug collision between two nested sources names the tree it collided
   with.** Two `kind: nested` sources mint into one entity store and the

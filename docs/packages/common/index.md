@@ -22,6 +22,7 @@ This package provides shared cross-cutting functionality used across all datakno
 - **Transitions**: Stateless transition validation for declarative status graphs
 - **Event Bus**: Pub/sub event system for distributed applications
 - **Expressions**: Safe Python expression evaluation with restricted builtins and AST validation
+- **Ontology**: `load_ontology` and the value types an authored vocabulary is made of — entities, assertions, the axes over them, and placing a surface form against the whole
 
 These patterns were extracted from common implementations across multiple packages to reduce duplication and provide consistency.
 

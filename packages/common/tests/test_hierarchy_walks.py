@@ -801,18 +801,44 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
     probe once and is not now: it lives under ``ontology/``, because its
     cursor needs the model at runtime -- the same reason the assertion backing
     does.
+
+    **The probe stubs the package door, and must.** ``dataknobs_common``
+    publishes the vocabulary surface, so its ``__init__`` imports
+    ``dataknobs_common.ontology`` -- and importing a submodule runs the
+    parent's ``__init__`` first. Left to run, the door puts the vocabulary in
+    ``sys.modules`` whatever this module does, and the probe answers a
+    question about the door instead of about the edge. A bare parent module
+    carrying the real ``__path__`` is all the import machinery needs, and it
+    leaves ``__init__`` unrun.
+
+    The second half is the control, and it names a module the probe was not
+    handed. Pointing the probe at ``dataknobs_common.ontology`` and asking
+    whether it reached ``dataknobs_common.ontology`` would pass on an
+    instrument that can see nothing but its own argument -- which is the one
+    failure that would make the absence above vacuous. ``ontology.taxonomy``
+    reaches this module only through an import chain, so a stub that broke the
+    measurement rather than the door reports ``False`` here.
     """
     import subprocess
     import sys
 
-    probe = (
-        "import sys, dataknobs_common.hierarchy; print('dataknobs_common.ontology' in sys.modules)"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
-    )
+    def reaches(module: str, target: str) -> str:
+        probe = (
+            "import importlib, importlib.util, sys, types; "
+            "_spec = importlib.util.find_spec('dataknobs_common'); "
+            "_stub = types.ModuleType('dataknobs_common'); "
+            "_stub.__path__ = list(_spec.submodule_search_locations); "
+            "_stub.__spec__ = _spec; "
+            "sys.modules['dataknobs_common'] = _stub; "
+            f"importlib.import_module({module!r}); "
+            f"print({target!r} in sys.modules)"
+        )
+        return subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        ).stdout.strip()
 
-    assert result.stdout.strip() == "False"
+    assert reaches("dataknobs_common.hierarchy", "dataknobs_common.ontology") == "False"
+    assert reaches("dataknobs_common.ontology.taxonomy", "dataknobs_common.hierarchy") == "True"
 
 
 # --------------------------------------------------------------------------

@@ -34,7 +34,12 @@ from dataknobs_common.entity_resolution.values import (
     Scoring,
 )
 from dataknobs_common.ontology.config import OntologyConfig
-from dataknobs_common.ontology.hierarchy import EdgeCriteria, edge_criteria
+from dataknobs_common.ontology.hierarchy import (
+    AssertionHierarchy,
+    AsyncAssertionHierarchy,
+    EdgeCriteria,
+    edge_criteria,
+)
 from dataknobs_common.ontology.loader import (
     AUTHORED_SOURCE_KINDS,
     DEFAULT_NESTED_RELATION,
@@ -86,6 +91,12 @@ from dataknobs_common.ontology.sources import (
     MappingEntitySource,
     SourceDescription,
 )
+from dataknobs_common.ontology.taxonomy import (
+    AsyncTaxonomy,
+    AsyncTaxonomyView,
+    Taxonomy,
+    TaxonomyView,
+)
 from dataknobs_common.text import default_normalizer
 from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
 
@@ -99,13 +110,17 @@ __all__ = [
     "RESERVED_ONTOLOGY_ID",
     "AliasFormSource",
     "Assertion",
+    "AssertionHierarchy",
     "AssertionSource",
     "AsyncAliasFormSource",
+    "AsyncAssertionHierarchy",
     "AsyncAssertionSource",
     "AsyncEntitySource",
     "AsyncMappingAssertionSource",
     "AsyncMappingEntitySource",
     "AsyncOntology",
+    "AsyncTaxonomy",
+    "AsyncTaxonomyView",
     "AttributeDef",
     "CompatibilityVerdict",
     "CyclePolicy",
@@ -135,7 +150,9 @@ __all__ = [
     "SiblingOrder",
     "SourceDescription",
     "SourceRef",
+    "Taxonomy",
     "TaxonomyDefinition",
+    "TaxonomyView",
     "Term",
     "TreeProjection",
     "async_build_resolver",

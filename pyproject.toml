@@ -634,6 +634,20 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "packages/utils/src/dataknobs_utils/json_utils.py" = ["SIM115"]  # ownership switches on the argument type: opened here only when passed a path, and then closed here
 "packages/utils/src/dataknobs_utils/xml_utils.py" = ["SIM115"]  # handle must outlive the expression because mmap borrows its fileno()
 "packages/xization/src/dataknobs_xization/ingestion/source.py" = ["SIM115"]  # handle crosses a thread boundary to a generator that finalizes it
+# The entry below is the only one here waiving a rule over a file whose text is
+# not its own. That file is a transcription of a fence published in
+# packages/common/docs/guides/ontology.md, held character-for-character equal to
+# it by tests/test_worked_ontology_call_site.py — so the per-LINE form this
+# block otherwise prefers is unavailable rather than merely inconvenient: four
+# `# noqa: B018` comments would have to appear in the published fence too, or
+# the identity assertion fails, which renders a lint directive on a
+# documentation page. The four flagged statements are bare attribute reads —
+# `beagle.name`, `beagle.source` and the two candidate reads — which is how the
+# guide shows a reader what each call answers; "assign it to a variable" would
+# silently change the page. The future-findings cost this block warns about is
+# bounded here by the same identity assertion: a new statement cannot be added
+# to this file without being added to the published guide first.
+"tests/worked_ontology_call_site.py" = ["B018"]  # transcribed doc fence: its bare attribute reads ARE the documentation, and a per-line noqa would have to be published on the page
 
 [tool.ruff.lint.isort]
 # Configure import sorting

@@ -30,6 +30,7 @@ $(echo -e "${BOLD}Usage:${NC}") $0 <command> [options]
 
 $(echo -e "${BOLD}Commands:${NC}")
   $(echo -e "${CYAN}check${NC}")         Check what changed since last release
+  $(echo -e "${CYAN}readiness${NC}")     Name each package's release-readiness list (also printed by check)
   $(echo -e "${CYAN}changes${NC}")       List all commits for a package or all packages
   $(echo -e "${CYAN}diffs${NC}")         Browse commit diffs interactively
   $(echo -e "${CYAN}bump${NC}")             Bump package versions interactively
@@ -634,6 +635,95 @@ check_changes() {
     if [ "$has_changes" = false ]; then
         echo -e "${GREEN}No changes detected since last release${NC}"
     fi
+
+    release_readiness
+}
+
+# Name each package's release-readiness list, if it has one.
+#
+# A release turns every reachable behaviour into something a consumer can code
+# against, so a deliberate refusal or a published guarantee is free to change
+# up to the cut and a migration afterwards. Which of those a package is
+# carrying is a judgement recorded where the work was planned -- this prints
+# the pointer so that the person cutting is READING the list rather than
+# remembering that one exists.
+#
+# Deliberately not a gate. It cannot know whether the list has been acted on,
+# and a prompt that blocks a release on a question it cannot evaluate gets
+# answered `y` by reflex within a week. What it can do is make the list
+# impossible to not know about, and report when a pointer has gone stale.
+#
+# Three states, and none of them is silence:
+#   * no manifest        -- said out loud; the file is tracked, so its absence
+#                           is a broken tree rather than "nothing outstanding"
+#   * tree not present   -- normal on a clone that has no planning checkout
+#   * document not found -- the pointer has DRIFTED, and that is a warning
+release_readiness() {
+    # Overridable so the degraded states below can be exercised by a test
+    # without moving a tracked file. A reminder nothing can test is one that
+    # goes quiet without anybody finding out, which is this pointer's own
+    # subject stated one level up.
+    local manifest="${DK_RELEASE_READINESS_MANIFEST:-$ROOT_DIR/.dataknobs/release-readiness.json}"
+
+    if [ ! -f "$manifest" ]; then
+        echo ""
+        echo -e "${YELLOW}No .dataknobs/release-readiness.json -- release-readiness pointers are not being checked.${NC}"
+        return 0
+    fi
+
+    # Fails rather than degrades. A reminder that goes quiet when its tool is
+    # missing reports success having checked nothing, which is the failure this
+    # whole function exists to prevent, arriving one level up.
+    if ! command -v jq >/dev/null 2>&1; then
+        echo ""
+        echo -e "  ${RED}✗${NC} jq is not installed, so the pointers cannot be read" >&2
+        echo "    macOS:  brew install jq" >&2
+        echo "    Debian: apt-get install jq" >&2
+        echo "    Or read .dataknobs/release-readiness.json by hand before cutting." >&2
+        exit 1
+    fi
+
+    local packages
+    packages=$(jq -r '.packages | keys[]' "$manifest")
+    [ -n "$packages" ] || return 0
+
+    echo -e "${BOLD}${CYAN}Release readiness${NC}"
+    echo -e "${CYAN}Read these before cutting. A behaviour that ships becomes one somebody can code against.${NC}"
+    echo ""
+
+    local package count index tree document section heading why tree_path tree_env resolved
+    # Read loop rather than word-splitting `$packages`: a package name is a
+    # line here, and splitting on IFS would make one containing a space into two.
+    while IFS= read -r package; do
+        count=$(jq -r --arg p "$package" '.packages[$p] | length' "$manifest")
+        for ((index = 0; index < count; index++)); do
+            tree=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].tree' "$manifest")
+            document=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].document' "$manifest")
+            section=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].section' "$manifest")
+            heading=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].heading' "$manifest")
+            why=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].why' "$manifest")
+
+            tree_path=$(jq -r --arg t "$tree" '.trees[$t].path' "$manifest")
+            tree_env=$(jq -r --arg t "$tree" '.trees[$t].env' "$manifest")
+            # An env override beats the manifest's default, so a checkout that
+            # is not a sibling needs no edit to a tracked file.
+            resolved="${!tree_env:-$ROOT_DIR/$tree_path}"
+
+            echo -e "  ${BOLD}${package}${NC}  ${why}"
+            echo -e "    ${tree}: ${document} §${section}"
+
+            if [ ! -d "$resolved" ]; then
+                echo -e "    ${BLUE}(${tree} is not checked out here -- looked in ${resolved})${NC}"
+            elif [ ! -f "$resolved/$document" ]; then
+                echo -e "    ${YELLOW}POINTER DRIFTED: no such document under ${resolved}${NC}"
+            elif ! grep -qF "$heading" "$resolved/$document"; then
+                echo -e "    ${YELLOW}POINTER DRIFTED: ${document} has no section headed '${heading}'${NC}"
+            else
+                echo -e "    ${GREEN}✓ found${NC}"
+            fi
+            echo ""
+        done
+    done <<< "$packages"
 }
 
 # Function to update cross-package dependency constraints
@@ -1533,6 +1623,9 @@ full_release() {
 case "${1:-help}" in
     check)
         check_changes
+        ;;
+    readiness)
+        release_readiness
         ;;
     changes)
         shift

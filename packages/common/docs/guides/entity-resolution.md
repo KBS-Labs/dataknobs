@@ -13,9 +13,12 @@ accommodation.
 
 ## Where the names live
 
-Imported from this family's own door. Not from `dataknobs_common`'s: the
-package's top-level door imports nothing from here, which is what keeps a rung
-free of the vocabulary package.
+On the package door, and on this family's own. `dataknobs_common` re-exports
+these names, and `dataknobs_common.entity_resolution` is where they are
+defined — the same names either way. What the family still imports nothing
+from is the *vocabulary* package, which is the property that keeps a rung
+free of it; [Where this package sits](#where-this-package-sits) says why that
+direction is the one that matters.
 
 ```python
 from dataknobs_common.entity_resolution import (
@@ -242,8 +245,7 @@ from dataknobs_common.entity_resolution import (
     AsyncCascadingResolver,
     AsyncExactNormalizedSignal,
 )
-from dataknobs_common.ontology import async_load_ontology
-from dataknobs_common.ontology.loader import async_build_resolver
+from dataknobs_common.ontology import async_build_resolver, async_load_ontology
 
 onto = await async_load_ontology(Path("mammals.yaml"))
 resolver = await async_build_resolver(Path("mammals.yaml"), onto)
@@ -329,3 +331,9 @@ That is a property worth keeping rather than a coincidence. An edge back would
 close a cycle through `ontology/__init__`, which imports the loader, which
 builds a cascade — and it would fail on import **order**, so a suite that
 happens to import one side first would stay green while the other was broken.
+
+It is a property of the **module graph**, not of your process. `dataknobs_common`
+publishes the vocabulary on its own door, so importing anything from the package
+imports `dataknobs_common.ontology` too. What the sentence above buys is that
+this family's modules can be read, moved or depended on without the vocabulary —
+not that a running interpreter holding a rung has never loaded it.

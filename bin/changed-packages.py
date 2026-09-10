@@ -168,6 +168,7 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".gitattributes",  # ditto, for the merge-driver guard
     "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
     ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
+    ".dataknobs/release-readiness.json",  # the pointers release-helper.sh reads and verifies
     # The root README, read by the documented-import guard along with every
     # package README and the site tree. The per-package copies ride their own
     # package scope and docs/ rides the docs scope; this one is reached by no
