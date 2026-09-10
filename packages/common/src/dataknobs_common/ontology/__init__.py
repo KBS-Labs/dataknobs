@@ -34,6 +34,7 @@ from dataknobs_common.entity_resolution.values import (
     Scoring,
 )
 from dataknobs_common.ontology.config import OntologyConfig
+from dataknobs_common.ontology.hierarchy import EdgeCriteria, edge_criteria
 from dataknobs_common.ontology.loader import (
     AUTHORED_SOURCE_KINDS,
     DEFAULT_NESTED_RELATION,
@@ -108,6 +109,7 @@ __all__ = [
     "AttributeDef",
     "CompatibilityVerdict",
     "CyclePolicy",
+    "EdgeCriteria",
     "Entity",
     "EntityRef",
     "EntitySource",
@@ -141,6 +143,7 @@ __all__ = [
     "build_ontology",
     "build_resolver",
     "default_normalizer",
+    "edge_criteria",
     "load_ontology",
     "qualify",
     "relation_id",

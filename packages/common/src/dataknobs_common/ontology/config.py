@@ -22,6 +22,21 @@ if TYPE_CHECKING:
 class OntologyConfig(StructuredConfig):
     """What a door must be handed to load an ontology.
 
+    **Compared field-wise, and declared unhashable.**
+    :class:`~dataknobs_common.structured_config.StructuredConfig` declares
+    ``type(cfg).from_dict(cfg.to_dict()) == cfg`` as a property of every
+    subclass, so equality is not a choice here -- it is the base class's
+    contract -- and a config carrying eight mappings and lists cannot honour a
+    hash over its fields as well.
+
+    ``__hash__ = None`` rather than ``frozen=False``, because the base class
+    is frozen and a dataclass may not unfreeze one. It reaches the same
+    contract by the one route that leaves: equality field-wise,
+    :class:`collections.abc.Hashable` answering False, and a caller who asks
+    getting the truth instead of a ``TypeError``. The class body sets it
+    directly, which ``dataclasses`` honours -- an explicit ``__hash__`` with
+    no explicit ``__eq__`` beside it is left alone rather than regenerated.
+
     Attributes:
         id: The ontology's namespace. Reserved value ``dk`` is refused, and so
             is any id containing ``:``
@@ -52,3 +67,14 @@ class OntologyConfig(StructuredConfig):
     taxonomies: list[Mapping[str, Any]] = field(default_factory=list)
     index: Mapping[str, Any] | None = None
     resolver: Mapping[str, Any] | None = None
+
+    # Declared unhashable, because every field above but two is a list or a
+    # mapping. See the class docstring for why this spelling and not
+    # `frozen=False`.
+    #
+    # The directive is mypy's, not this class's: `__hash__ = None` is the data
+    # model's own way of saying a type is unhashable, and mypy reads it against
+    # `object.__hash__`'s signature instead. Same shape and same code as the
+    # one in `dataknobs_fsm.core.data_wrapper`, which declares a mutable
+    # mapping unhashable for the same reason.
+    __hash__ = None  # type: ignore[assignment]

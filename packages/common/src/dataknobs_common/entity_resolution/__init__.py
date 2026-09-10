@@ -61,7 +61,7 @@ from dataknobs_common.entity_resolution.signals import (
     ExactNormalizedSignal,
 )
 from dataknobs_common.entity_resolution.values import (
-    TAXONOMY_ID_KEY,
+    ENTITY_TYPE_KEY,
     CompatibilityVerdict,
     Coverage,
     EntityCandidate,
@@ -69,6 +69,7 @@ from dataknobs_common.entity_resolution.values import (
     MatchEvidence,
     ResolutionRef,
     ResolutionResult,
+    ScopeAuthority,
     Scoring,
     Within,
     refuse_unknown_axes,
@@ -79,9 +80,9 @@ from dataknobs_common.entity_resolution.values import (
 )
 
 __all__ = [
+    "ENTITY_TYPE_KEY",
     "AliasFormSource",
     "AsyncAliasFormSource",
-    "TAXONOMY_ID_KEY",
     "AliasSignal",
     "AsyncAliasSignal",
     "AsyncDeclaredSignal",
@@ -104,6 +105,7 @@ __all__ = [
     "MembershipOracle",
     "ResolutionRef",
     "ResolutionResult",
+    "ScopeAuthority",
     "Scoring",
     "Within",
     "async_signal_backends",

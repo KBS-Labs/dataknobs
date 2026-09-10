@@ -47,6 +47,12 @@ from _dataclass_sweep import every_dataclass, import_failures, probe_hashability
 #: built value nobody compares field-wise, unfrozen equality for a record two
 #: of which really can be equal -- and there is no third correct answer.
 #: Entries leave this list as they are decided; nothing is added without one.
+#:
+#: It held twenty-three. The ten that left are the ontology and resolution
+#: types, each given one of the two answers before the package door published
+#: them -- the moment at which a declaration is still free to change. The
+#: thirteen that remain are reachable from a published distribution, so
+#: either answer is a migration for them and the decision is a different one.
 OPEN: frozenset[str] = frozenset(
     {
         "_nested_core._MintedNode",
@@ -55,16 +61,6 @@ OPEN: frozenset[str] = frozenset(
         "discriminator.ChainedDiscriminator",
         "discriminator.MultiFieldDiscriminator",
         "entity_resolution.cascade.CascadeState",
-        "entity_resolution.values.ResolutionRef",
-        "ontology.config.OntologyConfig",
-        "ontology.model.Literal",
-        "ontology.model.ProjectionContext",
-        "ontology.model.Provenance",
-        "ontology.model.SourceRef",
-        "ontology.sources.SourceDescription",
-        "ontology.values.AsyncOntology",
-        "ontology.values.Ontology",
-        "ontology.values.OntologyParts",
         "packs._CompositionPlan",
         "packs._Contribution",
         "ratelimit.types.RateLimiterConfig",

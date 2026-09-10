@@ -37,7 +37,7 @@ from dataknobs_common.entity_resolution import (
     MatchEvidence,
     MatchSignal,
     MembershipOracle,
-    TAXONOMY_ID_KEY,
+    ENTITY_TYPE_KEY,
     Scoring,
     cascade as cascade_module,
     signals as signals_module,
@@ -389,20 +389,20 @@ def test_within_unions_within_an_axis_and_conjoins_across_them() -> None:
         return [c.entity_id for c in resolver.resolve(query, k=5, within=within).candidates]
 
     # Union within one axis: either id admits.
-    assert placed("beagle", {TAXONOMY_ID_KEY: ["Breed", "Species"]}) == ["beagle"]
-    assert placed("dog", {TAXONOMY_ID_KEY: ["Breed", "Species"]}) == ["dog"]
-    assert placed("beagle", {TAXONOMY_ID_KEY: "Breed"}) == ["beagle"]
-    assert placed("beagle", {TAXONOMY_ID_KEY: "Species"}) == []
+    assert placed("beagle", {ENTITY_TYPE_KEY: ["Breed", "Species"]}) == ["beagle"]
+    assert placed("dog", {ENTITY_TYPE_KEY: ["Breed", "Species"]}) == ["dog"]
+    assert placed("beagle", {ENTITY_TYPE_KEY: "Breed"}) == ["beagle"]
+    assert placed("beagle", {ENTITY_TYPE_KEY: "Species"}) == []
 
     # Conjunction across axes: admitted only where both hold.
-    assert placed("beagle", {TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}) == ["beagle"]
-    assert placed("beagle", {TAXONOMY_ID_KEY: "Species", "habitat": "forest"}) == []
-    assert placed("beagle", {TAXONOMY_ID_KEY: "Breed", "habitat": "desert"}) == []
+    assert placed("beagle", {ENTITY_TYPE_KEY: "Breed", "habitat": "forest"}) == ["beagle"]
+    assert placed("beagle", {ENTITY_TYPE_KEY: "Species", "habitat": "forest"}) == []
+    assert placed("beagle", {ENTITY_TYPE_KEY: "Breed", "habitat": "desert"}) == []
 
     # An entity silent on a named axis is excluded, rather than passing every
     # filter on it. ``dog`` declares no habitat, so a scope naming one leaves
     # it out even though its type admits.
-    assert placed("dog", {TAXONOMY_ID_KEY: "Species", "habitat": "forest"}) == []
+    assert placed("dog", {ENTITY_TYPE_KEY: "Species", "habitat": "forest"}) == []
 
 
 def test_the_cascade_overrules_a_rung_that_answers_outside_the_scope(
@@ -634,7 +634,7 @@ def test_a_filter_is_offered_only_to_a_rung_that_declares_it_narrows(
     )
     resolver.resolve("beagle", k=5, within="Breed")
 
-    assert offered["narrowing"] == {TAXONOMY_ID_KEY: ["Breed"]}
+    assert offered["narrowing"] == {ENTITY_TYPE_KEY: ["Breed"]}
     assert offered["blunt"] is None
 
 
@@ -760,14 +760,14 @@ class TwoAxisSource(MappingEntitySource):
     """
 
     def memberships(self, entity: Entity) -> dict[str, str]:
-        placed = {TAXONOMY_ID_KEY: entity.type}
+        placed = {ENTITY_TYPE_KEY: entity.type}
         habitat = entity.metadata.get("habitat")
         if habitat is not None:
             placed["habitat"] = str(habitat)
         return placed
 
     def axes(self) -> frozenset[str]:
-        return frozenset({TAXONOMY_ID_KEY, "habitat"})
+        return frozenset({ENTITY_TYPE_KEY, "habitat"})
 
 
 def two_axis_resolver() -> CascadingResolver:
@@ -801,12 +801,12 @@ def test_a_two_axis_scope_can_still_admit() -> None:
         return [c.entity_id for c in resolver.resolve("beagle", k=5, within=within).candidates]
 
     # The positive the suite did not have: two axes, both satisfied.
-    assert placed({TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}) == ["beagle"]
+    assert placed({ENTITY_TYPE_KEY: "Breed", "habitat": "forest"}) == ["beagle"]
 
     # And the negatives that make it a two-axis claim rather than a one-axis
     # one that happens to carry a second key: either axis alone refuses it.
-    assert placed({TAXONOMY_ID_KEY: "Breed", "habitat": "tundra"}) == []
-    assert placed({TAXONOMY_ID_KEY: "Species", "habitat": "forest"}) == []
+    assert placed({ENTITY_TYPE_KEY: "Breed", "habitat": "tundra"}) == []
+    assert placed({ENTITY_TYPE_KEY: "Species", "habitat": "forest"}) == []
 
 
 def test_the_rung_may_over_admit_but_never_under_admit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -819,7 +819,7 @@ def test_the_rung_may_over_admit_but_never_under_admit(monkeypatch: pytest.Monke
     forgiving half is how it got written down wrong the first time.
     """
     resolver = two_axis_resolver()
-    scope = {TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}
+    scope = {ENTITY_TYPE_KEY: "Breed", "habitat": "forest"}
 
     def placed() -> list[str]:
         return [c.entity_id for c in resolver.resolve("beagle", k=5, within=scope).candidates]
@@ -862,14 +862,14 @@ class AsyncTwoAxisSource(AsyncMappingEntitySource):
     """
 
     def memberships(self, entity: Entity) -> dict[str, str]:
-        placed = {TAXONOMY_ID_KEY: entity.type}
+        placed = {ENTITY_TYPE_KEY: entity.type}
         habitat = entity.metadata.get("habitat")
         if habitat is not None:
             placed["habitat"] = str(habitat)
         return placed
 
     def axes(self) -> frozenset[str]:
-        return frozenset({TAXONOMY_ID_KEY, "habitat"})
+        return frozenset({ENTITY_TYPE_KEY, "habitat"})
 
 
 def async_two_axis_resolver() -> AsyncCascadingResolver:
@@ -904,7 +904,7 @@ def test_a_scope_naming_an_axis_the_source_does_not_publish_is_refused(
 
     message = str(raised.value)
     assert "taxonomy" in message
-    assert TAXONOMY_ID_KEY in message
+    assert ENTITY_TYPE_KEY in message
 
 
 def test_the_bare_scope_forms_are_never_refused(mammals_path: Path) -> None:
@@ -924,7 +924,7 @@ def test_the_bare_scope_forms_are_never_refused(mammals_path: Path) -> None:
     ] == ["beagle"]
     assert [
         c.entity_id
-        for c in resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed"}).candidates
+        for c in resolver.resolve("beagle", within={ENTITY_TYPE_KEY: "Breed"}).candidates
     ] == ["beagle"]
 
 
@@ -938,7 +938,7 @@ def test_a_source_that_publishes_an_axis_makes_it_askable() -> None:
     """
     resolver = two_axis_resolver()
 
-    admitted = resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed", "habitat": "forest"})
+    admitted = resolver.resolve("beagle", within={ENTITY_TYPE_KEY: "Breed", "habitat": "forest"})
     assert [c.entity_id for c in admitted.candidates] == ["beagle"]
 
     with pytest.raises(ValidationError):
@@ -969,7 +969,7 @@ def test_the_async_flavour_refuses_and_admits_the_same_scopes() -> None:
         resolver = async_two_axis_resolver()
 
         admitted = await resolver.resolve(
-            "beagle", within={TAXONOMY_ID_KEY: "Breed", "habitat": "forest"}
+            "beagle", within={ENTITY_TYPE_KEY: "Breed", "habitat": "forest"}
         )
         assert [c.entity_id for c in admitted.candidates] == ["beagle"]
 

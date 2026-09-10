@@ -119,7 +119,11 @@ resolution](#scoping-a-resolution).
 ## Scoping a resolution
 
 `within` takes a set id, a collection of them, or a mapping from a scope axis
-to either. On this path the sets are the entity types the source declares.
+to either. On this path the sets are the entity types the source declares —
+which is what the default axis is named for. `ENTITY_TYPE_KEY` holds
+`Entity.type`, so `Breed` and `Species` belong there and a taxonomy's own id
+does not: `onto.taxonomies` is a different id space, and a value from it under
+this axis matches nothing.
 
 ```python
 assert [c.entity_id for c in resolver.resolve("beagle", within="Breed").candidates] == [
@@ -143,10 +147,10 @@ vocabulary holding none of that type returns too, and nothing in it says which
 happened.
 
 ```python
-from dataknobs_common.entity_resolution import TAXONOMY_ID_KEY, within_axis_names
+from dataknobs_common.entity_resolution import ENTITY_TYPE_KEY, within_axis_names
 
-assert within_axis_names(onto.entities) == frozenset({TAXONOMY_ID_KEY})
-assert resolver.resolve("beagle", within={TAXONOMY_ID_KEY: "Breed"}).candidates
+assert within_axis_names(onto.entities) == frozenset({ENTITY_TYPE_KEY})
+assert resolver.resolve("beagle", within={ENTITY_TYPE_KEY: "Breed"}).candidates
 
 resolver.resolve("beagle", within={"habitat": "forest"})   # ValidationError
 ```
@@ -160,10 +164,10 @@ answerable and spell-checkable:
 ```python
 class Habitats(MappingEntitySource):
     def memberships(self, entity):
-        return {TAXONOMY_ID_KEY: entity.type, "habitat": entity.metadata["habitat"]}
+        return {ENTITY_TYPE_KEY: entity.type, "habitat": entity.metadata["habitat"]}
 
     def axes(self):
-        return frozenset({TAXONOMY_ID_KEY, "habitat"})
+        return frozenset({ENTITY_TYPE_KEY, "habitat"})
 ```
 
 **The cascade decides this, not the rungs.** It holds the entity source it was

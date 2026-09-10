@@ -17,6 +17,8 @@ populated, which is why they are green.
 
 from __future__ import annotations
 
+from collections.abc import Hashable
+
 from dataknobs_common.ontology.config import OntologyConfig
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import assert_structured_config_roundtrip
@@ -64,3 +66,39 @@ class TestOntologyConfigStructured:
         field, which is the roundtrip failure most worth catching.
         """
         assert_structured_config_roundtrip(_populated())
+
+
+class TestOntologyConfigIsHonestlyUnhashable:
+    """Equality and unhashability, which this type has to hold at once.
+
+    The base class is frozen, so ``frozen=False`` -- the ordinary way to say
+    *compared field-wise, not hashable* -- is unavailable: a dataclass may not
+    unfreeze an inherited one. The type reaches the same contract by setting
+    ``__hash__`` in its class body, and ``dataclasses`` honours that only
+    while no explicit ``__eq__`` sits beside it. That is a quiet condition, so
+    it is pinned rather than trusted: a later hand-written ``__eq__`` would
+    regenerate the hash and put the type back in the state it just left.
+    """
+
+    def test_the_type_does_not_claim_to_be_hashable(self) -> None:
+        """The check is how a caller asks, so it has to answer honestly."""
+        assert not issubclass(OntologyConfig, Hashable)
+        assert not isinstance(_populated(), Hashable)
+
+    def test_hashing_one_raises_the_ordinary_error(self) -> None:
+        """Unhashable in the way every other unhashable value is."""
+        try:
+            hash(_populated())
+        except TypeError:
+            return
+        raise AssertionError("hash() succeeded on a type declaring __hash__ = None")
+
+    def test_equality_still_compares_the_fields(self) -> None:
+        """The half the base class's roundtrip property depends on.
+
+        Asserted here as well as through the roundtrip because the two fail
+        for different reasons: the roundtrip breaks if ``to_dict`` and
+        ``from_dict`` disagree, this breaks if the type stops comparing.
+        """
+        assert _populated() == _populated()
+        assert _populated() != OntologyConfig(id="creatures", version="1")

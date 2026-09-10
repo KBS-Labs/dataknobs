@@ -195,7 +195,7 @@ def _localize(ontology_id: str, qualified_id: str) -> str:
     return remainder
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class OntologyParts:
     """A validated config, mapped onto values, with no source bound yet.
 
@@ -208,6 +208,10 @@ class OntologyParts:
     door: a core that inspected the config to decide which flavour to build
     would make the *return type* a function of the input, which is exactly the
     ambiguity two separate flavours exist to remove.
+
+    **Frozen, and compared by identity**, for the reason :class:`Ontology`
+    gives: this is a built value nobody compares field-wise, and several of
+    its fields are mappings that no amount of freezing makes hashable.
     """
 
     id: str
@@ -221,13 +225,22 @@ class OntologyParts:
     source_specs: tuple[Mapping[str, Any], ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Ontology:
     """A loaded vocabulary whose backings are synchronous.
 
     A value with accessors. Every member below is pure over the fields --
     nothing here opens anything, and nothing is lazy -- which is what makes an
     ontology safe to hold, share and pass without owning a lifecycle.
+
+    **Frozen, and compared by identity.** Frozen because nothing mutates a
+    loaded vocabulary: a different one is a different ``load_ontology`` call.
+    Identity because field-wise equality would generate a ``__hash__`` reaching
+    ``entity_types`` and ``taxonomies``, which are mappings -- so the type
+    would satisfy :class:`collections.abc.Hashable` and raise at the call,
+    which is worse than never claiming it. Two ontologies loaded from one
+    document are two vocabularies, not one, and nothing in this package
+    compares them.
     """
 
     id: str
@@ -329,7 +342,7 @@ class Ontology:
         return _localize(self.id, qualified_id)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AsyncOntology:
     """The same ten fields, with asynchronous backings.
 
@@ -337,6 +350,11 @@ class AsyncOntology:
     and ``assertions`` an
     :class:`~dataknobs_common.ontology.sources.AsyncAssertionSource`; everything
     else is identical, including that this is a value and owns nothing.
+
+    Frozen and identity-compared for the reason :class:`Ontology` states, and
+    stated here too because a difference between the twins in *how they are
+    declared* is one :func:`~dataknobs_common.testing.assert_twin_types_agree`
+    cannot see: it reads members, and this is a decision about the type.
     """
 
     id: str
