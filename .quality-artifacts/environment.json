@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-10T13:22:52Z",
+  "timestamp": "2026-09-10T16:41:01Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/canonicalise-every-relation-holder",
-  "git_commit": "d8af440cfa99a1d10a7da1b19a4a61f916433b36",
+  "git_branch": "sbk/leg-a4b-the-last-cheap-moment",
+  "git_commit": "26c2b905b15805b96b79985e45b02644db367204",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
