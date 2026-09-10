@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "Where a package's release-readiness list lives -- POINTERS, not the lists.",
+    "A list's reasoning belongs with the plan that produced it; duplicating it",
+    "here would give a cut two sources that can disagree. What this file buys is",
+    "that `bin/release-helper.sh check` names the list instead of relying on",
+    "somebody remembering it exists.",
+    "",
+    "A package with no entry has nothing outstanding and prints nothing. An",
+    "entry whose document cannot be found in a tree that IS present prints a",
+    "drift warning, so a moved or renamed section is reported rather than",
+    "quietly pointing at nothing."
+  ],
+  "trees": {
+    "dk-xdocs": {
+      "path": "../dk-xdocs",
+      "env": "DK_XDOCS_DIR",
+      "_comment": "Planning tree, a sibling checkout. Absent on most clones, which is normal and is not a warning."
+    }
+  },
+  "packages": {
+    "common": [
+      {
+        "tree": "dk-xdocs",
+        "document": "plans/ontology-and-semantic-index/03-implementation/03c-increment-a-sequenced.md",
+        "section": "4b",
+        "heading": "## 4b. The release-readiness list",
+        "why": "the vocabulary, hierarchy and entity-resolution surfaces ship behind a package-level door that no release has published yet, so deliberate refusals and published guarantees behind it are still free to change"
+      }
+    ]
+  }
+}
