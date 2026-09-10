@@ -63,6 +63,11 @@ ontology:
     - {subject: beagle, relation: isa, object: dog}
 ```
 
+Reading a `.yaml` path needs PyYAML, which `dataknobs-common` does not install
+by default — `pip install dataknobs-common[yaml]`. Nothing else on this page
+does: `load_ontology` also takes a `.json` path or a plain mapping, and either
+runs on the base install.
+
 ## The worked call site
 
 Five things a vocabulary is for, in the order someone meets them. Every line
@@ -223,7 +228,7 @@ asserted it and when.
 
 ### Optional protocols
 
-Three capabilities a source may have and need not:
+Two capabilities a source may have and need not, across three protocols:
 
 | Protocol | What it adds |
 |---|---|
@@ -255,8 +260,9 @@ has its own page — [The Anchored View](anchored-view.md).
 
 ## What a resolution leaves behind
 
-Placing a surface form is [its own guide](entity-resolution.md); three of its
-value types live here because a vocabulary stores them:
+Placing a surface form is [its own guide](entity-resolution.md); two of its
+value types live here because a vocabulary stores them, and `Scoring` — the
+mode enum the first of them carries — comes with them:
 
 - `ResolutionRef` — a resolution recorded rather than performed: the query, the
   entity it landed on, the score, the `Scoring` mode that produced it

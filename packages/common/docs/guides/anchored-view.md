@@ -16,8 +16,9 @@ in it to go stale.
 Imported by module path, and on no package door — unlike the rest of this
 family, which is on `dataknobs_common` now. These four are held back because
 they are unfinished: `HierarchyView` carries six of its nine planned members
-and `TaxonomyView` eight of twelve, and a name goes on a door once. A consumer rarely imports the
-cursors at all — `at()` constructs them — so these lines are for annotations.
+and `TaxonomyView` eight of twelve, and a name goes on a door once. A consumer
+rarely imports the cursors at all — `at()` constructs them — so these lines are
+for annotations.
 
 ```python
 from dataknobs_common.hierarchy import AsyncHierarchyView, HierarchyView

@@ -811,15 +811,18 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
     carrying the real ``__path__`` is all the import machinery needs, and it
     leaves ``__init__`` unrun.
 
-    The second half is the control: the same probe pointed at
-    ``dataknobs_common.ontology`` must report ``True``. Without it a stub that
-    broke the measurement outright would read the same as the absence this is
-    asserting.
+    The second half is the control, and it names a module the probe was not
+    handed. Pointing the probe at ``dataknobs_common.ontology`` and asking
+    whether it reached ``dataknobs_common.ontology`` would pass on an
+    instrument that can see nothing but its own argument -- which is the one
+    failure that would make the absence above vacuous. ``ontology.taxonomy``
+    reaches this module only through an import chain, so a stub that broke the
+    measurement rather than the door reports ``False`` here.
     """
     import subprocess
     import sys
 
-    def reaches_the_vocabulary(module: str) -> str:
+    def reaches(module: str, target: str) -> str:
         probe = (
             "import importlib, importlib.util, sys, types; "
             "_spec = importlib.util.find_spec('dataknobs_common'); "
@@ -828,14 +831,14 @@ def test_hierarchy_does_not_import_the_ontology_package() -> None:
             "_stub.__spec__ = _spec; "
             "sys.modules['dataknobs_common'] = _stub; "
             f"importlib.import_module({module!r}); "
-            "print('dataknobs_common.ontology' in sys.modules)"
+            f"print({target!r} in sys.modules)"
         )
         return subprocess.run(
             [sys.executable, "-c", probe], capture_output=True, text=True, check=True
         ).stdout.strip()
 
-    assert reaches_the_vocabulary("dataknobs_common.hierarchy") == "False"
-    assert reaches_the_vocabulary("dataknobs_common.ontology") == "True"
+    assert reaches("dataknobs_common.hierarchy", "dataknobs_common.ontology") == "False"
+    assert reaches("dataknobs_common.ontology.taxonomy", "dataknobs_common.hierarchy") == "True"
 
 
 # --------------------------------------------------------------------------

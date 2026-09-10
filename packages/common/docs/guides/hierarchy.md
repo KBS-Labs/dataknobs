@@ -31,9 +31,10 @@ tree satisfies them and inherits every walk without importing a vocabulary.
 
 ## Where the names live
 
-On the package door. Everything in the three groups below is importable from
-`dataknobs_common` directly, and from the module that defines it — the same
-names either way, so a line already spelling the module path keeps working.
+Mostly on the package door. Everything in the first two groups below is
+importable from `dataknobs_common` directly, and from the module that defines
+it — the same names either way, so a line already spelling the module path
+keeps working. The third group is on no door and says so.
 
 **The protocols, and what implements them.** `Hierarchy` and `AsyncHierarchy`
 are the four-member core — `roots`, `parents`, `children`, `contains`.
