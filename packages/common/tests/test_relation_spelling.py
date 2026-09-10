@@ -2,7 +2,7 @@
 
 :data:`~dataknobs_common.ontology.model.RelationRef` is ``str | RelationType``
 -- a relation id to resolve, or the definition itself -- and
-:func:`~dataknobs_common.ontology.sources.relation_id` is where this package
+:func:`~dataknobs_common.ontology.model.relation_id` is where this package
 decides which it was handed. Its own docstring says *every comparison goes
 through here rather than each site deciding what it was handed*.
 
