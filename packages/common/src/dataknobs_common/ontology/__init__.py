@@ -70,6 +70,7 @@ from dataknobs_common.ontology.model import (
     Term,
     TreeProjection,
     qualify,
+    relation_id,
     split_qualified,
 )
 from dataknobs_common.ontology.sources import (
@@ -83,7 +84,6 @@ from dataknobs_common.ontology.sources import (
     MappingAssertionSource,
     MappingEntitySource,
     SourceDescription,
-    relation_id,
 )
 from dataknobs_common.text import default_normalizer
 from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts

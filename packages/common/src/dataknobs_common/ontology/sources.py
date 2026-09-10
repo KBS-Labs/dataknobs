@@ -23,9 +23,9 @@ from dataknobs_common.ontology.model import (
     EntityRef,
     Polarity,
     RelationRef,
-    RelationType,
     SourceRef,
     Term,
+    relation_id,
 )
 from dataknobs_common.text import default_normalizer
 
@@ -177,25 +177,16 @@ class AsyncAssertionSource(Protocol):
 def object_entity_id(term: Term) -> str | None:
     """The entity id an assertion object points at, or None for a literal.
 
-    Public beside :func:`relation_id` for the same reason: two readers ask this
-    question -- the index below, and the assertion-backed hierarchy that walks
-    one relation's edges -- and a second copy of *what counts as an entity
-    object* is a rule that can disagree with itself.
+    Public for the reason :func:`~dataknobs_common.ontology.model.relation_id`
+    is: two readers ask this question -- the index below, and the
+    assertion-backed hierarchy that walks one relation's edges -- and a second
+    copy of *what counts as an entity object* is a rule that can disagree with
+    itself. That one now lives beside the alias it resolves, because the
+    dataclasses holding a ``RelationRef`` call it from ``__post_init__``.
     """
     if isinstance(term, EntityRef):
         return term.entity_id
     return None
-
-
-def relation_id(relation: RelationRef) -> str:
-    """The id of a relation given either an id or the definition itself.
-
-    Both forms are legal in an assertion, so every comparison goes through
-    here rather than each site deciding what it was handed.
-    """
-    if isinstance(relation, RelationType):
-        return relation.id
-    return relation
 
 
 @dataclass
