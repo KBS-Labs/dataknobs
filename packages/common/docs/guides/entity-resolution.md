@@ -245,8 +245,7 @@ from dataknobs_common.entity_resolution import (
     AsyncCascadingResolver,
     AsyncExactNormalizedSignal,
 )
-from dataknobs_common.ontology import async_load_ontology
-from dataknobs_common.ontology.loader import async_build_resolver
+from dataknobs_common.ontology import async_build_resolver, async_load_ontology
 
 onto = await async_load_ontology(Path("mammals.yaml"))
 resolver = await async_build_resolver(Path("mammals.yaml"), onto)

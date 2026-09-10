@@ -26,7 +26,8 @@ from dataknobs_common.ontology import (
 )
 ```
 
-Nine constructs are deliberately *not* on either door; see
+Three constructs are deliberately on neither of those two doors, and sit on the
+resolution family's instead; see
 [What is not on the door](#what-is-not-on-the-door) for which, and why.
 
 ## The whole input
@@ -78,7 +79,7 @@ below runs against the file above, exactly as written.
 ```python
 from pathlib import Path
 
-from dataknobs_common.hierarchy import ancestors
+from dataknobs_common import ancestors
 from dataknobs_common.ontology import (
     AssertionHierarchy,
     build_resolver,
@@ -280,22 +281,26 @@ exact then alias, over the vocabulary's own entities — which is what makes ste
 
 ## What is not on the door
 
-Nine constructs are reachable by module path and are on neither door. A module
-path is not a claim of public API, which is the point: each of these still
-gains members, and a name on a door is a promise.
+`CascadeState`, `merge_rung` and `finish` are on the resolution family's own
+door, `dataknobs_common.entity_resolution`, and not on this package's. That is
+a placement rather than a promise deferred: they are the cascade's internals,
+and being able to import one is not an invitation to build against it.
 
-| Construct | Where it is | Why it waits |
-|---|---|---|
-| `Taxonomy`, `AsyncTaxonomy` | `dataknobs_common.ontology.taxonomy` | still gaining members |
-| `TaxonomyView`, `AsyncTaxonomyView` | `dataknobs_common.ontology.taxonomy` | still gaining members |
-| `HierarchyView`, `AsyncHierarchyView` | `dataknobs_common.hierarchy` | still gaining members |
-| `CascadeState`, `merge_rung`, `finish` | `dataknobs_common.entity_resolution.cascade` | internals, not the extension point |
+A consumer extends the cascade by implementing `MatchSignal` and registering it
+in `signal_backends` — both exported here — never by calling `merge_rung`. That
+advice holds whichever door the three sit behind, which is why it is the half
+worth keeping.
 
-None of them needs importing to be used. `onto.taxonomy("species")` returns a
-`Taxonomy` and `.at(...)` returns a view; you only need the import to write an
-annotation. The cascade internals are a different case — a consumer extends the
-cascade by implementing `MatchSignal` and registering it, never by calling
-`merge_rung`.
+**The taxonomy and cursor types used to be here and are now on the door.**
+`Taxonomy`, `AsyncTaxonomy`, `TaxonomyView` and `AsyncTaxonomyView` are on this
+guide's door and the package's; `HierarchyView` and `AsyncHierarchyView` are on
+the package's. They still gain members, and publishing them anyway is the
+deliberate part: adding a member to a class breaks nobody, while withholding
+the name cost two different things. For the taxonomy types it cost an
+annotation — `onto.taxonomy("species")` already hands you one, so the import
+was only ever needed to write its type down. For the cursors it cost more than
+that: nothing published returns or constructs a `HierarchyView`, so without the
+import there is no way to get a cursor over a `Hierarchy` of your own at all.
 
 ## Related
 

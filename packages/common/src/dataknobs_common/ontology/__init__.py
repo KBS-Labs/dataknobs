@@ -91,6 +91,12 @@ from dataknobs_common.ontology.sources import (
     MappingEntitySource,
     SourceDescription,
 )
+from dataknobs_common.ontology.taxonomy import (
+    AsyncTaxonomy,
+    AsyncTaxonomyView,
+    Taxonomy,
+    TaxonomyView,
+)
 from dataknobs_common.text import default_normalizer
 from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
 
@@ -113,6 +119,8 @@ __all__ = [
     "AsyncMappingAssertionSource",
     "AsyncMappingEntitySource",
     "AsyncOntology",
+    "AsyncTaxonomy",
+    "AsyncTaxonomyView",
     "AttributeDef",
     "CompatibilityVerdict",
     "CyclePolicy",
@@ -142,7 +150,9 @@ __all__ = [
     "SiblingOrder",
     "SourceDescription",
     "SourceRef",
+    "Taxonomy",
     "TaxonomyDefinition",
+    "TaxonomyView",
     "Term",
     "TreeProjection",
     "async_build_resolver",

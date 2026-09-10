@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 104 names, taking the package's `__all__` from 205
-  to 309. Every one of them was already importable by module path; what
+  the resolution cascade — 110 names, taking the package's `__all__` from 205
+  to 315. Every one of them was already importable by module path; what
   changes is that they are now a promise this package keeps rather than a path
   that happened to work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the
@@ -21,25 +21,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A door publishes twice — through `__all__`, and through the module object the
   API reference renders from — so the discipline is that a construct held back
-  is not imported either. `AssertionHierarchy` and `AsyncAssertionHierarchy`
-  join `dataknobs_common.ontology`'s own door with the same change, and
-  `Ask`, `Member` and `Walk` join `dataknobs_common.hierarchy`'s.
+  is not imported either. `dataknobs_common.ontology`'s own door gains six
+  with the same change — `AssertionHierarchy` and `AsyncAssertionHierarchy`,
+  and the four taxonomy types below — taking it from 58 to 64, and `Ask`,
+  `Member` and `Walk` join `dataknobs_common.hierarchy`'s.
 
-- **Nine constructs are deliberately withheld, and stay reachable by module
-  path.** `Taxonomy`, `AsyncTaxonomy`, `TaxonomyView` and `AsyncTaxonomyView`
-  (`dataknobs_common.ontology.taxonomy`), `HierarchyView` and
-  `AsyncHierarchyView` (`dataknobs_common.hierarchy`), and `CascadeState`,
-  `merge_rung` and `finish`
-  (`dataknobs_common.entity_resolution.cascade`).
+- **`Taxonomy`, `AsyncTaxonomy`, `TaxonomyView`, `AsyncTaxonomyView`,
+  `HierarchyView` and `AsyncHierarchyView` are published**, on
+  `dataknobs_common` and — for the four taxonomy types — on
+  `dataknobs_common.ontology` as well. Each still gains members and is
+  published anyway: adding a member to a class breaks nobody, so the promise a
+  door makes is one the remaining members do not put at risk, while withholding
+  the name cost a consumer something real. For the taxonomy types that cost was
+  an annotation — `onto.taxonomy("species")` already returns one, so the import
+  only let you write its type down. For the cursors it was the capability
+  itself: nothing exported returns or constructs a `HierarchyView`, so without
+  the import there was no way to put one over a `Hierarchy` of your own.
 
-  The first six are unfinished: each carries some of its planned members and
-  will gain the rest, and a name on a door is a promise about a shape. The last
-  three are complete and are not the extension point — a consumer adds a rung
-  by implementing `MatchSignal` and registering it in `signal_backends`, both
-  of which are exported, never by calling `merge_rung`. **None of the nine is
-  promised yet**, and a module path is not a claim of public API. None needs
-  importing to be used: `onto.taxonomy("species")` returns a `Taxonomy` and
-  `.at(...)` returns a view, so the import is only for writing an annotation.
+- **Three constructs are on the resolution family's door and not on this
+  package's.** `CascadeState`, `merge_rung` and `finish` are exported from
+  `dataknobs_common.entity_resolution`, where the cascade lives, and are
+  deliberately not carried up to `dataknobs_common`. They are the cascade's
+  internals: a consumer adds a rung by implementing `MatchSignal` and
+  registering it in `signal_backends`, both of which are exported, never by
+  calling `merge_rung`.
 
 - **A guide for the vocabulary family**, `docs/guides/ontology.md`, carrying a
   worked example end to end: a hand-written YAML vocabulary, then loading it,

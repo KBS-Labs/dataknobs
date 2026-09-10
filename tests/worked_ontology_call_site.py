@@ -24,7 +24,7 @@ because ``get`` returns ``Entity | None`` and the page should say so.
 
 from pathlib import Path
 
-from dataknobs_common.hierarchy import ancestors
+from dataknobs_common import ancestors
 from dataknobs_common.ontology import (
     AssertionHierarchy,
     build_resolver,

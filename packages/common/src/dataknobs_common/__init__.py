@@ -179,11 +179,13 @@ from dataknobs_common.hierarchy import (
     AsyncBulkHierarchy,
     AsyncEnumerableHierarchy,
     AsyncHierarchy,
+    AsyncHierarchyView,
     AsyncMappingHierarchy,
     BulkHierarchy,
     DEFAULT_FRONTIER_CONCURRENCY,
     EnumerableHierarchy,
     Hierarchy,
+    HierarchyView,
     MappingHierarchy,
     Member,
     Walk,
@@ -222,6 +224,8 @@ from dataknobs_common.ontology import (
     AsyncMappingAssertionSource,
     AsyncMappingEntitySource,
     AsyncOntology,
+    AsyncTaxonomy,
+    AsyncTaxonomyView,
     AttributeDef,
     AUTHORED_SOURCE_ID,
     AUTHORED_SOURCE_KINDS,
@@ -258,7 +262,9 @@ from dataknobs_common.ontology import (
     SiblingOrder,
     SourceDescription,
     SourceRef,
+    Taxonomy,
     TaxonomyDefinition,
+    TaxonomyView,
     Term,
     TreeProjection,
     async_build_resolver,
@@ -644,10 +650,11 @@ __all__ = [
     # Ontology — an authored vocabulary, and what loads and reads one
     #
     # `Taxonomy`, `AsyncTaxonomy`, `TaxonomyView` and `AsyncTaxonomyView` are
-    # deliberately absent. Each still gains members, and a name on this list is
-    # a promise; they are reachable at `dataknobs_common.ontology.taxonomy`,
-    # and a module path is not a claim of public API. Nothing needs to import
-    # them to use them — `onto.taxonomy("species")` returns one.
+    # here despite still gaining members, because `Ontology.taxonomy()` returns
+    # one and `.at()` returns a view: a consumer already holds the object, and
+    # withholding the name only stops them naming what they hold. Adding
+    # members to a published class is backward-compatible, so the promise this
+    # list makes is one the remaining members do not break.
     "AliasFormSource",
     "Assertion",
     "AssertionHierarchy",
@@ -659,6 +666,8 @@ __all__ = [
     "AsyncMappingAssertionSource",
     "AsyncMappingEntitySource",
     "AsyncOntology",
+    "AsyncTaxonomy",
+    "AsyncTaxonomyView",
     "AttributeDef",
     "AUTHORED_SOURCE_ID",
     "AUTHORED_SOURCE_KINDS",
@@ -695,7 +704,9 @@ __all__ = [
     "SiblingOrder",
     "SourceDescription",
     "SourceRef",
+    "Taxonomy",
     "TaxonomyDefinition",
+    "TaxonomyView",
     "Term",
     "TreeProjection",
     "async_build_resolver",
@@ -712,17 +723,21 @@ __all__ = [
     #
     # The walks are module-level functions rather than methods, so implementing
     # `Hierarchy` earns all of them and overriding none. `HierarchyView` and
-    # `AsyncHierarchyView` are absent for the same reason the taxonomy views
-    # are, and sit at `dataknobs_common.hierarchy`.
+    # `AsyncHierarchyView` are here for a stronger reason than the taxonomy
+    # views: nothing published returns or constructs one, so the import is not
+    # a convenience for annotating a value you hold — it is the only way to get
+    # a cursor over a `Hierarchy` of your own at all.
     "Ask",
     "AsyncBulkHierarchy",
     "AsyncEnumerableHierarchy",
     "AsyncHierarchy",
+    "AsyncHierarchyView",
     "AsyncMappingHierarchy",
     "BulkHierarchy",
     "DEFAULT_FRONTIER_CONCURRENCY",
     "EnumerableHierarchy",
     "Hierarchy",
+    "HierarchyView",
     "MappingHierarchy",
     "Member",
     "Walk",
