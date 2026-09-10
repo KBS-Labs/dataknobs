@@ -22,6 +22,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -37,8 +38,9 @@ MANIFEST = ROOT / ".dataknobs" / "release-readiness.json"
 REQUIRED = ("tree", "document", "section", "heading", "why")
 
 
-def _manifest() -> dict:
-    return json.loads(MANIFEST.read_text())
+def _manifest() -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads(MANIFEST.read_text())
+    return loaded
 
 
 def _readiness(
@@ -63,7 +65,7 @@ def _readiness(
     return done.stdout + done.stderr
 
 
-def test_the_manifest_is_well_formed():
+def test_the_manifest_is_well_formed() -> None:
     """Every entry names a declared tree and carries what the printer reads.
 
     A missing key would print the string ``null`` beside a package name, which
@@ -86,7 +88,7 @@ def test_the_manifest_is_well_formed():
         assert tree.get("env"), f"tree {name} has no environment override"
 
 
-def test_the_check_command_reaches_the_reminder():
+def test_the_check_command_reaches_the_reminder() -> None:
     """The trigger is at the site that fires it, not in somebody's memory.
 
     This is the whole point of the change: ``check`` is what a person runs
@@ -102,14 +104,14 @@ def test_the_check_command_reaches_the_reminder():
     )
 
 
-def test_an_absent_manifest_is_reported_rather_than_assumed_empty(tmp_path):
+def test_an_absent_manifest_is_reported_rather_than_assumed_empty(tmp_path: Path) -> None:
     """Deleting the manifest must not read as 'nothing outstanding'."""
     out = _readiness(manifest=tmp_path / "gone.json")
     assert "not being checked" in out
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq reads the manifest")
-def test_a_present_pointer_is_confirmed_against_its_target(tmp_path):
+def test_a_present_pointer_is_confirmed_against_its_target(tmp_path: Path) -> None:
     """The happy path, built here rather than depending on a checkout.
 
     Without this the three drift assertions below are satisfied by a printer
@@ -124,7 +126,7 @@ def test_a_present_pointer_is_confirmed_against_its_target(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq reads the manifest")
-def test_an_absent_tree_is_distinguished_from_a_drifted_pointer(tmp_path):
+def test_an_absent_tree_is_distinguished_from_a_drifted_pointer(tmp_path: Path) -> None:
     """A clone without the planning checkout is normal and is not a warning."""
     out = _readiness(tree=tmp_path / "nowhere")
     assert "not checked out here" in out
@@ -132,14 +134,14 @@ def test_an_absent_tree_is_distinguished_from_a_drifted_pointer(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq reads the manifest")
-def test_a_moved_document_is_reported_as_drift(tmp_path):
+def test_a_moved_document_is_reported_as_drift(tmp_path: Path) -> None:
     """The tree is there and the document is not -- somebody moved it."""
     (tmp_path / "empty").mkdir()
     assert "DRIFTED" in _readiness(tree=tmp_path / "empty")
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq reads the manifest")
-def test_a_renamed_section_is_reported_as_drift(tmp_path):
+def test_a_renamed_section_is_reported_as_drift(tmp_path: Path) -> None:
     """The document is there and the section is not.
 
     The weaker check -- does the file exist -- passes over a document whose
@@ -154,12 +156,21 @@ def test_a_renamed_section_is_reported_as_drift(tmp_path):
     assert "no section headed" in _readiness(tree=tmp_path / "tree")
 
 
-def test_the_reminder_degrades_rather_than_vanishing_without_jq(tmp_path):
+def test_the_reminder_fails_loudly_without_jq(tmp_path: Path) -> None:
     """``jq`` reads the manifest, and its absence must not read as silence.
 
     The one degraded state that arrives without anybody editing anything -- a
-    runner whose image simply does not carry ``jq``. It has to leave behind the
-    one instruction that still works: read the file yourself.
+    runner whose image simply does not carry ``jq``. It names the tool, gives
+    the two install lines, and leaves behind the instruction that still works:
+    read the file yourself.
+
+    **It exits non-zero rather than continuing.** A tool we invoke as a
+    subprocess must fail loudly when absent -- a check that skips because its
+    tool is missing reports success having verified nothing, which is this
+    reminder's own subject one level up. ``tests/test_quality_gate_accounting``
+    holds every tracked shell file to that, and this is the same rule read from
+    the other side: what the branch must SAY, where that guard fixes what it
+    must DO.
 
     ``jq`` is hidden by building a PATH that carries the script's other tools
     and not that one, rather than by emptying PATH: an empty PATH breaks the

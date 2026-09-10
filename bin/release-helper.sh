@@ -671,11 +671,16 @@ release_readiness() {
         return 0
     fi
 
+    # Fails rather than degrades. A reminder that goes quiet when its tool is
+    # missing reports success having checked nothing, which is the failure this
+    # whole function exists to prevent, arriving one level up.
     if ! command -v jq >/dev/null 2>&1; then
         echo ""
-        echo -e "${YELLOW}jq is not installed, so release-readiness pointers cannot be read.${NC}"
-        echo -e "  Read ${BOLD}.dataknobs/release-readiness.json${NC} by hand before cutting."
-        return 0
+        echo -e "  ${RED}✗${NC} jq is not installed, so the pointers cannot be read" >&2
+        echo "    macOS:  brew install jq" >&2
+        echo "    Debian: apt-get install jq" >&2
+        echo "    Or read .dataknobs/release-readiness.json by hand before cutting." >&2
+        exit 1
     fi
 
     local packages
