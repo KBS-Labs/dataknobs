@@ -13,9 +13,12 @@ accommodation.
 
 ## Where the names live
 
-Imported from this family's own door. Not from `dataknobs_common`'s: the
-package's top-level door imports nothing from here, which is what keeps a rung
-free of the vocabulary package.
+On the package door, and on this family's own. `dataknobs_common` re-exports
+these names, and `dataknobs_common.entity_resolution` is where they are
+defined — the same names either way. What the family still imports nothing
+from is the *vocabulary* package, which is the property that keeps a rung
+free of it; [Where this package sits](#where-this-package-sits) says why that
+direction is the one that matters.
 
 ```python
 from dataknobs_common.entity_resolution import (

@@ -73,6 +73,7 @@ else:
 
 __all__ = [
     "DEFAULT_FRONTIER_CONCURRENCY",
+    "Ask",
     "AsyncBulkHierarchy",
     "AsyncEnumerableHierarchy",
     "AsyncHierarchy",
@@ -84,6 +85,8 @@ __all__ = [
     "HierarchyView",
     "K",
     "MappingHierarchy",
+    "Member",
+    "Walk",
     "ancestors",
     "async_ancestors",
     "async_drive",

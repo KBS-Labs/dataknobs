@@ -80,6 +80,10 @@
         {
           "package": "guides/entity-resolution.md",
           "site": "entity-resolution.md"
+        },
+        {
+          "package": "guides/ontology.md",
+          "site": "ontology.md"
         }
       ],
       "site_only": [
