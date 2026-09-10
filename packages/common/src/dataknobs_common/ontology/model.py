@@ -170,6 +170,24 @@ class RelationType(Entity):
 RelationRef = str | RelationType
 
 
+def relation_id(relation: RelationRef) -> str:
+    """The id of a relation given either an id or the definition itself.
+
+    Both forms are legal in an assertion, so every comparison goes through
+    here rather than each site deciding what it was handed.
+
+    Beside the alias it resolves rather than beside its first caller. It opens
+    nothing and awaits nothing, so this module is where the module docstring
+    above places it -- and the three holders below canonicalise with it in
+    ``__post_init__``, as the two in ``ontology.hierarchy`` do. ``sources``
+    imports this module, so a home there would have made those three a
+    circular import.
+    """
+    if isinstance(relation, RelationType):
+        return relation.id
+    return relation
+
+
 @dataclass(frozen=True)
 class EntityRef:
     """An assertion object that points at another entity."""
@@ -256,6 +274,17 @@ class Assertion:
     #: shipped with eight fields, and any earlier position would move
     #: ``metadata`` under a caller who passes it positionally.
     polarity: Polarity = Polarity.ASSERTED
+
+    def __post_init__(self) -> None:
+        """Canonicalise the relation, so one fact has one spelling.
+
+        The generated ``__eq__`` compares the field it was given, so the same
+        stated fact written by a caller holding the definition compared
+        unequal to one written by a caller holding the id. The loader never
+        produced that pair -- it coerces with ``str()`` -- but a caller
+        building an assertion from a ``RelationType`` it just looked up does.
+        """
+        self.relation = relation_id(self.relation)
 
 
 class QualifiedId(NamedTuple):
@@ -358,6 +387,17 @@ class ProjectionContext:
     depths: Mapping[str, int]
     types: Mapping[str, str]
 
+    def __post_init__(self) -> None:
+        """Canonicalise the relation; frozen, so through ``object.__setattr__``.
+
+        Nothing in this package constructs a context -- the projection core
+        hands one to a policy -- so the only caller who reaches this is a
+        consumer writing a ``ParentChoice`` and a context to exercise it
+        against, which is the caller least placed to notice that two contexts
+        naming one relation compared unequal.
+        """
+        object.__setattr__(self, "relation", relation_id(self.relation))
+
 
 @runtime_checkable
 class ParentChoice(Protocol):
@@ -436,5 +476,12 @@ class TaxonomyDefinition:
     materialization: Materialization = Materialization()
 
     def __post_init__(self) -> None:
+        """Default the name to the id, and canonicalise the relation.
+
+        The method predates the second line, which is why a static audit for
+        *does this type canonicalise* answered yes about it: the body existed
+        and never touched ``relation``.
+        """
         if not self.name:
             self.name = self.id
+        self.relation = relation_id(self.relation)

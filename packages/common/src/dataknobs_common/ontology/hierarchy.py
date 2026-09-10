@@ -27,8 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypedDict
 
-from dataknobs_common.ontology.model import EntityRef, Polarity
-from dataknobs_common.ontology.sources import object_entity_id, relation_id
+from dataknobs_common.ontology.model import EntityRef, Polarity, relation_id
+from dataknobs_common.ontology.sources import object_entity_id
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -156,7 +156,7 @@ class AssertionHierarchy:
 
     **The relation is canonicalised at construction.** ``RelationRef`` is two
     spellings of one name -- an id, or the definition itself -- and
-    :func:`~dataknobs_common.ontology.sources.relation_id` is where this
+    :func:`~dataknobs_common.ontology.model.relation_id` is where this
     package decides which it was handed. Every *read* went through it. The two
     members ``@dataclass`` generates did not, so an axis named by the
     definition read identically to one named by the id, compared unequal to

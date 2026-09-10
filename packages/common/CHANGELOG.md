@@ -543,6 +543,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `source_field`, `model_name` and `model_version`. It now copies through the
   instance, so every subclass is correct without an override.
 
+- **Three ontology value types compare by the relation they name rather than by
+  the spelling they were handed.** `RelationRef` is `str | RelationType` — a
+  relation id to resolve, or the definition itself — and `relation_id` is where
+  this package decides which it was given. The two members `@dataclass`
+  generates are comparisons, and they went through nothing: an `Assertion`, a
+  `TaxonomyDefinition` or a `ProjectionContext` built from a `RelationType`
+  read identically to one built from the id and compared **unequal** to it. All
+  three now canonicalise in `__post_init__`, as the two assertion-backed axes
+  already did; the doors still take either spelling and `relation` hands back
+  the id. No ontology document could produce the pair — the loader coerces with
+  `str()` at all three construction sites — so this was reachable only from
+  code building these types itself, holding a `RelationType` it had just looked
+  up, which is the ordinary way to build one.
+
+  `Assertion` and `TaxonomyDefinition` are unfrozen, so their `__hash__` is
+  None and only equality was ever at stake. `ProjectionContext` is frozen with
+  equality on, so it claims `Hashable` — and it still raises at `hash()`,
+  because `depths` and `types` are mappings. Canonicalising the relation
+  removes one reason a frozen holder withholds its hash and not the others.
+
+- **`relation_id` is exported from `dataknobs_common.ontology.model`**, beside
+  the `RelationRef` alias it resolves, rather than from `.sources`. It opens
+  nothing and awaits nothing, so `model` is where the module's own rule places
+  it — and `sources` imports `model`, so a dataclass in `model` canonicalising
+  in `__post_init__` could not have called it where it was. The package door
+  (`from dataknobs_common.ontology import relation_id`) is unchanged, and
+  `.sources` still binds the name, so no existing import breaks.
+
 ## v3.2.0 - 2026-09-02
 
 ### Added
