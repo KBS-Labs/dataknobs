@@ -44,8 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A guide for the vocabulary family**, `docs/guides/ontology.md`, carrying a
   worked example end to end: a hand-written YAML vocabulary, then loading it,
   reading a surface form back to an entity, walking an axis to its root,
-  reading what the vocabulary asserts, discovering that a referenced backing is
-  not attached, and placing the same phrase with a ranked resolver. The page's
+  reading what the vocabulary asserts, asking the source whether it can reach
+  the backing a `SourceRef` names before spending one, and placing the same
+  phrase with a ranked resolver. The page's
   input and its call site are executed by a workspace test that asserts both
   are character-identical to what the page publishes, so a page that goes wrong
   takes the suite with it rather than misleading a reader.
@@ -605,6 +606,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
+
+- **`MembershipOracle`'s return documentation reaches the rendered reference.**
+  The `Returns:` block describing what `memberships()` answers with sat in the
+  protocol's *class* docstring, where a class returns nothing — so the site's
+  generated reference dropped it, and a strict build reported four warnings
+  against it. It now sits on `memberships()`. Nothing rendered the class until
+  this release put the name on the package door, which is why a docstring
+  written against a convention it did not follow went unreported: a docstring
+  nothing renders is a docstring nothing checks.
 
 - **A slug collision between two nested sources names the tree it collided
   with.** Two `kind: nested` sources mint into one entity store and the

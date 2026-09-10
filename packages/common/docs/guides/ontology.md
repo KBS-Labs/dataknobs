@@ -80,33 +80,32 @@ from dataknobs_common.ontology import (
     load_ontology,
 )
 
-onto = load_ontology(Path("mammals.yaml"))                  # -> Ontology
+onto = load_ontology(Path("mammals.yaml"))  # -> Ontology
 # No database. No embedder. No event loop.
 
 # (1) the reader typed "beagles"
-onto.entities.by_surface_form("beagles")                    # -> frozenset({"beagle"})
-beagle = onto.entities.get("beagle")                        # -> Entity
-beagle.name                                                 # "Beagle"
+onto.entities.by_surface_form("beagles")  # -> frozenset({"beagle"})
+beagle = onto.entities.get("beagle")  # -> Entity | None
+assert beagle is not None  # an id that misses is a typo, not a result
+beagle.name  # "Beagle"
 
 # (2) what is it a kind of?
-structure = AssertionHierarchy(onto.assertions, "isa")      # a Hierarchy over
-                                                            #   the isa edges
-ancestors(structure, "beagle")                              # ("dog", "mammal")
-                                                            #   module-level over
-                                                            #   any Hierarchy
+structure = AssertionHierarchy(onto.assertions, "isa")  # a Hierarchy over the isa edges
+ancestors(structure, "beagle")  # ("dog", "mammal") -- module-level, over any Hierarchy
 
 # (3) what does the vocabulary say about it?
-onto.assertions.find(subject="beagle", relation="isa")      # -> [Assertion(...)]
+onto.assertions.find(subject="beagle", relation="isa")  # -> [Assertion(...)]
 
 # (4) leave with something spendable on your own data
-beagle.source                                               # SourceRef(clinic_db, ...)
-onto.entities.fetch_origin(beagle.source)                   # None — describe() says why
+beagle.source  # SourceRef(clinic_db, ...)
+onto.entities.describe().capabilities  # frozenset() -- no ORIGIN_FETCH, so the
+# reference is yours to spend and not ours to dereference
 
 # (5) the same placement, ranked and with its reasons
 resolver = build_resolver(Path("mammals.yaml"), onto)
 result = resolver.resolve("beagles", k=5)
-result.candidates[0].entity_id                              # "beagle"
-result.candidates[0].evidence[0].kind                       # EvidenceKind.DECLARED
+result.candidates[0].entity_id  # "beagle"
+result.candidates[0].evidence[0].kind  # EvidenceKind.DECLARED
 ```
 
 That block is executed as written by a workspace test, and the test asserts it
@@ -210,10 +209,17 @@ vocabulary gets, and `AUTHORED_SOURCE_KINDS` is the set of declaration shapes
 that count as authored.
 
 That is what makes step (4) of the call site honest. `beagle.source` is a
-`SourceRef` naming `clinic_db`, but this vocabulary has no `clinic_db` behind
-it, so `fetch_origin` returns `None` rather than inventing a record — and
-`describe()` is where a caller finds out why. A `Provenance` records the other
-direction: where an assertion came from, who asserted it and when.
+`SourceRef` naming `clinic_db`, and this vocabulary has no `clinic_db` behind
+it — so the question worth asking is not *what does `fetch_origin` return?* but
+*can this source reach an origin at all?* `Capability.ORIGIN_FETCH` in
+`describe().capabilities` answers it before the call, which matters because
+`fetch_origin` returning `None` cannot be told apart from a row that is simply
+not there. An authored vocabulary carrying references into your production
+table is the ordinary case, not a broken one: the reference is yours to spend
+and not ours to dereference.
+
+A `Provenance` records the other direction: where an assertion came from, who
+asserted it and when.
 
 ### Optional protocols
 

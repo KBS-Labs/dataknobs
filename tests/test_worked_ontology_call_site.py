@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from dataknobs_common.capabilities import Capability
 from tests._workspace import ROOT, code_fences
 
 if TYPE_CHECKING:
@@ -180,13 +181,20 @@ def test_an_unbacked_origin_says_so_rather_than_inventing_one(ran: dict[str, Any
     """Step 4: the reference is real and the backing is not, and both are legible.
 
     This is the step that would be easiest to fake. ``beagle.source`` names a
-    system this vocabulary has never opened, so the honest answer to
-    ``fetch_origin`` is ``None`` -- and ``describe()`` is where a caller finds
-    out why, which is why it is asserted here beside it rather than trusted.
+    system this vocabulary has never opened, and the fence asks
+    ``describe()`` whether the source can reach an origin *before* calling for
+    one -- which is what :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH`
+    exists to let a caller do.
+
+    ``fetch_origin`` is asserted here too, and deliberately not in the fence.
+    Its ``None`` is the right answer and the *uninformative* one: nothing
+    distinguishes it from a row that is missing, which is the reason the
+    capability is declared rather than discovered by calling.
     """
     onto, beagle = ran["onto"], ran["beagle"]
 
     assert beagle.source.source_id == "clinic_db"
+    assert Capability.ORIGIN_FETCH not in onto.entities.describe().capabilities
     assert onto.entities.fetch_origin(beagle.source) is None
     assert onto.entities.describe().source_id != beagle.source.source_id
 

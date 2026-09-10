@@ -332,3 +332,9 @@ That is a property worth keeping rather than a coincidence. An edge back would
 close a cycle through `ontology/__init__`, which imports the loader, which
 builds a cascade — and it would fail on import **order**, so a suite that
 happens to import one side first would stay green while the other was broken.
+
+It is a property of the **module graph**, not of your process. `dataknobs_common`
+publishes the vocabulary on its own door, so importing anything from the package
+imports `dataknobs_common.ontology` too. What the sentence above buys is that
+this family's modules can be read, moved or depended on without the vocabulary —
+not that a running interpreter holding a rung has never loaded it.

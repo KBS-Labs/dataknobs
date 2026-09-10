@@ -174,15 +174,18 @@ class MembershipOracle(Protocol):
     and touches no backing. An awaitable form would cost every caller an
     ``await`` and buy nothing, so the asynchronous cascade consults this same
     synchronous member.
-
-    Returns:
-        Axis name to the one id the entity has on that axis. An axis left out
-        is an axis the entity declares nothing on, which
-        :func:`~dataknobs_common.entity_resolution.values.within_admits` reads
-        as *excluded* rather than *unconstrained*.
     """
 
-    def memberships(self, entity: Entity) -> Mapping[str, str]: ...
+    def memberships(self, entity: Entity) -> Mapping[str, str]:
+        """What this entity is, on every axis this source can answer for.
+
+        Returns:
+            Axis name to the one id the entity has on that axis. An axis left
+            out is an axis the entity declares nothing on, which
+            :func:`~dataknobs_common.entity_resolution.values.within_admits`
+            reads as *excluded* rather than *unconstrained*.
+        """
+        ...
 
     def axes(self) -> Collection[str]:
         """Every axis name this source can answer on -- **the legal set**.
