@@ -42,12 +42,17 @@ if TYPE_CHECKING:
 AUTHORED_SOURCE_ID = "authored"
 
 
-@dataclass(frozen=True)
+@dataclass(eq=True, frozen=False)
 class SourceDescription:
     """What a source can say about itself without touching its backend.
 
     Free, because it is configuration -- which is what makes it the level a
     caller may consult on every read rather than once at startup.
+
+    **Compared field-wise, and therefore unhashable.** ``describe()`` builds a
+    fresh value on every call, so identity comparison would leave a pure
+    derived value unequal to itself. ``projection`` is a mapping, so a hash
+    over the fields would raise.
     """
 
     source_id: str

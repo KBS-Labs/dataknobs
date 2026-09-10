@@ -499,6 +499,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source without it yields an `AliasSignal` that matches nothing, which is what
   *this vocabulary declares no aliases* means.
 
+- **Every value type in the ontology and resolution families answers
+  `Hashable` honestly.** A `@dataclass(frozen=True)` with equality left on gets
+  a generated `__hash__` over its field tuple, so the *type* satisfies
+  `collections.abc.Hashable` whatever the fields hold — give it a mapping and
+  the check answers `True` while the call raises. A type that passes the check
+  and fails at the call is worse than one that never claimed the capability,
+  because the check is how a caller is supposed to ask.
+
+  So each of these picks one of the two honest answers, and which one is a
+  property of what the value is for. `Ontology`, `AsyncOntology` and
+  `OntologyParts` are **compared by identity**: they are built values holding
+  sources, nothing compares two of them, and two loads of one document are two
+  vocabularies. `SourceRef`, `Provenance`, `Literal`, `ProjectionContext`,
+  `SourceDescription`, `ResolutionRef` and `OntologyConfig` are **compared
+  field-wise and are unhashable**: two of each really can be equal, and for
+  several the equality is load-bearing — `ProjectionContext` canonicalises its
+  relation *so that* two contexts naming one relation compare equal,
+  `describe()` builds a fresh `SourceDescription` per call, and every
+  `StructuredConfig` subclass inherits `from_dict(to_dict()) == cfg` as a
+  declared property.
+
+  What this means at a call site: `hash(onto)` works and `onto == onto2` is
+  identity, while `hash(ref)` raises `TypeError` and `ref == ref2` compares the
+  fields. `isinstance(value, Hashable)` now answers correctly for all ten, so a
+  caller guarding with it is guarded.
+
+- **The default scope axis is `ENTITY_TYPE_KEY`, and it is named for the values
+  it holds.** `within="Breed"` and `within={ENTITY_TYPE_KEY: "Breed"}` are one
+  scope, as they always were; what the axis is called now says what belongs in
+  it. The projection behind it answers with `Entity.type`, and the same package
+  keys `Ontology.taxonomies` by `TaxonomyDefinition.id` — two id spaces that
+  are easy to confuse and produce different results. `refuse_unknown_axes`
+  refuses an axis a source will not answer for, but it cannot see a value from
+  the wrong id space under an axis it *will*; naming the axis for its contents
+  is what puts that mistake back inside the refusal's reach.
+
+- **`within_memberships`, `within_axis_names` and `refuse_unknown_axes` declare
+  what they take.** Their `entity` and `source` parameters were `Any` with the
+  contract written in prose beside them. `entity` is an `Entity`; `source` is
+  **`ScopeAuthority`**, published alongside them — an entity source of either
+  flavour, optionally a `MembershipOracle`, or nothing. The oracle arm is part
+  of the type rather than a note about it: an ordinary `EntitySource` declares
+  no `memberships`, so a union without it lets a type checker prove the oracle
+  branch unreachable. All three names are importable from
+  `dataknobs_common.entity_resolution`.
+
+- **`edge_criteria` and `EdgeCriteria` are on the `dataknobs_common.ontology`
+  door.** The function builds the criteria an asserted edge is read under, and
+  a consumer building an axis over `onto.assertions.find(relation="isa")`
+  reaches the same narrowing by unpacking them. Its return type travels with
+  it, because a published function whose result type is not published leaves a
+  caller unable to annotate what they were handed.
+
 ### Changed
 
 - **`dataknobs-common` declares one dependency**, `typing-extensions`, scoped by

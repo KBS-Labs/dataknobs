@@ -18,12 +18,17 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.entity_resolution.protocols import MembershipOracle
 from dataknobs_common.exceptions import ValidationError
 
+if TYPE_CHECKING:
+    from dataknobs_common.ontology.model import Entity
+    from dataknobs_common.ontology.sources import AsyncEntitySource, EntitySource
+
 __all__ = [
+    "ENTITY_TYPE_KEY",
     "CompatibilityVerdict",
     "Coverage",
     "EntityCandidate",
@@ -31,8 +36,8 @@ __all__ = [
     "MatchEvidence",
     "ResolutionRef",
     "ResolutionResult",
+    "ScopeAuthority",
     "Scoring",
-    "TAXONOMY_ID_KEY",
     "Within",
     "refuse_unknown_axes",
     "within_admits",
@@ -51,6 +56,28 @@ __all__ = [
 #: hand is a widening applied to five of them: there is no second copy here to
 #: forget. The bare forms are unchanged and remain sugar for the default axis.
 Within = str | Collection[str] | Mapping[str, str | Collection[str]] | None
+
+
+#: What a scope is decided against: the source an entity came from, either
+#: flavour, and possibly an oracle as well.
+#:
+#: Published once and referenced, for the reason :data:`Within` above gives --
+#: three functions take one, and a union widened by hand at three sites is a
+#: union widened at two of them.
+#:
+#: **The oracle arm is load-bearing rather than decorative.** Without it the
+#: type checker can prove ``isinstance(source, MembershipOracle)`` false, and
+#: reports the branch that exists for it as unreachable: an ordinary
+#: ``EntitySource`` declares no ``memberships``, so a union of only the two
+#: source protocols excludes exactly the case these functions were written
+#: for. A consumer's oracle satisfies both, and this says so.
+#:
+#: Spelled with ``type`` so the right-hand side is evaluated lazily. The three
+#: names in it are importable only under ``TYPE_CHECKING`` -- a runtime import
+#: of any of them closes a cycle through ``ontology/__init__``, reproduced
+#: rather than assumed -- and a lazy alias is what lets the union still be a
+#: real object a consumer can import and annotate with.
+type ScopeAuthority = EntitySource | AsyncEntitySource | MembershipOracle | None
 
 
 class Scoring(Enum):
@@ -306,7 +333,7 @@ class ResolutionResult:
         raise KeyError(entity_id)
 
 
-@dataclass(frozen=True)
+@dataclass(eq=True, frozen=False)
 class ResolutionRef:
     """What an entity-valued attribute was resolved on.
 
@@ -314,6 +341,10 @@ class ResolutionRef:
     :class:`~dataknobs_common.ontology.model.SourceRef` applies to a database
     row, applied to a search. It identifies a resolution; it does not
     reproduce one.
+
+    **Compared field-wise, and therefore unhashable**, for the reason that
+    class gives: two references recording one resolution are one reference,
+    and ``corpus`` and ``signals`` are mappings.
     """
 
     query: str
@@ -326,12 +357,25 @@ class ResolutionRef:
     runners_up: tuple[tuple[str, float], ...] = ()
 
 
-#: The metadata key a bare ``within`` value scopes on.
+#: The scope axis a bare ``within`` value scopes on.
 #:
 #: ``str`` and ``Collection[str]`` are sugar for this axis, which is what keeps
 #: the mapping form additive: no call written against the older spelling means
 #: anything different now.
-TAXONOMY_ID_KEY = "taxonomy_id"
+#:
+#: **Named for the values it holds.** The default projection answers with
+#: :attr:`~dataknobs_common.ontology.model.Entity.type` -- ``Breed``,
+#: ``Species`` -- so that is what the axis is called. It was ``taxonomy_id``
+#: once, and the same package keys
+#: :attr:`~dataknobs_common.ontology.values.Ontology.taxonomies` by
+#: :attr:`~dataknobs_common.ontology.model.TaxonomyDefinition.id`: a consumer
+#: holding a genuine taxonomy id was told by the name to pass it here, and
+#: doing so returned nothing with nothing said, because
+#: :func:`refuse_unknown_axes` refuses an axis a source will not answer for
+#: and this was the one it would. A value from the wrong id space under a
+#: correctly spelled axis is the single case that refusal cannot see, so the
+#: repair was to stop inviting it.
+ENTITY_TYPE_KEY = "entity_type"
 
 
 def within_axes(within: Within) -> Mapping[str, frozenset[str]]:
@@ -350,16 +394,16 @@ def within_axes(within: Within) -> Mapping[str, frozenset[str]]:
     if within is None:
         return {}
     if isinstance(within, str):
-        return {TAXONOMY_ID_KEY: frozenset({within})}
+        return {ENTITY_TYPE_KEY: frozenset({within})}
     if isinstance(within, Mapping):
         return {
             axis: frozenset({value} if isinstance(value, str) else value)
             for axis, value in within.items()
         }
-    return {TAXONOMY_ID_KEY: frozenset(within)}
+    return {ENTITY_TYPE_KEY: frozenset(within)}
 
 
-def within_memberships(entity: Any, source: Any = None) -> Mapping[str, str]:
+def within_memberships(entity: Entity, source: ScopeAuthority = None) -> Mapping[str, str]:
     """What one entity **is**, per scope axis -- the one projection.
 
     Every place a scope is applied reads membership through here: the cascade,
@@ -370,11 +414,20 @@ def within_memberships(entity: Any, source: Any = None) -> Mapping[str, str]:
     *second* axis, which is exactly where the suite's only assertion was
     negative. Nothing would have reported it.
 
-    ``entity`` is untyped for the reason the rest of this family is: naming
-    ``Entity`` at runtime would close a cycle through ``ontology/__init__``.
+    ``Entity`` and the two source protocols are named **under**
+    ``TYPE_CHECKING``. Importing any of them at runtime here really does close
+    a cycle through ``ontology/__init__`` -- reproduced, not assumed -- but an
+    annotation is not a runtime name, and
+    :class:`~dataknobs_common.entity_resolution.protocols.MembershipOracle`
+    one file over already declares this same parameter that way. So the type
+    the oracle branch forwards to and the type this signature admits are one
+    type, which is what a wider annotation here could not have given.
 
     Args:
-        entity: Anything carrying ``type``.
+        entity: The entity to project. The default reads ``type`` alone; an
+            oracle may read anything the entity carries, which is why the
+            parameter is the class rather than the narrower shape this
+            function's own body needs.
         source: The source the entity came from. When it satisfies
             :class:`~dataknobs_common.entity_resolution.protocols.MembershipOracle`
             it is asked instead, which is how a source that knows more than a
@@ -390,10 +443,10 @@ def within_memberships(entity: Any, source: Any = None) -> Mapping[str, str]:
     """
     if isinstance(source, MembershipOracle):
         return source.memberships(entity)
-    return {TAXONOMY_ID_KEY: entity.type}
+    return {ENTITY_TYPE_KEY: entity.type}
 
 
-def within_axis_names(source: Any = None) -> frozenset[str]:
+def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
     """The axis names a source can be scoped on -- **the legal set**.
 
     A source satisfying
@@ -409,10 +462,13 @@ def within_axis_names(source: Any = None) -> frozenset[str]:
     """
     if isinstance(source, MembershipOracle):
         return frozenset(source.axes())
-    return frozenset({TAXONOMY_ID_KEY})
+    return frozenset({ENTITY_TYPE_KEY})
 
 
-def refuse_unknown_axes(axes: Mapping[str, frozenset[str]], source: Any = None) -> None:
+def refuse_unknown_axes(
+    axes: Mapping[str, frozenset[str]],
+    source: ScopeAuthority = None,
+) -> None:
     """Refuse a scope naming an axis the source does not publish.
 
     **Because the quiet answer is indistinguishable from a correct one.**

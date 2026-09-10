@@ -71,12 +71,18 @@ class InferenceMode(Enum):
 # only types here a resolver has to construct.
 
 
-@dataclass(frozen=True)
+@dataclass(eq=True, frozen=False)
 class SourceRef:
     """Where a projected entity or derived assertion came from.
 
     Data, never a handle. That is what lets it travel out of an ontology to a
     caller who *can* reach the row, from one that cannot.
+
+    **Compared field-wise, and therefore unhashable.** Two references naming
+    one row are one reference, and the suite says so -- so equality is the
+    member that has to work. ``locator`` is a mapping, so a hash over the
+    fields would raise; declaring the type unhashable is how a caller learns
+    that from :class:`collections.abc.Hashable` rather than from the call.
     """
 
     source_id: str
@@ -85,9 +91,15 @@ class SourceRef:
     projection_id: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(eq=True, frozen=False)
 class Provenance:
-    """Who said a thing, on what evidence, and when."""
+    """Who said a thing, on what evidence, and when.
+
+    Compared field-wise, and unhashable, for the reason :class:`SourceRef`
+    gives -- which is also why it is *this* record rather than a further one:
+    it holds a ``SourceRef``, so a hash here would reach that mapping through
+    it.
+    """
 
     source: SourceRef | None = None
     extraction_confidence: float | None = None
@@ -195,9 +207,13 @@ class EntityRef:
     entity_id: str
 
 
-@dataclass(frozen=True)
+@dataclass(eq=True, frozen=False)
 class Literal:
-    """An assertion object that is a value rather than an entity."""
+    """An assertion object that is a value rather than an entity.
+
+    Compared field-wise, and unhashable: two literals carrying one value are
+    one literal, which shipped tests assert, and ``metadata`` is a dict.
+    """
 
     value: Any
     type: FieldType
@@ -372,13 +388,18 @@ class SiblingOrder(Enum):
     DECLARED = "declared"
 
 
-@dataclass(frozen=True)
+@dataclass(eq=True, frozen=False)
 class ProjectionContext:
     """Everything a :class:`ParentChoice` may consult, gathered before it runs.
 
     This is why ``choose`` can be synchronous. Both taxonomy flavours share one
     synchronous projection core, and a core that cannot await must be *handed*
     what its policies will read rather than letting them fetch it.
+
+    **Compared field-wise, and therefore unhashable.** Equality is the whole
+    reason ``__post_init__`` canonicalises the relation, so it is the member
+    that has to work; ``depths`` and ``types`` are mappings, so a hash over
+    the fields would raise.
     """
 
     taxonomy_id: str
@@ -388,7 +409,7 @@ class ProjectionContext:
     types: Mapping[str, str]
 
     def __post_init__(self) -> None:
-        """Canonicalise the relation; frozen, so through ``object.__setattr__``.
+        """Canonicalise the relation, so two spellings of one relation compare equal.
 
         Nothing in this package constructs a context -- the projection core
         hands one to a policy -- so the only caller who reaches this is a
@@ -396,7 +417,7 @@ class ProjectionContext:
         against, which is the caller least placed to notice that two contexts
         naming one relation compared unequal.
         """
-        object.__setattr__(self, "relation", relation_id(self.relation))
+        self.relation = relation_id(self.relation)
 
 
 @runtime_checkable

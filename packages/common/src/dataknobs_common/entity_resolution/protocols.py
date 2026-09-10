@@ -202,11 +202,11 @@ class MembershipOracle(Protocol):
         axis names.
 
         A source that does not satisfy this protocol publishes exactly
-        ``{TAXONOMY_ID_KEY}``, which is what the bare ``within`` spellings
+        ``{ENTITY_TYPE_KEY}``, which is what the bare ``within`` spellings
         mean and is why they can never be refused.
 
         Returns:
-            The axis names, including ``TAXONOMY_ID_KEY`` where
+            The axis names, including ``ENTITY_TYPE_KEY`` where
             :meth:`memberships` still answers on it -- this is the whole set,
             not the additions.
         """
