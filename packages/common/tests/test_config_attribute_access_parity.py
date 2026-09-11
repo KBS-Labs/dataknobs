@@ -166,7 +166,7 @@ def test_default_config_attr_ignores_other_attrs() -> None:
 
     ``_CustomAttrBad`` reads ``self.cfg.nope`` — with the default
     ``config_attr="config"`` that read is not audited, so the helper
-    passes. This pins the D4 scoping: only ``self.config.<attr>`` is
+    passes. This pins the scoping: only ``self.config.<attr>`` is
     walked, so reads off other objects (params, a dataknobs ``Config``,
     a dict) are never false-flagged.
     """

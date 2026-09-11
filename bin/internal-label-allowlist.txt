@@ -67,3 +67,10 @@ packages/llm/tests/test_bedrock_model_binding.py	llama3-1-70b	public Llama model
 tests/test_internal_label_scope.py	Item 116	synthetic label the separator test matches against — the test cannot assert the pattern catches a spelling without writing that spelling
 tests/test_internal_label_scope.py	Item 210	synthetic label written into a tmp_path fixture to prove the guard reports it and exits 1
 tests/test_internal_label_scope.py	77a	synthetic sub-item ids the percent-escape narrowing is checked against — asserting the branch still catches them requires writing them
+packages/bots/tests/integration/test_sibling_registries_postgres.py	name="Criterion 1"	rubric criterion's own name — a fixture value, not a reference to a numbered criterion
+packages/bots/tests/unit/rubrics/test_meta.py	"description": "Criterion 1"	rubric criterion description fixture value (the name beside it is C1)
+packages/bots/tests/unit/rubrics/test_registry.py	name="Criterion 1"	rubric criterion's own name — a fixture value, not a reference to a numbered criterion
+packages/llm/tests/prompts/test_composite_library.py	{"template": "D4"}	fourth template fixture in the A1/B2/C3/D4 series naming which library answered
+packages/llm/tests/prompts/test_composite_library.py	["template"] == "D4"	the assertion on that same A1/B2/C3/D4 fixture series
+tests/test_internal_label_scope.py	"Criterion 20"	synthetic criterion spellings the catching test matches against — asserting the branch catches them requires writing them
+tests/test_internal_label_scope.py	"D5", "D2"	synthetic decision-code spellings the catching test matches against — same reason

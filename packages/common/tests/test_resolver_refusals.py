@@ -95,7 +95,7 @@ def restored_registry() -> Iterator[None]:
 def test_a_rung_the_sync_flavour_cannot_build_is_refused(
     mammals_path: Path, tmp_path: Path
 ) -> None:
-    """Criterion 16: refused by the **build** door, naming the kind and the way out."""
+    """Refused by the **build** door, naming the kind and the way out."""
     path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
     ontology = load_ontology(path)
 

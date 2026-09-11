@@ -466,7 +466,7 @@ class ReActReasoning(
         )
 
     # ------------------------------------------------------------------
-    # In-loop history compaction (opt-in; shared by both loop sites, D5)
+    # In-loop history compaction (opt-in; shared by both loop sites)
     # ------------------------------------------------------------------
 
     def _compaction_enabled(self) -> bool:
@@ -584,7 +584,7 @@ class ReActReasoning(
     ) -> Any:
         """Await ``complete()``; on context overflow, compact once and retry.
 
-        The reactive backstop (D2): a ``ContextLengthExceededError`` from the
+        The reactive backstop: a ``ContextLengthExceededError`` from the
         in-loop completion triggers one compaction + one retry instead of
         failing the turn. When compaction is disabled the error propagates
         unchanged (byte-identical to today). ``complete`` is a zero-arg callable

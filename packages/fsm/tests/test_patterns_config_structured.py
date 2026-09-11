@@ -138,7 +138,7 @@ class TestErrorRecoveryConfigStructured:
         assert restored.fallback_on_exceptions == [ValueError, KeyError]
 
     def test_compensation_defaults_to_empty_actions(self):
-        # D4: compensation_actions is no longer a required field — from_dict
+        # compensation_actions is no longer a required field — from_dict
         # with no actions yields an empty list rather than raising.
         cfg = CompensationConfig.from_dict({})
         assert cfg.compensation_actions == []
@@ -154,7 +154,7 @@ class TestErrorRecoveryConfigStructured:
         assert restored.compensation_actions == [undo]
 
     def test_error_recovery_nested_composition_typed(self):
-        # D2: the five Optional sub-config fields are rebuilt as typed
+        # The five Optional sub-config fields are rebuilt as typed
         # instances by the base from_dict recursion — no _normalize_dict.
         # Strategy fields are given as raw strings (the shape a YAML/JSON
         # load produces) so the string -> enum coercion path is exercised
@@ -234,7 +234,7 @@ class TestAPIOrchestrationConfigStructured:
         assert restored.response_parser is parse
 
     def test_orchestration_nested_endpoints_typed(self):
-        # D5: list[APIEndpoint] is rebuilt as typed APIEndpoint instances.
+        # list[APIEndpoint] is rebuilt as typed APIEndpoint instances.
         cfg = APIOrchestrationConfig.from_dict(
             {
                 "endpoints": [
@@ -330,7 +330,7 @@ class TestETLConfigStructured:
 
 
 class TestFileProcessingConfigStructured:
-    """FileProcessingConfig: parity, round-trip, and the D6 detection fix."""
+    """FileProcessingConfig: parity, round-trip, and the format-detection fix."""
 
     def test_construction_parity(self):
         assert FileProcessingConfig.from_dict(
@@ -354,7 +354,7 @@ class TestFileProcessingConfigStructured:
             cfg.chunk_size = 99  # type: ignore[misc]
 
     def test_processor_resolves_format_without_mutating_config(self):
-        # D6 (reproduce-style): a FileProcessor over a .json input with
+        # Reproduce-style: a FileProcessor over a .json input with
         # format unset must auto-detect JSON onto the processor and NOT
         # write back to the now-frozen config (which would raise
         # FrozenInstanceError pre-fix).

@@ -47,7 +47,7 @@ def with_resolver(source: Path, destination: Path, section: dict) -> Path:
 
 
 def test_a_placement_completes_with_no_event_loop_running(mammals_path: Path) -> None:
-    """Criterion 11: the whole of it, in the order the criterion states it.
+    """The whole of it, in the order the call site runs it.
 
     ``asyncio.get_running_loop()`` raising is asserted rather than assumed. A
     cascade that merely *happens* not to await is not the claim: the claim is

@@ -717,7 +717,7 @@ async def test_bulk_insert_through_fsm_persists(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# W3 — DatabaseTransaction + adapter.begin_transaction (D3/D7)
+# W3 — DatabaseTransaction + adapter.begin_transaction
 #
 # Previously a dead seam: ``BatchCommit`` and ``DatabaseTransaction`` called
 # ``resource.transaction()`` / ``resource.begin_transaction()`` — methods no

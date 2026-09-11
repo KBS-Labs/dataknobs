@@ -41,7 +41,7 @@ def _scanned() -> set[str]:
     return {path.relative_to(ROOT).as_posix() for path in GUARD.iter_target_files([])}
 
 
-def test_the_scope_covers_the_code_that_runs_the_gate():
+def test_the_scope_covers_the_code_that_runs_the_gate() -> None:
     """Package code was never the gap: `bin/` and the workspace guards were.
 
     Asserted against the same declaration the guard reads rather than a list
@@ -65,7 +65,7 @@ def test_the_scope_covers_the_code_that_runs_the_gate():
     assert not missing_files, f"declared workspace files not scanned: {missing_files}"
 
 
-def test_the_scope_covers_every_shell_script_the_shell_lint_checks():
+def test_the_scope_covers_every_shell_script_the_shell_lint_checks() -> None:
     """The row's own example was a gate script's comment, and those are shell.
 
     Compared against ``tracked_shell_files`` -- a different enumeration than the
@@ -79,7 +79,7 @@ def test_the_scope_covers_every_shell_script_the_shell_lint_checks():
     )
 
 
-def test_the_scope_is_not_quietly_empty():
+def test_the_scope_is_not_quietly_empty() -> None:
     """A floor under each half, so a narrowing is a failure and not a quiet pass."""
     scanned = _scanned()
     counts = {
@@ -91,7 +91,7 @@ def test_the_scope_is_not_quietly_empty():
     assert not thin, f"these halves of the scope resolved to almost nothing: {thin}"
 
 
-def test_every_self_exemption_still_earns_itself():
+def test_every_self_exemption_still_earns_itself() -> None:
     """The ratchet. An exemption that stopped being needed must be removed.
 
     A file is skipped here only because describing a label requires writing one.
@@ -121,7 +121,7 @@ def test_every_self_exemption_still_earns_itself():
     )
 
 
-def test_the_exemption_is_what_keeps_the_scan_green():
+def test_the_exemption_is_what_keeps_the_scan_green() -> None:
     """Non-vacuity from the other side: without the skip, the guard fails.
 
     Otherwise the exemption could be removed with nothing to say so, and the two
@@ -136,7 +136,7 @@ def test_the_exemption_is_what_keeps_the_scan_green():
     )
 
 
-def test_both_separators_are_one_class():
+def test_both_separators_are_one_class() -> None:
     """``Item 116`` and ``Item-116`` are the same leak; only one was matched.
 
     Seven of these sat in the scope the guard already covered, one of them in
@@ -177,7 +177,7 @@ def test_narrowing_for_percent_escapes_still_catches_the_sub_item_ids() -> None:
         assert GUARD.LABEL_PATTERN.search(label), f"no longer matched: {label}"
 
 
-def test_a_label_is_reported_and_sets_a_failing_status(tmp_path):
+def test_a_label_is_reported_and_sets_a_failing_status(tmp_path: Path) -> None:
     """End to end through the real script: the finding, and the exit code.
 
     A guard that finds a label and exits 0 is not a guard, and the caller in
@@ -200,7 +200,7 @@ def test_a_label_is_reported_and_sets_a_failing_status(tmp_path):
     assert "Item 210" in result.stdout, result.stdout
 
 
-def test_a_named_file_is_scanned_whatever_its_suffix(tmp_path):
+def test_a_named_file_is_scanned_whatever_its_suffix(tmp_path: Path) -> None:
     """Naming a file is the statement that it should be read.
 
     The explicit-argument path filtered to ``*.py``, so pointing the guard at a
@@ -223,7 +223,7 @@ def test_a_named_file_is_scanned_whatever_its_suffix(tmp_path):
     )
 
 
-def test_a_scope_helper_that_exits_non_zero_is_not_absorbed():
+def test_a_scope_helper_that_exits_non_zero_is_not_absorbed() -> None:
     """A probe that cannot run must not report a pass.
 
     Both halves of the added scope come from a subprocess. If one fails and the
@@ -239,7 +239,7 @@ def test_a_scope_helper_that_exits_non_zero_is_not_absorbed():
         GUARD._declared([sys.executable, "-c", "raise SystemExit(1)"], "a failing probe")
 
 
-def test_a_scope_helper_that_names_nothing_is_not_absorbed():
+def test_a_scope_helper_that_names_nothing_is_not_absorbed() -> None:
     """Exit zero and print nothing is the other way a scope silently empties.
 
     Distinct from the failure above and not covered by it: a helper whose
@@ -319,3 +319,61 @@ def test_a_targeted_run_does_not_call_every_other_entry_dead(
 
     assert status == 0, f"a targeted run reported unrelated entries as dead:\n{out}"
     assert "never matches" not in out, out
+
+
+def test_a_criterion_number_is_caught_in_both_casings() -> None:
+    """The one family that leaked, and the spelling its own census missed.
+
+    A criterion marker above a test is a pointer into a document the reader
+    cannot open. It is also the one planning object a test is genuinely
+    *about*, which is why the association moved to the planning tree first --
+    a criteria row there names the test function -- rather than being deleted
+    and reconstructed from memory later.
+
+    The census that found thirteen of them keyed on the capitalised form and
+    missed three in the lowercase one, so both casings are pinned here. So is
+    the plural: one test discharged two and its marker said so. A qualifier in
+    front ("acceptance") changes nothing and needs no branch of its own.
+
+    The spellings live in this one line rather than in the prose above,
+    because a suppression is keyed to a substring and prose gets reworded --
+    and a suppression whose target was reworded goes on suppressing nothing
+    while the run prints its tick.
+    """
+    for spelling in ("Criterion 20", "criterion 19", "Criteria 19 and 16"):
+        assert GUARD.LABEL_PATTERN.search(spelling), f"not matched: {spelling}"
+
+
+def test_a_bare_single_digit_decision_code_is_caught() -> None:
+    """A decision code resolves to nothing in this repository, source included.
+
+    Nineteen lines carried one, two of them in shipped ``react.py`` -- the
+    only half of this family a consumer could actually encounter. The
+    separator varies the way the ``Item N`` branch's does, so the branch ends
+    at a word boundary rather than at a space.
+    """
+    for spelling in ("D5", "D2", "D3-cap", "D1/D4", "(D3/D7)", "the D4 scoping"):
+        assert GUARD.LABEL_PATTERN.search(spelling), f"not matched: {spelling}"
+
+
+def test_the_decision_branch_does_not_catch_a_pydocstyle_code() -> None:
+    """The sharper half, and the one that decides whether the branch is usable.
+
+    ruff's pydocstyle codes are three digits, public, legitimate, and 27 of
+    the 48 raw hits the census started from. A branch that is not single-digit
+    and word-bounded catches every ``noqa`` naming one and the guard fails on
+    its first run -- so this is checked from the other side, the way the
+    percent-escape narrowing is.
+
+    A hex literal is here for the leading boundary rather than the trailing
+    one: ``0xD4`` has no word break before the ``D``, which is what keeps the
+    branch off hash fragments and model ids.
+    """
+    for benign in (
+        "x = 1  # noqa: D401 - test fixture",
+        '"D400"',
+        '"D100", # [presentational] Missing docstring in public module',
+        "bin/quality-contract.py explain D203",
+        "0xD4",
+    ):
+        assert not GUARD.LABEL_PATTERN.search(benign), f"false positive: {benign}"

@@ -129,7 +129,7 @@ def test_a_literals_metadata_is_copied_into_the_field() -> None:
 
 
 # --------------------------------------------------------------------------
-# Criterion 26 -- the two members an ontology has that the free pair cannot
+# The two members an ontology has that the free pair cannot
 # --------------------------------------------------------------------------
 
 

@@ -191,7 +191,7 @@ class TestResourceConfigStructured:
 
 
 class TestStorageConfigStructured:
-    """``StorageConfig`` D7: dataclass conversion + Enum round-trip + frozen."""
+    """``StorageConfig``: dataclass conversion + Enum round-trip + frozen."""
 
     def test_from_dict_parity(self) -> None:
         cfg = StorageConfig(
@@ -263,7 +263,7 @@ class TestStorageConfigStructured:
 
 
 class TestStorageBackendsDoNotMutateConfig:
-    """D7 step 2: storage backends build a local working copy of the params.
+    """Storage backends build a local working copy of the params.
 
     Before the frozen flip, ``InMemoryStorage`` / ``FileStorage`` mutated the
     caller's ``StorageConfig.connection_params`` in place. Under a frozen

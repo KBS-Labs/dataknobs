@@ -184,7 +184,7 @@ async def test_cached_embedder_works_against_the_real_llm_cache() -> None:
 
 
 async def test_a_model_swap_misses_against_the_real_llm_cache() -> None:
-    """Acceptance criterion 4, against the shipped cache rather than a stand-in."""
+    """A model swap misses, against the shipped cache rather than a stand-in."""
     cache = MemoryEmbeddingCache()
 
     await CachedEmbedder(DeterministicEmbedder(dimensions=8, model_id="v1"), cache).embed(

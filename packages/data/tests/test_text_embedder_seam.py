@@ -151,7 +151,7 @@ def test_dimensions_must_be_positive() -> None:
 
 
 # --------------------------------------------------------------------------
-# CachedEmbedder — acceptance criterion 4
+# CachedEmbedder — a model swap invalidates rather than serving stale
 # --------------------------------------------------------------------------
 
 

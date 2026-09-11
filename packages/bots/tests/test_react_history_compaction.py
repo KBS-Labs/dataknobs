@@ -5,7 +5,7 @@ vendor input-context overflow. ``HistoryCompactionConfig`` opts a bot into
 bounding that growth: proactively (estimate the path's tokens and compact when
 over budget) and reactively (a caught ``ContextLengthExceededError`` compacts
 once and retries). Both loop sites — the phased ``process_input`` path DynaBot
-drives and the monolithic ``generate`` — share one helper (D5).
+drives and the monolithic ``generate`` — share one helper.
 
 Reproduce-first: against HEAD before this feature a long loop kept every
 iteration in the sent history (no bound). Real constructs only — ``BotTestHarness``
@@ -136,7 +136,7 @@ class TestPhasedProactiveCompaction:
 
 
 # ---------------------------------------------------------------------------
-# Monolithic ``generate`` site (the other loop path, D5) + reactive backstop
+# Monolithic ``generate`` site (the other loop path) + reactive backstop
 # ---------------------------------------------------------------------------
 
 

@@ -118,7 +118,7 @@ class IntParents:
 
 
 # --------------------------------------------------------------------------
-# Criterion 12 -- the answer, over the authored assertions
+# The answer, over the authored assertions
 # --------------------------------------------------------------------------
 
 

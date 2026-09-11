@@ -276,7 +276,7 @@ async def test_finalize_timeout_builders_markers() -> None:
 async def test_custom_tool_loop_timeout_message_surfaces(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """D4: a custom ``tool_loop_timeout_message`` surfaces in the degraded
+    """A custom ``tool_loop_timeout_message`` surfaces in the degraded
     response for both buffered and streaming paths.
 
     Separate harnesses per path: a timed-out synthesis is cancelled *before*
