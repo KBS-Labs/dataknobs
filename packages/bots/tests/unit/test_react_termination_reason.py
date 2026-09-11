@@ -345,7 +345,7 @@ class TestMonolithicGenerate:
 
 
 # ---------------------------------------------------------------------------
-# Always-on (D2): the reason is recorded even with store_trace=False (default).
+# Always-on: the reason is recorded even with store_trace=False (default).
 # ---------------------------------------------------------------------------
 
 
@@ -358,7 +358,7 @@ class TestAlwaysOn:
 
 
 # ---------------------------------------------------------------------------
-# Callback fan-out (D3): the topic fires once per terminated turn.
+# Callback fan-out: the topic fires once per terminated turn.
 # ---------------------------------------------------------------------------
 
 
@@ -418,7 +418,7 @@ class TestCallbackFanout:
 
 
 # ---------------------------------------------------------------------------
-# No-drift (D1/D4): metadata reason == the last trace status string.
+# No-drift: metadata reason == the last trace status string.
 # ---------------------------------------------------------------------------
 
 
@@ -462,7 +462,7 @@ class TestNoDrift:
 
 
 # ---------------------------------------------------------------------------
-# Capability advertisement (D3-cap): CALLBACK_REGISTRY is machine-queryable.
+# Capability advertisement: CALLBACK_REGISTRY is machine-queryable.
 # ---------------------------------------------------------------------------
 
 

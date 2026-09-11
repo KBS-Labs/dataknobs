@@ -6,11 +6,20 @@ Planning identifiers (``Item NNN`` / ``item NNa``, ``RCN``, ``Change C``,
 tags (``Phase N`` without a trailing ``:``), plan sub-item ids (``77a`` /
 ``92b`` / ``146b``), ``decision N``, plan-document section refs like
 ``02b §5.2`` / ``02b P5a``, bare-number tracker references like
-``pre-141`` / ``pre-146b`` / ``the 141 failure`` / ``as 141``, etc.) must
+``pre-141`` / ``pre-146b`` / ``the 141 failure`` / ``as 141``, a decision's
+bare code (``D5``), an ontology or acceptance ``criterion N``, etc.) must
 never appear in committed package source or tests: they render into
 published API docs and IDE hovers and mean nothing to consumers.
 A prior one-time cleanup scrubbed the pre-existing leakage; this script
 is the recurring guard that prevents reintroduction.
+
+The last two families were added after a census of the whole repository for
+every id family the planning trees allocate.  The finding-code families
+occur zero times and are deliberately not spelled here -- they are raised in
+leg plans and ruled in a decision log, and nothing in either place is copied
+into a test, so a branch for them would be a pattern with no subject.  What
+did leak was 34 occurrences across 32 lines, two of them in shipped source,
+where a reader has nothing to resolve the code against.
 
 Scope: ``packages/*/src`` and ``packages/*/tests``, plus the first-party code
 belonging to no package -- ``bin/``, root ``tests/``, the workspace shim and
@@ -186,6 +195,28 @@ LABEL_PATTERN = re.compile(
     r"|(?<![:>%])\b[0-9]{2,3}[a-g]\b"
     # Plan ``decision N`` references.
     r"|\bdecision [0-9]{1,3}\b"
+    # A decision's *code* rather than its word: ``D5``, ``D3-cap``,
+    # ``(D3/D7)``.  Single-digit and word-bounded on both sides, which is
+    # the whole of what makes this branch usable: ruff's pydocstyle codes
+    # are ``D1xx``-``D4xx`` and are public, legitimate, and 27 of the 48
+    # raw hits the census started from.  A branch one digit wider catches
+    # every pydocstyle suppression in the repository and the guard fails on
+    # its first run -- the literal directive is not written here, because a
+    # comment quoting one is parsed as one.  The trailing ``\b`` is also what
+    # catches the separator forms an author reaches for -- ``D1/D4``,
+    # ``D3-cap`` -- the same degree of freedom the ``Item[ -]`` branch covers.
+    r"|\bD[0-9]\b"
+    # Ontology/acceptance ``criterion N`` references.  A criterion number
+    # is a pointer into a document the reader cannot open, and it is the
+    # one planning object a test is genuinely *about* -- which is why the
+    # association moved to the planning tree (a criteria row names
+    # ``path::function``) before these came out, rather than after.
+    #
+    # Both casings, because the capitalised-only census missed three: a
+    # ``passes criterion 19`` in prose and two ``acceptance criterion 4``.
+    # The plural is matched because the tree writes it -- one test
+    # discharging two criteria was marked ``Criteria 19 and 16``.
+    r"|\b[Cc]riteri(?:on|a) [0-9]+\b"
     # Bare-number tracker references that slipped past the ``Item NN``
     # form: ``pre-141`` / ``post-141`` (hyphenated qualifier, optional
     # sub-item letter as in ``pre-146b``), ``the 141 failure`` / ``the

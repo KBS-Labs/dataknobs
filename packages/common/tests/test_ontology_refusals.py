@@ -540,7 +540,7 @@ def test_the_refusal_falls_back_to_the_keys_a_row_does_have(door: Door) -> None:
 
 
 # --------------------------------------------------------------------------
-# Criterion 24 -- a key only a later version reads is refused, not dropped
+# A key only a later version reads is refused, not dropped
 # --------------------------------------------------------------------------
 #
 # These four used to load and be discarded, which from the author's chair is

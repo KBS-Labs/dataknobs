@@ -204,7 +204,7 @@ def test_a_literal_object_is_read_from_a_mapping() -> None:
 
 
 # --------------------------------------------------------------------------
-# Criterion 23 -- a stated negation loads, and a query can select on it
+# A stated negation loads, and a query can select on it
 # --------------------------------------------------------------------------
 #
 # One criterion and not two on purpose. A loader that reads `polarity:` is

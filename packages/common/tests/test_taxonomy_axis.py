@@ -49,7 +49,7 @@ MINIMAL_DOCUMENT = {
 }
 
 # --------------------------------------------------------------------------
-# Criterion 13 -- the axis is reachable, and it takes nothing but its name
+# The axis is reachable, and it takes nothing but its name
 # --------------------------------------------------------------------------
 
 
@@ -133,7 +133,7 @@ async def test_the_async_twin_walks_the_same_terms(mammals_v11_path: Path) -> No
 
 
 # --------------------------------------------------------------------------
-# Criterion 14 -- refused at the accessor, naming the axis
+# Refused at the accessor, naming the axis
 # --------------------------------------------------------------------------
 
 
@@ -515,7 +515,7 @@ def test_a_known_anchor_still_walks(mammals_v11_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# Criterion 27 -- a negated edge is not walked
+# A negated edge is not walked
 # --------------------------------------------------------------------------
 #
 # One test and not four. Absent from `parents` and `children`, absent from the

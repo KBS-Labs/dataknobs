@@ -108,7 +108,7 @@ BOTH_POLARITIES = {
 
 
 # --------------------------------------------------------------------------
-# Criterion 20 -- the door, and absence is not childlessness
+# The door, and absence is not childlessness
 # --------------------------------------------------------------------------
 
 
@@ -217,7 +217,7 @@ def test_the_axis_it_holds_is_frozen_and_compared_by_identity(axis: Taxonomy) ->
 
 
 # --------------------------------------------------------------------------
-# Criterion 17 -- the forwards, one patch per flavour
+# The forwards, one patch per flavour
 # --------------------------------------------------------------------------
 
 _BOOL_FORWARDS = ("exists", "is_root", "is_leaf")
@@ -306,7 +306,7 @@ async def test_patching_the_async_hierarchy_view_moves_the_async_taxonomy_view(
 
 
 # --------------------------------------------------------------------------
-# Criteria 19 and 16 -- the edge the cursor walked, keyed per assertion
+# The edge the cursor walked, keyed per assertion
 # --------------------------------------------------------------------------
 
 
@@ -345,8 +345,8 @@ def test_an_axis_with_no_assertions_answers_empty_rather_than_raising(axis: Taxo
 def test_the_edge_members_are_keyed_per_assertion_not_per_parent() -> None:
     """One parent annotated twice gives two pairs with the same neighbour.
 
-    A collapse to one pair per parent returns one here and passes criterion 19
-    quietly; this is the fixture that fails it.
+    A collapse to one pair per parent returns one here and passes the
+    keyed-per-assertion claim quietly; this is the fixture that fails it.
     """
     axis = load_ontology(TWICE_ANNOTATED).taxonomy("species")
 

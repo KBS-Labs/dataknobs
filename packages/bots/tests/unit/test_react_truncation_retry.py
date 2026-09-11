@@ -316,7 +316,7 @@ class TestTruncationRetryBranchesOffTruncatedNode:
 
 
 # =========================================================================
-# Monolithic generate() route (shared helper — D4)
+# Monolithic generate() route (shared helper)
 # =========================================================================
 
 

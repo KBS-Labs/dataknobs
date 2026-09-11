@@ -100,7 +100,7 @@ def test_an_entity_with_no_name_answers_to_its_id() -> None:
 
 
 # --------------------------------------------------------------------------
-# Criterion 25 -- `imports:` survives the load, carried and never followed
+# `imports:` survives the load, carried and never followed
 # --------------------------------------------------------------------------
 
 #: A vocabulary that declares another one's namespace comes into scope.
