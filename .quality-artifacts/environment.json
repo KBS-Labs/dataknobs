@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-11T00:13:25Z",
+  "timestamp": "2026-09-11T16:36:57Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/assert-the-refusal-the-reminder-makes",
-  "git_commit": "9823a1019de145c2fabb5d4618633bf34e604e04",
+  "git_branch": "sbk/leg-a5b-the-public-page-stops-citing-the-private-tree",
+  "git_commit": "f091ae712df0b563e8cb433194a8010f9ee8a49b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
