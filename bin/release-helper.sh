@@ -648,16 +648,23 @@ check_changes() {
 # the pointer so that the person cutting is READING the list rather than
 # remembering that one exists.
 #
-# Deliberately not a gate. It cannot know whether the list has been acted on,
-# and a prompt that blocks a release on a question it cannot evaluate gets
-# answered `y` by reflex within a week. What it can do is make the list
-# impossible to not know about, and report when a pointer has gone stale.
+# Deliberately not a gate on the READING. It cannot know whether the list has
+# been acted on, and a prompt that blocks a release on a question it cannot
+# evaluate gets answered `y` by reflex within a week. What it can do is make the
+# list impossible to not know about, and report when a pointer has gone stale.
 #
-# Three states, and none of them is silence:
+# Four states, and none of them is silence. The first three are reported and
+# survived; only the last one refuses, because it is the one where nothing was
+# read at all:
 #   * no manifest        -- said out loud; the file is tracked, so its absence
 #                           is a broken tree rather than "nothing outstanding"
 #   * tree not present   -- normal on a clone that has no planning checkout
 #   * document not found -- the pointer has DRIFTED, and that is a warning
+#   * no jq              -- EXITS NON-ZERO. Not a judgement withheld but a read
+#                           that never happened, and a check that skips because
+#                           its tool is missing reports green having tested
+#                           nothing. `tests/test_release_readiness_pointer.py`
+#                           pins both halves: this one refuses, drift does not.
 release_readiness() {
     # Overridable so the degraded states below can be exercised by a test
     # without moving a tracked file. A reminder nothing can test is one that

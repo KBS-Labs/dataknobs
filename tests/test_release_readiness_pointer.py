@@ -43,10 +43,16 @@ def _manifest() -> dict[str, Any]:
     return loaded
 
 
-def _readiness(
+def _run(
     manifest: Path | None = None, tree: Path | None = None, path: str | None = None
-) -> str:
-    """Run the reminder alone, with the seams a test needs."""
+) -> subprocess.CompletedProcess[str]:
+    """Run the reminder alone, with the seams a test needs.
+
+    Returns the whole result rather than its text: one state below is a
+    *refusal*, and the exit code is the half of that promise a message cannot
+    carry. A helper that returns only the text cannot be asked about it, which
+    is how the refusal came to be documented and unasserted.
+    """
     env = {
         "PATH": "/usr/bin:/bin:/usr/local/bin" if path is None else path,
         "HOME": str(Path.home()),
@@ -55,13 +61,20 @@ def _readiness(
         env["DK_RELEASE_READINESS_MANIFEST"] = str(manifest)
     if tree is not None:
         env["DK_XDOCS_DIR"] = str(tree)
-    done = subprocess.run(
+    return subprocess.run(
         [BASH, str(SCRIPT), "readiness"],
         capture_output=True,
         text=True,
         env=env,
         check=False,
     )
+
+
+def _readiness(
+    manifest: Path | None = None, tree: Path | None = None, path: str | None = None
+) -> str:
+    """Everything the reminder said, on either stream."""
+    done = _run(manifest=manifest, tree=tree, path=path)
     return done.stdout + done.stderr
 
 
@@ -135,9 +148,18 @@ def test_an_absent_tree_is_distinguished_from_a_drifted_pointer(tmp_path: Path) 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq reads the manifest")
 def test_a_moved_document_is_reported_as_drift(tmp_path: Path) -> None:
-    """The tree is there and the document is not -- somebody moved it."""
+    """The tree is there and the document is not -- somebody moved it.
+
+    Drift is reported and *survived*, which is the control for the refusal at
+    the bottom of this file: a non-zero exit there means "the tool is missing"
+    rather than "this function exits non-zero whenever it has something to
+    complain about".
+    """
     (tmp_path / "empty").mkdir()
-    assert "DRIFTED" in _readiness(tree=tmp_path / "empty")
+    done = _run(tree=tmp_path / "empty")
+
+    assert "DRIFTED" in done.stdout + done.stderr
+    assert done.returncode == 0, "drift is a warning, not a gate"
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq reads the manifest")
@@ -185,7 +207,9 @@ def test_the_reminder_fails_loudly_without_jq(tmp_path: Path) -> None:
     assert shutil.which("dirname", path=str(stand_in)), "the stand-in PATH is unusable"
     assert not shutil.which("jq", path=str(stand_in)), "jq is still reachable"
 
-    out = _readiness(path=str(stand_in))
+    done = _run(path=str(stand_in))
+    out = done.stdout + done.stderr
 
+    assert done.returncode != 0, "a missing tool must not read as success"
     assert "jq is not installed" in out
     assert ".dataknobs/release-readiness.json" in out
