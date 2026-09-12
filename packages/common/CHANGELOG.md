@@ -599,7 +599,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, because a published function whose result type is not published leaves a
   caller unable to annotate what they were handed.
 
+- **A rung can say where in the query a form sat.** `DeclaredSignal` and
+  `AsyncDeclaredSignal` publish `_located`, which answers with `FormHit`s — an
+  entity id and a half-open span — so a rung that *locates* declared forms
+  inside an utterance is written by overriding one method. `_hits` stays for a
+  rung that compares the whole query and the base class locates what it
+  returns, so both kinds of rung produce spans and the slot-filling caller who
+  already knows the phrase takes the same path as the one who hands over a
+  sentence. `_order` is the third hook: a declared hit scores `1.0` by fiat and
+  carries no order, so an order that is to mean anything — the longer form
+  before the one it contains — has to be published by the rung.
+
+- **`content_span` and `token_spans`** in `dataknobs_common.text`, re-exported
+  on the package door and the resolution family's. The first is the extent a
+  fold keeps, which is what a whole-string match reports rather than
+  `(0, len(query))`. The second is the token-boundary policy: where the words
+  are, which is what stops a scan finding `beagle` inside `unbeagleable`, and
+  what an n-gram probe enumerates — 21 dictionary lookups for a six-token
+  utterance. They are separate from `default_normalizer` because folding and
+  bounding are different questions, and the fold that serves a whole-string
+  lookup does not serve a scan unchanged.
+
+- **`ResolutionResult.matched_text()` and `.unmatched_text()`**, which slice
+  `Coverage`'s spans back out of `query`.
+
 ### Changed
+
+- **`Coverage` holds offsets rather than text, and reports what the evidence
+  *located* rather than what reached a candidate.** `matched` is the union of
+  the evidence spans — merged, ordered, half-open into `query` — and
+  `unmatched` is the residue, each interval trimmed of the whitespace that
+  bounded it. Both were `tuple[str, ...]`; `matched_text()` and
+  `unmatched_text()` recover the strings.
+
+  Spans because the text is derivable from the position and the position is
+  not derivable from the text: a phrase occurring twice has one string and two
+  places, and a report naming the string cannot say which.
+
+  The reading changes with the type, and deliberately. Evidence carrying no
+  span contributes nothing, so a resolution whose only hits came from a rung
+  that cannot locate a match — a cosine neighbour, a fused or decayed
+  candidate that inherited one — comes back with `matched` empty and the whole
+  query `unmatched`. That is the line a consumer maintaining a vocabulary acts
+  on: no declared form was found in the text and a guess is being offered
+  anyway. The older all-or-nothing rule reported a vector-only hit and an exact
+  one identically, because both had produced a candidate.
+
+- **A declared rung's evidence carries a span, and `matched_text` is the slice
+  it points at.** `ExactNormalizedSignal` and `AliasSignal` reported
+  `span=None` and `matched_text=query`; they now report the extent the fold
+  kept — `"  Beagles  "` matches at `(2, 9)`, not `(0, 11)` — and the text at
+  that extent, in the caller's own casing. The two fields agree by
+  construction rather than by trust.
+
+- **`ResolutionRef` records which rung placed it and what kind of match that
+  was.** It gains `signal`, `kind` and `span`, drops `signals`, and
+  `runners_up` becomes a tuple of `RunnerUp`, each carrying a `MatchEvidence`.
+  A stored resolution is only worth storing if it can still be judged, and
+  `signals` — a mapping of rung name to score — recorded which rungs fired
+  while recording nothing about what any of them meant; a runner-up as an id
+  beside a bare float had the same hole one field over, and a bare float is
+  also the per-result scoring this family already refuses one level up.
+  `EvidenceKind`, `MatchEvidence` and `RunnerUp` join `ResolutionRef` on the
+  `dataknobs_common.ontology` door, since a type a published type carries has
+  to be reachable from the same place.
 
 - **`dataknobs-common` declares one dependency**, `typing-extensions`, scoped by
   marker to Python below 3.13. PEP 696 type-parameter defaults are `typing`'s

@@ -262,16 +262,24 @@ has its own page — [The Anchored View](anchored-view.md).
 ## What a resolution leaves behind
 
 Placing a surface form is [its own guide](entity-resolution.md); two of its
-value types live here because a vocabulary stores them, and `Scoring` — the
-mode enum the first of them carries — comes with them:
+value types live here because a vocabulary stores them, and whatever those two
+carry comes with them — `Scoring`, `EvidenceKind`, `MatchEvidence` and
+`RunnerUp`:
 
 - `ResolutionRef` — a resolution recorded rather than performed: the query, the
   entity it landed on, the score, the `Scoring` mode that produced it
-  (`DECLARED`, `RANK_FUSED`, `NORMALIZED`, `NATIVE` or `DECAYED`), the corpus
-  and the signals.
+  (`DECLARED`, `RANK_FUSED`, `NORMALIZED`, `NATIVE` or `DECAYED`), the rung of
+  record and whether its match was `DECLARED` or `INFERRED`, where in the query
+  it sat, the corpus, and the alternatives it ranked below.
 - `CompatibilityVerdict` — `COMPATIBLE`, `INCOMPATIBLE`, `UNVERIFIABLE` or
   `UNKNOWN`, which is how a resolution says whether the thing it matched was
   even the right kind of thing.
+
+A stored resolution is only worth storing if it can still be **judged**, which
+is what `kind` is for: without it a declared alias and a vector neighbour are
+the same row. Each entry in `runners_up` is a `RunnerUp` carrying its own
+`MatchEvidence` for the same reason — a bare id and a number said which
+alternatives existed and nothing about what any of them meant.
 
 `build_resolver` is the bridge: hand it the same document and the loaded
 vocabulary and it returns an `EntityResolver` composed from the document's own

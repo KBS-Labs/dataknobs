@@ -30,7 +30,10 @@ from dataknobs_common.entity_resolution.protocols import (
 )
 from dataknobs_common.entity_resolution.values import (
     CompatibilityVerdict,
+    EvidenceKind,
+    MatchEvidence,
     ResolutionRef,
+    RunnerUp,
     Scoring,
 )
 from dataknobs_common.ontology.config import OntologyConfig
@@ -129,8 +132,10 @@ __all__ = [
     "EntityRef",
     "EntitySource",
     "EntityType",
+    "EvidenceKind",
     "InferenceMode",
     "Literal",
+    "MatchEvidence",
     "MappingAssertionSource",
     "MappingEntitySource",
     "Materialization",
@@ -146,6 +151,7 @@ __all__ = [
     "RelationRef",
     "RelationType",
     "ResolutionRef",
+    "RunnerUp",
     "Scoring",
     "SiblingOrder",
     "SourceDescription",

@@ -185,8 +185,71 @@ def _stamp(
     return tuple(replace(item, signal=signal) for item in candidate.evidence)
 
 
+def _trimmed(query: str, start: int, end: int) -> tuple[int, int] | None:
+    """``(start, end)`` without its surrounding whitespace, or ``None``.
+
+    ``None`` for an interval that is empty or all whitespace, which is what a
+    residue between two adjoining matches is: reporting ``" "`` as a phrase
+    the vocabulary is missing would make every caller filter it, and reporting
+    ``" has been "`` would make every caller strip it.
+    """
+    while start < end and query[start].isspace():
+        start += 1
+    while end > start and query[end - 1].isspace():
+        end -= 1
+    return (start, end) if start < end else None
+
+
+def _coverage(
+    candidates: Sequence[EntityCandidate], query: str
+) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    """The union of the evidence spans, and the residue the query has left.
+
+    **Positional, and derived rather than accumulated.** Coverage is a view
+    over the candidates now, not a second computation kept in step with them
+    by hand, so there is one fewer thing that can come to disagree with the
+    evidence it describes.
+
+    A piece of evidence carrying no span contributes nothing, and that is the
+    reading rather than a hole in it: a cosine neighbour over an embedded
+    utterance has no position in that utterance to report. So a query whose
+    only hits are vector hits comes back with nothing matched and the whole
+    string unmatched -- no declared form was found in the text and a
+    neighbourhood guess is being offered anyway, which is the line a consumer
+    maintaining a vocabulary can act on and the older all-or-nothing rule
+    could not state.
+
+    An empty span is dropped rather than reported: the union of point sets is
+    what ``matched`` means, and an empty interval adds no points to it.
+    """
+    spans = sorted(
+        item.span
+        for candidate in candidates
+        for item in candidate.evidence
+        if item.span is not None and item.span[1] > item.span[0]
+    )
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            continue
+        merged.append((start, end))
+
+    residue: list[tuple[int, int]] = []
+    cursor = 0
+    for start, end in [*merged, (len(query), len(query))]:
+        gap = _trimmed(query, cursor, start)
+        if gap is not None:
+            residue.append(gap)
+        cursor = end
+    return tuple(merged), tuple(residue)
+
+
 def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -> ResolutionResult:
     """Turn the state into the result a caller gets back.
+
+    Coverage is derived here too, from the evidence the candidates carry --
+    see :func:`_coverage`, which is where the positional reading is argued.
 
     A candidate's score is its **rung of record's** -- the first rung that
     produced it -- because no later rung re-scores what an earlier one placed.
@@ -206,25 +269,7 @@ def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -
         replace(state.record[entity_id], evidence=state.evidence[entity_id])
         for entity_id in state.order
     )
-    matched = tuple(
-        dict.fromkeys(
-            item.matched_text
-            for candidate in candidates
-            for item in candidate.evidence
-            if item.matched_text
-        )
-    )
-    # What reached no candidate. These rungs match the whole query, so the
-    # residue is all-or-nothing -- but it must still be *reported*, because a
-    # miss that says nothing about what it could not place is the quiet
-    # failure this field exists to make loud. A caller maintaining a
-    # vocabulary reads exactly this to find the next entry to add.
-    # Keyed off the candidates rather than off ``matched``, which is a
-    # projection of them: ``_stamp`` leaves ``matched_text`` empty for a
-    # candidate that carried no evidence of its own, so a rung returning one
-    # produced a result that reported the entity *and* reported the query as
-    # placeable nowhere.
-    unmatched = () if candidates or not state.query else (state.query,)
+    matched, unmatched = _coverage(candidates, state.query)
     return ResolutionResult(
         candidates=candidates,
         query=state.query,

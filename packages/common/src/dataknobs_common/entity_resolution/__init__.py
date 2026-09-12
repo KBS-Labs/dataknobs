@@ -25,10 +25,16 @@ declared alias from a vector guess.
 a property worth stating because it is easy to lose and expensive when lost.
 The rungs here take an entity source as a *protocol*; the value types they
 construct live in :mod:`~dataknobs_common.entity_resolution.values` rather
-than in the ontology model, and the normalizer they fold with lives in
-:mod:`dataknobs_common.text`. An edge back would close a cycle through
-``ontology/__init__``, which fails on import *order* -- so a suite that
-happens to import one side first stays green while the other is broken.
+than in the ontology model, and the fold and the token-boundary policy they
+locate a form with live in :mod:`dataknobs_common.text`. An edge back would
+close a cycle through ``ontology/__init__``, which fails on import *order* --
+so a suite that happens to import one side first stays green while the other
+is broken.
+
+``content_span`` and ``token_spans`` are re-exported here, beside the rungs
+that need them, because writing a scanning rung is what they are for -- and
+they stay in ``text`` itself, which imports nothing, so the vocabulary side
+can fold with the same policy without depending on this package.
 
 A property of the module graph, not of the process: ``dataknobs_common``
 publishes the vocabulary on its own door, so importing anything from the
@@ -70,9 +76,11 @@ from dataknobs_common.entity_resolution.values import (
     Coverage,
     EntityCandidate,
     EvidenceKind,
+    FormHit,
     MatchEvidence,
     ResolutionRef,
     ResolutionResult,
+    RunnerUp,
     ScopeAuthority,
     Scoring,
     Within,
@@ -82,6 +90,7 @@ from dataknobs_common.entity_resolution.values import (
     within_axis_names,
     within_memberships,
 )
+from dataknobs_common.text import content_span, token_spans
 
 __all__ = [
     "ENTITY_TYPE_KEY",
@@ -104,18 +113,22 @@ __all__ = [
     "EntityResolver",
     "EvidenceKind",
     "ExactNormalizedSignal",
+    "FormHit",
     "MatchEvidence",
     "MatchSignal",
     "MembershipOracle",
     "ResolutionRef",
     "ResolutionResult",
+    "RunnerUp",
     "ScopeAuthority",
     "Scoring",
     "Within",
     "async_signal_backends",
+    "content_span",
     "finish",
     "merge_rung",
     "signal_backends",
+    "token_spans",
     "refuse_unknown_axes",
     "within_admits",
     "within_axes",

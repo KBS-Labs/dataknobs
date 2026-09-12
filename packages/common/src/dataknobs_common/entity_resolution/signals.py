@@ -21,12 +21,14 @@ from dataknobs_common.entity_resolution.protocols import AliasFormSource, AsyncA
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
     EvidenceKind,
+    FormHit,
     MatchEvidence,
     Scoring,
     within_admits,
     within_axes,
     within_memberships,
 )
+from dataknobs_common.text import content_span
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -48,27 +50,36 @@ __all__ = [
 _DECLARED_SCORE = 1.0
 
 
-def _candidate(entity_id: str, signal: str, query: str) -> EntityCandidate:
-    """One declared hit, with the one piece of evidence its rung can give.
+def _candidate(
+    entity_id: str, signal: str, query: str, found: Sequence[FormHit]
+) -> EntityCandidate:
+    """One declared entity, with one piece of evidence per place it was found.
 
-    ``span`` is ``None`` because these rungs match the **whole** query string
-    rather than locating a mention inside it. A span is an offset *into* the
-    query, and reporting ``(0, len(query))`` would be indistinguishable from a
-    scan that found the whole string -- a different rung, with a gate of its
-    own, that this one must not impersonate.
+    **Every declared hit carries a span**, including the whole-string one.
+    That was once refused here on the grounds that reporting the query's own
+    extent would be indistinguishable from a scan that found the whole
+    string -- true, and no longer an objection: a scan *subsumes* whole-string
+    matching rather than sitting beside it, so the two are meant to be
+    indistinguishable, and a caller supplying the phrase itself goes through
+    the same rung and gets an offset for free.
+
+    ``matched_text`` is the slice rather than the query, which is the same
+    sentence read the other way: it is what the span points at, so the two
+    fields agree by construction instead of by a caller's trust.
     """
     return EntityCandidate(
         entity_id=entity_id,
         score=_DECLARED_SCORE,
-        evidence=(
+        evidence=tuple(
             MatchEvidence(
                 signal=signal,
                 kind=EvidenceKind.DECLARED,
                 score=_DECLARED_SCORE,
                 scoring=Scoring.DECLARED,
-                matched_text=query,
-                span=None,
-            ),
+                matched_text=query[hit.span[0] : hit.span[1]],
+                span=hit.span,
+            )
+            for hit in found
         ),
     )
 
@@ -93,18 +104,45 @@ def _folded(query: str, normalizer: Callable[[str], str] | None) -> str:
     return query if normalizer is None else normalizer(query)
 
 
-def _ordered(hits: frozenset[str], k: int) -> list[str]:
-    """At most ``k`` ids, in a stable order.
+def _grouped(
+    found: Sequence[FormHit],
+    admitted: frozenset[str],
+    k: int,
+    *,
+    signal: str,
+    query: str,
+) -> list[EntityCandidate]:
+    """One candidate per admitted id, in the rung's own order, cut to ``k``.
 
-    The source answers with a frozenset, deliberately: two entities may
-    legitimately share a form, and that ambiguity is the vocabulary's to
-    declare. Iteration order over a set is not stable across processes, so a
-    rung that passed one straight through would return the *same* candidates
-    in a different order on a different run -- and the cascade positions by
-    arrival. Sorting makes the ambiguity survive as an ambiguity rather than
-    as an arbitrary winner that moves.
+    **``k`` counts entities, not hits.** A query naming one entity twice is
+    one candidate carrying two pieces of evidence, which is what the cascade
+    does with two *rungs* producing the same id -- so a rung that produced it
+    twice itself answers the same shape rather than spending two of the
+    caller's ``k`` on one entity.
+
+    The order is whatever :meth:`DeclaredSignal._located` returned, preserved
+    by the insertion order of the mapping below. That is the rung's to set:
+    a declared score is ``1.0`` by fiat and carries none, so if the order is
+    to mean anything -- the longer form before the shorter one it contains --
+    the rung is the only layer that can say so.
     """
-    return sorted(hits)[:k]
+    hits: dict[str, list[FormHit]] = {}
+    for hit in found:
+        if hit.entity_id in admitted:
+            hits.setdefault(hit.entity_id, []).append(hit)
+    return [_candidate(entity_id, signal, query, at) for entity_id, at in list(hits.items())[:k]]
+
+
+def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
+    """Every id, located at the extent of ``query`` the fold kept.
+
+    What a rung that compared the **whole** query against the index reports.
+    The span is :func:`~dataknobs_common.text.content_span`'s rather than
+    ``(0, len(query))`` because the fold strips, so a query of ``"  beagle  "``
+    matched ``beagle`` and did not match two spaces.
+    """
+    span = content_span(query)
+    return tuple(FormHit(entity_id=entity_id, span=span) for entity_id in ids)
 
 
 class DeclaredSignal:
@@ -118,7 +156,10 @@ class DeclaredSignal:
 
     **Subclass this to write a rung.** Set :attr:`key` and implement
     :meth:`_hits`; everything else -- the constructor, ``name``, ``narrows()``,
-    the rung-side narrowing and the batch loop -- comes with it. In particular
+    the rung-side narrowing and the batch loop -- comes with it. A rung that
+    *locates* a form inside the query rather than comparing the whole of it
+    overrides :meth:`_located` instead, and a rung that wants its own order
+    over :meth:`_hits`'s answer overrides :meth:`_order`. In particular
     the narrowing comes with it *correct*: it is a superset filter, and
     :meth:`~dataknobs_common.entity_resolution.MatchSignal.narrows` explains
     why getting that direction wrong is the one mistake nothing downstream can
@@ -182,12 +223,61 @@ class DeclaredSignal:
         """
         raise NotImplementedError
 
+    def _fold(self, form: str) -> str:
+        """This rung's own extra fold, or the form untouched.
+
+        Published to subclasses because a scanning rung folds the *slices* it
+        probes rather than the query, so it cannot reach the fold through
+        :meth:`_located`'s caller. See :func:`_folded` for why the default is
+        no fold at all.
+        """
+        return _folded(form, self._normalizer)
+
+    def _order(self, hits: frozenset[str]) -> Sequence[str]:
+        """The order :meth:`_hits`'s answer is proposed in -- **overridable**.
+
+        The source answers with a frozenset, deliberately: two entities may
+        legitimately share a form, and that ambiguity is the vocabulary's to
+        declare. Iteration order over a set is not stable across processes, so
+        a rung that passed one straight through would return the *same*
+        candidates in a different order on a different run -- and the cascade
+        positions by arrival. Sorting makes the ambiguity survive as an
+        ambiguity rather than as an arbitrary winner that moves.
+
+        It is a hook rather than a constant because a declared score is 1.0 by
+        fiat and carries no order at all, so any order that is to *mean*
+        something has to be published by the rung. Alphabetical means nothing
+        beyond stability, and is the right default for a rung whose hits are
+        all one form; a rung with a longer form and a shorter one inside it
+        has something to say and says it here.
+        """
+        return sorted(hits)
+
+    def _located(self, query: str) -> Sequence[FormHit]:
+        """Where this rung's matches sit in the query -- **the span hook**.
+
+        The default compares the **whole** query against the index and reports
+        every hit at the extent the fold kept, which is what
+        :meth:`_hits`-shaped rungs mean. Override this instead of
+        :meth:`_hits` to scan: return one :class:`FormHit` per place a
+        declared form was found, in the order the rung wants them proposed,
+        and overlapping forms as the several hits they are.
+
+        :meth:`_hits` remains the hook for the whole-string case rather than
+        being folded into this one. It returns a ``frozenset[str]``, which has
+        nowhere to put an offset -- so a scanning rung could never have been
+        written through it, and the two shipped rungs would gain nothing from
+        being made to answer in spans they compute identically.
+        """
+        return _whole_string(query, self._order(self._hits(self._fold(query))))
+
     def candidates(
         self, query: str, k: int, *, filter: dict[str, Any] | None = None
     ) -> list[EntityCandidate]:
         """At most ``k`` entities whose forms match this query."""
-        hits = _admitted(self._entities, self._hits(_folded(query, self._normalizer)), filter)
-        return [_candidate(entity_id, self.key, query) for entity_id in _ordered(hits, k)]
+        found = self._located(query)
+        admitted = _admitted(self._entities, frozenset(hit.entity_id for hit in found), filter)
+        return _grouped(found, admitted, k, signal=self.key, query=query)
 
     def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
@@ -234,7 +324,10 @@ class AsyncDeclaredSignal:
 
     :class:`DeclaredSignal`'s argument applies unchanged: set :attr:`key`,
     implement ``_hits``, and the constructor, ``name``, ``narrows()``, the
-    superset-filter narrowing and the batch loop come with it.
+    superset-filter narrowing and the batch loop come with it. ``_located``
+    and ``_order`` are the same two further hooks, and ``_order`` stays
+    synchronous on this side as well -- ordering a set that has already
+    arrived reaches for nothing.
 
     ``name`` and ``narrows()`` stay synchronous: neither reaches for data, and
     making them awaitable would cost every caller an ``await`` for nothing.
@@ -271,14 +364,27 @@ class AsyncDeclaredSignal:
     async def _hits(self, query: str) -> frozenset[str]:
         raise NotImplementedError
 
+    def _fold(self, form: str) -> str:
+        """This rung's own extra fold, or the form untouched."""
+        return _folded(form, self._normalizer)
+
+    def _order(self, hits: frozenset[str]) -> Sequence[str]:
+        """:meth:`DeclaredSignal._order`, and synchronous for its reasons."""
+        return sorted(hits)
+
+    async def _located(self, query: str) -> Sequence[FormHit]:
+        """:meth:`DeclaredSignal._located` over an asynchronous index."""
+        return _whole_string(query, self._order(await self._hits(self._fold(query))))
+
     async def candidates(
         self, query: str, k: int, *, filter: dict[str, Any] | None = None
     ) -> list[EntityCandidate]:
         """At most ``k`` entities whose forms match this query."""
-        hits = await _async_admitted(
-            self._entities, await self._hits(_folded(query, self._normalizer)), filter
+        found = await self._located(query)
+        admitted = await _async_admitted(
+            self._entities, frozenset(hit.entity_id for hit in found), filter
         )
-        return [_candidate(entity_id, self.key, query) for entity_id in _ordered(hits, k)]
+        return _grouped(found, admitted, k, signal=self.key, query=query)
 
     async def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
