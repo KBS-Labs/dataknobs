@@ -103,8 +103,8 @@ class SQLRecordSerializer:
 The pair `row_to_record` / `record_to_row` is the canonical inbound /
 outbound boundary for SQL backends. Backend implementations must
 delegate to these statics rather than duplicating the body inline —
-the inbound divergence between sync and async PostgreSQL (Item 114)
-is the cautionary tale for what happens when they don't.
+the inbound divergence between sync and async PostgreSQL is the
+cautionary tale for what happens when they don't.
 
 ## VectorField Serialization
 

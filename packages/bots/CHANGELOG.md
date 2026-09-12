@@ -4829,7 +4829,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `**self.custom`, so a custom entry sharing a key with a
   structured field (`headings`, `chunk_index`, `chunk_size`,
   etc.) silently overwrote the structured value in the serialized
-  dict — same vulnerability class as the pre-118 `_create_chunk`
+  dict — same vulnerability class as the earlier `_create_chunk`
   `node_type` defense, but covering the entire system-field
   surface. Post-fix, `**self.custom` is unpacked first so
   structured fields win.

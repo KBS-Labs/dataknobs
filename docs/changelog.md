@@ -1557,14 +1557,14 @@ Failures raise `DottedPathError` or `DottedPathTypeError` — both
 - feat(common): add internal run_supervised_loop helper for event-bus listeners
 - feat(common): extract compute_backoff_delay as a public pure function
 - feat(common): add SqsEventBus backend + optional-dependency extras
-- Add dataknobs_common.locks distributed lock abstraction (Item 128 Phase 1)
-- feat(common): registry-extensible event bus backends (Item 127 Phase 1)
+- Add dataknobs_common.locks distributed lock abstraction
+- feat(common): registry-extensible event bus backends
 
 #### Changed
 - docs(common): document event-bus connection resilience; CHANGELOG
 - common: reword plan-tracking refs (no behavior change)
 - common: reword internal tracking labels (no behavior change)
-- common: shared make_pgvector_test_table fixture + gated orphan sweep (Item 129 Changes A+B)
+- common: shared make_pgvector_test_table fixture + gated orphan sweep
 
 #### Fixed
 - fix(common): pace Postgres LISTEN watchdog; add is_listening; doc compute_backoff_delay
@@ -1572,7 +1572,7 @@ Failures raise `DottedPathError` or `DottedPathTypeError` — both
 - fix(common): RedisEventBus re-establishes pub/sub on connection loss
 - refactor(common): SqsEventBus on shared supervised loop; fix topic starvation
 - fix(common): sqs factory raises clean ValueError; guard aioboto3-free import
-- common: shared make_pgvector_test_table fixture + gated orphan sweep (Item 129 Changes A+B)
+- common: shared make_pgvector_test_table fixture + gated orphan sweep
 
 ### dataknobs-config [0.3.14]
 
@@ -1593,9 +1593,9 @@ Failures raise `DottedPathError` or `DottedPathTypeError` — both
 
 #### Added
 - feat(data): expose AsyncS3Database.region for sync/async parity
-- Address PR5A triage findings: label leakage, test fake, lazy logging
-- Item 131: add cross-backend metadata-aliasing conformance test
-- PgVectorStore init-time dimension-mismatch guard (Item 129 Change C)
+- Address review triage findings: label leakage, test fake, lazy logging
+- add cross-backend metadata-aliasing conformance test
+- PgVectorStore init-time dimension-mismatch guard
 
 #### Fixed
 - encode non-scalar Chroma metadata to stop cross-collection corruption
@@ -1603,10 +1603,10 @@ Failures raise `DottedPathError` or `DottedPathTypeError` — both
 - reword plan-phase refs (no behavior change)
 - reword PR#/review# refs (no behavior change)
 - reword internal tracking labels (no behavior change)
-- Item 130: replace IVF make_direct_map with raw-vector side-car (supersedes 887430f5)
-- Item 130: fix FaissVectorStore.get_vectors() for IVF index types
-- Item 132: neutralize PgVectorStore default schema (edubot -> public)
-- Item 133: remove pre-existing internal tracking labels from committed source
+- replace IVF make_direct_map with raw-vector side-car (supersedes 887430f5)
+- fix FaissVectorStore.get_vectors() for IVF index types
+- neutralize PgVectorStore default schema (edubot -> public)
+- remove pre-existing internal tracking labels from committed source
 - Address PR #317 review: fix TOMBSTONE additive-delta data loss
 - Redesign TOMBSTONE re-ingest: crash-safe generation swap
 
@@ -1627,17 +1627,17 @@ Failures raise `DottedPathError` or `DottedPathTypeError` — both
 
 #### Added
 - Add PostgresAdvisoryLock cross-replica DistributedLock backend
-- PR7 (125/126 Phase 4): embedder rate-limit seam + config-driven orchestrator lock
+- embedder rate-limit seam + config-driven orchestrator lock
 - Add native per-version snapshots and orchestrator dispatch matrix
 - Add per-file delta ingestion to KnowledgeIngestionManager
-- Add dataknobs_common.locks distributed lock abstraction (Item 128 Phase 1)
+- Add dataknobs_common.locks distributed lock abstraction
 
 #### Fixed
 - Extract shared requires_real_postgres mark; doc/changelog accuracy
 - updated CVE dependency floors and ran quality checks
 - reword plan-tracking refs (no behavior change)
 - reword internal tracking labels (no behavior change)
-- Unify the knowledge-backend version model (Items 125/126 Phase 0)
+- Unify the knowledge-backend version model
 
 
 ## Release - 2026-05-13

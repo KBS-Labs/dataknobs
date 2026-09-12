@@ -3164,7 +3164,7 @@ itself.
   non-string values through `quote_ident()` and producing broken
   SQL at first query.  Defense-in-depth — the canonical fix for
   the FSM-side `schema`-key collision lives in `dataknobs-fsm`
-  (Item 117).  This validator catches misuse from any future
+  itself.  This validator catches misuse from any future
   consumer that accidentally injects a non-identifier value via
   either key.  The same identifier shape (`^[a-zA-Z_][a-zA-Z0-9_]*$`)
   used by `validate_database_name` is enforced for both keys
@@ -3203,7 +3203,7 @@ itself.
   subsequent ``async for row in cursor`` then failed before yielding
   the first row. Pre-existing bug uncovered by the new
   ``test_async_stream_read_preserves_record_id`` parity test added
-  for the Item 114 fix above (no prior test exercised
+  for the record-id preservation fix above (no prior test exercised
   ``AsyncPostgresDatabase.stream_read`` against a real Postgres). Fix
   iterates the ``CursorFactory`` returned by
   ``conn.cursor(sql, *params)`` directly — matching the asyncpg
@@ -3264,8 +3264,8 @@ itself.
   tests requiring a live Postgres.
 - `packages/data/docs/record-serialization.md` documents the new
   `record_to_row` static and the inbound/outbound boundary
-  contract, with a forward-reference to the Item 114 cautionary
-  tale.
+  contract, with a forward-reference to the sync/async
+  inbound-divergence cautionary tale.
 
 ## v0.4.16 - 2026-04-29
 
@@ -3348,7 +3348,7 @@ itself.
   `MemoryVectorStore` and `PgVectorStore`;
   `FaissVectorStore` and `ChromaVectorStore` do **not** yet accept
   the `include_timestamps` kwarg (calling it raises `TypeError`) —
-  deferred per Item 36 follow-ups. Collision policy: consumer
+  deferred to a follow-up. Collision policy: consumer
   metadata values for a configured timestamp key always win; a
   WARNING is logged once per process per colliding key. See
   `packages/data/docs/vector-timestamps.md` for the full contract.
