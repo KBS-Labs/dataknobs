@@ -377,3 +377,195 @@ def test_the_decision_branch_does_not_catch_a_pydocstyle_code() -> None:
         "0xD4",
     ):
         assert not GUARD.LABEL_PATTERN.search(benign), f"false positive: {benign}"
+
+
+def _prose_lines() -> list[tuple[str, str]]:
+    """Every line of tracked prose, as (repo-relative name, line).
+
+    Read from the repository rather than from literals here, which is what
+    keeps the prose tests below free of new allowlist entries: a sample that
+    comes out of the tree is a fixture nobody had to write down.
+    """
+    lines: list[tuple[str, str]] = []
+    for path in GUARD._tracked_prose():
+        rel = path.relative_to(ROOT).as_posix()
+        lines.extend((rel, line) for line in path.read_text(encoding="utf-8").splitlines())
+    return lines
+
+
+def test_tracked_prose_is_in_the_default_scope() -> None:
+    """The walk read ``*.py``, so the exposed prose in this repo was unread.
+
+    Named individually rather than by a count, because the three that matter
+    are the three a stranger can reach without cloning: the changelog the site
+    publishes, and the two files the data package's sdist carries.
+    """
+    scanned = _scanned()
+    exposed = [
+        "docs/changelog.md",
+        "packages/data/CHANGELOG.md",
+        "packages/data/docs/record-serialization.md",
+    ]
+    missing = [name for name in exposed if name not in scanned]
+    assert not missing, (
+        f"published prose outside the label scan: {missing}. "
+        "These reach a reader who has never cloned the repository."
+    )
+    prose = sum(1 for name in scanned if name.endswith(".md"))
+    assert prose > 100, f"the prose half resolved to {prose} files, which is a narrowing"
+
+
+def test_a_directory_walk_contributes_markdown(tmp_path: Path) -> None:
+    """The suffix rule, checked where the prose half cannot stand in for it.
+
+    ``_tracked_prose`` covers the default run, so a walk that silently went
+    back to ``*.py`` would still pass every full-scope assertion. A directory
+    named on the command line has no such second source -- pointing the guard
+    at ``docs/`` has to read the docs.
+    """
+    (tmp_path / "notes.md").write_text("See Item 210 for why.\n", encoding="utf-8")
+
+    scanned = {p.name for p in GUARD.iter_target_files([str(tmp_path)])}
+    assert "notes.md" in scanned, f"a directory walk skipped its Markdown: {scanned}"
+
+
+def test_the_prose_probe_that_names_nothing_is_not_absorbed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The third scope half gets the same floor as the other two.
+
+    A repository with no tracked Markdown is not a state this check should
+    print a tick over -- it is the shape of a probe that stopped working.
+    """
+
+    class _Empty:
+        stdout = ""
+
+    monkeypatch.setattr(GUARD.subprocess, "run", lambda *a, **k: _Empty())
+    with pytest.raises(RuntimeError, match="named nothing"):
+        GUARD._tracked_prose()
+
+
+def test_every_prose_exemption_has_a_real_subject_in_the_tree() -> None:
+    """The ratchet on ``PROSE_EXEMPT``, in the shape the self-exemption uses.
+
+    Each entry is a branch this guard declines to enforce over prose, argued
+    from a measurement. An entry whose shape no longer occurs in any tracked
+    Markdown file is not a documented trade-off any more -- it is a hole that
+    reads exactly like a considered decision, and the next branch that starts
+    matching through it is reported by nothing.
+    """
+    lines = _prose_lines()
+    assert lines, "no tracked prose to measure against"
+
+    barren = []
+    for pattern, why in GUARD.PROSE_EXEMPT:
+        subjects = [
+            line
+            for _, line in lines
+            if (label := GUARD.first_label(line, prose=False)) and pattern.match(label)
+        ]
+        if not subjects:
+            barren.append(why)
+    assert not barren, (
+        "PROSE_EXEMPT entries with no subject left in the tree:\n"
+        + "\n".join(f"  - {why}" for why in barren)
+        + "\nDrop the entry; prose is guarded against that branch again once it is gone."
+    )
+
+
+def test_an_exempt_shape_is_never_what_the_prose_half_reports() -> None:
+    """The exemption applied, on the repository's own lines rather than fixtures.
+
+    Checked over every tracked line, not a sample, because the failure this
+    catches is a branch that fires on *one* document.
+    """
+    offenders = []
+    for rel, line in _prose_lines():
+        label = GUARD.first_label(line, prose=True)
+        if label is not None and GUARD.prose_exempt(label):
+            offenders.append(f"{rel}: {label!r}")
+    assert not offenders, "exempt shapes reported by the prose half:\n" + "\n".join(
+        f"  - {o}" for o in offenders[:10]
+    )
+
+
+def test_the_exemption_is_prose_only_and_the_same_line_reports_as_code() -> None:
+    """The other half: these branches still catch, in the files they were written for.
+
+    Driven from a line that really exists so the two readings differ by the
+    argument alone. A phase tag in a package doc points at a plan document
+    beside it in the same tree; the same token in a docstring points at
+    nothing, and the guard caught this docstring writing one.
+    """
+    lines = _prose_lines()
+    for pattern, why in GUARD.PROSE_EXEMPT:
+        sample = next(
+            (
+                line
+                for _, line in lines
+                if (label := GUARD.first_label(line, prose=False)) and pattern.match(label)
+            ),
+            None,
+        )
+        assert sample is not None, f"no subject in the tree for: {why}"
+        assert GUARD.first_label(sample, prose=False) is not None, (
+            f"read as code this line reports nothing, so the branch is gone: {sample!r}"
+        )
+
+
+def test_the_prose_exemption_is_what_keeps_the_prose_half_green() -> None:
+    """Non-vacuity: without it, widening the scope costs more than it buys.
+
+    The measurement the exemption was taken on, kept live. If the tree ever
+    drifts to where the whole pattern would be nearly clean over prose, the
+    exemption is no longer paying for itself and should be re-argued.
+    """
+    unexempted = [
+        f"{rel}: {label!r}"
+        for rel, line in _prose_lines()
+        if (label := GUARD.first_label(line, prose=False)) and GUARD.prose_exempt(label)
+    ]
+    assert len(unexempted) >= 50, (
+        f"only {len(unexempted)} prose lines would be reported without the "
+        "exemption — re-read whether the prose half still needs one"
+    )
+
+
+def test_the_bare_planning_pull_request_forms_are_caught() -> None:
+    """Two spellings the prose half surfaced by standing next to them.
+
+    Both were on the published site and neither was reachable by any branch:
+    a bare ``PR`` + digits is a planning label rather than a pull request --
+    the public form always carries the ``#`` -- and the slash-paired ``Items``
+    spelling is the ``+`` branch's other separator.
+
+    One spelling per line so each carries its own suppression. An entry keyed
+    to a substring that only matches while two tokens share a line is the
+    failure the allowlist's own header records twice.
+    """
+    for spelling in (
+        "PR7",
+        "PR5A",
+        "Items 125/126",
+        "Item 125/126",
+    ):
+        assert GUARD.LABEL_PATTERN.search(spelling), f"not matched: {spelling}"
+
+
+def test_the_bare_form_does_not_reach_round_the_public_reference() -> None:
+    """The other side: the hash spelling has its own branch and its own rules.
+
+    A public pull-request reference is matched by that branch and exempted in
+    prose. If the bare branch reached round it, every changelog line carrying
+    one would report a second, un-exemptable label under a different name --
+    so the reported label is asserted, not merely the fact that something
+    matched.
+    """
+    line = "Address PR #317 review: fix TOMBSTONE additive-delta data loss"
+    assert GUARD.first_label(line, prose=False) == "PR #317", (
+        "read as code this line no longer reports the hash form"
+    )
+    assert GUARD.first_label(line, prose=True) is None, (
+        "the bare branch reached round the exemption the hash form carries"
+    )

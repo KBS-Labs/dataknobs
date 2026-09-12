@@ -214,9 +214,14 @@ following are NOT valid deferral reasons in isolation:
   commit without seeing a second use case").
 - "Defer until requested" (without other justification).
 
-When you do defer, give the item a stable ID (e.g. `162-FU1`,
-`163-FU3`) so it can be lifted into a tracker row + context brief
-when prioritized.
+When you do defer, record the item where the planning lives, with
+its own rationale, so it can be lifted into a tracker row + context
+brief when prioritized. Refer to it in this repository by what it
+**is** — the capability and the seam it belongs to — never by a
+minted id. An id is a pointer to a document the reader of a docstring
+cannot open, and it survives into shipped source;
+`bin/check-internal-labels.py` is the guard that catches one, and
+this file is where they were being minted.
 
 ## Anti-Patterns
 
@@ -234,23 +239,23 @@ when prioritized.
 
 ## Examples in Recent Work
 
-- **Stage-primitive synthesizer registry** (Item 163): ships
+- **Stage-primitive synthesizer registry**: ships
   `intent_confirm:` as the first adopter, but consumers register
   their own primitives (`vendor_select:`, `policy_review:`) without
   dataknobs turnaround.
-- **Turn-lifecycle hook surface** (Item 164): the inbox bridge is
+- **Turn-lifecycle hook surface**: the inbox bridge is
   one auto-registered hook; the surface itself extends for any
   pre/post-turn logic.
-- **`StructuredConfigConsumer.components` pass-through** (Item 162):
+- **`StructuredConfigConsumer.components` pass-through**:
   engages existing mixin infrastructure so consumer composing
   strategies inherit the pattern.
-- **Two-adopter survey + maturity caveat** (Item 164 v4): surveyed
+- **Two-adopter survey + maturity caveat**: surveyed
   two consumer projects to pin SHAPE decisions (sync/async, payload
   shape, resolver pattern, state-mutation contract — all PINNED via
   concrete consumer evidence) but explicitly retained CAPABILITY
   scope for industry-pattern needs the surveys didn't validate
   (per-step observability hooks, external pub-sub fan-out via
-  EventBus substrate). Reinvention signals (ayler's parallel
+  EventBus substrate). Reinvention signals (ACME's parallel
   `CompilationEventPublisher` reimplementing dataknobs's
   `InMemoryEventBus`-shape pattern) treated as flagged consumer
   requests, not "they solved it themselves." Industry-pattern

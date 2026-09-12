@@ -18,12 +18,15 @@ every id family the planning trees allocate.  The finding-code families
 occur zero times and are deliberately not spelled here -- they are raised in
 leg plans and ruled in a decision log, and nothing in either place is copied
 into a test, so a branch for them would be a pattern with no subject.  What
-did leak was 34 occurrences across 32 lines, two of them in shipped source,
-where a reader has nothing to resolve the code against.
+did leak was 37 occurrences across 35 lines, two of them in shipped source,
+where a reader has nothing to resolve the code against.  That count was first
+published here as 34 across 32, typed from a capitalised grep before the
+case-tolerant pattern below existed; three of the lines are lower case.
 
 Scope: ``packages/*/src`` and ``packages/*/tests``, plus the first-party code
 belonging to no package -- ``bin/``, root ``tests/``, the workspace shim and
-the root conftest -- and every tracked shell script.
+the root conftest -- every tracked shell script, and every tracked Markdown
+file.
 
 That second half was outside the scan until it was measured.  The docstring
 justified the narrow scope by where labels do damage: rendered API docs and IDE
@@ -35,17 +38,53 @@ gets written, so it was simultaneously the likeliest place for one to land and
 the one place nothing looked.  Widening it cost nothing: measured across all of
 it, the only hits were in this file.
 
-Both halves are asked for rather than listed -- ``package-discovery.sh
+Every half is asked for rather than listed -- ``package-discovery.sh
 workspace-targets`` for the Python, ``lint-shell.sh --print-targets`` for the
-shell -- because a fourth hand-kept copy of "which code is ours" is how the
-first three came to disagree.  Neither is allowed to fail quietly: a scope that
-silently narrows reports a clean scan over code it never read.
+shell, ``git ls-files`` for the prose -- because a fourth hand-kept copy of
+"which code is ours" is how the first three came to disagree.  None of them is
+allowed to fail quietly: a scope that silently narrows reports a clean scan
+over code it never read.
 
 Data files are deliberately out.  Measured, they contribute no true positives
 and eleven false ones, because the digit-suffix branches below are tuned for
 English prose about code: ``70b`` is a model's parameter count, ``447f`` a hash
 fragment, ``18a`` a Unicode codepoint.  The line is authored prose, not file
 count.
+
+**Prose is in, and it is in under a narrower pattern.**  The suffix rule read
+``*.py`` from a directory walk, so no tracked Markdown file was scanned unless
+somebody named it -- and the exposed members of that population are not the
+private ones.  Of the four tracked prose files carrying a tracker label, three
+reach a stranger who has never cloned this repository: ``docs/changelog.md`` is
+nav-mounted on the published site, and ``packages/data/CHANGELOG.md`` and
+``packages/data/docs/record-serialization.md`` are both inside the sdist,
+because that package declares only a wheel target and hatchling's sdist default
+takes the package directory whole.
+
+Widening the walk at the *whole* pattern was measured before it was taken, and
+refuted: over 469 tracked Markdown files it reports **21 true positives and 164
+false ones**, which is worse than the eleven-to-nothing that put data files out.
+Three branches account for all but seven of the false ones, and each fails in
+prose for the same reason -- the thing it points at is one a reader of that
+document can actually open:
+
+* ``Phase N`` -- 88, none of them a leak.  ``packages/data/docs/index.md`` says
+  ``[Phase 6 Plan](history/vector-implementation/phase6-plan.md)``: the phase is
+  a document beside it in the same tree.  In code the same token resolves to
+  nothing, which is why the branch stays there.
+* ``PR #NNN`` -- 66, 65 of them in the changelog.  A pull-request number on a
+  public repository is a URL; citing it is what a changelog is for.
+* the bare sub-item id -- 7, every one a GHSA advisory segment
+  (``GHSA-62q4-447f-wv8h``).  The same digit-suffix collision the data-file
+  decision was taken about, arriving in prose.
+
+So the prose half runs the pattern less those three (``PROSE_EXEMPT``), at
+**21 true positives and 3 false** -- and the three are ``- Item 1`` list
+*content* in an example document about parsing Markdown, the shape this
+repository's allowlist already holds four entries of.  Exempting by *match*
+rather than by maintaining a second pattern is deliberate: a branch added
+later is enforced everywhere until somebody argues it out, which is the safer
+direction for the default to point.
 
 ``Phase N`` is enforced only in its *leak* form -- a planning-phase tag
 NOT immediately followed by ``:``.  The legitimate runtime-pipeline-stage
@@ -91,6 +130,13 @@ ALLOWLIST_FILE = Path(__file__).resolve().parent / "internal-label-allowlist.txt
 # belonging to no package is asked for rather than listed -- see _extra_roots.
 DEFAULT_GLOBS = ("packages/*/src", "packages/*/tests")
 
+#: Suffixes a *directory* walk contributes.  A named file is scanned whatever
+#: its suffix; this is the rule for what a directory offers up on its own.
+WALK_SUFFIXES = (".py", ".md")
+
+#: Files read under PROSE_EXEMPT rather than under the whole pattern.
+PROSE_SUFFIXES = frozenset({".md"})
+
 #: Files exempt from their own check, because describing a label requires
 #: writing one.  This module quotes fourteen across its docstring and its
 #: pattern comments, and the allowlist file is a table of them; keyed by exact
@@ -125,6 +171,31 @@ def _declared(command: list[str], what: str) -> list[str]:
     return names
 
 
+def _tracked_prose() -> list[Path]:
+    """Every tracked Markdown file, asked of git rather than walked.
+
+    Not routed through ``_declared``: that splits on whitespace, and the one
+    declaration source here enumerates *paths*, where a space is legal.  ``-z``
+    is the only spelling of this question that cannot be wrong about a filename.
+
+    Fails loudly on both shapes, for the reason ``_declared`` does: a repository
+    with no tracked Markdown is not a thing this check should report a tick
+    over.
+    """
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.md"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    names = [name for name in result.stdout.split("\0") if name]
+    if not names:
+        msg = "tracked prose named nothing: git ls-files -z -- '*.md'"
+        raise RuntimeError(msg)
+    return [ROOT / name for name in names]
+
+
 def _extra_roots() -> list[Path]:
     """The first-party code belonging to no package, plus every shell script."""
     workspace = _declared(
@@ -149,6 +220,15 @@ LABEL_PATTERN = re.compile(
     # class rather than two classes.
     r"Item[ -][0-9]{1,3}"
     r"|Items [0-9]+\+[0-9]+"
+    # The two spellings the prose half surfaced by standing next to them, both
+    # on the published site and neither reachable by any branch above.  A bare
+    # ``PR7`` / ``PR5A`` is a planning label rather than a pull request -- the
+    # public form always carries the ``#`` the branch below matches -- and
+    # ``Items 125/126`` is the slash-paired form of the ``+`` spelling one line
+    # up.  Measured before adding: across every tracked file, the only hits of
+    # either are the three in ``docs/changelog.md`` they were written for.
+    r"|\bPR[0-9]+[A-Z]?\b"
+    r"|\bItems? [0-9]{2,3}/[0-9]{2,3}\b"
     r"|consumer-gaps"
     r"|\bRC[0-9]+\b"
     r"|pre-Item"
@@ -233,6 +313,47 @@ LABEL_PATTERN = re.compile(
 )
 
 
+#: Branches that do not apply to a Markdown file, keyed by the text they
+#: match.  Each one points at something a reader of that document can open --
+#: which is the harm the whole guard is defined by, absent -- and each was
+#: measured over the 469 tracked Markdown files before being exempted.  The
+#: shapes are disjoint from every other branch's output, so matching on the
+#: text is the same statement as naming the branch, without a second pattern
+#: to keep in step.
+PROSE_EXEMPT: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^Phase [0-9]+$"), "88 in prose, 0 leaks: the phase is a document in the tree"),
+    (
+        re.compile(r"^PR #[0-9]{2,4}$"),
+        "66 in prose, 0 leaks: a public pull-request number is a URL",
+    ),
+    (re.compile(r"^[0-9]{2,3}[a-g]$"), "7 in prose, 0 leaks: every one a GHSA advisory segment"),
+)
+
+
+def prose_exempt(label: str) -> bool:
+    """Whether this matched label is one the prose half declines to report."""
+    return any(pattern.match(label) for pattern, _ in PROSE_EXEMPT)
+
+
+def first_label(line: str, *, prose: bool) -> str | None:
+    """The first reportable label on ``line``, or ``None``.
+
+    Scans every match rather than only the first, because in prose the leading
+    match can be an exempt one and the exempt branches are the *common* tokens:
+    a changelog sentence opening ``PR #317 review`` and naming a tracker label
+    after it would report nothing at all.  Measured at the commit this was
+    written against, no such line exists -- so this is a guard rather than a
+    fix, and it is here because the alternative failure is a silent miss, which
+    is the shape every other check in this file exists to prevent.
+    """
+    for match in LABEL_PATTERN.finditer(line):
+        label = match.group(0)
+        if prose and prose_exempt(label):
+            continue
+        return label
+    return None
+
+
 def load_allowlist() -> list[tuple[str, str]]:
     """Return (relative_path, exact_substring) suppression pairs.
 
@@ -262,12 +383,22 @@ def iter_target_files(args: list[str]) -> list[Path]:
     """Resolve CLI args (or the default scope) to a sorted list of files.
 
     A named file is scanned whatever its suffix -- naming it is the statement
-    that it should be -- while a directory contributes its ``*.py`` only.  The
+    that it should be -- while a directory contributes ``WALK_SUFFIXES``.  The
     shell half of the default scope arrives as individual paths from
     ``lint-shell.sh``, so it needs no suffix rule here; extending a *directory*
     walk to shell would mean a fourth copy of the suffix-or-shebang question
     that three files in this repository already answer differently on purpose.
+
+    Markdown reaches the default scope twice over, and deliberately: through the
+    walk, so ``check-internal-labels.py docs/`` reads what a reader would expect
+    it to, and through ``_tracked_prose``, because the exposed prose in this
+    repository -- a published changelog, a file inside the sdist -- lives under
+    no root the code scope names.
     """
+
+    def walk(directory: Path) -> set[Path]:
+        return {f.resolve() for suffix in WALK_SUFFIXES for f in directory.rglob(f"*{suffix}")}
+
     files: set[Path] = set()
     if args:
         for arg in args:
@@ -277,18 +408,19 @@ def iter_target_files(args: list[str]) -> list[Path]:
             if p.is_file():
                 files.add(p.resolve())
             elif p.is_dir():
-                files.update(f.resolve() for f in p.rglob("*.py"))
+                files.update(walk(p))
     else:
         roots = [
             root_dir for glob in DEFAULT_GLOBS for root_dir in ROOT.glob(glob) if root_dir.is_dir()
         ]
         for root_dir in roots:
-            files.update(f.resolve() for f in root_dir.rglob("*.py"))
+            files.update(walk(root_dir))
         for extra in _extra_roots():
             if extra.is_dir():
-                files.update(f.resolve() for f in extra.rglob("*.py"))
+                files.update(walk(extra))
             elif extra.is_file():
                 files.add(extra.resolve())
+        files.update(prose.resolve() for prose in _tracked_prose() if prose.is_file())
     return sorted(files)
 
 
@@ -366,15 +498,16 @@ def main(argv: list[str] | None = None) -> int:
             rel_path = path.as_posix()
         if rel_path in SELF_DESCRIBING:
             continue
+        prose = path.suffix in PROSE_SUFFIXES
         for lineno, line in enumerate(text.splitlines(), start=1):
-            match = LABEL_PATTERN.search(line)
-            if not match:
+            label = first_label(line, prose=prose)
+            if label is None:
                 continue
             entry = matching_entry(rel_path, line, allowlist)
             if entry is not None:
                 used.add(entry)
                 continue
-            findings.append((package_of(rel_path), lineno, match.group(0), rel_path))
+            findings.append((package_of(rel_path), lineno, label, rel_path))
 
     if findings:
         findings.sort(key=lambda f: (f[0], f[3], f[1]))
