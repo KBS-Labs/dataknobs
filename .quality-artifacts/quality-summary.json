@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-12T21:13:24Z",
+  "timestamp": "2026-09-12T22:02:12Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -21,10 +21,10 @@
   },
   "workspace_hashes": {
     "toolchain": "32247dbcac657dcf80426588383242f6574e6869bf7a31de6e36792231fb7fe0",
-    "workspace_tests": "70476314ebf8e9938ec1ed865879616dcf6cbccff49664b062d4757c1c477ac7",
+    "workspace_tests": "8dccc4c98bd7aa08b51ce7ed4d499ec2a7ee6db3e9de62ff84904b576d14a67d",
     "docs": "58b7186aa8198ef7a75e98221ef143f9c2a2d7464f35effe08860f2d02892075"
   },
-  "total_seconds": 133,
+  "total_seconds": 102,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -36,7 +36,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 6
     },
     "contract": {
       "status": "pass",
@@ -49,35 +49,35 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 8
+      "duration_seconds": 9
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "mkdocs",
-      "duration_seconds": 27
+      "duration_seconds": null
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": null
     },
     "documentation_mirrors": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
+      "skipped": true,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": null
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 87,
-      "workspace_guards_seconds": 87
+      "duration_seconds": 84,
+      "workspace_guards_seconds": 84
     },
     "integration_tests": {
       "status": "pass",
