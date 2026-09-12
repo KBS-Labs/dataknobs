@@ -1,7 +1,12 @@
 """Tests for testing utilities."""
 
+import contextlib
+import http.server
 import json
+import threading
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -233,6 +238,166 @@ class TestServiceProbeHostResolution:
     def test_is_package_available_returns_false_for_missing(self):
         """Test that is_package_available returns False for missing packages."""
         assert is_package_available("nonexistent_package_xyz") is False
+
+
+def _health_report(**indicators: str) -> dict[str, Any]:
+    """A ``/_health_report`` document whose indicators carry *indicators*.
+
+    Defaults are the healthy single-node shape: every gating indicator green
+    except ``shards_availability``, which sits at yellow whenever an index
+    asks for a replica the one node cannot host -- the ordinary resting state
+    of a dev cluster, and so the shape the probe must still call available.
+    """
+    statuses = {
+        "master_is_stable": "green",
+        "disk": "green",
+        "shards_capacity": "green",
+        "shards_availability": "yellow",
+        **indicators,
+    }
+    return {
+        "status": "yellow",
+        "indicators": {name: {"status": value} for name, value in statuses.items()},
+    }
+
+
+@contextlib.contextmanager
+def _stub_elasticsearch(routes: dict[str, tuple[int, Any]]) -> Iterator[tuple[str, int]]:
+    """A real local HTTP server answering Elasticsearch probe paths.
+
+    Not a mock of any dataknobs interface -- an actual ``http.server`` on an
+    ephemeral port, the same construct ``test_elasticsearch_sweep.py`` uses --
+    so the probe runs its genuine request and JSON-parsing path against a
+    controllable endpoint that needs no cluster.
+
+    Args:
+        routes: Path (``"/_health_report"``) to ``(status, json_body)``. A
+            path with no entry answers 404, which is what an Elasticsearch
+            predating an endpoint returns.
+
+    Yields:
+        The ``(host, port)`` the server is listening on.
+    """
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            status, payload = routes.get(self.path, (404, {"error": "no handler"}))
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:  # silence stderr noise
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    # A short poll interval so shutdown is prompt: the default 0.5s is what
+    # serve_forever waits to notice the stop flag, and it would put a flat
+    # half-second on every test in this class.
+    thread = threading.Thread(target=lambda: server.serve_forever(0.01), daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[0], server.server_address[1]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+class TestElasticsearchReadinessProbe:
+    """The probe gates on serving, not on a listening port.
+
+    ``requires_elasticsearch`` exists so a suite the cluster cannot run
+    *skips*. A cluster out of disk defeats a reachability-only probe
+    completely: it accepts the connection and answers ``/`` in milliseconds,
+    reports ``green`` cluster status while it still holds no unassigned
+    shard, and then blocks the suite's first index creation until the client
+    gives up -- turning the promised skip into four timeouts.
+    """
+
+    def test_a_cluster_low_on_disk_is_not_available(self):
+        """The reproducer: disk over the watermark, nothing unassigned yet.
+
+        This is the state a dev cluster is in *before* the first test index
+        is requested -- cluster status still green, because no shard has been
+        refused yet. The health report is the only place the coming refusal
+        is visible, and it is visible there as a non-green ``disk``.
+        """
+        with _stub_elasticsearch(
+            {
+                "/_health_report": (200, _health_report(disk="yellow")),
+                "/_cluster/health": (200, {"status": "green"}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_cluster_with_unassigned_primaries_is_not_available(self):
+        """Red ``shards_availability`` means primaries are unassigned."""
+        with _stub_elasticsearch(
+            {
+                "/_health_report": (200, _health_report(shards_availability="red")),
+                "/_cluster/health": (200, {"status": "red"}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_cluster_out_of_room_for_shards_is_not_available(self):
+        """``shards_capacity`` is the ceiling the session-start sweep reclaims.
+
+        The sweep exists because accumulated ``test_*`` residue exhausts
+        ``cluster.max_shards_per_node``; a cluster already at the ceiling
+        when the suite starts refuses every new index, and the gate should
+        say so rather than let the suite discover it.
+        """
+        with _stub_elasticsearch(
+            {"/_health_report": (200, _health_report(shards_capacity="red"))}
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_healthy_single_node_cluster_is_available(self):
+        """The positive control, and the one that matters most.
+
+        A gate that over-skips reports green while testing nothing. A
+        one-node cluster hosting any replicated index sits at yellow
+        ``shards_availability`` permanently, so treating yellow there as
+        unavailable would skip every ordinary dev run.
+        """
+        with _stub_elasticsearch(
+            {
+                "/_health_report": (200, _health_report()),
+                "/_cluster/health": (200, {"status": "yellow"}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is True
+
+    def test_a_cluster_without_the_health_api_falls_back_to_cluster_health(self):
+        """``/_health_report`` is 8.7+; older clusters must not all-skip.
+
+        A consumer on an Elasticsearch predating the health API gets a 404
+        here. Reading that as unavailable would silently skip their whole
+        suite, so the probe falls back to the ``yellow``-or-``green``
+        criterion ``wait_for_elasticsearch`` has always used.
+        """
+        with _stub_elasticsearch({"/_cluster/health": (200, {"status": "yellow"})}) as (
+            host,
+            port,
+        ):
+            assert is_elasticsearch_available(host, port) is True
+
+    def test_the_fallback_still_refuses_a_red_cluster(self):
+        """The fallback is a weaker check, not an absent one."""
+        with _stub_elasticsearch({"/_cluster/health": (200, {"status": "red"})}) as (
+            host,
+            port,
+        ):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_port_that_answers_nothing_useful_is_not_available(self):
+        """TCP open and both probes failing is not a cluster to run against."""
+        with _stub_elasticsearch({}) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
 
 
 class TestPytestMarkers:

@@ -675,6 +675,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`requires_elasticsearch` skips a cluster that cannot host a test index,
+  instead of letting the suite time out against it.** `is_elasticsearch_available()`
+  probed a TCP connect and nothing else, so it reported available for any
+  listening port. A cluster whose disk is over the high watermark is exactly
+  that: it accepts the connection, answers `/` in milliseconds, and reports
+  `green` cluster status until the moment the suite asks for its first index —
+  which the disk-threshold decider then declines to place, leaving the client
+  to time out. The marker exists so an unusable cluster *skips*; against this
+  one it delivered four failures that named a read timeout and nothing about
+  the cause.
+
+  The probe now also reads `GET /_health_report` and requires `master_is_stable`,
+  `disk` and `shards_capacity` to be green, with `shards_availability` allowed
+  green or yellow — a one-node cluster hosting a replicated index sits at
+  yellow permanently, so refusing it would skip every ordinary run. A cluster
+  predating the health API (Elasticsearch below 8.7) answers 404 and falls
+  back to the `yellow`-or-`green` cluster status `wait_for_elasticsearch()`
+  already used, so an older cluster is judged by the criterion it can answer
+  rather than skipped wholesale. `requires_real_elasticsearch` gains the same
+  term through the same probe, and both markers now share one evaluation of
+  it, as the Postgres pair already did.
+
+  The skip names both terms — *"Elasticsearch unreachable, or not in a state
+  to host a test index"* — because a skip against a cluster the developer can
+  see running is otherwise unexplainable from the skip line.
+
+- **A malformed HTTP response no longer escapes a service probe as a collection
+  error.** The probes decode JSON over `urllib`, which raises
+  `http.client.HTTPException` — not an `OSError` — for a truncated or
+  malformed response. Two of the three probes did not catch it, and they are
+  evaluated inside a `skipif` at *import*, so the escape was not a failed probe
+  but a collection error taking the module with it. The three had each written
+  the same request-and-decode body and caught three different sets; there is
+  now one body, and its catch set is the union.
+
 - **`MembershipOracle`'s return documentation reaches the rendered reference.**
   The `Returns:` block describing what `memberships()` answers with sat in the
   protocol's *class* docstring, where a class returns nothing — so the site's

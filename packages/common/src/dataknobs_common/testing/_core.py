@@ -172,6 +172,44 @@ def _resolve_ollama_endpoint(host: str | None, port: int | None) -> tuple[str, i
     )
 
 
+def _get_probe_json(url: str, timeout: float, *, what: str) -> Any | None:
+    """GET a bounded JSON document, or ``None`` for any failure.
+
+    The one HTTP body behind every probe here — unreachable, timeout, HTTP
+    error (including the 404 a service predating an endpoint returns), a body
+    that is not JSON, or one over :data:`_MAX_PROBE_BODY_BYTES`. Three probes
+    had written this separately and caught three different sets, so a shape
+    one of them swallowed was an exception escaping another; the catch set is
+    now stated once, and it is the union.
+
+    ``HTTPException`` earns its place there. It is not an ``OSError``, so a
+    truncated or malformed response escaped two of those three — out of a
+    ``skipif`` evaluated at *import*, where an exception is not a failed probe
+    but a collection error taking the whole module with it. A probe's failure
+    mode is "no", never "raise".
+
+    Standard library only: ``dataknobs-common`` installs with no required
+    dependencies, so a probe that reached for ``requests`` would be unusable
+    in exactly the minimal environment a probe is for.
+
+    Args:
+        url: Absolute URL to fetch.
+        timeout: Seconds to wait for the response.
+        what: Short description of the probe, for the debug log on failure.
+
+    Returns:
+        The decoded document, or ``None``.
+    """
+    import http.client
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return _read_probe_json(response)
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
+        logger.debug("%s probe to %s failed: %s", what, url, exc)
+        return None
+
+
 def _ollama_get_json(
     path: str,
     host: str | None,
@@ -180,22 +218,15 @@ def _ollama_get_json(
 ) -> Any | None:
     """GET a JSON document from the resolved Ollama endpoint.
 
-    Returns the decoded body, or ``None`` for any failure — unreachable,
-    timeout, HTTP error, or a body that is not JSON. Standard library only:
-    ``dataknobs-common`` installs with no required dependencies, so a probe
-    that reached for ``requests`` would be unusable in exactly the minimal
-    environment a probe is for.
+    Returns the decoded body, or ``None`` for any failure — see
+    :func:`_get_probe_json`, which this resolves an endpoint for.
     """
     resolved_host, resolved_port = _resolve_ollama_endpoint(host, port)
-    request = urllib.request.Request(f"http://{resolved_host}:{resolved_port}{path}")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return _read_probe_json(response)
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        logger.debug(
-            "Ollama request to %s at %s:%s failed: %s", path, resolved_host, resolved_port, exc
-        )
-        return None
+    return _get_probe_json(
+        f"http://{resolved_host}:{resolved_port}{path}",
+        timeout,
+        what="Ollama",
+    )
 
 
 def is_ollama_available(
@@ -469,6 +500,75 @@ def _docker_aware_default_host(docker_host: str) -> str:
     return docker_host if _in_docker_container() else "localhost"
 
 
+def _resolve_service_endpoint(
+    host: str | None,
+    port: int | None,
+    *,
+    host_env: str,
+    port_env: str,
+    docker_host: str,
+    default_port: int,
+) -> tuple[str, int]:
+    """Resolve a service endpoint: explicit arg → env var → Docker-aware default.
+
+    Host resolution: an explicit ``host`` wins; else ``$<host_env>``; else the
+    Docker-aware default (``docker_host`` inside a container, ``localhost`` on
+    the host). Port resolution: explicit ``port`` wins; else ``$<port_env>``;
+    else ``default_port``.
+
+    Separate from the probe because a probe that asks a *second* question —
+    an HTTP readiness check layered on the socket check — has to address the
+    same endpoint the socket did. Restating the chain at the second call site
+    is how the two halves of one gate come to disagree about where the
+    service lives.
+
+    Args:
+        host: Explicit host, or ``None`` to resolve from env / Docker default.
+        port: Explicit port, or ``None`` to resolve from env / default.
+        host_env: Environment variable naming the host.
+        port_env: Environment variable naming the port.
+        docker_host: Compose service hostname used inside Docker.
+        default_port: Port used when neither ``port`` nor ``$<port_env>`` is set.
+
+    Returns:
+        The resolved ``(host, port)`` pair.
+    """
+    if host is None:
+        host = os.environ.get(host_env) or _docker_aware_default_host(docker_host)
+    if port is None:
+        port = int(os.environ.get(port_env, str(default_port)))
+    return host, port
+
+
+def _tcp_reachable(host: str, port: int) -> bool:
+    """Whether a TCP connection to ``host:port`` succeeds within a second.
+
+    Answers reachability and nothing more. A listening port means a process
+    accepted the connection — not that the service behind it can serve, which
+    is a question only that service can answer (see
+    :func:`_elasticsearch_can_host_an_index`).
+
+    Args:
+        host: Resolved hostname or address.
+        port: Resolved port.
+
+    Returns:
+        True if the connection succeeds.
+    """
+    import socket
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        try:
+            result = sock.connect_ex((host, port))
+        finally:
+            sock.close()
+        return result == 0
+    except OSError:
+        return False
+
+
 def _is_tcp_service_available(
     host: str | None,
     port: int | None,
@@ -480,11 +580,8 @@ def _is_tcp_service_available(
 ) -> bool:
     """TCP-probe a service, resolving host/port arg → env var → Docker default.
 
-    Shared body for the socket-probe availability checks. Host resolution:
-    an explicit ``host`` wins; else ``$<host_env>``; else the Docker-aware
-    default (``docker_host`` inside a container, ``localhost`` on the host).
-    Port resolution: explicit ``port`` wins; else ``$<port_env>``; else
-    ``default_port``.
+    Shared body for the socket-probe availability checks: resolve with
+    :func:`_resolve_service_endpoint`, then probe with :func:`_tcp_reachable`.
 
     Args:
         host: Explicit host, or ``None`` to resolve from env / Docker default.
@@ -497,22 +594,16 @@ def _is_tcp_service_available(
     Returns:
         True if a TCP connection to the resolved host:port succeeds.
     """
-    import socket
-
-    if host is None:
-        host = os.environ.get(host_env) or _docker_aware_default_host(docker_host)
-    if port is None:
-        port = int(os.environ.get(port_env, str(default_port)))
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        try:
-            result = sock.connect_ex((host, port))
-        finally:
-            sock.close()
-        return result == 0
-    except OSError:
-        return False
+    return _tcp_reachable(
+        *_resolve_service_endpoint(
+            host,
+            port,
+            host_env=host_env,
+            port_env=port_env,
+            docker_host=docker_host,
+            default_port=default_port,
+        )
+    )
 
 
 def is_redis_available(host: str | None = None, port: int | None = None) -> bool:
@@ -564,12 +655,113 @@ def is_postgres_available(host: str | None = None, port: int | None = None) -> b
     )
 
 
+#: Health-report indicators that gate creating and writing a test index,
+#: mapped to the statuses that still permit it. An indicator the report does
+#: not carry is not evaluated, so a cluster is judged on what it publishes
+#: rather than on the version this list was written against.
+#:
+#: ``shards_availability`` admits yellow because a one-node cluster hosting any
+#: replicated index sits there permanently — the ordinary resting state of a
+#: dev cluster, not a fault, and refusing it would skip every ordinary run.
+#: The other three admit only green: an unstable master is a refusal to do
+#: anything at all, and a non-green ``disk`` or ``shards_capacity`` is the
+#: cluster saying it is at or past the point of refusing new shards.
+#:
+#: Reading ``disk`` that strictly is deliberately conservative — between the
+#: low and high watermarks a new index's primary can still be placed, so some
+#: skips here are clusters that would in fact have run. The trade is
+#: asymmetric and that is why it is taken this way round: an over-skip prints
+#: a named reason a developer can act on, while an under-skip prints a wall of
+#: client timeouts that reads as a defect in the code under test.
+_ES_GATING_INDICATORS: dict[str, tuple[str, ...]] = {
+    "master_is_stable": ("green",),
+    "disk": ("green",),
+    "shards_capacity": ("green",),
+    "shards_availability": ("green", "yellow"),
+}
+
+#: Seconds a readiness probe waits for Elasticsearch to answer. Matched to the
+#: ``RequestHelper`` timeout the Elasticsearch fixtures use, so the gate's
+#: patience is exactly the suite's: a cluster too slow to answer this is a
+#: cluster whose first fixture request times out.
+_ES_PROBE_TIMEOUT_SECONDS = 5
+
+
+def _elasticsearch_can_host_an_index(host: str, port: int) -> bool:
+    """Whether the cluster can still allocate and write a new test index.
+
+    Reachability is not readiness, and for Elasticsearch the gap between them
+    is wide enough to swallow a suite. A cluster out of disk accepts the
+    connection, answers ``/`` in milliseconds, and reports ``green`` cluster
+    status for as long as it holds no unassigned shard — then blocks the
+    suite's first ``PUT`` of an index until the client gives up, because the
+    disk-threshold decider will not place the new primary. The refusal is
+    standing, and the *only* place it is visible before the first index is
+    requested is the health report's ``disk`` indicator.
+
+    So the criterion is the health report (Elasticsearch 8.7+), read through
+    :data:`_ES_GATING_INDICATORS`. A cluster predating it answers 404, and
+    falls back to the ``yellow``-or-``green`` cluster status that
+    :func:`~dataknobs_common.testing.elasticsearch_fixtures.wait_for_elasticsearch`
+    has always used — weaker, since it cannot see a refusal that has not
+    stranded a shard yet, but it is the criterion those clusters have.
+
+    Failing both ways is ``False``: a port that accepts connections and
+    answers neither probe is not a cluster to run a suite against.
+
+    Args:
+        host: Resolved Elasticsearch host.
+        port: Resolved Elasticsearch port.
+
+    Returns:
+        True if the cluster is in a state to host the suite's indices.
+    """
+    base = f"http://{host}:{port}"
+
+    report = _get_probe_json(
+        f"{base}/_health_report", _ES_PROBE_TIMEOUT_SECONDS, what="Elasticsearch health report"
+    )
+    indicators = report.get("indicators") if isinstance(report, dict) else None
+    if isinstance(indicators, dict):
+        for name, permitted in _ES_GATING_INDICATORS.items():
+            indicator = indicators.get(name)
+            if isinstance(indicator, dict) and indicator.get("status") not in permitted:
+                logger.debug(
+                    "Elasticsearch at %s:%s reports %s=%s; treating as unavailable",
+                    host,
+                    port,
+                    name,
+                    indicator.get("status"),
+                )
+                return False
+        return True
+
+    health = _get_probe_json(
+        f"{base}/_cluster/health", _ES_PROBE_TIMEOUT_SECONDS, what="Elasticsearch cluster health"
+    )
+    if not isinstance(health, dict):
+        return False
+    status = health.get("status")
+    if not isinstance(status, str):
+        # A 200 that parses but names no status is a cluster we cannot judge.
+        # Run the suite: a failure is visible, and a silent skip is not.
+        return True
+    return status in ("green", "yellow")
+
+
 def is_elasticsearch_available(host: str | None = None, port: int | None = None) -> bool:
-    """Check if the Elasticsearch service is available.
+    """Check whether Elasticsearch is reachable *and* able to serve.
 
     Resolves the host as ``host`` arg → ``$ELASTICSEARCH_HOST`` → Docker-aware
     default (``elasticsearch`` inside a container, ``localhost`` otherwise);
     the port as ``port`` arg → ``$ELASTICSEARCH_PORT`` → ``9200``.
+
+    Two terms, not one. The port must accept a connection, and the cluster
+    behind it must be in a state to host a new index — see
+    :func:`_elasticsearch_can_host_an_index` for why a listening port is not
+    evidence of the second. Both markers this backs, ``requires_elasticsearch``
+    and ``requires_real_elasticsearch``, exist to make an unusable cluster
+    *skip* a suite; a probe answering only the first term makes it fail.
 
     Args:
         host: Elasticsearch host (default: ``$ELASTICSEARCH_HOST`` or the
@@ -579,7 +771,7 @@ def is_elasticsearch_available(host: str | None = None, port: int | None = None)
     Returns:
         True if Elasticsearch is available, False otherwise
     """
-    return _is_tcp_service_available(
+    resolved_host, resolved_port = _resolve_service_endpoint(
         host,
         port,
         host_env="ELASTICSEARCH_HOST",
@@ -587,6 +779,9 @@ def is_elasticsearch_available(host: str | None = None, port: int | None = None)
         docker_host="elasticsearch",
         default_port=9200,
     )
+    if not _tcp_reachable(resolved_host, resolved_port):
+        return False
+    return _elasticsearch_can_host_an_index(resolved_host, resolved_port)
 
 
 def get_localstack_endpoint(host: str | None = None, port: int | None = None) -> str:
@@ -679,15 +874,8 @@ def _localstack_service_enabled(endpoint: str, service: str) -> bool:
     Returns:
         True only when the health endpoint reports the service ready.
     """
-    from urllib.error import URLError
-    from urllib.request import urlopen
-
     url = f"{endpoint.rstrip('/')}/_localstack/health"
-    try:
-        with urlopen(url, timeout=2) as response:
-            payload = _read_probe_json(response)
-    except (URLError, OSError, ValueError):
-        return False
+    payload = _get_probe_json(url, 2, what="LocalStack health")
     if not isinstance(payload, dict):
         return False
     services = payload.get("services")
@@ -736,18 +924,7 @@ def is_localstack_available(
 
     endpoint = get_localstack_endpoint(host, port)
     parsed = urlparse(endpoint)
-    probe_host = parsed.hostname or "localhost"
-    probe_port = parsed.port or 4566
-    try:
-        import socket
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex((probe_host, probe_port))
-        sock.close()
-    except OSError:
-        return False
-    if result != 0:
+    if not _tcp_reachable(parsed.hostname or "localhost", parsed.port or 4566):
         return False
     if service is None:
         return True
@@ -950,9 +1127,17 @@ try:
         reason="PostgreSQL not available",
     )
 
+    # One probe, shared by both Elasticsearch markers -- the same reason the
+    # Postgres pair shares one below, and a wider window to go wrong in: this
+    # probe asks the cluster two HTTP questions, so two evaluations can
+    # straddle the moment a cluster runs out of disk and disagree about it.
+    _elasticsearch_serving = is_elasticsearch_available()
+
     requires_elasticsearch = pytest.mark.skipif(
-        not is_elasticsearch_available(),
-        reason="Elasticsearch not available",
+        not _elasticsearch_serving,
+        # Names both terms, because a skip on a cluster the developer can see
+        # running is otherwise unexplainable from the skip line alone.
+        reason="Elasticsearch unreachable, or not in a state to host a test index",
     )
 
     requires_localstack = pytest.mark.skipif(
@@ -1038,7 +1223,7 @@ try:
     requires_real_elasticsearch = _requires_real_service(
         service="Elasticsearch",
         opt_in_var="TEST_ELASTICSEARCH",
-        reachable=is_elasticsearch_available(),
+        reachable=_elasticsearch_serving,
         package="elasticsearch",
     )
 

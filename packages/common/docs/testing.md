@@ -958,10 +958,38 @@ and the availability probes / skip markers `is_postgres_available()` /
 
 #### Two marker families: reachable, and *really* usable
 
-`requires_postgres` and `requires_elasticsearch` test **one** term — did the
-service answer its probe. That is the right gate for a suite that only needs
-the server up, and the wrong one for a behavioural suite, which also needs the
-run to have opted in and the driver to be installed.
+`requires_postgres` and `requires_elasticsearch` test whether the service
+answered its probe. That is the right gate for a suite that only needs the
+server up, and the wrong one for a behavioural suite, which also needs the run
+to have opted in and the driver to be installed.
+
+> **Answering a probe is not the same as being reachable, for Elasticsearch.**
+> `is_elasticsearch_available()` asks two questions: does the port accept a
+> connection, *and* is the cluster in a state to host a new index. The second
+> is not a refinement — it is the one that fails in practice. A cluster whose
+> disk is over the high watermark accepts connections, answers `/` in
+> milliseconds, and reports `green` cluster status right up until the moment
+> the suite asks for its first index, which the disk-threshold decider then
+> refuses to place; the client sits there until it times out. Before that
+> first request there is exactly one place the standing refusal is visible,
+> and it is the `disk` indicator of the
+> [health report](https://www.elastic.co/guide/en/elasticsearch/reference/current/health-api.html).
+>
+> So the probe reads `GET /_health_report` (Elasticsearch 8.7+) and requires
+> `master_is_stable`, `disk` and `shards_capacity` to be green, with
+> `shards_availability` allowed green *or* yellow — a one-node cluster hosting
+> any replicated index sits at yellow permanently, and refusing that would
+> skip every ordinary dev run. A cluster predating the health API answers 404
+> and falls back to the `yellow`-or-`green` cluster status that
+> `wait_for_elasticsearch()` has always used.
+>
+> The skip reads **"Elasticsearch unreachable, or not in a state to host a
+> test index"**. If you see it against a cluster you can see running, ask it
+> what it thinks:
+>
+> ```bash
+> curl -s localhost:9200/_health_report | jq '.indicators | map_values(.status)'
+> ```
 
 For those, use the `requires_real_*` family. Each tests **three** terms —
 reachable, opt-in variable set to `true`, and the driver its suite actually
