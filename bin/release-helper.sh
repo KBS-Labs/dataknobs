@@ -653,13 +653,33 @@ check_changes() {
 # evaluate gets answered `y` by reflex within a week. What it can do is make the
 # list impossible to not know about, and report when a pointer has gone stale.
 #
-# Four states, and none of them is silence. The first three are reported and
+# THE POINTER NAMES THE SECTION, NOT THE FILE. An entry carries `heading` and
+# no path, and this function finds the section by searching the tree for it.
+# A path is a citation into a tree most clones do not have, and it needs an
+# edit every time that tree reorganizes; a heading needs none, and a section
+# that merely moved still resolves instead of reporting a drift that is not one.
+#
+# The search matches a LINE THAT BEGINS WITH the heading, which is neither of
+# the two obvious readings and both of those are broken:
+#   * as a substring, prose that QUOTES a heading matches it. Measured on the
+#     tree this manifest points into: one document is headed `## 4b. The
+#     release-readiness list` and four others mention it, so a substring search
+#     reports five and the pointer is ambiguous on day one.
+#   * as a whole line, nothing matches at all. A ruled heading there grows a
+#     `-- ruled <id> <date>` marker, so the manifest's text is a PREFIX of the
+#     line, never the whole of it.
+# Anchored at the line start it is exactly one, which is the question being
+# asked: is there a section headed this?
+#
+# Five states, and none of them is silence. The first four are reported and
 # survived; only the last one refuses, because it is the one where nothing was
 # read at all:
 #   * no manifest        -- said out loud; the file is tracked, so its absence
 #                           is a broken tree rather than "nothing outstanding"
 #   * tree not present   -- normal on a clone that has no planning checkout
-#   * document not found -- the pointer has DRIFTED, and that is a warning
+#   * heading nowhere    -- the pointer has DRIFTED, and that is a warning
+#   * heading in several -- AMBIGUOUS, also a warning: a heading that no longer
+#                           identifies one section has stopped being a pointer
 #   * no jq              -- EXITS NON-ZERO. Not a judgement withheld but a read
 #                           that never happened, and a check that skips because
 #                           its tool is missing reports green having tested
@@ -698,14 +718,14 @@ release_readiness() {
     echo -e "${CYAN}Read these before cutting. A behaviour that ships becomes one somebody can code against.${NC}"
     echo ""
 
-    local package count index tree document section heading why tree_path tree_env resolved
+    local package count index tree section heading why tree_path tree_env resolved
+    local heading_re matches match_count found status hit
     # Read loop rather than word-splitting `$packages`: a package name is a
     # line here, and splitting on IFS would make one containing a space into two.
     while IFS= read -r package; do
         count=$(jq -r --arg p "$package" '.packages[$p] | length' "$manifest")
         for ((index = 0; index < count; index++)); do
             tree=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].tree' "$manifest")
-            document=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].document' "$manifest")
             section=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].section' "$manifest")
             heading=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].heading' "$manifest")
             why=$(jq -r --arg p "$package" --argjson i "$index" '.packages[$p][$i].why' "$manifest")
@@ -717,16 +737,53 @@ release_readiness() {
             resolved="${!tree_env:-$ROOT_DIR/$tree_path}"
 
             echo -e "  ${BOLD}${package}${NC}  ${why}"
-            echo -e "    ${tree}: ${document} §${section}"
+            echo -e "    ${tree}: §${section} -- ${heading}"
 
+            # Checked before the search, and it must stay that way: a clone
+            # without the planning tree is NORMAL, and a search over a missing
+            # directory would otherwise report it as a pointer that drifted.
             if [ ! -d "$resolved" ]; then
                 echo -e "    ${BLUE}(${tree} is not checked out here -- looked in ${resolved})${NC}"
-            elif [ ! -f "$resolved/$document" ]; then
-                echo -e "    ${YELLOW}POINTER DRIFTED: no such document under ${resolved}${NC}"
-            elif ! grep -qF "$heading" "$resolved/$document"; then
-                echo -e "    ${YELLOW}POINTER DRIFTED: ${document} has no section headed '${heading}'${NC}"
+                echo ""
+                continue
+            fi
+
+            # Anchored at the line start -- see the note above this function for
+            # why neither a substring nor a whole-line match works. The heading
+            # is user data going into a regex, so every metacharacter in it is
+            # escaped first; `.` alone would otherwise make `4b. The` match
+            # `4b: The`.
+            heading_re=$(printf '%s' "$heading" | sed 's/[][\\.*^$+?(){}|]/\\&/g')
+
+            # grep exits 1 for "found nothing" and 2 for "could not look", and
+            # only the first is a verdict. Conflating them would report a search
+            # that never ran as a pointer that drifted -- this function's own
+            # subject, one level down.
+            status=0
+            matches=$(grep -rlI --exclude-dir=.git -e "^${heading_re}" "$resolved") || status=$?
+
+            if [ "$status" -gt 1 ]; then
+                echo -e "    ${YELLOW}SEARCH FAILED: could not read ${resolved} (grep exit ${status})${NC}"
+                echo ""
+                continue
+            fi
+
+            match_count=0
+            [ -n "$matches" ] && match_count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
+
+            if [ "$match_count" -eq 0 ]; then
+                echo -e "    ${YELLOW}POINTER DRIFTED: no document under ${resolved} is headed '${heading}'${NC}"
+            elif [ "$match_count" -eq 1 ]; then
+                # Print where it resolved to. The manifest no longer carries a
+                # path, so this line is the only place a reader learns which
+                # document to open.
+                found="${matches#"${resolved}"/}"
+                echo -e "    ${GREEN}✓ found${NC} ${found}"
             else
-                echo -e "    ${GREEN}✓ found${NC}"
+                echo -e "    ${YELLOW}POINTER AMBIGUOUS: ${match_count} documents are headed '${heading}'${NC}"
+                while IFS= read -r hit; do
+                    echo -e "      ${YELLOW}${hit#"${resolved}"/}${NC}"
+                done <<< "$matches"
             fi
             echo ""
         done
