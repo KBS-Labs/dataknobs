@@ -6,10 +6,18 @@
     "that `bin/release-helper.sh check` names the list instead of relying on",
     "somebody remembering it exists.",
     "",
+    "An entry names the SECTION, not the file that holds it: `heading` is the",
+    "whole pointer and the check is a search of the tree for it. A path would",
+    "be a citation into a tree most clones do not have, and it would need an",
+    "edit every time that tree reorganized; a heading needs none, and a",
+    "section that merely moved still resolves.",
+    "",
     "A package with no entry has nothing outstanding and prints nothing. An",
-    "entry whose document cannot be found in a tree that IS present prints a",
-    "drift warning, so a moved or renamed section is reported rather than",
-    "quietly pointing at nothing."
+    "entry whose heading is in no document in a tree that IS present prints a",
+    "drift warning, so a renamed or deleted section is reported rather than",
+    "quietly pointing at nothing -- and an entry whose heading is found in",
+    "MORE than one document prints an ambiguity warning, because a heading",
+    "that no longer identifies one section has stopped being a pointer."
   ],
   "trees": {
     "dk-xdocs": {
@@ -22,7 +30,6 @@
     "common": [
       {
         "tree": "dk-xdocs",
-        "document": "plans/ontology-and-semantic-index/03-implementation/03c-increment-a-sequenced.md",
         "section": "4b",
         "heading": "## 4b. The release-readiness list",
         "why": "the vocabulary, hierarchy and entity-resolution surfaces ship behind a package-level door that no release has published yet, so deliberate refusals and published guarantees behind it are still free to change"
