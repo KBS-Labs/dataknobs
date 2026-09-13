@@ -245,3 +245,120 @@ def test_asking_for_the_sub_authority_names_says_they_are_not_supplied():
 
     with pytest.raises(NotImplementedError):
         multi.sub_authority_names()
+
+
+# --- what the factory is given, and what it passes on -----------------------
+
+
+def _flat(name="animal"):
+    return dk_auth.AuthorityData(pd.DataFrame({name: ["dog", "cat"]}), name)
+
+
+def test_the_factory_builds_from_the_data_its_base_declares():
+    """Bug: the only ``AuthorityFactory`` refused its base's declared type.
+
+    ``AuthorityFactory`` publishes ``build_authority(name, builder, authdata)``
+    over an ``AuthorityData``. ``MultiAuthorityFactory`` opened its body with
+    a lookup declared only on ``MultiAuthorityData``, so a consumer holding
+    the abstract -- which is what publishing an abstract factory invites --
+    got ``AttributeError: 'AuthorityData' object has no attribute
+    'get_authority_data'`` from inside the factory.
+    """
+    factory = dk_lex.MultiAuthorityFactory("animal")
+    authdata = _flat()
+
+    authority = factory.build_authority("animal", dk_auth.AuthorityAnnotationsBuilder(), authdata)
+
+    assert isinstance(authority, dk_lex.DataframeAuthority)
+    assert authority.authdata is authdata
+    assert authority.has_value("dog")
+
+
+def test_a_container_still_resolves_the_sub_authority_rather_than_itself():
+    """The control: the leaf answer must not displace the container's.
+
+    The same call against ``MultiAuthorityData`` still builds the named
+    "sub" authority, so the fix above widens what the factory accepts without
+    changing what it does with the data it already accepted.
+    """
+    factory = dk_lex.MultiAuthorityFactory("animal")
+    multi = dk_lex.SimpleMultiAuthorityData(
+        pd.DataFrame({"animal": ["dog", "cat"], "colour": ["red", "blue"]}), "animals"
+    )
+
+    authority = factory.build_authority("animal", dk_auth.AuthorityAnnotationsBuilder(), multi)
+
+    assert authority.authdata is multi.peek_authority_data("animal")
+    assert authority.authdata is not multi
+
+
+def test_the_factory_passes_on_the_annotations_builder_it_was_handed():
+    """Bug: the builder the caller passed was accepted and discarded.
+
+    ``auth_anns_builder`` is the abstract factory's own second parameter, and
+    the only implementation named it, documented it, and then built the
+    authority without it -- so every authority built through the factory used
+    a fresh default builder, and a consumer's annotation metadata (column
+    names, id column, anything the builder carries) silently did not apply.
+    """
+
+    class _Marked(dk_auth.AuthorityAnnotationsBuilder):
+        pass
+
+    builder = _Marked()
+    factory = dk_lex.MultiAuthorityFactory("animal")
+
+    authority = factory.build_authority("animal", builder, _flat())
+
+    assert authority.anns_builder is builder
+
+
+def test_the_factory_passes_on_the_field_groups_it_was_configured_with():
+    """Gap: ``field_groups`` was hardcoded ``None``, asking where it came from.
+
+    ``DataframeAuthority`` accepts derived field groups and the factory could
+    not supply them, so every authority the only shipped factory built used
+    the default suffixes -- with no way for a consumer holding the factory to
+    say otherwise.
+    """
+    field_groups = dk_auth.DerivedFieldGroups(field_type_suffix="_kind")
+    factory = dk_lex.MultiAuthorityFactory("animal", field_groups=field_groups)
+
+    authority = factory.build_authority("animal", dk_auth.AuthorityAnnotationsBuilder(), _flat())
+
+    assert authority.field_groups is field_groups
+
+
+def test_the_factory_passes_on_the_anns_validator_it_was_configured_with():
+    """Gap: ``anns_validator`` was hardcoded ``None``, asking where it came from.
+
+    An authority with no validator accepts every match it finds. The factory
+    could not give one to the authority it built, so the validation the
+    annotation path is written around was unreachable through the factory
+    door.
+    """
+
+    def reject_everything(auth, ann_dicts):
+        return False
+
+    factory = dk_lex.MultiAuthorityFactory("animal", anns_validator=reject_everything)
+
+    authority = factory.build_authority("animal", dk_auth.AuthorityAnnotationsBuilder(), _flat())
+
+    assert authority.anns_validator is reject_everything
+    assert authority.annotate_input("a dog barked").is_empty()
+
+
+def test_the_factory_defaults_leave_the_authority_as_it_was():
+    """The control for both gaps: unconfigured, the factory builds what it did.
+
+    ``Authority`` substitutes a default ``DerivedFieldGroups`` for None, and
+    no validator means every match is kept.
+    """
+    factory = dk_lex.MultiAuthorityFactory("animal")
+
+    authority = factory.build_authority("animal", dk_auth.AuthorityAnnotationsBuilder(), _flat())
+
+    assert isinstance(authority.field_groups, dk_auth.DerivedFieldGroups)
+    assert authority.anns_validator is None
+    assert authority.annotate_input("a dog barked").df["text"].tolist() == ["dog"]

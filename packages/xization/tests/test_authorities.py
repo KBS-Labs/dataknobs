@@ -1,6 +1,7 @@
 import re
 
 import pandas as pd
+import pytest
 
 import dataknobs_xization.authorities as dk_auth
 import dataknobs_xization.lexicon as dk_lex
@@ -170,3 +171,31 @@ def test_a_multi_row_match_is_judged_and_added_as_one_unit():
 
     assert anns.df["text"].to_list() == ["07", "04", "1776"]
     assert anns.df["start_pos"].to_list() == [4, 7, 10]
+
+
+# --- the data a factory is handed answers for the name it holds -------------
+
+
+def test_flat_authority_data_answers_for_its_own_name():
+    """Bug: only a container could answer "give me the data for name N".
+
+    ``get_authority_data`` was declared on ``MultiAuthorityData`` alone, so
+    the one shipped ``AuthorityFactory`` -- whose body opens with that call --
+    raised ``AttributeError`` from inside itself for every plain
+    ``AuthorityData`` it was handed. A leaf holds one authority's values, and
+    the name it answers for is its own.
+    """
+    authdata = dk_auth.AuthorityData(pd.DataFrame({"animal": ["dog", "cat"]}), "animal")
+
+    assert authdata.get_authority_data("animal") is authdata
+
+
+def test_flat_authority_data_refuses_a_name_it_does_not_hold():
+    """The refusal names both the data and the name asked of it."""
+    authdata = dk_auth.AuthorityData(pd.DataFrame({"animal": ["dog", "cat"]}), "animal")
+
+    with pytest.raises(KeyError) as excinfo:
+        authdata.get_authority_data("colour")
+
+    assert "colour" in str(excinfo.value)
+    assert "animal" in str(excinfo.value)

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-13T04:04:04Z",
+  "timestamp": "2026-09-13T04:37:34Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/what-the-lexicon-owes",
-  "git_commit": "a4b209187b3c55b3bcd894c1a08a2a948dccd20a",
+  "git_branch": "sbk/the-factory-takes-the-data-it-is-given",
+  "git_commit": "d04214575c32dde101d8ea5f18a5893b18b66f5b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -594,10 +594,6 @@ class MultiAuthorityData(CorrelatedAuthorityData):
     "sub" authorities composed of explicit data for each component.
     """
 
-    def __init__(self, df: pd.DataFrame, name: str):
-        super().__init__(df, name)
-        self._authority_data = {}
-
     @abstractmethod
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
         """Build an authority for the named sub-authority.
@@ -625,6 +621,10 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
     def get_authority_data(self, name: str) -> dk_auth.AuthorityData:
         """Get AuthorityData for the named "sub" authority, building if needed.
+
+        Overrides the flat answer in :meth:`AuthorityData.get_authority_data`:
+        the names this data holds are its "sub" authorities rather than its
+        own, and each is built on first request and kept.
 
         Args:
             name: The "sub" authority name.
@@ -792,24 +792,43 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
         return dk_auth.AuthorityData(col_df, name)
 
 
-class MultiAuthorityFactory(dk_auth.AuthorityFactory[MultiAuthorityData]):
-    """An factory for building a "sub" authority directly or indirectly
-    from MultiAuthorityData.
+class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
+    """A factory for building a "sub" authority directly or indirectly
+    from authority data.
+
+    Indirectly from :class:`MultiAuthorityData`, whose named "sub" authority
+    it pulls; directly from any other :class:`~dataknobs_xization.authorities.AuthorityData`,
+    which supplies the authority of its own name. The factory asks the data
+    the same question either way, so it is substitutable for the abstract it
+    implements rather than usable only through its own concrete type.
+
+    The three things the built authority is configured with -- its lexical
+    expander, its derived field groups and its annotations validator -- are
+    given to the factory and read back per name, so a subclass can vary any
+    of them by authority without reimplementing the build.
     """
 
     def __init__(
         self,
         auth_name: str,
         lexical_expander: LexicalExpander | None = None,
+        field_groups: dk_auth.DerivedFieldGroups | None = None,
+        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None = None,
     ):
         """Initialize the MultiAuthorityFactory.
 
         Args:
             auth_name: The name of the dataframe authority to build.
             lexical_expander: The lexical expander to use (default=identity).
+            field_groups: The derived field groups the built authorities use
+                (default=the authority's own default groups).
+            anns_validator: fn(auth, anns_dict_list) the built authorities
+                validate each match with (default=accept every match).
         """
         self.auth_name = auth_name
         self._lexical_expander = lexical_expander
+        self._field_groups = field_groups
+        self._anns_validator = anns_validator
 
     def get_lexical_expander(self, name: str) -> LexicalExpander:
         """Get the lexical expander for the named (column) data.
@@ -824,33 +843,59 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[MultiAuthorityData]):
             self._lexical_expander = LexicalExpander(None, None)
         return self._lexical_expander
 
+    def get_field_groups(self, name: str) -> dk_auth.DerivedFieldGroups | None:
+        """Get the derived field groups for the named authority.
+
+        Args:
+            name: The name of the authority being built.
+
+        Returns:
+            The field groups to build with, or None to leave the authority
+            its own default.
+        """
+        return self._field_groups
+
+    def get_anns_validator(
+        self, name: str
+    ) -> Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None:
+        """Get the annotations validator for the named authority.
+
+        Args:
+            name: The name of the authority being built.
+
+        Returns:
+            fn(auth, anns_dict_list) judging each match, or None to accept
+            every match the authority finds.
+        """
+        return self._anns_validator
+
     def build_authority(
         self,
         name: str,
         auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder,
-        authdata: MultiAuthorityData,
+        authdata: dk_auth.AuthorityData,
         parent_auth: dk_auth.Authority | None = None,
     ) -> DataframeAuthority:
         """Build a DataframeAuthority.
 
         Args:
             name: The name of the authority to build.
-            auth_anns_builder: The authority annotations row builder to use
-                for building annotation rows.
-            authdata: The multi-authority source data.
+            auth_anns_builder: The authority annotations row builder the built
+                authority builds annotation rows with.
+            authdata: The source data supplying the named authority: a
+                :class:`MultiAuthorityData` holding it as a "sub" authority,
+                or the authority's own data.
             parent_auth: The parent authority.
 
         Returns:
             The DataframeAuthority instance.
         """
-        subauthdata = authdata.get_authority_data(name)
-        field_groups = None  # TODO: get from instance var set on construction?
-        anns_validator = None  # TODO: get from authdata?
         return DataframeAuthority(
             name,
             self.get_lexical_expander(name),
-            subauthdata,
-            field_groups=field_groups,
-            anns_validator=anns_validator,
+            authdata.get_authority_data(name),
+            auth_anns_builder=auth_anns_builder,
+            field_groups=self.get_field_groups(name),
+            anns_validator=self.get_anns_validator(name),
             parent_auth=parent_auth,
         )

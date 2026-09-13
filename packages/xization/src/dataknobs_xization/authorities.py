@@ -16,11 +16,13 @@ import dataknobs_xization.annotations as dk_annots
 # Key annotation column name constants
 KEY_AUTH_ID_COL = "auth_id"
 
-#: The kind of authority data a factory builds from. A factory is written
-#: against the container it knows how to read -- ``MultiAuthorityData``, say,
-#: whose sub-authorities it pulls one at a time -- and a factory that accepted
-#: any ``AuthorityData`` could not do that, so the parameter belongs to the
-#: factory rather than to the method.
+#: The kind of authority data a factory builds from. Every ``AuthorityData``
+#: supplies the data for the names it holds, so a factory that reads one
+#: authority at a time -- which is what building one authority is -- takes the
+#: base and binds this to ``AuthorityData``. The parameter is here for a
+#: factory that needs more than that, a container whose correlations it reads
+#: across sub-authorities, say: it declares the container in its own type
+#: rather than narrowing the method and contradicting the base it implements.
 AuthorityDataT = TypeVar("AuthorityDataT", bound="AuthorityData")
 
 
@@ -271,6 +273,28 @@ class AuthorityData:
         """
         col = self.df.index if is_id else self.df[self.name]
         return self.df[col == value]
+
+    def get_authority_data(self, name: str) -> "AuthorityData":
+        """Get the data for the named authority, which this data supplies.
+
+        Flat data holds one authority's values, so the only name it answers
+        for is its own; a container of correlated "sub" authorities overrides
+        this to supply the named one. Either way the answer is the data an
+        authority of that name is built over, which is what a factory handed
+        this object needs and the only thing it asks for.
+
+        Args:
+            name: The authority name.
+
+        Returns:
+            The data for the named authority.
+
+        Raises:
+            KeyError: If this data holds no authority of that name.
+        """
+        if name != self.name:
+            raise KeyError(f"{type(self).__name__} {self.name!r} holds no authority named {name!r}")
+        return self
 
 
 class Authority(dk_annots.Annotator):
@@ -557,7 +581,13 @@ class AnnotationsValidator(ABC):
 
 
 class AuthorityFactory(ABC, Generic[AuthorityDataT]):
-    """A factory class for building an authority from a kind of authority data."""
+    """A factory class for building an authority from a kind of authority data.
+
+    The data supplies the named authority's data -- see
+    :meth:`AuthorityData.get_authority_data` -- so a factory building one
+    authority at a time takes ``AuthorityData`` and is substitutable for its
+    base. See :data:`AuthorityDataT` for when a factory needs more.
+    """
 
     @abstractmethod
     def build_authority(
