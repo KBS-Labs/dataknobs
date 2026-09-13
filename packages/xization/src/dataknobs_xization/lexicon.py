@@ -177,6 +177,10 @@ class TokenAligner:
         The per-match grouping is the aligner's record because that is the
         unit an authority's annotations validator judges; this is the view
         for a caller that wants the rows and not the grouping.
+
+        A fresh list is built on every access, so appending to what this
+        returns discards the row silently. Add to ``matches`` instead, as one
+        list per match.
         """
         return [ann_dict for match in self.matches for ann_dict in match]
 
