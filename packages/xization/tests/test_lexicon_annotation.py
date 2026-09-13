@@ -20,6 +20,7 @@ already do by reading. What a reviewer cannot do is run the path.
 """
 
 import re
+import sys
 
 import pandas as pd
 import pytest
@@ -311,3 +312,114 @@ def test_the_aligner_records_one_group_per_match_and_flattens_on_request(
         ["beagle"],
     ]
     assert [row["text"] for row in aligner.annotations] == ["beagle", "beagle"]
+
+
+# --- how far the walk can go ----------------------------------------------
+
+
+@pytest.fixture
+def prefixed_animals() -> dk_auth.AuthorityData:
+    """A vocabulary where one declared form is a prefix of another.
+
+    ``"golden"`` and ``"golden retriever"`` both match starting at the same
+    token, which is the only arrangement that makes the aligner's recording
+    order observable: with no shared start token the matches are recorded in
+    start-position order whatever the traversal does.
+    """
+    return dk_auth.AuthorityData(
+        pd.DataFrame({"animal": ["golden", "golden retriever", "beagle"]}),
+        "animal",
+    )
+
+
+def test_a_document_longer_than_the_recursion_limit_is_annotated(
+    authority: dk_lex.DataframeAuthority,
+) -> None:
+    """Walking N tokens must not cost N stack frames.
+
+    The token stream is a linked list and the aligner followed it by
+    recursing on ``next_token``, so the longest document it could annotate
+    was fixed by ``sys.getrecursionlimit()`` rather than by anything about
+    the document. At the default limit of 1000 the last length that survived
+    was 980 whitespace tokens -- this repository's ``README.md`` (690 words)
+    annotated and ``packages/xization/CHANGELOG.md`` (2849 words) raised
+    ``RecursionError``, so the package's own changelog was past the edge.
+
+    The length is taken from the live limit rather than written in, so
+    raising the limit cannot quietly leave this test reproducing nothing.
+    """
+    sentence = "a beagle wandered past the quiet house "
+    repeats = (sys.getrecursionlimit() + 200) // len(sentence.split()) + 1
+    document = (sentence * repeats).strip()
+    assert len(document.split()) > sys.getrecursionlimit(), "the document must outrun the stack"
+
+    anns = authority.annotate_input(document)
+
+    assert anns.df is not None, "the long document produced no annotations at all"
+    assert anns.df["text"].tolist() == ["beagle"] * repeats
+
+
+def test_every_token_is_looked_up_once(prefixed_animals: dk_auth.AuthorityData) -> None:
+    """The walk visits each token once, so its cost is linear in the document.
+
+    Depth was the failure; this is the cost that outlived it. ``_processed_idx``
+    records only tokens that were *part of a match*, so a token matching
+    nothing was never marked and the traversal re-queried the authority for it
+    once per enclosing level of the walk -- quadratic in the token count, on
+    the unmatched tokens that are the overwhelming majority of any real
+    document.
+
+    Counted through a real subclass rather than a mock: the authority under
+    test is the production one, and the override forwards every call.
+    """
+
+    class _Counting(dk_lex.DataframeAuthority):
+        """A ``DataframeAuthority`` that records what the aligner asked it."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            self.queried: list[str] = []
+
+        def find_variations(self, text: str, **kwargs: object) -> pd.Series:
+            self.queried.append(text)
+            return super().find_variations(text, **kwargs)
+
+    authority = _Counting("animal", dk_lex.LexicalExpander(None, None), prefixed_animals)
+
+    authority.annotate_input("my golden retriever met a beagle")
+
+    assert authority.queried == ["my", "golden", "met", "a", "beagle"], (
+        "each token is offered to the authority once, and a token consumed by "
+        "a match is not offered at all"
+    )
+
+
+def test_the_order_matches_are_recorded_in_survives_the_walk(
+    prefixed_animals: dk_auth.AuthorityData,
+) -> None:
+    """The recording order is pinned so that changing it has to be deliberate.
+
+    It is not start-position order, and that is a property of the traversal
+    rather than a decision: a match is recorded, then everything reachable
+    after its end is walked, and only then is the *next* match starting at the
+    same token recorded. So ``"beagle"``, six tokens later, lands between the
+    two forms that both start at ``"golden"``.
+
+    Two things depend on it -- ``TokenAligner.matches`` itself, and the order
+    an authority's ``anns_validator`` is consulted in. The dataframe does not:
+    ``Annotations`` sorts by span, which is why this order has never been
+    visible to a consumer reading ``.df`` and why it is asserted here against
+    both views.
+    """
+    authority = dk_lex.DataframeAuthority(
+        "animal", dk_lex.LexicalExpander(None, None), prefixed_animals
+    )
+
+    anns = authority.annotate_input("my golden retriever met a beagle")
+
+    assert [[row["text"] for row in match] for match in authority.prev_aligner.matches] == [
+        ["golden"],
+        ["beagle"],
+        ["golden retriever"],
+    ]
+    assert anns.df["text"].tolist() == ["golden retriever", "golden", "beagle"]

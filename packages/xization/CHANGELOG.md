@@ -69,6 +69,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several rows, as a regex with named groups produces, is still judged and
   added as one unit.
 
+- **A document longer than about a thousand words is annotated.**
+  `TokenAligner` walked the token stream by recursing along `next_token`,
+  one stack frame per token, so the longest text `DataframeAuthority` could
+  annotate was fixed by `sys.getrecursionlimit()` rather than by anything
+  about the text. At the interpreter default of 1000 the last length that
+  survived was 980 whitespace tokens — this package's own changelog, at 2849
+  words, was past the edge. The `RecursionError` surfaced from whichever
+  frame happened to be on the stack when the limit was reached, usually a
+  pandas internal and never `TokenAligner`, so the traceback did not name
+  the cause.
+
+  The walk now carries its own stack, so document length is bounded by
+  memory rather than by the interpreter. The order matches are recorded in —
+  which is also the order an `anns_validator` is consulted in, and not
+  start-position order — is unchanged.
+
+  **The walk is now linear in the token count, where it was quadratic.** A
+  token that matched nothing was never marked as seen, so the traversal
+  re-queried the authority for it once per enclosing level of the walk, and
+  unmatched tokens are the bulk of any real document. `RegexAuthority` was
+  never affected by either half of this: it finds its matches with
+  `re.finditer` and walks no tokens.
+
 ### Added
 
 - **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
