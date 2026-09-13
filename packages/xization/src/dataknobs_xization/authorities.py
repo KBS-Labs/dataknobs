@@ -441,12 +441,20 @@ class Authority(dk_annots.Annotator):
         match -- which is the reason the unit matters: the coarser the batch,
         the more a single rejection discards.
 
+        The matches are judged in the order given, and every arm gives them in
+        document order, so that is the order a validator is consulted in: a
+        validator carrying state across the matches of one text sees them as
+        the text reads. Ties -- two matches beginning at the same position,
+        which a dictionary authority produces when one declared form prefixes
+        another -- are not ordered further, so a validator should not read
+        anything into which of those comes first.
+
         Args:
             text_obj: The annotated text object to add annotations to.
             matches: The annotation row dicts of each match, one list per
-                match. A match may carry several rows -- a regex with named
-                groups produces one per group -- and they are judged and
-                added together.
+                match, in document order. A match may carry several rows -- a
+                regex with named groups produces one per group -- and they are
+                judged and added together.
 
         Returns:
             The text object's annotations.

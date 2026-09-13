@@ -69,6 +69,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several rows, as a regex with named groups produces, is still judged and
   added as one unit.
 
+  **The matches arrive in document order**, whichever arm found them:
+  `RegexAuthority` iterates `re.finditer`, and `DataframeAuthority` walks the
+  token chain, so a validator carrying state across the matches of one text
+  sees them in the order the text reads. Two matches beginning at the same
+  position — which a dictionary authority produces where one declared form
+  prefixes another, as `"golden"` does `"golden retriever"` — are not ordered
+  further, so a validator should not read anything into which of those comes
+  first. `TokenAligner.matches` and `TokenAligner.annotations` hold that same
+  order; a consumer reading `Annotations.df` is unaffected either way, since
+  `Annotations` sorts by span on every add.
+
 - **A document longer than about a thousand words is annotated.**
   `TokenAligner` walked the token stream by recursing along `next_token`,
   one stack frame per token, so the longest text `DataframeAuthority` could
@@ -80,10 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pandas internal and never `TokenAligner`, so the traceback did not name
   the cause.
 
-  The walk now carries its own stack, so document length is bounded by
-  memory rather than by the interpreter. The order matches are recorded in —
-  which is also the order an `anns_validator` is consulted in, and not
-  start-position order — is unchanged.
+  The walk now follows `next_token` iteratively, so document length is
+  bounded by memory rather than by the interpreter.
 
   **The walk is now linear in the token count, where it was quadratic.** A
   token that matched nothing was never marked as seen, so the traversal

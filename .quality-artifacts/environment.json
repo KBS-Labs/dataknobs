@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-13T04:37:34Z",
+  "timestamp": "2026-09-13T05:07:14Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-factory-takes-the-data-it-is-given",
-  "git_commit": "d04214575c32dde101d8ea5f18a5893b18b66f5b",
+  "git_branch": "sbk/the-validator-is-consulted-in-document-order",
+  "git_commit": "b057cd7accb1b1bccaf97b8309be7fe40bb03d95",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

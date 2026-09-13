@@ -394,22 +394,22 @@ def test_every_token_is_looked_up_once(prefixed_animals: dk_auth.AuthorityData) 
     )
 
 
-def test_the_order_matches_are_recorded_in_survives_the_walk(
+def test_matches_are_recorded_in_document_order(
     prefixed_animals: dk_auth.AuthorityData,
 ) -> None:
-    """The recording order is pinned so that changing it has to be deliberate.
+    """The recording order is the document's, including at a shared start token.
 
-    It is not start-position order, and that is a property of the traversal
-    rather than a decision: a match is recorded, then everything reachable
-    after its end is walked, and only then is the *next* match starting at the
-    same token recorded. So ``"beagle"``, six tokens later, lands between the
-    two forms that both start at ``"golden"``.
+    Two declared forms starting at the same token is the only arrangement
+    that can separate document order from the traversal's, and it used to:
+    the walk recorded a match, walked everything reachable past its end, and
+    only then recorded the next match starting at the same token, so
+    ``"beagle"`` -- six tokens later -- landed between the two forms that
+    both start at ``"golden"``.
 
-    Two things depend on it -- ``TokenAligner.matches`` itself, and the order
-    an authority's ``anns_validator`` is consulted in. The dataframe does not:
-    ``Annotations`` sorts by span, which is why this order has never been
-    visible to a consumer reading ``.df`` and why it is asserted here against
-    both views.
+    Asserted against both views the order reaches. ``Annotations`` sorts by
+    span on every add, so the dataframe showed document order throughout and
+    is the control here rather than the claim: it reads the same before and
+    after, which is what makes the change one of consultation order alone.
     """
     authority = dk_lex.DataframeAuthority(
         "animal", dk_lex.LexicalExpander(None, None), prefixed_animals
@@ -419,10 +419,51 @@ def test_the_order_matches_are_recorded_in_survives_the_walk(
 
     assert [[row["text"] for row in match] for match in authority.prev_aligner.matches] == [
         ["golden"],
-        ["beagle"],
         ["golden retriever"],
+        ["beagle"],
     ]
+    assert [match[0]["start_pos"] for match in authority.prev_aligner.matches] == [3, 3, 26]
     assert anns.df["text"].tolist() == ["golden retriever", "golden", "beagle"]
+
+
+def test_the_walk_visits_each_token_once_so_it_needs_no_visited_set(
+    prefixed_animals: dk_auth.AuthorityData,
+) -> None:
+    """Document order is what makes the walk a chain rather than a search.
+
+    The traversal order was held by an explicit stack, and a match's
+    continuation could reach a token the plain ``next_token`` step would
+    reach later, so a second set of token numbers was needed to keep the walk
+    from re-walking one. Following ``next_token`` and nothing else visits
+    every token exactly once by construction: ``token_num`` increases by one
+    each step and the chain ends at ``None``.
+
+    Pinned through the authority's own query count, because that is where a
+    re-walk would show up -- a token walked twice is a token offered to the
+    authority twice.
+    """
+
+    class _Counting(dk_lex.DataframeAuthority):
+        """A ``DataframeAuthority`` that records what the aligner asked it."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            self.queried: list[str] = []
+
+        def find_variations(self, text: str, **kwargs: object) -> pd.Series:
+            self.queried.append(text)
+            return super().find_variations(text, **kwargs)
+
+    authority = _Counting("animal", dk_lex.LexicalExpander(None, None), prefixed_animals)
+
+    authority.annotate_input("my golden retriever met a beagle")
+
+    assert authority.queried == ["my", "golden", "met", "a", "beagle"], (
+        "a token consumed by a match is not offered, and no token is offered twice"
+    )
+    assert not hasattr(authority.prev_aligner, "_walked_idx"), (
+        "the walked set is what a chain walk does not need"
+    )
 
 
 # --- what the answers are made of ---
