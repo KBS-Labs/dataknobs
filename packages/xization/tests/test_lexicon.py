@@ -1,7 +1,8 @@
 """Tests for dataknobs_xization.lexicon.
 
-Currently scoped to ``MultiAuthorityData.get_unique_vals_df``. The rest of the
-module is uncovered; extending this file is welcome.
+Scoped to the authority *data* containers -- ``MultiAuthorityData`` and the
+masks built over it. The annotation path that reads them is covered by
+``test_lexicon_annotation.py``; extending either file is welcome.
 """
 
 import pandas as pd

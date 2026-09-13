@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`DataframeAuthority` annotates text.** The dictionary half of the
+  authority stack — `DataframeAuthority`, `TokenAligner`, `TokenMatch`, and
+  the `MultiAuthorityFactory` that builds them — could not produce a single
+  annotation. `authority.annotate_input(text)` now returns the declared forms
+  it found, with offsets into the original text:
+
+  ```python
+  authdata = AuthorityData(pd.DataFrame({"animal": ["golden retriever"]}), "animal")
+  authority = DataframeAuthority("animal", LexicalExpander(None, None), authdata)
+
+  anns = authority.annotate_input("my golden retriever has been limping")
+  # text="golden retriever", start_pos=3, end_pos=19, ann_type="animal", auth_id=0
+  ```
+
+  Three separate breaks stood in the way, each fatal on its own:
+  `add_annotations` declared two parameters where `Authority.annotate_input`
+  declares and passes one; the call into `LexicalExpander.build_first_token`
+  supplied an `input_id` keyword that method has never accepted; and
+  `TokenMatch.matched_text` read `Token.input_text`, a member no `Token` has
+  ever had. `RegexAuthority` — the other arm, reached through the same base
+  class — was unaffected throughout and is unchanged here.
+
+  **`DataframeAuthority.add_annotations` now takes one argument**, the
+  `AnnotatedText`, matching its base class and its two sibling
+  implementations. The text object supplies both halves the old signature
+  named separately: it is a `Text`, so the tokenizer reads the id and label
+  off it, and it owns the `Annotations` the matches are added to. No working
+  caller changes, because neither the one-argument call the base class makes
+  nor a direct two-argument call could complete before this release.
+
+- **`DataframeAuthority.get_id_by_variation` answers on a freshly built
+  authority.** The variation-to-term index it reads is populated as a side
+  effect of expanding the authority's values, and nothing in the method did
+  that, so until some other member happened to expand them it returned an
+  empty set for every variation — the same answer it gives for a variation
+  that genuinely is not declared, which is why the difference was invisible.
+  It now materializes the expansion first.
+
 ### Removed
 
 - **`nltk` is no longer a *declared* dependency of this package.** No module
