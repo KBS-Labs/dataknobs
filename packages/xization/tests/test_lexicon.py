@@ -193,3 +193,55 @@ def test_auth_records_mask_conjoins_an_unbuilt_field_without_raising():
     mask = multi.auth_records_mask({"a": 1})
 
     assert not mask.any()
+
+
+# --- the masks that answer None ---------------------------------------------
+
+
+def test_auth_records_mask_is_none_when_no_fields_are_named():
+    """No fields named and no pre-filter means nothing to conjoin, which is None.
+
+    The docstring said so and the annotation said ``-> pd.Series``; pinned here
+    because the annotation now agrees with both.
+    """
+    multi = _multi()
+
+    assert multi.auth_records_mask({}) is None
+
+
+def test_auth_records_mask_starts_from_the_filter_mask():
+    """With no fields named, the pre-filter is the whole answer."""
+    multi = _multi()
+    prefilter = pd.Series([True, False], index=multi.df.index)
+
+    assert multi.auth_records_mask({}, filter_mask=prefilter) is prefilter
+
+
+def test_combine_masks_is_none_when_the_masks_select_nothing_together():
+    """An empty conjunction is reported as None rather than as an all-False mask."""
+    multi = _multi()
+    first = pd.Series([True, False], index=multi.df.index)
+    second = pd.Series([False, True], index=multi.df.index)
+
+    assert multi.combine_masks(first, second) is None
+    assert multi.combine_masks(first, None).tolist() == [True, False]
+    assert multi.combine_masks(None, second).tolist() == [False, True]
+    assert multi.combine_masks(None, None) is None
+
+
+def test_asking_for_the_sub_authority_names_says_they_are_not_supplied():
+    """Bug: the base class answered None to a question annotated ``List[str]``.
+
+    ``sub_authority_names`` was the one member of ``CorrelatedAuthorityData``
+    that did not say it was unimplemented -- its four siblings all raise --
+    and it returned None instead. A caller iterating the result got
+    ``TypeError: 'NoneType' object is not iterable`` from its own frame, and a
+    caller testing it for truth got a silent "this data correlates no
+    sub-authorities", which is the one thing a ``CorrelatedAuthorityData``
+    cannot be. Nothing in the tree calls it and nothing overrides it, so the
+    lie had never been collected.
+    """
+    multi = _multi()
+
+    with pytest.raises(NotImplementedError):
+        multi.sub_authority_names()

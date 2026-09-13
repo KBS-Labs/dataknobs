@@ -133,7 +133,6 @@ module = [
     "graphviz.*",
     "pyparsing.*",
     "json_stream.*",
-    "more_itertools.*",
     # A hard dependency of dataknobs-utils (distribution `python3-nmap`) that
     # ships neither stubs nor a py.typed marker, and has no stub package.
     # Typeshed's `types-python-nmap` covers the *other* library -- distribution

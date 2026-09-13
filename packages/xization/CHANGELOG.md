@@ -92,6 +92,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never affected by either half of this: it finds its matches with
   `re.finditer` and walks no tokens.
 
+- **`DataframeAuthority.has_value` answers with a `bool`.** It returned
+  `np.any(...)` unconverted, so what a caller got back was a `numpy.bool`
+  wearing the annotation `bool`. A truth test cannot tell the two apart, which
+  is why nothing noticed; an identity test — `is True`, a `bool` key in a
+  dict, a comparison against a sentinel — silently disagreed with the
+  signature.
+
+- **A `LexicalExpander` keeps an expansion function that is falsy.** Either
+  function may be `None`, and the constructor asked which it had been given
+  with `if variations_fn`. A function object is never falsy, so the question
+  read correctly for every argument anyone had passed — but it is the wrong
+  question, and any other callable that defines `__len__` or `__bool__`
+  answers it wrongly. Such a callable was replaced by the default without a
+  word, so every term expanded to itself. Both functions are now tested with
+  `is not None`.
+
+- **`CorrelatedAuthorityData.sub_authority_names` says it is unimplemented.**
+  It was the one member of that class that did not — its four siblings all
+  raise `NotImplementedError` — and it returned `None` against an annotation
+  of `List[str]`. A caller iterating the result got `TypeError: 'NoneType'
+  object is not iterable` from its own frame; a caller testing it for truth
+  got a silent "this data correlates no sub-authorities", which is the one
+  thing a `CorrelatedAuthorityData` cannot be. Nothing in this package calls
+  it or overrides it.
+
+### Changed
+
+- **`AuthorityFactory` is generic over the authority data it builds from**, so
+  `MultiAuthorityFactory` declares itself `AuthorityFactory[MultiAuthorityData]`.
+  A factory is written against the container it knows how to read, and the
+  base declared the widest one, so a factory naming anything narrower was
+  contradicting the signature it inherits. **The third parameter of
+  `MultiAuthorityFactory.build_authority` is renamed `multiauthdata` →
+  `authdata`**, matching the base class it overrides; a positional call is
+  unaffected.
+
+- **The annotations say where `None` is accepted and where it is returned.**
+  `DataframeAuthority.prev_aligner`, `Authority.parent`,
+  `CorrelatedAuthorityData.auth_records_mask` and
+  `CorrelatedAuthorityData.combine_masks` are each documented to answer `None`
+  and now say so, as do the optional constructor arguments across `Authority`,
+  `LexicalAuthority`, `DataframeAuthority`, `MultiAuthorityFactory` and
+  `TextFeatures`. Nothing changes at runtime; what changes is that a consumer
+  type-checking against this package is told about the `None` it could always
+  have received, instead of finding it.
+
 ### Added
 
 - **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
@@ -103,6 +149,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived from `matches`.
 
 ### Removed
+
+- **`more-itertools` is no longer a dependency of this package.** Its one use
+  in the whole workspace was `more_itertools.consume(self.v2t[v].add(term)
+  for v in variations)` in `LexicalExpander.__call__` — a generator written to
+  spell a loop as an expression, over a call that returns nothing. It is a
+  loop now, so nothing under `packages/xization/` imports the library and the
+  declaration stated a floor this package no longer has a reason to hold.
+
+  Unlike `nltk` below, this one does not arrive by another route: no other
+  package in the workspace depends on it, so `uv lock` drops it from the
+  resolution entirely. A consumer that imports `more_itertools` itself should
+  declare it, as it should have been doing already.
 
 - **`nltk` is no longer a *declared* dependency of this package.** No module
   under `packages/xization/` has ever referenced `nltk` directly — not in the
