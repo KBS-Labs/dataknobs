@@ -124,7 +124,7 @@ class TextFeatures(CharacterFeatures):
         mark_digit: bool = False,
         mark_upper: bool = False,
         mark_lower: bool = False,
-        emoji_data: emoji_utils.EmojiData = None,
+        emoji_data: emoji_utils.EmojiData | None = None,
     ):
         """Initialize with text tokenization parameters.
 

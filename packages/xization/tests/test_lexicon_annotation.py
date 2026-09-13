@@ -423,3 +423,55 @@ def test_the_order_matches_are_recorded_in_survives_the_walk(
         ["golden retriever"],
     ]
     assert anns.df["text"].tolist() == ["golden retriever", "golden", "beagle"]
+
+
+# --- what the answers are made of ---
+
+
+def test_membership_is_answered_with_a_python_bool(
+    authority: dk_lex.DataframeAuthority,
+) -> None:
+    """Bug: ``has_value`` answered with ``numpy.bool``, not ``bool``.
+
+    It returned ``np.any(...)`` unconverted, so the value a caller got back
+    was a numpy scalar wearing the annotation ``bool``. Everything that reads
+    it for truth is unaffected, which is why nothing noticed; everything that
+    reads it for *identity* -- ``is True``, ``is False``, a ``bool`` key in a
+    dict, an equality check against a sentinel -- silently disagreed with the
+    signature.
+    """
+    assert authority.has_value("beagle") is True
+    assert authority.has_value("cat") is False
+
+
+class _FalsyVariations:
+    """A callable that is falsy: what ``if variations_fn`` cannot tell from ``None``."""
+
+    def __len__(self) -> int:
+        return 0
+
+    def __call__(self, term: str) -> set[str]:
+        return {term, term.upper()}
+
+
+def test_an_expansion_function_that_is_falsy_is_still_used() -> None:
+    """Bug: a falsy callable was silently replaced by the identity expansion.
+
+    ``LexicalExpander`` accepts ``None`` for either function and substitutes a
+    default, and it asked which it had been given with ``if variations_fn``.
+    A function object is never falsy, so the question read correctly for every
+    argument anyone had passed -- but it is the wrong question, and any other
+    callable that defines ``__len__`` or ``__bool__`` answers it wrongly. The
+    caller's expansion is then dropped without a word, and every term expands
+    to itself.
+    """
+    expander = dk_lex.LexicalExpander(_FalsyVariations(), None)
+
+    assert expander("dog") == {"dog", "DOG"}
+
+
+def test_the_latest_aligner_is_none_before_anything_is_annotated(
+    authority: dk_lex.DataframeAuthority,
+) -> None:
+    """``prev_aligner`` reports the last call to ``add_annotations``; there has been none."""
+    assert authority.prev_aligner is None

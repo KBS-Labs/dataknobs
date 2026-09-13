@@ -7,7 +7,7 @@ and derived annotation columns for structured text extraction.
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, Generic, List, Set, TypeVar, Union
 
 import pandas as pd
 
@@ -15,6 +15,13 @@ import dataknobs_xization.annotations as dk_annots
 
 # Key annotation column name constants
 KEY_AUTH_ID_COL = "auth_id"
+
+#: The kind of authority data a factory builds from. A factory is written
+#: against the container it knows how to read -- ``MultiAuthorityData``, say,
+#: whose sub-authorities it pulls one at a time -- and a factory that accepted
+#: any ``AuthorityData`` could not do that, so the parameter belongs to the
+#: factory rather than to the method.
+AuthorityDataT = TypeVar("AuthorityDataT", bound="AuthorityData")
 
 
 class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
@@ -274,11 +281,11 @@ class Authority(dk_annots.Annotator):
     def __init__(
         self,
         name: str,
-        auth_anns_builder: AuthorityAnnotationsBuilder = None,
-        authdata: AuthorityData = None,
-        field_groups: DerivedFieldGroups = None,
-        anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
-        parent_auth: "Authority" = None,
+        auth_anns_builder: AuthorityAnnotationsBuilder | None = None,
+        authdata: AuthorityData | None = None,
+        field_groups: DerivedFieldGroups | None = None,
+        anns_validator: Callable[["Authority", Dict[str, Any]], bool] | None = None,
+        parent_auth: "Authority | None" = None,
     ):
         """Initialize with this authority's metadata.
 
@@ -308,7 +315,7 @@ class Authority(dk_annots.Annotator):
         return self.anns_builder.metadata
 
     @property
-    def parent(self) -> "Authority":
+    def parent(self) -> "Authority | None":
         """Get this authority's parent, or None."""
         return self._parent
 
@@ -549,16 +556,16 @@ class AnnotationsValidator(ABC):
             return self.row_accessor.get_col_value(col_name, row)
 
 
-class AuthorityFactory(ABC):
-    """A factory class for building an authority."""
+class AuthorityFactory(ABC, Generic[AuthorityDataT]):
+    """A factory class for building an authority from a kind of authority data."""
 
     @abstractmethod
     def build_authority(
         self,
         name: str,
         auth_anns_builder: AuthorityAnnotationsBuilder,
-        authdata: AuthorityData,
-        parent_auth: Authority = None,
+        authdata: AuthorityDataT,
+        parent_auth: "Authority | None" = None,
     ) -> Authority:
         """Build an authority with the given name and data.
 
@@ -583,11 +590,11 @@ class LexicalAuthority(Authority):
     def __init__(
         self,
         name: str,
-        auth_anns_builder: AuthorityAnnotationsBuilder = None,
-        authdata: AuthorityData = None,
-        field_groups: DerivedFieldGroups = None,
-        anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
-        parent_auth: "Authority" = None,
+        auth_anns_builder: AuthorityAnnotationsBuilder | None = None,
+        authdata: AuthorityData | None = None,
+        field_groups: DerivedFieldGroups | None = None,
+        anns_validator: Callable[["Authority", Dict[str, Any]], bool] | None = None,
+        parent_auth: "Authority | None" = None,
     ):
         """Initialize with this authority's metadata.
 

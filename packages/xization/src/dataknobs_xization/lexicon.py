@@ -6,10 +6,9 @@ and pattern matching in text with support for variations and fuzzy matching.
 
 from abc import abstractmethod
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from typing import Any, Dict, List, Set, Union
 
-import more_itertools
 import numpy as np
 import pandas as pd
 
@@ -28,8 +27,8 @@ class LexicalExpander:
 
     def __init__(
         self,
-        variations_fn: Callable[[str], Set[str]],
-        normalize_fn: Callable[[str], str],
+        variations_fn: Callable[[str], Set[str]] | None,
+        normalize_fn: Callable[[str], str] | None,
         split_input_camelcase: bool = True,
         detect_emojis: bool = False,
     ):
@@ -46,11 +45,14 @@ class LexicalExpander:
                 then adjacent emojis will also be split; otherwise, adjacent
                 emojis will appear as a single token.
         """
-        self.variations_fn = variations_fn if variations_fn else lambda x: {x}
-        self.normalize_fn = normalize_fn if normalize_fn else lambda x: x
+        # ``is not None`` rather than truthiness: a callable that defines
+        # ``__len__`` or ``__bool__`` can be falsy, and asking for truth here
+        # discards it in favour of the default without a word.
+        self.variations_fn = variations_fn if variations_fn is not None else lambda x: {x}
+        self.normalize_fn = normalize_fn if normalize_fn is not None else lambda x: x
         self.split_input_camelcase = split_input_camelcase
         self.emoji_data = emoji_utils.load_emoji_data() if detect_emojis else None
-        self.v2t = defaultdict(set)
+        self.v2t: defaultdict[str, Set[Any]] = defaultdict(set)
 
     def __call__(self, term: Any, normalize: bool = True) -> Set[str]:
         """Get all variations of the original term.
@@ -67,7 +69,8 @@ class LexicalExpander:
             variations = {self.normalize_fn(v) for v in variations}
         # Add a mapping from each variation to its original term
         if variations is not None and len(variations) > 0:
-            more_itertools.consume(self.v2t[v].add(term) for v in variations)
+            for variation in variations:
+                self.v2t[variation].add(term)
         return variations
 
     def normalize(self, input_term: str) -> str:
@@ -110,7 +113,13 @@ class TokenMatch:
     matched text and annotation generation.
     """
 
-    def __init__(self, auth: dk_auth.LexicalAuthority, val_idx: int, var: str, token: dk_tok.Token):
+    def __init__(
+        self,
+        auth: dk_auth.LexicalAuthority,
+        val_idx: Hashable,
+        var: str,
+        token: dk_tok.Token,
+    ):
         self.auth = auth
         self.val_idx = val_idx
         self.var = var
@@ -259,15 +268,20 @@ class TokenAligner:
 class DataframeAuthority(dk_auth.LexicalAuthority):
     """A pandas dataframe-based lexical authority."""
 
+    #: Narrowed from the base, where an authority may hold no data at all: a
+    #: dataframe authority is built from its dataframe and its constructor
+    #: requires one, so every read below has something to read.
+    authdata: dk_auth.AuthorityData
+
     def __init__(
         self,
         name: str,
         lexical_expander: LexicalExpander,
         authdata: dk_auth.AuthorityData,
-        auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder = None,
-        field_groups: dk_auth.DerivedFieldGroups = None,
-        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] = None,
-        parent_auth: dk_auth.Authority = None,
+        auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder | None = None,
+        field_groups: dk_auth.DerivedFieldGroups | None = None,
+        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None = None,
+        parent_auth: dk_auth.Authority | None = None,
     ):
         """Initialize with the name, values, and associated ids of the authority;
         and with the lexical expander for authoritative values.
@@ -293,12 +307,16 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
             parent_auth=parent_auth,
         )
         self.lexical_expander = lexical_expander
-        self._variations = None
-        self._prev_aligner = None
+        self._variations: pd.Series | None = None
+        self._prev_aligner: TokenAligner | None = None
 
     @property
-    def prev_aligner(self) -> TokenAligner:
-        """Get the token aligner created in the latest call to annotate_text."""
+    def prev_aligner(self) -> TokenAligner | None:
+        """Get the token aligner created in the latest call to annotate_text.
+
+        Returns:
+            The latest aligner, or None if nothing has been annotated yet.
+        """
         return self._prev_aligner
 
     @property
@@ -367,7 +385,9 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         Returns:
             True if the value is a valid entity value.
         """
-        return np.any(self.authdata.df[self.name] == value)
+        # ``np.any`` answers with ``numpy.bool``, which is not a ``bool``:
+        # true enough for a truth test, but not for an identity one.
+        return bool(np.any(self.authdata.df[self.name] == value))
 
     def get_value_ids(self, value: Any) -> Set[Any]:
         """Get all IDs associated with the given value. Note that typically
@@ -442,7 +462,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         self,
         variations: pd.Series,
         variations_colname: str = "variation",
-        ids_colname: str = None,
+        ids_colname: str | None = None,
         lookup_values: bool = False,
     ) -> pd.DataFrame:
         """Create a DataFrame including associated ids for each variation.
@@ -501,11 +521,15 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 
     def __init__(self, df: pd.DataFrame, name: str):
         super().__init__(df, name)
-        self._authority_data = {}
+        self._authority_data: Dict[str, dk_auth.AuthorityData] = {}
 
     def sub_authority_names(self) -> List[str]:
-        """Get the "sub" authority names."""
-        return None
+        """Get the "sub" authority names.
+
+        Returns:
+            The names of the "sub" authorities this data correlates.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def auth_values_mask(self, name: str, value_id: int) -> pd.Series:
@@ -524,8 +548,8 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
     def auth_records_mask(
         self,
         record_value_ids: Dict[str, int],
-        filter_mask: pd.Series = None,
-    ) -> pd.Series:
+        filter_mask: pd.Series | None = None,
+    ) -> pd.Series | None:
         """Get a series identifying records in the full authority matching
         the given records of the form {<sub-name>: <sub-value-id>}.
 
@@ -552,7 +576,7 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
         raise NotImplementedError
 
     @abstractmethod
-    def combine_masks(self, mask1: pd.Series, mask2: pd.Series) -> pd.Series:
+    def combine_masks(self, mask1: pd.Series | None, mask2: pd.Series | None) -> pd.Series | None:
         """Combine the masks if possible, returning the valid combination or None.
 
         Args:
@@ -692,8 +716,8 @@ class MultiAuthorityData(CorrelatedAuthorityData):
     def auth_records_mask(
         self,
         record_value_ids: Dict[str, int],
-        filter_mask: pd.Series = None,
-    ) -> pd.Series:
+        filter_mask: pd.Series | None = None,
+    ) -> pd.Series | None:
         """Get a boolean series identifying records in the full authority matching
         the given records of the form {<sub-name>: <sub-value-id>}.
 
@@ -725,7 +749,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         """
         return self.df[records_mask]
 
-    def combine_masks(self, mask1: pd.Series, mask2: pd.Series) -> pd.Series:
+    def combine_masks(self, mask1: pd.Series | None, mask2: pd.Series | None) -> pd.Series | None:
         """Combine the masks if possible, returning the valid combination or None.
 
         Args:
@@ -768,7 +792,7 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
         return dk_auth.AuthorityData(col_df, name)
 
 
-class MultiAuthorityFactory(dk_auth.AuthorityFactory):
+class MultiAuthorityFactory(dk_auth.AuthorityFactory[MultiAuthorityData]):
     """An factory for building a "sub" authority directly or indirectly
     from MultiAuthorityData.
     """
@@ -776,7 +800,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
     def __init__(
         self,
         auth_name: str,
-        lexical_expander: LexicalExpander = None,
+        lexical_expander: LexicalExpander | None = None,
     ):
         """Initialize the MultiAuthorityFactory.
 
@@ -804,8 +828,8 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
         self,
         name: str,
         auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder,
-        multiauthdata: MultiAuthorityData,
-        parent_auth: dk_auth.Authority = None,
+        authdata: MultiAuthorityData,
+        parent_auth: dk_auth.Authority | None = None,
     ) -> DataframeAuthority:
         """Build a DataframeAuthority.
 
@@ -813,19 +837,19 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
             name: The name of the authority to build.
             auth_anns_builder: The authority annotations row builder to use
                 for building annotation rows.
-            multiauthdata: The multi-authority source data.
+            authdata: The multi-authority source data.
             parent_auth: The parent authority.
 
         Returns:
             The DataframeAuthority instance.
         """
-        authdata = multiauthdata.get_authority_data(name)
+        subauthdata = authdata.get_authority_data(name)
         field_groups = None  # TODO: get from instance var set on construction?
-        anns_validator = None  # TODO: get from multiauthdata?
+        anns_validator = None  # TODO: get from authdata?
         return DataframeAuthority(
             name,
             self.get_lexical_expander(name),
-            authdata,
+            subauthdata,
             field_groups=field_groups,
             anns_validator=anns_validator,
             parent_auth=parent_auth,
