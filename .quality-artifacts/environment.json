@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-13T02:27:08Z",
+  "timestamp": "2026-09-13T02:53:52Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-dictionary-half-of-the-authority-stack-runs",
-  "git_commit": "c705849fb877e31adb2322a2cbb566dafc09d77a",
+  "git_branch": "sbk/the-validator-sees-one-match-at-a-time",
+  "git_commit": "4e7c3f27ec5d5573b188681f0ddf4534db6c8fb1",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
