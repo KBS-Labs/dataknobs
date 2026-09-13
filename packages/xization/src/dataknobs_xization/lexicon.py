@@ -144,7 +144,7 @@ class TokenMatch:
     @property
     def matched_text(self):
         """Get the matched original text."""
-        return self.token.input_text[self.tokens[0].start_pos : self.tokens[-1].end_pos]
+        return self.token.full_text[self.tokens[0].start_pos : self.tokens[-1].end_pos]
 
     def build_annotation(self):
         return self.auth.build_annotation(
@@ -245,6 +245,18 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         Returns:
             A pandas series with index-identified variations.
         """
+        return self._materialize_variations()
+
+    def _materialize_variations(self) -> pd.Series:
+        """Expand this authority's values, once, caching the result.
+
+        Expanding is also what populates the lexical expander's
+        variation-to-term back-index, so anything reading that index goes
+        through here first.
+
+        Returns:
+            A pandas series with index-identified variations.
+        """
         if self._variations is None:
             self._variations = (
                 self.authdata.df[self.name].apply(self.lexical_expander).explode().dropna()
@@ -260,6 +272,11 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         Returns:
             The possibly empty set of associated value IDS.
         """
+        # The expander's variation-to-term back-index is populated as a side
+        # effect of expanding this authority's values, so materialize those
+        # first: a lookup against a cold index answers "no such variation" for
+        # every variation, including the ones this authority declares.
+        self._materialize_variations()
         ids = set()
         for value in self.lexical_expander.get_terms(variation):
             ids.update(self.get_value_ids(value))
@@ -388,26 +405,27 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
 
     def add_annotations(
         self,
-        doctext: dk_doc.Text,
-        annotations: dk_anns.Annotations,
+        text_obj: dk_anns.AnnotatedText,
     ) -> dk_anns.Annotations:
         """Method to do the work of finding, validating, and adding annotations.
 
+        The text object carries both halves this needs: it is a
+        :class:`~dataknobs_structures.document.Text`, so the tokenizer reads
+        its id and label straight off it, and it owns the annotations the
+        matches are added to.
+
         Args:
-            doctext: The text to process.
-            annotations: The annotations object to add annotations to.
+            text_obj: The annotated text object to process and add annotations.
 
         Returns:
-            The given or a new Annotations instance.
+            The added Annotations.
         """
-        first_token = self.lexical_expander.build_first_token(
-            doctext.text, input_id=doctext.text_id
-        )
+        first_token = self.lexical_expander.build_first_token(text_obj)
         token_aligner = TokenAligner(first_token, self)
         self._prev_aligner = token_aligner
         if self.validate_ann_dicts(token_aligner.annotations):
-            annotations.add_dicts(token_aligner.annotations)
-        return annotations
+            text_obj.annotations.add_dicts(token_aligner.annotations)
+        return text_obj.annotations
 
 
 class CorrelatedAuthorityData(dk_auth.AuthorityData):
