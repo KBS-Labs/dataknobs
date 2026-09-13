@@ -80,6 +80,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order; a consumer reading `Annotations.df` is unaffected either way, since
   `Annotations` sorts by span on every add.
 
+- **An `AuthoritiesBundle` consults the `anns_validator` it was given.** The
+  composite declared the parameter in its own signature, documented it with
+  the same "single match or entity" sentence as the base class, and stored
+  it — and then never called it. A consumer who handed a bundle a validator
+  got no exception, no warning, and a result identical to the one they would
+  have got by passing nothing:
+
+  ```python
+  # a bundle over a dictionary arm and a date pattern, with a validator
+  # that rejects beagles
+  bundle.annotate_input("my golden retriever met a beagle on 07/04/1776")
+  # was: the validator is called 0 times and the beagle survives
+  # now: it is called once per match and "golden retriever", "07/04/1776" survive
+  ```
+
+  A bundle could not use the seam its arms use, because its members added
+  their rows straight to the shared text object and the match boundaries were
+  gone by the time the bundle could look. `Authority` grew `find_matches`
+  (below) so a member can hand its matches back instead, and the bundle
+  judges what its members found.
+
+  **A member judges its own matches first**, so a match a member's validator
+  rejects is never shown to the bundle — the two are consulted innermost
+  first, which is the only order in which either can mean anything.
+  **The members are merged into document order rather than chained**, so a
+  bundle, like each arm, shows a validator the matches of one text in the
+  order the text reads even when a later-added member matched earlier;
+  results are unaffected either way, since `Annotations` sorts on every add.
+
+  A bundle carrying **no** validator delegates exactly as it did before. The
+  one new failure is a member that does not implement `find_matches` inside a
+  bundle that **does** carry one: that raises `NotImplementedError` naming the
+  class, rather than judging a document while that member's matches go
+  unexamined.
+
 - **A document longer than about a thousand words is annotated.**
   `TokenAligner` walked the token stream by recursing along `next_token`,
   one stack frame per token, so the longest text `DataframeAuthority` could
@@ -177,6 +212,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have received, instead of finding it.
 
 ### Added
+
+- **`Authority.find_matches(text_obj)`**, the counterpart to
+  `add_valid_annotations`: a subclass finds its matches and hands them back
+  rather than adding them, so something other than the authority that found a
+  match can judge it. `RegexAuthority` and `DataframeAuthority` implement it,
+  and `AuthoritiesBundle` implements it by merging its members'. It is **not
+  abstract** — a subclass written before it existed still constructs, and
+  keeps working wherever nothing needs its matches back.
 
 - **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
   matches and this decides how they are judged. Two supporting members come
