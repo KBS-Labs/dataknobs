@@ -184,26 +184,28 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    ("sync_type", "async_type", "members"),
+    ("sync_type", "async_type", "members", "unflavoured"),
     [
-        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"]),
-        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"]),
-        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"]),
+        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], ()),
+        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], ()),
+        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], ()),
         (
             ExactNormalizedSignal,
             AsyncExactNormalizedSignal,
-            ["candidates", "candidates_many"],
+            ["candidates", "candidates_many", "_hits"],
+            (),
         ),
-        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many"]),
+        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], ()),
         (
             DeclaredSignal,
             AsyncDeclaredSignal,
-            ["candidates", "candidates_many"],
+            ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
+            ("_fold", "_order"),
         ),
     ],
 )
 def test_the_twins_expose_one_surface(
-    sync_type: type, async_type: type, members: list[str]
+    sync_type: type, async_type: type, members: list[str], unflavoured: tuple[str, ...]
 ) -> None:
     """Parity over **annotations**, not only names and defaults.
 
@@ -211,8 +213,25 @@ def test_the_twins_expose_one_surface(
     ``str | Collection[str] | None`` while the other half has widened -- which
     is precisely the drift the alias was published to prevent, arriving
     through the test written to catch it.
+
+    **The hooks are listed, not only the surface.** ``_hits``, ``_located``,
+    ``_fold`` and ``_order`` are what a consumer overrides to write a rung, so
+    they are the pair's extension surface and drift there reaches consumer
+    code directly -- a keyword added to the asynchronous ``_located`` and
+    forgotten on the synchronous one is wrong against whichever half its
+    author did not reach for. ``_fold`` and ``_order`` are declared
+    ``unflavoured`` because they stay synchronous on both halves for the
+    reason their docstrings give: ordering a set that has already arrived
+    reaches for nothing. That declaration relaxes the flavour assertion and
+    nothing else, so the parameters are still compared.
     """
-    assert_twin_types_agree(sync_type, async_type, members, compare_return=True)
+    assert_twin_types_agree(
+        sync_type,
+        async_type,
+        members,
+        unflavoured_members=unflavoured,
+        compare_return=True,
+    )
 
 
 def test_the_bridge_is_not_one_of_the_twins() -> None:
@@ -456,8 +475,10 @@ def test_an_id_the_authority_cannot_check_is_named_rather_than_silently_dropped(
     scoped = resolver.resolve("anything", k=5, within="Breed")
     assert scoped.candidates == ()
     assert scoped.coverage.beyond_authority == ("wombat",)
-    # The half a caller previously got on its own, and could not read.
-    assert scoped.coverage.unmatched == ("anything",)
+    # The half a caller previously got on its own, and could not read. It is
+    # spans now, and the text reader is the other half of the same claim.
+    assert scoped.coverage.unmatched == ((0, 8),)
+    assert scoped.unmatched_text() == ("anything",)
 
 
 def test_a_candidate_the_scope_merely_excludes_is_not_reported_as_uncheckable(
@@ -733,17 +754,52 @@ def test_a_miss_reports_what_it_could_not_place(mammals_path: Path) -> None:
     for is the quiet failure this field exists to make loud: the phrases users
     ask about and the vocabulary does not carry are the next entries somebody
     should add, and they are only visible here.
+
+    **Spans, with the text as a reader over them.** Both halves are asserted
+    at every point below, because the pair is the claim: a position nobody can
+    turn back into a phrase is no more use than a phrase nobody can locate.
     """
     ontology = load_ontology(mammals_path)
     resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
 
     hit = resolver.resolve("beagle", k=5)
-    assert hit.coverage.matched == ("beagle",)
+    assert hit.coverage.matched == ((0, 6),)
+    assert hit.matched_text() == ("beagle",)
     assert hit.coverage.unmatched == ()
+    assert hit.unmatched_text() == ()
 
     miss = resolver.resolve("wombat", k=5)
     assert miss.coverage.matched == ()
-    assert miss.coverage.unmatched == ("wombat",)
+    assert miss.matched_text() == ()
+    assert miss.coverage.unmatched == ((0, 6),)
+    assert miss.unmatched_text() == ("wombat",)
+
+
+def test_a_whole_string_match_reports_the_extent_the_fold_kept(
+    mammals_path: Path,
+) -> None:
+    """``(0, len(query))`` is not the honest span when the fold strips.
+
+    The rung compared the whole query, so it has one span to report -- but the
+    fold that made the match strips, so two of the characters in the query
+    took no part in it. Reporting them as evidence is the same class of claim
+    as reporting a corpus compatible because nobody looked.
+
+    The slice is also what ``matched_text`` carries now, in the caller's own
+    casing rather than the index's: the field is what the span points at, so
+    the two agree by construction instead of by trust.
+    """
+    ontology = load_ontology(mammals_path)
+    resolver = CascadingResolver([ExactNormalizedSignal(ontology.entities)], ontology.entities)
+
+    result = resolver.resolve("  Beagle  ", k=5)
+
+    assert [c.entity_id for c in result.candidates] == ["beagle"]
+    assert result.coverage.matched == ((2, 8),)
+    assert result.matched_text() == ("Beagle",)
+    assert result.candidates[0].evidence[0].span == (2, 8)
+    assert result.candidates[0].evidence[0].matched_text == "Beagle"
+    assert result.coverage.unmatched == ()
 
 
 class TwoAxisSource(MappingEntitySource):
@@ -1082,15 +1138,26 @@ def test_a_candidate_subclass_survives_the_cascade(mammals_path: Path) -> None:
     assert candidate.fused_from == ("a", "b")
 
 
-def test_a_query_that_placed_something_is_not_reported_unmatched(mammals_path: Path) -> None:
-    """``unmatched`` keys off the candidates, not off a projection of them.
+def test_a_candidate_that_located_nothing_leaves_the_query_unmatched(
+    mammals_path: Path,
+) -> None:
+    """Coverage is positional, and the reading follows from that.
 
-    It was derived from ``matched_text``, which ``_stamp`` leaves empty for a
-    candidate that carried no evidence of its own -- the case ``merge_rung``'s
-    ``kind`` parameter exists to serve. So a rung returning a bare candidate
-    produced a result that reported the entity **and** reported the query as
-    placeable nowhere, and the guide teaches ``coverage.unmatched`` as the
-    signal for what to add to a vocabulary next.
+    ``unmatched`` was *"what reached no candidate"*, all-or-nothing, so a
+    resolution that produced anything at all reported the whole query placed.
+    It is *"what no evidence located"* now, and the two differ exactly where a
+    candidate carries no position -- a bare candidate from a fusing or
+    decaying rung, a cosine neighbour over an embedded utterance.
+
+    **That reads correctly rather than being the cost of the change.** No
+    declared form was found in this text and a match is being offered anyway,
+    which is precisely the line a consumer maintaining a vocabulary acts on;
+    the older rule could not state it, because a vector-only hit and an exact
+    one produced the same empty report.
+
+    The positive control is the neighbouring test: the same query through a
+    rung that *does* locate its match comes back with nothing unmatched, so
+    this is a property of the evidence rather than of the query.
     """
 
     class BareRung(DecayRung):
@@ -1107,7 +1174,13 @@ def test_a_query_that_placed_something_is_not_reported_unmatched(mammals_path: P
     result = CascadingResolver([BareRung()], onto.entities).resolve("beagle")
 
     assert [c.entity_id for c in result.candidates] == ["beagle"]
-    assert result.coverage.unmatched == ()
+    assert result.candidates[0].evidence[0].span is None
+    assert result.coverage.matched == ()
+    assert result.coverage.unmatched == ((0, 6),)
+    assert result.unmatched_text() == ("beagle",)
+
+    located = CascadingResolver([ExactNormalizedSignal(onto.entities)], onto.entities)
+    assert located.resolve("beagle").coverage.unmatched == ()
 
 
 class AliaslessSource:

@@ -101,13 +101,44 @@ cascade positions by rung rather than by number. It does *not* survive an
 `INCOMPATIBLE` corpus, so a caller putting candidates in front of a person
 reads `compatibility` first.
 
+## Where a match sat
+
+Evidence carries a **span**: half-open offsets into `result.query`, or `None`
+where the rung cannot locate one.
+
+```python
+assert result.explain("beagle")[0].span == (0, 7)      # into `result.query`
+
+padded = resolver.resolve("  Beagles  ", k=5)
+assert padded.explain("beagle")[0].span == (2, 9)      # the fold strips
+assert padded.explain("beagle")[0].matched_text == "Beagles"
+```
+
+`(0, len(query))` would be the easy answer for that second one and is not the
+honest one: the fold strips, so two of those characters took no part in the
+match. `matched_text` is the slice the span points at, so the two agree by
+construction — and it is the caller's own casing rather than the index's.
+
+A rung that compares the whole query has one span to report and the base class
+reports it; a rung that *locates* forms inside the query reports one per place
+it found something. Those are the same rung as far as a caller is concerned,
+which is the point: a caller who already knows the phrase and one who hands
+over a whole sentence take the same path.
+
+`span` is `None` where there is no position to report — a cosine neighbour over
+an embedded utterance has none in the utterance, and a candidate that inherited
+its match rather than making one has none either.
+
 ## What the query left unaccounted for
+
+Coverage is that positional account, rolled up over every candidate.
 
 ```python
 miss = resolver.resolve("wombat", k=5)
 
 assert not miss.candidates                             # a miss is an empty tuple
-assert miss.coverage.unmatched == ("wombat",)
+assert miss.coverage.unmatched == ((0, 6),)
+assert miss.unmatched_text() == ("wombat",)
 ```
 
 There is no outcome enum: `bool(candidates)` is the miss. Coverage is a report
@@ -115,8 +146,24 @@ rather than a verdict — an absence is not a falsehood — and it is how a
 vocabulary gets maintained: the phrases users ask about and the vocabulary does
 not carry are the next entries somebody should add.
 
-Its third field, `beyond_authority`, holds entity **ids** rather than query
-text, and belongs to the scope path — see [Scoping a
+`matched` is the union of the evidence spans, merged and ordered; `unmatched`
+is the residue, each interval trimmed of the whitespace that bounded it.
+`matched_text()` and `unmatched_text()` slice them back out of `query` for you.
+Spans rather than strings because the text is derivable from the position and
+the position is not derivable from the text — a phrase occurring twice has one
+string and two places, and a report naming the string cannot say which.
+
+**Evidence that located nothing covers nothing**, and that is the reading
+rather than a gap in it. A resolution whose only hits came from a vector rung
+comes back with `matched` empty and the whole query `unmatched`: a
+neighbourhood guess is being offered and no declared form was found in the
+text. That is the single strongest line a consumer maintaining a vocabulary can
+act on, and one the older all-or-nothing rule could not state — it reported a
+vector-only hit and an exact one the same way, because both had produced a
+candidate.
+
+Its third field, `beyond_authority`, holds entity **ids** rather than offsets,
+and belongs to the scope path — see [Scoping a
 resolution](#scoping-a-resolution).
 
 ## Scoping a resolution
@@ -183,7 +230,7 @@ Not sharing that backing also means a rung can answer with an id the authority
 does not carry at all — an index gone stale against the vocabulary, which is an
 operational fact rather than a bug. Such a candidate is **dropped**, because
 nothing can show it is inside the scope; but the drop is **reported**, because
-an empty result whose `unmatched` names the query is also what a correctly
+an empty result whose `unmatched` spans the query is also what a correctly
 spelled scope over a vocabulary lacking the phrase returns, and only one of
 those is the caller's to fix.
 
@@ -197,7 +244,7 @@ across = CascadingResolver([ExactNormalizedSignal(stale)], onto.entities)
 
 scoped = across.resolve("quokka", k=5, within="Breed")
 assert scoped.candidates == ()                          # dropped: nothing can check it
-assert scoped.coverage.unmatched == ("quokka",)         # true of a plain miss too
+assert scoped.unmatched_text() == ("quokka",)           # true of a plain miss too
 assert scoped.coverage.beyond_authority == ("quokka",)  # only this says which id
 
 assert across.resolve("quokka", k=5).coverage.beyond_authority == ()
@@ -295,6 +342,49 @@ signal_backends.register("my_rung", MyRung)
 
 `AsyncDeclaredSignal` is the same for a rung that reaches for data — one
 `async def _hits`, everything else shared.
+
+**To scan rather than compare, override `_located` instead.** `_hits` answers
+with a `frozenset[str]`, which has nowhere to put an offset; `_located` answers
+with `FormHit`s — an id and where its form sat — in the order the rung wants
+them proposed.
+
+```python
+from dataknobs_common.entity_resolution import DeclaredSignal, FormHit, token_spans
+
+
+class MyScanningRung(DeclaredSignal):
+    key = "my_scan"
+
+    def _located(self, query: str) -> list[FormHit]:
+        tokens = token_spans(query)              # where the words are
+        found = []
+        for length in range(len(tokens), 0, -1): # longest form first
+            for first in range(len(tokens) - length + 1):
+                start, end = tokens[first][0], tokens[first + length - 1][1]
+                hits = self._entities.by_surface_form(self._fold(query[start:end]))
+                for entity_id in sorted(hits):       # a set has no stable order
+                    found.append(FormHit(entity_id=entity_id, span=(start, end)))
+        return found
+```
+
+`token_spans` is the boundary policy, and it is a different question from the
+fold: `default_normalizer` strips and case-folds, which is what a whole-string
+lookup wants and is not what stops a scan finding `beagle` inside `beagles`.
+Probe the **slice** rather than a join of the tokens, so no offset ever points
+at a string the text does not contain. Twenty-one lookups for a six-token
+utterance, over a dictionary — a bounded cost, not a search.
+
+Overlapping forms are all returned. `"golden retriever"` hits
+`golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`; choosing one is
+a verdict, and the offsets make the containment visible so the consumer can
+make it instead. Order matters where the score does not: a declared hit is
+`1.0` by fiat, so the only order a caller can read is the one the rung
+publishes — which is also what `_order` is for on the `_hits` path, where
+alphabetical is the stable default and means nothing more than that.
+
+`k` counts entities rather than places: one entity named twice is one candidate
+carrying two pieces of evidence, which is what the cascade does when two rungs
+produce the same id.
 
 The bare `MatchSignal` protocol stays the escape hatch, for a rung the base
 cannot serve: one whose backing is not a dictionary lookup, or one that already

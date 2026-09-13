@@ -599,7 +599,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, because a published function whose result type is not published leaves a
   caller unable to annotate what they were handed.
 
+- **A rung can say where in the query a form sat.** `DeclaredSignal` and
+  `AsyncDeclaredSignal` publish `_located`, which answers with `FormHit`s — an
+  entity id and a half-open span — so a rung that *locates* declared forms
+  inside an utterance is written by overriding one method. `_hits` stays for a
+  rung that compares the whole query and the base class locates what it
+  returns, so both kinds of rung produce spans and the slot-filling caller who
+  already knows the phrase takes the same path as the one who hands over a
+  sentence. `_order` is the third hook: a declared hit scores `1.0` by fiat and
+  carries no order, so an order that is to mean anything — the longer form
+  before the one it contains — has to be published by the rung.
+
+- **`content_span` and `token_spans`** in `dataknobs_common.text`, re-exported
+  on the package door and the resolution family's. The first is the extent a
+  fold keeps, which is what a whole-string match reports rather than
+  `(0, len(query))`. The second is the token-boundary policy: where the words
+  are, which is what stops a scan finding `beagle` inside `unbeagleable`, and
+  what an n-gram probe enumerates — 21 dictionary lookups for a six-token
+  utterance. They are separate from `default_normalizer` because folding and
+  bounding are different questions, and the fold that serves a whole-string
+  lookup does not serve a scan unchanged.
+
+- **`ResolutionResult.matched_text()` and `.unmatched_text()`**, which slice
+  `Coverage`'s spans back out of `query`.
+
+- **`assert_twins_agree` can check a member that is synchronous on both
+  halves.** A twinned type has them — a name property, a predicate, an ordering
+  hook over data that has already arrived — and they reach for nothing, so
+  making the asynchronous half a coroutine would cost every caller an `await`
+  for no I/O. Such a pair failed the flavour assertion outright, so the only way
+  to keep the guard green was to leave the member out of the list, where nothing
+  checked it. Declare it instead: `unflavoured` on `assert_twins_agree`, or
+  `unflavoured_members` on `assert_twin_types_agree`, which names *members*
+  rather than parameters and so carries an explicit subset check where the other
+  declarations self-check by equality. The flavour assertion relaxes and nothing
+  else does — parameter names, defaults, kinds and annotations are still
+  compared, and a member that later becomes genuinely asynchronous fails rather
+  than going quiet.
+
 ### Changed
+
+- **`Coverage` holds offsets rather than text, and reports what the evidence
+  *located* rather than what reached a candidate.** `matched` is the union of
+  the evidence spans — merged, ordered, half-open into `query` — and
+  `unmatched` is the residue, each interval trimmed of the whitespace that
+  bounded it. Both were `tuple[str, ...]`; `matched_text()` and
+  `unmatched_text()` recover the strings.
+
+  Spans because the text is derivable from the position and the position is
+  not derivable from the text: a phrase occurring twice has one string and two
+  places, and a report naming the string cannot say which.
+
+  The reading changes with the type, and deliberately. Evidence carrying no
+  span contributes nothing, so a resolution whose only hits came from a rung
+  that cannot locate a match — a cosine neighbour, a fused or decayed
+  candidate that inherited one — comes back with `matched` empty and the whole
+  query `unmatched`. That is the line a consumer maintaining a vocabulary acts
+  on: no declared form was found in the text and a guess is being offered
+  anyway. The older all-or-nothing rule reported a vector-only hit and an exact
+  one identically, because both had produced a candidate.
+
+- **A declared rung's evidence carries a span, and `matched_text` is the slice
+  it points at.** `ExactNormalizedSignal` and `AliasSignal` reported
+  `span=None` and `matched_text=query`; they now report the extent the fold
+  kept — `"  Beagles  "` matches at `(2, 9)`, not `(0, 11)` — and the text at
+  that extent, in the caller's own casing. The two fields agree by
+  construction rather than by trust.
+
+- **`ResolutionRef` records which rung placed it and what kind of match that
+  was.** It gains `signal`, `kind` and `span`, drops `signals`, and
+  `runners_up` becomes a tuple of `RunnerUp`, each carrying a `MatchEvidence`.
+  A stored resolution is only worth storing if it can still be judged, and
+  `signals` — a mapping of rung name to score — recorded which rungs fired
+  while recording nothing about what any of them meant; a runner-up as an id
+  beside a bare float had the same hole one field over, and a bare float is
+  also the per-result scoring this family already refuses one level up.
+  `EvidenceKind`, `MatchEvidence` and `RunnerUp` join `ResolutionRef` on the
+  `dataknobs_common.ontology` door, since a type a published type carries has
+  to be reachable from the same place.
 
 - **`dataknobs-common` declares one dependency**, `typing-extensions`, scoped by
   marker to Python below 3.13. PEP 696 type-parameter defaults are `typing`'s
@@ -611,6 +688,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
+
+- **`requires_elasticsearch` skips a cluster that cannot host a test index,
+  instead of letting the suite time out against it.** `is_elasticsearch_available()`
+  probed a TCP connect and nothing else, so it reported available for any
+  listening port. A cluster whose disk is over the high watermark is exactly
+  that: it accepts the connection, answers `/` in milliseconds, and reports
+  `green` cluster status until the moment the suite asks for its first index —
+  which the disk-threshold decider then declines to place, leaving the client
+  to time out. The marker exists so an unusable cluster *skips*; against this
+  one it delivered four failures that named a read timeout and nothing about
+  the cause.
+
+  The probe now also reads `GET /_health_report` and requires `master_is_stable`,
+  `disk` and `shards_capacity` to be green, with `shards_availability` allowed
+  green or yellow — a one-node cluster hosting a replicated index sits at
+  yellow permanently, so refusing it would skip every ordinary run. A cluster
+  predating the health API (Elasticsearch below 8.7) answers 404 and falls
+  back to the `yellow`-or-`green` cluster status `wait_for_elasticsearch()`
+  already used, so an older cluster is judged by the criterion it can answer
+  rather than skipped wholesale. `requires_real_elasticsearch` gains the same
+  term through the same probe, and both markers now share one evaluation of
+  it, as the Postgres pair already did.
+
+  The skip names both terms — *"Elasticsearch unreachable, or not in a state
+  to host a test index"* — because a skip against a cluster the developer can
+  see running is otherwise unexplainable from the skip line.
+
+- **A malformed HTTP response no longer escapes a service probe as a collection
+  error.** The probes decode JSON over `urllib`, which raises
+  `http.client.HTTPException` — not an `OSError` — for a response that is not
+  HTTP, or is truncated mid-body. None of them caught it, and they are
+  evaluated inside a `skipif` at *import*, so the escape was not a failed probe
+  but a collection error taking the module with it. Three bodies had each
+  written the same request-and-decode sequence, spelling the catch set two
+  ways; there is one body now and its catch set is the union. The probe that
+  POSTs — `is_ollama_model_usable`'s canary — reaches it through an accessor
+  rather than a request of its own, because a probe that asks a service to *do*
+  something fails in the same ways as one that only reads, and the body that
+  wrote its own request is the one whose catch set drifted.
+
+  `is_ollama_model_usable` also read `body.get("message")` off whatever JSON
+  came back. A well-formed JSON *list* has no `.get`, and the `AttributeError`
+  that raised is in no catch set — so a service answering the wrong shape
+  crashed collection exactly as a malformed one did. It checks the shape first
+  now, as `is_ollama_model_available` already did.
 
 - **`MembershipOracle`'s return documentation reaches the rendered reference.**
   The `Returns:` block describing what `memberships()` answers with sat in the

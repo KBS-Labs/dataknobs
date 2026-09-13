@@ -1,7 +1,13 @@
 """Tests for testing utilities."""
 
+import contextlib
+import http.server
 import json
+import socket
+import threading
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -233,6 +239,290 @@ class TestServiceProbeHostResolution:
     def test_is_package_available_returns_false_for_missing(self):
         """Test that is_package_available returns False for missing packages."""
         assert is_package_available("nonexistent_package_xyz") is False
+
+
+def _health_report(**indicators: str) -> dict[str, Any]:
+    """A ``/_health_report`` document whose indicators carry *indicators*.
+
+    Defaults are the healthy single-node shape: every gating indicator green
+    except ``shards_availability``, which sits at yellow whenever an index
+    asks for a replica the one node cannot host -- the ordinary resting state
+    of a dev cluster, and so the shape the probe must still call available.
+    """
+    statuses = {
+        "master_is_stable": "green",
+        "disk": "green",
+        "shards_capacity": "green",
+        "shards_availability": "yellow",
+        **indicators,
+    }
+    return {
+        "status": "yellow",
+        "indicators": {name: {"status": value} for name, value in statuses.items()},
+    }
+
+
+@contextlib.contextmanager
+def _stub_http_json(routes: dict[str, tuple[int, Any]]) -> Iterator[tuple[str, int]]:
+    """A real local HTTP server answering probe paths with JSON.
+
+    Not a mock of any dataknobs interface -- an actual ``http.server`` on an
+    ephemeral port, the same construct ``test_elasticsearch_sweep.py`` uses --
+    so a probe runs its genuine request and JSON-parsing path against a
+    controllable endpoint that needs no service behind it.
+
+    ``POST`` is answered from the same table as ``GET``: the probes differ by
+    method and by nothing else a stub here would model, and a second server
+    class for the one that carries a body would be the duplication the shared
+    request helper was just written to remove.
+
+    Args:
+        routes: Path (``"/_health_report"``, ``"/api/chat"``) to
+            ``(status, json_body)``. A path with no entry answers 404, which
+            is what a service predating an endpoint returns.
+
+    Yields:
+        The ``(host, port)`` the server is listening on.
+    """
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            status, payload = routes.get(self.path, (404, {"error": "no handler"}))
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            # Drain the request body before answering: an unread body leaves
+            # bytes in the socket and the client reads them as the next
+            # response, which would make this stub flaky rather than wrong.
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.do_GET()
+
+        def log_message(self, *_args: object) -> None:  # silence stderr noise
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    # A short poll interval so shutdown is prompt: the default 0.5s is what
+    # serve_forever waits to notice the stop flag, and it would put a flat
+    # half-second on every test in this class.
+    thread = threading.Thread(target=lambda: server.serve_forever(0.01), daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[0], server.server_address[1]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+class TestElasticsearchReadinessProbe:
+    """The probe gates on serving, not on a listening port.
+
+    ``requires_elasticsearch`` exists so a suite the cluster cannot run
+    *skips*. A cluster out of disk defeats a reachability-only probe
+    completely: it accepts the connection and answers ``/`` in milliseconds,
+    reports ``green`` cluster status while it still holds no unassigned
+    shard, and then blocks the suite's first index creation until the client
+    gives up -- turning the promised skip into four timeouts.
+    """
+
+    def test_a_cluster_low_on_disk_is_not_available(self):
+        """The reproducer: disk over the watermark, nothing unassigned yet.
+
+        This is the state a dev cluster is in *before* the first test index
+        is requested -- cluster status still green, because no shard has been
+        refused yet. The health report is the only place the coming refusal
+        is visible, and it is visible there as a non-green ``disk``.
+        """
+        with _stub_http_json(
+            {
+                "/_health_report": (200, _health_report(disk="yellow")),
+                "/_cluster/health": (200, {"status": "green"}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_cluster_with_unassigned_primaries_is_not_available(self):
+        """Red ``shards_availability`` means primaries are unassigned."""
+        with _stub_http_json(
+            {
+                "/_health_report": (200, _health_report(shards_availability="red")),
+                "/_cluster/health": (200, {"status": "red"}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_cluster_out_of_room_for_shards_is_not_available(self):
+        """``shards_capacity`` is the ceiling the session-start sweep reclaims.
+
+        The sweep exists because accumulated ``test_*`` residue exhausts
+        ``cluster.max_shards_per_node``; a cluster already at the ceiling
+        when the suite starts refuses every new index, and the gate should
+        say so rather than let the suite discover it.
+        """
+        with _stub_http_json({"/_health_report": (200, _health_report(shards_capacity="red"))}) as (
+            host,
+            port,
+        ):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_healthy_single_node_cluster_is_available(self):
+        """The positive control, and the one that matters most.
+
+        A gate that over-skips reports green while testing nothing. A
+        one-node cluster hosting any replicated index sits at yellow
+        ``shards_availability`` permanently, so treating yellow there as
+        unavailable would skip every ordinary dev run.
+        """
+        with _stub_http_json(
+            {
+                "/_health_report": (200, _health_report()),
+                "/_cluster/health": (200, {"status": "yellow"}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is True
+
+    def test_a_cluster_without_the_health_api_falls_back_to_cluster_health(self):
+        """``/_health_report`` is 8.7+; older clusters must not all-skip.
+
+        A consumer on an Elasticsearch predating the health API gets a 404
+        here. Reading that as unavailable would silently skip their whole
+        suite, so the probe falls back to the ``yellow``-or-``green``
+        criterion ``wait_for_elasticsearch`` has always used.
+        """
+        with _stub_http_json({"/_cluster/health": (200, {"status": "yellow"})}) as (
+            host,
+            port,
+        ):
+            assert is_elasticsearch_available(host, port) is True
+
+    def test_the_fallback_still_refuses_a_red_cluster(self):
+        """The fallback is a weaker check, not an absent one."""
+        with _stub_http_json({"/_cluster/health": (200, {"status": "red"})}) as (
+            host,
+            port,
+        ):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_port_that_answers_nothing_useful_is_not_available(self):
+        """TCP open and both probes failing is not a cluster to run against."""
+        with _stub_http_json({}) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+
+@contextlib.contextmanager
+def _stub_malformed_http() -> Iterator[tuple[str, int]]:
+    """A listening socket that answers with something that is not HTTP.
+
+    ``http.server`` cannot produce this shape -- it always writes a valid
+    status line -- so the reproduction is a raw socket. What comes back
+    raises ``http.client.BadStatusLine``, which is an ``HTTPException`` and
+    **not** an ``OSError``: the one shape a catch set spelled
+    ``(URLError, TimeoutError, ValueError, OSError)`` misses while reading as
+    though it covers everything.
+
+    Yields:
+        The ``(host, port)`` the socket is listening on.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    server.settimeout(0.05)
+    stop = threading.Event()
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:  # the socket closed under us; we are done
+                return
+            with contextlib.closing(conn), contextlib.suppress(OSError):
+                conn.recv(65536)
+                conn.sendall(b"NOT-HTTP-AT-ALL\r\n\r\n")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        host, port = server.getsockname()
+        yield host, port
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+        server.close()
+
+
+class TestProbeFailureModes:
+    """A probe answers "no". It does not raise.
+
+    Every probe here backs a ``pytest.mark.skipif`` whose condition is
+    evaluated the moment a consuming module applies the marker -- at
+    *import*, where an escaping exception is not a failed probe but a
+    collection error that takes the whole module with it. So the catch set
+    has to cover every shape a listening port can answer with, and
+    ``HTTPException`` is the one that looks covered and is not: it does not
+    inherit ``OSError``, so the narrower spelling let it straight through.
+    """
+
+    def test_a_malformed_response_does_not_escape_the_usable_model_probe(self) -> None:
+        """The reproducer.
+
+        ``is_ollama_model_usable`` was the probe left out of the shared
+        request helper, and it still carried the narrow catch set. Against a
+        port answering a malformed status line it raised ``BadStatusLine``
+        out of ``requires_ollama_usable_model``'s ``skipif`` instead of
+        reporting the model unusable.
+        """
+        with _stub_malformed_http() as (host, port):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is False
+
+    def test_a_malformed_response_does_not_escape_the_model_listing_probe(self) -> None:
+        """Its sibling, which the shared helper already covered."""
+        with _stub_malformed_http() as (host, port):
+            assert is_ollama_model_available("any-model", host, port) is False
+
+    def test_a_malformed_response_does_not_escape_the_elasticsearch_probe(self) -> None:
+        """The union catch set, pinned on the probe this branch rewrote.
+
+        Nothing else asserts that ``HTTPException`` is caught rather than
+        merely listed, and a catch set is exactly the kind of claim that
+        reads as true until something raises the member that is missing.
+        """
+        with _stub_malformed_http() as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_body_of_the_wrong_shape_does_not_escape_the_usable_model_probe(self) -> None:
+        """A second escape in the same function, found next to the first.
+
+        The canary read ``body.get("message")`` off whatever JSON came back.
+        A well-formed JSON *list* has no ``.get``, and the ``AttributeError``
+        that raised is in no probe's catch set -- so a service answering the
+        wrong shape crashed collection just as a malformed one did.
+        """
+        with _stub_http_json({"/api/chat": (200, ["not", "an", "object"])}) as (host, port):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is False
+
+    def test_a_model_answering_with_content_is_usable(self) -> None:
+        """The positive control, and the reason the others prove anything.
+
+        A probe hard-wired to ``False`` would pass every assertion above.
+        """
+        with _stub_http_json({"/api/chat": (200, {"message": {"content": "ok"}})}) as (host, port):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is True
+
+    def test_a_model_answering_nothing_is_not_usable(self) -> None:
+        """The check this probe exists for: listed, loaded, and mute."""
+        with _stub_http_json({"/api/chat": (200, {"message": {"content": "   "}})}) as (
+            host,
+            port,
+        ):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is False
 
 
 class TestPytestMarkers:

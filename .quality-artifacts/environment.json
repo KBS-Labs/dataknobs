@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-12T22:02:12Z",
+  "timestamp": "2026-09-13T00:43:58Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "main",
-  "git_commit": "9841495c8ad93379ff188feac2bb22f14f4f0c74",
+  "git_branch": "sbk/the-deferral-keeps-one-thing-and-the-data-model-lands-whole",
+  "git_commit": "e510f9cdc28af43e1f4f0cc53f3c999b88d34218",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

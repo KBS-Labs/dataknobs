@@ -664,16 +664,28 @@ kinds, with each difference declared.
 |---|---|
 | `async_only` | Parameter names the asynchronous half may have and the synchronous half may not |
 | `flavour_typed` | Parameter names whose *annotation* differs because the parameter is itself flavoured — `Hierarchy[K]` against `AsyncHierarchy[K]` |
+| `unflavoured` | That this member is synchronous on **both** halves, deliberately |
 | `compare_return` | Whether return annotations must match. `False` by default, because a streaming twin returns `Iterator[str]` against `AsyncIterator[str]` and comparing them asserts the flavour rather than the contract |
 | `label` | Prepended to failure messages, for a caller checking many pairs |
 
-**Both declarations are compared by equality, not as a subset.** The other
-guards on this page take a suppression list and need their own check that every
-entry still matches something, because a suppression whose site moved is a hole
-that reads as a clean scan. These need no such check: an entry naming a
+**The parameter declarations are compared by equality, not as a subset.** The
+other guards on this page take a suppression list and need their own check that
+every entry still matches something, because a suppression whose site moved is a
+hole that reads as a clean scan. These need no such check: an entry naming a
 parameter since adopted, renamed or removed fails the assertion directly. Name
 the difference and a *second* one fails rather than quietly joining the first —
 which a tolerance of "at most one" would not do.
+
+**Not every member of a twinned type is flavoured.** A name property, a
+predicate, an ordering hook over data that has already arrived — these reach for
+nothing, so making the asynchronous half a coroutine would cost every caller an
+`await` for no I/O. Such a pair fails the flavour assertion, and before
+`unflavoured` existed the only way to keep the check green was to leave the
+member out of the list entirely — unguarded, which is where drift lives. Declare
+it instead: `unflavoured` relaxes the flavour assertion and *nothing else*, so
+parameter names, defaults, kinds and annotations are still compared. It is
+compared against what is observed like the other declarations, so a member that
+later becomes genuinely asynchronous fails here rather than going quiet.
 
 **An async generator counts as the asynchronous half.**
 `inspect.iscoroutinefunction` is the obvious flavour check and the wrong one: an
@@ -700,6 +712,26 @@ protocol pair or a backend pair takes. Failures name the member.
 **Members are listed, not discovered.** A member added to one flavour and not
 the other is caught by the test that lists it; a comparison that walked whatever
 both types already had would go quiet on exactly that case.
+
+**A surface that mixes the two kinds takes one call.** `unflavoured_members`
+names the members that are synchronous on both halves, and the rest are checked
+as flavoured pairs:
+
+```python
+assert_twin_types_agree(
+    DeclaredSignal,
+    AsyncDeclaredSignal,
+    ("candidates", "candidates_many", "_hits", "_located", "_fold", "_order"),
+    unflavoured_members={"_fold", "_order"},
+    compare_return=True,
+)
+```
+
+Unlike `async_only` and `flavour_typed`, which name *parameters*, this names
+*members* — so equality against an observed difference is not available to it,
+and an entry outside `members` would declare an exception for a comparison
+nobody is making. It carries an explicit subset check instead, and an entry that
+names an unchecked member fails.
 
 ---
 
@@ -958,10 +990,38 @@ and the availability probes / skip markers `is_postgres_available()` /
 
 #### Two marker families: reachable, and *really* usable
 
-`requires_postgres` and `requires_elasticsearch` test **one** term — did the
-service answer its probe. That is the right gate for a suite that only needs
-the server up, and the wrong one for a behavioural suite, which also needs the
-run to have opted in and the driver to be installed.
+`requires_postgres` and `requires_elasticsearch` test whether the service
+answered its probe. That is the right gate for a suite that only needs the
+server up, and the wrong one for a behavioural suite, which also needs the run
+to have opted in and the driver to be installed.
+
+> **Answering a probe is not the same as being reachable, for Elasticsearch.**
+> `is_elasticsearch_available()` asks two questions: does the port accept a
+> connection, *and* is the cluster in a state to host a new index. The second
+> is not a refinement — it is the one that fails in practice. A cluster whose
+> disk is over the high watermark accepts connections, answers `/` in
+> milliseconds, and reports `green` cluster status right up until the moment
+> the suite asks for its first index, which the disk-threshold decider then
+> refuses to place; the client sits there until it times out. Before that
+> first request there is exactly one place the standing refusal is visible,
+> and it is the `disk` indicator of the
+> [health report](https://www.elastic.co/guide/en/elasticsearch/reference/current/health-api.html).
+>
+> So the probe reads `GET /_health_report` (Elasticsearch 8.7+) and requires
+> `master_is_stable`, `disk` and `shards_capacity` to be green, with
+> `shards_availability` allowed green *or* yellow — a one-node cluster hosting
+> any replicated index sits at yellow permanently, and refusing that would
+> skip every ordinary dev run. A cluster predating the health API answers 404
+> and falls back to the `yellow`-or-`green` cluster status that
+> `wait_for_elasticsearch()` has always used.
+>
+> The skip reads **"Elasticsearch unreachable, or not in a state to host a
+> test index"**. If you see it against a cluster you can see running, ask it
+> what it thinks:
+>
+> ```bash
+> curl -s localhost:9200/_health_report | jq '.indicators | map_values(.status)'
+> ```
 
 For those, use the `requires_real_*` family. Each tests **three** terms —
 reachable, opt-in variable set to `true`, and the driver its suite actually

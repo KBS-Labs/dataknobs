@@ -16,7 +16,7 @@ re-exported, not a copy.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -33,9 +33,11 @@ __all__ = [
     "Coverage",
     "EntityCandidate",
     "EvidenceKind",
+    "FormHit",
     "MatchEvidence",
     "ResolutionRef",
     "ResolutionResult",
+    "RunnerUp",
     "ScopeAuthority",
     "Scoring",
     "Within",
@@ -159,6 +161,36 @@ class MatchEvidence:
 
 
 @dataclass(frozen=True)
+class FormHit:
+    """One declared form, found at one place in a query.
+
+    What a scanning rung's hook answers with, and the smallest thing that can
+    carry an offset: an id and where the form sat. The text is
+    ``query[start:end]`` and is not stored, because position is the half a
+    consumer cannot recover and text is the half they can.
+
+    A rung may answer with the same ``entity_id`` at two spans -- a query
+    naming one entity twice really does hit it twice -- and with two ids at
+    overlapping spans, which is what ``"golden retriever"`` does when the
+    vocabulary declares both ``golden_retriever`` and ``retriever``. Both are
+    returned, and containment is visible in the offsets rather than resolved
+    by a rule nobody wrote down.
+    """
+
+    entity_id: str
+    """In the **resolver's ontology's** id space, as
+    :attr:`EntityCandidate.entity_id` is."""
+
+    span: tuple[int, int]
+    """Half-open, into the query the rung was handed.
+
+    Not optional here, unlike :attr:`MatchEvidence.span`: a rung that cannot
+    say where a form sat has nothing to put in a :class:`FormHit` and answers
+    through the whole-string hook instead.
+    """
+
+
+@dataclass(frozen=True)
 class EntityCandidate:
     """An entity a cascade produced, with every rung's reason for it."""
 
@@ -200,34 +232,66 @@ class EntityCandidate:
 
 @dataclass(frozen=True)
 class Coverage:
-    """Which parts of a query reached a candidate, and which reached none."""
+    """Which parts of a query the evidence located, and which parts none did.
 
-    matched: tuple[str, ...] = ()
-    """Contributed to at least one candidate."""
+    **Offsets, and the type is the question.** These two fields held the query
+    text and now hold spans into it, because the text was always derivable
+    from the position by slicing and the position was never derivable from the
+    text: a phrase occurring twice has one string and two places, and a report
+    that names the string cannot say which.
 
-    unmatched: tuple[str, ...] = ()
-    """Contributed to none.
+    So this is a **positional** account rather than a record of which rungs
+    fired. A candidate whose evidence carries no span contributes nothing
+    here, and that is the reading rather than a gap in it: a cosine neighbour
+    over an embedded utterance has no position in that utterance, so a query
+    whose only hits are vector hits has an empty :attr:`matched` and the whole
+    string :attr:`unmatched` -- no declared form was found in the text, and a
+    neighbourhood guess is being offered anyway. That is the single strongest
+    line a consumer maintaining a vocabulary can act on, and the older
+    all-or-nothing reading could not state it.
+    """
+
+    matched: tuple[tuple[int, int], ...] = ()
+    """The union of the evidence spans: half-open, into
+    :attr:`ResolutionResult.query`, merged, ordered, and neither overlapping
+    nor touching.
+
+    A union of point sets rather than a list of what each rung reported, so
+    two rungs finding the same form, and a longer form containing a shorter
+    one, each contribute one interval. Which rung found what is
+    :meth:`ResolutionResult.explain`'s answer, and lives on the evidence.
+    """
+
+    unmatched: tuple[tuple[int, int], ...] = ()
+    """The residue: what :attr:`matched` left over, each interval trimmed of
+    surrounding whitespace and dropped where nothing is left.
 
     A report, not a verdict. Nothing about an unmatched phrase makes a
     resolution wrong -- an absence is not a falsehood. What it is good for is
     maintenance: the phrases a corpus's users ask about and the vocabulary
     does not cover are the next entries somebody should add.
+
+    Trimmed because the gap between two matched spans is bounded by them
+    rather than by the text, so it begins and ends on whatever separated them;
+    reporting ``" has been "`` as an unplaced phrase would make the caller
+    strip it before they could use it, and reporting ``" "`` would make them
+    filter it.
     """
 
     beyond_authority: tuple[str, ...] = ()
     """Entity **ids** a rung produced that the scope could not be applied to.
 
-    Not query text, which is what the two fields above hold -- two id spaces
-    in one dataclass need the names to carry the difference, and *authority*
-    is this family's word for the source a ``within`` scope is decided
-    against.
+    Not offsets into the query, which is what the two fields above hold --
+    two id spaces in one dataclass need the names to carry the difference, and
+    *authority* is this family's word for the source a ``within`` scope is
+    decided against.
 
     A rung need not share the cascade's backing, so it can answer with an id
     that backing does not carry. Under a scope such a candidate is dropped:
     it cannot be shown to be inside one, and admitting what cannot be checked
     is what the scope path exists to refuse. Reporting it is what keeps the
     drop from *reading* as a vocabulary miss -- an empty result whose
-    ``unmatched`` names the query is also what a correctly spelled scope over
+    ``unmatched`` spans the query is also what a correctly spelled scope over
     a vocabulary lacking the phrase returns, and only one of those is the
     caller's to fix. The usual cause is an index gone stale against the
     vocabulary, which is an operational fact rather than a bug, and is why
@@ -277,6 +341,29 @@ class ResolutionResult:
         ``INCOMPATIBLE``, rather than showing a ranking that means nothing.
         """
         return self.candidates
+
+    def matched_text(self) -> tuple[str, ...]:
+        """:attr:`coverage`'s matched spans, sliced out of :attr:`query`.
+
+        The half a consumer can recover, recovered for them. These two readers
+        exist so that ``Coverage`` can hold the half they could not -- a
+        phrase occurring twice has one string and two places -- without the
+        common case costing anyone a list comprehension over offsets.
+
+        Singular ``matched_text`` on :class:`MatchEvidence` is one rung's
+        answer for one candidate; this is the whole resolution's, deduplicated
+        by position rather than by spelling.
+        """
+        return tuple(self.query[start:end] for start, end in self.coverage.matched)
+
+    def unmatched_text(self) -> tuple[str, ...]:
+        """:attr:`coverage`'s unmatched spans, sliced out of :attr:`query`.
+
+        What a vocabulary is missing, in the words the caller used. Already
+        trimmed: :attr:`Coverage.unmatched` holds the residue with its
+        surrounding whitespace removed, so these are phrases rather than gaps.
+        """
+        return tuple(self.query[start:end] for start, end in self.coverage.unmatched)
 
     def as_distribution(self) -> dict[str, float] | None:
         """The scores as a distribution, or ``None`` where they are not one.
@@ -333,6 +420,40 @@ class ResolutionResult:
         raise KeyError(entity_id)
 
 
+@dataclass(frozen=True)
+class RunnerUp:
+    """One entity a resolution ranked below the one it kept.
+
+    **Evidence, not a bare number**, which is the whole of the change here.
+    This was ``tuple[str, float]``, and the argument against that shape is the
+    one made one field over for :class:`ResolutionRef` itself: a stored
+    resolution whose ``kind`` was dropped cannot tell a declared alias from a
+    vector guess, and that is equally true of every alternative it ranked. A
+    bare float beside an id is also the per-result scoring this family already
+    deleted one level up -- an exact ``1.0`` and a cosine ``0.83`` are not the
+    same measurement, and nothing in a pair of tuples says so.
+
+    Carries its reason **whole**, where the reference above flattens its own
+    onto itself. That asymmetry is deliberate: a reference *is* the record of
+    the resolution, so the fields a consumer filters a stored one by belong on
+    it; a runner-up is a list entry, and the object the cascade already
+    produced for it says everything a list entry needs to.
+    """
+
+    entity_id: str
+    """In the **resolver's ontology's** id space, as
+    :attr:`ResolutionRef.entity_id` is."""
+
+    evidence: MatchEvidence
+    """Its rung of record's -- the first rung that produced it.
+
+    One piece rather than the tuple :attr:`EntityCandidate.evidence` holds: a
+    reference identifies a resolution and does not reproduce it, and the rung
+    that placed an alternative is what a reader of a stored resolution is
+    asking about.
+    """
+
+
 @dataclass(eq=True, frozen=False)
 class ResolutionRef:
     """What an entity-valued attribute was resolved on.
@@ -344,17 +465,43 @@ class ResolutionRef:
 
     **Compared field-wise, and therefore unhashable**, for the reason that
     class gives: two references recording one resolution are one reference,
-    and ``corpus`` and ``signals`` are mappings.
+    and ``corpus`` is a mapping.
+
+    **``signals`` is gone and ``signal`` and ``kind`` stand in its place.** It
+    was a mapping of rung name to score, which recorded which rungs fired and
+    could not record what any of them meant -- the same failure the tuple of
+    pairs had, spread across every rung instead of every runner-up. What a
+    reader of a stored resolution needs is the rung of record and whether its
+    match was declared or inferred, and those are two scalars.
     """
 
     query: str
     entity_id: str
     score: float
     scoring: Scoring
+
+    signal: str
+    """The rung of record's ``name`` -- the first rung that produced this id."""
+
+    kind: EvidenceKind
+    """Whether that rung's match was declared or inferred.
+
+    The half a consumer branches on, and the half that makes a *stored*
+    resolution judgeable at all: without it a declared alias and a vector
+    neighbour are the same row.
+    """
+
     compatibility: CompatibilityVerdict
     corpus: Mapping[str, Any]
-    signals: Mapping[str, float] = field(default_factory=dict)
-    runners_up: tuple[tuple[str, float], ...] = ()
+
+    span: tuple[int, int] | None = None
+    """Where in :attr:`query` the match sat, half-open.
+
+    ``None`` where the rung of record could not locate it, on
+    :attr:`MatchEvidence.span`'s terms and for its reasons.
+    """
+
+    runners_up: tuple[RunnerUp, ...] = ()
 
 
 #: The scope axis a bare ``within`` value scopes on.
