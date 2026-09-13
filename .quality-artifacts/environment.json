@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-13T03:10:33Z",
+  "timestamp": "2026-09-13T03:23:15Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-validator-sees-one-match-at-a-time",
-  "git_commit": "5a7a3664f0c87cf448c67e57bb7e913689100a08",
+  "git_branch": "sbk/the-aligner-walks-without-recursing",
+  "git_commit": "c0445dad98cc9dfc57a0b03f14015721e960f290",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

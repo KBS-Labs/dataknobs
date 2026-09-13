@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-13T03:10:33Z",
+  "timestamp": "2026-09-13T03:23:15Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -20,21 +20,21 @@
     "llm": "40df3d987e041195a7d6fb18fbfe4e5349f329bb9487aeba4d25cc6214806afa",
     "structures": "73fcd3ad3753d60eab53a1c4ecc7b6665862e9325920eb5daebdca42c1673af3",
     "utils": "3ca9f3ccb5f73799ff81d0a6ec3c6bf14e632908757b24a352c345e7d499d875",
-    "xization": "5eeab11316d0450d6c02afed165bd8e9b91673a743a2e1ed45554c678ee5ff9f",
+    "xization": "2af219ccb0a758e7aec2082c100da954aae69ffdc1722ce4a6ea3f7e0e422d82",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
     "toolchain": "32247dbcac657dcf80426588383242f6574e6869bf7a31de6e36792231fb7fe0",
-    "workspace_tests": "f95cad545211b8c7cef0d7af76f62526eb5cd718568d14ede3091c8507861719",
+    "workspace_tests": "bf5040ea989202c726b49d48e954ff9a77a2ea1c4ab5681b96d348957bd8fc45",
     "docs": "01fa35f23b3418dee1fbcdb6d9ce181e29f6eb84044a5468d3fa53ac3ca3a6f9"
   },
-  "total_seconds": 198,
+  "total_seconds": 194,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
@@ -53,7 +53,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 42
+      "duration_seconds": 40
     },
     "documentation": {
       "status": "pass",
@@ -67,7 +67,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -80,8 +80,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 108,
-      "workspace_guards_seconds": 85
+      "duration_seconds": 107,
+      "workspace_guards_seconds": 84
     },
     "integration_tests": {
       "status": "pass",
