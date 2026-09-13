@@ -173,6 +173,64 @@ def test_a_multi_row_match_is_judged_and_added_as_one_unit():
     assert anns.df["start_pos"].to_list() == [4, 7, 10]
 
 
+# --- what order the validator is shown them in -----------------------------
+#
+# The unit is the match; this is the sequence those matches arrive in.
+# `Authority.add_valid_annotations` iterates the matches as the arm found
+# them, so the order an arm emits *is* the consultation order, and the two
+# arms have to agree on it for the same reason they have to agree on the unit.
+
+
+PREFIXED_VOCABULARY = ["golden", "golden retriever", "beagle"]
+
+
+class _Positions(dk_auth.AnnotationsValidator):
+    """A validator that records the start position of each match it is shown."""
+
+    def __init__(self) -> None:
+        self.starts: list[int] = []
+
+    def validate_annotation_rows(self, auth_annotations) -> bool:
+        metadata = auth_annotations.auth.metadata
+        self.starts.append(auth_annotations.ann_row_dicts[0][metadata.start_pos_col])
+        return True
+
+
+def test_both_arms_consult_the_validator_in_document_order():
+    """The order is the document's on both arms, asserted as the same property.
+
+    The dictionary arm used to emit the traversal's order instead: a match,
+    then everything reachable past its end, and only then the next match
+    starting at the same token. So a validator was shown ``"golden"``, then
+    ``"beagle"`` twenty-three characters later, then ``"golden retriever"``
+    back at the first -- while the regex arm, iterating ``re.finditer``, has
+    always been in document order.
+
+    Asserted as ascending starts rather than as two literals because the
+    claim is about the contract both arms owe, and the arms cannot be given
+    the same matches here: ``re.finditer`` does not produce two matches at
+    one position, which is exactly the case that separated them.
+    """
+    lexical_seen, regex_seen = _Positions(), _Positions()
+
+    dk_lex.DataframeAuthority(
+        "animal",
+        dk_lex.LexicalExpander(None, None),
+        dk_auth.AuthorityData(pd.DataFrame({"animal": PREFIXED_VOCABULARY}), "animal"),
+        anns_validator=lexical_seen,
+    ).annotate_input(QUERY)
+
+    dk_auth.RegexAuthority(
+        "animal",
+        re.compile(r"golden retriever|beagle"),
+        anns_validator=regex_seen,
+    ).annotate_input(QUERY)
+
+    assert lexical_seen.starts == sorted(lexical_seen.starts)
+    assert regex_seen.starts == sorted(regex_seen.starts)
+    assert lexical_seen.starts == [3, 3, 26], "both forms at 'golden', then 'beagle'"
+
+
 # --- the data a factory is handed answers for the name it holds -------------
 
 

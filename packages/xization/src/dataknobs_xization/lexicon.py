@@ -175,9 +175,9 @@ class TokenAligner:
     def __init__(self, first_token: dk_tok.Token, authority: dk_auth.LexicalAuthority):
         self.first_token = first_token
         self.auth = authority
-        self.matches: list[list[dict[str, Any]]] = []  # one list per match
+        #: One list per match, in document order -- see :meth:`_process`.
+        self.matches: list[list[dict[str, Any]]] = []
         self._processed_idx: set[int] = set()
-        self._walked_idx: set[int] = set()
         self._process(self.first_token)
 
     @property
@@ -186,7 +186,8 @@ class TokenAligner:
 
         The per-match grouping is the aligner's record because that is the
         unit an authority's annotations validator judges; this is the view
-        for a caller that wants the rows and not the grouping.
+        for a caller that wants the rows and not the grouping. The order is
+        ``matches``' order, which is the document's.
 
         A fresh list is built on every access, so appending to what this
         returns discards the row silently. Add to ``matches`` instead, as one
@@ -197,61 +198,56 @@ class TokenAligner:
     def _process(self, first_token: dk_tok.Token) -> None:
         """Walk the stream from ``first_token``, recording every match found.
 
-        The walk is depth-first and carries its own stack. It used to use the
-        interpreter's, following ``next_token`` by recursing once per token,
+        The walk follows ``next_token`` and nothing else, so matches are
+        recorded in document order and every token is visited exactly once:
+        ``token_num`` rises by one each step and the chain ends at ``None``.
+        Both properties are the walk's shape rather than bookkeeping, which is
+        why there is none here beyond ``_processed_idx``.
+
+        It used to follow ``next_token`` by recursing, one frame per token,
         which made the longest annotatable document a property of
         ``sys.getrecursionlimit()`` rather than of the document: at the
         default limit of 1000 the last length that survived was 980
         whitespace tokens, short enough that this package's own changelog
-        raised ``RecursionError``.
+        raised ``RecursionError``. Replacing the interpreter's stack with an
+        explicit one fixed the depth and kept the recursion's emission order,
+        in which a match was recorded, then everything reachable past its end,
+        and only then the next match starting at the same token -- so a match
+        could be shown to a validator after one that starts later in the text.
+        Following the chain fixes the depth without holding that order, and
+        needs no stack to do it.
 
-        Each entry pairs a match to record with the token to walk on from,
-        and entries are pushed so that they pop in the order the recursion
-        made its calls -- a match, then everything reachable past its end,
-        and only then the next match starting at the same token. That order
-        is what ``matches`` has always held, and the order an authority's
-        ``anns_validator`` is consulted in, so it is preserved here rather
-        than tidied: making it start-position order is a visible change to
-        what a consumer is shown, and belongs to a change that says so.
-
-        Two sets of token numbers, because a token can be in either state
-        without the other. ``_processed_idx`` holds tokens some match has
-        consumed, which may not begin another. ``_walked_idx`` holds tokens
-        already walked from; walking one a second time can record nothing --
-        it finds the token either consumed, and skipped, or unmatched, and
-        barren on a re-query -- so skipping it drops no match, and it is what
-        keeps the walk linear in the token count rather than quadratic on the
-        unmatched tokens that make up most of a document.
+        ``_processed_idx`` holds tokens some match has consumed; those may not
+        begin another and so are not offered to the authority. Reading it here
+        is sound because the walk arrives in increasing position: by the time
+        a token is reached, every match that could have consumed it has been
+        found and marked.
         """
-        pending: list[tuple[TokenMatch | None, dk_tok.Token | None]] = [(None, first_token)]
-        while pending:
-            token_match, token = pending.pop()
-            if token_match is not None:
-                # A TokenMatch spans one variation and so builds exactly one
-                # row; a match is still a list, because that is what a match
-                # is elsewhere -- a regex match with named groups carries one
-                # row per group.
-                self.matches.append([token_match.build_annotation()])
-            if token is None or token.token_num in self._walked_idx:
-                continue
-            self._walked_idx.add(token.token_num)
-            # Pushed before the matches so that it pops after them: the walk
-            # past this token resumes only once every match starting here,
-            # and everything those matches lead on to, has been recorded.
-            pending.append((None, token.next_token))
+        token: dk_tok.Token | None = first_token
+        while token is not None:
             if token.token_num not in self._processed_idx:
-                for next_match in reversed(self._get_token_matches(token)):
-                    pending.append((next_match, next_match.next_token))
+                for token_match in self._get_token_matches(token):
+                    # A TokenMatch spans one variation and so builds exactly
+                    # one row; a match is still a list, because that is what a
+                    # match is elsewhere -- a regex match with named groups
+                    # carries one row per group.
+                    self.matches.append([token_match.build_annotation()])
+            token = token.next_token
 
     def _get_token_matches(self, token):
         """Find every declared variation beginning at ``token``.
 
-        The result must stay a function of ``token`` and ``self.auth`` alone.
-        ``_process`` skips a token it has already walked from on the grounds
-        that a re-query could only return what the first one did; reading
-        ``_processed_idx`` here -- or anything else the caller has changed
-        since -- would make that false, and the walk would start dropping
-        matches rather than deduplicating arrivals at them.
+        This writes ``_processed_idx`` and must not read it. ``_process``
+        consults that set before calling, to skip a token some match has
+        already consumed, and the two reads would then disagree about a token
+        marked by this very call: a variation would be found or not according
+        to which of its own siblings had been built first, and the walk would
+        start dropping matches rather than reporting every one that begins
+        here.
+
+        The result staying a function of ``token`` and ``self.auth`` alone is
+        also what lets the caller decide the order matches are recorded in,
+        which it does by the order it arrives at tokens.
         """
         token_matches = []
         vs = self.auth.find_variations(token.norm_text, starts_with=True)
