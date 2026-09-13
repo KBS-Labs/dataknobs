@@ -235,6 +235,15 @@ class TokenAligner:
                     pending.append((next_match, next_match.next_token))
 
     def _get_token_matches(self, token):
+        """Find every declared variation beginning at ``token``.
+
+        The result must stay a function of ``token`` and ``self.auth`` alone.
+        ``_process`` skips a token it has already walked from on the grounds
+        that a re-query could only return what the first one did; reading
+        ``_processed_idx`` here -- or anything else the caller has changed
+        since -- would make that false, and the walk would start dropping
+        matches rather than deduplicating arrivals at them.
+        """
         token_matches = []
         vs = self.auth.find_variations(token.norm_text, starts_with=True)
         if len(vs) > 0:
