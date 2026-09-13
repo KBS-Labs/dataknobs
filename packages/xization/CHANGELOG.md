@@ -117,13 +117,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thing a `CorrelatedAuthorityData` cannot be. Nothing in this package calls
   it or overrides it.
 
+- **The only `AuthorityFactory` accepts the data its abstract declares.**
+  `MultiAuthorityFactory.build_authority` opened with a lookup declared on
+  `MultiAuthorityData` alone, so a consumer holding the abstract — which is
+  what publishing an abstract factory invites — got `AttributeError:
+  'AuthorityData' object has no attribute 'get_authority_data'`, raised from
+  inside the factory, for every plain `AuthorityData` handed to it. Flat data
+  now supplies the authority of its own name, so the call builds over the data
+  it was given:
+
+  ```python
+  authdata = AuthorityData(pd.DataFrame({"animal": ["dog", "cat"]}), "animal")
+  authority = MultiAuthorityFactory("animal").build_authority(
+      "animal", AuthorityAnnotationsBuilder(), authdata
+  )
+  ```
+
+  A `MultiAuthorityData` still resolves to its named "sub" authority, so
+  nothing that already worked through the factory changes.
+
+- **The factory passes on the annotations builder it is handed.**
+  `auth_anns_builder` is the abstract factory's own second parameter, and the
+  only implementation named it, documented it, and then built the authority
+  without it — so every authority built through the factory used a fresh
+  default builder, and the annotation metadata a caller's builder carries
+  (column names, the id column, anything else) silently did not apply.
+
 ### Changed
 
-- **`AuthorityFactory` is generic over the authority data it builds from**, so
-  `MultiAuthorityFactory` declares itself `AuthorityFactory[MultiAuthorityData]`.
-  A factory is written against the container it knows how to read, and the
-  base declared the widest one, so a factory naming anything narrower was
-  contradicting the signature it inherits. **The third parameter of
+- **`AuthorityFactory` is generic over the authority data it builds from**, and
+  `MultiAuthorityFactory` declares itself `AuthorityFactory[AuthorityData]` —
+  the base type, because every `AuthorityData` now supplies the data for the
+  names it holds and a factory building one authority at a time needs nothing
+  narrower. The parameter is there for a factory that does need more — a
+  container whose correlations it reads across sub-authorities, say — which
+  can declare that container in its own type instead of narrowing the method
+  and contradicting the base it implements. **The third parameter of
   `MultiAuthorityFactory.build_authority` is renamed `multiauthdata` →
   `authdata`**, matching the base class it overrides; a positional call is
   unaffected.
@@ -147,6 +176,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TokenAligner.matches`, which records the aligner's rows grouped by match.
   `TokenAligner.annotations` is unchanged as a flat list of every row, now
   derived from `matches`.
+
+- **`AuthorityData.get_authority_data(name)`**, answering with the data the
+  named authority is built over. Flat data holds one authority's values and so
+  answers for its own name, raising `KeyError` for any other;
+  `MultiAuthorityData` overrides it to build and keep its named "sub"
+  authorities exactly as it already did. It is the one question a factory asks
+  of the data it is handed, which is what lets one factory take either.
+
+- **`MultiAuthorityFactory` takes the field groups and annotations validator it
+  builds with**, as `field_groups` and `anns_validator` constructor arguments
+  read back through `get_field_groups(name)` and `get_anns_validator(name)` —
+  the shape `get_lexical_expander(name)` already had, so a subclass can vary
+  any of the three by authority without reimplementing the build. Both were
+  hardcoded `None`, so an authority built through the factory could not carry
+  a consumer's derived field groups and validated nothing, though
+  `DataframeAuthority` accepts both. Unconfigured, the factory builds what it
+  built before.
 
 ### Removed
 
