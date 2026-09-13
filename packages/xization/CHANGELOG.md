@@ -64,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   The unit is no longer each implementation's to choose. `Authority` grew
-  `add_valid_annotations(text_obj, matches)`, which judges and adds one
+  `add_valid_annotations(text_obj, found)`, which judges and adds one
   match's rows at a time, and both arms route through it — so a match with
   several rows, as a regex with named groups produces, is still judged and
   added as one unit.
@@ -114,6 +114,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundle that **does** carry one: that raises `NotImplementedError` naming the
   class, rather than judging a document while that member's matches go
   unexamined.
+
+- **A validator reads a match's rows through the authority that found them.**
+  Every accessor on `AnnotationsValidator.AuthAnnotations` read the rows
+  through the authority the validator was called for, which assumes the
+  authority that *judges* a match is the one that *found* it. That holds for
+  an authority judging what it found itself, and it is false for a bundle
+  judging what its members found: the rows are a member's, written in the
+  member's column vocabulary, while the authority is the bundle.
+
+  ```python
+  # a member built with DerivedFieldGroups(field_type_suffix="_part"), one
+  # regex with three named groups, on "abc 07/04/1776 xyz"
+  auth_annotations.attributes
+  # judged by its own authority: {'day': '07', 'month': '04', 'year': '1776'}
+  # was, judged by a bundle    : {None: '1776'}
+  # now, judged by a bundle    : {'day': '07', 'month': '04', 'year': '1776'}
+  ```
+
+  Three fields became one entry under `None`, silently: the bundle's
+  `field_type` column name is not among the member's columns, so every row's
+  field type read as missing and the three collapsed onto the one key. Where
+  a member's `text_col` differed instead, the same assumption raised
+  `KeyError` from inside pandas.
+
+  **`AuthAnnotations` carries both authorities.** `auth` is unchanged and
+  still means what it is documented to mean — the authority proposing the
+  annotations, whose validator is being consulted and whose decision stands.
+  `finder` is the authority that found them, whose columns they are written
+  in, and every accessor reads through that. The two are one object wherever
+  an authority judges what it found itself. A validator given as a plain
+  callable is offered the finder as a third argument, and only where it
+  differs from the authority it was already given — so a two-argument
+  callable is unaffected everywhere the two are one, which is everywhere a
+  validator could be called before a bundle began calling one. A validator
+  handed to a bundle takes `fn(auth, ann_dicts, finder)`.
+
+  The finder travels with the match: `Authority.find_matches_with_finders`
+  (below) pairs each match with the authority that found it, and
+  `add_valid_annotations` judges the pairs. A member that is itself a bundle
+  names a finder further down rather than naming itself, so nesting does not
+  reintroduce the divergence one level in; the merge reads each match's start
+  position through its finder's column for the same reason.
+
+- **`AuthAnnotations.get_text` reads the column its metadata names.** It asked
+  the row accessor for a column *name* where that method takes a column
+  *type*, and the two are the same word only for the default metadata. An
+  authority built with any other `text_col` could not read its own matches
+  back — the lookup fell through to the derived-column path and raised.
+
+- **An unrecognized column type reads as the missing value.**
+  `DerivedFieldGroups.get_col_value` documents that it returns the caller's
+  missing value for an unknown or missing column, and raised
+  `UnboundLocalError` instead: it left the column name unbound for any column
+  type other than the three it derives.
 
 - **A document longer than about a thousand words is annotated.**
   `TokenAligner` walked the token stream by recursing along `next_token`,
@@ -220,6 +274,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `AuthoritiesBundle` implements it by merging its members'. It is **not
   abstract** — a subclass written before it existed still constructs, and
   keeps working wherever nothing needs its matches back.
+
+- **`Authority.find_matches_with_finders(text_obj)`**, the same matches paired
+  with the authority that found each one — the authority whose columns the
+  match's rows are written in, which is what anything reading those rows back
+  has to go through. An authority that finds its own matches is its own
+  finder, so the default pairs each match with itself and a subclass
+  implementing only `find_matches` needs nothing more. `AuthoritiesBundle`
+  overrides this one rather than `find_matches`, so a member's vocabulary
+  survives being judged by the composite and by any composite above that.
+  `add_valid_annotations` takes these pairs.
 
 - **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
   matches and this decides how they are judged. Two supporting members come

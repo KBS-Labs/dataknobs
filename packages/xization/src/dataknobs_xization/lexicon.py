@@ -276,7 +276,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         authdata: dk_auth.AuthorityData,
         auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder | None = None,
         field_groups: dk_auth.DerivedFieldGroups | None = None,
-        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None = None,
+        anns_validator: dk_auth.AnnsValidator | None = None,
         parent_auth: dk_auth.Authority | None = None,
     ):
         """Initialize with the name, values, and associated ids of the authority;
@@ -500,7 +500,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         Returns:
             The added Annotations.
         """
-        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+        return self.add_valid_annotations(text_obj, self.find_matches_with_finders(text_obj))
 
     def find_matches(
         self,
@@ -824,7 +824,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
         auth_name: str,
         lexical_expander: LexicalExpander | None = None,
         field_groups: dk_auth.DerivedFieldGroups | None = None,
-        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None = None,
+        anns_validator: dk_auth.AnnsValidator | None = None,
     ):
         """Initialize the MultiAuthorityFactory.
 
@@ -866,9 +866,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
         """
         return self._field_groups
 
-    def get_anns_validator(
-        self, name: str
-    ) -> Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None:
+    def get_anns_validator(self, name: str) -> dk_auth.AnnsValidator | None:
         """Get the annotations validator for the named authority.
 
         Args:
