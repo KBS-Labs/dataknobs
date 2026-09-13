@@ -291,3 +291,23 @@ def test_find_variations_scopes_its_match(authority: dk_lex.DataframeAuthority) 
         "retriever",
     ]
     assert authority.find_variations("cat", starts_with=True).empty
+
+
+def test_the_aligner_records_one_group_per_match_and_flattens_on_request(
+    authority: dk_lex.DataframeAuthority,
+) -> None:
+    """``matches`` is the record; ``annotations`` is the view derived from it.
+
+    The aligner keeps its rows grouped by match because that is the unit an
+    authority's validator judges. ``annotations`` stayed, as the flat list it
+    always was -- it can only have been read rather than appended to, since
+    building an aligner over a text with any match raised before this change.
+    """
+    authority.annotate_input("a beagle met a beagle")
+    aligner = authority.prev_aligner
+
+    assert [[row["text"] for row in match] for match in aligner.matches] == [
+        ["beagle"],
+        ["beagle"],
+    ]
+    assert [row["text"] for row in aligner.annotations] == ["beagle", "beagle"]

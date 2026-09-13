@@ -47,6 +47,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that genuinely is not declared, which is why the difference was invisible.
   It now materializes the expansion first.
 
+- **An `anns_validator` is shown one match at a time, whichever arm found
+  it.** The parameter is documented on `Authority`, `LexicalAuthority` and
+  `AuthoritiesBundle` as judging "a single match or entity", and
+  `RegexAuthority` honoured that while `DataframeAuthority` made a single
+  call carrying every match in the document. Two harms followed from the one
+  call: a validator written to the documented contract was handed a batch
+  spanning unrelated entities, which it cannot judge; and rejecting any one
+  match discarded every other match in the same text, returning an empty
+  `Annotations` indistinguishable from a text carrying no declared form.
+
+  ```python
+  # vocabulary ["golden retriever", "beagle"], a validator that rejects beagles
+  authority.annotate_input("my golden retriever met a beagle")
+  # now: the validator is called twice and "golden retriever" survives
+  ```
+
+  The unit is no longer each implementation's to choose. `Authority` grew
+  `add_valid_annotations(text_obj, matches)`, which judges and adds one
+  match's rows at a time, and both arms route through it — so a match with
+  several rows, as a regex with named groups produces, is still judged and
+  added as one unit.
+
+### Added
+
+- **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
+  matches and this decides how they are judged. Two supporting members come
+  with it — `RegexAuthority.build_match_annotations(match)`, which builds one
+  match's rows and is now an override point in its own right, and
+  `TokenAligner.matches`, which records the aligner's rows grouped by match.
+  `TokenAligner.annotations` is unchanged as a flat list of every row, now
+  derived from `matches`.
+
 ### Removed
 
 - **`nltk` is no longer a *declared* dependency of this package.** No module
