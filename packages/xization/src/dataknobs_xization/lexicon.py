@@ -276,7 +276,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         authdata: dk_auth.AuthorityData,
         auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder | None = None,
         field_groups: dk_auth.DerivedFieldGroups | None = None,
-        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None = None,
+        anns_validator: dk_auth.AnnsValidator | None = None,
         parent_auth: dk_auth.Authority | None = None,
     ):
         """Initialize with the name, values, and associated ids of the authority;
@@ -291,7 +291,9 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
@@ -500,7 +502,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         Returns:
             The added Annotations.
         """
-        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+        return self.add_valid_annotations(text_obj, self.find_matches_with_finders(text_obj))
 
     def find_matches(
         self,
@@ -824,7 +826,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
         auth_name: str,
         lexical_expander: LexicalExpander | None = None,
         field_groups: dk_auth.DerivedFieldGroups | None = None,
-        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None = None,
+        anns_validator: dk_auth.AnnsValidator | None = None,
     ):
         """Initialize the MultiAuthorityFactory.
 
@@ -834,7 +836,10 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
             field_groups: The derived field groups the built authorities use
                 (default=the authority's own default groups).
             anns_validator: fn(auth, anns_dict_list) the built authorities
-                validate each match with (default=accept every match).
+                validate each match with (default=accept every match). A
+                third parameter, where one is declared, receives the
+                authority that found the rows -- see
+                :data:`~dataknobs_xization.authorities.AnnsValidator`.
         """
         self.auth_name = auth_name
         self._lexical_expander = lexical_expander
@@ -866,9 +871,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
         """
         return self._field_groups
 
-    def get_anns_validator(
-        self, name: str
-    ) -> Callable[[dk_auth.Authority, Dict[str, Any]], bool] | None:
+    def get_anns_validator(self, name: str) -> dk_auth.AnnsValidator | None:
         """Get the annotations validator for the named authority.
 
         Args:

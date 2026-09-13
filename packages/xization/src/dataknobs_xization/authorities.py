@@ -4,6 +4,7 @@ Provides classes for managing authority-based annotations, field groups,
 and derived annotation columns for structured text extraction.
 """
 
+import inspect
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -15,6 +16,15 @@ import dataknobs_xization.annotations as dk_annots
 
 # Key annotation column name constants
 KEY_AUTH_ID_COL = "auth_id"
+
+#: A validator for the annotation rows of one match: ``fn(auth, ann_dicts)``,
+#: or ``fn(auth, ann_dicts, finder)`` to be told which authority found them and
+#: so whose columns the rows are written in -- see
+#: :meth:`Authority.validate_ann_dicts`, which offers the third argument to a
+#: validator whose signature accepts one, so a validator written to either form
+#: is called the way it was written. Spelled with an ellipsis because both
+#: arities are accepted.
+AnnsValidator = Callable[..., bool]
 
 #: The kind of authority data a factory builds from. Every ``AuthorityData``
 #: supplies the data for the names it holds, so a factory that reads one
@@ -86,6 +96,10 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         if metadata.ann_type_col in row.index:
             field = row[metadata.ann_type_col]
             if field is not None:
+                # None unless the col_type below names one of the derived
+                # columns; any other col_type has no derived column and takes
+                # the missing value the caller asked for.
+                col_name = None
                 if col_type == "field_type":
                     col_name = self.get_field_type_col(field)
                 elif col_type == "field_group":
@@ -297,10 +311,50 @@ class AuthorityData:
         return self
 
 
+def _accepts_third_positional(fn: Callable[..., Any]) -> bool:
+    """Whether ``fn`` can be called with a third positional argument.
+
+    Answers for the callable rather than for its caller, because the callable
+    is what decides how many arguments a call may carry. ``*args`` accepts
+    one, which is how a validator behind a decorator ordinarily arrives.
+
+    A callable whose signature cannot be introspected -- a C builtin, most
+    commonly -- reads as declining it, degrading to the two-argument contract
+    that predates the third argument, so an authority that could call it
+    before still can.
+
+    Args:
+        fn: The callable to ask.
+
+    Returns:
+        True if a third positional argument is accepted.
+    """
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    positional = 0
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            return True
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            positional += 1
+    return positional >= 3
+
+
 class Authority(dk_annots.Annotator):
     """A class for managing and defining tabular authoritative data for e.g.,
     taxonomies, etc., and using them to annotate instances within text.
     """
+
+    #: The last answer :meth:`_validator_accepts_finder` computed, with the
+    #: callable it was computed for. A class-level ``None`` so that a subclass
+    #: not calling ``super().__init__()`` -- which this class already accounts
+    #: for elsewhere -- still reads an empty cache rather than raising.
+    _finder_arity: "tuple[AnnsValidator, bool] | None" = None
 
     def __init__(
         self,
@@ -308,7 +362,7 @@ class Authority(dk_annots.Annotator):
         auth_anns_builder: AuthorityAnnotationsBuilder | None = None,
         authdata: AuthorityData | None = None,
         field_groups: DerivedFieldGroups | None = None,
-        anns_validator: Callable[["Authority", Dict[str, Any]], bool] | None = None,
+        anns_validator: AnnsValidator | None = None,
         parent_auth: "Authority | None" = None,
     ):
         """Initialize with this authority's metadata.
@@ -321,7 +375,9 @@ class Authority(dk_annots.Annotator):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(name)
@@ -419,6 +475,11 @@ class Authority(dk_annots.Annotator):
         its members found, which it cannot do once the rows have been added,
         because adding them loses the match boundaries.
 
+        This is the method a subclass implements.
+        :meth:`find_matches_with_finders` is what carries the matches to the
+        judging, and it is derived from this one, so implementing this is
+        enough for an authority that finds its own matches.
+
         Not abstract, so a subclass written before this existed still
         constructs. Such a subclass keeps working wherever nothing needs its
         matches back; the default raises only when something does.
@@ -435,27 +496,98 @@ class Authority(dk_annots.Annotator):
             "bundle carrying an anns_validator cannot judge the matches it finds"
         )
 
-    def validate_ann_dicts(self, ann_dicts: List[Dict[str, Any]]) -> bool:
+    def find_matches_with_finders(
+        self,
+        text_obj: dk_annots.AnnotatedText,
+    ) -> Iterable[tuple["Authority", List[Dict[str, Any]]]]:
+        """Find this authority's matches, each with the authority that found it.
+
+        The finder is the authority whose column vocabulary a match's rows are
+        written in: its ``metadata`` names their columns and its
+        ``field_groups`` derives the rest, which is what anything reading the
+        rows back has to go through. An authority that finds its own matches
+        is its own finder, so the default pairs each match with ``self`` and a
+        subclass implementing only :meth:`find_matches` needs nothing more.
+
+        A composite overrides this rather than :meth:`find_matches`, so that a
+        member's vocabulary survives being judged by the composite -- and
+        survives a further composite above that, because the pairs are carried
+        along rather than rebuilt around whichever authority was asked last.
+
+        Args:
+            text_obj: The annotated text object to find matches in.
+
+        Returns:
+            Each match's annotation row dicts with the authority that found
+            them, in document order.
+        """
+        return ((self, ann_dicts) for ann_dicts in self.find_matches(text_obj))
+
+    def validate_ann_dicts(
+        self,
+        ann_dicts: List[Dict[str, Any]],
+        finder: "Authority | None" = None,
+    ) -> bool:
         """The annotation row dictionaries are valid if:
           * They are non-empty
           * and
              * either there is no annotations validator
              * or they are valid according to the validator
 
+        The validator is given the finder as a third argument if its
+        signature accepts one, so a validator written to either documented
+        form is called the way it was written. Asking the callable is what
+        makes both ends work: a leaf is always its own finder and a bundle is
+        never its own, so conditioning the call on the two authorities
+        differing would make the three-argument form uncallable by the one
+        and the two-argument form uncallable by the other.
+
+        A validator declining the third argument is one that reads nothing
+        through the finder, so it is not told which authority found the rows.
+
         Args:
             ann_dicts: Annotation dictionaries.
+            finder: The authority whose columns the rows are written in, when
+                that is not this authority -- an :class:`AuthoritiesBundle`
+                judging a match one of its members found. Defaults to this
+                authority.
 
         Returns:
             True if valid.
         """
-        return len(ann_dicts) > 0 and (
-            self.anns_validator is None or self.anns_validator(self, ann_dicts)
-        )
+        if len(ann_dicts) == 0:
+            return False
+        validator = self.anns_validator
+        if validator is None:
+            return True
+        if not self._validator_accepts_finder(validator):
+            return validator(self, ann_dicts)
+        return validator(self, ann_dicts, finder if finder is not None else self)
+
+    def _validator_accepts_finder(self, validator: AnnsValidator) -> bool:
+        """Whether this authority's validator can be handed the finder.
+
+        Cached against the callable's identity rather than recomputed per
+        match, because ``anns_validator`` is a public attribute that may be
+        replaced after construction and introspection is not free.
+
+        Args:
+            validator: The validator to ask about.
+
+        Returns:
+            True if it accepts the finder as a third positional argument.
+        """
+        cached = self._finder_arity
+        if cached is not None and cached[0] is validator:
+            return cached[1]
+        accepts = _accepts_third_positional(validator)
+        self._finder_arity = (validator, accepts)
+        return accepts
 
     def add_valid_annotations(
         self,
         text_obj: dk_annots.AnnotatedText,
-        matches: Iterable[List[Dict[str, Any]]],
+        found: Iterable[tuple["Authority", List[Dict[str, Any]]]],
     ) -> dk_annots.Annotations:
         """Add the annotation rows of each match the validator accepts.
 
@@ -478,18 +610,24 @@ class Authority(dk_annots.Annotator):
         another -- are not ordered further, so a validator should not read
         anything into which of those comes first.
 
+        Each match carries the authority that found it, because a composite
+        judges rows it did not write and a validator reading those rows needs
+        the column vocabulary they are in, not the vocabulary of whichever
+        authority is doing the judging.
+
         Args:
             text_obj: The annotated text object to add annotations to.
-            matches: The annotation row dicts of each match, one list per
-                match, in document order. A match may carry several rows -- a
-                regex with named groups produces one per group -- and they are
+            found: Each match's annotation row dicts with the authority that
+                found them, as :meth:`find_matches_with_finders` gives them,
+                in document order. A match may carry several rows -- a regex
+                with named groups produces one per group -- and they are
                 judged and added together.
 
         Returns:
             The text object's annotations.
         """
-        for ann_dicts in matches:
-            if self.validate_ann_dicts(ann_dicts):
+        for finder, ann_dicts in found:
+            if self.validate_ann_dicts(ann_dicts, finder=finder):
                 text_obj.annotations.add_dicts(ann_dicts)
         return text_obj.annotations
 
@@ -531,6 +669,7 @@ class AnnotationsValidator(ABC):
         self,
         auth: Authority,
         ann_row_dicts: List[Dict[str, Any]],
+        finder: Authority | None = None,
     ) -> bool:
         """Call function to enable instances of this type of class to be passed in
         as a anns_validator function to an Authority.
@@ -538,12 +677,15 @@ class AnnotationsValidator(ABC):
         Args:
             auth: The authority proposing annotations.
             ann_row_dicts: The proposed annotations.
+            finder: The authority that found them, whose columns they are
+                written in, when that is not `auth` -- a composite judging a
+                match one of its members found. Defaults to `auth`.
 
         Returns:
             True if the annotations are valid; otherwise, False.
         """
         return self.validate_annotation_rows(
-            AnnotationsValidator.AuthAnnotations(auth, ann_row_dicts)
+            AnnotationsValidator.AuthAnnotations(auth, ann_row_dicts, finder)
         )
 
     @abstractmethod
@@ -563,10 +705,25 @@ class AnnotationsValidator(ABC):
         raise NotImplementedError
 
     class AuthAnnotations:
-        """A wrapper class for convenient access to the entity annotations."""
+        """A wrapper class for convenient access to the entity annotations.
 
-        def __init__(self, auth: Authority, ann_row_dicts: List[Dict[str, Any]]):
+        Two authorities can be involved in one match, and they are not always
+        the same one. `auth` proposes the annotations: it is the authority
+        whose validator is being consulted and whose decision stands. `finder`
+        found them, so the rows are written in its columns, and every accessor
+        here reads through it. They differ when a composite judges a match one
+        of its members found -- which is every match an
+        :class:`AuthoritiesBundle` carrying a validator sees.
+        """
+
+        def __init__(
+            self,
+            auth: Authority,
+            ann_row_dicts: List[Dict[str, Any]],
+            finder: Authority | None = None,
+        ):
             self.auth = auth
+            self.finder = finder if finder is not None else auth
             self.ann_row_dicts = ann_row_dicts
             self._row_accessor = None  # AnnotationsRowAccessor
             self._anns = None  # Annotations
@@ -577,7 +734,7 @@ class AnnotationsValidator(ABC):
             """Get the row accessor for this instance's annotations."""
             if self._row_accessor is None:
                 self._row_accessor = dk_annots.AnnotationsRowAccessor(
-                    self.auth.metadata, derived_cols=self.auth.field_groups
+                    self.finder.metadata, derived_cols=self.finder.field_groups
                 )
             return self._row_accessor
 
@@ -585,7 +742,7 @@ class AnnotationsValidator(ABC):
         def anns(self) -> dk_annots.Annotations:
             """Get this instance's annotation rows as an annotations object"""
             if self._anns is None:
-                self._anns = dk_annots.Annotations(self.auth.metadata)
+                self._anns = dk_annots.Annotations(self.finder.metadata)
                 for row_dict in self.ann_row_dicts:
                     self._anns.add_dict(row_dict)
             return self._anns
@@ -600,8 +757,14 @@ class AnnotationsValidator(ABC):
             return self.row_accessor.get_col_value("field_type", row, None)
 
         def get_text(self, row: pd.Series) -> str:
-            """Get the entity text from the row"""
-            return self.row_accessor.get_col_value(self.auth.metadata.text_col, row, None)
+            """Get the entity text from the row.
+
+            Asked for by column *type*, which the row accessor resolves to
+            whatever column the metadata names -- passing the column name
+            instead only reads correctly when the metadata leaves it at the
+            default, where the name and the type happen to be the same word.
+            """
+            return self.row_accessor.get_col_value(dk_annots.KEY_TEXT_COL, row, None)
 
         @property
         def attributes(self) -> Dict[str, str]:
@@ -660,7 +823,7 @@ class LexicalAuthority(Authority):
         auth_anns_builder: AuthorityAnnotationsBuilder | None = None,
         authdata: AuthorityData | None = None,
         field_groups: DerivedFieldGroups | None = None,
-        anns_validator: Callable[["Authority", Dict[str, Any]], bool] | None = None,
+        anns_validator: AnnsValidator | None = None,
         parent_auth: "Authority | None" = None,
     ):
         """Initialize with this authority's metadata.
@@ -673,7 +836,9 @@ class LexicalAuthority(Authority):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
@@ -769,7 +934,7 @@ class RegexAuthority(Authority):
         auth_anns_builder: AuthorityAnnotationsBuilder = None,
         authdata: AuthorityData = None,
         field_groups: DerivedFieldGroups = None,
-        anns_validator: Callable[[Authority, Dict[str, Any]], bool] = None,
+        anns_validator: AnnsValidator = None,
         parent_auth: "Authority" = None,
     ):
         """Initialize with this authority's entity name.
@@ -802,7 +967,9 @@ class RegexAuthority(Authority):
                 Note that the validator function takes the regex authority instance
                 as its first parameter to provide access to the field_groups, etc.
                 The validation_fn signature is: fn(regexAuthority, ann_row_dicts)
-                and returns a boolean.
+                and returns a boolean. A third parameter, where one is
+                declared, receives the authority that found the rows -- see
+                :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
@@ -840,7 +1007,7 @@ class RegexAuthority(Authority):
         Returns:
             The added Annotations.
         """
-        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+        return self.add_valid_annotations(text_obj, self.find_matches_with_finders(text_obj))
 
     def find_matches(
         self,
@@ -929,7 +1096,7 @@ class AuthoritiesBundle(Authority):
         authdata: AuthorityData = None,
         field_groups: DerivedFieldGroups = None,
         parent_auth: "Authority" = None,
-        anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
+        anns_validator: AnnsValidator = None,
         auths: List[Authority] = None,
     ):
         """Initialize the AuthoritiesBundle.
@@ -942,7 +1109,9 @@ class AuthoritiesBundle(Authority):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
             auths: The authorities to bundle together.
         """
@@ -988,7 +1157,7 @@ class AuthoritiesBundle(Authority):
         and lets each member annotate the text directly, exactly as it always
         has -- so a member that does not implement :meth:`find_matches` keeps
         working here. Carrying one, it judges its members' matches itself,
-        which is what :meth:`find_matches` collects.
+        which is what :meth:`find_matches_with_finders` collects.
 
         Args:
             text_obj: The annotated text object to process and add annotations.
@@ -1000,12 +1169,32 @@ class AuthoritiesBundle(Authority):
             for auth in self.auths:
                 auth.annotate_input(text_obj)
             return text_obj.annotations
-        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+        return self.add_valid_annotations(text_obj, self.find_matches_with_finders(text_obj))
 
     def find_matches(
         self,
         text_obj: dk_annots.AnnotatedText,
     ) -> Iterable[List[Dict[str, Any]]]:
+        """Find the members' surviving matches, without saying who found them.
+
+        The merge is :meth:`find_matches_with_finders`; this is that answer
+        with the finders dropped, for a caller that only wants the rows. A
+        caller that will read those rows back wants the other one, because
+        the rows are in their finder's columns and not in this bundle's.
+
+        Args:
+            text_obj: The annotated text object to find matches in.
+
+        Returns:
+            One list of annotation row dicts per surviving match, in document
+            order.
+        """
+        return [ann_dicts for _, ann_dicts in self.find_matches_with_finders(text_obj)]
+
+    def find_matches_with_finders(
+        self,
+        text_obj: dk_annots.AnnotatedText,
+    ) -> Iterable[tuple[Authority, List[Dict[str, Any]]]]:
         """Find the members' matches, each judged by its own member first.
 
         A member judges what it found before offering it, so a match its own
@@ -1019,29 +1208,30 @@ class AuthoritiesBundle(Authority):
         chained, because chaining would show a validator all of one member's
         matches before any of the next one's, and
         :meth:`Authority.add_valid_annotations` states that the matches it is
-        given are in document order. Each member is read through its own
-        ``start_pos_col``, since a member may be built with its own metadata.
-        The merge is stable, so two matches beginning at one position stay in
-        the order their members were added -- which the same docstring says a
-        validator should not read anything into.
+        given are in document order. Each match is read through its finder's
+        ``start_pos_col``, since a member may be built with its own metadata
+        -- and a member that is itself a bundle names a finder further down
+        rather than itself. The merge is stable, so two matches beginning at
+        one position stay in the order their members were added -- which the
+        same docstring says a validator should not read anything into.
 
         Args:
             text_obj: The annotated text object to find matches in.
 
         Returns:
-            One list of annotation row dicts per surviving match, in document
-            order.
+            Each surviving match's annotation row dicts with the authority
+            that found them, in document order.
 
         Raises:
-            NotImplementedError: If a member does not implement this method.
-                Named rather than silent, because the alternative is judging
-                a document while a member's matches go unexamined.
+            NotImplementedError: If a member does not implement
+                :meth:`find_matches`. Named rather than silent, because the
+                alternative is judging a document while a member's matches go
+                unexamined.
         """
-        found: List[tuple[int, List[Dict[str, Any]]]] = []
+        found: List[tuple[int, Authority, List[Dict[str, Any]]]] = []
         for auth in self.auths:
-            start_pos_col = auth.metadata.start_pos_col
-            for ann_dicts in auth.find_matches(text_obj):
-                if auth.validate_ann_dicts(ann_dicts):
-                    found.append((ann_dicts[0][start_pos_col], ann_dicts))
+            for finder, ann_dicts in auth.find_matches_with_finders(text_obj):
+                if auth.validate_ann_dicts(ann_dicts, finder=finder):
+                    found.append((ann_dicts[0][finder.metadata.start_pos_col], finder, ann_dicts))
         found.sort(key=lambda match: match[0])
-        return [ann_dicts for _, ann_dicts in found]
+        return [(finder, ann_dicts) for _, finder, ann_dicts in found]

@@ -3,6 +3,7 @@ import re
 import pandas as pd
 import pytest
 
+import dataknobs_xization.annotations as dk_annots
 import dataknobs_xization.authorities as dk_auth
 import dataknobs_xization.lexicon as dk_lex
 
@@ -80,14 +81,16 @@ class _Recorder(dk_auth.AnnotationsValidator):
     Written to the documented interface -- it reads the rows of one entity
     through ``AuthAnnotations`` -- because the harm the contract prevents is
     precisely that a validator written this way is handed a batch spanning
-    unrelated entities and cannot judge it.
+    unrelated entities and cannot judge it. The column name comes off the
+    finder, which is the authority the rows were written by, and so the
+    authority that named their columns.
     """
 
     def __init__(self) -> None:
         self.shown: list[list[str]] = []
 
     def validate_annotation_rows(self, auth_annotations) -> bool:
-        text_col = auth_annotations.auth.metadata.text_col
+        text_col = auth_annotations.finder.metadata.text_col
         texts = [row[text_col] for row in auth_annotations.ann_row_dicts]
         self.shown.append(texts)
         return "beagle" not in texts
@@ -191,7 +194,7 @@ class _Positions(dk_auth.AnnotationsValidator):
         self.starts: list[int] = []
 
     def validate_annotation_rows(self, auth_annotations) -> bool:
-        metadata = auth_annotations.auth.metadata
+        metadata = auth_annotations.finder.metadata
         self.starts.append(auth_annotations.ann_row_dicts[0][metadata.start_pos_col])
         return True
 
@@ -288,7 +291,7 @@ class _Rejects(dk_auth.AnnotationsValidator):
         self.shown: list[list[str]] = []
 
     def validate_annotation_rows(self, auth_annotations) -> bool:
-        text_col = auth_annotations.auth.metadata.text_col
+        text_col = auth_annotations.finder.metadata.text_col
         texts = [row[text_col] for row in auth_annotations.ann_row_dicts]
         self.shown.append(texts)
         return self.unwanted not in texts
@@ -439,3 +442,288 @@ def test_a_multi_row_match_survives_the_bundle_as_one_unit():
 
     assert seen.shown == [["07", "04", "1776"]], "one call carrying three rows"
     assert anns.df["text"].to_list() == ["07", "04", "1776"]
+
+
+# --- a validator reads rows through the authority that found them ----------
+#
+# Every accessor on `AuthAnnotations` used to read the rows through the
+# authority the validator was called for, which assumes the authority that
+# JUDGES a match is the one that FOUND it. That held for every caller until a
+# bundle began judging what its members found: the rows are then a member's,
+# written in the member's column vocabulary, while the authority is the
+# bundle. The bundle's `field_type` column name does not exist in the
+# member's rows, so `attributes` collapsed three fields onto one `None` key
+# and said nothing; its `text_col` does not either, so `get_text` raised.
+#
+# `auth` still names the authority proposing the annotations, which is what
+# it has always been documented as. The authority whose columns the rows are
+# in is `finder`, and the accessors read that.
+
+
+NAMED_DATE_PATTERN = re.compile(r"(?P<day>\d{2})/(?P<month>\d{2})/(?P<year>\d{4})")
+NAMED_DATE_QUERY = "abc 07/04/1776 xyz"
+NAMED_DATE_FIELDS = {"day": "07", "month": "04", "year": "1776"}
+
+
+class _Vocabulary(dk_auth.AnnotationsValidator):
+    """A validator that records the `attributes` accessor's answer per match."""
+
+    def __init__(self) -> None:
+        self.attributes: list[dict] = []
+
+    def validate_annotation_rows(self, auth_annotations) -> bool:
+        self.attributes.append(dict(auth_annotations.attributes))
+        return True
+
+
+class _Parties(dk_auth.AnnotationsValidator):
+    """A validator that records both authorities it is told about per match."""
+
+    def __init__(self) -> None:
+        self.proposers: list[dk_auth.Authority] = []
+        self.finders: list[dk_auth.Authority] = []
+
+    def validate_annotation_rows(self, auth_annotations) -> bool:
+        self.proposers.append(auth_annotations.auth)
+        self.finders.append(auth_annotations.finder)
+        return True
+
+
+def _part_date_arm(anns_validator=None) -> dk_auth.RegexAuthority:
+    """A member with its own field groups: its rows carry `date_part` columns.
+
+    Reachable through `MultiAuthorityFactory.get_field_groups(name)`, which
+    takes the authority's name so that a subclass can vary the field groups
+    per authority -- so a bundle over members whose field groups differ is
+    one factory subclass away, not a construction invented for this test.
+    """
+    return dk_auth.RegexAuthority(
+        "date",
+        NAMED_DATE_PATTERN,
+        field_groups=dk_auth.DerivedFieldGroups(field_type_suffix="_part"),
+        anns_validator=anns_validator,
+    )
+
+
+def _surface_date_arm(anns_validator=None) -> dk_auth.RegexAuthority:
+    """A member with its own metadata: its rows carry the text in `surface_form`."""
+    return dk_auth.RegexAuthority(
+        "date",
+        NAMED_DATE_PATTERN,
+        auth_anns_builder=dk_auth.AuthorityAnnotationsBuilder(
+            metadata=dk_auth.AuthorityAnnotationsMetaData(text_col="surface_form")
+        ),
+        anns_validator=anns_validator,
+    )
+
+
+def _auth_annotations(arm, query) -> dk_auth.AnnotationsValidator.AuthAnnotations:
+    """The first match `arm` finds in `query`, wrapped as a validator sees it."""
+    text_obj = dk_annots.AnnotatedText(query, annots_metadata=arm.metadata)
+    return dk_auth.AnnotationsValidator.AuthAnnotations(arm, next(iter(arm.find_matches(text_obj))))
+
+
+def test_a_bundle_reads_a_members_rows_through_the_members_field_groups():
+    """The silent half: three fields collapsed onto one `None` key.
+
+    Asserted as an agreement between the two validators -- the member's own
+    and the bundle's -- because the claim is that being judged by a composite
+    does not change what the rows say. The literal is spelled out as well, so
+    that the agreement cannot be satisfied by both of them being wrong.
+    """
+    by_itself, by_the_bundle = _Vocabulary(), _Vocabulary()
+
+    _part_date_arm(by_itself).annotate_input(NAMED_DATE_QUERY)
+    _bundle(by_the_bundle, auths=[_part_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert by_itself.attributes == [NAMED_DATE_FIELDS]
+    assert by_the_bundle.attributes == by_itself.attributes
+
+
+def test_a_bundle_reads_a_members_rows_through_the_members_metadata():
+    """The loud half: a `KeyError` raised from inside pandas."""
+    by_itself, by_the_bundle = _Vocabulary(), _Vocabulary()
+
+    _surface_date_arm(by_itself).annotate_input(NAMED_DATE_QUERY)
+    _bundle(by_the_bundle, auths=[_surface_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert by_itself.attributes == [NAMED_DATE_FIELDS]
+    assert by_the_bundle.attributes == by_itself.attributes
+
+
+def test_the_finder_of_a_nested_bundles_match_is_the_member_that_found_it():
+    """The finder is the authority whose columns the rows are in, not the member.
+
+    An inner bundle hands the outer one rows its own member wrote, so naming
+    the member of the outer bundle would be the same defect one level down.
+    """
+    seen = _Vocabulary()
+    inner = _bundle(auths=[_part_date_arm()])
+
+    _bundle(seen, auths=[inner]).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen.attributes == [NAMED_DATE_FIELDS]
+
+
+def test_the_validator_is_still_told_which_authority_proposed_the_match():
+    """`auth` keeps its documented meaning; the finder is carried beside it.
+
+    `AnnotationsValidator.__call__` documents its first argument as "the
+    authority proposing annotations". For a bundle that is the bundle -- it
+    is the one whose validator is being consulted and whose decision stands
+    -- and a validator that reads it is reading what it was promised.
+    """
+    seen = _Parties()
+    member = _date_arm()
+    bundle = _bundle(seen, auths=[member])
+
+    bundle.annotate_input(BUNDLE_QUERY)
+
+    assert seen.proposers == [bundle]
+    assert seen.finders == [member]
+
+
+def test_an_authority_that_finds_its_own_matches_is_its_own_finder():
+    """The control: where the two were never distinct, nothing moves."""
+    seen = _Parties()
+    arm = _date_arm(seen)
+
+    arm.annotate_input(BUNDLE_QUERY)
+
+    assert seen.proposers == [arm]
+    assert seen.finders == [arm]
+
+
+def test_a_plain_callable_validator_is_offered_the_finder_too():
+    """The seam is not locked to `AnnotationsValidator`.
+
+    A plain callable is handed the row dicts themselves, so it reads their
+    columns off an authority just as the accessors do, and is wrong in the
+    same way if that authority is the wrong one. It is offered the finder as
+    a third argument wherever the finder is not the authority already given.
+    """
+    seen = []
+
+    def validator(auth, ann_dicts, finder):
+        seen.append((auth.name, finder.name, finder.metadata.text_col))
+        return True
+
+    _bundle(validator, auths=[_surface_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == [("intake", "date", "surface_form")]
+
+
+def test_a_three_argument_callable_works_on_an_authority_that_finds_its_own():
+    """The finder is offered because the validator asks for it, not because it differs.
+
+    A leaf is always its own finder, so conditioning the call on the two
+    authorities differing means a validator written to the three-argument
+    form can never be called by one -- it is handed two arguments and raises
+    `TypeError` before it runs. What decides how many arguments a call may
+    carry is the callable, so a validator that asks for the finder is given
+    it, and on a leaf that is the authority itself.
+    """
+    seen = []
+
+    def validator(auth, ann_dicts, finder):
+        seen.append((auth.name, finder.name, finder is auth))
+        return True
+
+    anns = _part_date_arm(validator).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == [("date", "date", True)]
+    assert len(anns.df) == 3
+
+
+def test_a_two_argument_callable_still_works_as_a_bundles_own_validator():
+    """The two-argument contract survives the one place the authorities never coincide.
+
+    A bundle never finds its own matches, so `finder` differs from `auth` for
+    every match it judges. Offering the third argument on that basis alone
+    hands three arguments to every validator a bundle carries, and a callable
+    written to the documented two-argument form -- which is every validator
+    written before a bundle could judge one -- raises `TypeError`. A
+    validator that does not ask for the finder is one that reads nothing
+    through it, so it keeps being called the way it was written.
+    """
+    seen = []
+
+    def validator(auth, ann_dicts):
+        seen.append(auth.name)
+        return True
+
+    anns = _bundle(validator, auths=[_surface_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == ["intake"]
+    assert len(anns.df) == 3
+
+
+def test_a_validator_that_takes_star_args_is_offered_the_finder():
+    """A wrapped validator declares `*args`, and that accepts the finder.
+
+    The question is whether the callable can carry a third positional
+    argument, which `*args` can -- a validator behind a decorator is the
+    ordinary way one arrives in this shape, and reading its arity as two
+    would withhold the finder from something able to use it.
+    """
+    seen = []
+
+    def validator(*args):
+        seen.append(len(args))
+        return True
+
+    _bundle(validator, auths=[_surface_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == [3]
+
+
+def test_the_text_accessor_reads_the_column_its_metadata_names():
+    """A neighbouring defect in the same class, on a leaf, with no bundle.
+
+    `get_text` passed `metadata.text_col` -- a column *name* -- where
+    `AnnotationsRowAccessor.get_col_value` takes a column *type*, and the two
+    coincide only for the default metadata. An authority built with any other
+    `text_col` could not read its own rows back.
+    """
+    auth_anns = _auth_annotations(_surface_date_arm(), NAMED_DATE_QUERY)
+
+    texts = [auth_anns.get_text(row) for _, row in auth_anns.df.iterrows()]
+
+    assert texts == ["07", "04", "1776"]
+
+
+def test_an_unrecognized_column_reads_as_missing_rather_than_raising():
+    """`DerivedFieldGroups.get_col_value` documents a missing value; it raised.
+
+    Any column type that is neither a key column nor one of the three derived
+    ones reached the derived lookup, which left its column name unbound and
+    raised `UnboundLocalError` instead of returning what the caller asked to
+    be told for an unknown column.
+    """
+    auth_anns = _auth_annotations(_date_arm(), BUNDLE_QUERY)
+
+    row = auth_anns.df.iloc[0]
+
+    assert auth_anns.colval("no_such_column", row) is None
+
+
+def test_a_bundle_orders_a_match_by_the_column_its_finder_names():
+    """The merge reads each match's position through its finder too.
+
+    The same assumption in the other place it was made: the merge read the
+    start position through the member it asked, which is not the authority
+    that wrote the row once that member is itself a bundle.
+    """
+    leaf = dk_auth.RegexAuthority(
+        "date",
+        DATE_PATTERN,
+        auth_anns_builder=dk_auth.AuthorityAnnotationsBuilder(
+            metadata=dk_auth.AuthorityAnnotationsMetaData(start_pos_col="begin")
+        ),
+    )
+    outer = _bundle(_Vocabulary(), auths=[_bundle(auths=[leaf])])
+
+    found = list(outer.find_matches_with_finders(dk_annots.AnnotatedText(BUNDLE_QUERY)))
+
+    assert [finder for finder, _ in found] == [leaf]
+    assert [rows[0]["begin"] for _, rows in found] == [36], "where the date starts"
