@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-13T04:37:34Z",
+  "timestamp": "2026-09-13T05:07:14Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -20,7 +20,7 @@
     "llm": "40df3d987e041195a7d6fb18fbfe4e5349f329bb9487aeba4d25cc6214806afa",
     "structures": "73fcd3ad3753d60eab53a1c4ecc7b6665862e9325920eb5daebdca42c1673af3",
     "utils": "3ca9f3ccb5f73799ff81d0a6ec3c6bf14e632908757b24a352c345e7d499d875",
-    "xization": "859d2708c61b128ed446e48cff18af3e7fce0d139dcb228d126c400caca80a92",
+    "xization": "ab18798e1f7ceae55f40def634efef4b13fc97656d0fdde15154cf886be9ed0a",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
@@ -28,32 +28,32 @@
     "workspace_tests": "11545935e0025a5d3d3c28577ca05a341b1918f99ebf0ae8ec32bad38d287165",
     "docs": "01fa35f23b3418dee1fbcdb6d9ce181e29f6eb84044a5468d3fa53ac3ca3a6f9"
   },
-  "total_seconds": 198,
+  "total_seconds": 199,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 6
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 41
+      "duration_seconds": 42
     },
     "documentation": {
       "status": "pass",
@@ -74,7 +74,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "unit_tests": {
       "status": "pass",
