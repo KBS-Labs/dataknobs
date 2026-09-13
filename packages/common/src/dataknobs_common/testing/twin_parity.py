@@ -23,6 +23,12 @@ a hole that reads as a clean scan. ``async_only`` needs no such check: it is
 compared by *equality* against the observed difference, so an entry naming a
 parameter since adopted, renamed or removed fails this assertion directly
 rather than going quiet.
+
+``unflavoured_members`` is the one declaration here naming *members* rather
+than parameters, so equality against an observed difference is not available
+to it -- an entry outside the list being checked would claim an exception for
+a comparison nobody is making. It carries an explicit subset check instead,
+which is the same guarantee reached the only way its shape allows.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ def assert_twins_agree(
     *,
     async_only: Iterable[str] = (),
     flavour_typed: Iterable[str] = (),
+    unflavoured: bool = False,
     compare_return: bool = False,
     label: str = "",
 ) -> None:
@@ -73,6 +80,15 @@ def assert_twins_agree(
             on the other. Compared by equality like ``async_only``: a name
             listed here whose annotations have since converged fails, so the
             exception cannot outlive its reason.
+        unflavoured: Whether this member is deliberately synchronous on *both*
+            halves. A twinned type has them -- a name property, a predicate, an
+            ordering hook over data that has already arrived -- and they reach
+            for nothing, so making one awaitable would cost every caller an
+            ``await`` for no I/O. Without this the pair fails the flavour
+            assertion, which left exactly those members unguarded: the only way
+            to keep them green was to leave them out of the list, and a keyword
+            added to one half and not the other does not stop being the drift
+            this function exists to catch because both halves are synchronous.
         compare_return: Whether the return annotations must match too. False by
             default because a streaming twin's differs by flavour --
             ``Iterator[str]`` against ``AsyncIterator[str]`` -- and comparing
@@ -90,10 +106,19 @@ def assert_twins_agree(
     where = f"{label}: " if label else ""
 
     assert not _is_async(sync_impl), f"{where}the synchronous twin is an async callable"
-    assert _is_async(async_impl), (
-        f"{where}the asynchronous twin is neither a coroutine function nor an "
-        f"async generator function"
-    )
+    if unflavoured:
+        assert not _is_async(async_impl), (
+            f"{where}this member is declared unflavoured, and the asynchronous twin's "
+            f"half is an async callable. Drop `unflavoured` where the pair is genuinely "
+            f"flavoured — like the other declarations here it is compared against what "
+            f"is observed, so an entry that stops being true fails rather than going quiet"
+        )
+    else:
+        assert _is_async(async_impl), (
+            f"{where}the asynchronous twin is neither a coroutine function nor an "
+            f"async generator function. A member deliberately synchronous on both "
+            f"halves is declared with `unflavoured`, not omitted from the check"
+        )
 
     sync_signature = inspect.signature(sync_impl)
     async_signature = inspect.signature(async_impl)
@@ -151,6 +176,7 @@ def assert_twin_types_agree(
     *,
     async_only: Iterable[str] = (),
     flavour_typed: Iterable[str] = (),
+    unflavoured_members: Iterable[str] = (),
     compare_return: bool = False,
 ) -> None:
     """:func:`assert_twins_agree` over the named members of two twinned types.
@@ -167,17 +193,34 @@ def assert_twin_types_agree(
             that lists it rather than silently dropping out of the comparison.
         async_only: As :func:`assert_twins_agree`, applied to every member.
         flavour_typed: As :func:`assert_twins_agree`, applied to every member.
+        unflavoured_members: Member *names* — unlike the two sets above, which
+            name parameters — that are synchronous on both halves. Passed as
+            :func:`assert_twins_agree`'s ``unflavoured`` for those members and
+            not for the rest, so one call covers a surface that mixes the two
+            rather than splitting into a call per flavour. Must name members
+            that are actually being checked; an entry outside ``members``
+            declares an exception for a comparison nobody is making.
         compare_return: As :func:`assert_twins_agree`, applied to every member.
 
     Raises:
-        AssertionError: From the first member that disagrees, naming it.
+        AssertionError: From the first member that disagrees, naming it; or for
+            an ``unflavoured_members`` entry absent from ``members``.
     """
+    unflavoured = set(unflavoured_members)
+    stale = unflavoured - set(members)
+    assert stale == set(), (
+        f"{sync_type.__name__}/{async_type.__name__}: {sorted(stale)} are declared "
+        f"unflavoured but are not among the members being checked, so the declaration "
+        f"guards nothing. Add them to `members` or drop them"
+    )
+
     for name in members:
         assert_twins_agree(
             getattr(sync_type, name),
             getattr(async_type, name),
             async_only=async_only,
             flavour_typed=flavour_typed,
+            unflavoured=name in unflavoured,
             compare_return=compare_return,
             label=f"{sync_type.__name__}/{async_type.__name__}.{name}",
         )

@@ -623,6 +623,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ResolutionResult.matched_text()` and `.unmatched_text()`**, which slice
   `Coverage`'s spans back out of `query`.
 
+- **`assert_twins_agree` can check a member that is synchronous on both
+  halves.** A twinned type has them — a name property, a predicate, an ordering
+  hook over data that has already arrived — and they reach for nothing, so
+  making the asynchronous half a coroutine would cost every caller an `await`
+  for no I/O. Such a pair failed the flavour assertion outright, so the only way
+  to keep the guard green was to leave the member out of the list, where nothing
+  checked it. Declare it instead: `unflavoured` on `assert_twins_agree`, or
+  `unflavoured_members` on `assert_twin_types_agree`, which names *members*
+  rather than parameters and so carries an explicit subset check where the other
+  declarations self-check by equality. The flavour assertion relaxes and nothing
+  else does — parameter names, defaults, kinds and annotations are still
+  compared, and a member that later becomes genuinely asynchronous fails rather
+  than going quiet.
+
 ### Changed
 
 - **`Coverage` holds offsets rather than text, and reports what the evidence
@@ -703,12 +717,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A malformed HTTP response no longer escapes a service probe as a collection
   error.** The probes decode JSON over `urllib`, which raises
-  `http.client.HTTPException` — not an `OSError` — for a truncated or
-  malformed response. Two of the three probes did not catch it, and they are
+  `http.client.HTTPException` — not an `OSError` — for a response that is not
+  HTTP, or is truncated mid-body. None of them caught it, and they are
   evaluated inside a `skipif` at *import*, so the escape was not a failed probe
-  but a collection error taking the module with it. The three had each written
-  the same request-and-decode body and caught three different sets; there is
-  now one body, and its catch set is the union.
+  but a collection error taking the module with it. Three bodies had each
+  written the same request-and-decode sequence, spelling the catch set two
+  ways; there is one body now and its catch set is the union. The probe that
+  POSTs — `is_ollama_model_usable`'s canary — reaches it through an accessor
+  rather than a request of its own, because a probe that asks a service to *do*
+  something fails in the same ways as one that only reads, and the body that
+  wrote its own request is the one whose catch set drifted.
+
+  `is_ollama_model_usable` also read `body.get("message")` off whatever JSON
+  came back. A well-formed JSON *list* has no `.get`, and the `AttributeError`
+  that raised is in no catch set — so a service answering the wrong shape
+  crashed collection exactly as a malformed one did. It checks the shape first
+  now, as `is_ollama_model_available` already did.
 
 - **`MembershipOracle`'s return documentation reaches the rendered reference.**
   The `Returns:` block describing what `memberships()` answers with sat in the

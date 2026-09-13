@@ -3,6 +3,7 @@
 import contextlib
 import http.server
 import json
+import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -262,18 +263,23 @@ def _health_report(**indicators: str) -> dict[str, Any]:
 
 
 @contextlib.contextmanager
-def _stub_elasticsearch(routes: dict[str, tuple[int, Any]]) -> Iterator[tuple[str, int]]:
-    """A real local HTTP server answering Elasticsearch probe paths.
+def _stub_http_json(routes: dict[str, tuple[int, Any]]) -> Iterator[tuple[str, int]]:
+    """A real local HTTP server answering probe paths with JSON.
 
     Not a mock of any dataknobs interface -- an actual ``http.server`` on an
     ephemeral port, the same construct ``test_elasticsearch_sweep.py`` uses --
-    so the probe runs its genuine request and JSON-parsing path against a
-    controllable endpoint that needs no cluster.
+    so a probe runs its genuine request and JSON-parsing path against a
+    controllable endpoint that needs no service behind it.
+
+    ``POST`` is answered from the same table as ``GET``: the probes differ by
+    method and by nothing else a stub here would model, and a second server
+    class for the one that carries a body would be the duplication the shared
+    request helper was just written to remove.
 
     Args:
-        routes: Path (``"/_health_report"``) to ``(status, json_body)``. A
-            path with no entry answers 404, which is what an Elasticsearch
-            predating an endpoint returns.
+        routes: Path (``"/_health_report"``, ``"/api/chat"``) to
+            ``(status, json_body)``. A path with no entry answers 404, which
+            is what a service predating an endpoint returns.
 
     Yields:
         The ``(host, port)`` the server is listening on.
@@ -288,6 +294,13 @@ def _stub_elasticsearch(routes: dict[str, tuple[int, Any]]) -> Iterator[tuple[st
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            # Drain the request body before answering: an unread body leaves
+            # bytes in the socket and the client reads them as the next
+            # response, which would make this stub flaky rather than wrong.
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.do_GET()
 
         def log_message(self, *_args: object) -> None:  # silence stderr noise
             pass
@@ -325,7 +338,7 @@ class TestElasticsearchReadinessProbe:
         refused yet. The health report is the only place the coming refusal
         is visible, and it is visible there as a non-green ``disk``.
         """
-        with _stub_elasticsearch(
+        with _stub_http_json(
             {
                 "/_health_report": (200, _health_report(disk="yellow")),
                 "/_cluster/health": (200, {"status": "green"}),
@@ -335,7 +348,7 @@ class TestElasticsearchReadinessProbe:
 
     def test_a_cluster_with_unassigned_primaries_is_not_available(self):
         """Red ``shards_availability`` means primaries are unassigned."""
-        with _stub_elasticsearch(
+        with _stub_http_json(
             {
                 "/_health_report": (200, _health_report(shards_availability="red")),
                 "/_cluster/health": (200, {"status": "red"}),
@@ -351,9 +364,10 @@ class TestElasticsearchReadinessProbe:
         when the suite starts refuses every new index, and the gate should
         say so rather than let the suite discover it.
         """
-        with _stub_elasticsearch(
-            {"/_health_report": (200, _health_report(shards_capacity="red"))}
-        ) as (host, port):
+        with _stub_http_json({"/_health_report": (200, _health_report(shards_capacity="red"))}) as (
+            host,
+            port,
+        ):
             assert is_elasticsearch_available(host, port) is False
 
     def test_a_healthy_single_node_cluster_is_available(self):
@@ -364,7 +378,7 @@ class TestElasticsearchReadinessProbe:
         ``shards_availability`` permanently, so treating yellow there as
         unavailable would skip every ordinary dev run.
         """
-        with _stub_elasticsearch(
+        with _stub_http_json(
             {
                 "/_health_report": (200, _health_report()),
                 "/_cluster/health": (200, {"status": "yellow"}),
@@ -380,7 +394,7 @@ class TestElasticsearchReadinessProbe:
         suite, so the probe falls back to the ``yellow``-or-``green``
         criterion ``wait_for_elasticsearch`` has always used.
         """
-        with _stub_elasticsearch({"/_cluster/health": (200, {"status": "yellow"})}) as (
+        with _stub_http_json({"/_cluster/health": (200, {"status": "yellow"})}) as (
             host,
             port,
         ):
@@ -388,7 +402,7 @@ class TestElasticsearchReadinessProbe:
 
     def test_the_fallback_still_refuses_a_red_cluster(self):
         """The fallback is a weaker check, not an absent one."""
-        with _stub_elasticsearch({"/_cluster/health": (200, {"status": "red"})}) as (
+        with _stub_http_json({"/_cluster/health": (200, {"status": "red"})}) as (
             host,
             port,
         ):
@@ -396,8 +410,119 @@ class TestElasticsearchReadinessProbe:
 
     def test_a_port_that_answers_nothing_useful_is_not_available(self):
         """TCP open and both probes failing is not a cluster to run against."""
-        with _stub_elasticsearch({}) as (host, port):
+        with _stub_http_json({}) as (host, port):
             assert is_elasticsearch_available(host, port) is False
+
+
+@contextlib.contextmanager
+def _stub_malformed_http() -> Iterator[tuple[str, int]]:
+    """A listening socket that answers with something that is not HTTP.
+
+    ``http.server`` cannot produce this shape -- it always writes a valid
+    status line -- so the reproduction is a raw socket. What comes back
+    raises ``http.client.BadStatusLine``, which is an ``HTTPException`` and
+    **not** an ``OSError``: the one shape a catch set spelled
+    ``(URLError, TimeoutError, ValueError, OSError)`` misses while reading as
+    though it covers everything.
+
+    Yields:
+        The ``(host, port)`` the socket is listening on.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    server.settimeout(0.05)
+    stop = threading.Event()
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:  # the socket closed under us; we are done
+                return
+            with contextlib.closing(conn), contextlib.suppress(OSError):
+                conn.recv(65536)
+                conn.sendall(b"NOT-HTTP-AT-ALL\r\n\r\n")
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        host, port = server.getsockname()
+        yield host, port
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+        server.close()
+
+
+class TestProbeFailureModes:
+    """A probe answers "no". It does not raise.
+
+    Every probe here backs a ``pytest.mark.skipif`` whose condition is
+    evaluated the moment a consuming module applies the marker -- at
+    *import*, where an escaping exception is not a failed probe but a
+    collection error that takes the whole module with it. So the catch set
+    has to cover every shape a listening port can answer with, and
+    ``HTTPException`` is the one that looks covered and is not: it does not
+    inherit ``OSError``, so the narrower spelling let it straight through.
+    """
+
+    def test_a_malformed_response_does_not_escape_the_usable_model_probe(self) -> None:
+        """The reproducer.
+
+        ``is_ollama_model_usable`` was the probe left out of the shared
+        request helper, and it still carried the narrow catch set. Against a
+        port answering a malformed status line it raised ``BadStatusLine``
+        out of ``requires_ollama_usable_model``'s ``skipif`` instead of
+        reporting the model unusable.
+        """
+        with _stub_malformed_http() as (host, port):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is False
+
+    def test_a_malformed_response_does_not_escape_the_model_listing_probe(self) -> None:
+        """Its sibling, which the shared helper already covered."""
+        with _stub_malformed_http() as (host, port):
+            assert is_ollama_model_available("any-model", host, port) is False
+
+    def test_a_malformed_response_does_not_escape_the_elasticsearch_probe(self) -> None:
+        """The union catch set, pinned on the probe this branch rewrote.
+
+        Nothing else asserts that ``HTTPException`` is caught rather than
+        merely listed, and a catch set is exactly the kind of claim that
+        reads as true until something raises the member that is missing.
+        """
+        with _stub_malformed_http() as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_body_of_the_wrong_shape_does_not_escape_the_usable_model_probe(self) -> None:
+        """A second escape in the same function, found next to the first.
+
+        The canary read ``body.get("message")`` off whatever JSON came back.
+        A well-formed JSON *list* has no ``.get``, and the ``AttributeError``
+        that raised is in no probe's catch set -- so a service answering the
+        wrong shape crashed collection just as a malformed one did.
+        """
+        with _stub_http_json({"/api/chat": (200, ["not", "an", "object"])}) as (host, port):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is False
+
+    def test_a_model_answering_with_content_is_usable(self) -> None:
+        """The positive control, and the reason the others prove anything.
+
+        A probe hard-wired to ``False`` would pass every assertion above.
+        """
+        with _stub_http_json({"/api/chat": (200, {"message": {"content": "ok"}})}) as (host, port):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is True
+
+    def test_a_model_answering_nothing_is_not_usable(self) -> None:
+        """The check this probe exists for: listed, loaded, and mute."""
+        with _stub_http_json({"/api/chat": (200, {"message": {"content": "   "}})}) as (
+            host,
+            port,
+        ):
+            assert is_ollama_model_usable("any-model", host=host, port=port, timeout=5) is False
 
 
 class TestPytestMarkers:

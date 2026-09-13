@@ -172,18 +172,18 @@ def _resolve_ollama_endpoint(host: str | None, port: int | None) -> tuple[str, i
     )
 
 
-def _get_probe_json(url: str, timeout: float, *, what: str) -> Any | None:
-    """GET a bounded JSON document, or ``None`` for any failure.
+def _probe_json(target: str | urllib.request.Request, timeout: float, *, what: str) -> Any | None:
+    """Fetch a bounded JSON document, or ``None`` for any failure.
 
     The one HTTP body behind every probe here — unreachable, timeout, HTTP
     error (including the 404 a service predating an endpoint returns), a body
-    that is not JSON, or one over :data:`_MAX_PROBE_BODY_BYTES`. Three probes
-    had written this separately and caught three different sets, so a shape
-    one of them swallowed was an exception escaping another; the catch set is
-    now stated once, and it is the union.
+    that is not JSON, or one over :data:`_MAX_PROBE_BODY_BYTES`. Every probe
+    had written this separately — three bodies, two spellings of the catch
+    set — so a shape one of them swallowed was an exception escaping another;
+    the catch set is stated once now, and it is the union.
 
     ``HTTPException`` earns its place there. It is not an ``OSError``, so a
-    truncated or malformed response escaped two of those three — out of a
+    truncated or malformed response escaped the narrower spellings — out of a
     ``skipif`` evaluated at *import*, where an exception is not a failed probe
     but a collection error taking the whole module with it. A probe's failure
     mode is "no", never "raise".
@@ -193,7 +193,9 @@ def _get_probe_json(url: str, timeout: float, *, what: str) -> Any | None:
     in exactly the minimal environment a probe is for.
 
     Args:
-        url: Absolute URL to fetch.
+        target: An absolute URL, or a prepared ``Request`` where the probe
+            carries a body. ``urlopen`` takes either, so the method is the
+            caller's to choose without a second copy of this body.
         timeout: Seconds to wait for the response.
         what: Short description of the probe, for the debug log on failure.
 
@@ -203,11 +205,33 @@ def _get_probe_json(url: str, timeout: float, *, what: str) -> Any | None:
     import http.client
 
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with urllib.request.urlopen(target, timeout=timeout) as response:
             return _read_probe_json(response)
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
+        url = target.full_url if isinstance(target, urllib.request.Request) else target
         logger.debug("%s probe to %s failed: %s", what, url, exc)
         return None
+
+
+def _get_probe_json(url: str, timeout: float, *, what: str) -> Any | None:
+    """GET a bounded JSON document — :func:`_probe_json` with no body."""
+    return _probe_json(url, timeout, what=what)
+
+
+def _post_probe_json(url: str, payload: Any, timeout: float, *, what: str) -> Any | None:
+    """POST a JSON *payload* and read a bounded JSON document back.
+
+    An accessor over :func:`_probe_json` rather than a body of its own: a
+    probe that asks a service to *do* something still fails the same ways,
+    and the one that wrote its own request here is the one whose catch set
+    drifted.
+    """
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    return _probe_json(request, timeout, what=what)
 
 
 def _ollama_get_json(
@@ -411,24 +435,21 @@ def is_ollama_model_usable(
         ``True`` if the model returned non-empty content, ``False`` otherwise.
     """
     resolved_host, resolved_port = _resolve_ollama_endpoint(host, port)
-    payload = json.dumps(
+    body = _post_probe_json(
+        f"http://{resolved_host}:{resolved_port}/api/chat",
         {
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "options": {"num_predict": num_predict, "temperature": 0.0},
-        }
-    ).encode()
-    request = urllib.request.Request(
-        f"http://{resolved_host}:{resolved_port}/api/chat",
-        data=payload,
-        headers={"Content-Type": "application/json"},
+        },
+        timeout,
+        what=f"Ollama usability canary for model {model_name!r}",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = _read_probe_json(response)
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        logger.debug("Ollama usability canary for model %r failed: %s", model_name, exc)
+    if not isinstance(body, dict):
+        # Including a well-formed JSON body of the wrong shape: a list has no
+        # ``.get``, and the AttributeError that raised is not in any probe's
+        # catch set. :func:`is_ollama_model_available` guards the same way.
         return False
     content = (body.get("message") or {}).get("content") or ""
     return bool(str(content).strip())

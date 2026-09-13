@@ -184,26 +184,28 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    ("sync_type", "async_type", "members"),
+    ("sync_type", "async_type", "members", "unflavoured"),
     [
-        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"]),
-        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"]),
-        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"]),
+        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], ()),
+        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], ()),
+        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], ()),
         (
             ExactNormalizedSignal,
             AsyncExactNormalizedSignal,
-            ["candidates", "candidates_many"],
+            ["candidates", "candidates_many", "_hits"],
+            (),
         ),
-        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many"]),
+        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], ()),
         (
             DeclaredSignal,
             AsyncDeclaredSignal,
-            ["candidates", "candidates_many"],
+            ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
+            ("_fold", "_order"),
         ),
     ],
 )
 def test_the_twins_expose_one_surface(
-    sync_type: type, async_type: type, members: list[str]
+    sync_type: type, async_type: type, members: list[str], unflavoured: tuple[str, ...]
 ) -> None:
     """Parity over **annotations**, not only names and defaults.
 
@@ -211,8 +213,25 @@ def test_the_twins_expose_one_surface(
     ``str | Collection[str] | None`` while the other half has widened -- which
     is precisely the drift the alias was published to prevent, arriving
     through the test written to catch it.
+
+    **The hooks are listed, not only the surface.** ``_hits``, ``_located``,
+    ``_fold`` and ``_order`` are what a consumer overrides to write a rung, so
+    they are the pair's extension surface and drift there reaches consumer
+    code directly -- a keyword added to the asynchronous ``_located`` and
+    forgotten on the synchronous one is wrong against whichever half its
+    author did not reach for. ``_fold`` and ``_order`` are declared
+    ``unflavoured`` because they stay synchronous on both halves for the
+    reason their docstrings give: ordering a set that has already arrived
+    reaches for nothing. That declaration relaxes the flavour assertion and
+    nothing else, so the parameters are still compared.
     """
-    assert_twin_types_agree(sync_type, async_type, members, compare_return=True)
+    assert_twin_types_agree(
+        sync_type,
+        async_type,
+        members,
+        unflavoured_members=unflavoured,
+        compare_return=True,
+    )
 
 
 def test_the_bridge_is_not_one_of_the_twins() -> None:

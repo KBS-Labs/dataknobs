@@ -172,6 +172,66 @@ def test_a_synchronous_second_half_is_refused() -> None:
 
 
 # --------------------------------------------------------------------------
+# Members that are synchronous on both halves
+# --------------------------------------------------------------------------
+
+
+def rank(hits: frozenset[str], *, descending: bool = False) -> Sequence[str]:
+    """A member a twinned type keeps synchronous on both halves.
+
+    Ordering a set that has already arrived reaches for nothing, so the
+    asynchronous twin gains an ``await`` and no I/O by being made a coroutine.
+    Real instances of this shape: a ``name`` property, a ``narrows()``
+    predicate, an ordering hook over hits the source already returned.
+    """
+    return sorted(hits, reverse=descending)
+
+
+def rank_twin(hits: frozenset[str], *, descending: bool = False) -> Sequence[str]:
+    """Its opposite number: same surface, synchronous for the same reason."""
+    return sorted(hits, reverse=descending)
+
+
+def rank_twin_drifted(
+    hits: frozenset[str], *, descending: bool = False, limit: int = 0
+) -> Sequence[str]:
+    """The drift, arriving on a pair that is synchronous on both halves."""
+    return sorted(hits, reverse=descending)[:limit]
+
+
+def test_a_pair_synchronous_on_both_halves_passes_when_declared() -> None:
+    assert_twins_agree(rank, rank_twin, unflavoured=True, compare_return=True)
+
+
+def test_a_pair_synchronous_on_both_halves_is_refused_undeclared() -> None:
+    """The gap the parameter closes, pinned as a gap.
+
+    Before it, such a pair failed the flavour assertion outright, so the only
+    way to keep the check green was to leave the member out of the list --
+    unguarded, which is precisely where drift lives unnoticed.
+    """
+    with pytest.raises(AssertionError, match="neither a coroutine function"):
+        assert_twins_agree(rank, rank_twin)
+
+
+def test_drift_is_still_caught_in_a_pair_declared_unflavoured() -> None:
+    """``unflavoured`` relaxes the flavour assertion and nothing else.
+
+    The half of this that carries the value: a parameter that switched the
+    check off for a member would be worse than not listing the member, since
+    it would also report green.
+    """
+    with pytest.raises(AssertionError, match="limit"):
+        assert_twins_agree(rank, rank_twin_drifted, unflavoured=True)
+
+
+def test_a_flavoured_pair_declared_unflavoured_is_refused() -> None:
+    """A declaration that stops being true fails rather than going quiet."""
+    with pytest.raises(AssertionError, match="declared unflavoured"):
+        assert_twins_agree(fetch, async_fetch, unflavoured=True)
+
+
+# --------------------------------------------------------------------------
 # The types accessor
 # --------------------------------------------------------------------------
 
@@ -204,6 +264,55 @@ def test_the_types_accessor_names_the_member_that_drifted() -> None:
     """A loop over members is only useful if the failure says which one."""
     with pytest.raises(AssertionError, match=r"Reader/AsyncReader\.keys"):
         assert_twin_types_agree(Reader, AsyncReader, ("read", "keys"))
+
+
+class Vocabulary:
+    """A surface mixing the two kinds of member in one type."""
+
+    def lookup(self, key: str) -> str:
+        return key
+
+    def rank(self, hits: frozenset[str]) -> Sequence[str]:
+        return sorted(hits)
+
+
+class AsyncVocabulary:
+    """Its twin: ``lookup`` crosses the loop, ``rank`` deliberately does not."""
+
+    async def lookup(self, key: str) -> str:
+        return key
+
+    def rank(self, hits: frozenset[str]) -> Sequence[str]:
+        return sorted(hits)
+
+
+def test_the_types_accessor_mixes_flavoured_and_unflavoured_members() -> None:
+    """One call over a real surface, which is the shape callers have.
+
+    Splitting into a call per flavour would work and would also let a member
+    drop out of both lists without anything noticing.
+    """
+    assert_twin_types_agree(
+        Vocabulary,
+        AsyncVocabulary,
+        ("lookup", "rank"),
+        unflavoured_members={"rank"},
+        compare_return=True,
+    )
+
+
+def test_an_unflavoured_member_outside_the_checked_list_is_refused() -> None:
+    """The declaration names members, so equality cannot self-check it.
+
+    An entry outside ``members`` claims an exception for a comparison nobody
+    is making -- a stale suppression that reads as a clean scan, which is the
+    failure this module's other declarations avoid by being compared against
+    what is observed.
+    """
+    with pytest.raises(AssertionError, match="not among the members"):
+        assert_twin_types_agree(
+            Vocabulary, AsyncVocabulary, ("lookup",), unflavoured_members={"rank"}
+        )
 
 
 def test_the_listed_members_are_what_is_checked() -> None:
