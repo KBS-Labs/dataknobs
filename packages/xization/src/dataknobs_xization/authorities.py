@@ -6,7 +6,7 @@ and derived annotation columns for structured text extraction.
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Dict, List, Set, Union
 
 import pandas as pd
@@ -392,6 +392,39 @@ class Authority(dk_annots.Annotator):
             self.anns_validator is None or self.anns_validator(self, ann_dicts)
         )
 
+    def add_valid_annotations(
+        self,
+        text_obj: dk_annots.AnnotatedText,
+        matches: Iterable[List[Dict[str, Any]]],
+    ) -> dk_annots.Annotations:
+        """Add the annotation rows of each match the validator accepts.
+
+        The unit is the match: `anns_validator` is documented as judging "a
+        single match or entity", so each match is offered on its own and an
+        accepted one is added whether or not its neighbours were. Subclasses
+        find the matches; how they are judged is decided here, once, so that
+        two implementations cannot disagree about what a validator is shown.
+
+        A match whose rows are rejected contributes nothing, and a text whose
+        matches are all rejected is indistinguishable from a text carrying no
+        match -- which is the reason the unit matters: the coarser the batch,
+        the more a single rejection discards.
+
+        Args:
+            text_obj: The annotated text object to add annotations to.
+            matches: The annotation row dicts of each match, one list per
+                match. A match may carry several rows -- a regex with named
+                groups produces one per group -- and they are judged and
+                added together.
+
+        Returns:
+            The text object's annotations.
+        """
+        for ann_dicts in matches:
+            if self.validate_ann_dicts(ann_dicts):
+                text_obj.annotations.add_dicts(ann_dicts)
+        return text_obj.annotations
+
     def compose(
         self,
         annotations: dk_annots.Annotations,
@@ -733,47 +766,64 @@ class RegexAuthority(Authority):
         Returns:
             The added Annotations.
         """
-        for match in re.finditer(self.regex, text_obj.text):
-            ann_dicts = []
-            if match.lastindex is not None:
-                if len(self.regex.groupindex) > 0:  # we have named groups
-                    for group_name, group_num in self.regex.groupindex.items():
-                        group_text = match.group(group_num)
-                        kwargs = {self.field_groups.get_field_type_col(self.name): group_name}
-                        ann_dicts.append(
-                            self.build_annotation(
-                                start_pos=match.start(group_name),
-                                end_pos=match.end(group_name),
-                                entity_text=group_text,
-                                auth_value_id=self.get_canonical_form(group_text, group_name),
-                                **kwargs,
-                            )
+        return self.add_valid_annotations(
+            text_obj,
+            (
+                self.build_match_annotations(match)
+                for match in re.finditer(self.regex, text_obj.text)
+            ),
+        )
+
+    def build_match_annotations(self, match: re.Match) -> List[Dict[str, Any]]:
+        """Build the annotation rows for a single match of this pattern.
+
+        One row per group when the pattern has groups, named or numbered, and
+        a single row spanning the whole match when it has none. A match's rows
+        are the fields of one entity, so they are judged and added together.
+
+        Args:
+            match: A match of this authority's regex.
+
+        Returns:
+            The match's annotation row dicts.
+        """
+        ann_dicts = []
+        if match.lastindex is not None:
+            if len(self.regex.groupindex) > 0:  # we have named groups
+                for group_name, group_num in self.regex.groupindex.items():
+                    group_text = match.group(group_num)
+                    kwargs = {self.field_groups.get_field_type_col(self.name): group_name}
+                    ann_dicts.append(
+                        self.build_annotation(
+                            start_pos=match.start(group_name),
+                            end_pos=match.end(group_name),
+                            entity_text=group_text,
+                            auth_value_id=self.get_canonical_form(group_text, group_name),
+                            **kwargs,
                         )
-                else:  # we have only numbers for groups
-                    for group_num, group_text in enumerate(match.groups(), start=1):
-                        kwargs = {self.field_groups.get_field_type_col(self.name): group_num}
-                        ann_dicts.append(
-                            self.build_annotation(
-                                start_pos=match.start(group_num),
-                                end_pos=match.end(group_num),
-                                entity_text=group_text,
-                                auth_value_id=self.get_canonical_form(group_text, group_num),
-                                **kwargs,
-                            )
-                        )
-            else:  # we have no groups
-                ann_dicts.append(
-                    self.build_annotation(
-                        start_pos=match.start(),
-                        end_pos=match.end(),
-                        entity_text=match.group(),
-                        auth_value_id=self.get_canonical_form(match.group(), self.name),
                     )
+            else:  # we have only numbers for groups
+                for group_num, group_text in enumerate(match.groups(), start=1):
+                    kwargs = {self.field_groups.get_field_type_col(self.name): group_num}
+                    ann_dicts.append(
+                        self.build_annotation(
+                            start_pos=match.start(group_num),
+                            end_pos=match.end(group_num),
+                            entity_text=group_text,
+                            auth_value_id=self.get_canonical_form(group_text, group_num),
+                            **kwargs,
+                        )
+                    )
+        else:  # we have no groups
+            ann_dicts.append(
+                self.build_annotation(
+                    start_pos=match.start(),
+                    end_pos=match.end(),
+                    entity_text=match.group(),
+                    auth_value_id=self.get_canonical_form(match.group(), self.name),
                 )
-            if self.validate_ann_dicts(ann_dicts):
-                # Add non-empty, valid annotation dicts to the result
-                text_obj.annotations.add_dicts(ann_dicts)
-        return text_obj.annotations
+            )
+        return ann_dicts
 
     def get_canonical_form(self, entity_text: str, entity_type: str) -> Any:
         if self.canonical_fn is not None:

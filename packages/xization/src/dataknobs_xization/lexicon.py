@@ -166,16 +166,30 @@ class TokenAligner:
     def __init__(self, first_token: dk_tok.Token, authority: dk_auth.LexicalAuthority):
         self.first_token = first_token
         self.auth = authority
-        self.annotations = []  # List[Dict[str, Any]]
+        self.matches = []  # List[List[Dict[str, Any]]] -- one list per match
         self._processed_idx = set()
         self._process(self.first_token)
+
+    @property
+    def annotations(self) -> List[Dict[str, Any]]:
+        """Every matched annotation row, flattened out of the matches.
+
+        The per-match grouping is the aligner's record because that is the
+        unit an authority's annotations validator judges; this is the view
+        for a caller that wants the rows and not the grouping.
+        """
+        return [ann_dict for match in self.matches for ann_dict in match]
 
     def _process(self, token):
         if token is not None:
             if token.token_num not in self._processed_idx:
                 token_matches = self._get_token_matches(token)
                 for token_match in token_matches:
-                    self.annotations.append(token_match.build_annotation())
+                    # A TokenMatch spans one variation and so builds exactly
+                    # one row; a match is still a list, because that is what a
+                    # match is elsewhere -- a regex match with named groups
+                    # carries one row per group.
+                    self.matches.append([token_match.build_annotation()])
                     self._process(token_match.next_token)
             self._process(token.next_token)
 
@@ -414,6 +428,10 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         its id and label straight off it, and it owns the annotations the
         matches are added to.
 
+        The aligner's matches are offered one at a time, which is the unit
+        `anns_validator` is documented to judge and the unit the regex arm
+        already used.
+
         Args:
             text_obj: The annotated text object to process and add annotations.
 
@@ -423,9 +441,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         first_token = self.lexical_expander.build_first_token(text_obj)
         token_aligner = TokenAligner(first_token, self)
         self._prev_aligner = token_aligner
-        if self.validate_ann_dicts(token_aligner.annotations):
-            text_obj.annotations.add_dicts(token_aligner.annotations)
-        return text_obj.annotations
+        return self.add_valid_annotations(text_obj, token_aligner.matches)
 
 
 class CorrelatedAuthorityData(dk_auth.AuthorityData):
