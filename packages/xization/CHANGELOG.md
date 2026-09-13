@@ -144,11 +144,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `finder` is the authority that found them, whose columns they are written
   in, and every accessor reads through that. The two are one object wherever
   an authority judges what it found itself. A validator given as a plain
-  callable is offered the finder as a third argument, and only where it
-  differs from the authority it was already given — so a two-argument
-  callable is unaffected everywhere the two are one, which is everywhere a
-  validator could be called before a bundle began calling one. A validator
-  handed to a bundle takes `fn(auth, ann_dicts, finder)`.
+  callable is offered the finder as a third argument if its signature accepts
+  one, so a validator written to either documented form is called the way it
+  was written: `fn(auth, ann_dicts)` keeps working everywhere, including as a
+  bundle's own validator, and `fn(auth, ann_dicts, finder)` is given the
+  finder everywhere, including on an authority that finds its own matches —
+  where the finder is that authority. Asking the callable is what makes both
+  ends work, since a leaf is always its own finder and a bundle is never its
+  own; conditioning the call on the two authorities differing instead would
+  make each form uncallable by one of them.
 
   The finder travels with the match: `Authority.find_matches_with_finders`
   (below) pairs each match with the authority that found it, and

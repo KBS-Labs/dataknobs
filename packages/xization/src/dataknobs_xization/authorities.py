@@ -4,6 +4,7 @@ Provides classes for managing authority-based annotations, field groups,
 and derived annotation columns for structured text extraction.
 """
 
+import inspect
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -17,11 +18,12 @@ import dataknobs_xization.annotations as dk_annots
 KEY_AUTH_ID_COL = "auth_id"
 
 #: A validator for the annotation rows of one match: ``fn(auth, ann_dicts)``,
-#: or ``fn(auth, ann_dicts, finder)`` where the authority judging the match is
-#: not the one that found it -- see :meth:`Authority.validate_ann_dicts`, which
-#: passes the third argument only in that case, so a validator written to the
-#: two-argument form keeps working everywhere the two have always been one.
-#: Spelled with an ellipsis because both arities are accepted.
+#: or ``fn(auth, ann_dicts, finder)`` to be told which authority found them and
+#: so whose columns the rows are written in -- see
+#: :meth:`Authority.validate_ann_dicts`, which offers the third argument to a
+#: validator whose signature accepts one, so a validator written to either form
+#: is called the way it was written. Spelled with an ellipsis because both
+#: arities are accepted.
 AnnsValidator = Callable[..., bool]
 
 #: The kind of authority data a factory builds from. Every ``AuthorityData``
@@ -309,10 +311,50 @@ class AuthorityData:
         return self
 
 
+def _accepts_third_positional(fn: Callable[..., Any]) -> bool:
+    """Whether ``fn`` can be called with a third positional argument.
+
+    Answers for the callable rather than for its caller, because the callable
+    is what decides how many arguments a call may carry. ``*args`` accepts
+    one, which is how a validator behind a decorator ordinarily arrives.
+
+    A callable whose signature cannot be introspected -- a C builtin, most
+    commonly -- reads as declining it, degrading to the two-argument contract
+    that predates the third argument, so an authority that could call it
+    before still can.
+
+    Args:
+        fn: The callable to ask.
+
+    Returns:
+        True if a third positional argument is accepted.
+    """
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    positional = 0
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            return True
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            positional += 1
+    return positional >= 3
+
+
 class Authority(dk_annots.Annotator):
     """A class for managing and defining tabular authoritative data for e.g.,
     taxonomies, etc., and using them to annotate instances within text.
     """
+
+    #: The last answer :meth:`_validator_accepts_finder` computed, with the
+    #: callable it was computed for. A class-level ``None`` so that a subclass
+    #: not calling ``super().__init__()`` -- which this class already accounts
+    #: for elsewhere -- still reads an empty cache rather than raising.
+    _finder_arity: "tuple[AnnsValidator, bool] | None" = None
 
     def __init__(
         self,
@@ -333,7 +375,9 @@ class Authority(dk_annots.Annotator):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(name)
@@ -490,10 +534,16 @@ class Authority(dk_annots.Annotator):
              * either there is no annotations validator
              * or they are valid according to the validator
 
-        The validator is given the finder as a third argument only when it is
-        not this authority, so a validator written to the two-argument
-        contract keeps working wherever the two have always been the same --
-        which is every authority that judges what it found itself.
+        The validator is given the finder as a third argument if its
+        signature accepts one, so a validator written to either documented
+        form is called the way it was written. Asking the callable is what
+        makes both ends work: a leaf is always its own finder and a bundle is
+        never its own, so conditioning the call on the two authorities
+        differing would make the three-argument form uncallable by the one
+        and the two-argument form uncallable by the other.
+
+        A validator declining the third argument is one that reads nothing
+        through the finder, so it is not told which authority found the rows.
 
         Args:
             ann_dicts: Annotation dictionaries.
@@ -507,11 +557,32 @@ class Authority(dk_annots.Annotator):
         """
         if len(ann_dicts) == 0:
             return False
-        if self.anns_validator is None:
+        validator = self.anns_validator
+        if validator is None:
             return True
-        if finder is None or finder is self:
-            return self.anns_validator(self, ann_dicts)
-        return self.anns_validator(self, ann_dicts, finder)
+        if not self._validator_accepts_finder(validator):
+            return validator(self, ann_dicts)
+        return validator(self, ann_dicts, finder if finder is not None else self)
+
+    def _validator_accepts_finder(self, validator: AnnsValidator) -> bool:
+        """Whether this authority's validator can be handed the finder.
+
+        Cached against the callable's identity rather than recomputed per
+        match, because ``anns_validator`` is a public attribute that may be
+        replaced after construction and introspection is not free.
+
+        Args:
+            validator: The validator to ask about.
+
+        Returns:
+            True if it accepts the finder as a third positional argument.
+        """
+        cached = self._finder_arity
+        if cached is not None and cached[0] is validator:
+            return cached[1]
+        accepts = _accepts_third_positional(validator)
+        self._finder_arity = (validator, accepts)
+        return accepts
 
     def add_valid_annotations(
         self,
@@ -765,7 +836,9 @@ class LexicalAuthority(Authority):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
@@ -894,7 +967,9 @@ class RegexAuthority(Authority):
                 Note that the validator function takes the regex authority instance
                 as its first parameter to provide access to the field_groups, etc.
                 The validation_fn signature is: fn(regexAuthority, ann_row_dicts)
-                and returns a boolean.
+                and returns a boolean. A third parameter, where one is
+                declared, receives the authority that found the rows -- see
+                :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
@@ -1034,7 +1109,9 @@ class AuthoritiesBundle(Authority):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
             auths: The authorities to bundle together.
         """

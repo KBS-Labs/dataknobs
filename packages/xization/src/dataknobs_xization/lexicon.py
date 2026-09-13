@@ -291,7 +291,9 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
             field_groups: The derived field groups to use.
             anns_validator: fn(auth, anns_dict_list) that returns True if
                 the list of annotation row dicts are valid to be added as
-                annotations for a single match or "entity".
+                annotations for a single match or "entity". A third
+                parameter, where one is declared, receives the authority
+                that found the rows -- see :data:`AnnsValidator`.
             parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
@@ -834,7 +836,10 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
             field_groups: The derived field groups the built authorities use
                 (default=the authority's own default groups).
             anns_validator: fn(auth, anns_dict_list) the built authorities
-                validate each match with (default=accept every match).
+                validate each match with (default=accept every match). A
+                third parameter, where one is declared, receives the
+                authority that found the rows -- see
+                :data:`~dataknobs_xization.authorities.AnnsValidator`.
         """
         self.auth_name = auth_name
         self._lexical_expander = lexical_expander

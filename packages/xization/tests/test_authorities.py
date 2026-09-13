@@ -613,6 +613,70 @@ def test_a_plain_callable_validator_is_offered_the_finder_too():
     assert seen == [("intake", "date", "surface_form")]
 
 
+def test_a_three_argument_callable_works_on_an_authority_that_finds_its_own():
+    """The finder is offered because the validator asks for it, not because it differs.
+
+    A leaf is always its own finder, so conditioning the call on the two
+    authorities differing means a validator written to the three-argument
+    form can never be called by one -- it is handed two arguments and raises
+    `TypeError` before it runs. What decides how many arguments a call may
+    carry is the callable, so a validator that asks for the finder is given
+    it, and on a leaf that is the authority itself.
+    """
+    seen = []
+
+    def validator(auth, ann_dicts, finder):
+        seen.append((auth.name, finder.name, finder is auth))
+        return True
+
+    anns = _part_date_arm(validator).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == [("date", "date", True)]
+    assert len(anns.df) == 3
+
+
+def test_a_two_argument_callable_still_works_as_a_bundles_own_validator():
+    """The two-argument contract survives the one place the authorities never coincide.
+
+    A bundle never finds its own matches, so `finder` differs from `auth` for
+    every match it judges. Offering the third argument on that basis alone
+    hands three arguments to every validator a bundle carries, and a callable
+    written to the documented two-argument form -- which is every validator
+    written before a bundle could judge one -- raises `TypeError`. A
+    validator that does not ask for the finder is one that reads nothing
+    through it, so it keeps being called the way it was written.
+    """
+    seen = []
+
+    def validator(auth, ann_dicts):
+        seen.append(auth.name)
+        return True
+
+    anns = _bundle(validator, auths=[_surface_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == ["intake"]
+    assert len(anns.df) == 3
+
+
+def test_a_validator_that_takes_star_args_is_offered_the_finder():
+    """A wrapped validator declares `*args`, and that accepts the finder.
+
+    The question is whether the callable can carry a third positional
+    argument, which `*args` can -- a validator behind a decorator is the
+    ordinary way one arrives in this shape, and reading its arity as two
+    would withhold the finder from something able to use it.
+    """
+    seen = []
+
+    def validator(*args):
+        seen.append(len(args))
+        return True
+
+    _bundle(validator, auths=[_surface_date_arm()]).annotate_input(NAMED_DATE_QUERY)
+
+    assert seen == [3]
+
+
 def test_the_text_accessor_reads_the_column_its_metadata_names():
     """A neighbouring defect in the same class, on a leaf, with no bundle.
 
