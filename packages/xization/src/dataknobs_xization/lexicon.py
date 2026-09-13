@@ -6,7 +6,7 @@ and pattern matching in text with support for variations and fuzzy matching.
 
 from abc import abstractmethod
 from collections import defaultdict
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Iterable
 from typing import Any, Dict, List, Set, Union
 
 import numpy as np
@@ -489,25 +489,40 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
     ) -> dk_anns.Annotations:
         """Method to do the work of finding, validating, and adding annotations.
 
-        The text object carries both halves this needs: it is a
-        :class:`~dataknobs_structures.document.Text`, so the tokenizer reads
-        its id and label straight off it, and it owns the annotations the
-        matches are added to.
-
         The aligner's matches are offered one at a time, which is the unit
         `anns_validator` is documented to judge and the unit the regex arm
         already used.
 
         Args:
             text_obj: The annotated text object to process and add annotations.
+                It owns the annotations the matches are added to.
 
         Returns:
             The added Annotations.
         """
+        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+
+    def find_matches(
+        self,
+        text_obj: dk_anns.AnnotatedText,
+    ) -> Iterable[List[Dict[str, Any]]]:
+        """Find each declared form the text carries, in document order.
+
+        The aligner walks the tokens forward and records a match where it
+        begins, so its matches are in the document's order.
+
+        Args:
+            text_obj: The annotated text object to find matches in. It is a
+                :class:`~dataknobs_structures.document.Text`, so the tokenizer
+                reads its id and label straight off it.
+
+        Returns:
+            One list of annotation row dicts per match.
+        """
         first_token = self.lexical_expander.build_first_token(text_obj)
         token_aligner = TokenAligner(first_token, self)
         self._prev_aligner = token_aligner
-        return self.add_valid_annotations(text_obj, token_aligner.matches)
+        return token_aligner.matches
 
 
 class CorrelatedAuthorityData(dk_auth.AuthorityData):

@@ -406,6 +406,35 @@ class Authority(dk_annots.Annotator):
         """
         raise NotImplementedError
 
+    def find_matches(
+        self,
+        text_obj: dk_annots.AnnotatedText,
+    ) -> Iterable[List[Dict[str, Any]]]:
+        """Find this authority's matches without adding them.
+
+        The counterpart to :meth:`add_valid_annotations`: subclasses find the
+        matches, and what is done with them is decided elsewhere. Splitting
+        the two is what lets a match be judged by something other than the
+        authority that found it -- an :class:`AuthoritiesBundle` judging what
+        its members found, which it cannot do once the rows have been added,
+        because adding them loses the match boundaries.
+
+        Not abstract, so a subclass written before this existed still
+        constructs. Such a subclass keeps working wherever nothing needs its
+        matches back; the default raises only when something does.
+
+        Args:
+            text_obj: The annotated text object to find matches in.
+
+        Returns:
+            The annotation row dicts of each match, one list per match, in
+            document order.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement find_matches(), so a "
+            "bundle carrying an anns_validator cannot judge the matches it finds"
+        )
+
     def validate_ann_dicts(self, ann_dicts: List[Dict[str, Any]]) -> bool:
         """The annotation row dictionaries are valid if:
           * They are non-empty
@@ -811,12 +840,24 @@ class RegexAuthority(Authority):
         Returns:
             The added Annotations.
         """
-        return self.add_valid_annotations(
-            text_obj,
-            (
-                self.build_match_annotations(match)
-                for match in re.finditer(self.regex, text_obj.text)
-            ),
+        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+
+    def find_matches(
+        self,
+        text_obj: dk_annots.AnnotatedText,
+    ) -> Iterable[List[Dict[str, Any]]]:
+        """Find each match of this authority's pattern, in document order.
+
+        ``re.finditer`` scans left to right, so the order is the document's.
+
+        Args:
+            text_obj: The annotated text object to find matches in.
+
+        Returns:
+            One list of annotation row dicts per match of the pattern.
+        """
+        return (
+            self.build_match_annotations(match) for match in re.finditer(self.regex, text_obj.text)
         )
 
     def build_match_annotations(self, match: re.Match) -> List[Dict[str, Any]]:
@@ -943,12 +984,64 @@ class AuthoritiesBundle(Authority):
     ) -> dk_annots.Annotations:
         """Method to do the work of finding, validating, and adding annotations.
 
+        With no `anns_validator` of its own, this bundle has nothing to judge
+        and lets each member annotate the text directly, exactly as it always
+        has -- so a member that does not implement :meth:`find_matches` keeps
+        working here. Carrying one, it judges its members' matches itself,
+        which is what :meth:`find_matches` collects.
+
         Args:
             text_obj: The annotated text object to process and add annotations.
 
         Returns:
             The added Annotations.
         """
+        if self.anns_validator is None:
+            for auth in self.auths:
+                auth.annotate_input(text_obj)
+            return text_obj.annotations
+        return self.add_valid_annotations(text_obj, self.find_matches(text_obj))
+
+    def find_matches(
+        self,
+        text_obj: dk_annots.AnnotatedText,
+    ) -> Iterable[List[Dict[str, Any]]]:
+        """Find the members' matches, each judged by its own member first.
+
+        A member judges what it found before offering it, so a match its own
+        validator rejects is never shown to this bundle: the bundle judges
+        what survived its members, not what they found. Two validators on one
+        match are consulted innermost first, which is the only order that
+        lets either of them mean anything -- a bundle cannot un-reject what a
+        member refused.
+
+        The members are merged into the document's order rather than
+        chained, because chaining would show a validator all of one member's
+        matches before any of the next one's, and
+        :meth:`Authority.add_valid_annotations` states that the matches it is
+        given are in document order. Each member is read through its own
+        ``start_pos_col``, since a member may be built with its own metadata.
+        The merge is stable, so two matches beginning at one position stay in
+        the order their members were added -- which the same docstring says a
+        validator should not read anything into.
+
+        Args:
+            text_obj: The annotated text object to find matches in.
+
+        Returns:
+            One list of annotation row dicts per surviving match, in document
+            order.
+
+        Raises:
+            NotImplementedError: If a member does not implement this method.
+                Named rather than silent, because the alternative is judging
+                a document while a member's matches go unexamined.
+        """
+        found: List[tuple[int, List[Dict[str, Any]]]] = []
         for auth in self.auths:
-            auth.annotate_input(text_obj)
-        return text_obj.annotations
+            start_pos_col = auth.metadata.start_pos_col
+            for ann_dicts in auth.find_matches(text_obj):
+                if auth.validate_ann_dicts(ann_dicts):
+                    found.append((ann_dicts[0][start_pos_col], ann_dicts))
+        found.sort(key=lambda match: match[0])
+        return [ann_dicts for _, ann_dicts in found]

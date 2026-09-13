@@ -257,3 +257,185 @@ def test_flat_authority_data_refuses_a_name_it_does_not_hold():
 
     assert "colour" in str(excinfo.value)
     assert "animal" in str(excinfo.value)
+
+
+# --- a bundle judges what its members found --------------------------------
+#
+# `AuthoritiesBundle` accepted an `anns_validator`, stored it, documented it
+# with the same "single match or entity" sentence as the base class -- and
+# never called it. The leaf arms reach the validator through
+# `Authority.add_valid_annotations`; a composite could not, because its
+# members added their rows straight to the shared text object and by the time
+# the bundle could look there were no match boundaries left to judge. So the
+# bundle needs its members to hand matches back rather than only add them,
+# which is what `find_matches` is for.
+
+
+DATE_PATTERN = re.compile(r"\d{2}/\d{2}/\d{4}")
+BUNDLE_QUERY = "my golden retriever met a beagle on 07/04/1776"
+
+# The same three matches, with the date first -- so chaining the members in
+# the order they were added would hand the bundle [17, 40, 3] rather than the
+# document's [3, 17, 40]. The dictionary arm is added first in both.
+UNSORTED_QUERY = "on 07/04/1776 my golden retriever met a beagle"
+
+
+class _Rejects(dk_auth.AnnotationsValidator):
+    """A recorder that rejects the one match text it was built to reject."""
+
+    def __init__(self, unwanted: str) -> None:
+        self.unwanted = unwanted
+        self.shown: list[list[str]] = []
+
+    def validate_annotation_rows(self, auth_annotations) -> bool:
+        text_col = auth_annotations.auth.metadata.text_col
+        texts = [row[text_col] for row in auth_annotations.ann_row_dicts]
+        self.shown.append(texts)
+        return self.unwanted not in texts
+
+
+def _date_arm(anns_validator=None) -> dk_auth.RegexAuthority:
+    return dk_auth.RegexAuthority("date", DATE_PATTERN, anns_validator=anns_validator)
+
+
+def _bundle(anns_validator=None, auths=None) -> dk_auth.AuthoritiesBundle:
+    bundle = dk_auth.AuthoritiesBundle("intake", anns_validator=anns_validator)
+    for auth in auths if auths is not None else (_dictionary_arm(), _date_arm()):
+        bundle.add(auth)
+    return bundle
+
+
+def test_a_bundle_shows_its_validator_one_match_at_a_time():
+    """The defect: the validator was stored and never consulted at all.
+
+    Not a granularity mismatch like the dictionary arm's -- a total absence.
+    The bundle was handed a validator, kept it, and returned a result
+    indistinguishable from the one it returns with no validator at all.
+    """
+    seen = _Recorder()
+
+    _bundle(seen).annotate_input(BUNDLE_QUERY)
+
+    assert seen.shown == [["golden retriever"], ["beagle"], ["07/04/1776"]]
+
+
+def test_a_match_the_bundle_rejects_is_the_only_one_missing():
+    """The consumer-visible half, and the same unit claim as the leaf arms."""
+    anns = _bundle(_Recorder()).annotate_input(BUNDLE_QUERY)
+
+    assert anns.df["text"].to_list() == ["golden retriever", "07/04/1776"]
+
+
+def test_a_member_validator_still_runs_and_runs_first():
+    """Both validators are consulted, and a member's rejection is final.
+
+    The member judges its own matches before offering them, so a match it
+    rejects is never shown to the bundle -- the bundle judges what survived
+    its member, not what the member found.
+    """
+    # The member rejects the date; the bundle rejects the beagle.
+    bundle_seen, member_seen = _Recorder(), _Rejects("07/04/1776")
+
+    anns = _bundle(bundle_seen, auths=[_dictionary_arm(), _date_arm(member_seen)]).annotate_input(
+        BUNDLE_QUERY
+    )
+
+    assert member_seen.shown == [["07/04/1776"]]
+    assert bundle_seen.shown == [["golden retriever"], ["beagle"]]
+    assert anns.df["text"].to_list() == ["golden retriever"]
+
+
+def test_a_bundle_consults_its_validator_in_document_order():
+    """The order is the document's, not the order the members were added.
+
+    `Authority.add_valid_annotations` states that every arm gives it matches
+    in document order. A bundle routes through that same seam, so chaining
+    its members -- all of member one's matches, then all of member two's --
+    would make the composite the one arm that contradicts it. The members are
+    merged rather than chained, each read through its own `start_pos_col`.
+
+    Invisible in the result either way: `Annotations.add_dicts` sorts on
+    every add, so this is the order a *validator* is consulted in.
+    """
+    seen = _Positions()
+
+    _bundle(seen).annotate_input(UNSORTED_QUERY)
+
+    assert seen.starts == sorted(seen.starts)
+    assert seen.starts == [3, 17, 40], "the date is first in the text"
+
+
+def test_a_bundle_with_no_validator_returns_what_it_always_did():
+    """The compatibility net: the delegating path is untouched."""
+    anns = _bundle().annotate_input(BUNDLE_QUERY)
+
+    assert anns.df["text"].to_list() == ["golden retriever", "beagle", "07/04/1776"]
+
+
+def test_a_nested_bundle_judges_its_members_members():
+    """Bundles are authorities, so they nest, and the outer one still judges."""
+    seen = _Recorder()
+    inner = _bundle()
+
+    anns = _bundle(seen, auths=[inner]).annotate_input(BUNDLE_QUERY)
+
+    assert seen.shown == [["golden retriever"], ["beagle"], ["07/04/1776"]]
+    assert anns.df["text"].to_list() == ["golden retriever", "07/04/1776"]
+
+
+class _NoHook(dk_auth.Authority):
+    """A consumer subclass written against the ABC as it was published.
+
+    It implements both abstract methods and nothing else, which is what a
+    correct subclass looked like before `find_matches` existed. Adding the
+    hook must not break it at construction -- which is the whole reason the
+    hook is not abstract.
+    """
+
+    def add_annotations(self, text_obj):
+        return text_obj.annotations
+
+    def has_value(self, value):
+        return False
+
+
+def test_a_member_without_the_hook_works_in_an_unvalidated_bundle():
+    """Nothing that works today stops working."""
+    bundle = _bundle(auths=[_dictionary_arm(), _NoHook("legacy")])
+
+    anns = bundle.annotate_input(BUNDLE_QUERY)
+
+    assert anns.df["text"].to_list() == ["golden retriever", "beagle"]
+
+
+def test_a_member_without_the_hook_in_a_validated_bundle_says_so():
+    """The one new failure: loud, named, and only where the answer was wrong.
+
+    A bundle carrying a validator cannot judge matches a member will not hand
+    back, and answering as though it had is the defect this change fixes. So
+    it raises instead, naming the class that cannot take part.
+    """
+    bundle = _bundle(_Recorder(), auths=[_dictionary_arm(), _NoHook("legacy")])
+
+    with pytest.raises(NotImplementedError) as excinfo:
+        bundle.annotate_input(BUNDLE_QUERY)
+
+    assert "_NoHook" in str(excinfo.value)
+    assert "find_matches" in str(excinfo.value)
+
+
+def test_a_multi_row_match_survives_the_bundle_as_one_unit():
+    """The grouping the arms pin individually has to survive the chain.
+
+    Each arm judges a named-group match as one unit of three rows; nothing
+    yet pinned that the unit is still one unit once a bundle has carried it.
+    """
+    r = re.compile(r"(?P<day>\d{2})/(?P<month>\d{2})/(?P<year>\d{4})")
+    seen = _Recorder()
+
+    anns = _bundle(seen, auths=[dk_auth.RegexAuthority("date", r)]).annotate_input(
+        "abc 07/04/1776 xyz"
+    )
+
+    assert seen.shown == [["07", "04", "1776"]], "one call carrying three rows"
+    assert anns.df["text"].to_list() == ["07", "04", "1776"]
