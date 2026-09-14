@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-14T20:54:52Z",
+  "timestamp": "2026-09-14T21:26:38Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -23,16 +23,16 @@
     "toolchain": "7616bd62712ff94e09f857b5849ab005326cdefd6972e6f846bc4300ea4ba4ba",
     "toolchain_test": "a3c996e51c661e2fc0d1c26400dbbe16708cad0bd629827aec331bf99a4c82b1",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
-    "workspace_tests": "21cabc7363477299d099e12429a863fbb35423bf0015bc8ebdbe4104309fc721",
+    "workspace_tests": "e40e52071a78190e2346fa1fcdb915c37e0abad0d559ab26a9fc8636b461498e",
     "docs": "694fc04722cdaa78787d7b7585ff1cf6742a71baf1145c1632c89f9ba20dd25b"
   },
-  "total_seconds": 107,
+  "total_seconds": 110,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
@@ -44,7 +44,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
@@ -78,8 +78,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 90,
-      "workspace_guards_seconds": 90
+      "duration_seconds": 93,
+      "workspace_guards_seconds": 93
     },
     "integration_tests": {
       "status": "pass",
