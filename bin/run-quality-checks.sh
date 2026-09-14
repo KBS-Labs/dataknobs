@@ -414,6 +414,12 @@ fi
 
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
+# "No package suite ran", which is the truth on every path that reaches the
+# summary without setting it: tests skipped entirely, or change detection
+# deciding there is nothing to test. Every path that *does* run suites derives
+# this from PACKAGES_TO_TEST where that list is settled — see below. It was a
+# default with one conditional assignment, which is this file's documented
+# defect shape: a value that reads as a result, on a code path most runs miss.
 TESTED_PACKAGES_JSON="[]"
 # Empty until change detection speaks, and read through a :- default at its one
 # use site so an unset value falls back to the full package list rather than to
@@ -443,12 +449,10 @@ data = json.load(sys.stdin)
 print(" ".join(data["packages"]))
 print(str(data["docs_changed"]).lower())
 print(data.get("mode", "all"))
-# What the test stage actually ran, which is no longer the same list: a
+# The test-stage list, which is no longer the same as the validation one: a
 # global input that moves only the lint step leaves the test result of every
-# package intact, so it is re-validated and not re-tested. Recorded as the
-# narrower list so the artifact cannot claim a suite that did not run.
+# package intact, so it is re-validated and not re-tested.
 _test_packages = data.get("test_packages", data["packages"])
-print(json.dumps(_test_packages))
 # Same default in the same direction: a detector that does not name the test
 # subset falls back to the full list, so an older one over-tests rather than
 # skipping a suite.
@@ -477,9 +481,8 @@ print(data.get("test_scope", "packages"))
         CHANGED_PACKAGES="${_changed_fields[0]}"
         DOCS_CHANGED="${_changed_fields[1]}"
         CHANGE_MODE="${_changed_fields[2]}"
-        TESTED_PACKAGES_JSON="${_changed_fields[3]}"
-        TEST_PACKAGES="${_changed_fields[4]}"
-        TEST_SCOPE="${_changed_fields[5]}"
+        TEST_PACKAGES="${_changed_fields[3]}"
+        TEST_SCOPE="${_changed_fields[4]}"
 
         # Three answers, not two. An empty package list is correct for a change
         # to the workspace guards — they belong to no package — but reading it
@@ -801,6 +804,18 @@ fi
 
 # Seconds elapsed since a `date +%s` stamp.
 elapsed_since() { echo $(( $(date +%s) - $1 )); }
+
+# A JSON array of the arguments, which are workspace package names — no
+# escaping beyond the quotes is needed and none is attempted, so do not reach
+# for this with arbitrary strings. A function rather than an inline loop so the
+# assignment that matters reads as what it is: the list that ran, serialized.
+json_array_of() {
+    local _out="" _item
+    for _item in "$@"; do
+        _out="${_out:+$_out, }\"$_item\""
+    done
+    printf '[%s]' "$_out"
+}
 
 # Compute the overall PASS/FAIL/PASS_WITH_SKIPS verdict from the individual check
 # statuses. Called from two sites that MUST agree — the quality-summary.json
@@ -1278,6 +1293,16 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 fi
             done
         fi
+
+        # Stated once, where it is produced — the principle the summary writer
+        # was built on, applied to the one field that still had a second home.
+        # This is the list both loops below iterate, so the document and the run
+        # cannot part; derived from change detection it was only ever assigned
+        # in pr mode, and an `all` run tested ten suites and recorded none.
+        # Deliberate word splitting — the list is a space-separated set of
+        # package names, which is what the loops below iterate too.
+        # shellcheck disable=SC2086
+        TESTED_PACKAGES_JSON=$(json_array_of $PACKAGES_TO_TEST)
 
         # Run unit tests
         print_status "Running unit tests..."
