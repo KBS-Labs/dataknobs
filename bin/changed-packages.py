@@ -334,6 +334,16 @@ PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     "packages/bots/docs/multi-tenant.md": "bots",
     "packages/bots/docs/behavior-packs.md": "bots",
     "packages/common/docs/guides/packs.md": "common",
+    # Both publish a `worked-input` fence holding a vocabulary the common suite
+    # also carries as a conftest constant, and test_worked_input_fences.py is
+    # what stops the two copies parting. Read from the package side rather than
+    # from tests/ deliberately: the comparison needs the conftest constant, and
+    # a workspace guard reading a package's test file sits in no workspace hash
+    # scope — while filing that file in the workspace-only tier would stop it
+    # scheduling its own package, since change detection tests that tier first
+    # and stops. From here both halves are covered by rules that already exist.
+    "packages/common/docs/guides/ontology.md": "common",
+    "packages/common/docs/guides/entity-resolution.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
     "packages/data/docs/vector-store-capabilities.md": "data",
 }

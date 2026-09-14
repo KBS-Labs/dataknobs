@@ -29,6 +29,108 @@ from dataknobs_common.entity_resolution import (
 )
 ```
 
+## The whole input
+
+Hand-edited, no tooling, no second file. The same vocabulary the
+[ontology guide](https://kbs-labs.github.io/dataknobs/packages/common/ontology/)
+publishes, at the version that declares a breed and the breed it is a kind of —
+which is what makes the sentence below carry two forms at overlapping spans:
+
+<!-- worked-input -->
+
+```yaml
+# mammals.yaml
+ontology:
+  id: mammals
+  version: "1.1"
+
+  entity_types:
+    - id: Species
+      attributes:
+        - {name: latin_name, type: string, required: true}
+        - {name: lifespan_years, type: number, field_type: float}
+    - id: Breed
+      isa: Species                        # <-- the TYPE lattice
+      attributes:
+        - {name: akc_group, type: string}
+
+  relation_types:
+    - id: isa
+      transitive: true
+
+  entities:
+    - {id: mammal, type: Species, name: Mammal,
+       description: "Warm-blooded, milk-producing vertebrates."}
+    - {id: dog, type: Species, name: Dog, aliases: [Canine, "Domestic dog"],
+       description: "A domesticated carnivoran."}
+    - {id: retriever, type: Breed, name: Retriever}
+    - {id: golden_retriever, type: Breed, name: Golden Retriever, aliases: [Goldie]}
+    - {id: beagle, type: Breed, name: Beagle, aliases: [Beagles],
+       source: {source_id: clinic_db, table: species, key: "sp-2291"}}
+
+  assertions:
+    - {subject: dog, relation: isa, object: mammal}            # <-- the INSTANCE
+    - {subject: retriever, relation: isa, object: dog}         #     lattice, same
+    - {subject: golden_retriever, relation: isa, object: retriever}   # relation id
+    - {subject: beagle, relation: isa, object: dog}
+    # an attribute value is an assertion whose object is a Literal
+    - {subject: dog, relation: lifespan_years, object: 12}
+
+  taxonomies:
+    - {id: species, name: Species, relation: isa}
+```
+
+Reading a `.yaml` path needs PyYAML, which `dataknobs-common` does not install
+by default — `pip install dataknobs-common[yaml]`. Nothing else on this page
+does: `load_ontology` also takes a `.json` path or a plain mapping, and either
+runs on the base install.
+
+## The worked call site
+
+A sentence rather than a phrase, which is the case this page is for: the caller
+does not know where the forms are, or how many, or what the vocabulary missed.
+Every line below runs against the file above, exactly as written.
+
+<!-- worked-call-site -->
+
+```python
+from pathlib import Path
+
+from dataknobs_common.entity_resolution import CascadingResolver, ScanningSignal
+from dataknobs_common.ontology import load_ontology
+
+onto = load_ontology(Path("mammals.yaml"))  # -> Ontology
+# No database. No embedder. No event loop.
+
+resolver = CascadingResolver([ScanningSignal(onto.entities)], onto.entities)
+result = resolver.resolve("my golden retriever has been limping", k=5)
+
+# (1) which declared forms the sentence carries, longest first
+[c.entity_id for c in result.candidates]  # ["golden_retriever", "retriever"]
+
+# (2) where each one sat -- half-open offsets into `result.query`
+result.explain("golden_retriever")[0].span  # (3, 19)
+result.explain("retriever")[0].span  # (10, 19)
+result.explain("golden_retriever")[0].matched_text  # "golden retriever"
+
+# (3) what the vocabulary did not account for
+result.coverage.matched  # ((3, 19),) -- the union: (10, 19) is inside it
+result.coverage.unmatched  # ((0, 2), (20, 36))
+result.unmatched_text()  # ("my", "has been limping")
+```
+
+That block is executed as written by a workspace test, and the test asserts it
+is character-identical to the fence above. If this page and the code ever
+disagree, the suite goes red rather than the page going quietly wrong.
+
+`ScanningSignal` is constructed by name rather than reached through
+`build_resolver`, and that is the subject rather than a convenience: a page
+showing a reader how to find declared forms inside a sentence should name the
+rung that does it. [The door, and what it builds](#the-door-and-what-it-builds)
+is the other route, and what a document declaring no `resolver:` section builds
+today is `ExactNormalizedSignal` then `AliasSignal` — neither of which locates
+anything inside a sentence.
+
 ## The door, and what it builds
 
 ```python
@@ -348,43 +450,66 @@ with a `frozenset[str]`, which has nowhere to put an offset; `_located` answers
 with `FormHit`s — an id and where its form sat — in the order the rung wants
 them proposed.
 
+**If an n-gram scan is what you want, it ships — construct it.** That is
+`ScanningSignal`, at the top of this page: every span of consecutive tokens
+looked up as the slice it covers, longest first, twenty-one lookups for a
+six-token utterance. Writing it again is the one thing this section should not
+talk you into.
+
+What is worth writing yourself is a rung that asks the index a question the
+shipped one cannot, and there is a concrete one. A probe is a slice *between*
+token boundaries, so a declared form whose first or last character is not
+alphanumeric — `(beagle)`, `C.D.C.` — is never probed at all. A vocabulary
+carrying forms like those wants a different boundary:
+
 ```python
-from dataknobs_common.entity_resolution import DeclaredSignal, FormHit, token_spans
+import re
+
+from dataknobs_common.entity_resolution import DeclaredSignal, FormHit
 
 
-class MyScanningRung(DeclaredSignal):
-    key = "my_scan"
+class PunctuatedFormRung(DeclaredSignal):
+    key = "punctuated"
 
     def _located(self, query: str) -> list[FormHit]:
-        tokens = token_spans(query)              # where the words are
         found = []
-        for length in range(len(tokens), 0, -1): # longest form first
-            for first in range(len(tokens) - length + 1):
-                start, end = tokens[first][0], tokens[first + length - 1][1]
-                hits = self._entities.by_surface_form(self._fold(query[start:end]))
-                for entity_id in sorted(hits):       # a set has no stable order
-                    found.append(FormHit(entity_id=entity_id, span=(start, end)))
+        for chunk in re.finditer(r"\S+", query):   # "(beagle)" is one chunk
+            hits = self._entities.by_surface_form(self._fold(chunk.group()))
+            found += [FormHit(entity_id=i, span=chunk.span()) for i in sorted(hits)]
         return found
 ```
 
-`token_spans` is the boundary policy, and it is a different question from the
-fold: `default_normalizer` strips and case-folds, which is what a whole-string
-lookup wants and is not what stops a scan finding `beagle` inside `beagles`.
-Probe the **slice** rather than a join of the tokens, so no offset ever points
-at a string the text does not contain. Twenty-one lookups for a six-token
-utterance, over a dictionary — a bounded cost, not a search.
-
-Overlapping forms are all returned. `"golden retriever"` hits
-`golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`; choosing one is
-a verdict, and the offsets make the containment visible so the consumer can
-make it instead. Order matters where the score does not: a declared hit is
+Five lines, and every one of them is the hook rather than the policy. Note what
+the rung is responsible for: `sorted(hits)` because a set has no stable order,
+`self._fold` because the slice is what reaches the index, and a span that points
+at **the query** — `chunk.span()` rather than an offset into anything the rung
+computed for itself. Order matters where the score does not: a declared hit is
 `1.0` by fiat, so the only order a caller can read is the one the rung
 publishes — which is also what `_order` is for on the `_hits` path, where
 alphabetical is the stable default and means nothing more than that.
 
+`token_spans` is the boundary policy the shipped scan uses, and it is a
+different question from the fold: `default_normalizer` strips and case-folds,
+which is what a whole-string lookup wants and is not what stops a scan finding
+`beagle` inside `unbeagleable`. Whichever boundary a rung picks, probe the
+**slice** rather than a join, so no offset ever points at a string the text does
+not contain.
+
+Overlapping forms are all returned. `"golden retriever"` hits
+`golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`; choosing one is
+a verdict, and the offsets make the containment visible so the consumer can
+make it instead.
+
 `k` counts entities rather than places: one entity named twice is one candidate
 carrying two pieces of evidence, which is what the cascade does when two rungs
 produce the same id.
+
+**Compose rather than choose.** `ScanningSignal` and `ExactNormalizedSignal`
+read the same index and neither subsumes the other: the scan finds a declared
+form sitting inside a sentence, which a whole-string comparison misses, and the
+whole-string rung finds a form whose own edges are punctuated, which no scan
+probes. A cascade carrying both asks the index twice and pays two dictionary
+lookups for it.
 
 The bare `MatchSignal` protocol stays the escape hatch, for a rung the base
 cannot serve: one whose backing is not a dictionary lookup, or one that already

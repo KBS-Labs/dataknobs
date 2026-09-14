@@ -182,6 +182,41 @@ def test_unavailable_reason_reports_why_without_building(restored_registry: None
     assert not signal_backends.is_known("no-such-rung")
 
 
+def test_the_scanning_rung_is_registered_in_both_flavours() -> None:
+    """A rung with two flavours needs no ``declare_unavailable`` mark.
+
+    ``semantic`` above is the asymmetric case and is the reason this one is
+    worth stating beside it: asking either registry for ``scan`` builds
+    something, so neither has a reason to explain itself. The classes are
+    asserted rather than only the keys, because a factory registered under the
+    wrong flavour is exactly what the two registries exist to separate -- and
+    a key that builds *a* rung is not the claim.
+    """
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        ScanningSignal,
+        async_signal_backends,
+    )
+    from dataknobs_common.ontology import AsyncMappingEntitySource, Entity, MappingEntitySource
+
+    assert signal_backends.is_registered("scan")
+    assert signal_backends.unavailable_reason("scan") is None
+    assert async_signal_backends.is_registered("scan")
+    assert async_signal_backends.unavailable_reason("scan") is None
+
+    declared = {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    built = signal_backends.create(
+        config={"kind": "scan", "entities": MappingEntitySource(declared)}
+    )
+    twin = async_signal_backends.create(
+        config={"kind": "scan", "entities": AsyncMappingEntitySource(declared)}
+    )
+
+    assert isinstance(built, ScanningSignal)
+    assert isinstance(twin, AsyncScanningSignal)
+    assert built.name == twin.name == "scan"
+
+
 def test_the_two_registries_refuse_each_other_s_flavour() -> None:
     """Why there are two registries rather than one, asserted rather than stated.
 

@@ -84,6 +84,13 @@ ontology:
 Shared by the ontology suites rather than repeated in each: they assert
 different things *about the same document*, and six near-copies of a YAML
 block drift until the thing they are all supposedly loading is six things.
+
+**A seventh copy is published**, as the ``worked-input`` fence in
+``packages/common/docs/guides/ontology.md``, and it has to be: a reader copies
+the fence and this constant is not reachable from a guide. The two are held
+identical -- less the ``# mammals.yaml`` line a published file names itself
+with -- by ``test_worked_input_fences.py`` beside this file, so neither may be edited
+alone.
 """
 
 
@@ -143,6 +150,15 @@ is not editable; and the axis questions need a ``taxonomies:`` section, a
 multi-child node and a grandchild before they can be asked at all. Both are the
 same hand-edited file at two points in its life, which is what the two versions
 say.
+
+**Published too**, as the ``worked-input`` fence in
+``packages/common/docs/guides/entity-resolution.md``, and held identical to
+this constant by ``test_worked_input_fences.py`` beside this file. That matters more here
+than for the v1.0 pair: ``retriever`` and ``golden_retriever`` are the two
+overlapping forms the span and coverage assertions are *about*, and they are
+asserted against this constant in the package suite and against the fence in
+the workspace runner. A form added to one copy alone leaves both suites
+agreeing on offsets that no longer describe one document.
 """
 
 

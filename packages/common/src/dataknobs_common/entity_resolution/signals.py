@@ -1,16 +1,23 @@
 """The rungs an authored vocabulary can run with no dependency at all.
 
-Two matchers, twinned. Both read an entity source and nothing else -- no
-store, no embedder, no network -- which is what makes them the default a
+Three matchers, twinned. All of them read an entity source and nothing else --
+no store, no embedder, no network -- which is what makes them the default a
 cascade falls back to when a consumer configures nothing.
 
-They differ in **which index they ask**, and that difference is the whole
-reason the source publishes two members. ``ExactNormalizedSignal`` asks for
-any form: an id, a name, or an alias, folded together, which is what an exact
-lookup wants. ``AliasSignal`` asks for alias forms specifically, because the
-folded map cannot report which of the three matched -- so a rung that
+Two of them differ in **which index they ask**, and that difference is the
+whole reason the source publishes two members. ``ExactNormalizedSignal`` asks
+for any form: an id, a name, or an alias, folded together, which is what an
+exact lookup wants. ``AliasSignal`` asks for alias forms specifically, because
+the folded map cannot report which of the three matched -- so a rung that
 reconstructed the distinction by fetching each hit and re-folding its aliases
 would be deciding, in the matcher, something the vocabulary already declares.
+
+``ScanningSignal`` asks the same index as the first of those and differs in
+**how much of the query it hands over**: every span of consecutive tokens,
+rather than the whole string once. That is a difference in what the rung can
+*find*, not merely in what it reports, and neither direction subsumes the
+other -- see the class for the measurement, which is why it is a third kind
+and not the first one configured.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ from dataknobs_common.entity_resolution.values import (
     within_axes,
     within_memberships,
 )
-from dataknobs_common.text import content_span
+from dataknobs_common.text import content_span, token_spans
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -40,8 +47,10 @@ __all__ = [
     "AsyncAliasSignal",
     "AsyncDeclaredSignal",
     "AsyncExactNormalizedSignal",
+    "AsyncScanningSignal",
     "DeclaredSignal",
     "ExactNormalizedSignal",
+    "ScanningSignal",
 ]
 
 #: A declared hit's score. 1.0 by fiat and carrying no information, which is
@@ -58,10 +67,15 @@ def _candidate(
     **Every declared hit carries a span**, including the whole-string one.
     That was once refused here on the grounds that reporting the query's own
     extent would be indistinguishable from a scan that found the whole
-    string -- true, and no longer an objection: a scan *subsumes* whole-string
-    matching rather than sitting beside it, so the two are meant to be
-    indistinguishable, and a caller supplying the phrase itself goes through
-    the same rung and gets an offset for free.
+    string -- true, and not an objection: being indistinguishable *there* is
+    the point. A caller who already knows the phrase and one who hands over a
+    whole sentence read the same field and need not know which rung answered.
+
+    That is as far as the claim goes, and this docstring used to take it
+    further: it said a scan **subsumes** whole-string matching. It does not,
+    and :func:`~dataknobs_common.text.token_spans` is why -- see
+    :class:`ScanningSignal` for the measured cases each rung reaches and the
+    other does not.
 
     ``matched_text`` is the slice rather than the query, which is the same
     sentence read the other way: it is what the span points at, so the two
@@ -145,21 +159,49 @@ def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
     return tuple(FormHit(entity_id=entity_id, span=span) for entity_id in ids)
 
 
+def _probe_spans(query: str) -> tuple[tuple[int, int], ...]:
+    """Every span of consecutive tokens in ``query``, **longest first**.
+
+    The enumeration a scan runs: *n(n+1)/2* spans for *n* tokens -- 21 for a
+    six-token utterance -- each one a slice to look up as the form it covers.
+    Bounded and arithmetic, which is what makes a scan over an authored
+    vocabulary dictionary lookups rather than a search.
+
+    **Longest first** because the rung publishes its own order and this is
+    where that order is decided: a declared score is ``1.0`` by fiat and
+    carries none, the cascade positions by arrival, and a form containing
+    another should be proposed before the form it contains.
+
+    Shared by both flavours rather than written twice, for
+    :func:`_whole_string`'s reason one rung along: the arithmetic here is the
+    half of a scan that has nothing to do with awaiting, so two copies of it
+    could drift in a direction no twin-parity check over signatures would see.
+    """
+    tokens = token_spans(query)
+    return tuple(
+        (tokens[first][0], tokens[first + length - 1][1])
+        for length in range(len(tokens), 0, -1)
+        for first in range(len(tokens) - length + 1)
+    )
+
+
 class DeclaredSignal:
     """What every synchronous rung shares: everything but the index it asks.
 
-    The two shipped rungs differ in one expression. Writing that as two classes
-    with two copies of the constructor, the name, the filter handling and the
-    candidate construction is how a fix to one of them stops being a fix to the
-    other -- and the same argument reaches a consumer's rung, which is why this
-    is published rather than private.
+    The two whole-string rungs differ in one expression, and the scanning one
+    in one method. Writing those as three classes with three copies of the
+    constructor, the name, the filter handling and the candidate construction
+    is how a fix to one of them stops being a fix to the others -- and the same
+    argument reaches a consumer's rung, which is why this is published rather
+    than private.
 
     **Subclass this to write a rung.** Set :attr:`key` and implement
     :meth:`_hits`; everything else -- the constructor, ``name``, ``narrows()``,
     the rung-side narrowing and the batch loop -- comes with it. A rung that
     *locates* a form inside the query rather than comparing the whole of it
-    overrides :meth:`_located` instead, and a rung that wants its own order
-    over :meth:`_hits`'s answer overrides :meth:`_order`. In particular
+    overrides :meth:`_located` instead, as :class:`ScanningSignal` does, and a
+    rung that wants its own order over :meth:`_hits`'s answer overrides
+    :meth:`_order`. In particular
     the narrowing comes with it *correct*: it is a superset filter, and
     :meth:`~dataknobs_common.entity_resolution.MatchSignal.narrows` explains
     why getting that direction wrong is the one mistake nothing downstream can
@@ -319,6 +361,63 @@ class AliasSignal(DeclaredSignal):
         return self._entities.by_alias_form(query)
 
 
+class ScanningSignal(DeclaredSignal):
+    """Find declared forms **inside** the query, and report where each one sat.
+
+    Every span of consecutive tokens is looked up as the slice it covers, so
+    the form reaches the index carrying whatever separated its tokens and
+    matches whichever spelling the vocabulary declared -- ``golden retriever``
+    and ``golden_retriever`` both, if that is how they were written. Twenty-one
+    lookups for a six-token utterance, over a dictionary: a bounded cost, not
+    a search. See :func:`_probe_spans` for the enumeration and
+    :func:`~dataknobs_common.text.token_spans` for the boundary policy that
+    stops it finding ``beagle`` inside ``unbeagleable``.
+
+    **Overlapping forms are all returned.** ``"my golden retriever has been
+    limping"`` yields ``golden_retriever`` at ``(3, 19)`` and ``retriever`` at
+    ``(10, 19)``; choosing one is a verdict, and this family does not make
+    verdicts -- the offsets make the containment visible and the caller
+    decides. Longest first, because a declared score carries no order.
+
+    **It overrides** :meth:`~DeclaredSignal._located` **and not**
+    :meth:`~DeclaredSignal._hits`: a scan reports *where*, and a
+    ``frozenset[str]`` has nowhere to put an offset. Everything else -- the
+    constructor, ``name``, ``narrows()``, the rung-side narrowing and the
+    batch loop -- comes from the base unchanged.
+
+    **It does not subsume** :class:`ExactNormalizedSignal`, although both read
+    ``by_surface_form``, so the two are worth composing together rather than
+    choosing between. A probe is a slice *between* token boundaries, so a
+    declared form whose first or last character is not alphanumeric is never
+    probed at all. Over a vocabulary declaring the aliases ``(beagle)`` and
+    ``C.D.C.``, each query being the declared form itself:
+
+    - ``"(beagle)"`` -- the whole-string rung finds it at ``(0, 8)``; this
+      rung finds **nothing**, because ``token_spans`` reports ``((1, 7),)``
+      and no probe reaches the parentheses.
+    - ``"C.D.C."`` -- found at ``(0, 6)``; this rung finds **nothing**, for
+      the trailing period.
+    - ``"K-9"`` -- found at ``(0, 3)`` by both. An interior boundary character
+      is fine; only the edges matter.
+    - ``"Beagles!"`` -- the whole-string rung finds **nothing**, and this one
+      finds ``beagle`` at ``(0, 7)``.
+
+    The last of those is the other direction, and is why neither rung is the
+    stronger one: a scan reaches a declared form sitting inside a punctuated
+    query that a whole-string comparison misses. They ask the same index
+    differently.
+    """
+
+    key = "scan"
+
+    def _located(self, query: str) -> Sequence[FormHit]:
+        found: list[FormHit] = []
+        for start, end in _probe_spans(query):
+            hits = self._entities.by_surface_form(self._fold(query[start:end]))
+            found += [FormHit(entity_id=entity_id, span=(start, end)) for entity_id in sorted(hits)]
+        return found
+
+
 class AsyncDeclaredSignal:
     """The asynchronous twin's shared half -- **subclass this** for an async rung.
 
@@ -411,6 +510,26 @@ class AsyncAliasSignal(AsyncDeclaredSignal):
         if not isinstance(self._entities, AsyncAliasFormSource):
             return frozenset()
         return await self._entities.by_alias_form(query)
+
+
+class AsyncScanningSignal(AsyncDeclaredSignal):
+    """:class:`ScanningSignal` over an asynchronous source.
+
+    The same hook one ``await`` further in, which is what makes the span seam
+    a property of the family rather than of one flavour: a consumer scanning
+    asynchronously does not have to drop to the bare
+    :class:`~dataknobs_common.entity_resolution.AsyncMatchSignal` protocol to
+    do it.
+    """
+
+    key = "scan"
+
+    async def _located(self, query: str) -> Sequence[FormHit]:
+        found: list[FormHit] = []
+        for start, end in _probe_spans(query):
+            hits = await self._entities.by_surface_form(self._fold(query[start:end]))
+            found += [FormHit(entity_id=entity_id, span=(start, end)) for entity_id in sorted(hits)]
+        return found
 
 
 def _admitted(

@@ -26,6 +26,7 @@ from dataknobs_common.entity_resolution import (
     AsyncEntityResolver,
     AsyncExactNormalizedSignal,
     AsyncMatchSignal,
+    AsyncScanningSignal,
     BridgedEntityResolver,
     CascadeState,
     CascadingResolver,
@@ -38,6 +39,7 @@ from dataknobs_common.entity_resolution import (
     MatchSignal,
     MembershipOracle,
     ENTITY_TYPE_KEY,
+    ScanningSignal,
     Scoring,
     cascade as cascade_module,
     signals as signals_module,
@@ -196,6 +198,12 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
             (),
         ),
         (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], ()),
+        (
+            ScanningSignal,
+            AsyncScanningSignal,
+            ["candidates", "candidates_many", "_located"],
+            (),
+        ),
         (
             DeclaredSignal,
             AsyncDeclaredSignal,

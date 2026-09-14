@@ -9,9 +9,17 @@ derived from the evidence rather than a second computation kept beside it. And
 *inside* a query -- proven the only way that claim can be proven, by writing
 one from outside the package and asking it to do the job.
 
-**The scanning rung below is a consumer's, deliberately.** The shipped default
-belongs to the increment that builds it; what ships here is the seam, and a
-seam is only shown to be one by something that was not written to fit it.
+**The scanning rung below is a consumer's, deliberately.** It was written from
+outside the package, against the published hook and with nothing to copy, which
+is the only way the seam can be shown to be one. The library now ships
+``ScanningSignal`` doing the same job -- so this class is no longer the only
+implementation, and is still the only *independent* one. Rewriting it against
+the shipped class would retire the evidence rather than tidy it; what the leg
+that shipped the rung did instead was take its name and rename this one.
+
+``test_the_shipped_rung_and_an_independent_one_agree`` is what that
+independence is now spent on: two implementations of one description, compared
+against each other rather than each against a literal.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncCascadingResolver,
     AsyncDeclaredSignal,
+    AsyncScanningSignal,
     CascadingResolver,
     CompatibilityVerdict,
     DeclaredSignal,
@@ -34,18 +43,24 @@ from dataknobs_common.entity_resolution import (
     MatchEvidence,
     ResolutionRef,
     RunnerUp,
+    ScanningSignal,
     Scoring,
     content_span,
     token_spans,
 )
-from dataknobs_common.ontology import async_load_ontology, load_ontology
+from dataknobs_common.ontology import (
+    Entity,
+    MappingEntitySource,
+    async_load_ontology,
+    load_ontology,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
 
-class ScanningSignal(DeclaredSignal):
+class ConsumerScanningSignal(DeclaredSignal):
     """An n-gram probe over the folded form index, written as a consumer would.
 
     Every span of consecutive tokens is looked up as the slice it covers --
@@ -74,8 +89,8 @@ class ScanningSignal(DeclaredSignal):
         return found
 
 
-class AsyncScanningSignal(AsyncDeclaredSignal):
-    """:class:`ScanningSignal` over an asynchronous source.
+class AsyncConsumerScanningSignal(AsyncDeclaredSignal):
+    """:class:`ConsumerScanningSignal` over an asynchronous source.
 
     The same hook, one ``await`` further in -- which is the point of asserting
     it separately: the span seam is on both halves of the twin, so a consumer
@@ -157,7 +172,7 @@ def test_a_scanning_rung_reports_where_each_declared_form_sat(
     whatever separated them.
     """
     onto = load_ontology(mammals_v11_path)
-    resolver = CascadingResolver([ScanningSignal(onto.entities)], onto.entities)
+    resolver = CascadingResolver([ConsumerScanningSignal(onto.entities)], onto.entities)
 
     result = resolver.resolve("my golden retriever has been limping", k=5)
 
@@ -184,11 +199,13 @@ async def test_the_span_hook_is_on_both_halves_of_the_twin(
     """
     query = "my golden retriever has been limping"
     onto = load_ontology(mammals_v11_path)
-    expected = CascadingResolver([ScanningSignal(onto.entities)], onto.entities).resolve(query, k=5)
+    expected = CascadingResolver([ConsumerScanningSignal(onto.entities)], onto.entities).resolve(
+        query, k=5
+    )
 
     async_onto = await async_load_ontology(mammals_v11_path)
     resolver = AsyncCascadingResolver(
-        [AsyncScanningSignal(async_onto.entities)], async_onto.entities
+        [AsyncConsumerScanningSignal(async_onto.entities)], async_onto.entities
     )
     result = await resolver.resolve(query, k=5)
 
@@ -206,7 +223,7 @@ def test_k_counts_entities_rather_than_places(mammals_v11_path: Path) -> None:
     rungs produce the same id, which is to append evidence and move nothing.
     """
     onto = load_ontology(mammals_v11_path)
-    resolver = CascadingResolver([ScanningSignal(onto.entities)], onto.entities)
+    resolver = CascadingResolver([ConsumerScanningSignal(onto.entities)], onto.entities)
 
     result = resolver.resolve("a beagle met a beagle", k=1)
 
@@ -246,9 +263,13 @@ def test_a_whole_string_rung_still_goes_through_the_span_hook(
     """``_hits`` stays, and the base class locates what it returns.
 
     The slot-filling path -- where the caller supplies the value and the
-    string *is* the phrase -- needs no scan and gets an offset anyway, which
-    is what it means for a scan to subsume whole-string matching rather than
-    to sit beside it. Two rungs, two pieces of evidence, one span.
+    string *is* the phrase -- needs no scan and gets an offset anyway, so a
+    caller reading ``span`` never has to know which kind of rung answered.
+    Two rungs, two pieces of evidence, one span.
+
+    That is the whole of the claim. It is **not** that a scan subsumes this
+    path: ``test_neither_rung_subsumes_the_other`` measures a declared form
+    each one reaches and the other cannot, in both directions.
     """
     onto = load_ontology(mammals_path)
     resolver = CascadingResolver(
@@ -260,6 +281,103 @@ def test_a_whole_string_rung_still_goes_through_the_span_hook(
     assert [e.signal for e in result.explain("beagle")] == ["exact", "alias"]
     assert {e.span for e in result.explain("beagle")} == {(0, 7)}
     assert result.coverage.matched == ((0, 7),)
+
+
+def test_the_shipped_rung_and_an_independent_one_agree(mammals_v11_path: Path) -> None:
+    """Two implementations of one description, compared against each other.
+
+    ``ConsumerScanningSignal`` was written from outside the package against the
+    published hook, before ``ScanningSignal`` existed. Asserting the shipped
+    class against a literal would only say it matches what somebody typed
+    beside it; asserting it against the independent one says the description
+    was sufficient -- which is the claim the fixture was written to support and
+    the only thing it is still uniquely good for.
+
+    Candidates, spans and coverage, because a rung that agreed on *which*
+    entities and not on *where* would be the interesting way for this to fail.
+    """
+    onto = load_ontology(mammals_v11_path)
+    query = "my golden retriever has been limping"
+
+    independent = CascadingResolver([ConsumerScanningSignal(onto.entities)], onto.entities).resolve(
+        query, k=5
+    )
+    shipped = CascadingResolver([ScanningSignal(onto.entities)], onto.entities).resolve(query, k=5)
+
+    assert [c.entity_id for c in shipped.candidates] == [
+        c.entity_id for c in independent.candidates
+    ]
+    assert shipped.coverage == independent.coverage
+    assert [(e.span, e.matched_text) for e in shipped.explain("golden_retriever")] == [
+        (e.span, e.matched_text) for e in independent.explain("golden_retriever")
+    ]
+    assert [e.signal for e in shipped.explain("retriever")] == ["scan"]
+
+
+async def test_the_shipped_twins_locate_the_same_forms(mammals_v11_path: Path) -> None:
+    """The asynchronous half of the shipped pair, against the synchronous one.
+
+    The same shape as the hook's own twin test above, one layer up: the claim
+    is *the twins agree*, so neither half can be edited to a new answer alone.
+    """
+    query = "my golden retriever has been limping"
+    onto = load_ontology(mammals_v11_path)
+    expected = CascadingResolver([ScanningSignal(onto.entities)], onto.entities).resolve(query, k=5)
+
+    async_onto = await async_load_ontology(mammals_v11_path)
+    result = await AsyncCascadingResolver(
+        [AsyncScanningSignal(async_onto.entities)], async_onto.entities
+    ).resolve(query, k=5)
+
+    assert [c.entity_id for c in result.candidates] == [c.entity_id for c in expected.candidates]
+    assert result.coverage == expected.coverage
+    assert [e.span for e in result.explain("golden_retriever")] == [(3, 19)]
+
+
+def test_neither_rung_subsumes_the_other() -> None:
+    """The scan and the whole-string rung each reach what the other cannot.
+
+    This docstring's claim used to be the opposite, in
+    ``signals._candidate`` and in the design it came from: that a scan
+    *subsumes* whole-string matching. It does not, and the reason is a property
+    of the boundary policy rather than a bug in either rung -- every probe is a
+    slice **between** token boundaries, so a declared form whose first or last
+    character is not alphanumeric is never probed at all.
+
+    It survived because the sentence lived in a private function's docstring,
+    which nothing reads, and because no fixture in this repository declared a
+    form with a punctuated edge. That is the shape of defect this file now
+    carries a measurement for rather than a sentence.
+    """
+    punctuated = MappingEntitySource(
+        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=("(beagle)", "C.D.C."))}
+    )
+    scan = CascadingResolver([ScanningSignal(punctuated)], punctuated)
+    whole = CascadingResolver([ExactNormalizedSignal(punctuated)], punctuated)
+
+    # The whole-string rung reaches a form the scan never probes.
+    for form, span in (("(beagle)", (0, 8)), ("C.D.C.", (0, 6))):
+        assert [c.entity_id for c in whole.resolve(form, k=5).candidates] == ["k9"]
+        assert whole.resolve(form, k=5).explain("k9")[0].span == span
+        assert scan.resolve(form, k=5).candidates == ()
+
+    # An interior boundary character is fine: the edges are what matter.
+    assert token_spans("(beagle)") == ((1, 7),)
+    assert token_spans("K-9") == ((0, 1), (2, 3))
+    assert [c.entity_id for c in scan.resolve("K-9", k=5).candidates] == ["k9"]
+
+    # And the other direction, which is why neither is the stronger rung.
+    plain = MappingEntitySource(
+        {"beagle": Entity(id="beagle", type="Breed", name="Beagle", aliases=("Beagles",))}
+    )
+    inside = CascadingResolver([ScanningSignal(plain)], plain).resolve("Beagles!", k=5)
+
+    assert [c.entity_id for c in inside.candidates] == ["beagle"]
+    assert inside.explain("beagle")[0].span == (0, 7)
+    assert (
+        CascadingResolver([ExactNormalizedSignal(plain)], plain).resolve("Beagles!", k=5).candidates
+        == ()
+    )
 
 
 def test_a_reference_records_which_rung_and_what_kind() -> None:

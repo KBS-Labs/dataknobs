@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ScanningSignal` and `AsyncScanningSignal`, registered under
+  `kind: "scan"`.** A rung that finds declared forms *inside* a query rather
+  than comparing the whole of it, and reports where each one sat: every span of
+  consecutive tokens is looked up as the slice it covers, longest form first.
+  Twenty-one dictionary lookups for a six-token utterance — bounded, and not a
+  search. `"my golden retriever has been limping"` comes back carrying
+  `golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`, with
+  `coverage.unmatched` reporting `"my"` and `"has been limping"` as the phrases
+  the vocabulary does not account for.
+
+  It overrides `DeclaredSignal._located` and nothing else, which is what that
+  hook was published for: the constructor, `name`, `narrows()`, the rung-side
+  narrowing and the batch loop all come from the base.
+
+  **It does not replace `ExactNormalizedSignal`, and the two compose.** A probe
+  is a slice between token boundaries, so a declared form whose first or last
+  character is not alphanumeric — `(beagle)`, `C.D.C.` — is reachable by the
+  whole-string rung and by no scan; a form sitting inside a longer sentence is
+  reachable by the scan and by no whole-string rung. A cascade wanting both
+  carries both.
+
+- **What does not change: the default composition.** A document declaring no
+  `resolver:` section still builds `ExactNormalizedSignal` then `AliasSignal`.
+  The scan is available to a document that asks for it by `kind: scan`, and to
+  any caller who constructs it.
+
+- **The entity-resolution guide now carries an executed call site.**
+  `docs/guides/entity-resolution.md` publishes the vocabulary it resolves
+  against and the block that resolves it, and a workspace test runs that block
+  as written and asserts it is character-identical to the fence — so the spans
+  and coverage shown on the page are measured rather than transcribed. Its
+  *Writing your own rung* section names `ScanningSignal` as the shipped
+  implementation instead of walking a reader through writing one, and
+  demonstrates `_located` with an override the shipped rung does not perform.
+
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
   the resolution cascade — 110 names, taking the package's `__all__` from 205

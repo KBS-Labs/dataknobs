@@ -537,3 +537,44 @@ def code_fences(path: Path) -> list[Fence]:
     if inside:
         found.append(Fence(lang, opened, "\n".join(body), marker))
     return found
+
+
+def published_fence(path: Path, marker: str) -> str:
+    """The body of ``path``'s fence carrying ``marker``.
+
+    **Refuses rather than returning empty**, which is the whole reason this is
+    a function. A marker that has been renamed or deleted would otherwise hand
+    every assertion downstream an empty string, and two empty strings compare
+    equal -- a guard reporting green because it read nothing, over the one page
+    it exists to read.
+
+    Shared by the worked-call-site guards rather than copied into each. There
+    are two of them now, one per guide, and the failure mode above is exactly
+    the kind a second copy loses silently: a guard that stopped refusing still
+    passes every test written for the guard that did.
+    """
+    fences = [f for f in code_fences(path) if f.marker == marker]
+    if len(fences) != 1:
+        raise LookupError(
+            f"{rel(path)} carries {len(fences)} fences marked <!-- {marker} -->, "
+            f"expected exactly one. The guide and its guard agree on these "
+            f"markers and on nothing else."
+        )
+    body = fences[0].body
+    if not body.strip():
+        raise LookupError(f"the <!-- {marker} --> fence in {rel(path)} is empty")
+    return body
+
+
+def executed_source(path: Path) -> str:
+    """An executed copy of a fence, less its own docstring header.
+
+    The split is on the first blank line after the closing ``\"\"\"``, which is
+    the boundary such a module's own docstring describes. Anything else in the
+    file would be an assertion a reader of the guide never sees.
+    """
+    text = path.read_text(encoding="utf-8")
+    _, _, after = text.partition('"""\n\n')
+    if not after:
+        raise LookupError(f"{rel(path)} has no docstring to split on")
+    return after.rstrip("\n")
