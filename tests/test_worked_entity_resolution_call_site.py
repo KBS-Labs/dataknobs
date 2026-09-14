@@ -232,8 +232,19 @@ RUNG = ROOT / "tests" / "worked_punctuated_rung.py"
 
 @pytest.fixture
 def punctuated_rung() -> type:
-    """The class the guide's *Writing your own rung* fence defines, as published."""
-    return runpy.run_path(str(RUNG), run_name="__worked_rung__")["PunctuatedFormRung"]
+    """The class the guide's *Writing your own rung* fence defines, as published.
+
+    The ``isinstance`` is what makes the annotation a checked claim rather than
+    one the reader has to take on trust: :func:`runpy.run_path` hands back a
+    namespace of ``Any``, so nothing else here would notice the fence binding
+    that name to something other than a class.
+    """
+    published = runpy.run_path(str(RUNG), run_name="__worked_rung__")["PunctuatedFormRung"]
+    assert isinstance(published, type), (
+        f"{RUNG.relative_to(ROOT)} no longer binds PunctuatedFormRung to a class, so the "
+        "fence has stopped defining the rung the guide tells a reader to write"
+    )
+    return published
 
 
 def test_the_executed_rung_is_the_published_one() -> None:
@@ -271,7 +282,7 @@ def test_the_published_rung_reaches_the_three_forms_the_page_names(
     from dataknobs_common.ontology import Entity, MappingEntitySource
 
     vocabulary = MappingEntitySource(
-        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=("(beagle)", "C.D.C."))}
+        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=["(beagle)", "C.D.C."])}
     )
     written = punctuated_rung(vocabulary)
     shipped = ScanningSignal(vocabulary)
