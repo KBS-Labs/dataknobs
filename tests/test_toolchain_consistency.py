@@ -778,6 +778,79 @@ def test_every_global_trigger_declares_which_step_it_moves() -> None:
         )
 
 
+def test_a_global_hash_scope_groups_inputs_that_move_the_same_step() -> None:
+    """A scope's members agree about what they move, or its digest cannot say.
+
+    ``validate_artifacts`` widens the dirty set to every package when a global
+    scope moves, under a comment claiming such a scope "changes lint, type, or
+    test results everywhere". That held while the global inputs were
+    undifferentiated. ``GLOBAL_TRIGGER_STEPS`` then classified three of them
+    test-only and two lint-only, and one digest was left standing for three
+    different claims -- so a moved ``toolchain`` hash could report only that
+    *something* global had changed, and the sentence above the widening became
+    false for the lint-only pair.
+
+    Partitioning by the declared step gives the name its meaning back: a moved
+    ``toolchain_lint`` says every package's validation row is stale and its
+    test rows are not, in the one field a reader of the artifact -- or of the
+    gate's end-of-run re-check -- actually sees.
+
+    The dirty set is unchanged and deliberately so. A lint-only input does move
+    every package's recorded validation result, so all ten are still named;
+    what the step split made wrong was the declaration, not the width.
+    """
+    for scope in sorted(_scopes.GLOBAL_SCOPES):
+        entries = WORKSPACE_QUALITY_INPUTS[scope]
+        assert entries, (
+            f"the {scope} scope is global and declares no inputs, so nothing "
+            f"it is supposed to catch can move its digest"
+        )
+
+        by_entry = {entry: _scopes.GLOBAL_TRIGGER_STEPS[entry] for entry in entries}
+        assert len(set(by_entry.values())) == 1, (
+            f"the {scope} scope holds inputs that move different recorded "
+            f"steps, so a change to its digest cannot say which result went "
+            f"stale: " + ", ".join(f"{name} -> {sorted(steps)}" for name, steps in by_entry.items())
+        )
+
+
+def test_the_global_hash_scopes_partition_the_global_triggers() -> None:
+    """Splitting the scope must not drop an input out of the global tier.
+
+    The widening in ``validate_artifacts`` is keyed on the scope rather than on
+    the trigger list, so an entry that falls out of every global scope is still
+    scheduled by change detection while its digest stops dirtying a single
+    package. That is the same two-readers-one-question shape the split is
+    fixing, reintroduced by the fix and pointing the unsafe way.
+
+    Disjointness is asserted within the global tier for the opposite reason:
+    one entry hashed into two *global* scopes moves both digests, which reads
+    as two independent facts about one edit.
+
+    Across tiers it is not a defect and is not asserted. ``bin/validate.sh`` is
+    hashed in ``toolchain_lint`` and again under the ``bin/`` entry of the
+    workspace-only tier, and both are true of it -- it is the lint step, and it
+    is also a file the guards under ``tests/`` read. Two tiers saying so is the
+    accumulation ``map_files_to_packages`` was fixed to allow, not a double
+    count.
+    """
+    seen: dict[str, str] = {}
+    for scope in sorted(_scopes.GLOBAL_SCOPES):
+        for entry in WORKSPACE_QUALITY_INPUTS[scope]:
+            assert entry not in seen, (
+                f"{entry} is hashed in both {seen[entry]} and {scope}, so one "
+                f"edit moves two global digests"
+            )
+            seen[entry] = scope
+
+    triggers = set(_scopes.GLOBAL_TRIGGERS)
+    assert sorted(seen) == sorted(triggers), (
+        "the global hash scopes and the global trigger list disagree:\n"
+        f"  scheduled, hashed in no global scope: {sorted(triggers - set(seen))}\n"
+        f"  hashed globally, not a trigger: {sorted(set(seen) - triggers)}"
+    )
+
+
 def test_the_test_step_does_not_read_the_lint_only_inputs() -> None:
     """The premise under the split, checked against the script rather than assumed.
 
