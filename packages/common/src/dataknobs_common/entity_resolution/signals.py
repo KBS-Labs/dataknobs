@@ -664,7 +664,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
     ) -> None:
-        """The synchronous twin's constructor, over an asynchronous source.
+        """The same constructor as the synchronous twin's, over an asynchronous source.
 
         ``max_window`` carries more weight on this flavour than on the other
         one: a probe here is whatever the backing does when awaited, so an

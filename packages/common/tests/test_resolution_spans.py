@@ -49,6 +49,7 @@ from dataknobs_common.entity_resolution import (
     content_span,
     token_spans,
 )
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import (
     AsyncMappingEntitySource,
     Entity,
@@ -875,6 +876,47 @@ async def test_max_window_is_the_bound_a_caller_reasons_about_themselves() -> No
         )
         == []
     ), "a cap is a budget: the spelling wider than it is given up, in both flavours"
+
+
+async def test_both_scans_refuse_a_window_narrower_than_one_token() -> None:
+    """Zero and negatives, refused by both flavours in the same words.
+
+    ``_checked_max_window`` is shared *so that the twins refuse identically*,
+    and that claim is the half no other guard reaches. The parity check over
+    the two ``__init__`` compares signatures, so a flavour that stopped
+    calling it would keep its keyword, keep its annotation, and pass. What it
+    would do instead is accept ``max_window=0`` and report an empty result for
+    every query -- indistinguishable from a vocabulary that matches nothing,
+    which is the silence the refusal exists to prevent. So the messages are
+    compared and not only the type: a flavour refusing in its own words is a
+    flavour refusing on its own, one edit away from not refusing at all.
+
+    ``1`` is asserted accepted beside them because that is where an off-by-one
+    would hide, and because a scan capped at a single token is a legitimate
+    thing for a caller to ask for rather than the degenerate case above.
+    """
+    declared = {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    synchronous = MappingEntitySource(declared)
+    asynchronous = AsyncMappingEntitySource(declared)
+
+    for refused in (0, -1, -7):
+        with pytest.raises(ValidationError) as from_sync:
+            ScanningSignal(synchronous, max_window=refused)
+        with pytest.raises(ValidationError) as from_async:
+            AsyncScanningSignal(asynchronous, max_window=refused)
+
+        assert str(refused) in str(from_sync.value), (
+            f"the refusal of max_window={refused} does not say which value was refused"
+        )
+        assert str(from_sync.value) == str(from_async.value), (
+            f"the twins refuse max_window={refused} in different words, so one of "
+            f"them has stopped reaching the shared check they are meant to share"
+        )
+
+    assert await _agreeing_scan(declared, "my beagle", max_window=1) == ["beagle"], (
+        "a window of one token is the narrowest scan that probes anything, and "
+        "both flavours have to build it"
+    )
 
 
 def test_the_bound_costs_nothing_an_unbounded_implementation_finds() -> None:
