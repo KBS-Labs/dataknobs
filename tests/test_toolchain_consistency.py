@@ -42,6 +42,7 @@ from tests._workspace import (
     python_floor,
     tracked_files,
 )
+from tests._workspace import tracked_and_new_files as _tracked_and_new_files
 from tests._workspace import rel as _rel
 from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
@@ -1225,6 +1226,181 @@ def test_every_package_document_a_package_suite_reads_is_in_that_package_hash() 
         )
 
 
+#: Tracked files beneath ``packages/*/tests/`` that no test reads, and so enter
+#: no package's hash. Every other non-Python file there is a fixture: something
+#: a test opens, whose edit changes what that suite asserts.
+#:
+#: Both are prose sitting beside a test package rather than inside a fixture
+#: directory — ``packages/data/tests/examples/`` and
+#: ``packages/data/tests/integration/`` hold collected test modules, and these
+#: describe them to a developer. Hashing one would dirty ``data`` for an edit
+#: that moves no verdict.
+#:
+#: Named individually on purpose. The rule-shaped version of this exemption is
+#: "a README is prose", and it would be wrong the first time a test reads one —
+#: silently, because an unhashed input has no symptom until a stale verdict is
+#: accepted. A list of two fails the guard below when it becomes a list of
+#: three, which is the moment the question is worth asking.
+_TEST_TREE_PROSE = (
+    "packages/data/tests/examples/README.md",
+    "packages/data/tests/integration/README.md",
+)
+
+
+def test_every_test_input_a_suite_reads_is_in_that_packages_hash() -> None:
+    """A fixture decides whether its suite passes, so it has to dirty the package.
+
+    ``_HASH_PATTERNS`` reaches ``tests/**/*.py``, which is the suite and not
+    everything the suite reads. The files it misses are the ones a test opens:
+    a golden JSON, a YAML configuration, the markdown a knowledge source
+    ingests. Editing one changes what the tests assert while every stored hash
+    stays intact, so a recorded ``pass`` survives an edit to the thing it was a
+    verdict about — and it is the golden file, whose entire purpose is to be
+    the expected answer, that shows what that is worth.
+
+    Scheduling was never the missing half here, which is what makes this the
+    mirror of the package-document case above rather than a repeat of it. A
+    file under ``packages/<p>/tests/`` already maps to ``<p>`` by the generic
+    rule, so a run triggered by the edit does test it; only the stored verdict
+    fails to move. Hashing one therefore costs no gate run that the edit does
+    not already cause.
+
+    ``_TEST_TREE_PROSE`` is the whole of the exception, and naming it rather
+    than spelling it as a rule is what makes this guard exhaustive: a third
+    file that feeds nothing fails here on arrival, and somebody decides which
+    of the two it is instead of a pattern deciding for them.
+    """
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        package: {_rel(p) for p in hashes.package_hash_files(package)}
+        for package in hashes.ALL_PACKAGES
+    }
+    # A src .py is the positive control: if the coverage lookup above is asking
+    # the wrong question, everything reads as uncovered and the assertion below
+    # passes for a reason that has nothing to do with fixtures.
+    control = "packages/common/src/dataknobs_common/__init__.py"
+    assert control in covered["common"], (
+        f"{control} reads as unhashed, so this guard is measuring something "
+        "other than what package_hash_files returns"
+    )
+
+    unhashed = []
+    for path in _tracked_and_new_files():
+        parts = path.split("/")
+        if len(parts) < 4 or parts[0] != "packages" or parts[2] != "tests":
+            continue
+        if path.endswith(".py") or path in _TEST_TREE_PROSE:
+            continue
+        if path not in covered.get(parts[1], set()):
+            unhashed.append(path)
+
+    assert not unhashed, (
+        "a test input is in no package's hash, so a verdict recorded before an "
+        "edit to it still validates after one:\n  " + "\n  ".join(sorted(unhashed))
+    )
+
+    for exempt in _TEST_TREE_PROSE:
+        assert exempt in _tracked_and_new_files(), (
+            f"{exempt} is declared as prose no test reads and is no longer "
+            "there — an exemption outliving its file exempts nothing and reads "
+            "like a decision somebody made"
+        )
+        assert exempt not in covered.get(exempt.split("/")[1], set()), (
+            f"{exempt} is hashed and also declared as feeding nothing; one of "
+            "the two is wrong, and the declaration is the one a reader trusts"
+        )
+
+
+def test_a_declared_fixture_directory_expands_to_exactly_what_is_tracked_in_it() -> None:
+    """The walk and the checkout have to agree, or two hashes of one tree differ.
+
+    A fixture directory is hashed by walking it rather than by naming suffixes,
+    which is only safe while the walk finds what a fresh checkout would. The
+    failure it would otherwise have is quiet and one-sided: a developer's tree
+    accumulates ``__pycache__`` and ``*~`` backups that CI never has, so their
+    hash for an untouched package stops matching the stored one and their
+    artifacts read dirty forever, with nothing naming the file responsible.
+
+    Comparing against ``git ls-files`` is what turns ``_is_fixture_input`` from
+    an argument into a measurement — and it fails on a kind of stray nobody
+    anticipated, rather than only on the two kinds that have appeared so far.
+    """
+    hashes = load_bin_module("package-hashes")
+    declared = hashes.PACKAGE_TEST_FIXTURE_DIRS
+    assert declared, "no fixture directory is declared, so this guard checks nothing"
+
+    tracked = _tracked_and_new_files()
+    for entry in declared:
+        parts = entry.split("/")
+        assert parts[0] == "packages" and parts[2] == "tests" and len(parts) > 3, (
+            f"{entry} is declared as a package test fixture directory but is not "
+            "beneath packages/<package>/tests/, so no package's hash claims it"
+        )
+        package = parts[1]
+        assert (ROOT / entry).is_dir(), (
+            f"{entry} is declared and is not a directory — a stale entry hashes "
+            "nothing while reading like coverage"
+        )
+
+        expected = {name for name in tracked if name.startswith(f"{entry}/")}
+        covered = {_rel(p) for p in hashes.package_hash_files(package)}
+        walked = {name for name in covered if name.startswith(f"{entry}/")}
+        assert walked == expected, (
+            f"the hash of {entry} disagrees with what is checked out there.\n"
+            f"  walked but not tracked: {sorted(walked - expected)}\n"
+            f"  tracked but not walked: {sorted(expected - walked)}"
+        )
+        assert any(not name.endswith(".py") for name in expected), (
+            f"{entry} holds only Python, which tests/**/*.py already covers — "
+            "declaring it adds nothing and hides that the inputs moved elsewhere"
+        )
+
+    # The stripper is written for source: it drops a `version = "..."` line so a
+    # release does not dirty every package. A fixture is not source, and one of
+    # these is gzipped, so the bytes it returns have to be the bytes that went
+    # in — otherwise an edit to a line it happens to match moves no hash.
+    scopes = load_bin_module("changed-packages")
+    for entry in declared:
+        for path in sorted((ROOT / entry).rglob("*")):
+            if not path.is_file():
+                continue
+            raw = path.read_bytes()
+            assert scopes.strip_release_noise(raw) == raw, (
+                f"{_rel(path)} loses content on its way into the hash, so an "
+                "edit to the part that is dropped moves no recorded verdict"
+            )
+
+
+def test_a_test_fixture_already_schedules_the_suite_that_reads_it() -> None:
+    """The half that was never missing, pinned because the fix leans on it.
+
+    Hashing a fixture directory wholesale is cheap only because the edit that
+    dirties the package was already running that package's suite: a path under
+    ``packages/<p>/tests/`` maps to ``<p>`` by the generic rule, with no
+    declaration involved. Narrow that rule and the argument for taking a whole
+    directory quietly stops holding — the hash would then be scheduling runs
+    rather than following them.
+    """
+    scopes = load_bin_module("changed-packages")
+    hashes = load_bin_module("package-hashes")
+
+    for entry in hashes.PACKAGE_TEST_FIXTURE_DIRS:
+        package = entry.split("/")[1]
+        sample = next(
+            (
+                _rel(p)
+                for p in sorted((ROOT / entry).rglob("*"))
+                if p.is_file() and not p.name.endswith(".py")
+            ),
+            None,
+        )
+        assert sample is not None, f"{entry} holds no fixture to test with"
+        plan = scopes.plan_for_files([sample])
+        assert plan["packages"] == [package], (
+            f"{sample} must schedule {package} and nothing else; got {plan['packages']}"
+        )
+
+
 def test_the_release_noise_definition_has_one_home() -> None:
     """Declared once, in the module both readers already share.
 
@@ -1772,6 +1948,26 @@ def _workspace_input_probes() -> list[str]:
     return probes
 
 
+def _fixture_input_probes() -> list[str]:
+    """Every declared test fixture, for coverage checking.
+
+    All of them rather than one per directory, which is where the workspace
+    probe above stops: those entries expand to whole source trees, these to ten
+    files between them. And the suffixes are the question — ``**/*.py`` already
+    covers a directory's Python, so a probe that happened to land on a helper
+    would report the directory covered while its ``.json`` and ``.yaml`` matched
+    nothing.
+    """
+    hashes = load_bin_module("package-hashes")
+    probes = [
+        _rel(path)
+        for entry in hashes.PACKAGE_TEST_FIXTURE_DIRS
+        for path in hashes.fixture_dir_files(entry)
+    ]
+    assert probes, "no declared fixture directory resolved to a file"
+    return probes
+
+
 def test_ci_runs_the_gate_when_a_guarded_file_changes() -> None:
     """A guard that CI never starts is the same as a guard that does not exist.
 
@@ -1797,6 +1993,7 @@ def test_ci_runs_the_gate_when_a_guarded_file_changes() -> None:
     """
     guarded = [_rel(path) for path in (*_pyprojects(), *_mypy_inis(), *_interpreter_pins())]
     guarded += _workspace_input_probes()
+    guarded += _fixture_input_probes()
     guarded.append(str(CI_WORKFLOW))
 
     patterns = _ci_code_filter_patterns()
