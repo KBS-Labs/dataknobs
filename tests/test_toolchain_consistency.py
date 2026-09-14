@@ -1234,6 +1234,98 @@ def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     )
 
 
+#: Calls that reach a file's contents. A package test performing none of these
+#: cannot be reading a document whatever its string literals say, and the two
+#: literals in this tree that name a document without reading it — a Jinja
+#: variable value and an assertion about an error message — are both in files
+#: that open nothing at all. Gating on the file rather than the expression is
+#: what keeps this guard from modelling construction, which is the thing the
+#: detector above already does as well as it can be done.
+_FILE_READ_CALLS = frozenset({"read_text", "read_bytes", "open", "glob", "rglob", "iterdir"})
+
+
+def test_a_package_test_naming_its_own_document_declares_it() -> None:
+    """The reader above models one syntax; this one models none.
+
+    ``_documents_a_package_suite_reads`` finds a read structurally, as an
+    expression containing ``__file__`` divided by ``"docs"``, and
+    reconstructing the path is what lets it say *which* document. The cost of
+    that precision is that every other route to the same file is invisible:
+    ``os.path.join(os.path.dirname(__file__), "..", "docs", "x.md")`` opens the
+    document and divides nothing, so the declaration and the tree agree about
+    a reader neither can see, and the document decides a suite's result while
+    scheduled by nothing and hashed by nothing. A chain that guard can see but
+    cannot resolve already fails loudly there; this is the other half.
+
+    So this one models no construction at all. It asks a weaker question that
+    no syntax dodges — does a package test that opens files anywhere name one
+    of its own package's documents? — and requires the answer to be declared.
+    It cannot say which expression does the reading and does not try, because
+    naming the document is the part a reader cannot avoid writing.
+
+    Matched on the basename rather than the path for the same reason. bots
+    carries both ``docs/multi-tenant.md`` and ``docs/knowledge/multi-tenant.md``,
+    and a literal naming one is indistinguishable from a literal naming the
+    other — so asking whether *a* document of that name is declared is a
+    question the ambiguity does not reach, while asking which file it was
+    invents an answer.
+    """
+    documents: dict[str, set[str]] = {}
+    for document in ROOT.glob("packages/*/docs/**/*.md"):
+        package = document.relative_to(ROOT).parts[1]
+        documents.setdefault(package, set()).add(document.name)
+
+    named: set[tuple[str, str]] = set()
+    for source in sorted(ROOT.glob("packages/*/tests/**/*.py")):
+        package = source.relative_to(ROOT).parts[1]
+        here = documents.get(package)
+        if not here:
+            continue
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        reads_files = any(
+            isinstance(node, ast.Call)
+            and (
+                getattr(node.func, "attr", None) in _FILE_READ_CALLS
+                or getattr(node.func, "id", None) == "open"
+            )
+            for node in ast.walk(tree)
+        )
+        if not reads_files:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                basename = node.value.rsplit("/", 1)[-1]
+                if basename in here:
+                    named.add((package, basename))
+
+    declared = {
+        (package, document.rsplit("/", 1)[-1])
+        for document, package in _scopes.PACKAGE_TEST_DOC_INPUTS.items()
+    }
+
+    # The control, derived rather than named: every declared document is read
+    # by a test in its package -- that is what the guard above asserts -- so
+    # every one of them must also be *named* by one. A scan that has stopped
+    # seeing string literals, or an IO gate that has stopped matching, reports
+    # an empty set, and an empty set trivially declares everything.
+    unseen = sorted(declared - named)
+    assert not unseen, (
+        "these documents are declared as read by their package's suite and no "
+        f"test in it names them: {unseen}. The scan is not reading what it "
+        "thinks it is, so its silence about anything else means nothing"
+    )
+
+    undeclared = sorted(named - declared)
+    assert not undeclared, (
+        "a package test that opens files names one of its own package's "
+        f"documents, and the document is not declared: {undeclared}.\n"
+        "If the test reads it, declare it in PACKAGE_TEST_DOC_INPUTS — "
+        "undeclared, editing that document neither runs the test that reads "
+        "it nor invalidates that test's recorded verdict. If the name is a "
+        "coincidence and nothing opens it, say so here."
+    )
+
+
 def test_a_documentation_change_schedules_the_guards_that_read_it() -> None:
     """Documentation feeds the workspace guards, so it must schedule them.
 
