@@ -46,10 +46,22 @@ At most twenty-one dictionary lookups for a
   reachable by the scan and by no whole-string rung. A cascade wanting both
   carries both.
 
-- **What does not change: the default composition.** A document declaring no
-  `resolver:` section still builds `ExactNormalizedSignal` then `AliasSignal`.
-  The scan is available to a document that asks for it by `kind: scan`, and to
-  any caller who constructs it.
+- **The default composition carries the scan.** A document declaring no
+  `resolver:` section builds `ExactNormalizedSignal`, then `AliasSignal`, then
+  `ScanningSignal`, so a consumer who configures nothing can hand over a
+  sentence and get the declared forms inside it — the offsets they sat at, and
+  the phrases the vocabulary does not account for. Without it the composition a
+  document gets for free compared the whole query and nothing else, which left
+  `coverage.matched` empty for every resolution it could perform.
+
+  The scan sits **last**, which decides nothing about what the cascade answers
+  and one thing about what it reports. The three rungs read one index two ways
+  and never disagree, so the candidates, their spans and the coverage are the
+  same whichever end the scan sits at; what the position decides is the rung of
+  *record* for a query the whole-string rungs already answer, and last leaves
+  that `exact` for a caller whose string already *is* the phrase. A composition
+  that wants the locating rung to lead writes itself out under `resolver:` —
+  the composition is the policy.
 
 - **The entity-resolution guide now carries an executed call site.**
   `docs/guides/entity-resolution.md` publishes the vocabulary it resolves

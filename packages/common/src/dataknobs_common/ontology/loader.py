@@ -33,7 +33,9 @@ from dataknobs_common.entity_resolution.signals import (
     AliasSignal,
     AsyncAliasSignal,
     AsyncExactNormalizedSignal,
+    AsyncScanningSignal,
     ExactNormalizedSignal,
+    ScanningSignal,
 )
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.fields import FieldType
@@ -1057,14 +1059,35 @@ def _async_rungs(
 def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:
     """What a document that configures nothing gets.
 
-    The cascade's declared order minus the rung that needs an index: exact,
-    then alias, and no vector leg because a synchronous cascade has none to
-    fall back to.
+    The cascade's declared order minus the rung that needs an index -- exact,
+    then alias, with no vector leg because a synchronous cascade has none to
+    fall back to -- and then the scan, which needs no index either.
 
     Silence has to build *something*, because the worked call site loads a
     file declaring no ``resolver:`` and then asserts on candidates that report
     the rung which produced them. *Nothing configured* cannot mean *nothing
     built* without that assertion having nothing to be true of.
+
+    **The scan is here because silence has to build something a caller can
+    use.** Without it the default compares the whole query and nothing else,
+    so a consumer who configures nothing hands over a sentence and gets no
+    candidates, an empty ``coverage.matched`` and the whole string unmatched
+    -- the question spans were added to answer, unanswerable by the
+    composition a document gets for free. It does not replace
+    :class:`ExactNormalizedSignal`: a probe is a slice between token
+    boundaries, so a declared form whose own first or last character is not
+    alphanumeric is reachable by the whole-string rungs and by no scan.
+
+    **Last rather than first**, which decides nothing about what the cascade
+    answers and one thing about what it reports. Measured over every query the
+    suite and the guides ask, the three rungs return the same candidates at the
+    same spans with the same coverage whichever end the scan sits at, because
+    the rungs never disagree -- they read one index two ways. What the position
+    decides is the rung of *record* for a query the whole-string rungs already
+    answer: last leaves that ``exact``, so the slot-filling caller whose string
+    *is* the phrase reads the same evidence it always did and the scan is
+    appended to it. A caller who wants the locating rung to lead writes the
+    composition out; the composition is the policy.
 
     The rungs inherit the loader's normalizer without being handed one --
     because they do not fold at all. The source folded its forms with whatever
@@ -1078,6 +1101,7 @@ def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:
     return [
         ExactNormalizedSignal(ontology.entities),
         AliasSignal(ontology.entities),
+        ScanningSignal(ontology.entities),
     ]
 
 
@@ -1086,4 +1110,5 @@ def _default_async_rungs(ontology: AsyncOntology) -> list[AsyncMatchSignal]:
     return [
         AsyncExactNormalizedSignal(ontology.entities),
         AsyncAliasSignal(ontology.entities),
+        AsyncScanningSignal(ontology.entities),
     ]

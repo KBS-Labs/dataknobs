@@ -284,8 +284,9 @@ alternatives existed and nothing about what any of them meant.
 `build_resolver` is the bridge: hand it the same document and the loaded
 vocabulary and it returns an `EntityResolver` composed from the document's own
 `resolver:` section. A document that declares none gets the sensible default —
-exact then alias, over the vocabulary's own entities — which is what makes step
-(5) of the call site run against a file that never mentions resolution.
+exact, then alias, then a scan that locates declared forms *inside* a longer
+string, all over the vocabulary's own entities — which is what makes step (5)
+of the call site run against a file that never mentions resolution.
 
 ## What is not on the door
 

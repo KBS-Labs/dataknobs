@@ -127,9 +127,8 @@ disagree, the suite goes red rather than the page going quietly wrong.
 `build_resolver`, and that is the subject rather than a convenience: a page
 showing a reader how to find declared forms inside a sentence should name the
 rung that does it. [The door, and what it builds](#the-door-and-what-it-builds)
-is the other route, and what a document declaring no `resolver:` section builds
-today is `ExactNormalizedSignal` then `AliasSignal` — neither of which locates
-anything inside a sentence.
+is the other route, and a document declaring no `resolver:` section gets this
+rung too — last, behind the two that compare the whole query.
 
 ## The door, and what it builds
 
@@ -150,10 +149,17 @@ lifecycle and has nowhere to put a runtime. A caller wanting both makes two
 calls and holds two objects.
 
 A document that declares no `resolver:` section gets the declared order over
-what the value can serve — `ExactNormalizedSignal`, then `AliasSignal`. A
-document that declares `rungs: []` gets a cascade that misses everything.
-Those are different answers on purpose: silence is silence, and an empty list
-is a composition somebody wrote.
+what the value can serve — `ExactNormalizedSignal`, then `AliasSignal`, then
+`ScanningSignal`. The scan is there because silence has to build something a
+caller can use: without it the default compares the whole query and nothing
+else, so a sentence comes back with no candidates and the whole string
+unmatched. It sits **last** because the three never disagree — they read one
+index two ways, and the composition returns the same candidates at the same
+spans whichever end the scan sits at. What the position decides is which rung
+is of *record*, and last leaves that `exact` for a caller whose string already
+*is* the phrase. A document that declares `rungs: []` gets a cascade that
+misses everything. Those are different answers on purpose: silence is silence,
+and an empty list is a composition somebody wrote.
 
 ## Every candidate carries its evidence
 
@@ -162,17 +168,19 @@ is a composition somebody wrote.
 ```python
 top = result.candidates[0]
 
-assert [e.signal for e in top.evidence] == ["exact", "alias"]
+assert [e.signal for e in top.evidence] == ["exact", "alias", "scan"]
 assert top.evidence[0].kind is EvidenceKind.DECLARED
 assert top.declared                                   # some evidence is DECLARED
 
-assert [e.signal for e in result.explain("beagle")] == ["exact", "alias"]
+assert [e.signal for e in result.explain("beagle")] == ["exact", "alias", "scan"]
 ```
 
-`beagles` is `beagle`'s declared alias, so **two** rungs produce it: the exact
-rung through the folded form index, the alias rung through the alias index.
-The candidate appears **once**, positioned by the earlier rung, carrying two
-pieces of evidence — a duplicate appends evidence and moves nothing.
+`beagles` is `beagle`'s declared alias, so all **three** default rungs produce
+it: the exact rung through the folded form index, the alias rung through the
+alias index, and the scan through the folded index again — a one-word query is
+a single token slice, so the scan probes it whole. The candidate appears
+**once**, positioned by the earliest rung, carrying three pieces of evidence —
+a duplicate appends evidence and moves nothing.
 
 `explain()` returns the evidence tuple rather than a mapping of signal to
 score. A mapping cannot carry `kind`, `scoring`, `matched_text` or `span`, and
@@ -518,7 +526,8 @@ read the same index and neither subsumes the other: the scan finds a declared
 form sitting inside a sentence, which a whole-string comparison misses, and the
 whole-string rung finds a form whose own edges are punctuated, which no scan
 probes. A cascade carrying both asks the index twice and pays two dictionary
-lookups for it.
+lookups for it — which is what the default composition does, so a document
+that configures nothing already asks it both ways.
 
 The bare `MatchSignal` protocol stays the escape hatch, for a rung the base
 cannot serve: one whose backing is not a dictionary lookup, or one that already

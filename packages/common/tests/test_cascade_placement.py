@@ -17,9 +17,11 @@ from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncAliasSignal,
     AsyncExactNormalizedSignal,
+    AsyncScanningSignal,
     CascadingResolver,
     EvidenceKind,
     ExactNormalizedSignal,
+    ScanningSignal,
     Scoring,
 )
 from dataknobs_common.ontology import (
@@ -107,17 +109,59 @@ def test_a_miss_is_an_empty_candidate_tuple(mammals_path: Path) -> None:
 
 
 def test_an_absent_resolver_section_builds_the_declared_order(mammals_path: Path) -> None:
-    """Silence builds something, and what it builds is exact then alias.
+    """Silence builds something, and what it builds is exact, alias, then scan.
 
     The fixture declares no ``resolver:`` at all, so if silence meant *no
     rungs* the criterion above would have nothing to be true of. Asserted on
     the composition rather than only on the answer, because a cascade with one
     rung would also place ``beagles``.
+
+    **The scan sits last, and that position is the ruling rather than a
+    preference.** Measured over every query this file and the two guides ask,
+    the three-rung composition answers identically whichever end the scan
+    sits at -- same candidates, same spans, same coverage -- so the only thing
+    the position decides is which rung is of *record* for a query the
+    whole-string rungs already answer. Last leaves that answer alone: a caller
+    who hands over the phrase still reads ``exact``, and the rung that reports
+    *where* is reached by a query that needs it.
     """
     resolver = build_resolver(mammals_path, load_ontology(mammals_path))
 
     assert isinstance(resolver, CascadingResolver)
-    assert [type(rung) for rung in resolver.rungs] == [ExactNormalizedSignal, AliasSignal]
+    assert [type(rung) for rung in resolver.rungs] == [
+        ExactNormalizedSignal,
+        AliasSignal,
+        ScanningSignal,
+    ]
+
+
+def test_a_document_configuring_nothing_places_forms_inside_a_sentence(
+    mammals_v11_path: Path,
+) -> None:
+    """What silence builds is what a caller with a sentence actually needs.
+
+    The composition assertion above pins the *shape*; this pins what the shape
+    answers, and the two fail for different reasons -- a composition that is
+    right over a rung that is never reached passes one and not the other.
+
+    Before the scan joined the default this returned no candidates at all,
+    ``coverage.matched`` was empty and the whole sentence was unmatched: a
+    consumer who configured nothing could not ask the question the span and
+    coverage fields were landed for. The positive control is
+    ``test_a_placement_completes_with_no_event_loop_running``, which still
+    reads ``exact`` as the rung of record for a query that *is* the phrase --
+    so this pair says the default gained an answer rather than traded one.
+    """
+    resolver = build_resolver(mammals_v11_path, load_ontology(mammals_v11_path))
+
+    result = resolver.resolve("my golden retriever has been limping", k=5)
+
+    assert [c.entity_id for c in result.candidates] == ["golden_retriever", "retriever"]
+    assert result.explain("golden_retriever")[0].span == (3, 19)
+    assert result.explain("retriever")[0].span == (10, 19)
+    assert result.coverage.matched == ((3, 19),)
+    assert result.coverage.unmatched == ((0, 2), (20, 36))
+    assert result.unmatched_text() == ("my", "has been limping")
 
 
 def test_an_empty_rung_list_builds_a_cascade_that_misses_everything(
@@ -224,6 +268,7 @@ def test_the_async_door_builds_the_same_declared_order(mammals_path: Path) -> No
         assert [type(rung) for rung in resolver.rungs] == [
             AsyncExactNormalizedSignal,
             AsyncAliasSignal,
+            AsyncScanningSignal,
         ]
 
         result = await resolver.resolve("beagles", k=5)
