@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-13T06:17:10Z",
+  "timestamp": "2026-09-14T14:05:48Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/a-validator-reads-rows-through-the-authority-that-found-them",
-  "git_commit": "44e07661ae5cedc62426ce1162eb48851e32b74f",
+  "git_branch": "sbk/the-scan-ships-and-the-page-that-shows-it-is-executed",
+  "git_commit": "3f4ecff66102c541814241d4284ea4112ce94c24",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
