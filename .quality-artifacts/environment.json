@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-14T17:58:45Z",
+  "timestamp": "2026-09-14T18:29:08Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/local-only-test-changes-stop-at-their-package",
-  "git_commit": "1e6d782977f5c4cb24b249a114435814c68ffce5",
+  "git_branch": "sbk/a-lock-change-maps-to-the-members-it-moved",
+  "git_commit": "570d7a4976cef6c605ba605ebaeeb369b81a894e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
