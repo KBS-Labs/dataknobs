@@ -316,6 +316,65 @@ def test_an_unhashed_test_input_still_schedules_its_package() -> None:
         )
 
 
+def test_a_file_can_feed_more_than_one_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file declared in two tiers contributes to both, rather than the first.
+
+    The tiers are not a partition and the declarations never claimed to be
+    one: a file can be a package's test input *and* something a workspace
+    guard reads. The mapping read them as a partition anyway — each branch
+    ended in ``continue``, so the first tier that matched was the only one
+    that spoke, and the rest of the file's blast radius was dropped in
+    silence.
+
+    ``packages/common/tests/conftest.py`` is the case that is not
+    hypothetical. It is the common suite's own conftest, and a workspace
+    guard reads it — ``test_worked_input_fences`` compares a vocabulary
+    published in a package document against the constant this file carries.
+    Declaring it in the workspace tier so the guard is scheduled used to
+    stop the common suite being scheduled by its own conftest.
+
+    Asserted with the declaration patched rather than by filing the entry,
+    because what is being pinned is the mapping's arithmetic: two tiers, two
+    contributions. Which files are *declared* in which tier is a separate
+    decision that this guard must keep legal rather than make.
+    """
+    dual = "packages/common/tests/conftest.py"
+    assert (ROOT / dual).exists(), (
+        f"{dual} was this test's real instance of a file two tiers can claim; "
+        "if it moved, re-anchor on another rather than deleting the case"
+    )
+
+    # Both halves run against a *patched* tier list, including the half that
+    # leaves the entry out. Reading the real declaration for the baseline would
+    # make this guard's control case depend on a decision it exists to keep
+    # legal: file the entry for real and the baseline stops holding, so the
+    # guard fails on the change it was written to permit.
+    tiers = [t for t in _scopes.WORKSPACE_ONLY_TRIGGERS if t != dual]
+
+    # Undeclared, it is exactly what it looks like: an input to one package.
+    # Asserted on directly_changed rather than packages, which also carries
+    # common's transitive dependents — nine more names that say nothing about
+    # what this file was mapped to.
+    monkeypatch.setattr(_scopes, "WORKSPACE_ONLY_TRIGGERS", tiers)
+    before = _scopes.plan_for_files([dual])
+    assert before["directly_changed"] == ["common"]
+    assert before["workspace_changed"] is False
+
+    monkeypatch.setattr(_scopes, "WORKSPACE_ONLY_TRIGGERS", [*tiers, dual])
+
+    both = _scopes.plan_for_files([dual])
+    assert both["workspace_changed"] is True, (
+        "a file declared in the workspace tier must schedule the guards that "
+        "read it — that is what the declaration is for"
+    )
+    assert both["directly_changed"] == ["common"], (
+        "declaring a file in a second tier must not un-declare the first: "
+        f"{dual} is the common suite's own conftest and still feeds it, "
+        f"got directly_changed={both['directly_changed']}"
+    )
+    assert both["test_scope"] == "packages"
+
+
 def _documents_a_package_suite_reads() -> dict[str, str]:
     """Every package document read by a test in that package's own suite.
 
