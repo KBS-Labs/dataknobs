@@ -292,29 +292,104 @@ def test_a_release_bump_schedules_no_package_suite() -> None:
     assert plan["docs_changed"] is True
 
 
-def test_an_unhashed_test_input_still_schedules_its_package() -> None:
-    """Change detection shares the hasher's definition, not its blind spot.
+def test_a_file_no_hash_reaches_still_schedules_its_package() -> None:
+    """Change detection schedules on path; hash membership is a narrower set.
 
-    The hasher decides *membership* as well — ``_HASH_PATTERNS`` reaches the
-    ``.py`` files under ``src/`` and ``tests/`` and nothing else. Deferring to
-    that wholesale would be the unsafe half of the unification: these files
-    decide whether a suite passes while moving no stored hash, so a golden
-    file regenerated wrongly would stop scheduling the suite that would have
-    caught it. Over-scheduling here is the deliberate asymmetry.
+    Deferring change detection to hash membership is the unsafe half of the
+    unification, and it stayed unsafe after the fixtures were hashed. What the
+    hasher reaches is a *declaration* — ``_HASH_PATTERNS`` takes the ``.py``
+    files under ``src/`` and ``tests/`` and the package's ``pyproject.toml``,
+    and the test documents are named one at a time in ``changed-packages.py``
+    while the fixture directories are declared whole — and a declaration lags
+    the tree it describes. Mapping a package's files to that package by path is
+    what stops the lag being a blind spot: a file the declaration has not
+    reached still schedules the suite that would notice it change.
+
+    **The anchors are derived rather than named, and this test is why.** It
+    used to name a golden JSON and a config YAML as its instances of an input
+    no hash reaches. The change that put both into their package's hash left
+    it green, because the weaker claim it still made — that those files
+    schedule their package — is true of hashed and unhashed files alike. So
+    nothing went red while its name, its docstring and its stated purpose all
+    went false. A named instance of a property nothing re-checks is how a
+    guard outlives its subject, which is why every premise below is asserted
+    rather than described.
     """
-    unhashed_inputs = (
-        "packages/llm/tests/golden/anthropic_profile_golden.json",
-        "packages/config/tests/fixtures/test_config.yaml",
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        package: {_rel(p) for p in hashes.package_hash_files(package)}
+        for package in hashes.ALL_PACKAGES
+    }
+    # Positive control. A coverage lookup asking the wrong question answers
+    # "nothing is hashed", and every assertion below then passes for that
+    # reason rather than for its own. This file is one the declaration names.
+    control = "packages/config/tests/fixtures/test_config.yaml"
+    assert control in covered["config"], (
+        f"{control} reads as unhashed, so this guard is measuring something "
+        "other than what package_hash_files returns"
     )
 
-    for path in unhashed_inputs:
-        assert (ROOT / path).exists(), (
-            f"{path} was this test's real instance of an unhashed test input; "
-            "if it moved, re-anchor on another rather than deleting the case"
+    # Derived: what the declaration does not reach inside a tests tree. Today
+    # that is the prose _TEST_TREE_PROSE holds unhashed on purpose; when the
+    # declaration grows, this set shrinks with no edit here.
+    unhashed = [
+        path
+        for path in _tracked_and_new_files()
+        if (parts := path.split("/"))[:1] == ["packages"]
+        and len(parts) >= 4
+        and parts[2] == "tests"
+        and not path.endswith(".py")
+        and path not in covered.get(parts[1], set())
+    ]
+    assert unhashed, (
+        "every file under a tests tree is now in its package's hash, so this "
+        "half has no instance and would pass without asserting anything. That "
+        "is also the state in which deferring change detection to hash "
+        "membership stops being unsafe for this tree — decide that here, "
+        "rather than leaving a case that reads as a check and is not one"
+    )
+    for path in unhashed:
+        plan = _scopes.plan_for_files([path])
+        assert plan["test_scope"] == "packages", (
+            f"{path} is in no hash, so nothing else will notice it change; "
+            f"it must still schedule its package, got {plan['test_scope']}"
         )
-        assert _scopes.plan_for_files([path])["test_scope"] == "packages", (
-            f"{path} feeds a test result — it must still schedule its package"
+        assert path.split("/")[1] in plan["packages"], (
+            f"{path} scheduled {plan['packages']}, which does not include the "
+            "package whose tree it sits in"
         )
+
+    # The sharper case, and the one the asymmetry exists for: a file a suite
+    # loads by name that no hash reaches. An edit to it changes what that
+    # suite asserts and moves no stored hash, so membership alone would drop
+    # the result. The tests-tree half above cannot carry this claim — what is
+    # unhashed there is prose that no test reads, which is why it is exempt.
+    read_by_a_suite = "packages/llm/src/dataknobs_llm/llm/providers/data/bedrock_models.yaml"
+    readers = [
+        path
+        for path in _tracked_and_new_files()
+        if path.startswith("packages/llm/tests/")
+        and path.endswith(".py")
+        and "data/bedrock_models.yaml" in (ROOT / path).read_text()
+    ]
+    assert readers, (
+        f"no suite names {read_by_a_suite} any more, so it is no longer this "
+        "case's instance of an input a test result depends on; re-anchor on a "
+        "file some suite does read rather than dropping the case"
+    )
+    assert read_by_a_suite not in covered["llm"], (
+        f"{read_by_a_suite} is named here as an input no hash reaches, and the "
+        f"hasher now reaches it. That is progress, not a regression: re-anchor "
+        f"on another file a suite reads that no hash covers, and if there is "
+        f"none left, say so here — it is the condition under which change "
+        f"detection could safely defer to hash membership"
+    )
+    plan = _scopes.plan_for_files([read_by_a_suite])
+    assert plan["test_scope"] == "packages"
+    assert "llm" in plan["packages"], (
+        f"{read_by_a_suite} decides what {readers[0]} asserts and is in no "
+        f"hash, so it must schedule llm; got {plan['packages']}"
+    )
 
 
 def test_a_file_can_feed_more_than_one_tier(monkeypatch: pytest.MonkeyPatch) -> None:
