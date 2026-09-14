@@ -1,21 +1,10 @@
 {
-  "timestamp": "2026-09-14T17:05:00Z",
+  "timestamp": "2026-09-14T17:58:45Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [
-    "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "b4a89723e780120c4af45dd9c4a9327fea3737fc2f76b5405c1683bb8189fb1a",
@@ -32,22 +21,22 @@
   },
   "workspace_hashes": {
     "toolchain": "5630281efef2982288803adadf8ce3695e4441c4f15d7c4e8c53ad78732f403d",
-    "workspace_tests": "d78a59c913617df7eff38a4976702b0e7c1a4e301c48709901d43e311f98c206",
+    "workspace_tests": "1a9738426d80e3f1e89c14defd1719445c14b2a90d58f94cb232fd36b2e60fae",
     "docs": "91117c0b81d7d01dc418834508dbe6ed6205259d9310cba89dc60c9e5d492583"
   },
-  "total_seconds": 379,
+  "total_seconds": 108,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 6
     },
     "contract": {
       "status": "pass",
@@ -60,7 +49,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 105
+      "duration_seconds": 8
     },
     "documentation": {
       "status": "pass",
@@ -87,14 +76,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 156,
-      "workspace_guards_seconds": 89
+      "duration_seconds": 90,
+      "workspace_guards_seconds": 90
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 106
+      "skipped": true,
+      "duration_seconds": null
     }
   }
 }

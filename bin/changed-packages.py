@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 # Root of the repository
 _ROOT = Path(__file__).resolve().parent.parent
@@ -329,6 +329,28 @@ def strip_release_noise(content: bytes) -> bytes:
 #: that would make that safe is a docs-scope one, not this.
 _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 
+#: Directories directly under a package whose contents that package's own suite
+#: reads and no other package can. A change to one schedules that package and
+#: stops there, rather than dragging the dependents the transitive closure
+#: exists to reach.
+#:
+#: The closure earns its cost on a change to what a package *exports*: edit
+#: common's source and the other nine are running against different code, so
+#: their recorded results say nothing until they re-run. A test file is not
+#: that. The gate runs each package's suite as its own pytest invocation, so no
+#: other package's run collects these files at all — and that is checked rather
+#: than assumed, by test_no_package_suite_reads_another_packages_tests, because
+#: it is not true by construction: a tests directory goes on sys.path under
+#: pytest's default import mode, so two packages could share a helper through a
+#: bare import that spells neither package's name. Measured at zero, out of 995
+#: test modules offering 935 importable names.
+#:
+#: ``pyproject.toml`` is the case that shows this is about ``tests/`` rather
+#: than about "not src": it sits at the package root, no suite reads it as a
+#: test input, and a dependency constraint or a version in it is read by every
+#: dependent's resolution. It exports, so it is not here.
+_LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
+
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
@@ -567,14 +589,46 @@ def _is_workspace_only_input(filepath: str) -> bool:
     )
 
 
-def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]:
-    """Map changed files to affected packages.
+def _is_local_only_package_input(filepath: str) -> bool:
+    """Whether a package file is read only by its own package's suite.
 
-    Returns:
-        (directly_changed_packages, docs_changed, all_packages_triggered,
-         workspace_only_changed)
+    Asked of a path already known to map to a package, so the question is
+    narrow: which directory under the package holds it. See
+    _LOCAL_ONLY_PACKAGE_DIRS for what makes a directory answer yes and why
+    pyproject.toml, which is also not source, answers no.
     """
+    parts = filepath.split("/")
+    return len(parts) > 3 and parts[2] in _LOCAL_ONLY_PACKAGE_DIRS
+
+
+class FileScan(NamedTuple):
+    """What one change set's files were mapped to.
+
+    Named rather than positional because two of the five members are sets of
+    package names that differ by a subset relation, and the whole decision
+    below turns on which of them reaches the closure. Swapped, the mistake is
+    silent in both directions: the closure over *changed* schedules exactly
+    what it used to, and reporting only *exporting* under-reports what changed.
+    """
+
+    #: Every package a file in the change set belongs to. Each runs its suite.
+    changed_packages: set[str]
+    #: The subset whose change is observable from outside the package, so its
+    #: dependents' recorded results no longer describe what they run against.
+    #: Always a subset of changed_packages; only this reaches the closure.
+    exporting_packages: set[str]
+    #: Whether to recompute the three recorded documentation checks.
+    docs_changed: bool
+    #: Whether a global quality input moved, which dirties everything.
+    all_triggered: bool
+    #: Whether an input the guards under tests/ read moved.
+    workspace_changed: bool
+
+
+def map_files_to_packages(files: list[str]) -> FileScan:
+    """Map changed files to affected packages. See FileScan."""
     changed_packages: set[str] = set()
+    exporting_packages: set[str] = set()
     docs_changed = False
     all_triggered = False
     workspace_changed = False
@@ -631,6 +685,9 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
                 docs_changed = True
                 workspace_changed = True
                 is_package_document = True
+                # Declared because a test *in* that package reads it, which
+                # is also why it does not export: the document decides one
+                # suite's result, and no dependent's run opens it.
                 owner = PACKAGE_TEST_DOC_INPUTS.get(filepath)
                 if owner is not None:
                     changed_packages.add(owner)
@@ -643,15 +700,25 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
                 docs_changed = True
                 is_package_document = True
 
-            # Map to package.
+            # Map to package, and decide separately whether the change is
+            # one a dependent's run can see. Only the second drives the
+            # closure — see _LOCAL_ONLY_PACKAGE_DIRS for which it is.
             if not is_package_document:
                 parts = filepath.split("/")
                 if len(parts) >= 2:
                     pkg_name = parts[1]
                     if pkg_name in DEPENDENCIES:
                         changed_packages.add(pkg_name)
+                        if not _is_local_only_package_input(filepath):
+                            exporting_packages.add(pkg_name)
 
-    return changed_packages, docs_changed, all_triggered, workspace_changed
+    return FileScan(
+        changed_packages=changed_packages,
+        exporting_packages=exporting_packages,
+        docs_changed=docs_changed,
+        all_triggered=all_triggered,
+        workspace_changed=workspace_changed,
+    )
 
 
 def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
@@ -690,6 +757,7 @@ def plan_for_files(files: list[str]) -> dict[str, Any]:
         packages: sorted list of package names that need testing
         docs_changed: whether docs-related files changed
         directly_changed: packages with direct file changes
+        exporting: the subset of those whose change their dependents can see
         mode: "all" if global trigger hit, "changed" otherwise
         workspace_changed: whether a workspace-only quality input changed
         test_scope: "packages", "workspace" or "none" (see classify_test_scope)
@@ -699,34 +767,36 @@ def plan_for_files(files: list[str]) -> dict[str, Any]:
             "packages": [],
             "docs_changed": False,
             "directly_changed": [],
+            "exporting": [],
             "mode": "none",
             "workspace_changed": False,
             "test_scope": "none",
         }
 
-    (
-        directly_changed,
-        docs_changed,
-        all_triggered,
-        workspace_changed,
-    ) = map_files_to_packages(files)
+    scan = map_files_to_packages(files)
 
-    if all_triggered:
+    if scan.all_triggered:
         packages = list(ALL_PACKAGES)
         mode = "all"
     else:
-        # Compute transitive dependents, filtered to packages that exist
-        all_affected = get_transitive_dependents(directly_changed)
+        # Only what a package *exports* reaches its dependents. Their recorded
+        # results describe running against this package, so a change they can
+        # see is what makes those results stop describing anything — and a
+        # change they cannot see is one their suites would re-confirm
+        # unchanged. Every directly changed package still runs its own suite;
+        # the union is what keeps a local-only change scheduling one.
+        all_affected = get_transitive_dependents(scan.exporting_packages) | scan.changed_packages
         packages = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
         mode = "changed"
 
     return {
         "packages": packages,
-        "docs_changed": docs_changed,
-        "directly_changed": sorted(directly_changed),
+        "docs_changed": scan.docs_changed,
+        "directly_changed": sorted(scan.changed_packages),
+        "exporting": sorted(scan.exporting_packages),
         "mode": mode,
-        "workspace_changed": workspace_changed,
-        "test_scope": classify_test_scope(packages, workspace_changed),
+        "workspace_changed": scan.workspace_changed,
+        "test_scope": classify_test_scope(packages, scan.workspace_changed),
     }
 
 
