@@ -518,6 +518,51 @@ PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
 }
 
 
+#: Directories beneath a package's ``tests/`` holding what its suite reads
+#: rather than what pytest collects: a golden answer, a YAML configuration, the
+#: markdown a knowledge source ingests. ``_HASH_PATTERNS`` in package-hashes.py
+#: reaches ``tests/**/*.py``, which is the suite and not the suite's inputs, so
+#: editing one of these changed what the tests assert while every stored hash
+#: stayed intact — a recorded ``pass`` surviving an edit to the thing it was a
+#: verdict about. The golden file is the case that names itself: its entire
+#: purpose is to be the expected answer.
+#:
+#: Unlike the declaration above, this one buys no scheduling and needs none. A
+#: file under ``packages/<p>/tests/`` already maps to ``<p>`` by the generic
+#: rule in map_files_to_packages, so the edit was already running that suite;
+#: what was missing is only the stored verdict moving with it. Hashing these
+#: therefore costs no gate run that the edit does not already cause, which is
+#: the whole of why they may be taken a directory at a time where a document
+#: had to be argued for one at a time. There, the cost of being wrong was a
+#: suite scheduled for prose; here there is no such cost.
+#:
+#: Directories for a second reason too: the files are not all nameable. config
+#: and llm do name theirs — ``Path(__file__).parent / "fixtures" /
+#: "test_config.yaml"``, and the golden answer beside it — but bots hands the
+#: whole ``packages/bots/tests/test_docs/`` directory to a knowledge source and
+#: never names a document inside it, and utils names three of its four through a
+#: conftest helper composed with a module constant. The fourth, a gzipped
+#: ``.json``, appears in no test at all: it is read by the one that walks the
+#: directory asking which of its files are gzipped. So a list of files would be
+#: hand-maintained for two of the four packages and would have missed that one
+#: outright. The directory is what every reader does name, which is also what
+#: lets one be checked against the tree rather than believed.
+#:
+#: Deliberately absent: a README beside a test package. Two exist under
+#: packages/data/tests/ and no test reads either, so neither moves a verdict
+#: and hashing one would dirty a package for prose. They are named one at a
+#: time rather than left to a rule about the word README, and
+#: ``test_every_test_input_a_suite_reads_is_in_that_packages_hash`` is what
+#: holds the exception to exactly those two: a third file feeding nothing
+#: fails there on arrival instead of joining a pattern.
+PACKAGE_TEST_FIXTURE_DIRS: tuple[str, ...] = (
+    "packages/bots/tests/test_docs",
+    "packages/config/tests/fixtures",
+    "packages/llm/tests/golden",
+    "packages/utils/tests/resources",
+)
+
+
 # Paths whose change means the gate should re-run the documentation checks.
 # Matched by prefix, so a full path names exactly one file.
 #
