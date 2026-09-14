@@ -375,6 +375,145 @@ def test_a_file_can_feed_more_than_one_tier(monkeypatch: pytest.MonkeyPatch) -> 
     assert both["test_scope"] == "packages"
 
 
+def test_a_test_only_change_stops_at_its_own_package() -> None:
+    """A package's own tests decide that package's result and no other's.
+
+    The transitive closure earns its cost on a change to a package's
+    *exported* surface: edit ``common``'s source and the other nine packages
+    are running against different code, so their suites have to re-run to say
+    anything. A change under ``packages/common/tests/`` is not that. Nothing
+    outside the common suite reads those files, and nothing outside it can:
+    the gate runs each package's suite as its own pytest invocation, so no
+    other package's run collects them at all. What holds that true rather
+    than assuming it is ``test_no_package_suite_reads_another_packages_tests``
+    below, which is this test's other half.
+
+    Scheduled as an export anyway, ``common`` is both the worst case and the
+    ordinary one — nine dependents — so a one-line edit to a common test ran
+    every suite in the workspace to re-confirm nine results that could not
+    have moved.
+
+    ``pyproject.toml`` is the control in the other direction, and the reason
+    this is about ``tests/`` rather than about "not source": a dependency
+    constraint or a version is read by every dependent's resolution, so it
+    exports and must keep dragging the closure.
+    """
+    local_only = "packages/common/tests/test_registry.py"
+    exports_source = "packages/common/src/dataknobs_common/__init__.py"
+    exports_metadata = "packages/common/pyproject.toml"
+
+    for path in (local_only, exports_source, exports_metadata):
+        assert (ROOT / path).exists(), (
+            f"{path} anchors this guard in a real file; if it moved, "
+            "re-anchor on another rather than deleting the case"
+        )
+
+    local = _scopes.plan_for_files([local_only])
+    assert local["packages"] == ["common"], (
+        "a change to a package's own tests is read by that package's suite "
+        "and by nothing else, so it schedules that suite and nothing else; "
+        f"got {local['packages']}"
+    )
+    assert local["directly_changed"] == ["common"]
+    assert local["exporting"] == [], (
+        "a test file is not part of what a package exports to its dependents"
+    )
+    assert local["test_scope"] == "packages"
+
+    # Both halves of the control, because the closure is what is being
+    # narrowed and a narrowing that took everything with it would pass the
+    # assertion above. common has nine dependents; each of these must still
+    # reach all ten.
+    for path in (exports_source, exports_metadata):
+        exporting = _scopes.plan_for_files([path])
+        assert exporting["packages"] == sorted(_scopes.ALL_PACKAGES), (
+            f"{path} changes what common's dependents build and run against, "
+            f"so it must still schedule them; got {exporting['packages']}"
+        )
+        assert exporting["exporting"] == ["common"]
+
+
+def test_no_package_suite_reads_another_packages_tests() -> None:
+    """The premise the narrowing above rests on, checked against the tree.
+
+    "A package's tests are local to that package" is true of this tree and is
+    not true by construction: ``packages/*/tests`` directories go on
+    ``sys.path`` under pytest's default import mode, so a bare
+    ``from _vocabularies import ...`` resolves to whichever tests directory
+    was inserted. Two packages sharing a helper that way would be a real
+    coupling, invisible in the imports (nothing spells the other package's
+    name) and silently un-scheduled by the change above.
+
+    Measured when this was written: **zero** cross-package test imports, out
+    of 995 test modules offering 935 bare-importable names.
+
+    The count below is the positive control, and this guard is worth nothing
+    without it. A reader that resolved no imports at all — a parse that threw,
+    a name table built wrong — reports zero violations for the same reason a
+    correct one does. Asserting that same-package bare imports are still
+    *found* is what tells the two apart.
+    """
+    tests_dirs = {
+        path.relative_to(ROOT).parts[1]: path
+        for path in sorted(ROOT.glob("packages/*/tests"))
+        if path.is_dir()
+    }
+    assert len(tests_dirs) > 1, "nothing to compare across"
+
+    # Which packages' tests offer each bare-importable top-level name. A file
+    # is importable as its own stem, and a subdirectory as its own name, once
+    # the tests directory holding it is on sys.path.
+    offered: dict[str, set[str]] = {}
+    sources: list[tuple[str, Path]] = []
+    for package, tests_dir in tests_dirs.items():
+        for source in sorted(tests_dir.rglob("*.py")):
+            sources.append((package, source))
+            relative = source.relative_to(tests_dir)
+            if relative.name != "__init__.py":
+                offered.setdefault(source.stem, set()).add(package)
+            if len(relative.parts) > 1:
+                offered.setdefault(relative.parts[0], set()).add(package)
+
+    foreign: list[str] = []
+    local_hits = 0
+    for package, source in sources:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                # A relative import cannot leave the package it is written in,
+                # so only absolute ones can reach another package's tests.
+                imported = [node.module.split(".")[0]]
+            else:
+                continue
+            for name in imported:
+                owners = offered.get(name)
+                if owners is None:
+                    continue
+                if package in owners:
+                    local_hits += 1
+                else:
+                    foreign.append(
+                        f"{_rel(source)}:{node.lineno} imports {name!r}, which "
+                        f"only {sorted(owners)} provide"
+                    )
+
+    assert local_hits, (
+        "this guard resolved no bare test-module import anywhere in the "
+        "workspace, which is what a broken reader and a clean tree both look "
+        "like. There are such imports — _vocabularies, _anthropic_stubs — so "
+        "finding none means the name table or the parse is wrong, not that "
+        "nothing is coupled"
+    )
+    assert not foreign, (
+        "a package's tests are scheduled by a change to that package alone "
+        "(see test_a_test_only_change_stops_at_its_own_package), so a test "
+        "reaching into another package's tests directory is a coupling the "
+        "gate would stop scheduling:\n  " + "\n  ".join(foreign)
+    )
+
+
 def _documents_a_package_suite_reads() -> dict[str, str]:
     """Every package document read by a test in that package's own suite.
 
