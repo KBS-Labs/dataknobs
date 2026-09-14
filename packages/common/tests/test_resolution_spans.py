@@ -25,7 +25,7 @@ against each other rather than each against a literal.
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -48,7 +48,9 @@ from dataknobs_common.entity_resolution import (
     content_span,
     token_spans,
 )
+from dataknobs_common.entity_resolution.signals import _probe_spans
 from dataknobs_common.ontology import (
+    AsyncMappingEntitySource,
     Entity,
     MappingEntitySource,
     async_load_ontology,
@@ -110,6 +112,92 @@ class AsyncConsumerScanningSignal(AsyncDeclaredSignal):
                     FormHit(entity_id=entity_id, span=(start, end)) for entity_id in sorted(hits)
                 ]
         return found
+
+
+class CountingEntitySource:
+    """A real source that also tallies the lookups a rung spends on it.
+
+    Delegation to :class:`MappingEntitySource` plus a counter, rather than a
+    double standing in for one: every answer below is the real index's, so the
+    rung under test runs its real path and the tally describes that path rather
+    than an approximation of it.
+
+    What it measures is the half of a rung's behaviour no assertion on a
+    *result* can reach. Two rungs probing different numbers of windows return
+    identical candidates, so a cost is only visible by counting -- which is why
+    an unbounded enumeration survived a suite that asserted thoroughly on what
+    came back.
+    """
+
+    def __init__(self, entities: dict[str, Entity]) -> None:
+        self._inner = MappingEntitySource(entities)
+        self.probes = 0
+
+    def get(self, entity_id: str) -> Entity | None:
+        return self._inner.get(entity_id)
+
+    def get_many(self, entity_ids: Sequence[str]) -> dict[str, Entity]:
+        return self._inner.get_many(entity_ids)
+
+    def fetch_origin(self, ref: Any) -> Any:
+        return self._inner.fetch_origin(ref)
+
+    def fetch_origins(self, refs: Sequence[Any]) -> Any:
+        return self._inner.fetch_origins(refs)
+
+    def describe(self) -> Any:
+        return self._inner.describe()
+
+    def by_surface_form(self, form: str) -> frozenset[str]:
+        self.probes += 1
+        return self._inner.by_surface_form(form)
+
+    def by_type(self, type_id: str) -> frozenset[str]:
+        return self._inner.by_type(type_id)
+
+    def longest_form_tokens(self) -> int:
+        return self._inner.longest_form_tokens()
+
+
+def test_a_scan_probes_no_window_longer_than_a_declared_form() -> None:
+    """The enumeration is bounded by the vocabulary, not by the query.
+
+    Every contiguous window of a query is *n(n+1)/2* probes -- quadratic in the
+    token count, and cubic in the characters copied, since each probe slices a
+    span that may be the whole query. On text a caller hands over, through a
+    rung a document reaches by writing ``kind: scan``. Measured before this
+    assertion existed: 20,100 probes for 200 tokens, 500,500 for 1,000.
+
+    **A window longer than the longest form the vocabulary declares cannot
+    match it.** ``by_surface_form`` answers the empty set for every one of
+    them, so cutting the enumeration there removes only probes that could not
+    have contributed -- an exact bound rather than a budget, which is why the
+    count and the answer are asserted together below. A cap that lost a
+    candidate would be a different change needing a different argument.
+    """
+    source = CountingEntitySource(
+        {
+            "beagle": Entity(id="beagle", type="Breed", name="Beagle"),
+            "golden_retriever": Entity(
+                id="golden_retriever", type="Breed", name="Golden Retriever"
+            ),
+        }
+    )
+    query = " ".join(["word"] * 38 + ["golden", "retriever"])
+    tokens = len(token_spans(query))
+    assert tokens == 40, "the arithmetic below is written for a forty-token query"
+
+    found = ScanningSignal(source).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == ["golden_retriever"]
+    assert source.longest_form_tokens() == 2
+    assert source.probes <= tokens * source.longest_form_tokens(), (
+        f"the scan spent {source.probes} lookups on a {tokens}-token query "
+        f"over a vocabulary whose longest declared form is "
+        f"{source.longest_form_tokens()} tokens. Unbounded, that is "
+        f"{tokens * (tokens + 1) // 2}: every window is probed, including the "
+        f"ones no declared form could fill."
+    )
 
 
 def test_the_fold_and_the_boundary_policy_answer_different_questions() -> None:
@@ -357,14 +445,21 @@ def test_neither_rung_subsumes_the_other() -> None:
 
     # The whole-string rung reaches a form the scan never probes.
     for form, span in (("(beagle)", (0, 8)), ("C.D.C.", (0, 6))):
-        assert [c.entity_id for c in whole.resolve(form, k=5).candidates] == ["k9"]
-        assert whole.resolve(form, k=5).explain("k9")[0].span == span
+        found = whole.resolve(form, k=5)
+        assert [c.entity_id for c in found.candidates] == ["k9"]
+        assert found.explain("k9")[0].span == span
         assert scan.resolve(form, k=5).candidates == ()
 
-    # An interior boundary character is fine: the edges are what matter.
+    # An interior boundary character is fine: the edges are what matter, so
+    # this is the one form in the vocabulary both rungs reach -- asserted in
+    # both directions, because "by both" is the claim and one half of it is
+    # what the two cases above are contrasted against.
     assert token_spans("(beagle)") == ((1, 7),)
     assert token_spans("K-9") == ((0, 1), (2, 3))
-    assert [c.entity_id for c in scan.resolve("K-9", k=5).candidates] == ["k9"]
+    for rung in (scan, whole):
+        found = rung.resolve("K-9", k=5)
+        assert [c.entity_id for c in found.candidates] == ["k9"]
+        assert found.explain("k9")[0].span == (0, 3)
 
     # And the other direction, which is why neither is the stronger rung.
     plain = MappingEntitySource(
@@ -378,6 +473,84 @@ def test_neither_rung_subsumes_the_other() -> None:
         CascadingResolver([ExactNormalizedSignal(plain)], plain).resolve("Beagles!", k=5).candidates
         == ()
     )
+
+
+def test_the_scanning_rung_proposes_ids_in_its_own_order() -> None:
+    """``_order`` is live on the scanning path, not only the whole-string one.
+
+    Both were published as a rung's extension surface, and only one of them
+    was reachable: the scan spelled ``sorted(hits)`` inline, so a subclass
+    overriding the hook had it read and discarded. Silently -- the default
+    ``_order`` *is* ``sorted``, so every test written against the shipped rung
+    agreed with the bypass.
+
+    It is the scanning rung the hook's own docstring describes, which is what
+    makes this the wrong place to have hard-coded the answer: "a rung with a
+    longer form and a shorter one inside it has something to say and says it
+    here". Two entities declaring one form is the same ambiguity one span
+    down, and the rung is the only layer that can rank them -- a declared
+    score is ``1.0`` by fiat, so nothing downstream could recover an order the
+    rung did not publish.
+    """
+
+    class ReverseOrderScanningSignal(ScanningSignal):
+        """The shipped rung with the one hook a consumer is invited to override."""
+
+        def _order(self, hits: frozenset[str]) -> Sequence[str]:
+            return sorted(hits, reverse=True)
+
+    shared = MappingEntitySource(
+        {
+            "a_beagle": Entity(id="a_beagle", type="Breed", name="Beagle"),
+            "z_beagle": Entity(id="z_beagle", type="Breed", name="Beagle"),
+        }
+    )
+
+    default = ScanningSignal(shared).candidates("a beagle here", k=5)
+    reversed_ = ReverseOrderScanningSignal(shared).candidates("a beagle here", k=5)
+
+    assert [c.entity_id for c in default] == ["a_beagle", "z_beagle"]
+    assert [c.entity_id for c in reversed_] == ["z_beagle", "a_beagle"], (
+        "the override was read and discarded: the scan is ordering its own "
+        "hits instead of asking _order, so the published hook does nothing "
+        "for the one rung whose docstring describes it"
+    )
+
+
+async def test_the_async_scan_is_bounded_and_ordered_the_same_way() -> None:
+    """Both corrections reach the asynchronous twin, measured rather than assumed.
+
+    The twin-parity guard compares *signatures*, so it would have agreed
+    happily while one flavour probed every window and honoured its hook and
+    the other did neither. These are the two behaviours the sync assertions
+    above pin, asked one ``await`` further in -- and the sequential shape is
+    why the bound matters more on this side, not less: each probe here is a
+    round trip for a source that is not a mapping.
+    """
+
+    class ReverseOrderAsyncScanningSignal(AsyncScanningSignal):
+        def _order(self, hits: frozenset[str]) -> Sequence[str]:
+            return sorted(hits, reverse=True)
+
+    # Single-token ids as well as names, so the bound below is 1 and the
+    # probe count is the token count exactly rather than a sum of two rows.
+    shared = AsyncMappingEntitySource(
+        {
+            "abeagle": Entity(id="abeagle", type="Breed", name="Beagle"),
+            "zbeagle": Entity(id="zbeagle", type="Breed", name="Beagle"),
+        }
+    )
+    query = " ".join(["word"] * 39 + ["beagle"])
+    tokens = len(token_spans(query))
+
+    default = await AsyncScanningSignal(shared).candidates(query, k=5)
+    reversed_ = await ReverseOrderAsyncScanningSignal(shared).candidates(query, k=5)
+
+    assert [c.entity_id for c in default] == ["abeagle", "zbeagle"]
+    assert [c.entity_id for c in reversed_] == ["zbeagle", "abeagle"]
+    assert shared.longest_form_tokens() == 1
+    assert tokens == 40
+    assert len(_probe_spans(query, shared.longest_form_tokens())) == tokens
 
 
 def test_a_reference_records_which_rung_and_what_kind() -> None:

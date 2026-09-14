@@ -25,9 +25,9 @@ guard is for. ``test_the_call_site_names_the_shipped_rung`` is where that stops
 being incidental.
 
 **Where the input comes from.** The ``worked-input`` fence is the same
-vocabulary as ``MAMMALS_V11_DOCUMENT`` in ``packages/common/tests/conftest.py``,
-and ``packages/common/tests/test_worked_input_fences.py`` holds the two
-identical. Until that file arrived nothing did: each copy was guarded by its own suite -- a fence that
+vocabulary as ``MAMMALS_V11_DOCUMENT`` in
+``packages/common/tests/_vocabularies.py``, and
+``packages/common/tests/test_worked_input_fences.py`` holds the two identical. Until that file arrived nothing did: each copy was guarded by its own suite -- a fence that
 drifts takes this file red, a constant that drifts takes
 ``test_resolution_spans.py`` red -- which left *that they are one document*
 guarded by nobody, and the two had already parted by a line. This is the pair
@@ -43,6 +43,7 @@ opens anything and nothing is lazy.
 
 from __future__ import annotations
 
+import ast
 import runpy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -141,10 +142,23 @@ def test_the_call_site_names_the_shipped_rung() -> None:
     assert "ScanningSignal(" in published, (
         "the published call site no longer constructs the shipped scanning "
         "rung. Every other assertion in this file passes against a rung the "
-        "page defined for itself, which is the failure this one exists for"
+        "page defined for itself, which is the failure this one exists for. "
+        "The trailing parenthesis is the assertion: without it the import "
+        "line alone satisfies this, which it briefly did"
     )
-    assert "class " not in published, (
-        "the page defines a rung instead of constructing the one that ships"
+
+    # Parsed rather than searched. `"class " not in published` is the same
+    # claim spelled so that a comment or a string containing the word answers
+    # it -- and the thing being ruled out is a *definition*, which the grammar
+    # knows about and a substring does not.
+    defined = [
+        node.name for node in ast.walk(ast.parse(published)) if isinstance(node, ast.ClassDef)
+    ]
+    assert not defined, (
+        f"the published call site defines {defined} instead of constructing "
+        f"the rung that ships. A page teaching a reader to find declared forms "
+        f"inside a sentence, while writing its own rung to do it, satisfies "
+        f"every other assertion in this file"
     )
 
 
@@ -210,3 +224,63 @@ def test_nothing_in_the_call_site_needs_a_loop_or_a_backend(ran: dict[str, Any])
 
     assert description.backend == "authored"
     assert description.table is None
+
+
+RUNG_MARKER = "worked-rung"
+RUNG = ROOT / "tests" / "worked_punctuated_rung.py"
+
+
+@pytest.fixture
+def punctuated_rung() -> type:
+    """The class the guide's *Writing your own rung* fence defines, as published."""
+    return runpy.run_path(str(RUNG), run_name="__worked_rung__")["PunctuatedFormRung"]
+
+
+def test_the_executed_rung_is_the_published_one() -> None:
+    """The second fence on this page is held to the first one's standard.
+
+    The page describes itself as executed, and until this existed one block on
+    it was not: the sample a reader is most likely to copy, since it is the one
+    the page tells them to write themselves. Its claims are also the sharper
+    ones -- three named forms said to be reachable this way and no other -- and
+    a claim a reader cannot check without first writing the class is exactly
+    the kind that should not rest on prose.
+    """
+    published = published_fence(GUIDE, RUNG_MARKER)
+    executed = executed_source(RUNG)
+
+    assert executed == published, (
+        "the executed rung and the one the guide publishes have diverged. They "
+        "are one text with two homes: edit the fence in "
+        f"{GUIDE.relative_to(ROOT)} and copy it to {RUNG.relative_to(ROOT)}, or "
+        "the reverse -- but never one alone."
+    )
+
+
+def test_the_published_rung_reaches_the_three_forms_the_page_names(
+    punctuated_rung: type,
+) -> None:
+    """`(beagle)`, `C.D.C.` and `K-9`, and the shipped scan reaching two fewer.
+
+    Both halves are the page's claim and both have to hold, because the section
+    exists to answer *what is worth writing yourself*. A rung that found the
+    three forms would still not justify the section if the shipped scan found
+    them too, so the contrast is asserted rather than described.
+    """
+    from dataknobs_common.entity_resolution import ScanningSignal
+    from dataknobs_common.ontology import Entity, MappingEntitySource
+
+    vocabulary = MappingEntitySource(
+        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=("(beagle)", "C.D.C."))}
+    )
+    written = punctuated_rung(vocabulary)
+    shipped = ScanningSignal(vocabulary)
+
+    for form in ("(beagle)", "C.D.C.", "K-9"):
+        found = written.candidates(form, k=5)
+        assert [c.entity_id for c in found] == ["k9"], f"the published rung misses {form!r}"
+        assert found[0].evidence[0].span == (0, len(form))
+
+    assert [c.entity_id for c in shipped.candidates("K-9", k=5)] == ["k9"]
+    assert shipped.candidates("(beagle)", k=5) == []
+    assert shipped.candidates("C.D.C.", k=5) == []

@@ -2,8 +2,8 @@
 
 Two guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
 which a workspace test writes to disk and runs the guide's published call site
-against. ``conftest.py`` holds the *same* vocabulary as a module constant,
-which most of this suite loads from instead.
+against. ``_vocabularies.py`` holds the *same* vocabulary as a module
+constant, which this package's fixtures and most of its suites load instead.
 
 **Nothing compared the two.** Each copy was guarded by its own suite -- a fence
 that drifts takes its workspace runner red, a constant that drifts takes
@@ -39,7 +39,11 @@ document, which ``PACKAGE_TEST_DOC_INPUTS`` already exists to declare and
 ``packages/*/docs/`` already hashes. ``test_packs.py`` reads its own guide the
 same way.
 
-Adding a third pair is one row in the table below and one in that declaration.
+**Adding a third pair is one row in the table below and one in that
+declaration**, and forgetting the first is caught rather than trusted:
+``test_every_published_vocabulary_is_in_the_table`` reads the guides for the
+marker and fails on one the table does not carry. A table nobody checks against
+the tree is a list of the pairs somebody remembered.
 """
 
 from __future__ import annotations
@@ -49,7 +53,17 @@ import re
 
 import pytest
 
-from conftest import MAMMALS_DOCUMENT, MAMMALS_V11_DOCUMENT
+from _vocabularies import MAMMALS_DOCUMENT, MAMMALS_V11_DOCUMENT
+
+#: Every guide that could carry a published vocabulary. Globbed rather than
+#: listed, so a guide added tomorrow is inside what the table is checked
+#: against rather than outside it.
+#:
+#: Reached through a declared guide's ``.parent`` rather than by dividing
+#: ``__file__`` towards the directory, for the reason the comment above gives
+#: one direction on: the declaration guard reconstructs a divided
+#: ``Path(__file__)`` chain as the document it names, and a chain ending at
+#: ``"guides"`` reconstructs as a directory it then fails to find.
 
 #: Each guide is spelled as one whole ``Path(__file__)`` chain rather than a
 #: shared ``GUIDES`` directory divided twice. ``PACKAGE_TEST_DOC_INPUTS`` is
@@ -61,6 +75,8 @@ ENTITY_RESOLUTION_GUIDE = (
     pathlib.Path(__file__).parents[1] / "docs" / "guides" / "entity-resolution.md"
 )
 
+GUIDES = sorted(ONTOLOGY_GUIDE.parent.glob("*.md"))
+
 #: The header line a fence carries and a constant does not: a published
 #: vocabulary names the file a reader should save it as, and the constant is
 #: written to a path the fixture chooses. The one declared difference --
@@ -68,7 +84,16 @@ ENTITY_RESOLUTION_GUIDE = (
 FILENAME_COMMENT = "# mammals.yaml"
 
 _MARKER = "<!-- worked-input -->"
-_FENCE = re.compile(r"^```yaml\n(?P<body>.*?)^```$", re.M | re.S)
+#: Anchored at the start of what follows the marker, so the fence this reads is
+#: the one the marker *introduces*. An unanchored search would bind the marker
+#: to the first ``yaml`` fence anywhere below it, which is a different document
+#: whenever a page grows a paragraph between the two.
+_FENCE = re.compile(r"\A\s*```yaml\n(?P<body>.*?)^```$", re.M | re.S)
+
+
+def _carries_marker(guide: pathlib.Path) -> bool:
+    """Whether ``guide`` publishes a vocabulary at all."""
+    return guide.is_file() and _MARKER in guide.read_text(encoding="utf-8")
 
 
 def _published_vocabulary(guide: pathlib.Path) -> str:
@@ -80,6 +105,16 @@ def _published_vocabulary(guide: pathlib.Path) -> str:
     the comparison below an empty string, and two empty strings compare equal.
     A guard reporting green because it read nothing is the failure mode of
     every reader like this one.
+
+    **It refuses the same three things** ``tests/_workspace.published_fence``
+    refuses, deliberately. That reader cannot be imported from here -- a
+    package suite reaching into the workspace guards is the boundary the module
+    docstring explains -- so this is a second reader by necessity, and a second
+    reader whose refusals are *weaker* is the failure the first one's docstring
+    warns about: a guard that stopped refusing still passes every test written
+    for the guard that did. The one difference that remains is deliberate and
+    narrow: this reader requires ``yaml``, because what it reads is a
+    vocabulary rather than any published block.
     """
     assert guide.is_file(), (
         f"{guide} is missing. It carries the published copy of a vocabulary "
@@ -87,23 +122,34 @@ def _published_vocabulary(guide: pathlib.Path) -> str:
         f"guard rather than making one inapplicable."
     )
     text = guide.read_text(encoding="utf-8")
-    _, marker, after = text.partition(_MARKER)
-    assert marker, f"{guide.name} carries no {_MARKER} comment"
+    assert text.count(_MARKER) == 1, (
+        f"{guide.name} carries {text.count(_MARKER)} {_MARKER} comments, "
+        f"expected exactly one. Reading the first of several would compare a "
+        f"document nobody chose"
+    )
 
-    fence = _FENCE.search(after)
-    assert fence is not None, f"no ```yaml fence follows {_MARKER} in {guide.name}"
+    fence = _FENCE.search(text.partition(_MARKER)[2])
+    assert fence is not None, (
+        f"no ```yaml fence immediately follows {_MARKER} in {guide.name}. The "
+        f"marker introduces the fence below it; anything between them means "
+        f"this would read a block the marker does not name"
+    )
     body = fence.group("body")
     assert body.strip(), f"the {_MARKER} fence in {guide.name} is empty"
     return body
 
 
+#: The pairs, named once: parametrized below and checked against the tree by
+#: ``test_every_published_vocabulary_is_in_the_table``. Two readings of one
+#: list, rather than a list and a copy of it.
+PAIRS = [
+    (ONTOLOGY_GUIDE, MAMMALS_DOCUMENT, "MAMMALS_DOCUMENT"),
+    (ENTITY_RESOLUTION_GUIDE, MAMMALS_V11_DOCUMENT, "MAMMALS_V11_DOCUMENT"),
+]
+
+
 @pytest.mark.parametrize(
-    ("guide", "declared", "constant"),
-    [
-        (ONTOLOGY_GUIDE, MAMMALS_DOCUMENT, "MAMMALS_DOCUMENT"),
-        (ENTITY_RESOLUTION_GUIDE, MAMMALS_V11_DOCUMENT, "MAMMALS_V11_DOCUMENT"),
-    ],
-    ids=["ontology", "entity-resolution"],
+    ("guide", "declared", "constant"), PAIRS, ids=["ontology", "entity-resolution"]
 )
 def test_the_published_input_is_this_suites_own_vocabulary(
     guide: pathlib.Path, declared: str, constant: str
@@ -117,8 +163,33 @@ def test_the_published_input_is_this_suites_own_vocabulary(
         f"only thing this fence may carry that {constant} does not"
     )
     assert body == declared, (
-        f"the vocabulary {guide.name} publishes and {constant} in conftest.py "
+        f"the vocabulary {guide.name} publishes and {constant} in "
+        f"_vocabularies.py "
         f"have diverged. They are one document with two homes: the fence is "
         f"what a reader copies and the constant is what this suite loads, so "
         f"both are authorities and neither may be edited alone."
+    )
+
+
+def test_every_published_vocabulary_is_in_the_table() -> None:
+    """The table is checked against the guides, not trusted to be complete.
+
+    Each declared pair is compared character for character, so an *edit* to
+    either copy is caught. What a hand-written table cannot catch is an
+    **addition**: a third guide publishing a third vocabulary, mirrored by a
+    third constant, guarded by nothing until someone remembers the row. That is
+    the same shape as the defect this file was written for -- two copies, each
+    guarded, and their sameness guarded by nobody.
+
+    Read the way ``_declared_import_roots`` reads its declarations: from the
+    tree, so the answer cannot be stale.
+    """
+    publishing = {guide.name for guide in GUIDES if _carries_marker(guide)}
+    tabled = {guide.name for guide, _, _ in PAIRS}
+
+    assert publishing == tabled, (
+        f"guides publishing a {_MARKER} fence: {sorted(publishing)}; guides in "
+        f"the table: {sorted(tabled)}. A published vocabulary outside the table "
+        f"is compared to nothing, and a table row for a guide that no longer "
+        f"publishes one is a guard that has quietly stopped reading."
     )

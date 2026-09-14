@@ -27,7 +27,7 @@ from dataknobs_common.ontology.model import (
     Term,
     relation_id,
 )
-from dataknobs_common.text import default_normalizer
+from dataknobs_common.text import default_normalizer, token_spans
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -76,6 +76,19 @@ class EntitySource(Protocol):
     into non-conforming at once -- which is the migration the warning on
     :class:`AssertionSource` refuses to impose, and it is stricter for a
     member than for a keyword.
+
+    **:meth:`longest_form_tokens` is here anyway, and the exception is dated.**
+    That argument is about a population of structural conformers, and when the
+    member was added that population was empty: this protocol had not been in
+    a release, so the migration it describes cost nothing. It is the only
+    member that will ever be able to say that. The alternative -- a second
+    optional protocol, on the :class:`AliasFormSource` pattern -- buys a source
+    the right not to answer, and what it charges for that is a branch: a
+    scanning rung that cannot ask has to fall back to a cap it guessed, and a
+    guessed cap is a form the vocabulary declares and the scan silently stops
+    finding. A member every source owes keeps the bound exact for all of them.
+    A source whose backing makes the answer expensive may cache it; it is
+    fixed for the life of the vocabulary.
     """
 
     def get(self, entity_id: str) -> Entity | None: ...
@@ -92,6 +105,8 @@ class EntitySource(Protocol):
 
     def by_type(self, type_id: str) -> frozenset[str]: ...
 
+    def longest_form_tokens(self) -> int: ...
+
 
 @runtime_checkable
 class AsyncEntitySource(Protocol):
@@ -101,9 +116,10 @@ class AsyncEntitySource(Protocol):
     gives; :class:`~dataknobs_common.entity_resolution.AsyncAliasFormSource`
     is where that member lives.
 
-    ``describe`` stays synchronous on both twins: it answers from
-    configuration and touches no backend, so making it awaitable would buy
-    nothing and cost every caller an ``await``.
+    ``describe`` and ``longest_form_tokens`` stay synchronous on both twins:
+    each answers from what the source already holds and touches no backend, so
+    making either awaitable would buy nothing and cost every caller an
+    ``await``.
     """
 
     async def get(self, entity_id: str) -> Entity | None: ...
@@ -119,6 +135,8 @@ class AsyncEntitySource(Protocol):
     async def by_surface_form(self, form: str) -> frozenset[str]: ...
 
     async def by_type(self, type_id: str) -> frozenset[str]: ...
+
+    def longest_form_tokens(self) -> int: ...
 
 
 @runtime_checkable
@@ -220,6 +238,7 @@ class _EntityIndex:
     by_form: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_alias: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_type: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
+    longest_form: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         forms: dict[str, set[str]] = {}
@@ -240,6 +259,10 @@ class _EntityIndex:
         self.by_form = {form: frozenset(ids) for form, ids in forms.items()}
         self.by_alias = {form: frozenset(ids) for form, ids in aliases.items()}
         self.by_type = {type_id: frozenset(ids) for type_id, ids in types.items()}
+        # Measured over the *folded* keys, because a folded form is what a
+        # lookup compares against -- and once here rather than per query,
+        # since the forms cannot change after construction.
+        self.longest_form = max((len(token_spans(form)) for form in self.by_form), default=0)
 
     def get(self, entity_id: str) -> Entity | None:
         return self.entities.get(entity_id)
@@ -260,6 +283,9 @@ class _EntityIndex:
 
     def of_type(self, type_id: str) -> frozenset[str]:
         return self.by_type.get(type_id, frozenset())
+
+    def longest_form_tokens(self) -> int:
+        return self.longest_form
 
     def describe(self) -> SourceDescription:
         return SourceDescription(
@@ -345,6 +371,26 @@ class MappingEntitySource:
         """The ids of every entity of this type."""
         return self._index.of_type(type_id)
 
+    def longest_form_tokens(self) -> int:
+        """How many tokens the longest form this source declares occupies.
+
+        **What a scanning rung needs to stop enumerating.** A rung that looks
+        up every contiguous window of a query spends *n(n+1)/2* lookups for
+        *n* tokens, and every window longer than this answer is one no
+        declared form could fill -- so the bound turns a cost quadratic in the
+        caller's input into one linear in it, without changing a single
+        answer. See
+        :class:`~dataknobs_common.entity_resolution.ScanningSignal`.
+
+        Counted with :func:`~dataknobs_common.text.token_spans`, which is the
+        same boundary policy a probe is sliced on: an answer counted any other
+        way would bound the wrong enumeration.
+
+        ``0`` for a vocabulary declaring no forms at all, which is the honest
+        answer and stops a scan before its first lookup.
+        """
+        return self._index.longest_form_tokens()
+
 
 class AsyncMappingEntitySource:
     """:class:`MappingEntitySource` with ``async`` on the members that read.
@@ -398,6 +444,16 @@ class AsyncMappingEntitySource:
     async def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type."""
         return self._index.of_type(type_id)
+
+    def longest_form_tokens(self) -> int:
+        """Synchronous on both twins, and for ``describe``'s reason.
+
+        The answer is fixed at construction and reaches for nothing, so an
+        ``await`` here would cost every caller a suspension to read a number
+        this object already holds. See
+        :meth:`MappingEntitySource.longest_form_tokens`.
+        """
+        return self._index.longest_form_tokens()
 
 
 @dataclass

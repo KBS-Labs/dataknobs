@@ -20,6 +20,7 @@ merely *named* the other copy while the correctness fix landed only here.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import re
@@ -569,12 +570,21 @@ def published_fence(path: Path, marker: str) -> str:
 def executed_source(path: Path) -> str:
     """An executed copy of a fence, less its own docstring header.
 
-    The split is on the first blank line after the closing ``\"\"\"``, which is
-    the boundary such a module's own docstring describes. Anything else in the
-    file would be an assertion a reader of the guide never sees.
+    The boundary is the end of the module docstring, taken from the parsed
+    tree rather than by finding a closing ``\"\"\"`` in the text. Those are not
+    the same place: a published fence containing a triple-quoted string
+    followed by a blank line carries an earlier one, and splitting there
+    silently truncates the comparison to the tail of the file.
+
+    Anything above that boundary is the executed copy's own preamble, which a
+    reader of the guide never sees; everything below it is the fence.
     """
     text = path.read_text(encoding="utf-8")
-    _, _, after = text.partition('"""\n\n')
-    if not after:
-        raise LookupError(f"{rel(path)} has no docstring to split on")
-    return after.rstrip("\n")
+    body = ast.parse(text).body
+    if not (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)):
+        raise LookupError(
+            f"{rel(path)} opens with no module docstring. An executed copy "
+            f"carries one saying it is a transcription and where the fence "
+            f"begins, and this function has nothing to split on without it."
+        )
+    return "\n".join(text.splitlines()[body[0].end_lineno :]).strip("\n")

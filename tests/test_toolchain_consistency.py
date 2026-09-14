@@ -383,16 +383,17 @@ def _divided_constants(node: ast.BinOp) -> list[str]:
 def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     """The list that decides scheduling is checked against the tree, not trusted.
 
-    A package document belongs to no package's suite by default: 139 of the
-    144 here are read only by the workspace guards, and scheduling their
+    A package document belongs to no package's suite by default: 141 of the
+    148 here are read only by the workspace guards, and scheduling their
     package for one is what ran two full suites for a link repair. The other
-    five are read by a test *in* that package, so they do decide whether it
+    seven are read by a test *in* that package, so they do decide whether it
     passes, and they have to keep scheduling and dirtying it.
 
     Which of the two a document is cannot be inferred from its path, so it is
     declared. This is the guard that stops the declaration from being a list
-    somebody remembered to update: a sixth such test fails here on arrival,
-    naming itself, rather than being scheduled by nothing until it goes stale.
+    somebody remembered to update: a test reading an undeclared document fails
+    here on arrival, naming itself, rather than being scheduled by nothing
+    until it goes stale.
     """
     declared = _scopes.PACKAGE_TEST_DOC_INPUTS
     found = _documents_a_package_suite_reads()
@@ -2386,3 +2387,71 @@ def test_every_state_that_should_validate_something_does() -> None:
     assert not wrong, "bin/run-quality-checks.sh decides the wrong validation scope:\n" + "\n".join(
         f"  - {item}" for item in wrong
     )
+
+
+#: Where the size of ``PACKAGE_TEST_DOC_INPUTS`` is stated in prose, and the
+#: shape each statement takes. Two files say it four times between them, in
+#: sentences whose whole job is to convince a reader the exception is rare --
+#: so a stale number does not merely age, it argues for the opposite of what
+#: the tree contains.
+_COUNT_CLAIMS = (
+    ("bin/changed-packages.py", r"(?P<rest>\d+) of the (?P<total>\d+) are read only by"),
+    ("bin/changed-packages.py", r"The (?P<declared>\w+) below are the exception"),
+    (
+        "tests/test_toolchain_consistency.py",
+        r"default: (?P<rest>\d+) of the\n\s*(?P<total>\d+) here",
+    ),
+    ("tests/test_toolchain_consistency.py", r"The other\n\s*(?P<declared>\w+) are read by a test"),
+)
+
+#: Spelled out in the prose, so the comparison has to cross the same gap a
+#: reader does. Only as far as the list can plausibly grow.
+_WORDS = {
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def test_the_declarations_prose_counts_match_the_tree() -> None:
+    """A count in a comment is a claim, and this is what makes it checkable.
+
+    ``PACKAGE_TEST_DOC_INPUTS`` went from five entries to seven in the change
+    that added the two guide rows, and all four sentences describing its size
+    stayed behind -- in the same pull request that corrected an identical
+    staleness two files away and wrote down the rule it was breaking: *"A count
+    in a comment is a claim about the rest of the file, so it is corrected in
+    the change that falsifies it rather than left to be noticed."*
+
+    Noticing is what this replaces. The rule is right and it is not
+    self-enforcing, and a claim about a number the tree already knows is the
+    kind a test can hold.
+    """
+    declared = len(_scopes.PACKAGE_TEST_DOC_INPUTS)
+    total = len(sorted(ROOT.glob("packages/*/docs/**/*.md")))
+    expected = {"declared": declared, "total": total, "rest": total - declared}
+
+    for name, pattern in _COUNT_CLAIMS:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        match = re.search(pattern, text)
+        assert match is not None, (
+            f"{name} no longer carries a sentence matching {pattern!r}. Either "
+            f"the prose was rewritten -- in which case update this pattern -- "
+            f"or the claim was deleted, and this guard is now checking one "
+            f"file where it used to check two."
+        )
+        for group, claimed in match.groupdict().items():
+            actual = _WORDS.get(claimed) if not claimed.isdigit() else int(claimed)
+            assert actual == expected[group], (
+                f"{name} says {claimed!r} where the tree says {expected[group]}: "
+                f"PACKAGE_TEST_DOC_INPUTS declares {declared} of {total} package "
+                f"documents. The sentence argues the exception is rare, so a "
+                f"stale number there argues from the wrong figure."
+            )

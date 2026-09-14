@@ -77,6 +77,10 @@ class _RecordingEntitySource:
         self.calls.append(("by_type", type_id))
         return self._inner.by_type(type_id)
 
+    def longest_form_tokens(self) -> int:
+        self.calls.append(("longest_form_tokens", ""))
+        return self._inner.longest_form_tokens()
+
 
 def test_the_double_conforms_to_the_protocol_it_stands_in_for() -> None:
     """The guard whose absence is why widening the protocol broke this quietly.

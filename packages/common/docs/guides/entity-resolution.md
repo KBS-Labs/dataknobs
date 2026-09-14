@@ -452,8 +452,9 @@ them proposed.
 
 **If an n-gram scan is what you want, it ships — construct it.** That is
 `ScanningSignal`, at the top of this page: every span of consecutive tokens
-looked up as the slice it covers, longest first, twenty-one lookups for a
-six-token utterance. Writing it again is the one thing this section should not
+looked up as the slice it covers, longest first, at most twenty-one lookups for
+a six-token utterance — and no window wider than the longest form the
+vocabulary declares, since no declared form could fill one, so usually fewer. Writing it again is the one thing this section should not
 talk you into.
 
 What is worth writing yourself is a rung that asks the index a question the
@@ -462,6 +463,7 @@ token boundaries, so a declared form whose first or last character is not
 alphanumeric — `(beagle)`, `C.D.C.` — is never probed at all. A vocabulary
 carrying forms like those wants a different boundary:
 
+<!-- worked-rung -->
 ```python
 import re
 
@@ -472,21 +474,27 @@ class PunctuatedFormRung(DeclaredSignal):
     key = "punctuated"
 
     def _located(self, query: str) -> list[FormHit]:
-        found = []
-        for chunk in re.finditer(r"\S+", query):   # "(beagle)" is one chunk
+        found: list[FormHit] = []
+        for chunk in re.finditer(r"\S+", query):  # "(beagle)" is one chunk
             hits = self._entities.by_surface_form(self._fold(chunk.group()))
-            found += [FormHit(entity_id=i, span=chunk.span()) for i in sorted(hits)]
+            found += [FormHit(entity_id=i, span=chunk.span()) for i in self._order(hits)]
         return found
 ```
 
 Five lines, and every one of them is the hook rather than the policy. Note what
-the rung is responsible for: `sorted(hits)` because a set has no stable order,
+the rung is responsible for: `self._order(hits)` because a set has no stable
+order and the rung is the layer that decides what the order means,
 `self._fold` because the slice is what reaches the index, and a span that points
 at **the query** — `chunk.span()` rather than an offset into anything the rung
 computed for itself. Order matters where the score does not: a declared hit is
 `1.0` by fiat, so the only order a caller can read is the one the rung
-publishes — which is also what `_order` is for on the `_hits` path, where
-alphabetical is the stable default and means nothing more than that.
+publishes — and `_order` is the hook that publishes it on both paths, the
+`_hits` one and this one, with alphabetical as the stable default that means
+nothing more than that.
+
+That block is executed: `tests/worked_punctuated_rung.py` is the same text, run
+against a vocabulary declaring `(beagle)`, `C.D.C.` and `K-9`, so the three
+forms named below are measured rather than asserted here.
 
 `token_spans` is the boundary policy the shipped scan uses, and it is a
 different question from the fold: `default_normalizer` strips and case-folds,
@@ -495,10 +503,11 @@ which is what a whole-string lookup wants and is not what stops a scan finding
 **slice** rather than a join, so no offset ever points at a string the text does
 not contain.
 
-Overlapping forms are all returned. `"golden retriever"` hits
-`golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`; choosing one is
-a verdict, and the offsets make the containment visible so the consumer can
-make it instead.
+Overlapping forms are all returned. `"my golden retriever has been limping"`
+hits `golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)` — the same
+two the executed block at the top of this page reports; choosing one is a
+verdict, and the offsets make the containment visible so the consumer can make
+it instead.
 
 `k` counts entities rather than places: one entity named twice is one candidate
 carrying two pieces of evidence, which is what the cascade does when two rungs

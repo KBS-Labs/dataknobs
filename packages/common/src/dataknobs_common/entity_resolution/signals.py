@@ -159,18 +159,29 @@ def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
     return tuple(FormHit(entity_id=entity_id, span=span) for entity_id in ids)
 
 
-def _probe_spans(query: str) -> tuple[tuple[int, int], ...]:
-    """Every span of consecutive tokens in ``query``, **longest first**.
+def _probe_spans(query: str, longest: int) -> tuple[tuple[int, int], ...]:
+    """Spans of up to ``longest`` consecutive tokens in ``query``, longest first.
 
-    The enumeration a scan runs: *n(n+1)/2* spans for *n* tokens -- 21 for a
-    six-token utterance -- each one a slice to look up as the form it covers.
-    Bounded and arithmetic, which is what makes a scan over an authored
-    vocabulary dictionary lookups rather than a search.
+    The enumeration a scan runs, and ``longest`` is what keeps it affordable.
+    Unbounded it is *n(n+1)/2* spans for *n* tokens -- 21 for a six-token
+    utterance, but 500,500 for a thousand-token paste, with each probe slicing
+    a span that may be the whole query. Quadratic in tokens and cubic in the
+    characters copied, on text a caller hands over.
+
+    **The bound costs no answer**, which is what makes it an arithmetic fix
+    rather than a budget. ``longest`` is how many tokens the longest form the
+    vocabulary *declares* occupies -- see
+    :meth:`~dataknobs_common.ontology.EntitySource.longest_form_tokens` -- and
+    a window wider than that is one no declared form could fill, so every
+    probe removed here would have answered the empty set. What remains is
+    *n x longest* spans: linear in the caller's input, with the constant set
+    by the vocabulary rather than by the query.
 
     **Longest first** because the rung publishes its own order and this is
-    where that order is decided: a declared score is ``1.0`` by fiat and
-    carries none, the cascade positions by arrival, and a form containing
-    another should be proposed before the form it contains.
+    where the *enumeration*'s order is decided: the cascade positions by
+    arrival, and a form containing another should be proposed before the form
+    it contains. Ordering the ids found *within* one span is a different
+    question and :meth:`DeclaredSignal._order`'s.
 
     Shared by both flavours rather than written twice, for
     :func:`_whole_string`'s reason one rung along: the arithmetic here is the
@@ -180,9 +191,24 @@ def _probe_spans(query: str) -> tuple[tuple[int, int], ...]:
     tokens = token_spans(query)
     return tuple(
         (tokens[first][0], tokens[first + length - 1][1])
-        for length in range(len(tokens), 0, -1)
+        for length in range(min(longest, len(tokens)), 0, -1)
         for first in range(len(tokens) - length + 1)
     )
+
+
+def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
+    """One :class:`FormHit` per id, all at the same span, in the order given.
+
+    The other half of a probe, extracted for :func:`_probe_spans`'s reason:
+    what is left in each flavour's ``_located`` is then the loop and the
+    ``await``, and nothing a twin-parity check over signatures could not see.
+
+    The order is the caller's -- :meth:`DeclaredSignal._order`'s answer, not a
+    ``sorted`` spelled here. A rung that overrides that hook is overriding it
+    for the scanning path too, which is what the hook's own docstring promises
+    a rung "with a longer form and a shorter one inside it".
+    """
+    return [FormHit(entity_id=entity_id, span=span) for entity_id in ids]
 
 
 class DeclaredSignal:
@@ -367,9 +393,12 @@ class ScanningSignal(DeclaredSignal):
     Every span of consecutive tokens is looked up as the slice it covers, so
     the form reaches the index carrying whatever separated its tokens and
     matches whichever spelling the vocabulary declared -- ``golden retriever``
-    and ``golden_retriever`` both, if that is how they were written. Twenty-one
-    lookups for a six-token utterance, over a dictionary: a bounded cost, not
-    a search. See :func:`_probe_spans` for the enumeration and
+    and ``golden_retriever`` both, if that is how they were written. At most
+    twenty-one lookups for a six-token utterance, over a dictionary, and fewer
+    than that unless the vocabulary declares a six-token form: the enumeration
+    is cut at the longest form there is, which is what keeps the cost linear in
+    the query rather than quadratic in it. See
+    :func:`_probe_spans` for the enumeration and its bound, and
     :func:`~dataknobs_common.text.token_spans` for the boundary policy that
     stops it finding ``beagle`` inside ``unbeagleable``.
 
@@ -412,9 +441,9 @@ class ScanningSignal(DeclaredSignal):
 
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        for start, end in _probe_spans(query):
-            hits = self._entities.by_surface_form(self._fold(query[start:end]))
-            found += [FormHit(entity_id=entity_id, span=(start, end)) for entity_id in sorted(hits)]
+        for span in _probe_spans(query, self._entities.longest_form_tokens()):
+            hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
+            found += _hits_at(span, self._order(hits))
         return found
 
 
@@ -520,15 +549,29 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
     asynchronously does not have to drop to the bare
     :class:`~dataknobs_common.entity_resolution.AsyncMatchSignal` protocol to
     do it.
+
+    **The probes are sequential, and the source protocol has no batch form.**
+    Over :class:`~dataknobs_common.ontology.AsyncMappingEntitySource` that
+    costs nothing -- the data is in memory and no ``await`` here suspends --
+    which is the case this family is for: the rung's contract is a dictionary
+    lookup, *no store, no embedder, no network*. A source that does reach for
+    data on every ``by_surface_form`` pays one round trip per probe, and the
+    bound :func:`_probe_spans` takes from the vocabulary is what keeps that a
+    number proportional to the query rather than to its square. If a backing
+    that genuinely round-trips is wanted here, the thing to add is a batch
+    member on
+    :class:`~dataknobs_common.ontology.AsyncEntitySource` -- not a rung that
+    fans out, which would make the order it publishes an accident of
+    completion.
     """
 
     key = "scan"
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        for start, end in _probe_spans(query):
-            hits = await self._entities.by_surface_form(self._fold(query[start:end]))
-            found += [FormHit(entity_id=entity_id, span=(start, end)) for entity_id in sorted(hits)]
+        for span in _probe_spans(query, self._entities.longest_form_tokens()):
+            hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
+            found += _hits_at(span, self._order(hits))
         return found
 
 

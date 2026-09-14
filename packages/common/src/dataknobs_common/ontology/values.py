@@ -286,6 +286,10 @@ class Ontology:
         """The ids matching this form, by way of :attr:`entities`."""
         return self.entities.by_surface_form(form)
 
+    def longest_form_tokens(self) -> int:
+        """The longest declared form's token count, by way of :attr:`entities`."""
+        return self.entities.longest_form_tokens()
+
     def taxonomy(self, name: str) -> Taxonomy:
         """The axis this ontology declares under ``name``, built.
 
@@ -379,6 +383,14 @@ class AsyncOntology:
     async def by_surface_form(self, form: str) -> frozenset[str]:
         """The ids matching this form, by way of :attr:`entities`."""
         return await self.entities.by_surface_form(form)
+
+    def longest_form_tokens(self) -> int:
+        """The longest declared form's token count, by way of :attr:`entities`.
+
+        A plain ``def`` on this twin too -- the source answers it without
+        awaiting, so there is nothing here to suspend for.
+        """
+        return self.entities.longest_form_tokens()
 
     def taxonomy(self, name: str) -> AsyncTaxonomy:
         """The axis this ontology declares under ``name``, built.
