@@ -532,7 +532,10 @@ def test_a_lock_change_maps_to_the_members_whose_resolution_moved() -> None:
     The closure still runs from whatever moved, which is what keeps a real
     dependency change reaching the packages that build against it.
     """
-    moved = _scopes.plan_for_files(["uv.lock"], lock_scan=frozenset({"llm"}))
+    moved = _scopes.plan_for_files(
+        ["uv.lock"],
+        {"uv.lock": _scopes.TriggerScan(steps=_scopes.BOTH_STEPS, packages=frozenset({"llm"}))},
+    )
     assert moved["mode"] == "changed", (
         "a lock diff that named the members it moved has a blast radius the "
         f"file itself reported; got mode={moved['mode']}"
@@ -559,12 +562,20 @@ def test_an_unreadable_lock_change_keeps_the_global_blast_radius() -> None:
     tell" as "nothing" would schedule fewer suites for exactly the changes
     that most need them.
     """
+    # None is "nothing read the file"; the empty set is "a reader ran and
+    # placed nothing", which is the shape a silently-broken parser produces for
+    # every input. Both must keep the full blast radius.
     unattributed: tuple[frozenset[str] | None, ...] = (None, frozenset())
-    for scan in unattributed:
-        plan = _scopes.plan_for_files(["uv.lock"], lock_scan=scan)
+    for members in unattributed:
+        scans = (
+            {}
+            if members is None
+            else {"uv.lock": _scopes.TriggerScan(steps=_scopes.BOTH_STEPS, packages=members)}
+        )
+        plan = _scopes.plan_for_files(["uv.lock"], scans)
         assert plan["mode"] == "all", (
-            f"lock_scan={scan!r} names no member, so nothing narrowed the "
-            f"path's own blast radius; got mode={plan['mode']}"
+            f"a lock scan of {members!r} names no member, so nothing "
+            f"narrowed the path's own blast radius; got mode={plan['mode']}"
         )
         assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), plan["packages"]
 
@@ -693,6 +704,279 @@ def test_a_resolution_marker_reorder_is_not_a_change() -> None:
         _scopes.lock_members_changed(lock, altered.encode("utf-8", errors="surrogateescape"))
         is None
     ), "a changed marker is a changed resolution, not a reordering"
+
+
+def test_a_lint_only_input_does_not_schedule_package_test_suites() -> None:
+    """``bin/validate.sh`` is the lint step, so it moves no package's test result.
+
+    The entry is global for a reason ``09e1dbc5`` argued and demonstrated: the
+    script *is* a step, so every package's recorded result for that step is
+    whatever it produced, and the branch that introduced it fixed a runner
+    exiting 0 on its second target. That argument is about the step the script
+    runs. ``bin/test.sh`` produced the test results; ``bin/validate.sh``
+    produced the validation ones, and neither can move the other's.
+
+    So the blast radius keeps its full width on the side the script owns --
+    ``packages`` is still all ten, and the validation step still re-runs over
+    every one of them -- while the ten package test suites it cannot have
+    moved stop being scheduled.
+    """
+    lint_only = sorted(
+        name
+        for name, steps in _scopes.GLOBAL_TRIGGER_STEPS.items()
+        if steps == frozenset({_scopes.LINT_STEP})
+    )
+    # Driven off the table rather than naming one file, so every entry
+    # classified lint-only is pinned by this. Reclassifying one back to both
+    # steps -- the silent way to lose the narrowing -- then fails here instead
+    # of passing because the guard happened to probe a different entry.
+    assert lint_only == ["bin/package-discovery.sh", "bin/validate.sh"], (
+        f"the lint-only classification changed to {lint_only}; that is a "
+        f"scheduling decision, so it belongs in a diff that argues it"
+    )
+
+    for path in lint_only:
+        plan = _scopes.plan_for_files([path])
+
+        assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), (
+            f"the lint step's own blast radius is undiminished: a change to "
+            f"{path} makes every package's recorded validation result stale, "
+            f"exactly as before; got {plan['packages']}"
+        )
+        # Read with a fallback rather than by key, so this fails against a tree
+        # without the capability by naming the packages it would have tested --
+        # the defect -- rather than by raising KeyError, which only says "absent".
+        assert plan.get("test_packages", plan["packages"]) == [], (
+            f"{path} feeds the lint step; no package's *test* result can have "
+            f"moved, so no package suite is scheduled. Got "
+            f"{plan.get('test_packages', plan['packages'])}"
+        )
+
+
+def test_every_global_trigger_declares_which_step_it_moves() -> None:
+    """The classification is exhaustive, so a new global input forces the call.
+
+    ``09e1dbc5`` scoped its coverage guard for this reason exactly -- to make a
+    new workflow step "force the tiering decision in review, where the blast
+    radius is already being considered, instead of leaving it to whoever edits
+    the script next". A global input added without a step is the same omission
+    one layer in: the mapper falls back to both steps, which is safe and
+    silent, and silent is what makes it permanent.
+    """
+    declared = set(_scopes.GLOBAL_TRIGGER_STEPS)
+    triggers = set(_scopes.GLOBAL_TRIGGERS)
+
+    assert declared == triggers, (
+        "every global input declares the recorded step it can move:\n"
+        f"  undeclared: {sorted(triggers - declared)}\n"
+        f"  declared but not a trigger: {sorted(declared - triggers)}"
+    )
+    for name, steps in _scopes.GLOBAL_TRIGGER_STEPS.items():
+        assert steps and steps <= _scopes.BOTH_STEPS, (
+            f"{name} declares {sorted(steps)}; a global input moves at least "
+            f"one of {sorted(_scopes.BOTH_STEPS)} or it is not global"
+        )
+
+
+def test_the_test_step_does_not_read_the_lint_only_inputs() -> None:
+    """The premise under the split, checked against the script rather than assumed.
+
+    ``bin/validate.sh`` and ``bin/package-discovery.sh`` are classified
+    lint-only because the test step cannot reach them: ``bin/test.sh`` has its
+    own ``discover_test_packages`` loop over ``packages/*`` and neither sources
+    the discovery helper nor invokes the validator. That is a property of the
+    file today, not a law -- one ``source`` line would make every lint-only
+    classification wrong and every narrowed schedule unsound, with nothing else
+    in the tree reporting it.
+
+    Comments are stripped first, because ``bin/test.sh`` mentions
+    ``bin/validate.sh`` twice in prose -- it mirrors its argument parsing -- and
+    a guard that could not tell a mention from a use would have to be weakened
+    to a substring nobody trusts.
+    """
+    source = (ROOT / "bin" / "test.sh").read_text(encoding="utf-8")
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+
+    lint_only = sorted(
+        name
+        for name, steps in _scopes.GLOBAL_TRIGGER_STEPS.items()
+        if steps == frozenset({_scopes.LINT_STEP})
+    )
+    assert lint_only, "the classification declares no lint-only input to check"
+
+    for path in lint_only:
+        basename = path.rsplit("/", 1)[-1]
+        assert basename not in code, (
+            f"bin/test.sh reaches {basename}, so it is an input to the test "
+            f"step and cannot be classified lint-only. Either the reference is "
+            f"new -- in which case {path} belongs in BOTH_STEPS and every "
+            f"narrowed schedule since is unsound -- or it is a comment this "
+            f"strip did not catch."
+        )
+
+    # The control: a reader that stripped the whole file, or looked in the
+    # wrong one, finds nothing for the same reason a correct one does. test.sh
+    # does discover packages -- just not through the helper validate.sh uses.
+    assert "discover_test_packages" in code, (
+        "bin/test.sh discovers its own packages; finding no trace of that "
+        "means this guard is reading the wrong file or stripping too much"
+    )
+
+
+def test_no_package_suite_reads_the_root_pyproject() -> None:
+    """A package's tests read their own manifest, never the root one.
+
+    The root ``pyproject.toml`` carries ``[tool.ruff]`` and ``[tool.mypy]``,
+    and a diff confined to those schedules no package test suite. That is only
+    true while no package suite *reads* them -- a guard asserting a ruff
+    setting from inside ``packages/*/tests`` would be a test whose result the
+    root manifest decides, and it would stop being scheduled.
+
+    Checked by how far up each reader reaches rather than by the string, since
+    two package suites legitimately read a manifest: from
+    ``packages/<pkg>/tests/x.py``, ``parents[1]`` is the package and
+    ``parents[2]`` is ``packages/``. Anything higher has left the package.
+    """
+    readers: dict[str, int] = {}
+    for source in sorted(ROOT.glob("packages/*/tests/**/*.py")):
+        text = source.read_text(encoding="utf-8")
+        if "pyproject.toml" not in text:
+            continue
+        depths = [int(m) for m in re.findall(r"parents\[(\d+)\]", text)]
+        readers[str(source.relative_to(ROOT))] = max(depths, default=0)
+
+    # Positive control: there IS such a reader, so an empty result means the
+    # glob or the pattern is wrong rather than that nothing reads a manifest.
+    assert readers, (
+        "no package test mentions pyproject.toml at all -- there is at least "
+        "one (test_record_core_independence.py reads its own), so this guard "
+        "is looking in the wrong place"
+    )
+
+    escaped = {path: depth for path, depth in readers.items() if depth > 2}
+    assert not escaped, (
+        "a package suite reaches above packages/ while reading a "
+        "pyproject.toml, so the root manifest may decide its result and a "
+        "lint-table change would stop scheduling it:\n  "
+        + "\n  ".join(f"{path}: parents[{depth}]" for path, depth in sorted(escaped.items()))
+    )
+
+
+def test_a_pyproject_change_outside_the_linter_tables_stays_global() -> None:
+    """The fail-closed half of the pyproject reader, against the real file.
+
+    Three silences that must all read as "the path keeps its blast radius": a
+    table this does not recognise as a linter's, the preamble, and -- the one
+    that matters most -- a diff in which nothing moved at all. A reader that
+    silently matched nothing would report "no table moved" for every input,
+    and that must never become "no step moved", which is an empty schedule.
+    """
+    original = (ROOT / "pyproject.toml").read_bytes()
+    text = original.decode("utf-8")
+
+    assert _scopes.pyproject_steps_changed(original, original) is None, (
+        "an unchanged file moved no table, which is exactly what a reader "
+        "that matched nothing also reports -- so it must read as unattributed"
+    )
+
+    # A dependency change: both steps, every package, as the path has always said.
+    marker = "[dependency-groups]"
+    assert marker in text, "the real manifest no longer carries the table this probes"
+    widened = text.replace(marker, marker + "\n# x-probe\n", 1)
+    assert _scopes.pyproject_steps_changed(original, widened.encode("utf-8")) is None, (
+        "a change outside the linter tables keeps the global blast radius"
+    )
+
+
+def test_the_pyproject_reader_resolves_a_real_edit_and_places_it_on_the_lint_step() -> None:
+    """The positive half: an edit inside [tool.ruff] narrows, and to lint only.
+
+    Without this, the guard above passes just as well against a reader that
+    returns ``None`` unconditionally -- which is a reader that has quietly
+    switched the optimisation off while every fail-closed test still agrees
+    with it.
+    """
+    original = (ROOT / "pyproject.toml").read_bytes()
+    text = original.decode("utf-8")
+
+    for table in sorted(_scopes._LINT_ONLY_TABLES):
+        header = f"[{table}]"
+        assert header in text, (
+            f"the real manifest no longer carries {header}; the reader is "
+            f"declared to narrow on it and nothing would exercise that"
+        )
+        edited = text.replace(header, header + "\n# x-probe\n", 1)
+        scan = _scopes.pyproject_steps_changed(original, edited.encode("utf-8"))
+
+        assert scan is not None, f"an edit confined to {header} is attributable"
+        assert scan.steps == frozenset({_scopes.LINT_STEP}), (
+            f"{header} decides what the validation step reports and nothing a "
+            f"test can observe; got {sorted(scan.steps)}"
+        )
+        assert scan.packages is None, (
+            "a rule change is re-validated across every package -- the reader "
+            "narrows the step, not the package set"
+        )
+
+    # A *subtable*, which is what the measured cases actually edit: eight of
+    # the nine lint-only pull requests in the window touched [tool.ruff.lint]
+    # or deeper, never the bare [tool.ruff] header. Keying a subtable on its
+    # own header instead of its tool leaves every one of them unattributable,
+    # which fails closed -- so the optimisation switches itself off and every
+    # other test in this file still agrees with it.
+    subtable = "[tool.ruff.lint.per-file-ignores]"
+    assert subtable in text, (
+        f"the real manifest no longer carries {subtable}; the grouping this "
+        f"probes is what makes a per-file-ignore edit read as the ruff change "
+        f"it is"
+    )
+    edited = text.replace(subtable, subtable + "\n# x-probe\n", 1)
+    scan = _scopes.pyproject_steps_changed(original, edited.encode("utf-8"))
+    assert scan is not None and scan.steps == frozenset({_scopes.LINT_STEP}), (
+        "a tool's configuration is one document however deeply it is spelled; "
+        f"an edit inside {subtable} is a ruff change, not a table of its own"
+    )
+
+    # And the plan that answer produces: lint everything, test nothing.
+    plan = _scopes.plan_for_files(
+        ["pyproject.toml"],
+        {
+            "pyproject.toml": _scopes.TriggerScan(
+                steps=frozenset({_scopes.LINT_STEP}), packages=None
+            )
+        },
+    )
+    assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), plan["packages"]
+    assert plan["test_packages"] == [], plan["test_packages"]
+
+
+def test_the_test_list_never_exceeds_the_package_list() -> None:
+    """``test_packages`` is a subset of ``packages``, on every shape.
+
+    The compatibility claim in one assertion: a consumer that knows only
+    ``packages`` schedules a superset of what the test stage runs, so reading
+    the old key alone can over-test and can never skip a suite the new key
+    would have run. Spelled the other way round, that consumer under-tests in
+    silence.
+    """
+    shapes = [
+        ["bin/validate.sh"],
+        ["bin/test.sh"],
+        ["pyproject.toml"],
+        ["uv.lock"],
+        ["packages/common/src/x.py"],
+        ["packages/common/tests/test_x.py"],
+        ["tests/test_toolchain_consistency.py"],
+        ["bin/validate.sh", "packages/llm/src/x.py"],
+        ["LICENSE"],
+        [],
+    ]
+    for files in shapes:
+        plan = _scopes.plan_for_files(files)
+        assert set(plan["test_packages"]) <= set(plan["packages"]), (
+            f"{files}: test_packages {plan['test_packages']} is not a subset "
+            f"of packages {plan['packages']}"
+        )
 
 
 def _documents_a_package_suite_reads() -> dict[str, str]:

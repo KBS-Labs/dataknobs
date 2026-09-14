@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -88,12 +89,20 @@ _GLOBAL_QUALITY_INPUTS = [
     # inputs every package result depends on.
     "bin/validate.sh",  # the validation step: ruff, mypy, import checks
     "bin/test.sh",  # the test step: selection, markers, coverage flags
-    # Sourced by both of the above, and it answers the two questions that decide
-    # what they act on: which packages exist, and which code belongs to none of
-    # them. It sits in this tier rather than the workspace one for the same
+    # Sourced by validate.sh, and it answers the two questions that decide what
+    # that script acts on: which packages exist, and which code belongs to none
+    # of them. It sits in this tier rather than the workspace one for the same
     # reason validate.sh does — it moves every package's recorded result, not
     # just the artifact, and the "bin/" entry in the workspace tier would put it
     # in the wrong tier rather than in none.
+    #
+    # This said "sourced by both of the above" until the step classification
+    # below went looking. bin/test.sh does not source it — it has its own
+    # discover_test_packages loop over packages/* — and the difference is not a
+    # nicety: it is the whole reason this entry and validate.sh are classified
+    # lint-only, so the sentence that was wrong is the one a reader would have
+    # used to argue they are not.
+    # test_the_test_step_does_not_read_the_lint_only_inputs holds it.
     "bin/package-discovery.sh",  # which packages exist, and what else to check
 ]
 
@@ -246,6 +255,61 @@ _DOCS_QUALITY_INPUTS = [
 # input still invalidates the artifacts, but through the workspace hash scope
 # rather than by dirtying every package. See bin/package-hashes.py.
 GLOBAL_TRIGGERS = list(_GLOBAL_QUALITY_INPUTS)
+
+# ---------------------------------------------------------------------------
+# Which recorded step a global input can move
+# ---------------------------------------------------------------------------
+#
+# The gate records two per-package results, produced by two different scripts:
+# the validation row comes from bin/validate.sh, the unit and integration rows
+# from bin/test.sh. "Global" says a change can invalidate a result no package's
+# own content explains. It does not say *which* result, and most of these
+# inputs feed exactly one of the two.
+#
+# 09e1dbc5 is the commit that put the step scripts in this tier, and it argued
+# the point rather than assuming it: "bin/validate.sh and bin/test.sh ARE the
+# lint and test steps, so every package's recorded result is whatever they
+# produced", demonstrated on a branch fixing a runner that exited 0 on its
+# second target. Read precisely, that sentence is per step — each script owns
+# the results *it* produced — and the tier had no way to say so, so both landed
+# on everything. This table is that sentence with the step named.
+#
+# The split is checkable rather than asserted, which is what makes it safe to
+# act on: bin/test.sh has its own discover_test_packages loop over packages/*
+# and neither sources bin/package-discovery.sh nor invokes bin/validate.sh, so
+# no edit to either can reach a test result.
+# test_the_test_step_does_not_read_the_lint_only_inputs fails if that stops
+# being true, and the gate never passes -f, so validate.sh cannot rewrite the
+# tree the tests then run against either.
+LINT_STEP = "lint"
+TEST_STEP = "test"
+BOTH_STEPS = frozenset({LINT_STEP, TEST_STEP})
+
+#: Every entry in GLOBAL_TRIGGERS, by the step it can move. Checked for
+#: exhaustiveness against that list by the toolchain guards, so a new global
+#: input fails the build until the decision is made — the same shape 09e1dbc5
+#: chose when it scoped its coverage guard to force the tiering decision in
+#: review "instead of leaving it to whoever edits the script next".
+GLOBAL_TRIGGER_STEPS: dict[str, frozenset[str]] = {
+    # The linters' configuration and the resolved versions both steps run
+    # against. pyproject.toml is read further than the path: see
+    # pyproject_steps_changed for the sections that move only the lint half.
+    "pyproject.toml": BOTH_STEPS,
+    "uv.lock": BOTH_STEPS,
+    # The interpreter: mypy's target version and the runtime under test.
+    ".python-version": BOTH_STEPS,
+    # Test-step inputs. None of the three has fired in the last 150 merged
+    # pull requests, so this classification buys nothing measurable today; it
+    # is here because the table is a declaration of what is true, and a table
+    # that records only the profitable half is one nobody can check.
+    "conftest.py": frozenset({TEST_STEP}),
+    "pytest.ini": frozenset({TEST_STEP}),
+    "bin/test.sh": frozenset({TEST_STEP}),
+    # The lint step, and the discovery it sources. This is where the measured
+    # return is: 39 of the 61 test suite-runs this change removes.
+    "bin/validate.sh": frozenset({LINT_STEP}),
+    "bin/package-discovery.sh": frozenset({LINT_STEP}),
+}
 
 # The workspace-only tier, matched rather than merely declared. Three readers
 # consulted the list above and a fourth — the mapping below — did not, which is
@@ -550,6 +614,30 @@ def drop_release_noise_only(files: list[str], resolved_ref: str) -> list[str]:
 # the "toolchain" scope — so teaching it the lock's spellings would move every
 # stored workspace hash for a scheduling fix. Scheduling is the question here,
 # so the reading stays on the scheduling side.
+class TriggerScan(NamedTuple):
+    """What reading a global input said it actually moved.
+
+    Two axes, because the two readable inputs narrow different ones. ``uv.lock``
+    names *packages* and leaves both steps in range; the root ``pyproject.toml``
+    names *steps* and leaves every package in range. One type carrying both
+    rather than one parameter each, so a third reader is a row in
+    :data:`_TRIGGER_READERS` instead of a fourth keyword argument threaded
+    through three functions — the shape this module would otherwise grow one
+    special case at a time.
+
+    ``packages`` is ``None`` when the content said nothing about which packages
+    are affected, which is not the same as saying none are. An *empty* set is
+    the reading a silently-broken parser produces for every input, so the
+    caller treats it as unattributed too — see map_files_to_packages, which is
+    the one place that rule is written.
+    """
+
+    #: The recorded steps this change can have moved.
+    steps: frozenset[str]
+    #: The packages it moved, or None for "the content did not say".
+    packages: frozenset[str] | None
+
+
 _LOCK_FILE = "uv.lock"
 
 #: The marker that makes a ``[[package]]`` block a workspace member, and names
@@ -584,6 +672,35 @@ def _canonical_lock(text: str) -> str:
     return _LOCK_MARKERS_RE.sub(_sorted_markers, text)
 
 
+def _toml_blocks(text: str, opens: Callable[[str], bool]) -> list[list[str]]:
+    """Split a TOML file into blocks, each opened by a line ``opens`` accepts.
+
+    The line walk both readers below need, and the only thing they share: what
+    a block *means* is the part that differs, so the callers key the blocks and
+    this returns them in file order. Block 0 is whatever precedes the first
+    opener, which both callers treat as the preamble and neither lets a package
+    or a section claim.
+
+    ``opens`` sees the line with its newline stripped and nothing else, so a
+    line's indentation is what keeps a bracketed value inside a multi-line
+    array from reading as a table header — a top-level header is at column
+    zero, and TOML does not require the contents of an array to be.
+    """
+    blocks: list[list[str]] = [[]]
+    for line in text.splitlines(keepends=True):
+        if opens(line.rstrip("\n")):
+            blocks.append([])
+        blocks[-1].append(line)
+    return blocks
+
+
+def _opens_lock_region(stripped: str) -> bool:
+    """A ``[[package]]`` block, or any top-level table that is not its subtable."""
+    if stripped == _LOCK_BLOCK:
+        return True
+    return stripped.startswith("[") and not stripped.startswith("[package.")
+
+
 def _lock_regions(text: str) -> dict[str, str]:
     """Every top-level region of a lock file, keyed by what identifies it.
 
@@ -597,32 +714,31 @@ def _lock_regions(text: str) -> dict[str, str]:
     repeated key accumulates rather than overwriting. A change in either half
     then still shows up as a difference in the whole, which is the answer that
     keeps this safe rather than the one that makes it precise.
+
+    A block whose name cannot be read keys on its position. It is then its own
+    region either way, and position is the stabler of the two spellings: keying
+    on a running count made an unnamed block's key depend on how many regions
+    happened to precede it.
     """
     regions: dict[str, str] = {}
-    key = ""
-    buffer: list[str] = []
-
-    def flush() -> None:
-        if buffer:
-            regions[key] = regions.get(key, "") + "".join(buffer)
-
-    for line in text.splitlines(keepends=True):
-        stripped = line.rstrip("\n")
-        if stripped == _LOCK_BLOCK:
-            flush()
-            buffer, key = [line], f"\x00unnamed:{len(regions)}"
+    for index, block in enumerate(_toml_blocks(text, _opens_lock_region)):
+        if not block:
             continue
-        if stripped.startswith("[") and not stripped.startswith("[package."):
-            flush()
-            buffer, key = [line], stripped
-            continue
-        if key.startswith("\x00unnamed:"):
-            named = _LOCK_NAME_RE.match(stripped)
-            if named:
-                key = named.group(1)
-        buffer.append(line)
-
-    flush()
+        head = block[0].rstrip("\n")
+        if index == 0:
+            key = ""
+        elif head == _LOCK_BLOCK:
+            key = next(
+                (
+                    match.group(1)
+                    for line in block
+                    if (match := _LOCK_NAME_RE.match(line.rstrip("\n")))
+                ),
+                f"\x00unnamed:{index}",
+            )
+        else:
+            key = head
+        regions[key] = regions.get(key, "") + "".join(block)
     return regions
 
 
@@ -671,18 +787,139 @@ def lock_members_changed(before: bytes, after: bytes) -> frozenset[str] | None:
     return frozenset(moved)
 
 
-def lock_scan_for(resolved_ref: str) -> frozenset[str] | None:
+def lock_scan_for(resolved_ref: str) -> TriggerScan | None:
     """Read the lock at both ends and say which members it moved.
 
     Separated from the decision so plan_for_files stays a function of its
     arguments: this is the half that touches git, and it is the half a test
     cannot pin without a repository.
+
+    An empty answer is passed along rather than converted to ``None`` here.
+    Both mean "unattributed" and the caller is where that is decided, so this
+    stays a reader and the rule keeps one home.
     """
     before = _blob_at(resolved_ref, _LOCK_FILE)
     after = _worktree_bytes(_LOCK_FILE)
     if before is None or after is None:
         return None
-    return lock_members_changed(before, after)
+    members = lock_members_changed(before, after)
+    if members is None:
+        return None
+    # Both steps: a member's resolution decides what its dependents lint
+    # against and what they run against, and the lock says nothing that
+    # separates the two.
+    return TriggerScan(steps=BOTH_STEPS, packages=members)
+
+
+# ---------------------------------------------------------------------------
+# What a pyproject change actually moved
+# ---------------------------------------------------------------------------
+#
+# The root pyproject.toml is a global trigger because it carries the dependency
+# set and the uv workspace declaration, and a change to either really does
+# reach every package through both steps. It also carries the ruff and mypy
+# configuration, which is the whole of what most changes to it touch: measured
+# over 150 merged pull requests it moved ten times, and nine of those ten were
+# confined to [tool.ruff] or [tool.mypy].
+#
+# A linter's configuration decides what the *validation* step reports and
+# nothing a test can observe. So a diff confined to those tables keeps its full
+# width on the lint side — every package is re-validated under the new rules —
+# and schedules no package test suite.
+#
+# Read by region rather than by diff hunk, the same way the lock is: comparing
+# whole top-level tables needs no hunk parser and no line arithmetic, and it
+# cannot mis-attribute a line to the table above it.
+_PYPROJECT_FILE = "pyproject.toml"
+
+#: The tables whose content only the lint step reads. Deliberately the two
+#: tool configurations and nothing else — [project], [dependency-groups] and
+#: [tool.uv] decide what is installed, which both steps run against, and
+#: [tool.pytest.ini_options] would be the test step's alone if this file
+#: carried one (pytest.ini does).
+_LINT_ONLY_TABLES = frozenset({"tool.ruff", "tool.mypy"})
+
+
+def _opens_toml_table(stripped: str) -> bool:
+    """A top-level table header, at column zero."""
+    return stripped.startswith("[")
+
+
+def _pyproject_table(header: str) -> str:
+    """The region a table header belongs to.
+
+    ``[tool.ruff.lint.per-file-ignores]`` is part of ``tool.ruff``: a tool's
+    configuration is one document however deeply it is spelled, and grouping
+    by the first two components is what makes a per-file-ignore edit read as
+    the ruff change it is rather than as a table of its own.
+    """
+    parts = header.strip().strip("[]").split(".")
+    return ".".join(parts[:2]) if parts[0] == "tool" else parts[0]
+
+
+def _pyproject_regions(text: str) -> dict[str, str]:
+    """Every top-level region of a pyproject file, keyed by the table it is.
+
+    Everything before the first header keys on "", like the lock reader: the
+    preamble is a region nobody's table may claim, so an edit to it is a
+    difference the caller cannot attribute — which is the answer that keeps
+    this fail-closed.
+    """
+    regions: dict[str, str] = {}
+    for index, block in enumerate(_toml_blocks(text, _opens_toml_table)):
+        if not block:
+            continue
+        key = "" if index == 0 else _pyproject_table(block[0].rstrip("\n"))
+        regions[key] = regions.get(key, "") + "".join(block)
+    return regions
+
+
+def pyproject_steps_changed(before: bytes, after: bytes) -> TriggerScan | None:
+    """Which recorded steps a root pyproject diff can have moved.
+
+    Returns ``None`` for anything this cannot place in a linter's table — a
+    dependency bump, a workspace member added, the preamble, a table it does
+    not recognise. ``None`` means the entry keeps the blast radius its path has
+    always carried, which is both steps over every package.
+
+    **An empty answer is ``None``'s answer too**, for the reason
+    lock_members_changed states at length: a reader that silently matched
+    nothing returns "no table moved" for every input, and "no table moved"
+    would otherwise read as "no step moved" and schedule nothing at all.
+    """
+    try:
+        before_regions = _pyproject_regions(before.decode("utf-8", errors="surrogateescape"))
+        after_regions = _pyproject_regions(after.decode("utf-8", errors="surrogateescape"))
+    except (UnicodeDecodeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+    moved = {
+        table
+        for table in set(before_regions) | set(after_regions)
+        if before_regions.get(table) != after_regions.get(table)
+    }
+    if not moved or not moved <= _LINT_ONLY_TABLES:
+        return None
+    # Every package, still: a ruff or mypy rule change is re-validated across
+    # the whole tree. What it cannot move is any package's test result.
+    return TriggerScan(steps=frozenset({LINT_STEP}), packages=None)
+
+
+def pyproject_scan_for(resolved_ref: str) -> TriggerScan | None:
+    """Read the root pyproject at both ends and say which steps it moved."""
+    before = _blob_at(resolved_ref, _PYPROJECT_FILE)
+    after = _worktree_bytes(_PYPROJECT_FILE)
+    if before is None or after is None:
+        return None
+    return pyproject_steps_changed(before, after)
+
+
+#: The global inputs that can report on themselves, and what reads each. A
+#: third readable input is a row here; nothing else in the module changes.
+_TRIGGER_READERS: dict[str, Callable[[str], TriggerScan | None]] = {
+    _LOCK_FILE: lock_scan_for,
+    _PYPROJECT_FILE: pyproject_scan_for,
+}
 
 
 def get_changed_files(base_ref: str) -> list[str]:
@@ -779,23 +1016,29 @@ class FileScan(NamedTuple):
     exporting_packages: set[str]
     #: Whether to recompute the three recorded documentation checks.
     docs_changed: bool
-    #: Whether a global quality input moved, which dirties everything.
-    all_triggered: bool
+    #: Which recorded steps a global quality input moved, which dirties every
+    #: package for that step. Empty when no global input fired. A set rather
+    #: than a flag because the gate records two per-package results from two
+    #: different scripts, and most global inputs feed exactly one of them —
+    #: see GLOBAL_TRIGGER_STEPS.
+    triggered_steps: frozenset[str]
     #: Whether an input the guards under tests/ read moved.
     workspace_changed: bool
 
 
-def map_files_to_packages(files: list[str], lock_scan: frozenset[str] | None = None) -> FileScan:
+def map_files_to_packages(
+    files: list[str], scans: Mapping[str, TriggerScan] | None = None
+) -> FileScan:
     """Map changed files to affected packages. See FileScan.
 
-    ``lock_scan`` is what ``uv.lock`` reported about itself, from
-    :func:`lock_members_changed`; ``None`` — the default — means nothing read
-    it, so the path keeps the blast radius it has always carried.
+    ``scans`` is what the readable global inputs reported about themselves,
+    keyed by path — see :data:`_TRIGGER_READERS`. A path absent from it is one
+    nothing read, so it keeps the blast radius it has always carried.
     """
     changed_packages: set[str] = set()
     exporting_packages: set[str] = set()
     docs_changed = False
-    all_triggered = False
+    triggered_steps: set[str] = set()
     workspace_changed = False
 
     for filepath in files:
@@ -818,12 +1061,22 @@ def map_files_to_packages(files: list[str], lock_scan: frozenset[str] | None = N
             # radius the path carries. An *empty* scan counts as unaccounted
             # for: see lock_members_changed for why that direction is the
             # safe one.
-            members = lock_scan if filepath == _LOCK_FILE else None
-            if members:
-                changed_packages.update(members)
-                exporting_packages.update(members)
+            scan = scans.get(filepath) if scans else None
+            if scan is not None and scan.packages:
+                changed_packages.update(scan.packages)
+                exporting_packages.update(scan.packages)
             else:
-                all_triggered = True
+                # What the content said, or — for an input nothing read, or one
+                # whose reader could not place the change — what the table
+                # declares. BOTH_STEPS is the fallback for a global input the
+                # table does not carry, so a new entry behaves exactly as it
+                # would have before the table existed until someone classifies
+                # it. The guards fail first, but not at the moment it runs.
+                triggered_steps |= (
+                    scan.steps
+                    if scan is not None
+                    else GLOBAL_TRIGGER_STEPS.get(filepath, BOTH_STEPS)
+                )
 
         # Workspace-only inputs belong to no package, so they move no package's
         # result — but they are still a quality input, and the guards under
@@ -895,7 +1148,7 @@ def map_files_to_packages(files: list[str], lock_scan: frozenset[str] | None = N
         changed_packages=changed_packages,
         exporting_packages=exporting_packages,
         docs_changed=docs_changed,
-        all_triggered=all_triggered,
+        triggered_steps=frozenset(triggered_steps),
         workspace_changed=workspace_changed,
     )
 
@@ -925,29 +1178,42 @@ def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
     return "none"
 
 
-def plan_for_files(files: list[str], lock_scan: frozenset[str] | None = None) -> dict[str, Any]:
+def plan_for_files(
+    files: list[str], scans: Mapping[str, TriggerScan] | None = None
+) -> dict[str, Any]:
     """Decide what a change set needs tested, without consulting git.
 
     Split out from detect_changes so the decision is reachable from a test
     with a literal file list. The git half is what made the previous
     behaviour awkward to pin, and it is the decision that was wrong.
 
-    ``lock_scan`` keeps that split intact now that one of the inputs has to be
-    *read* to be sized: detect_changes does the reading and passes the answer
-    in, so this stays a function of its arguments. See map_files_to_packages.
+    ``scans`` keeps that split intact now that some inputs have to be *read* to
+    be sized: detect_changes does the reading and passes the answers in, so
+    this stays a function of its arguments. See map_files_to_packages.
 
     Returns dict with:
-        packages: sorted list of package names that need testing
+        packages: sorted list of packages affected in any way — unchanged in
+            meaning, so a reader that knows only this key over-tests at worst
+        test_packages: the subset whose *test* result can have moved
         docs_changed: whether docs-related files changed
         directly_changed: packages with direct file changes
         exporting: the subset of those whose change their dependents can see
         mode: "all" if global trigger hit, "changed" otherwise
         workspace_changed: whether a workspace-only quality input changed
         test_scope: "packages", "workspace" or "none" (see classify_test_scope)
+
+    **``packages`` deliberately keeps its old meaning rather than becoming the
+    lint list.** The two differ only when a global input moves one step and not
+    the other, and the direction of that difference is what matters: a consumer
+    reading ``packages`` alone schedules everything it would have scheduled
+    before, so the narrowing is something a reader opts into rather than
+    something it can miss. Spelled the other way — ``packages`` narrowed, a
+    wider list beside it — the same consumer silently under-tests.
     """
     if not files:
         return {
             "packages": [],
+            "test_packages": [],
             "docs_changed": False,
             "directly_changed": [],
             "exporting": [],
@@ -956,24 +1222,27 @@ def plan_for_files(files: list[str], lock_scan: frozenset[str] | None = None) ->
             "test_scope": "none",
         }
 
-    scan = map_files_to_packages(files, lock_scan)
+    scan = map_files_to_packages(files, scans)
 
-    if scan.all_triggered:
-        packages = list(ALL_PACKAGES)
-        mode = "all"
-    else:
-        # Only what a package *exports* reaches its dependents. Their recorded
-        # results describe running against this package, so a change they can
-        # see is what makes those results stop describing anything — and a
-        # change they cannot see is one their suites would re-confirm
-        # unchanged. Every directly changed package still runs its own suite;
-        # the union is what keeps a local-only change scheduling one.
-        all_affected = get_transitive_dependents(scan.exporting_packages) | scan.changed_packages
-        packages = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
-        mode = "changed"
+    # Only what a package *exports* reaches its dependents. Their recorded
+    # results describe running against this package, so a change they can
+    # see is what makes those results stop describing anything — and a
+    # change they cannot see is one their suites would re-confirm
+    # unchanged. Every directly changed package still runs its own suite;
+    # the union is what keeps a local-only change scheduling one.
+    all_affected = get_transitive_dependents(scan.exporting_packages) | scan.changed_packages
+    closure = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
+
+    # One closure, two overrides. A global input widens the list for the steps
+    # it moves and leaves the other at whatever the files themselves said,
+    # which is the whole of the difference between these two lines.
+    packages = list(ALL_PACKAGES) if scan.triggered_steps else closure
+    test_packages = list(ALL_PACKAGES) if TEST_STEP in scan.triggered_steps else closure
+    mode = "all" if scan.triggered_steps else "changed"
 
     return {
         "packages": packages,
+        "test_packages": test_packages,
         "docs_changed": scan.docs_changed,
         "directly_changed": sorted(scan.changed_packages),
         "exporting": sorted(scan.exporting_packages),
@@ -986,12 +1255,20 @@ def plan_for_files(files: list[str], lock_scan: frozenset[str] | None = None) ->
 def detect_changes(base_ref: str = "main") -> dict[str, Any]:
     """Detect changed packages and docs status. See plan_for_files.
 
-    Reads ``uv.lock`` only when it is in the material change set, so the two
-    extra git object reads are paid on the change sets that can benefit.
+    Reads a global input only when it is in the material change set, so the two
+    extra git object reads per reader are paid on the change sets that can
+    benefit and on no others.
     """
     files = get_changed_files(base_ref)
-    lock_scan = lock_scan_for(_resolve_base_ref(base_ref)) if _LOCK_FILE in files else None
-    return plan_for_files(files, lock_scan)
+    resolved = _resolve_base_ref(base_ref)
+    scans: dict[str, TriggerScan] = {}
+    for path, read in _TRIGGER_READERS.items():
+        if path not in files:
+            continue
+        scan = read(resolved)
+        if scan is not None:
+            scans[path] = scan
+    return plan_for_files(files, scans)
 
 
 def main() -> None:

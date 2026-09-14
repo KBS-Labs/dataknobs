@@ -181,6 +181,51 @@ def _build(tmp_path: Path, records: Path, **overrides: Any) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def test_the_tested_package_list_is_derived_from_the_suites_that_ran() -> None:
+    """``tested_packages`` is a default that is itself a verdict.
+
+    The defect this file documents, one field over: a variable initialised to
+    something that *reads as a result*, and a code path that never overwrites
+    it. ``TESTED_PACKAGES_JSON="[]"`` is the claim "no package suite ran", and
+    it was assigned exactly once afterwards — inside the branch that only runs
+    when ``RUN_MODE`` is ``pr`` and no packages were named on the command line.
+
+    So every ``all``, ``full`` and ``dev`` run, and every ``pr`` run given an
+    explicit package list, tested ten suites and recorded that it had tested
+    none. The status fields escaped this by defaulting to ``null``, which is
+    the absence of a measurement rather than a passing one; this field had no
+    such luck, because an empty list is a perfectly well-formed answer.
+
+    The fix is the one the writer already embodies: state it where it is
+    produced. ``PACKAGES_TO_TEST`` is the list the unit and integration loops
+    iterate, so deriving the field from that variable makes the document and
+    the run unable to disagree, in every mode, without anyone maintaining a
+    second code path that has to remember to.
+    """
+    source = GATE.read_text(encoding="utf-8")
+
+    assignments = re.findall(r"^\s*TESTED_PACKAGES_JSON=(.*)$", source, re.M)
+    assert assignments, (
+        "bin/run-quality-checks.sh no longer assigns TESTED_PACKAGES_JSON at "
+        "all; this guard is reading the wrong variable or the wrong file"
+    )
+
+    derived = [value for value in assignments if "PACKAGES_TO_TEST" in value]
+    assert derived, (
+        "tested_packages must be derived from PACKAGES_TO_TEST — the list the "
+        "test loops actually iterate — so the artifact cannot claim a suite "
+        f"that did not run. Assignments found: {assignments}"
+    )
+
+    from_plan = [value for value in assignments if "_changed_fields" in value]
+    assert not from_plan, (
+        "tested_packages is derived from change detection, which is the "
+        "*plan* rather than the run: it is only reached in pr mode, and a run "
+        "that tests everything records that it tested nothing. "
+        f"Got: {from_plan}"
+    )
+
+
 def test_a_check_that_records_nothing_is_absent_rather_than_passing(tmp_path: Path) -> None:
     """The whole reason the producer changed shape.
 
