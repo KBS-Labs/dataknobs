@@ -9,10 +9,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ScanningSignal` and `AsyncScanningSignal`, registered under
+  `kind: "scan"`.** A rung that finds declared forms *inside* a query rather
+  than comparing the whole of it, and reports where each one sat: every span of
+  consecutive tokens is looked up as the slice it covers, longest form first.
+  At most twenty-one dictionary lookups for a six-token utterance, and fewer
+  unless the vocabulary declares a six-token form: the enumeration stops at
+  the longest form there is, since a wider window is one no declared form
+  could fill. Cutting there removes probes and no answers, and leaves a cost
+  linear in the query rather than quadratic in it — for any fold that keeps
+  token boundaries, which is every fold but the ones the next entry is about.
+  `"my golden retriever has been limping"` comes back carrying
+  `golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`, with
+  `coverage.unmatched` reporting `"my"` and `"has been limping"` as the phrases
+  the vocabulary does not account for.
+
+  It overrides `DeclaredSignal._located` and nothing else, which is what that
+  hook was published for: the constructor, `name`, `narrows()`, the rung-side
+  narrowing, the batch loop and the `_order` hook all come from the base — the
+  last of those meaning a subclass that wants its own order over two entities
+  sharing one form gets it on this rung as it does on the whole-string ones.
+
+- **`EntitySource.longest_form_tokens()` and its asynchronous twin**, answered
+  by `MappingEntitySource`, `AsyncMappingEntitySource`, `Ontology` and
+  `AsyncOntology`. How many tokens the longest form a vocabulary declares
+  occupies — which is what lets a scan stop enumerating, since a wider window
+  can match nothing. It is a member of the protocol itself rather than a
+  separate optional one, unlike `AliasFormSource`: asking every source is what
+  keeps the linear enumeration the common case rather than the configured one.
+
+  **`None` where the source's own fold merges token boundaries**, and then the
+  scan enumerates every window. The bound rests on a window of *L* tokens
+  needing a key of *L* tokens or more, which holds for `default_normalizer`
+  and fails for any fold that deletes what `token_spans` reads as a
+  boundary — a vocabulary folded with one of those reaches the single key
+  `goldenretriever` from `Golden Retriever`, from `gold en retriever`, and
+  from a query spelling it letter by letter, so *no* finite number bounds it.
+  Reporting one would be a declared form the scan silently stops finding, so
+  the source reports that it cannot bound and keeps every answer at the cost
+  of the linearity it never could have had.
+
+  **It does not replace `ExactNormalizedSignal`, and the two compose.** A probe
+  is a slice between token boundaries, so a declared form whose first or last
+  character is not alphanumeric — `(beagle)`, `C.D.C.` — is reachable by the
+  whole-string rung and by no scan; a form sitting inside a longer sentence is
+  reachable by the scan and by no whole-string rung. A cascade wanting both
+  carries both.
+
+- **`max_window` on `ScanningSignal` and `AsyncScanningSignal`**, forwarded by
+  the `kind: scan` factory so a document can set it. The widest probe in
+  tokens, and **the only number in this rung that can cost an answer**: the
+  derived bound removes probes that could not have matched, and this one
+  removes probes that could. It is for the vocabulary the source cannot bound,
+  where a caller who knows their own queries supplies the number the
+  vocabulary could not. Below one is refused rather than clamped — a scan that
+  probes nothing reports an empty result for every query, which is
+  indistinguishable from a vocabulary that matches nothing.
+
+  A rung handed its own `normalizer` does not ask the source for a bound at
+  all. The source measured its keys before that rung existed and cannot see
+  the extra fold, so its number was never an answer to the question, and no
+  source-side measurement could be.
+
+- **The window enumeration is lazy.** Both rungs iterate the spans once and
+  keep none, and the unbounded case is what makes that load-bearing: four
+  thousand tokens with nothing to bound them is eight million spans, which
+  cost 489 MiB to materialise and 494 KiB to stream.
+
+- **The default composition carries the scan.** A document declaring no
+  `resolver:` section builds `ExactNormalizedSignal`, then `AliasSignal`, then
+  `ScanningSignal`, so a consumer who configures nothing can hand over a
+  sentence and get the declared forms inside it — the offsets they sat at, and
+  the phrases the vocabulary does not account for. Without it the composition a
+  document gets for free compared the whole query and nothing else, which left
+  `coverage.matched` empty for every resolution it could perform.
+
+  The scan sits **last**, which decides nothing about what the cascade answers
+  and one thing about what it reports. The three rungs read one index two ways
+  and never disagree, so the candidates and the coverage are the same whichever
+  end the scan sits at; what the position decides is the rung of *record* for a
+  query the whole-string rungs already answer, and last leaves that `exact` for
+  a caller whose string already *is* the phrase. Evidence is reported in rung
+  order, so that moves with the position too — the same fact rather than a
+  second one. A composition
+  that wants the locating rung to lead writes itself out under `resolver:` —
+  the composition is the policy.
+
+- **The entity-resolution guide now carries an executed call site.**
+  `docs/guides/entity-resolution.md` publishes the vocabulary it resolves
+  against and the block that resolves it, and a workspace test runs that block
+  as written and asserts it is character-identical to the fence — so the spans
+  and coverage shown on the page are measured rather than transcribed. Its
+  *Writing your own rung* section names `ScanningSignal` as the shipped
+  implementation instead of walking a reader through writing one, and
+  demonstrates `_located` with an override the shipped rung does not perform.
+
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 110 names, taking the package's `__all__` from 205
-  to 315. Every one of them was already importable by module path; what
+  the resolution cascade — 116 names, taking the package's `__all__` to 321. Every one of them was already importable by module path; what
   changes is that they are now a promise this package keeps rather than a path
   that happened to work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the

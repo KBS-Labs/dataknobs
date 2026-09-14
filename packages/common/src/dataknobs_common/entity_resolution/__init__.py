@@ -67,8 +67,10 @@ from dataknobs_common.entity_resolution.signals import (
     AsyncAliasSignal,
     AsyncDeclaredSignal,
     AsyncExactNormalizedSignal,
+    AsyncScanningSignal,
     DeclaredSignal,
     ExactNormalizedSignal,
+    ScanningSignal,
 )
 from dataknobs_common.entity_resolution.values import (
     ENTITY_TYPE_KEY,
@@ -102,6 +104,7 @@ __all__ = [
     "AsyncCascadingResolver",
     "AsyncEntityResolver",
     "AsyncExactNormalizedSignal",
+    "AsyncScanningSignal",
     "DeclaredSignal",
     "AsyncMatchSignal",
     "BridgedEntityResolver",
@@ -120,6 +123,7 @@ __all__ = [
     "ResolutionRef",
     "ResolutionResult",
     "RunnerUp",
+    "ScanningSignal",
     "ScopeAuthority",
     "Scoring",
     "Within",

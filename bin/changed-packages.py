@@ -204,8 +204,13 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
 # and the mapping now says so: the guards under tests/ read every document.
 # What must not happen is that becoming the *only* thing it says, because the
 # two facts have different populations — a changelog re-runs the documentation
-# checks and is read by no guard. Setting both flags in the DOCS_PATTERNS
+# checks and does not dirty a package. Setting both flags in the DOCS_PATTERNS
 # branch keeps them independent; moving the entry would collapse them.
+#
+# A changelog *is* read by a guard now, which is a hashing question rather than
+# a tier one: `packages/*/CHANGELOG.md` is in the docs hash scope below, so
+# editing one invalidates the artifact, while the tier it matches is unchanged
+# and it still re-runs the documentation checks.
 #
 # Two file entries rather than ".dataknobs/", which also holds notes and an
 # example workflow that feed no check.
@@ -215,6 +220,21 @@ _DOCS_QUALITY_INPUTS = [
     "packages/*/docs/",  # symlinked and transcluded into the tree above
     ".dataknobs/docs-mirror-manifest.json",  # what documentation_mirrors reads
     ".dataknobs/packages.json",  # what documentation_versions compares against
+    # Read by a workspace guard, which is why it is hashed: a release note
+    # counting the names on a package door is checked against that door by
+    # test_the_changelog_door_count_matches_the_door. Hashed *here* rather
+    # than in the workspace-only tier for the reason the note above gives --
+    # that tier is matched before DOCS_PATTERNS and stops, so filing a
+    # changelog there would stop it re-running the documentation checks.
+    #
+    # Named individually rather than as "packages/*/CHANGELOG.md", because a
+    # "*" expands only in a *directory* entry: scope_entry_files tests a file
+    # entry with is_file(), so the glob would resolve to nothing and read
+    # exactly like coverage -- the hazard the workflows note above describes.
+    # The guard that found this derives its population from the guards' own
+    # source, so a guard reading a second package's changelog fails until that
+    # one is named too.
+    "packages/common/CHANGELOG.md",
 ]
 
 # Files that trigger testing all packages. Only the global tier: a workspace-only
@@ -307,7 +327,7 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 139 of the 144 are read only by
+#: Almost no package document is one of these. 141 of the 148 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so
@@ -316,7 +336,7 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: repair touching two packages' docs ran two full test suites and no guard that
 #: reads a link.
 #:
-#: The five below are the exception and they are a real one: each is read by a
+#: The seven below are the exception and they are a real one: each is read by a
 #: test *in* the package, comparing a published table against the code it
 #: describes, so the document genuinely decides whether that suite passes. They
 #: keep scheduling their package, and package-hashes.py folds them into that
@@ -327,13 +347,23 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: from a path. What keeps the list honest is
 #: ``test_every_package_document_a_package_suite_reads_is_declared``, which finds
 #: them structurally — a ``Path(__file__)`` expression divided by ``"docs"`` —
-#: and fails on a sixth. A naive search for the string is not available: 192
+#: and fails on one this list does not carry. A naive search is not available: 192
 #: lines under ``packages/*/tests`` mention ``"docs"``, and all but these name a
 #: knowledge source or a RAG adapter.
 PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     "packages/bots/docs/multi-tenant.md": "bots",
     "packages/bots/docs/behavior-packs.md": "bots",
     "packages/common/docs/guides/packs.md": "common",
+    # Both publish a `worked-input` fence holding a vocabulary the common suite
+    # also carries as a conftest constant, and test_worked_input_fences.py is
+    # what stops the two copies parting. Read from the package side rather than
+    # from tests/ deliberately: the comparison needs the conftest constant, and
+    # a workspace guard reading a package's test file sits in no workspace hash
+    # scope — while filing that file in the workspace-only tier would stop it
+    # scheduling its own package, since change detection tests that tier first
+    # and stops. From here both halves are covered by rules that already exist.
+    "packages/common/docs/guides/ontology.md": "common",
+    "packages/common/docs/guides/entity-resolution.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
     "packages/data/docs/vector-store-capabilities.md": "data",
 }

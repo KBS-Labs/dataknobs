@@ -30,7 +30,9 @@ from dataknobs_common.entity_resolution.signals import (
     AliasSignal,
     AsyncAliasSignal,
     AsyncExactNormalizedSignal,
+    AsyncScanningSignal,
     ExactNormalizedSignal,
+    ScanningSignal,
 )
 from dataknobs_common.registry import PluginRegistry
 
@@ -65,12 +67,31 @@ def _make_alias(config: dict[str, Any]) -> MatchSignal:
     return AliasSignal(config["entities"], normalizer=config.get("normalizer"))
 
 
+def _make_scan(config: dict[str, Any]) -> MatchSignal:
+    # ``max_window`` is forwarded because a document is where a vocabulary the
+    # source cannot bound gets its cap -- a caller reaching this factory by
+    # writing ``kind: scan`` has no other way to supply one.
+    return ScanningSignal(
+        config["entities"],
+        normalizer=config.get("normalizer"),
+        max_window=config.get("max_window"),
+    )
+
+
 def _make_async_exact(config: dict[str, Any]) -> AsyncMatchSignal:
     return AsyncExactNormalizedSignal(config["entities"], normalizer=config.get("normalizer"))
 
 
 def _make_async_alias(config: dict[str, Any]) -> AsyncMatchSignal:
     return AsyncAliasSignal(config["entities"], normalizer=config.get("normalizer"))
+
+
+def _make_async_scan(config: dict[str, Any]) -> AsyncMatchSignal:
+    return AsyncScanningSignal(
+        config["entities"],
+        normalizer=config.get("normalizer"),
+        max_window=config.get("max_window"),
+    )
 
 
 #: Every rung declares its flavour and whether it needs I/O, so a door can
@@ -81,8 +102,10 @@ _ASYNC_DECLARED_METADATA = {"flavour": "async", "needs_io": False}
 
 signal_backends.register("exact", _make_exact, metadata=_DECLARED_METADATA)
 signal_backends.register("alias", _make_alias, metadata=_DECLARED_METADATA)
+signal_backends.register("scan", _make_scan, metadata=_DECLARED_METADATA)
 async_signal_backends.register("exact", _make_async_exact, metadata=_ASYNC_DECLARED_METADATA)
 async_signal_backends.register("alias", _make_async_alias, metadata=_ASYNC_DECLARED_METADATA)
+async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARED_METADATA)
 
 
 # A rung that exists in one flavour only is *declared* in the other with a

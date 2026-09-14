@@ -1,0 +1,330 @@
+"""The published scanning call site runs, from outside the package that ships it.
+
+A consumer hands over a *sentence*, not a phrase: they do not know where the
+declared forms are, how many there are, or what the vocabulary missed. That
+claim is easy to make in a design document and cheap to check exactly once -- a
+call site fails. It cannot be written around a class that does not exist, or
+around a name a door does not export.
+
+So this runs the call site
+``packages/common/docs/guides/entity-resolution.md`` publishes, as written,
+against the vocabulary the guide publishes beside it -- and it runs it from the
+workspace root rather than from ``packages/common/tests``. That is not a filing
+preference. A test living inside the package can reach anything the package
+defines whether or not the door exports it, which makes it structurally unable
+to fail for the one reason this test exists: a name that is implemented and not
+published. :mod:`tests.test_worked_ontology_call_site` is the sibling this
+copies, and states the same reason for the same location.
+
+**Why the rung is named rather than built by the door.** The block constructs
+``ScanningSignal`` itself. A page showing a reader how to find declared forms
+inside a sentence should name the rung that does it -- and a block that reached
+``build_resolver`` instead would pass this file while the published spelling of
+the class stayed untested, which is half of what the criterion behind this
+guard is for. ``test_the_call_site_names_the_shipped_rung`` is where that stops
+being incidental.
+
+**Where the input comes from.** The ``worked-input`` fence is the same
+vocabulary as ``MAMMALS_V11_DOCUMENT`` in
+``packages/common/tests/_vocabularies.py``, and
+``packages/common/tests/test_worked_input_fences.py`` holds the two identical. Until that file arrived nothing did: each copy was guarded by its own suite -- a fence that
+drifts takes this file red, a constant that drifts takes
+``test_resolution_spans.py`` red -- which left *that they are one document*
+guarded by nobody, and the two had already parted by a line. This is the pair
+where that costs something, because the offsets asserted below are offsets into
+a query resolved against the forms the fence declares.
+
+The assertions come after the block rather than inside it, because the block's
+lines are mostly bare expressions whose values are discarded -- the form that
+shows a reader what each call answers. Re-calling them to assert is only sound
+because every accessor here is pure over the vocabulary's own fields: nothing
+opens anything and nothing is lazy.
+"""
+
+from __future__ import annotations
+
+import ast
+import runpy
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from tests._workspace import ROOT, executed_source, published_fence
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+GUIDE = ROOT / "packages" / "common" / "docs" / "guides" / "entity-resolution.md"
+EXECUTED = ROOT / "tests" / "worked_entity_resolution_call_site.py"
+
+INPUT_MARKER = "worked-input"
+CALL_SITE_MARKER = "worked-call-site"
+
+#: The sentence the block resolves, and the two forms it carries.
+QUERY = "my golden retriever has been limping"
+
+
+@pytest.fixture
+def vocabulary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """``mammals.yaml`` on disk, written from the guide, and made the cwd.
+
+    The call site names the file by a bare relative path, which is what a
+    reader would type. Honouring that means giving it a directory rather than
+    rewriting the line to suit the harness.
+    """
+    (tmp_path / "mammals.yaml").write_text(
+        published_fence(GUIDE, INPUT_MARKER) + "\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    yield tmp_path
+
+
+@pytest.fixture
+def ran(vocabulary: Path) -> dict[str, Any]:
+    """What the call site leaves bound, having run it exactly as published."""
+    return runpy.run_path(str(EXECUTED), run_name="__worked_call_site__")
+
+
+def test_the_executed_copy_is_the_published_one() -> None:
+    """Character for character, in both directions.
+
+    This is what makes *verbatim* a property of the tree rather than an
+    intention. Without it the guide could drift from the code, or the code from
+    the guide, and every other assertion in this file would keep passing.
+    """
+    published = published_fence(GUIDE, CALL_SITE_MARKER)
+    executed = executed_source(EXECUTED)
+
+    assert executed == published, (
+        "the executed call site and the one the guide publishes have diverged. "
+        "They are one text with two homes: edit the fence in "
+        f"{GUIDE.relative_to(ROOT)} and copy it to {EXECUTED.relative_to(ROOT)}, "
+        "or the reverse -- but never one alone."
+    )
+
+
+def test_the_call_site_imports_only_through_the_doors() -> None:
+    """Every import in the block is a package door, not a module path.
+
+    The point of the leg this test arrives with is that these names are
+    *exported*. A call site reaching into
+    ``dataknobs_common.entity_resolution.signals`` would run identically and
+    would prove nothing about that, so the spelling is the subject and not an
+    incidental.
+    """
+    doors = {"dataknobs_common", "dataknobs_common.entity_resolution", "dataknobs_common.ontology"}
+    reached = {
+        line.split()[1]
+        for line in published_fence(GUIDE, CALL_SITE_MARKER).splitlines()
+        if line.startswith("from dataknobs_common")
+    }
+
+    assert reached, "the call site imports nothing from this package"
+    assert reached <= doors, (
+        f"{sorted(reached - doors)} is a module path rather than a door. "
+        f"The call site is the increment's own acceptance that the names are "
+        f"published, so reaching past a door defeats it"
+    )
+
+
+def test_the_call_site_names_the_shipped_rung() -> None:
+    """``ScanningSignal``, spelled out, rather than a cascade the door composed.
+
+    The three placement assertions below are true of *any* rung that locates
+    forms, which is correct -- they are about what a cascade returns. This is
+    the one that is about the shipped class: a page teaching a reader to find
+    forms inside a sentence, while quietly building its own rung or reaching
+    for a default that does not scan, would satisfy every other guard here.
+    """
+    published = published_fence(GUIDE, CALL_SITE_MARKER)
+
+    assert "ScanningSignal(" in published, (
+        "the published call site no longer constructs the shipped scanning "
+        "rung. Every other assertion in this file passes against a rung the "
+        "page defined for itself, which is the failure this one exists for. "
+        "The trailing parenthesis is the assertion: without it the import "
+        "line alone satisfies this, which it briefly did"
+    )
+
+    # Parsed rather than searched. `"class " not in published` is the same
+    # claim spelled so that a comment or a string containing the word answers
+    # it -- and the thing being ruled out is a *definition*, which the grammar
+    # knows about and a substring does not.
+    defined = [
+        node.name for node in ast.walk(ast.parse(published)) if isinstance(node, ast.ClassDef)
+    ]
+    assert not defined, (
+        f"the published call site defines {defined} instead of constructing "
+        f"the rung that ships. A page teaching a reader to find declared forms "
+        f"inside a sentence, while writing its own rung to do it, satisfies "
+        f"every other assertion in this file"
+    )
+
+
+def test_the_declared_forms_the_sentence_carries_come_back_longest_first(
+    ran: dict[str, Any],
+) -> None:
+    """Step 1: two forms at overlapping spans, and both are candidates.
+
+    Choosing the longer one and dropping the other is a verdict, and this
+    family refuses verdicts. The order is the half a consumer cannot recover
+    for themselves: a declared score is ``1.0`` by fiat, so if the rung
+    published a different order nothing downstream would notice.
+    """
+    result = ran["result"]
+
+    assert [c.entity_id for c in result.candidates] == ["golden_retriever", "retriever"]
+    assert result.query == QUERY
+
+
+def test_each_form_reports_where_it_sat(ran: dict[str, Any]) -> None:
+    """Step 2: half-open offsets into ``result.query``, and the slice agrees.
+
+    ``matched_text`` is asserted against the query sliced by the span rather
+    than against the literal on the page, so the claim is *the two fields
+    agree* rather than two copies of one expectation that can be edited apart.
+    """
+    result = ran["result"]
+
+    assert result.explain("golden_retriever")[0].span == (3, 19)
+    assert result.explain("retriever")[0].span == (10, 19)
+    assert result.explain("golden_retriever")[0].matched_text == "golden retriever"
+    assert result.query[3:19] == result.explain("golden_retriever")[0].matched_text
+
+
+def test_the_coverage_reports_what_the_vocabulary_did_not_account_for(
+    ran: dict[str, Any],
+) -> None:
+    """Step 3: the union of the evidence spans, and the residue.
+
+    ``(10, 19)`` is inside ``(3, 19)``, so ``matched`` is one interval rather
+    than the two the rungs reported -- coverage is derived from the evidence
+    rather than computed a second time beside it. The residue is trimmed of
+    the whitespace that bounded it, which is why ``"my"`` is ``(0, 2)`` and not
+    ``(0, 3)``.
+    """
+    result = ran["result"]
+
+    assert result.coverage.matched == ((3, 19),)
+    assert result.coverage.unmatched == ((0, 2), (20, 36))
+    assert result.unmatched_text() == ("my", "has been limping")
+    assert result.matched_text() == ("golden retriever",)
+
+
+def test_nothing_in_the_call_site_needs_a_loop_or_a_backend(ran: dict[str, Any]) -> None:
+    """The claim the block's own comment makes, asserted rather than repeated.
+
+    ``ran`` having been produced at all is most of the proof -- the module ran
+    to completion outside any event loop, so nothing in it awaited. What is
+    left is the other half: that the vocabulary describes itself as authored,
+    rather than as something with a backend behind it.
+    """
+    description = ran["onto"].entities.describe()
+
+    assert description.backend == "authored"
+    assert description.table is None
+
+
+RUNG_MARKER = "worked-rung"
+RUNG = ROOT / "tests" / "worked_punctuated_rung.py"
+
+
+@pytest.fixture
+def punctuated_rung() -> type:
+    """The class the guide's *Writing your own rung* fence defines, as published.
+
+    The ``isinstance`` is what makes the annotation a checked claim rather than
+    one the reader has to take on trust: :func:`runpy.run_path` hands back a
+    namespace of ``Any``, so nothing else here would notice the fence binding
+    that name to something other than a class.
+    """
+    published = runpy.run_path(str(RUNG), run_name="__worked_rung__")["PunctuatedFormRung"]
+    assert isinstance(published, type), (
+        f"{RUNG.relative_to(ROOT)} no longer binds PunctuatedFormRung to a class, so the "
+        "fence has stopped defining the rung the guide tells a reader to write"
+    )
+    return published
+
+
+def test_the_executed_rung_is_the_published_one() -> None:
+    """The second fence on this page is held to the first one's standard.
+
+    The page describes itself as executed, and until this existed one block on
+    it was not: the sample a reader is most likely to copy, since it is the one
+    the page tells them to write themselves. Its claims are also the sharper
+    ones -- three named forms said to be reachable this way and no other -- and
+    a claim a reader cannot check without first writing the class is exactly
+    the kind that should not rest on prose.
+    """
+    published = published_fence(GUIDE, RUNG_MARKER)
+    executed = executed_source(RUNG)
+
+    assert executed == published, (
+        "the executed rung and the one the guide publishes have diverged. They "
+        "are one text with two homes: edit the fence in "
+        f"{GUIDE.relative_to(ROOT)} and copy it to {RUNG.relative_to(ROOT)}, or "
+        "the reverse -- but never one alone."
+    )
+
+
+def test_the_published_rung_reaches_the_three_forms_the_page_names(
+    punctuated_rung: type,
+) -> None:
+    """`(beagle)`, `C.D.C.` and `K-9`, and the shipped scan reaching two fewer.
+
+    Both halves are the page's claim and both have to hold, because the section
+    exists to answer *what is worth writing yourself*. A rung that found the
+    three forms would still not justify the section if the shipped scan found
+    them too, so the contrast is asserted rather than described.
+    """
+    from dataknobs_common.entity_resolution import ScanningSignal
+    from dataknobs_common.ontology import Entity, MappingEntitySource
+
+    vocabulary = MappingEntitySource(
+        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=["(beagle)", "C.D.C."])}
+    )
+    written = punctuated_rung(vocabulary)
+    shipped = ScanningSignal(vocabulary)
+
+    for form in ("(beagle)", "C.D.C.", "K-9"):
+        found = written.candidates(form, k=5)
+        assert [c.entity_id for c in found] == ["k9"], f"the published rung misses {form!r}"
+        assert found[0].evidence[0].span == (0, len(form))
+
+    assert [c.entity_id for c in shipped.candidates("K-9", k=5)] == ["k9"]
+    assert shipped.candidates("(beagle)", k=5) == []
+    assert shipped.candidates("C.D.C.", k=5) == []
+
+
+def test_the_published_rung_reaches_no_multi_word_form(punctuated_rung: type) -> None:
+    """The other half of the trade, measured where the page states it.
+
+    A chunk is whitespace-delimited, so the rung the page teaches cannot join
+    two of them -- it reaches ``(beagle)`` and reaches ``golden retriever``
+    never, for any query. That is the cost of the boundary it picks, and it is
+    exactly invisible in the test above, whose vocabulary is single-chunk
+    forms only: a reader with a vocabulary carrying both kinds copies the
+    block and silently loses half of it.
+
+    So the loss is asserted rather than described, and asserted beside the
+    shipped rung finding the same form -- because *compose rather than choose*
+    is the page's conclusion, and a reader has to be able to see that the two
+    rungs fail in opposite directions.
+    """
+    from dataknobs_common.entity_resolution import ScanningSignal
+    from dataknobs_common.ontology import Entity, MappingEntitySource
+
+    vocabulary = MappingEntitySource(
+        {"golden_retriever": Entity(id="golden_retriever", type="Breed", name="Golden Retriever")}
+    )
+    query = "my golden retriever has been limping"
+
+    assert punctuated_rung(vocabulary).candidates(query, k=5) == [], (
+        "the published rung reached a multi-word form. It probes one "
+        "whitespace-delimited chunk at a time and never joins two, so this "
+        "passing would mean the fence no longer says what the page explains"
+    )
+    assert [c.entity_id for c in ScanningSignal(vocabulary).candidates(query, k=5)] == [
+        "golden_retriever"
+    ], "the shipped scan is the half of the composition that reaches it"

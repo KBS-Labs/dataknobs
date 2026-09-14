@@ -220,6 +220,15 @@ def _top_level_package_claims() -> dict[str, list[str]]:
     unreachable. The second is what collapsed three trees onto ``tests``; the
     first is the quieter version of the same mistake, and neither is worth
     tolerating on the grounds that the other is worse.
+
+    **Directories only, and the omission is deliberate rather than a gap.**
+    A root exposes its ``.py`` files by their bare stems too -- every tests
+    directory supplies a ``conftest``, and the repository root supplies one as
+    well -- but that exposure is universal and costs nothing until a file
+    spends it. Enumerating it here would report a collision on every package
+    at once and say nothing about any of them, so the module-shaped half is
+    checked from the other side, by
+    :func:`_bare_imports_of_collected_modules`.
     """
     claims = _root_namespace_claims()
 
@@ -341,6 +350,142 @@ def _invocation_dependent_tree_imports() -> list[str]:
                     findings.append(f"{rel(path)}:{node.lineno}: {statement}")
 
     return findings
+
+
+def _pytest_loaded_module_names(directory: Path) -> set[str]:
+    """The module names pytest itself binds for the files in ``directory``.
+
+    ``conftest.py`` and whatever ``python_files`` matches -- the files pytest
+    imports under names it chooses. Read from the root ``pytest.ini`` rather
+    than written down, so a repository that starts collecting ``*_test.py``
+    does not leave this guard checking the old half.
+    """
+    text = (ROOT / "pytest.ini").read_text(encoding="utf-8")
+    match = re.search(r"^python_files\s*=\s*(?P<patterns>.+)$", text, re.M)
+    assert match is not None, (
+        "pytest.ini declares no python_files. This guard derives the collected "
+        "set from it, so its absence would silently narrow the check to "
+        "conftest alone."
+    )
+    # ``rglob`` on both halves, because the scan below reads every ``*.py``
+    # at any depth: a collected module in a nested subdirectory read through a
+    # non-recursive glob is outside ``collected`` and its bare import would go
+    # unreported. A nested ``conftest.py`` is loaded by pytest exactly as the
+    # top-level one is.
+    names = {path.stem for path in directory.rglob("conftest.py")}
+    for pattern in match.group("patterns").split():
+        names |= {path.stem for path in directory.rglob(pattern)}
+    return names
+
+
+def _bare_imports_of_collected_modules() -> list[str]:
+    """Imports of a module pytest loads, spelled as a bare top-level name.
+
+    ``declare_import_root`` puts a tests directory on ``sys.path``, which makes
+    *every* file beside it importable by its bare stem -- including the ones
+    pytest has already imported under a name of its own. Importing one of
+    those back gives a **second** module object for the same file, with its
+    module-level code run twice, and which of the two a name resolves to is
+    decided by ``sys.path`` ordering that nobody declared.
+
+    ``declare_import_root``'s own docstring says so and names the remedy:
+    *"Put shared scaffolding in a module pytest does not collect -- an
+    underscore-prefixed name -- and import that."* Nothing enforced it.
+
+    **This is the module-shaped half of the collision check.**
+    :func:`_top_level_package_claims` enumerates the *directories* a root
+    exposes and stops there, so ``conftest`` -- supplied by the repository root
+    and by four declared roots at once -- was outside everything this file
+    measured. Checked by the import rather than by the exposure, because the
+    exposure is universal and harmless until something spends it: every tests
+    directory supplies its own ``conftest``, and only a file that imports one
+    gets two of it.
+    """
+    tracked = set(tracked_files())
+    findings: list[str] = []
+
+    for directory in sorted({*ROOT.glob("packages/*/tests"), ROOT / "tests"}):
+        if not directory.is_dir():
+            continue
+        collected = _pytest_loaded_module_names(directory)
+        for path in sorted(directory.rglob("*.py")):
+            if rel(path) not in tracked:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        continue
+                    module, statement = node.module or "", "from {} import ..."
+                elif isinstance(node, ast.Import):
+                    module, statement = node.names[0].name, "import {}"
+                else:
+                    continue
+                root_name = module.split(".")[0]
+                if root_name in collected:
+                    findings.append(f"{rel(path)}:{node.lineno}: {statement.format(module)}")
+
+    return findings
+
+
+def test_no_test_module_imports_a_module_pytest_has_already_loaded() -> None:
+    """A collected module reached by bare name is a second copy of that file.
+
+    Measured when this was written: ``packages/common/tests/conftest.py``
+    existed twice in a live run -- as ``tests.conftest``, the object pytest
+    loaded and whose fixtures are the ones in effect, and as ``conftest``, a
+    separate object whose module-level code had run again. A constant read
+    from the second is not the constant the suite around it is using, and
+    nothing says so.
+
+    It resolves at all only by ``sys.path`` ordering: the repository root
+    supplies a ``conftest`` too, and which one wins depends on which
+    declaration ran last. Outside pytest -- the ordering a person gets from a
+    bare ``python -c`` -- it resolves to the root's and raises ``ImportError``.
+
+    The remedy is the one ``declare_import_root`` documents: move the shared
+    thing into a module pytest does not collect, whose name begins with an
+    underscore, and import that. It is then one object however it is reached.
+    """
+    findings = _bare_imports_of_collected_modules()
+    assert not findings, (
+        "test modules importing a file pytest itself loads:\n  "
+        + "\n  ".join(findings)
+        + "\n\nEach gives a second module object for that file, with its "
+        "module-level code run twice, chosen by sys.path ordering. Move what "
+        "is shared into an underscore-prefixed module -- pytest does not "
+        "collect it, so importing it binds the one object that exists."
+    )
+
+
+def test_the_collected_name_scan_reads_the_configured_patterns() -> None:
+    """Guard the guard: the collected set must include more than ``conftest``.
+
+    A derivation that silently matched nothing would leave this checking one
+    filename, which is the half that happened to be violated. Asserting that
+    the scan sees a real test module keeps the other half live.
+
+    **Both halves are read recursively**, and the nested assertion below is
+    what says so. A non-recursive glob answers correctly for every directory
+    whose test modules all sit at the top -- which is every directory here
+    except one -- so the narrowing would have been invisible in the place it
+    mattered and nowhere else.
+    """
+    names = _pytest_loaded_module_names(ROOT / "tests")
+
+    assert "test_pytest_collection_integrity" in names, (
+        "the python_files patterns in pytest.ini no longer match this very "
+        "file, so the scan has narrowed to conftest and would report green "
+        "over a bare import of any collected test module"
+    )
+
+    nested = _pytest_loaded_module_names(ROOT / "packages" / "bots" / "tests")
+    assert "test_bot_test_harness" in nested, (
+        "the scan no longer reaches packages/bots/tests/unit/, whose modules "
+        "pytest collects exactly as it collects the ones a level up. A name "
+        "outside this set is a name the import scan will not report, so a "
+        "bare import of a nested test module would pass unnoticed"
+    )
 
 
 def test_a_whole_workspace_collection_reports_no_errors() -> None:

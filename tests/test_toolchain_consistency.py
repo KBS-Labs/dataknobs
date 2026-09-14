@@ -34,7 +34,14 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._workspace import ROOT, load_bin_module, load_toml, pyprojects, python_floor
+from tests._workspace import (
+    ROOT,
+    load_bin_module,
+    load_toml,
+    pyprojects,
+    python_floor,
+    tracked_files,
+)
 from tests._workspace import rel as _rel
 from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
@@ -383,16 +390,17 @@ def _divided_constants(node: ast.BinOp) -> list[str]:
 def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     """The list that decides scheduling is checked against the tree, not trusted.
 
-    A package document belongs to no package's suite by default: 139 of the
-    144 here are read only by the workspace guards, and scheduling their
+    A package document belongs to no package's suite by default: 141 of the
+    148 here are read only by the workspace guards, and scheduling their
     package for one is what ran two full suites for a link repair. The other
-    five are read by a test *in* that package, so they do decide whether it
+    seven are read by a test *in* that package, so they do decide whether it
     passes, and they have to keep scheduling and dirtying it.
 
     Which of the two a document is cannot be inferred from its path, so it is
     declared. This is the guard that stops the declaration from being a list
-    somebody remembered to update: a sixth such test fails here on arrival,
-    naming itself, rather than being scheduled by nothing until it goes stale.
+    somebody remembered to update: a test reading an undeclared document fails
+    here on arrival, naming itself, rather than being scheduled by nothing
+    until it goes stale.
     """
     declared = _scopes.PACKAGE_TEST_DOC_INPUTS
     found = _documents_a_package_suite_reads()
@@ -2386,3 +2394,139 @@ def test_every_state_that_should_validate_something_does() -> None:
     assert not wrong, "bin/run-quality-checks.sh decides the wrong validation scope:\n" + "\n".join(
         f"  - {item}" for item in wrong
     )
+
+
+#: Where the size of ``PACKAGE_TEST_DOC_INPUTS`` is stated in prose, and the
+#: shape each statement takes. Two files say it four times between them, in
+#: sentences whose whole job is to convince a reader the exception is rare --
+#: so a stale number does not merely age, it argues for the opposite of what
+#: the tree contains.
+_COUNT_CLAIMS = (
+    ("bin/changed-packages.py", r"(?P<rest>\d+) of the (?P<total>\d+) are read only by"),
+    ("bin/changed-packages.py", r"The (?P<declared>\w+) below are the exception"),
+    (
+        "tests/test_toolchain_consistency.py",
+        r"default: (?P<rest>\d+) of the\n\s*(?P<total>\d+) here",
+    ),
+    ("tests/test_toolchain_consistency.py", r"The other\n\s*(?P<declared>\w+) are read by a test"),
+)
+
+#: Spelled out in the prose, so the comparison has to cross the same gap a
+#: reader does. Only as far as the list can plausibly grow.
+_WORDS = {
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def _declared_door_names(package: str) -> int:
+    """How many names ``packages/<package>``'s door declares in ``__all__``."""
+    door = ROOT / "packages" / package / "src" / f"dataknobs_{package}" / "__init__.py"
+    tree = ast.parse(door.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
+        ):
+            return len(node.value.elts)  # type: ignore[attr-defined]
+    raise AssertionError(f"{door} declares no __all__")
+
+
+def test_the_changelog_door_count_matches_the_door() -> None:
+    """A release note counting the door's names is checked against the door.
+
+    The same shape as the guard above and a different denominator, which is
+    why it is a second test rather than a row in ``_COUNT_CLAIMS``. The claim
+    is in ``packages/common/CHANGELOG.md``: an entry announcing that a family
+    reached the package door, and saying how many names that left there.
+
+    **Stale twice over before this existed.** The sentence said 315 while the
+    tree said 319, and the change that found it added two more without
+    touching the sentence. A count in a release note ages exactly like a count
+    in a comment -- every later change to the same unreleased section moves it
+    -- and this one is worse than a comment, because a consumer reads it as a
+    description of what they will get.
+
+    Scheduling runs the right way round. Editing the door maps to the common
+    package and runs its suite; this guard lives here, where the workspace
+    tier reaches it, so the case that matters -- a name added to ``__all__``
+    without the note being corrected -- is the case that fails.
+    """
+    declared = _declared_door_names("common")
+    changelog = (ROOT / "packages" / "common" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    match = re.search(
+        r"(?P<added>\d+) names, taking the package's `__all__` to (?P<total>\d+)", changelog
+    )
+    assert match is not None, (
+        "packages/common/CHANGELOG.md no longer carries the sentence counting "
+        "the door's names. Either it was rewritten -- in which case update "
+        "this pattern -- or it was deleted, and this guard now checks nothing."
+    )
+
+    assert int(match.group("total")) == declared, (
+        f"the CHANGELOG says the door carries {match.group('total')} names and "
+        f"it carries {declared}. The entry describes what a consumer gets, so "
+        f"a stale total there is a promise about a surface that is not the "
+        f"one shipping."
+    )
+
+
+def _is_package_document(path: str) -> bool:
+    """``packages/<pkg>/docs/**/*.md``, spelled against a root-relative path.
+
+    The segment test rather than :func:`fnmatch.fnmatch`, whose ``*`` crosses
+    ``/`` and would count every nested guide a second time under the
+    top-level pattern.
+    """
+    parts = path.split("/")
+    return len(parts) > 3 and parts[0] == "packages" and parts[2] == "docs" and path.endswith(".md")
+
+
+def test_the_declarations_prose_counts_match_the_tree() -> None:
+    """A count in a comment is a claim, and this is what makes it checkable.
+
+    ``PACKAGE_TEST_DOC_INPUTS`` went from five entries to seven in the change
+    that added the two guide rows, and all four sentences describing its size
+    stayed behind -- in the same pull request that corrected an identical
+    staleness two files away and wrote down the rule it was breaking: *"A count
+    in a comment is a claim about the rest of the file, so it is corrected in
+    the change that falsifies it rather than left to be noticed."*
+
+    Noticing is what this replaces. The rule is right and it is not
+    self-enforcing, and a claim about a number the tree already knows is the
+    kind a test can hold.
+    """
+    declared = len(_scopes.PACKAGE_TEST_DOC_INPUTS)
+    # Tracked rather than globbed. The claim is about the documents the
+    # repository has, and a glob also counts an untracked scratch file left
+    # under a package's ``docs/`` -- which would fail this guard with a
+    # message about stale prose for a reason that has nothing to do with the
+    # prose. ``tracked_files`` is what the guards either side of this one use.
+    total = sum(1 for path in tracked_files() if _is_package_document(path))
+    expected = {"declared": declared, "total": total, "rest": total - declared}
+
+    for name, pattern in _COUNT_CLAIMS:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        match = re.search(pattern, text)
+        assert match is not None, (
+            f"{name} no longer carries a sentence matching {pattern!r}. Either "
+            f"the prose was rewritten -- in which case update this pattern -- "
+            f"or the claim was deleted, and this guard is now checking one "
+            f"file where it used to check two."
+        )
+        for group, claimed in match.groupdict().items():
+            actual = _WORDS.get(claimed) if not claimed.isdigit() else int(claimed)
+            assert actual == expected[group], (
+                f"{name} says {claimed!r} where the tree says {expected[group]}: "
+                f"PACKAGE_TEST_DOC_INPUTS declares {declared} of {total} package "
+                f"documents. The sentence argues the exception is rare, so a "
+                f"stale number there argues from the wrong figure."
+            )

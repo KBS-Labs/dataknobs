@@ -17,9 +17,11 @@ from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncAliasSignal,
     AsyncExactNormalizedSignal,
+    AsyncScanningSignal,
     CascadingResolver,
     EvidenceKind,
     ExactNormalizedSignal,
+    ScanningSignal,
     Scoring,
 )
 from dataknobs_common.ontology import (
@@ -107,17 +109,166 @@ def test_a_miss_is_an_empty_candidate_tuple(mammals_path: Path) -> None:
 
 
 def test_an_absent_resolver_section_builds_the_declared_order(mammals_path: Path) -> None:
-    """Silence builds something, and what it builds is exact then alias.
+    """Silence builds something, and what it builds is exact, alias, then scan.
 
     The fixture declares no ``resolver:`` at all, so if silence meant *no
     rungs* the criterion above would have nothing to be true of. Asserted on
     the composition rather than only on the answer, because a cascade with one
     rung would also place ``beagles``.
+
+    **The scan sits last, and that position is the ruling rather than a
+    preference.** Measured over every query this file and the two guides ask,
+    the three-rung composition answers identically whichever end the scan
+    sits at -- same candidates, same spans, same coverage -- so the only thing
+    the position decides is which rung is of *record* for a query the
+    whole-string rungs already answer. Last leaves that answer alone: a caller
+    who hands over the phrase still reads ``exact``, and the rung that reports
+    *where* is reached by a query that needs it.
     """
     resolver = build_resolver(mammals_path, load_ontology(mammals_path))
 
     assert isinstance(resolver, CascadingResolver)
-    assert [type(rung) for rung in resolver.rungs] == [ExactNormalizedSignal, AliasSignal]
+    assert [type(rung) for rung in resolver.rungs] == [
+        ExactNormalizedSignal,
+        AliasSignal,
+        ScanningSignal,
+    ]
+
+
+def test_a_document_configuring_nothing_places_forms_inside_a_sentence(
+    mammals_v11_path: Path,
+) -> None:
+    """What silence builds is what a caller with a sentence actually needs.
+
+    The composition assertion above pins the *shape*; this pins what the shape
+    answers, and the two fail for different reasons -- a composition that is
+    right over a rung that is never reached passes one and not the other.
+
+    Before the scan joined the default this returned no candidates at all,
+    ``coverage.matched`` was empty and the whole sentence was unmatched: a
+    consumer who configured nothing could not ask the question the span and
+    coverage fields were landed for. The positive control is
+    ``test_a_placement_completes_with_no_event_loop_running``, which still
+    reads ``exact`` as the rung of record for a query that *is* the phrase --
+    so this pair says the default gained an answer rather than traded one.
+    """
+    resolver = build_resolver(mammals_v11_path, load_ontology(mammals_v11_path))
+
+    result = resolver.resolve("my golden retriever has been limping", k=5)
+
+    assert [c.entity_id for c in result.candidates] == ["golden_retriever", "retriever"]
+    assert result.explain("golden_retriever")[0].span == (3, 19)
+    assert result.explain("retriever")[0].span == (10, 19)
+    assert result.coverage.matched == ((3, 19),)
+    assert result.coverage.unmatched == ((0, 2), (20, 36))
+    assert result.unmatched_text() == ("my", "has been limping")
+
+
+def test_a_document_can_cap_the_scans_window(mammals_v11_path: Path, tmp_path: Path) -> None:
+    """``max_window:`` reaches the rung, so the escape hatch is reachable by config.
+
+    The cap exists for the vocabulary whose fold merges token boundaries,
+    where the source reports no bound and the scan enumerates every window. A
+    caller constructing the rung can pass it; a caller who configured their
+    cascade in a document could not reach it at all unless the factory
+    forwards it, and a knob only a Python caller can set is not an answer for
+    the consumer who reached this rung by writing ``kind: scan``.
+
+    Measured on the answer rather than the construction: at one token the
+    two-token ``golden retriever`` is outside the cap and ``retriever`` is
+    inside it, so the cap is doing something and the document is what said so.
+    """
+    document = with_resolver(
+        mammals_v11_path,
+        tmp_path / "capped.yaml",
+        {"rungs": [{"kind": "scan", "max_window": 1}]},
+    )
+    resolver = build_resolver(document, load_ontology(document))
+
+    found = resolver.resolve("my golden retriever has been limping", k=5)
+
+    assert [c.entity_id for c in found.candidates] == ["retriever"], (
+        "a one-token cap must leave the two-token form unreachable; if both "
+        "come back the document's max_window never reached the rung"
+    )
+
+    uncapped = build_resolver(
+        with_resolver(mammals_v11_path, tmp_path / "uncapped.yaml", {"rungs": [{"kind": "scan"}]}),
+        load_ontology(mammals_v11_path),
+    ).resolve("my golden retriever has been limping", k=5)
+
+    assert [c.entity_id for c in uncapped.candidates] == ["golden_retriever", "retriever"], (
+        "the control: without the cap the same document reaches both, so the "
+        "assertion above is about max_window rather than about the vocabulary"
+    )
+
+
+#: Every query this file and the two guides ask of the default composition.
+#: Named once, because the claim below is about the set rather than about any
+#: member of it -- and a claim quantified over "every query we ask" is only
+#: worth making if the queries are somewhere a reader can count them.
+_DEFAULT_COMPOSITION_QUERIES = (
+    "beagles",
+    "beagle",
+    "my golden retriever has been limping",
+    "golden retriever",
+    "Golden Retriever",
+    "domestic dog",
+    "a beagle and a domestic dog",
+    "retriever",
+)
+
+
+def test_the_scans_position_decides_the_rung_of_record_and_nothing_else(
+    mammals_v11_path: Path,
+) -> None:
+    """The claim the default composition makes about its own order, measured.
+
+    ``_default_sync_rungs`` says the scan sits last, that the three rungs never
+    disagree, and that the position therefore decides only which rung is of
+    *record* for a query the whole-string rungs already answer. That is a
+    quantified claim -- *every query this file and the guides ask* -- and it
+    was stated in four places and held in none, which is the same shape as the
+    two defects the scan's own review found: a docstring saying *measured*
+    beside a test that measured the other half.
+
+    So both halves are here. The candidates and the coverage are identical
+    whichever end the scan sits at, and the rung of record is not -- and the
+    second assertion is what stops the first from being a claim about a
+    composition nobody varied.
+
+    **Evidence order is the rung order, and is excluded deliberately.**
+    ``explain`` reports evidence in the order the rungs produced it, so moving
+    a rung moves it there by construction. That is the *same* fact as the rung
+    of record rather than a second difference, and asserting it as a surprise
+    would make this test fail for the reason it exists to describe.
+    """
+    onto = load_ontology(mammals_v11_path)
+    entities = onto.entities
+    last = CascadingResolver(
+        [ExactNormalizedSignal(entities), AliasSignal(entities), ScanningSignal(entities)],
+        entities,
+    )
+    first = CascadingResolver(
+        [ScanningSignal(entities), ExactNormalizedSignal(entities), AliasSignal(entities)],
+        entities,
+    )
+
+    for query in _DEFAULT_COMPOSITION_QUERIES:
+        shipped, inverted = last.resolve(query, k=5), first.resolve(query, k=5)
+        assert [c.entity_id for c in shipped.candidates] == [
+            c.entity_id for c in inverted.candidates
+        ], f"the rungs disagree on what {query!r} reaches, so the order is a policy"
+        assert shipped.coverage == inverted.coverage, f"the rungs disagree on what {query!r} covers"
+
+    # And the one thing the position does decide, on the query that has an
+    # answer from both kinds of rung.
+    assert last.resolve("beagles", k=5).candidates[0].evidence[0].signal == "exact"
+    assert first.resolve("beagles", k=5).candidates[0].evidence[0].signal == "scan", (
+        "putting the scan first must change the rung of record -- if it does "
+        "not, the loop above is comparing two compositions that differ in "
+        "nothing and would pass against any rung at all"
+    )
 
 
 def test_an_empty_rung_list_builds_a_cascade_that_misses_everything(
@@ -224,6 +375,7 @@ def test_the_async_door_builds_the_same_declared_order(mammals_path: Path) -> No
         assert [type(rung) for rung in resolver.rungs] == [
             AsyncExactNormalizedSignal,
             AsyncAliasSignal,
+            AsyncScanningSignal,
         ]
 
         result = await resolver.resolve("beagles", k=5)

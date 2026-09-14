@@ -26,6 +26,7 @@ from dataknobs_common.entity_resolution import (
     AsyncEntityResolver,
     AsyncExactNormalizedSignal,
     AsyncMatchSignal,
+    AsyncScanningSignal,
     BridgedEntityResolver,
     CascadeState,
     CascadingResolver,
@@ -38,6 +39,7 @@ from dataknobs_common.entity_resolution import (
     MatchSignal,
     MembershipOracle,
     ENTITY_TYPE_KEY,
+    ScanningSignal,
     Scoring,
     cascade as cascade_module,
     signals as signals_module,
@@ -53,6 +55,7 @@ from dataknobs_common.ontology import (
 from dataknobs_common.testing import (
     assert_no_leaked_bridge_threads,
     assert_twin_types_agree,
+    assert_twins_agree,
 )
 
 if TYPE_CHECKING:
@@ -184,28 +187,46 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    ("sync_type", "async_type", "members", "unflavoured"),
+    ("sync_type", "async_type", "members", "unflavoured", "flavour_typed"),
     [
-        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], ()),
-        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], ()),
-        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], ()),
+        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], (), ()),
+        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], (), ()),
+        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], (), ()),
         (
             ExactNormalizedSignal,
             AsyncExactNormalizedSignal,
             ["candidates", "candidates_many", "_hits"],
             (),
+            (),
         ),
-        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], ()),
+        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], (), ()),
+        (
+            ScanningSignal,
+            AsyncScanningSignal,
+            # ``__init__`` is checked by
+            # ``test_the_scanning_twins_constructors_agree`` rather than here:
+            # ``flavour_typed`` is declared once for the whole pair and
+            # compared against *every* member, so a parameter flavoured on one
+            # member only cannot be expressed in this table.
+            ["candidates", "candidates_many", "_located"],
+            (),
+            (),
+        ),
         (
             DeclaredSignal,
             AsyncDeclaredSignal,
             ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
             ("_fold", "_order"),
+            (),
         ),
     ],
 )
 def test_the_twins_expose_one_surface(
-    sync_type: type, async_type: type, members: list[str], unflavoured: tuple[str, ...]
+    sync_type: type,
+    async_type: type,
+    members: list[str],
+    unflavoured: tuple[str, ...],
+    flavour_typed: tuple[str, ...],
 ) -> None:
     """Parity over **annotations**, not only names and defaults.
 
@@ -230,6 +251,34 @@ def test_the_twins_expose_one_surface(
         async_type,
         members,
         unflavoured_members=unflavoured,
+        flavour_typed=flavour_typed,
+        compare_return=True,
+    )
+
+
+def test_the_scanning_twins_constructors_agree() -> None:
+    """``max_window`` and ``normalizer`` are the same parameters on both rungs.
+
+    These two are the only rungs that override ``__init__`` -- every other
+    rung inherits the base's whole -- so they are the only pair whose
+    constructors can drift. A keyword added to one flavour and forgotten on
+    the other is wrong against whichever half a consumer reached for, and no
+    assertion on a *result* would reach it: the twin that lacks the keyword
+    raises ``TypeError`` at construction, in the consumer's code rather than
+    in ours.
+
+    Checked here rather than in the table above because ``entities`` is
+    flavoured by definition -- ``EntitySource`` against ``AsyncEntitySource``
+    -- while ``candidates`` and ``_located`` carry no flavoured parameter, and
+    ``flavour_typed`` is declared once per pair and compared against every
+    member of it. Declaring it there would fail the members that do not have
+    it.
+    """
+    assert_twins_agree(
+        ScanningSignal.__init__,
+        AsyncScanningSignal.__init__,
+        flavour_typed=("entities",),
+        unflavoured=True,
         compare_return=True,
     )
 
@@ -1216,6 +1265,9 @@ class AliaslessSource:
 
     def by_type(self, type_id: str) -> frozenset[str]:
         return self._inner.by_type(type_id)
+
+    def longest_form_tokens(self) -> int:
+        return self._inner.longest_form_tokens()
 
 
 def test_a_source_without_alias_forms_still_conforms_and_still_resolves() -> None:

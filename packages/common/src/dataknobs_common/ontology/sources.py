@@ -27,7 +27,7 @@ from dataknobs_common.ontology.model import (
     Term,
     relation_id,
 )
-from dataknobs_common.text import default_normalizer
+from dataknobs_common.text import default_normalizer, token_spans
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -76,6 +76,25 @@ class EntitySource(Protocol):
     into non-conforming at once -- which is the migration the warning on
     :class:`AssertionSource` refuses to impose, and it is stricter for a
     member than for a keyword.
+
+    **:meth:`longest_form_tokens` is here anyway, and the exception is dated.**
+    That argument is about a population of structural conformers, and when the
+    member was added that population was empty: ``git ls-tree -r
+    common/v3.2.0 -- packages/common/src/dataknobs_common/ontology`` lists no
+    files, so this protocol had not been in a release and the migration it
+    describes cost nothing. It is the only member that will ever be able to
+    say that, and the tag is named so the next author can re-run the check
+    rather than inherit the conclusion.
+
+    The alternative -- a second optional protocol, on the
+    :class:`AliasFormSource` pattern -- buys a source the right not to answer,
+    and what it charges for that is a *slower* scan rather than a lossier one:
+    a rung told nothing enumerates every window, which is exactly what this
+    member's own ``None`` now means. So the choice was never between a bound
+    and a guess; it was between asking every source and asking some. Asking
+    every source is what keeps the linear enumeration the common case instead
+    of the configured one. A source whose backing makes the answer expensive
+    may cache it; it is fixed for the life of the vocabulary.
     """
 
     def get(self, entity_id: str) -> Entity | None: ...
@@ -92,6 +111,8 @@ class EntitySource(Protocol):
 
     def by_type(self, type_id: str) -> frozenset[str]: ...
 
+    def longest_form_tokens(self) -> int | None: ...
+
 
 @runtime_checkable
 class AsyncEntitySource(Protocol):
@@ -101,9 +122,17 @@ class AsyncEntitySource(Protocol):
     gives; :class:`~dataknobs_common.entity_resolution.AsyncAliasFormSource`
     is where that member lives.
 
-    ``describe`` stays synchronous on both twins: it answers from
-    configuration and touches no backend, so making it awaitable would buy
-    nothing and cost every caller an ``await``.
+    ``describe`` and ``longest_form_tokens`` stay synchronous on both twins:
+    each answers from what the source already holds and touches no backend, so
+    making either awaitable would buy nothing and cost every caller an
+    ``await``.
+
+    :meth:`longest_form_tokens` widened this protocol too, under the dated
+    exception :class:`EntitySource` records and for the same reason -- neither
+    twin had been in a release. Read that note before adding a second member
+    on its authority: what it licensed was a widening with no conformers to
+    break, and that is a fact about ``common/v3.2.0``, not a standing
+    allowance.
     """
 
     async def get(self, entity_id: str) -> Entity | None: ...
@@ -119,6 +148,8 @@ class AsyncEntitySource(Protocol):
     async def by_surface_form(self, form: str) -> frozenset[str]: ...
 
     async def by_type(self, type_id: str) -> frozenset[str]: ...
+
+    def longest_form_tokens(self) -> int | None: ...
 
 
 @runtime_checkable
@@ -220,26 +251,70 @@ class _EntityIndex:
     by_form: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_alias: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_type: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
+    longest_form: int | None = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         forms: dict[str, set[str]] = {}
         aliases: dict[str, set[str]] = {}
         types: dict[str, set[str]] = {}
+        merges = False
         for entity_id, entity in self.entities.items():
             for form in (entity_id, entity.name):
                 if not form:
                     continue
-                forms.setdefault(self.normalizer(form), set()).add(entity_id)
+                folded = self.normalizer(form)
+                merges = merges or self._merges_tokens(form, folded)
+                forms.setdefault(folded, set()).add(entity_id)
             for form in entity.aliases:
                 if not form:
                     continue
                 folded = self.normalizer(form)
+                merges = merges or self._merges_tokens(form, folded)
                 forms.setdefault(folded, set()).add(entity_id)
                 aliases.setdefault(folded, set()).add(entity_id)
             types.setdefault(entity.type, set()).add(entity_id)
         self.by_form = {form: frozenset(ids) for form, ids in forms.items()}
         self.by_alias = {form: frozenset(ids) for form, ids in aliases.items()}
         self.by_type = {type_id: frozenset(ids) for type_id, ids in types.items()}
+        # Measured over the *folded* keys, because a folded form is what a
+        # lookup compares against -- and once here rather than per query,
+        # since the forms cannot change after construction. ``None`` where
+        # this fold was seen to merge token boundaries, because then no
+        # number is an upper bound: see :meth:`_merges_tokens`.
+        self.longest_form = (
+            None if merges else max((len(token_spans(form)) for form in self.by_form), default=0)
+        )
+
+    @staticmethod
+    def _merges_tokens(form: str, folded: str) -> bool:
+        """Whether folding ``form`` ran two of its tokens together.
+
+        The window bound a scan spends rests on one implication: a query
+        window of *L* tokens can only match a key of *L* tokens or more, so
+        the widest key bounds the widest useful window. That holds exactly
+        while the fold preserves token boundaries, and a fold which deletes
+        them breaks it in a direction no wider number repairs -- under
+        ``re.sub(r"[^0-9a-z]", "", ...)`` the two-token ``Golden Retriever``
+        and the fifteen-token ``g o l d e n r e t r i e v e r`` both reach one
+        one-token key, and nothing stops a query spelling it wider still.
+
+        So this reports the condition rather than trying to price it, and a
+        source that sees it declines to bound at all. That costs the scan its
+        linearity over such a vocabulary and costs it no answers, which is the
+        right way round: a bound that is wrong is a declared form the scan
+        silently stops finding, which is the failure
+        :meth:`MappingEntitySource.longest_form_tokens` exists to prevent.
+
+        **Seen, not proven.** The check reads the forms the vocabulary
+        declares, so it cannot see a fold that merges only on some query no
+        declared form resembles -- ``default_normalizer`` casefolds the
+        non-alphanumeric ``U+0345`` to the alphanumeric ``iota``, so a
+        vocabulary declaring the folded spelling and a query using the
+        combining one part here undetected. A rung that folds for itself is
+        outside this entirely, and declines the bound for that reason rather
+        than this one.
+        """
+        return len(token_spans(folded)) < len(token_spans(form))
 
     def get(self, entity_id: str) -> Entity | None:
         return self.entities.get(entity_id)
@@ -260,6 +335,9 @@ class _EntityIndex:
 
     def of_type(self, type_id: str) -> frozenset[str]:
         return self.by_type.get(type_id, frozenset())
+
+    def longest_form_tokens(self) -> int | None:
+        return self.longest_form
 
     def describe(self) -> SourceDescription:
         return SourceDescription(
@@ -345,6 +423,38 @@ class MappingEntitySource:
         """The ids of every entity of this type."""
         return self._index.of_type(type_id)
 
+    def longest_form_tokens(self) -> int | None:
+        """How many tokens the longest form this source declares occupies.
+
+        **What a scanning rung needs to stop enumerating.** A rung that looks
+        up every contiguous window of a query spends *n(n+1)/2* lookups for
+        *n* tokens, and every window longer than this answer is one no
+        declared form could fill -- so the bound turns a cost quadratic in the
+        caller's input into one linear in it, without changing an answer. See
+        :class:`~dataknobs_common.entity_resolution.ScanningSignal`.
+
+        Counted with :func:`~dataknobs_common.text.token_spans`, which is the
+        same boundary policy a probe is sliced on: an answer counted any other
+        way would bound the wrong enumeration.
+
+        ``0`` for a vocabulary declaring no forms at all, which is the honest
+        answer and stops a scan before its first lookup.
+
+        **``None`` where this source's own fold was seen to merge token
+        boundaries**, which is the case no number describes. The bound rests
+        on a window of *L* tokens needing a key of *L* tokens or more, and a
+        fold deleting the characters :func:`~dataknobs_common.text.token_spans`
+        reads as boundaries breaks that implication without putting any other
+        number in its place: under one, ``Golden Retriever`` and
+        ``g o l d e n r e t r i e v e r`` reach the same one-token key and a
+        query may spell it wider still. So the source says it cannot bound,
+        the scan enumerates in full, and the vocabulary keeps every answer it
+        had at the cost of the linearity it never could have had. See
+        :meth:`~dataknobs_common.ontology.sources._EntityIndex._merges_tokens`
+        for what the check sees and what it cannot.
+        """
+        return self._index.longest_form_tokens()
+
 
 class AsyncMappingEntitySource:
     """:class:`MappingEntitySource` with ``async`` on the members that read.
@@ -398,6 +508,16 @@ class AsyncMappingEntitySource:
     async def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type."""
         return self._index.of_type(type_id)
+
+    def longest_form_tokens(self) -> int | None:
+        """Synchronous on both twins, and for ``describe``'s reason.
+
+        The answer is fixed at construction and reaches for nothing, so an
+        ``await`` here would cost every caller a suspension to read a number
+        this object already holds. See
+        :meth:`MappingEntitySource.longest_form_tokens`.
+        """
+        return self._index.longest_form_tokens()
 
 
 @dataclass
