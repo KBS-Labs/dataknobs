@@ -193,12 +193,17 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
 # mechanisms agreed to check nothing. Reproduced with a broken intra-doc link,
 # which `mkdocs build --strict` rejects and both paths passed.
 #
-# Deliberately NOT added to _WORKSPACE_ONLY_QUALITY_INPUTS, though they are
-# workspace-only in blast radius. That list is also what change detection
-# matches, and map_files_to_packages tests it *before* DOCS_PATTERNS and stops
-# at the first hit — so filing them there would stop setting docs_changed,
-# which is what makes the gate re-run the very checks this scope exists to keep
-# honest.
+# Kept out of _WORKSPACE_ONLY_QUALITY_INPUTS, though they are workspace-only in
+# blast radius. The reason used to be an ordering: that list is also what change
+# detection matches, every branch ended in `continue`, and the workspace tier was
+# tested first — so filing them there stopped them setting docs_changed, which is
+# what makes the gate re-run the very checks this scope exists to keep honest.
+#
+# That ordering is gone: map_files_to_packages accumulates, so a file declared in
+# two tiers now contributes to both and filing an entry here is no longer a way
+# to un-declare it there. What remains is a plain scoping question — these feed
+# the three recorded documentation checks, so they are hashed under "docs" where
+# a docs-only change invalidates them without dirtying the guard suite's scope.
 #
 # Note what the hazard is and is not. A docs edit *is* a workspace-guard change
 # and the mapping now says so: the guards under tests/ read every document.
@@ -224,8 +229,8 @@ _DOCS_QUALITY_INPUTS = [
     # counting the names on a package door is checked against that door by
     # test_the_changelog_door_count_matches_the_door. Hashed *here* rather
     # than in the workspace-only tier for the reason the note above gives --
-    # that tier is matched before DOCS_PATTERNS and stops, so filing a
-    # changelog there would stop it re-running the documentation checks.
+    # which is now a scoping one rather than an ordering one, since the mapping
+    # accumulates and a second tier no longer silences the first.
     #
     # Named individually rather than as "packages/*/CHANGELOG.md", because a
     # "*" expands only in a *directory* entry: scope_entry_files tests a file
@@ -359,9 +364,12 @@ PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     # what stops the two copies parting. Read from the package side rather than
     # from tests/ deliberately: the comparison needs the conftest constant, and
     # a workspace guard reading a package's test file sits in no workspace hash
-    # scope — while filing that file in the workspace-only tier would stop it
-    # scheduling its own package, since change detection tests that tier first
-    # and stops. From here both halves are covered by rules that already exist.
+    # scope. The second half of that argument has expired — filing the conftest
+    # in the workspace-only tier used to stop it scheduling its own package,
+    # because the mapping tested that tier first and stopped, and it no longer
+    # does. Reading from this side still costs nothing and covers both halves
+    # with rules that already exist, so the placement stands on the first half
+    # alone; see test_a_file_can_feed_more_than_one_tier for what is now legal.
     "packages/common/docs/guides/ontology.md": "common",
     "packages/common/docs/guides/entity-resolution.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
@@ -572,17 +580,26 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
     workspace_changed = False
 
     for filepath in files:
-        # Check for global triggers
+        # Every tier that matches contributes. The tiers are not a partition
+        # and the declarations never said they were: a file can be a package's
+        # test input *and* something a workspace guard reads, and three pairs
+        # genuinely overlap on the tree today. Each branch used to end in
+        # `continue`, so the first match was the only one that spoke and the
+        # rest of the file's blast radius was dropped in silence — which made
+        # declaring a file in a second tier a way to *un*-declare it from the
+        # first. Four comments in this module warned about that ordering; they
+        # describe the shape below instead.
         if filepath in GLOBAL_TRIGGERS:
             all_triggered = True
-            continue
 
-        # Check for workspace-only inputs. These belong to no package, so they
-        # move no package's result — but they are still a quality input, and
-        # the guards under tests/ are the ones that check the toolchain.
+        # Workspace-only inputs belong to no package, so they move no package's
+        # result — but they are still a quality input, and the guards under
+        # tests/ are the ones that check the toolchain. "Belongs to no package"
+        # is a property of the entries filed here, not of the branch: a file
+        # that does belong to one and is also read by a guard reaches the
+        # package mapping below as well.
         if _is_workspace_only_input(filepath):
             workspace_changed = True
-            continue
 
         # Documentation. Two flags, because two different things read it and
         # they disagree about a changelog: docs_changed re-runs the three
@@ -595,37 +612,44 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
         if any(filepath.startswith(pattern) for pattern in DOCS_PATTERNS):
             docs_changed = True
             workspace_changed = True
-            continue
 
-        # Package documentation. It belongs to no package's suite unless a test
-        # in that suite reads it — see PACKAGE_TEST_DOC_INPUTS, which is the
-        # whole of the exception and is checked against the tree rather than
-        # trusted. Without the `continue` every package document mapped to its
-        # package below, which ran that suite and its dependents for a prose
-        # edit while running none of the four workspace guards that read it.
-        if "/docs/" in filepath and filepath.startswith("packages/"):
-            docs_changed = True
-            workspace_changed = True
-            owner = PACKAGE_TEST_DOC_INPUTS.get(filepath)
-            if owner is not None:
-                changed_packages.add(owner)
-            continue
-
-        # Package-root documentation, which the mapping below would otherwise
-        # read as a change to the package itself — scheduling its whole suite
-        # to publish a release note. See _PACKAGE_DOC_FILES for why nothing
-        # about a package's recorded verdict depends on one.
-        if filepath.startswith("packages/") and filepath.rsplit("/", 1)[-1] in _PACKAGE_DOC_FILES:
-            docs_changed = True
-            continue
-
-        # Map to package
         if filepath.startswith("packages/"):
-            parts = filepath.split("/")
-            if len(parts) >= 2:
-                pkg_name = parts[1]
-                if pkg_name in DEPENDENCIES:
-                    changed_packages.add(pkg_name)
+            # The one exclusion that survives, and the only one the tree
+            # exhibits: a package *document* must not map to its package by the
+            # generic rule below. 158 files match both — 148 under docs/ and
+            # ten changelogs — and mapping them ran a whole suite and its
+            # dependents for a prose edit while running none of the four guards
+            # that actually read the file. A document reaches its package only
+            # by being declared in PACKAGE_TEST_DOC_INPUTS.
+            is_package_document = False
+
+            # Package documentation. It belongs to no package's suite unless a
+            # test in that suite reads it — see PACKAGE_TEST_DOC_INPUTS, which
+            # is the whole of the exception and is checked against the tree
+            # rather than trusted.
+            if "/docs/" in filepath:
+                docs_changed = True
+                workspace_changed = True
+                is_package_document = True
+                owner = PACKAGE_TEST_DOC_INPUTS.get(filepath)
+                if owner is not None:
+                    changed_packages.add(owner)
+
+            # Package-root documentation, which the mapping below would
+            # otherwise read as a change to the package itself — scheduling its
+            # whole suite to publish a release note. See _PACKAGE_DOC_FILES for
+            # why nothing about a package's recorded verdict depends on one.
+            if filepath.rsplit("/", 1)[-1] in _PACKAGE_DOC_FILES:
+                docs_changed = True
+                is_package_document = True
+
+            # Map to package.
+            if not is_package_document:
+                parts = filepath.split("/")
+                if len(parts) >= 2:
+                    pkg_name = parts[1]
+                    if pkg_name in DEPENDENCIES:
+                        changed_packages.add(pkg_name)
 
     return changed_packages, docs_changed, all_triggered, workspace_changed
 

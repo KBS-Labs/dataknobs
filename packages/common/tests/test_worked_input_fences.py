@@ -32,12 +32,14 @@ is the wrong side of a boundary the toolchain guards enforce. A workspace guard
 reading ``packages/common/tests/conftest.py`` puts a *package's* file in a
 workspace guard's input set, and that file belongs to no workspace hash scope --
 so editing it would move this verdict while every stored hash stayed intact.
-Filing it in the workspace-only tier would be worse: change detection tests that
-tier before the package mapping and stops, so the common conftest would stop
-scheduling the common suite. Read from this side instead, the input is a package
-document, which ``PACKAGE_TEST_DOC_INPUTS`` already exists to declare and
-``packages/*/docs/`` already hashes. ``test_packs.py`` reads its own guide the
-same way.
+Filing it in the workspace-only tier used to be worse still: change detection
+tested that tier before the package mapping and stopped, so the common conftest
+would have stopped scheduling the common suite. That half has expired --
+``map_files_to_packages`` accumulates now, and a file declared in two tiers
+contributes to both -- so the placement rests on the hash-scope half above
+rather than on both. Read from this side, the input is a package document, which
+``PACKAGE_TEST_DOC_INPUTS`` already exists to declare and ``packages/*/docs/``
+already hashes. ``test_packs.py`` reads its own guide the same way.
 
 **Adding a third pair is one row in the table below and one in that
 declaration**, and forgetting the first is caught rather than trusted:
