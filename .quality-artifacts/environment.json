@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-14T20:54:52Z",
+  "timestamp": "2026-09-14T21:26:38Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/a-test-fixture-a-suite-reads-enters-that-packages-hash",
-  "git_commit": "9c49b9e718ab0d28ef56d81c44ac5305c98d178f",
+  "git_branch": "sbk/a-guard-asserts-the-premise-its-anchors-rest-on",
+  "git_commit": "3879fde1b2bb3c4ec94d0d25daffb45262c8d47b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
