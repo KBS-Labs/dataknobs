@@ -311,6 +311,53 @@ GLOBAL_TRIGGER_STEPS: dict[str, frozenset[str]] = {
     "bin/package-discovery.sh": frozenset({LINT_STEP}),
 }
 
+#: The hash-scope name for each step set a global input can declare. The widest
+#: one keeps the name "toolchain": the scope predates the step classification,
+#: and renaming it would move a stored digest for every global input rather
+#: than only for the ones leaving it.
+_GLOBAL_SCOPE_NAMES: dict[frozenset[str], str] = {
+    BOTH_STEPS: "toolchain",
+    frozenset({LINT_STEP}): "toolchain_lint",
+    frozenset({TEST_STEP}): "toolchain_test",
+}
+
+
+def _global_scopes_by_step() -> dict[str, list[str]]:
+    """Partition the global inputs into one hash scope per step they move.
+
+    The scope is what the artifact stores and package-hashes.py compares, so
+    while there was one of them a moved digest could say only that *something*
+    global had changed -- over inputs whose recorded consequences the table
+    above had already been made to tell apart. An edited bin/validate.sh and an
+    edited conftest.py produced identical evidence, under a comment claiming
+    both moved "lint, type, or test results everywhere", which stopped being
+    true of the lint-only pair on the day that table was written.
+
+    Derived rather than declared again. A hand-kept list here would be a fifth
+    reader of the blast-radius question, and the four that already existed
+    disagreeing is the defect this declaration was built to end. A new global
+    input reaches the right scope by declaring its step, and declaring one is
+    not optional -- the toolchain guards fail on a trigger missing from the
+    table.
+
+    Fails closed at both lookups. An undeclared input takes BOTH_STEPS, the
+    same default map_files_to_packages applies, and an unrecognised step set
+    takes the widest scope: a gap here over-dirties and the guard names it,
+    rather than raising at import time in a module four programs load.
+    """
+    grouped: dict[str, list[str]] = {}
+    for entry in GLOBAL_TRIGGERS:
+        steps = GLOBAL_TRIGGER_STEPS.get(entry, BOTH_STEPS)
+        grouped.setdefault(_GLOBAL_SCOPE_NAMES.get(steps, "toolchain"), []).append(entry)
+    return grouped
+
+
+#: The global tier, split by the recorded step its members move. A step nothing
+#: declares contributes no scope rather than an empty one: an empty scope hashes
+#: to the same digest every run and compares equal forever, which is what a
+#: scope being checked also looks like.
+_GLOBAL_SCOPE_INPUTS: dict[str, list[str]] = _global_scopes_by_step()
+
 # The workspace-only tier, matched rather than merely declared. Three readers
 # consulted the list above and a fourth — the mapping below — did not, which is
 # how a diff touching only tests/ came out as "no quality input changed" and
@@ -323,15 +370,23 @@ WORKSPACE_ONLY_TRIGGERS = list(_WORKSPACE_ONLY_QUALITY_INPUTS)
 #: directories through a "*"; what "beneath" covers differs by reader — hashing
 #: takes the files that feed a check, change detection takes every path under
 #: the prefix. See the caveat on _WORKSPACE_ONLY_QUALITY_INPUTS.
+#:
+#: The global tier arrives already split by step, so the key that moved names
+#: which recorded result went stale rather than only that one did.
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = {
-    "toolchain": _GLOBAL_QUALITY_INPUTS,
+    **_GLOBAL_SCOPE_INPUTS,
     "workspace_tests": _WORKSPACE_ONLY_QUALITY_INPUTS,
     "docs": _DOCS_QUALITY_INPUTS,
 }
 
 #: Scopes whose change invalidates every package's result rather than only the
 #: workspace guard suite. package-hashes.py reads this to size the dirty set.
-GLOBAL_SCOPES = frozenset({"toolchain"})
+#:
+#: Every member of the split global tier is one, and the width is unchanged by
+#: the split: a lint-only input moves every package's recorded validation
+#: result, so all ten are still dirty. What the split changes is which claim a
+#: moved digest carries, not how many packages it names.
+GLOBAL_SCOPES = frozenset(_GLOBAL_SCOPE_INPUTS)
 
 # ---------------------------------------------------------------------------
 # Release-time noise

@@ -396,10 +396,21 @@ def validate_artifacts() -> dict[str, Any]:
             if digest != stored_workspace.get(scope)
         }
 
-    # A global scope changes lint, type, or test results everywhere, so every
-    # package needs re-validation. A workspace-only scope moves no package's
-    # result, so it invalidates the artifacts without dirtying a single suite —
-    # that asymmetry is the whole reason the scopes are declared separately.
+    # A global scope changes a recorded result everywhere, so every package
+    # needs re-validation. *Which* result is the scope's name: the global tier
+    # is partitioned by the step its members move, so a moved "toolchain_lint"
+    # says every package's validation row is stale and its test rows are not.
+    #
+    # The dirty set neither widens nor narrows on that — it is one list per
+    # package, not one per step — so all ten are named whichever global scope
+    # moved, and that is the right width either way: a lint-only input really
+    # does move every package's recorded validation result. The scope name is
+    # where the narrower fact is legible, to a reader of the failure report and
+    # of the gate's end-of-run re-check.
+    #
+    # A workspace-only scope moves no package's result at all, so it
+    # invalidates the artifacts without dirtying a single suite — that
+    # asymmetry is the whole reason the scopes are declared separately.
     if changed_scopes & GLOBAL_SCOPES:
         changed |= set(ALL_PACKAGES)
 
