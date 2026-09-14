@@ -525,6 +525,166 @@ def drop_release_noise_only(files: list[str], resolved_ref: str) -> list[str]:
     return material
 
 
+# ---------------------------------------------------------------------------
+# What a lock change actually moved
+# ---------------------------------------------------------------------------
+#
+# uv.lock is a global trigger because a resolution change really can reach
+# every package: a bumped third-party version is installed for all ten, and
+# the path says nothing about which. But the file is not opaque, and the
+# blast radius it carries is written inside it. Each workspace member is its
+# own ``[[package]]`` block marked ``source = { editable = "packages/<name>" }``,
+# so a diff confined to those blocks names the packages it moved.
+#
+# This is the same move drop_release_noise_only above already makes — read the
+# content rather than trusting the path — one step further. That filter drops
+# uv.lock when the *whole* diff is release noise; measured over 150 merged
+# pull requests it did so twice, while uv.lock still reached the global
+# trigger ten times and was the sole trigger in eight of them. The remainder
+# is not noise, so dropping the file would be wrong; it is a real change that
+# names the packages it reaches.
+#
+# Kept here rather than widened into strip_release_noise deliberately. That
+# function is shared with the hasher (package-hashes.py imports it by name, so
+# the two cannot disagree about what a change *is*), and uv.lock is hashed in
+# the "toolchain" scope — so teaching it the lock's spellings would move every
+# stored workspace hash for a scheduling fix. Scheduling is the question here,
+# so the reading stays on the scheduling side.
+_LOCK_FILE = "uv.lock"
+
+#: The marker that makes a ``[[package]]`` block a workspace member, and names
+#: the directory it is. Read from the block rather than derived from the
+#: distribution name, because the two do not match: ``name = "dataknobs"`` is
+#: ``packages/legacy``. ``source = { editable = "." }`` is the workspace root,
+#: which owns no package's code and so matches this deliberately-narrow pattern
+#: not at all — it is unattributable, and handled as such below.
+_LOCK_MEMBER_RE = re.compile(r'^source = \{ editable = "packages/([^"/]+)" \}\s*$', re.M)
+
+#: The block header of one locked distribution, and the name line that follows.
+_LOCK_BLOCK = "[[package]]"
+_LOCK_NAME_RE = re.compile(r'^name = "([^"]+)"\s*$')
+
+#: ``resolution-markers`` is a set that the format writes as a list, and uv
+#: reorders it on its own. Three of the release pull requests measured differed
+#: from their base in nothing else at the top of the file — the same reordering
+#: each time, an identical set of markers — which is a diff that means nothing
+#: and, read literally, made those releases behave differently from the two
+#: that happened not to get reordered. Compared as the set it is, so one PR
+#: class gets one answer.
+_LOCK_MARKERS_RE = re.compile(r"^(resolution-markers = \[\n)(.*?)(^\]$)", re.M | re.S)
+
+
+def _canonical_lock(text: str) -> str:
+    """Sort the one list in a lock file whose order carries no meaning."""
+
+    def _sorted_markers(match: re.Match[str]) -> str:
+        entries = sorted(line for line in match.group(2).splitlines() if line.strip())
+        return match.group(1) + "".join(f"{line}\n" for line in entries) + match.group(3)
+
+    return _LOCK_MARKERS_RE.sub(_sorted_markers, text)
+
+
+def _lock_regions(text: str) -> dict[str, str]:
+    """Every top-level region of a lock file, keyed by what identifies it.
+
+    A ``[[package]]`` block is keyed by its ``name``; every other top-level
+    table by its header; everything before the first of either by "". Tables
+    spelled ``[package.*]`` are sub-tables and stay with the block they
+    qualify, which is what keeps a dependency edit inside its own package
+    rather than reading as a region of its own.
+
+    Two blocks may share a name — uv emits one per resolution fork — so a
+    repeated key accumulates rather than overwriting. A change in either half
+    then still shows up as a difference in the whole, which is the answer that
+    keeps this safe rather than the one that makes it precise.
+    """
+    regions: dict[str, str] = {}
+    key = ""
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if buffer:
+            regions[key] = regions.get(key, "") + "".join(buffer)
+
+    for line in text.splitlines(keepends=True):
+        stripped = line.rstrip("\n")
+        if stripped == _LOCK_BLOCK:
+            flush()
+            buffer, key = [line], f"\x00unnamed:{len(regions)}"
+            continue
+        if stripped.startswith("[") and not stripped.startswith("[package."):
+            flush()
+            buffer, key = [line], stripped
+            continue
+        if key.startswith("\x00unnamed:"):
+            named = _LOCK_NAME_RE.match(stripped)
+            if named:
+                key = named.group(1)
+        buffer.append(line)
+
+    flush()
+    return regions
+
+
+def lock_members_changed(before: bytes, after: bytes) -> frozenset[str] | None:
+    """Which workspace members' resolutions moved between two lock files.
+
+    Returns ``None`` when the answer is "more than the workspace can account
+    for" — a third-party block moved, the preamble moved, the manifest moved,
+    a block could not be attributed to a package directory. That is the honest
+    reading of a bumped shared dependency: it is installed for every package
+    and the lock does not say which of them care.
+
+    **The empty set is also ``None``'s answer at the call site, and
+    deliberately so.** A lock that survived drop_release_noise_only and then
+    named no member at all is a file this reader did not account for, and the
+    shape of that mistake is the dangerous one: a parser that silently matched
+    nothing would return an empty set for every input, which reads as "no
+    package is affected" and — when the lock is the only material file —
+    becomes an empty schedule and a skipped test suite reporting success. This
+    module's own history has that failure twice over. So the caller treats
+    empty as unattributed; see map_files_to_packages.
+    """
+    try:
+        before_text = _canonical_lock(before.decode("utf-8", errors="surrogateescape"))
+        after_text = _canonical_lock(after.decode("utf-8", errors="surrogateescape"))
+    except (UnicodeDecodeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+    before_regions = _lock_regions(before_text)
+    after_regions = _lock_regions(after_text)
+
+    moved: set[str] = set()
+    for name in set(before_regions) | set(after_regions):
+        old = before_regions.get(name)
+        new = after_regions.get(name)
+        if old == new:
+            continue
+        member = _LOCK_MEMBER_RE.search(new if new is not None else old or "")
+        if member is None:
+            return None
+        package = member.group(1)
+        if package not in DEPENDENCIES:
+            return None
+        moved.add(package)
+
+    return frozenset(moved)
+
+
+def lock_scan_for(resolved_ref: str) -> frozenset[str] | None:
+    """Read the lock at both ends and say which members it moved.
+
+    Separated from the decision so plan_for_files stays a function of its
+    arguments: this is the half that touches git, and it is the half a test
+    cannot pin without a repository.
+    """
+    before = _blob_at(resolved_ref, _LOCK_FILE)
+    after = _worktree_bytes(_LOCK_FILE)
+    if before is None or after is None:
+        return None
+    return lock_members_changed(before, after)
+
+
 def get_changed_files(base_ref: str) -> list[str]:
     """Get all changed files: committed on branch, staged, and unstaged.
 
@@ -625,8 +785,13 @@ class FileScan(NamedTuple):
     workspace_changed: bool
 
 
-def map_files_to_packages(files: list[str]) -> FileScan:
-    """Map changed files to affected packages. See FileScan."""
+def map_files_to_packages(files: list[str], lock_scan: frozenset[str] | None = None) -> FileScan:
+    """Map changed files to affected packages. See FileScan.
+
+    ``lock_scan`` is what ``uv.lock`` reported about itself, from
+    :func:`lock_members_changed`; ``None`` — the default — means nothing read
+    it, so the path keeps the blast radius it has always carried.
+    """
     changed_packages: set[str] = set()
     exporting_packages: set[str] = set()
     docs_changed = False
@@ -644,7 +809,21 @@ def map_files_to_packages(files: list[str]) -> FileScan:
         # first. Four comments in this module warned about that ordering; they
         # describe the shape below instead.
         if filepath in GLOBAL_TRIGGERS:
-            all_triggered = True
+            # One of these can say what it moved. A lock diff confined to
+            # workspace-member blocks names the packages whose resolution
+            # changed, and their dependents follow through the closure like
+            # any other exporting change — a member's resolution is exactly
+            # what its dependents build against. Every other global input,
+            # and a lock this reader could not account for, keeps the blast
+            # radius the path carries. An *empty* scan counts as unaccounted
+            # for: see lock_members_changed for why that direction is the
+            # safe one.
+            members = lock_scan if filepath == _LOCK_FILE else None
+            if members:
+                changed_packages.update(members)
+                exporting_packages.update(members)
+            else:
+                all_triggered = True
 
         # Workspace-only inputs belong to no package, so they move no package's
         # result — but they are still a quality input, and the guards under
@@ -746,12 +925,16 @@ def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
     return "none"
 
 
-def plan_for_files(files: list[str]) -> dict[str, Any]:
+def plan_for_files(files: list[str], lock_scan: frozenset[str] | None = None) -> dict[str, Any]:
     """Decide what a change set needs tested, without consulting git.
 
     Split out from detect_changes so the decision is reachable from a test
     with a literal file list. The git half is what made the previous
     behaviour awkward to pin, and it is the decision that was wrong.
+
+    ``lock_scan`` keeps that split intact now that one of the inputs has to be
+    *read* to be sized: detect_changes does the reading and passes the answer
+    in, so this stays a function of its arguments. See map_files_to_packages.
 
     Returns dict with:
         packages: sorted list of package names that need testing
@@ -773,7 +956,7 @@ def plan_for_files(files: list[str]) -> dict[str, Any]:
             "test_scope": "none",
         }
 
-    scan = map_files_to_packages(files)
+    scan = map_files_to_packages(files, lock_scan)
 
     if scan.all_triggered:
         packages = list(ALL_PACKAGES)
@@ -801,8 +984,14 @@ def plan_for_files(files: list[str]) -> dict[str, Any]:
 
 
 def detect_changes(base_ref: str = "main") -> dict[str, Any]:
-    """Detect changed packages and docs status. See plan_for_files."""
-    return plan_for_files(get_changed_files(base_ref))
+    """Detect changed packages and docs status. See plan_for_files.
+
+    Reads ``uv.lock`` only when it is in the material change set, so the two
+    extra git object reads are paid on the change sets that can benefit.
+    """
+    files = get_changed_files(base_ref)
+    lock_scan = lock_scan_for(_resolve_base_ref(base_ref)) if _LOCK_FILE in files else None
+    return plan_for_files(files, lock_scan)
 
 
 def main() -> None:

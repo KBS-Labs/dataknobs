@@ -514,6 +514,187 @@ def test_no_package_suite_reads_another_packages_tests() -> None:
     )
 
 
+def test_a_lock_change_maps_to_the_members_whose_resolution_moved() -> None:
+    """``uv.lock`` says which packages it moved; the path alone does not.
+
+    The entry is in the global tier because a resolution change really can
+    reach every package -- a bumped third-party version is installed for all
+    ten, and nothing in the path says which. But the file is not opaque. Each
+    workspace member is its own ``[[package]]`` block, marked
+    ``source = { editable = "packages/<name>" }``, so a diff confined to those
+    blocks names the packages it moved and stops there.
+
+    That is the common shape rather than a corner: measured over 150 merged
+    pull requests, ``uv.lock`` was the single most frequent global trigger at
+    12, and 7 of those 12 touched workspace-member blocks only -- release
+    version bumps, and one package gaining a dependency.
+
+    The closure still runs from whatever moved, which is what keeps a real
+    dependency change reaching the packages that build against it.
+    """
+    moved = _scopes.plan_for_files(["uv.lock"], lock_scan=frozenset({"llm"}))
+    assert moved["mode"] == "changed", (
+        "a lock diff that named the members it moved has a blast radius the "
+        f"file itself reported; got mode={moved['mode']}"
+    )
+    assert moved["packages"] == sorted(
+        _scopes.get_transitive_dependents({"llm"}) & set(_scopes.DEPENDENCIES)
+    ), (
+        "a resolution change to one member reaches that member and the "
+        f"packages that build against it; got {moved['packages']}"
+    )
+    assert moved["exporting"] == ["llm"], (
+        "a member's resolution is exactly what its dependents build against, "
+        "so a lock change to it exports"
+    )
+
+
+def test_an_unreadable_lock_change_keeps_the_global_blast_radius() -> None:
+    """The fail-closed half: no scan means the old answer, not a smaller one.
+
+    A lock diff that moved a third-party block, a lock the base ref does not
+    carry, a parse that failed -- each is a case where the file did not say
+    which packages it moved, and the only safe reading of that silence is the
+    one the path has always carried. A narrowing that treated "I could not
+    tell" as "nothing" would schedule fewer suites for exactly the changes
+    that most need them.
+    """
+    unattributed: tuple[frozenset[str] | None, ...] = (None, frozenset())
+    for scan in unattributed:
+        plan = _scopes.plan_for_files(["uv.lock"], lock_scan=scan)
+        assert plan["mode"] == "all", (
+            f"lock_scan={scan!r} names no member, so nothing narrowed the "
+            f"path's own blast radius; got mode={plan['mode']}"
+        )
+        assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), plan["packages"]
+
+    assert _scopes.plan_for_files(["uv.lock"])["packages"] == sorted(_scopes.ALL_PACKAGES), (
+        "the default must be the global answer: a caller that does not supply "
+        "a scan has not narrowed anything"
+    )
+
+
+def test_every_package_is_attributable_in_the_real_lock() -> None:
+    """The premise the narrowing rests on, checked against the tree.
+
+    ``lock_members_changed`` narrows a global trigger by finding workspace
+    members inside ``uv.lock``. A reader that found *none* would return the
+    empty set for every diff -- which the caller treats as unattributed, so
+    the failure is safe, but it is also silent: the narrowing would simply
+    stop paying while every test above still passed, because each supplies
+    its own scan rather than reading the file.
+
+    So this reads the real lock and asserts the marker accounts for every
+    package, which is what makes a uv format change fail here rather than
+    quietly switch the optimisation off.
+    """
+    lock = (ROOT / "uv.lock").read_bytes()
+    text = lock.decode("utf-8", errors="surrogateescape")
+    attributed = set(_scopes._LOCK_MEMBER_RE.findall(text))
+
+    assert attributed == set(_scopes.ALL_PACKAGES), (
+        "every workspace package is an editable block in uv.lock, and the "
+        "narrowing can only attribute a change to a package it can find. "
+        f"missing from the lock: {sorted(set(_scopes.ALL_PACKAGES) - attributed)}; "
+        f"found but not a package: {sorted(attributed - set(_scopes.ALL_PACKAGES))}"
+    )
+
+    # The workspace root is an editable member too and owns no package's code,
+    # so it must NOT be attributed -- a pattern loose enough to catch it would
+    # map a root-only change onto some package.
+    assert 'editable = "." }' in text, (
+        "the workspace root block anchors the case below; if uv stopped "
+        "emitting it, re-anchor rather than dropping the assertion"
+    )
+    assert _scopes._LOCK_MEMBER_RE.search('source = { editable = "." }\n') is None
+
+
+def test_the_lock_reader_resolves_a_real_edit_and_refuses_what_it_cannot_place() -> None:
+    """Both directions, against the real file rather than a fixture.
+
+    The positive half is the one that matters: a reader that resolved nothing
+    reports "no member moved" for the same reason a correct one reports it of
+    an unchanged file, and this module's history is full of guards that
+    reported green because they read nothing.
+    """
+    lock = (ROOT / "uv.lock").read_bytes()
+    assert _scopes.lock_members_changed(lock, lock) == frozenset(), (
+        "a file compared with itself moved no member"
+    )
+
+    marker = b'source = { editable = "packages/llm" }'
+    assert lock.count(marker) == 1, "the llm block anchors this case"
+    edited = lock.replace(marker, marker + b"\nbuild-constraint-dependencies = []")
+    assert edited != lock
+    assert _scopes.lock_members_changed(lock, edited) == frozenset({"llm"}), (
+        "an edit inside one member's block is attributable to that member, "
+        f"got {_scopes.lock_members_changed(lock, edited)}"
+    )
+
+    # A third-party block is what the workspace cannot account for: the bumped
+    # version is installed for every package and the lock does not say which
+    # of them care.
+    third_party = b'\nname = "jinja2"\nversion = '
+    assert lock.count(third_party) == 1, (
+        "the jinja2 block anchors this case; spelled with its surrounding "
+        "newlines because the bare name also appears in every dependency list"
+    )
+    bumped = lock.replace(third_party, b'\nname = "jinja2"\nx-probe = 1\nversion = ')
+    assert _scopes.lock_members_changed(lock, bumped) is None, (
+        "a change this reader cannot place must keep the global blast radius"
+    )
+
+    # And the preamble, which is every package's resolution at once.
+    repython = b'requires-python = ">=3.12"'
+    assert lock.count(repython) == 1
+    assert (
+        _scopes.lock_members_changed(lock, lock.replace(repython, b'requires-python = ">=3.13"'))
+        is None
+    )
+
+
+def test_a_resolution_marker_reorder_is_not_a_change() -> None:
+    """Uv reorders that list on its own; the set it denotes is what matters.
+
+    Left literal, the same release-helper run behaved differently depending on
+    whether uv happened to reorder -- measured across the release pull requests
+    in the last 150, three were reordered and two were not, and only the
+    unreordered two could ever narrow. One PR class, one answer.
+    """
+    lock = (ROOT / "uv.lock").read_bytes()
+    text = lock.decode("utf-8", errors="surrogateescape")
+    match = _scopes._LOCK_MARKERS_RE.search(text)
+    assert match is not None, (
+        "uv.lock carries a resolution-markers list; if the format changed, "
+        "this canonicalisation needs re-reading rather than deleting"
+    )
+    entries = [line for line in match.group(2).splitlines() if line.strip()]
+    assert len(entries) > 1, "a one-entry list cannot be reordered"
+
+    shuffled = text.replace(
+        match.group(0),
+        match.group(1) + "".join(f"{line}\n" for line in reversed(entries)) + match.group(3),
+    )
+    assert shuffled != text, "the reorder must actually change the bytes"
+    reordered = shuffled.encode("utf-8", errors="surrogateescape")
+
+    assert _scopes.lock_members_changed(lock, reordered) == frozenset(), (
+        "reordering a set changes nothing about the resolution it denotes"
+    )
+
+    # The control in the other direction: a marker whose *text* changed is a
+    # real resolution change and must still be unattributable.
+    # Altered mechanically rather than by editing a version inside it: every
+    # entry is a quoted string, and nothing here should depend on which
+    # markers uv happens to emit today.
+    altered = text.replace(entries[0], entries[0].replace('"', '"x-probe and ', 1), 1)
+    assert altered != text, "the control must actually alter a marker"
+    assert (
+        _scopes.lock_members_changed(lock, altered.encode("utf-8", errors="surrogateescape"))
+        is None
+    ), "a changed marker is a changed resolution, not a reordering"
+
+
 def _documents_a_package_suite_reads() -> dict[str, str]:
     """Every package document read by a test in that package's own suite.
 
