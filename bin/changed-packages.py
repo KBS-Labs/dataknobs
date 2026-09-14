@@ -204,8 +204,13 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
 # and the mapping now says so: the guards under tests/ read every document.
 # What must not happen is that becoming the *only* thing it says, because the
 # two facts have different populations — a changelog re-runs the documentation
-# checks and is read by no guard. Setting both flags in the DOCS_PATTERNS
+# checks and does not dirty a package. Setting both flags in the DOCS_PATTERNS
 # branch keeps them independent; moving the entry would collapse them.
+#
+# A changelog *is* read by a guard now, which is a hashing question rather than
+# a tier one: `packages/*/CHANGELOG.md` is in the docs hash scope below, so
+# editing one invalidates the artifact, while the tier it matches is unchanged
+# and it still re-runs the documentation checks.
 #
 # Two file entries rather than ".dataknobs/", which also holds notes and an
 # example workflow that feed no check.
@@ -215,6 +220,21 @@ _DOCS_QUALITY_INPUTS = [
     "packages/*/docs/",  # symlinked and transcluded into the tree above
     ".dataknobs/docs-mirror-manifest.json",  # what documentation_mirrors reads
     ".dataknobs/packages.json",  # what documentation_versions compares against
+    # Read by a workspace guard, which is why it is hashed: a release note
+    # counting the names on a package door is checked against that door by
+    # test_the_changelog_door_count_matches_the_door. Hashed *here* rather
+    # than in the workspace-only tier for the reason the note above gives --
+    # that tier is matched before DOCS_PATTERNS and stops, so filing a
+    # changelog there would stop it re-running the documentation checks.
+    #
+    # Named individually rather than as "packages/*/CHANGELOG.md", because a
+    # "*" expands only in a *directory* entry: scope_entry_files tests a file
+    # entry with is_file(), so the glob would resolve to nothing and read
+    # exactly like coverage -- the hazard the workflows note above describes.
+    # The guard that found this derives its population from the guards' own
+    # source, so a guard reading a second package's changelog fails until that
+    # one is named too.
+    "packages/common/CHANGELOG.md",
 ]
 
 # Files that trigger testing all packages. Only the global tier: a workspace-only

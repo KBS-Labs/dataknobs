@@ -5,7 +5,7 @@ no store, no embedder, no network -- which is what makes them the default a
 cascade falls back to when a consumer configures nothing.
 
 Two of them differ in **which index they ask**, and that difference is the
-whole reason the source publishes two members. ``ExactNormalizedSignal`` asks
+whole reason the source publishes two *index* members. ``ExactNormalizedSignal`` asks
 for any form: an id, a name, or an alias, folded together, which is what an
 exact lookup wants. ``AliasSignal`` asks for alias forms specifically, because
 the folded map cannot report which of the three matched -- so a rung that
@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.entity_resolution.protocols import AliasFormSource, AsyncAliasFormSource
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
     EvidenceKind,
@@ -38,7 +39,7 @@ from dataknobs_common.entity_resolution.values import (
 from dataknobs_common.text import content_span, token_spans
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from dataknobs_common.ontology.sources import AsyncEntitySource, EntitySource
 
@@ -159,23 +160,33 @@ def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
     return tuple(FormHit(entity_id=entity_id, span=span) for entity_id in ids)
 
 
-def _probe_spans(query: str, longest: int) -> tuple[tuple[int, int], ...]:
+def _probe_spans(query: str, longest: int | None) -> Iterator[tuple[int, int]]:
     """Spans of up to ``longest`` consecutive tokens in ``query``, longest first.
 
     The enumeration a scan runs, and ``longest`` is what keeps it affordable.
     Unbounded it is *n(n+1)/2* spans for *n* tokens -- 21 for a six-token
     utterance, but 500,500 for a thousand-token paste, with each probe slicing
-    a span that may be the whole query. Quadratic in tokens and cubic in the
-    characters copied, on text a caller hands over.
+    a span that may be the whole query. Quadratic in the token count, and the
+    characters copied grow with the cube of it, on text a caller hands over.
 
-    **The bound costs no answer**, which is what makes it an arithmetic fix
-    rather than a budget. ``longest`` is how many tokens the longest form the
+    **A derived bound costs no answer**, which is what makes it an arithmetic
+    fix rather than a budget -- and ``longest`` is only derived when the
+    vocabulary could support it. It is how many tokens the longest form the
     vocabulary *declares* occupies -- see
     :meth:`~dataknobs_common.ontology.EntitySource.longest_form_tokens` -- and
     a window wider than that is one no declared form could fill, so every
-    probe removed here would have answered the empty set. What remains is
-    *n x longest* spans: linear in the caller's input, with the constant set
-    by the vocabulary rather than by the query.
+    probe removed is one that would have answered the empty set. What remains
+    is *n x longest* spans: linear in the caller's input, with the constant
+    set by the vocabulary rather than by the query.
+
+    **``None`` means no bound could be derived, and then every window is
+    enumerated.** A source whose fold merges token boundaries reports it, and
+    a rung that folds for itself does not ask -- in both cases the implication
+    the bound rests on has failed, and there is no wider number to fall back
+    to. Quadratic and complete beats linear and lossy: the alternative is a
+    declared form the scan silently stops finding.
+    ``max_window`` on :class:`ScanningSignal` is where a caller who knows
+    their own queries puts a number the vocabulary could not supply.
 
     **Longest first** because the rung publishes its own order and this is
     where the *enumeration*'s order is decided: the cascade positions by
@@ -189,11 +200,63 @@ def _probe_spans(query: str, longest: int) -> tuple[tuple[int, int], ...]:
     could drift in a direction no twin-parity check over signatures would see.
     """
     tokens = token_spans(query)
-    return tuple(
+    widest = len(tokens) if longest is None else min(longest, len(tokens))
+    return (
         (tokens[first][0], tokens[first + length - 1][1])
-        for length in range(min(longest, len(tokens)), 0, -1)
+        for length in range(widest, 0, -1)
         for first in range(len(tokens) - length + 1)
     )
+
+
+def _window_bound(
+    entities: EntitySource | AsyncEntitySource,
+    normalizer: Callable[[str], str] | None,
+    max_window: int | None,
+) -> int | None:
+    """How many tokens a probe may span, or ``None`` to enumerate every window.
+
+    **Shared by both flavours**, for the reason :func:`_probe_spans` is: the
+    three-way decision below has nothing to do with awaiting, and two copies
+    of it could disagree in a direction no twin-parity check over signatures
+    would see. The twins answering identically is the property, and one
+    function is how it is held rather than asserted.
+
+    The source's number describes the source's own fold. A rung handed a
+    ``normalizer`` folds again before the source does, so the window that
+    reaches a key may carry more tokens than the key does, and the source's
+    number was never an answer to that question -- it measured its keys before
+    this rung existed and cannot see the extra fold. No source-side
+    measurement can, so such a rung does not ask.
+
+    ``max_window`` caps whatever that leaves, including nothing. It is the one
+    number here a caller chose rather than the vocabulary implied, so it is
+    the only one that can cost an answer -- see :class:`ScanningSignal`.
+    """
+    derived = None if normalizer is not None else entities.longest_form_tokens()
+    if max_window is None:
+        return derived
+    return max_window if derived is None else min(derived, max_window)
+
+
+def _checked_max_window(max_window: int | None) -> int | None:
+    """``max_window`` as given, having refused a value that means no scan.
+
+    Shared so the twins refuse identically. Zero and negatives are refused
+    rather than clamped: each would build a rung that probes nothing and
+    reports no candidates, which is indistinguishable from a vocabulary that
+    matches nothing and is the kind of silence this family refuses to ship.
+    A caller who wants a rung that never fires leaves it out of the cascade.
+
+    Raises:
+        ValidationError: For a ``max_window`` below one.
+    """
+    if max_window is not None and max_window < 1:
+        raise ValidationError(
+            f"max_window must be at least 1, got {max_window}. A scan with a "
+            f"window narrower than one token probes nothing and would report "
+            f"an empty result for every query."
+        )
+    return max_window
 
 
 def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
@@ -227,8 +290,7 @@ class DeclaredSignal:
     *locates* a form inside the query rather than comparing the whole of it
     overrides :meth:`_located` instead, as :class:`ScanningSignal` does, and a
     rung that wants its own order over :meth:`_hits`'s answer overrides
-    :meth:`_order`. In particular
-    the narrowing comes with it *correct*: it is a superset filter, and
+    :meth:`_order`. In particular the narrowing comes with it *correct*: it is a superset filter, and
     :meth:`~dataknobs_common.entity_resolution.MatchSignal.narrows` explains
     why getting that direction wrong is the one mistake nothing downstream can
     recover. A rung written against the bare
@@ -439,9 +501,37 @@ class ScanningSignal(DeclaredSignal):
 
     key = "scan"
 
+    def __init__(
+        self,
+        entities: EntitySource,
+        *,
+        normalizer: Callable[[str], str] | None = None,
+        max_window: int | None = None,
+    ) -> None:
+        """Args:
+        entities: The vocabulary to match against.
+        normalizer: An **extra** fold, applied before the source's own, as on
+            every rung -- and here it also means this rung stops asking the
+            source how wide a window can be. See :func:`_window_bound`.
+        max_window: The widest probe, in tokens, or ``None`` to spend
+            whatever the vocabulary implies. **The only number here that can
+            cost an answer**: the derived bound removes probes that could not
+            have matched, and this one removes probes that could. It exists
+            for the vocabulary that cannot be bounded -- a source whose fold
+            merges token boundaries reports no bound, and a scan over one
+            enumerates every window unless a caller who knows their own
+            queries says how wide is worth probing.
+
+        Raises:
+            ValidationError: For a ``max_window`` below one.
+        """
+        super().__init__(entities, normalizer=normalizer)
+        self._max_window = _checked_max_window(max_window)
+
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        for span in _probe_spans(query, self._entities.longest_form_tokens()):
+        bound = _window_bound(self._entities, self._normalizer, self._max_window)
+        for span in _probe_spans(query, bound):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
         return found
@@ -567,9 +657,31 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
 
     key = "scan"
 
+    def __init__(
+        self,
+        entities: AsyncEntitySource,
+        *,
+        normalizer: Callable[[str], str] | None = None,
+        max_window: int | None = None,
+    ) -> None:
+        """The synchronous twin's constructor, over an asynchronous source.
+
+        ``max_window`` carries more weight on this flavour than on the other
+        one: a probe here is whatever the backing does when awaited, so an
+        enumeration nobody could bound is a round trip per window rather than
+        a dictionary lookup per window. See :class:`ScanningSignal` for what
+        each argument means and for which of them can cost an answer.
+
+        Raises:
+            ValidationError: For a ``max_window`` below one.
+        """
+        super().__init__(entities, normalizer=normalizer)
+        self._max_window = _checked_max_window(max_window)
+
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        for span in _probe_spans(query, self._entities.longest_form_tokens()):
+        bound = _window_bound(self._entities, self._normalizer, self._max_window)
+        for span in _probe_spans(query, bound):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
         return found

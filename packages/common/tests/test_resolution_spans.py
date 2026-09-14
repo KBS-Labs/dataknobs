@@ -25,6 +25,7 @@ against each other rather than each against a literal.
 from __future__ import annotations
 
 import dataclasses
+import re
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -48,7 +49,6 @@ from dataknobs_common.entity_resolution import (
     content_span,
     token_spans,
 )
-from dataknobs_common.entity_resolution.signals import _probe_spans
 from dataknobs_common.ontology import (
     AsyncMappingEntitySource,
     Entity,
@@ -56,9 +56,10 @@ from dataknobs_common.ontology import (
     async_load_ontology,
     load_ontology,
 )
+from dataknobs_common.text import default_normalizer
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
 
@@ -114,24 +115,48 @@ class AsyncConsumerScanningSignal(AsyncDeclaredSignal):
         return found
 
 
-class CountingEntitySource:
-    """A real source that also tallies the lookups a rung spends on it.
+class _CountingSource:
+    """The flavourless half of a source that tallies the lookups spent on it.
 
-    Delegation to :class:`MappingEntitySource` plus a counter, rather than a
-    double standing in for one: every answer below is the real index's, so the
-    rung under test runs its real path and the tally describes that path rather
-    than an approximation of it.
+    Delegation to a real :class:`MappingEntitySource` plus a counter, rather
+    than a double standing in for one: every answer below is the real index's,
+    so the rung under test runs its real path and the tally describes that
+    path rather than an approximation of it.
 
     What it measures is the half of a rung's behaviour no assertion on a
     *result* can reach. Two rungs probing different numbers of windows return
-    identical candidates, so a cost is only visible by counting -- which is why
-    an unbounded enumeration survived a suite that asserted thoroughly on what
-    came back.
+    identical candidates, so a cost is only visible by counting -- which is
+    why an unbounded enumeration survived a suite that asserted thoroughly on
+    what came back, on both flavours and for two different reasons.
+
+    **The bound accessor is here rather than on each twin**, because it is the
+    number the tests below assert against and a counting source that reported
+    it differently from its own index would make every one of them measure
+    itself. The flavoured members are the ones the protocols spell
+    differently, and they are the only ones the subclasses carry.
     """
 
-    def __init__(self, entities: dict[str, Entity]) -> None:
-        self._inner = MappingEntitySource(entities)
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
         self.probes = 0
+
+    def describe(self) -> Any:
+        return self._inner.describe()
+
+    def longest_form_tokens(self) -> int | None:
+        return self._inner.longest_form_tokens()
+
+
+class CountingEntitySource(_CountingSource):
+    """The synchronous flavour."""
+
+    def __init__(
+        self,
+        entities: Mapping[str, Entity],
+        *,
+        normalizer: Callable[[str], str] | None = None,
+    ) -> None:
+        super().__init__(MappingEntitySource(entities, normalizer=normalizer))
 
     def get(self, entity_id: str) -> Entity | None:
         return self._inner.get(entity_id)
@@ -145,9 +170,6 @@ class CountingEntitySource:
     def fetch_origins(self, refs: Sequence[Any]) -> Any:
         return self._inner.fetch_origins(refs)
 
-    def describe(self) -> Any:
-        return self._inner.describe()
-
     def by_surface_form(self, form: str) -> frozenset[str]:
         self.probes += 1
         return self._inner.by_surface_form(form)
@@ -155,25 +177,65 @@ class CountingEntitySource:
     def by_type(self, type_id: str) -> frozenset[str]:
         return self._inner.by_type(type_id)
 
-    def longest_form_tokens(self) -> int:
-        return self._inner.longest_form_tokens()
+
+class AsyncCountingEntitySource(_CountingSource):
+    """The asynchronous flavour, counting the round trips rather than the calls.
+
+    The distinction is the reason this exists. A probe on the synchronous side
+    is a dictionary lookup; here it is whatever the backing does when awaited,
+    so an enumeration nobody bounded is the more expensive of the two mistakes
+    and was the less measured.
+    """
+
+    def __init__(
+        self,
+        entities: Mapping[str, Entity],
+        *,
+        normalizer: Callable[[str], str] | None = None,
+    ) -> None:
+        super().__init__(AsyncMappingEntitySource(entities, normalizer=normalizer))
+
+    async def get(self, entity_id: str) -> Entity | None:
+        return await self._inner.get(entity_id)
+
+    async def get_many(self, entity_ids: Sequence[str]) -> dict[str, Entity]:
+        return await self._inner.get_many(entity_ids)
+
+    async def fetch_origin(self, ref: Any) -> Any:
+        return await self._inner.fetch_origin(ref)
+
+    async def fetch_origins(self, refs: Sequence[Any]) -> Any:
+        return await self._inner.fetch_origins(refs)
+
+    async def by_surface_form(self, form: str) -> frozenset[str]:
+        self.probes += 1
+        return await self._inner.by_surface_form(form)
+
+    async def by_type(self, type_id: str) -> frozenset[str]:
+        return await self._inner.by_type(type_id)
 
 
 def test_a_scan_probes_no_window_longer_than_a_declared_form() -> None:
     """The enumeration is bounded by the vocabulary, not by the query.
 
     Every contiguous window of a query is *n(n+1)/2* probes -- quadratic in the
-    token count, and cubic in the characters copied, since each probe slices a
-    span that may be the whole query. On text a caller hands over, through a
-    rung a document reaches by writing ``kind: scan``. Measured before this
-    assertion existed: 20,100 probes for 200 tokens, 500,500 for 1,000.
+    token count, and the characters copied grow with the cube of it, since each
+    probe slices a span that may be the whole query. On text a caller hands
+    over, through a rung a document reaches by writing ``kind: scan``. Measured
+    before this assertion existed: 20,100 probes for 200 tokens, 500,500 for
+    1,000.
 
     **A window longer than the longest form the vocabulary declares cannot
-    match it.** ``by_surface_form`` answers the empty set for every one of
-    them, so cutting the enumeration there removes only probes that could not
-    have contributed -- an exact bound rather than a budget, which is why the
-    count and the answer are asserted together below. A cap that lost a
-    candidate would be a different change needing a different argument.
+    match it**, while the fold keeps token boundaries where it finds them --
+    which ``default_normalizer``, used here, does.
+    ``by_surface_form`` answers the empty set for every such window, so cutting
+    the enumeration there removes only probes that could not have contributed:
+    an exact bound rather than a budget, which is why the count and the answer
+    are asserted together below. A cap that lost a candidate would be a
+    different change needing a different argument, and
+    ``test_a_fold_that_merges_tokens_leaves_the_scan_with_no_bound`` is the
+    vocabulary where that implication fails and the bound is therefore not
+    derived at all.
     """
     source = CountingEntitySource(
         {
@@ -517,23 +579,28 @@ def test_the_scanning_rung_proposes_ids_in_its_own_order() -> None:
     )
 
 
-async def test_the_async_scan_is_bounded_and_ordered_the_same_way() -> None:
-    """Both corrections reach the asynchronous twin, measured rather than assumed.
+async def test_the_async_scan_is_ordered_the_same_way() -> None:
+    """``_order`` reaches the asynchronous twin, measured rather than assumed.
 
     The twin-parity guard compares *signatures*, so it would have agreed
-    happily while one flavour probed every window and honoured its hook and
-    the other did neither. These are the two behaviours the sync assertions
-    above pin, asked one ``await`` further in -- and the sequential shape is
-    why the bound matters more on this side, not less: each probe here is a
-    round trip for a source that is not a mapping.
+    happily while one flavour honoured its hook and the other did not. This is
+    the behaviour the sync assertion above pins, asked one ``await`` further
+    in.
+
+    **The bound is not asserted here, and used to be.** The assertion read
+    ``len(_probe_spans(query, shared.longest_form_tokens())) == tokens``, which
+    is arithmetic on the helper rather than a fact about this rung: it held
+    whatever the twin passed, and held if the twin stopped calling it at all.
+    A cost is only visible by counting what the *source* was asked, which is
+    what ``test_the_async_scan_spends_the_bound_it_was_given`` does.
     """
 
     class ReverseOrderAsyncScanningSignal(AsyncScanningSignal):
         def _order(self, hits: frozenset[str]) -> Sequence[str]:
             return sorted(hits, reverse=True)
 
-    # Single-token ids as well as names, so the bound below is 1 and the
-    # probe count is the token count exactly rather than a sum of two rows.
+    # Single-token ids as well as names, so the two entities differ only in
+    # the id that orders them and one probe reaches both.
     shared = AsyncMappingEntitySource(
         {
             "abeagle": Entity(id="abeagle", type="Breed", name="Beagle"),
@@ -547,10 +614,11 @@ async def test_the_async_scan_is_bounded_and_ordered_the_same_way() -> None:
     reversed_ = await ReverseOrderAsyncScanningSignal(shared).candidates(query, k=5)
 
     assert [c.entity_id for c in default] == ["abeagle", "zbeagle"]
-    assert [c.entity_id for c in reversed_] == ["zbeagle", "abeagle"]
-    assert shared.longest_form_tokens() == 1
+    assert [c.entity_id for c in reversed_] == ["zbeagle", "abeagle"], (
+        "the override was read and discarded on the asynchronous twin, and "
+        "honoured on the synchronous one"
+    )
     assert tokens == 40
-    assert len(_probe_spans(query, shared.longest_form_tokens())) == tokens
 
 
 def test_a_reference_records_which_rung_and_what_kind() -> None:
@@ -597,3 +665,277 @@ def test_a_reference_records_which_rung_and_what_kind() -> None:
     assert dataclasses.replace(ref) == ref
     with pytest.raises(TypeError):
         hash(ref)
+
+
+# ---------------------------------------------------------------------------
+# What the window bound survives, and what it does not.
+# ---------------------------------------------------------------------------
+
+
+def _squash(form: str) -> str:
+    """A fold that deletes the characters :func:`token_spans` reads as boundaries.
+
+    Unremarkable and legitimate -- it is how a vocabulary matches ``C.D.C.``
+    against ``cdc``, or ``K-9`` against ``k9`` -- and it is the one property a
+    window bound measured in *tokens* cannot survive. Every assertion in this
+    section is about a fold of this shape rather than about this function.
+    """
+    return re.sub(r"[^0-9a-z]", "", form.casefold())
+
+
+#: Two forms, one containing the other, so a scan that reaches them reports
+#: both and a scan that does not reports the shorter alone. The difference
+#: between the two answers is what makes the loss visible rather than a count.
+RETRIEVERS = {
+    "golden_retriever": Entity(id="golden_retriever", type="Breed", name="Golden Retriever"),
+    "retriever": Entity(id="retriever", type="Breed", name="Retriever"),
+}
+
+#: The guide's own sentence: neither form is the whole string, so the scan is
+#: the only rung that can place either of them.
+SENTENCE = "my golden retriever has been limping"
+
+
+async def _agreeing_scan(
+    entities: Mapping[str, Entity],
+    query: str,
+    *,
+    source_normalizer: Callable[[str], str] | None = None,
+    **rung: Any,
+) -> list[str]:
+    """What **both** flavours answer, having asserted that it is one answer.
+
+    The twins are one description with two drivers, so every claim in this
+    section is a claim about both. Asserting them separately would state it
+    twice and hold it nowhere: a fix applied to one ``_located`` and not the
+    other passes the flavour it was written against, which is the shape the
+    scan's own review found twice. Here the comparison *is* the assertion, so
+    a divergence fails whichever side caused it.
+
+    Spans as well as ids, because the two rungs enumerate windows in an order
+    that decides where a candidate is reported to sit.
+    """
+    found = ScanningSignal(
+        MappingEntitySource(entities, normalizer=source_normalizer), **rung
+    ).candidates(query, k=5)
+    awaited = await AsyncScanningSignal(
+        AsyncMappingEntitySource(entities, normalizer=source_normalizer), **rung
+    ).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == [c.entity_id for c in awaited], (
+        "the twins disagree on which entities a query reaches. They read one "
+        "index through one enumeration and differ only in awaiting it, so a "
+        "difference here is a fix that reached one _located and not the other"
+    )
+    assert [e.span for c in found for e in c.evidence] == [
+        e.span for c in awaited for e in c.evidence
+    ], "the twins agree on what a query reaches and disagree on where it sat"
+    return [c.entity_id for c in found]
+
+
+async def test_a_fold_that_merges_tokens_leaves_the_scan_with_no_bound() -> None:
+    """A source whose own fold merges token boundaries cannot bound a window.
+
+    The bound's derivation is that a window of *L* tokens can only match a key
+    of at least *L* tokens, so a key count bounds the enumeration. That holds
+    while the fold preserves boundaries, which ``default_normalizer`` does.
+    ``_squash`` does not: ``Golden Retriever`` is two tokens and folds to the
+    one-token key ``goldenretriever``, so the two-token window the sentence
+    carries is the *only* way to reach it -- and a bound measured over the keys
+    says one.
+
+    Measured before this assertion existed: ``golden_retriever`` was not among
+    the candidates, and ``coverage.matched`` reported ``(10, 19)`` -- the
+    shorter form alone, with ``golden`` reported as text the vocabulary did not
+    account for. A wrong answer rather than a slow one, which is the failure
+    the bound was introduced to prevent in the other direction.
+    """
+    source = MappingEntitySource(RETRIEVERS, normalizer=_squash)
+
+    assert source.longest_form_tokens() is None, (
+        "the source reported a number for a fold that merges token "
+        "boundaries. No number is correct here -- see the test below -- so "
+        "reporting one is how the scan silently stops finding a declared form"
+    )
+    assert await _agreeing_scan(RETRIEVERS, SENTENCE, source_normalizer=_squash) == [
+        "golden_retriever",
+        "retriever",
+    ]
+
+
+async def test_no_number_bounds_a_window_once_the_fold_merges_tokens() -> None:
+    """Why the answer is *stop bounding* rather than *bound wider*.
+
+    The obvious repair is to measure the bound over the declared form as
+    written as well as over the folded key -- ``Golden Retriever`` is two
+    tokens, so bound two and the sentence is reachable again. It is not
+    enough, and this is the measurement that says so: under a fold that
+    deletes boundaries the *query* decides how many tokens a window needs, and
+    it can spell the form with as many as it likes.
+
+    Fifteen here, and fifteen is not the limit -- it is the longest spelling
+    anybody bothered to write down. A bound that is finite is therefore a
+    bound that is wrong for some query, which leaves declining to bound as the
+    only answer that loses nothing.
+    """
+    source = MappingEntitySource(RETRIEVERS, normalizer=_squash)
+    letter_by_letter = " ".join("goldenretriever")
+
+    for spelling in ("golden retriever", "gold en retriever", letter_by_letter):
+        assert source.by_surface_form(spelling) == frozenset({"golden_retriever"}), (
+            f"{spelling!r} folds onto the declared key and must reach it"
+        )
+
+    assert len(token_spans(letter_by_letter)) == 15
+    assert len(token_spans("Golden Retriever")) == 2, (
+        "the declared form is two tokens, and a fifteen-token window reaches "
+        "it -- so measuring the bound over the declaration would still lose"
+    )
+
+
+async def test_the_default_fold_merges_tokens_too_and_is_caught() -> None:
+    """The check is about the fold's behaviour, not about custom normalizers.
+
+    ``default_normalizer`` strips and case-folds, and case-folding is not
+    boundary-preserving in general: ``U+0345 COMBINING GREEK YPOGEGRAMMENI``
+    is a non-spacing mark, so :func:`token_spans` reads it as a boundary and
+    ``a<U+0345>b`` is two tokens -- but it case-folds to ``iota``, which is
+    alphanumeric, so the folded key is one. A vocabulary declaring the
+    combining spelling therefore trips the same implication a squashing
+    normalizer does, under the fold every caller gets by default.
+
+    Exotic, and that is the point: the condition detected is a property of the
+    fold rather than of who supplied it, so it is caught here without
+    ``_squash`` anywhere in sight. Measured before the check existed: the
+    query below returned no candidates.
+    """
+    combining = {"x": Entity(id="x", type="Thing", name="a\u0345b")}
+    source = MappingEntitySource(combining)
+
+    assert len(token_spans("a\u0345b")) == 2, "the combining mark is a token boundary"
+    assert len(token_spans(default_normalizer("a\u0345b"))) == 1, "and folds away to one"
+    assert source.longest_form_tokens() is None
+    assert await _agreeing_scan(combining, "a\u0345b") == ["x"]
+
+
+async def test_a_rung_that_folds_does_not_trust_a_bound_measured_without_it() -> None:
+    """The source's number describes the source's fold, and the rung has another.
+
+    ``normalizer=`` on a rung is the documented way to match differently from
+    the way the index was built, and the registry's ``kind: scan`` factory
+    hands one over. The source cannot see it: it measured its keys before the
+    rung existed, so a rung that folds is asking a question the number was not
+    an answer to.
+
+    Here the index is built with the default fold and holds the single-token
+    key ``goldenretriever``, so the source says one -- correctly, for itself.
+    The rung folds with ``_squash``, which makes the two-token window
+    ``golden retriever`` reach that key, and one is the wrong number for that
+    enumeration. No source-side measurement can ever be the right one, so a
+    rung that folds declines the bound instead.
+    """
+    entities = {
+        "goldenretriever": Entity(id="goldenretriever", type="Breed", name="GoldenRetriever"),
+    }
+    plain = MappingEntitySource(entities)
+
+    assert plain.longest_form_tokens() == 1, "the source's own fold keeps one token"
+    assert await _agreeing_scan(entities, SENTENCE, normalizer=_squash) == ["goldenretriever"]
+
+
+async def test_max_window_is_the_bound_a_caller_reasons_about_themselves() -> None:
+    """The escape hatch for a vocabulary the source cannot bound.
+
+    Declining the bound is correct and it is not free: a fold that merges
+    boundaries puts the enumeration back to *n(n+1)/2*, which is where the
+    scan started. A caller who knows their own queries can say how wide a
+    window is worth probing, and that is a number they chose rather than one
+    derived from a vocabulary that cannot support it.
+
+    So it caps, and it is honest about what capping costs: at two, the
+    two-token spelling is reached and the fifteen-token one is not. That is a
+    *budget*, unlike the derived bound, and the assertion below says so by
+    measuring both what it keeps and what it gives up.
+    """
+    source = CountingEntitySource(RETRIEVERS, normalizer=_squash)
+    query = " ".join(["word"] * 34 + SENTENCE.split())
+    tokens = len(token_spans(query))
+    assert tokens == 40, "the arithmetic below is written for a forty-token query"
+
+    found = ScanningSignal(source, max_window=2).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == ["golden_retriever", "retriever"]
+    assert source.probes <= tokens * 2, (
+        f"a max_window of 2 spent {source.probes} lookups on {tokens} tokens; "
+        f"unbounded that is {tokens * (tokens + 1) // 2}"
+    )
+    assert (
+        await _agreeing_scan(
+            RETRIEVERS, " ".join("goldenretriever"), source_normalizer=_squash, max_window=2
+        )
+        == []
+    ), "a cap is a budget: the spelling wider than it is given up, in both flavours"
+
+
+def test_the_bound_costs_nothing_an_unbounded_implementation_finds() -> None:
+    """The losslessness claim, against an implementation that does not bound.
+
+    Every other assertion about the bound is against an expectation somebody
+    typed. This one is against ``ConsumerScanningSignal``, which was written
+    from outside the package before the bound existed and still enumerates
+    every window -- so *the shipped rung loses no answer* is compared with a
+    rung that cannot lose one, rather than restated.
+
+    **Parametrized over the fold, because that is what the claim turns on.**
+    Under ``default_normalizer`` the bound applies and the two agree; under a
+    fold that merges token boundaries the source declines to bound and the two
+    agree again, which is the case that decides whether declining was the
+    right answer. A bound kept over the second vocabulary would show up here
+    as the shipped rung finding strictly less.
+    """
+    for label, fold in (("default", None), ("merging", _squash)):
+        source = MappingEntitySource(RETRIEVERS, normalizer=fold)
+        unbounded = CascadingResolver([ConsumerScanningSignal(source)], source).resolve(
+            SENTENCE, k=5
+        )
+        shipped = CascadingResolver([ScanningSignal(source)], source).resolve(SENTENCE, k=5)
+
+        assert [c.entity_id for c in shipped.candidates] == [
+            c.entity_id for c in unbounded.candidates
+        ], f"the bounded and unbounded rungs disagree under the {label} fold"
+        assert shipped.coverage == unbounded.coverage, (
+            f"the two rungs cover different text under the {label} fold"
+        )
+
+    # The control: the two folds are not the same vocabulary, so the loop
+    # above is comparing two situations rather than one twice.
+    assert MappingEntitySource(RETRIEVERS).longest_form_tokens() == 2
+    assert MappingEntitySource(RETRIEVERS, normalizer=_squash).longest_form_tokens() is None
+
+
+async def test_the_async_scan_spends_the_bound_it_was_given() -> None:
+    """Finding the twin's probe count, rather than the helper's arithmetic.
+
+    The assertion this replaces read
+    ``len(_probe_spans(query, source.longest_form_tokens())) == tokens``, which
+    is a property of ``_probe_spans`` alone -- true whatever the rung passes
+    it, and true if the rung stopped calling it. The twin could have gone back
+    to enumerating every window with the whole file still green, which matters
+    here more than on the sync side: each probe on this flavour is a round trip
+    for a source that is not a mapping.
+
+    So the count comes from the source, the way the sync test takes it.
+    """
+    source = AsyncCountingEntitySource({"beagle": Entity(id="beagle", type="Breed", name="Beagle")})
+    query = " ".join(["word"] * 39 + ["beagle"])
+    tokens = len(token_spans(query))
+
+    found = await AsyncScanningSignal(source).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == ["beagle"]
+    assert source.longest_form_tokens() == 1
+    assert source.probes <= tokens, (
+        f"the asynchronous scan spent {source.probes} lookups on a "
+        f"{tokens}-token query over a one-token vocabulary. Unbounded that is "
+        f"{tokens * (tokens + 1) // 2}, and every one of them is a round trip"
+    )

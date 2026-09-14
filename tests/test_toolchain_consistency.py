@@ -34,7 +34,14 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._workspace import ROOT, load_bin_module, load_toml, pyprojects, python_floor
+from tests._workspace import (
+    ROOT,
+    load_bin_module,
+    load_toml,
+    pyprojects,
+    python_floor,
+    tracked_files,
+)
 from tests._workspace import rel as _rel
 from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
@@ -2420,6 +2427,69 @@ _WORDS = {
 }
 
 
+def _declared_door_names(package: str) -> int:
+    """How many names ``packages/<package>``'s door declares in ``__all__``."""
+    door = ROOT / "packages" / package / "src" / f"dataknobs_{package}" / "__init__.py"
+    tree = ast.parse(door.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
+        ):
+            return len(node.value.elts)  # type: ignore[attr-defined]
+    raise AssertionError(f"{door} declares no __all__")
+
+
+def test_the_changelog_door_count_matches_the_door() -> None:
+    """A release note counting the door's names is checked against the door.
+
+    The same shape as the guard above and a different denominator, which is
+    why it is a second test rather than a row in ``_COUNT_CLAIMS``. The claim
+    is in ``packages/common/CHANGELOG.md``: an entry announcing that a family
+    reached the package door, and saying how many names that left there.
+
+    **Stale twice over before this existed.** The sentence said 315 while the
+    tree said 319, and the change that found it added two more without
+    touching the sentence. A count in a release note ages exactly like a count
+    in a comment -- every later change to the same unreleased section moves it
+    -- and this one is worse than a comment, because a consumer reads it as a
+    description of what they will get.
+
+    Scheduling runs the right way round. Editing the door maps to the common
+    package and runs its suite; this guard lives here, where the workspace
+    tier reaches it, so the case that matters -- a name added to ``__all__``
+    without the note being corrected -- is the case that fails.
+    """
+    declared = _declared_door_names("common")
+    changelog = (ROOT / "packages" / "common" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    match = re.search(
+        r"(?P<added>\d+) names, taking the package's `__all__` to (?P<total>\d+)", changelog
+    )
+    assert match is not None, (
+        "packages/common/CHANGELOG.md no longer carries the sentence counting "
+        "the door's names. Either it was rewritten -- in which case update "
+        "this pattern -- or it was deleted, and this guard now checks nothing."
+    )
+
+    assert int(match.group("total")) == declared, (
+        f"the CHANGELOG says the door carries {match.group('total')} names and "
+        f"it carries {declared}. The entry describes what a consumer gets, so "
+        f"a stale total there is a promise about a surface that is not the "
+        f"one shipping."
+    )
+
+
+def _is_package_document(path: str) -> bool:
+    """``packages/<pkg>/docs/**/*.md``, spelled against a root-relative path.
+
+    The segment test rather than :func:`fnmatch.fnmatch`, whose ``*`` crosses
+    ``/`` and would count every nested guide a second time under the
+    top-level pattern.
+    """
+    parts = path.split("/")
+    return len(parts) > 3 and parts[0] == "packages" and parts[2] == "docs" and path.endswith(".md")
+
+
 def test_the_declarations_prose_counts_match_the_tree() -> None:
     """A count in a comment is a claim, and this is what makes it checkable.
 
@@ -2435,7 +2505,12 @@ def test_the_declarations_prose_counts_match_the_tree() -> None:
     kind a test can hold.
     """
     declared = len(_scopes.PACKAGE_TEST_DOC_INPUTS)
-    total = len(sorted(ROOT.glob("packages/*/docs/**/*.md")))
+    # Tracked rather than globbed. The claim is about the documents the
+    # repository has, and a glob also counts an untracked scratch file left
+    # under a package's ``docs/`` -- which would fail this guard with a
+    # message about stale prose for a reason that has nothing to do with the
+    # prose. ``tracked_files`` is what the guards either side of this one use.
+    total = sum(1 for path in tracked_files() if _is_package_document(path))
     expected = {"declared": declared, "total": total, "rest": total - declared}
 
     for name, pattern in _COUNT_CLAIMS:

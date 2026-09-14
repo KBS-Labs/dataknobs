@@ -284,3 +284,36 @@ def test_the_published_rung_reaches_the_three_forms_the_page_names(
     assert [c.entity_id for c in shipped.candidates("K-9", k=5)] == ["k9"]
     assert shipped.candidates("(beagle)", k=5) == []
     assert shipped.candidates("C.D.C.", k=5) == []
+
+
+def test_the_published_rung_reaches_no_multi_word_form(punctuated_rung: type) -> None:
+    """The other half of the trade, measured where the page states it.
+
+    A chunk is whitespace-delimited, so the rung the page teaches cannot join
+    two of them -- it reaches ``(beagle)`` and reaches ``golden retriever``
+    never, for any query. That is the cost of the boundary it picks, and it is
+    exactly invisible in the test above, whose vocabulary is single-chunk
+    forms only: a reader with a vocabulary carrying both kinds copies the
+    block and silently loses half of it.
+
+    So the loss is asserted rather than described, and asserted beside the
+    shipped rung finding the same form -- because *compose rather than choose*
+    is the page's conclusion, and a reader has to be able to see that the two
+    rungs fail in opposite directions.
+    """
+    from dataknobs_common.entity_resolution import ScanningSignal
+    from dataknobs_common.ontology import Entity, MappingEntitySource
+
+    vocabulary = MappingEntitySource(
+        {"golden_retriever": Entity(id="golden_retriever", type="Breed", name="Golden Retriever")}
+    )
+    query = "my golden retriever has been limping"
+
+    assert punctuated_rung(vocabulary).candidates(query, k=5) == [], (
+        "the published rung reached a multi-word form. It probes one "
+        "whitespace-delimited chunk at a time and never joins two, so this "
+        "passing would mean the fence no longer says what the page explains"
+    )
+    assert [c.entity_id for c in ScanningSignal(vocabulary).candidates(query, k=5)] == [
+        "golden_retriever"
+    ], "the shipped scan is the half of the composition that reaches it"

@@ -367,9 +367,14 @@ def _pytest_loaded_module_names(directory: Path) -> set[str]:
         "set from it, so its absence would silently narrow the check to "
         "conftest alone."
     )
-    names = {"conftest"} if (directory / "conftest.py").is_file() else set()
+    # ``rglob`` on both halves, because the scan below reads every ``*.py``
+    # at any depth: a collected module in a nested subdirectory read through a
+    # non-recursive glob is outside ``collected`` and its bare import would go
+    # unreported. A nested ``conftest.py`` is loaded by pytest exactly as the
+    # top-level one is.
+    names = {path.stem for path in directory.rglob("conftest.py")}
     for pattern in match.group("patterns").split():
-        names |= {path.stem for path in directory.glob(pattern)}
+        names |= {path.stem for path in directory.rglob(pattern)}
     return names
 
 
@@ -459,14 +464,27 @@ def test_the_collected_name_scan_reads_the_configured_patterns() -> None:
     A derivation that silently matched nothing would leave this checking one
     filename, which is the half that happened to be violated. Asserting that
     the scan sees a real test module keeps the other half live.
+
+    **Both halves are read recursively**, and the nested assertion below is
+    what says so. A non-recursive glob answers correctly for every directory
+    whose test modules all sit at the top -- which is every directory here
+    except one -- so the narrowing would have been invisible in the place it
+    mattered and nowhere else.
     """
     names = _pytest_loaded_module_names(ROOT / "tests")
 
-    assert "conftest" not in names, "tests/ has no conftest.py; the fixture below assumes that"
     assert "test_pytest_collection_integrity" in names, (
         "the python_files patterns in pytest.ini no longer match this very "
         "file, so the scan has narrowed to conftest and would report green "
         "over a bare import of any collected test module"
+    )
+
+    nested = _pytest_loaded_module_names(ROOT / "packages" / "bots" / "tests")
+    assert "test_bot_test_harness" in nested, (
+        "the scan no longer reaches packages/bots/tests/unit/, whose modules "
+        "pytest collects exactly as it collects the ones a level up. A name "
+        "outside this set is a name the import scan will not report, so a "
+        "bare import of a nested test module would pass unnoticed"
     )
 
 

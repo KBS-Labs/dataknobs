@@ -13,12 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kind: "scan"`.** A rung that finds declared forms *inside* a query rather
   than comparing the whole of it, and reports where each one sat: every span of
   consecutive tokens is looked up as the slice it covers, longest form first.
-At most twenty-one dictionary lookups for a
-  six-token utterance, and fewer unless the vocabulary declares a six-token
-  form: the enumeration stops at the longest form there is, since a wider
-  window is one no declared form could fill. Cutting there removes probes and
-  no answers, and leaves a cost linear in the query rather than quadratic in
-  it.
+  At most twenty-one dictionary lookups for a six-token utterance, and fewer
+  unless the vocabulary declares a six-token form: the enumeration stops at
+  the longest form there is, since a wider window is one no declared form
+  could fill. Cutting there removes probes and no answers, and leaves a cost
+  linear in the query rather than quadratic in it — for any fold that keeps
+  token boundaries, which is every fold but the ones the next entry is about.
   `"my golden retriever has been limping"` comes back carrying
   `golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)`, with
   `coverage.unmatched` reporting `"my"` and `"has been limping"` as the phrases
@@ -35,9 +35,19 @@ At most twenty-one dictionary lookups for a
   `AsyncOntology`. How many tokens the longest form a vocabulary declares
   occupies — which is what lets a scan stop enumerating, since a wider window
   can match nothing. It is a member of the protocol itself rather than a
-  separate optional one, unlike `AliasFormSource`: a source that could decline
-  to answer would leave the rung falling back to a cap it guessed, and a
-  guessed cap is a declared form the scan silently stops finding.
+  separate optional one, unlike `AliasFormSource`: asking every source is what
+  keeps the linear enumeration the common case rather than the configured one.
+
+  **`None` where the source's own fold merges token boundaries**, and then the
+  scan enumerates every window. The bound rests on a window of *L* tokens
+  needing a key of *L* tokens or more, which holds for `default_normalizer`
+  and fails for any fold that deletes what `token_spans` reads as a
+  boundary — a vocabulary folded with one of those reaches the single key
+  `goldenretriever` from `Golden Retriever`, from `gold en retriever`, and
+  from a query spelling it letter by letter, so *no* finite number bounds it.
+  Reporting one would be a declared form the scan silently stops finding, so
+  the source reports that it cannot bound and keeps every answer at the cost
+  of the linearity it never could have had.
 
   **It does not replace `ExactNormalizedSignal`, and the two compose.** A probe
   is a slice between token boundaries, so a declared form whose first or last
@@ -45,6 +55,26 @@ At most twenty-one dictionary lookups for a
   whole-string rung and by no scan; a form sitting inside a longer sentence is
   reachable by the scan and by no whole-string rung. A cascade wanting both
   carries both.
+
+- **`max_window` on `ScanningSignal` and `AsyncScanningSignal`**, forwarded by
+  the `kind: scan` factory so a document can set it. The widest probe in
+  tokens, and **the only number in this rung that can cost an answer**: the
+  derived bound removes probes that could not have matched, and this one
+  removes probes that could. It is for the vocabulary the source cannot bound,
+  where a caller who knows their own queries supplies the number the
+  vocabulary could not. Below one is refused rather than clamped — a scan that
+  probes nothing reports an empty result for every query, which is
+  indistinguishable from a vocabulary that matches nothing.
+
+  A rung handed its own `normalizer` does not ask the source for a bound at
+  all. The source measured its keys before that rung existed and cannot see
+  the extra fold, so its number was never an answer to the question, and no
+  source-side measurement could be.
+
+- **The window enumeration is lazy.** Both rungs iterate the spans once and
+  keep none, and the unbounded case is what makes that load-bearing: four
+  thousand tokens with nothing to bound them is eight million spans, which
+  cost 489 MiB to materialise and 494 KiB to stream.
 
 - **The default composition carries the scan.** A document declaring no
   `resolver:` section builds `ExactNormalizedSignal`, then `AliasSignal`, then
@@ -56,10 +86,12 @@ At most twenty-one dictionary lookups for a
 
   The scan sits **last**, which decides nothing about what the cascade answers
   and one thing about what it reports. The three rungs read one index two ways
-  and never disagree, so the candidates, their spans and the coverage are the
-  same whichever end the scan sits at; what the position decides is the rung of
-  *record* for a query the whole-string rungs already answer, and last leaves
-  that `exact` for a caller whose string already *is* the phrase. A composition
+  and never disagree, so the candidates and the coverage are the same whichever
+  end the scan sits at; what the position decides is the rung of *record* for a
+  query the whole-string rungs already answer, and last leaves that `exact` for
+  a caller whose string already *is* the phrase. Evidence is reported in rung
+  order, so that moves with the position too — the same fact rather than a
+  second one. A composition
   that wants the locating rung to lead writes itself out under `resolver:` —
   the composition is the policy.
 
@@ -74,8 +106,7 @@ At most twenty-one dictionary lookups for a
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 110 names, taking the package's `__all__` from 205
-  to 315. Every one of them was already importable by module path; what
+  the resolution cascade — 116 names, taking the package's `__all__` to 321. Every one of them was already importable by module path; what
   changes is that they are now a promise this package keeps rather than a path
   that happened to work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the
@@ -751,31 +782,6 @@ At most twenty-one dictionary lookups for a
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
-
-- **`_order` is honoured on the scanning path, not only the whole-string one.**
-  Both hooks were published as a rung's extension surface and only one was
-  reachable: the scan ordered its own hits inline, so a subclass overriding
-  `_order` had the override read and discarded. Silently, since the default
-  `_order` is the same `sorted` the scan was spelling — so every test written
-  against the shipped rung agreed with the bypass. It is the scanning rung that
-  `_order`'s own docstring describes, as *"a rung with a longer form and a
-  shorter one inside it"*, which is what made this the wrong place to hard-code
-  the answer.
-
-- **A scan no longer enumerates windows the vocabulary cannot fill.** Every
-  contiguous window of a query was probed regardless of the forms declared —
-  *n(n+1)/2* lookups, each slicing a span up to the whole query, so quadratic
-  in tokens and cubic in the characters copied, on text a caller hands over and
-  through a rung a document reaches by writing `kind: scan`. Measured: 20,100
-  probes for a 200-token query, 500,500 for 1,000. The enumeration now stops at
-  `longest_form_tokens()`, which removes only probes that answered nothing: the
-  same 1,000-token query is 1,999 probes and the same candidates.
-
-- **The `ScanningSignal` docstring no longer claims a scan subsumes
-  whole-string matching.** It does not, in either direction, and
-  `token_spans` is why — a form the tokenizer splits differently from the query
-  is reachable by one rung and not the other. `test_neither_rung_subsumes_the_other`
-  measures all four cases rather than restating the sentence.
 
 - **`requires_elasticsearch` skips a cluster that cannot host a test index,
   instead of letting the suite time out against it.** `is_elasticsearch_available()`

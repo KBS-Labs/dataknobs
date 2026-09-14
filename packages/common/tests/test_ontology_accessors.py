@@ -14,11 +14,17 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dataknobs_common.ontology import (
+    AsyncEntitySource,
+    AsyncMappingEntitySource,
+    AsyncOntology,
     Entity,
+    EntitySource,
     MappingEntitySource,
+    Ontology,
     async_load_ontology,
     load_ontology,
 )
+from dataknobs_common.testing import assert_twin_types_agree
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -77,9 +83,12 @@ class _RecordingEntitySource:
         self.calls.append(("by_type", type_id))
         return self._inner.by_type(type_id)
 
-    def longest_form_tokens(self) -> int:
+    def longest_form_tokens(self) -> int | None:
         self.calls.append(("longest_form_tokens", ""))
-        return self._inner.longest_form_tokens()
+        # A sentinel for the same reason ``by_surface_form`` answers one: no
+        # real vocabulary in this file declares a 99-token form, so an
+        # accessor returning it can only mean it asked.
+        return 99
 
 
 def test_the_double_conforms_to_the_protocol_it_stands_in_for() -> None:
@@ -147,6 +156,33 @@ def test_by_surface_form_invokes_the_sources_member(mammals_path: Path) -> None:
     assert recording.calls == [("by_surface_form", "beagles")]
 
 
+def test_longest_form_tokens_invokes_the_sources_member(mammals_path: Path) -> None:
+    """The third accessor, held to the second one's standard.
+
+    It shipped with neither a caller nor an assertion: the scan reaches the
+    *source* directly, so an ``Ontology`` that answered this from nowhere
+    would have passed everything in the tree. That is the shape the accessor
+    exists to prevent -- a caller holding the loaded value rather than its
+    entities can ask what a window may span, and has to get the vocabulary's
+    answer rather than a plausible one.
+    """
+    onto = load_ontology(mammals_path)
+    recording = _RecordingEntitySource({})
+    swapped = type(onto)(
+        id=onto.id,
+        version=onto.version,
+        entity_types=onto.entity_types,
+        relation_types=onto.relation_types,
+        entities=recording,
+        assertions=onto.assertions,
+        taxonomies=onto.taxonomies,
+        describes=onto.describes,
+    )
+
+    assert swapped.longest_form_tokens() == 99
+    assert recording.calls == [("longest_form_tokens", "")]
+
+
 def test_the_accessor_and_the_source_agree_on_the_real_file(
     mammals_path: Path,
 ) -> None:
@@ -155,12 +191,87 @@ def test_the_accessor_and_the_source_agree_on_the_real_file(
 
     assert onto.entity("beagle") is onto.entities.get("beagle")
     assert onto.by_surface_form("beagles") == onto.entities.by_surface_form("beagles")
+    assert onto.longest_form_tokens() == onto.entities.longest_form_tokens()
 
 
 @pytest.mark.asyncio
 async def test_the_async_accessors_delegate_too(mammals_path: Path) -> None:
-    """The twin has the same two accessors over the same two members."""
+    """The twin has the same three accessors over the same three members.
+
+    ``longest_form_tokens`` is a plain ``def`` on both flavours, so it is the
+    one asserted here without an ``await`` -- which is itself the claim.
+    """
     onto = await async_load_ontology(mammals_path)
 
     assert await onto.entity("beagle") == await onto.entities.get("beagle")
     assert await onto.by_surface_form("beagles") == frozenset({"beagle"})
+    assert onto.longest_form_tokens() == onto.entities.longest_form_tokens()
+
+
+#: The members every one of the three pairs owes, and which of them stay
+#: synchronous on both halves. ``describe`` and ``longest_form_tokens`` answer
+#: from what the object already holds, which is the reason neither is
+#: awaitable and the reason both are declared here rather than omitted.
+_SOURCE_MEMBERS = [
+    "get",
+    "get_many",
+    "fetch_origin",
+    "fetch_origins",
+    "describe",
+    "by_surface_form",
+    "by_type",
+    "longest_form_tokens",
+]
+_SOURCE_UNFLAVOURED = ("describe", "longest_form_tokens")
+
+
+@pytest.mark.parametrize(
+    ("sync_type", "async_type", "members", "unflavoured"),
+    [
+        (EntitySource, AsyncEntitySource, _SOURCE_MEMBERS, _SOURCE_UNFLAVOURED),
+        (
+            MappingEntitySource,
+            AsyncMappingEntitySource,
+            _SOURCE_MEMBERS,
+            _SOURCE_UNFLAVOURED,
+        ),
+        (
+            Ontology,
+            AsyncOntology,
+            ["entity", "by_surface_form", "longest_form_tokens"],
+            ("longest_form_tokens",),
+        ),
+    ],
+    ids=["protocols", "mapping-sources", "ontology-values"],
+)
+def test_the_vocabulary_twins_expose_one_surface(
+    sync_type: type, async_type: type, members: list[str], unflavoured: tuple[str, ...]
+) -> None:
+    """Parity over the three pairs a vocabulary is reached through.
+
+    ``dataknobs_common.entity_resolution`` has held its rungs to this since
+    they were twinned; the source protocols, the mapping sources and the
+    loaded values had nothing equivalent, and the three were kept in step by
+    hand. That worked until a member was added to all three pairs at once --
+    which is precisely when hand-maintenance is least reliable and when a miss
+    is hardest to see, because each half is individually correct and complete.
+
+    ``longest_form_tokens`` is the member that prompted this and is not the
+    reason it should exist: the next one will arrive the same way, and the
+    difference between a pair that agrees and a pair that happens to agree is
+    a test.
+
+    Returns are compared for the protocol pair and the concrete sources, where
+    every member returns the same type on both halves. ``Ontology`` is
+    narrowed to the three accessors for the reason it is narrowed: ``taxonomy``
+    answers a ``Taxonomy`` against an ``AsyncTaxonomy``, which is a flavoured
+    return rather than drift, and it belongs with whichever guard covers that
+    pair.
+    """
+    assert_twin_types_agree(
+        sync_type,
+        async_type,
+        members,
+        unflavoured_members=unflavoured,
+        compare_return=True,
+    )

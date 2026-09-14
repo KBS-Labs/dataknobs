@@ -68,7 +68,14 @@ def _make_alias(config: dict[str, Any]) -> MatchSignal:
 
 
 def _make_scan(config: dict[str, Any]) -> MatchSignal:
-    return ScanningSignal(config["entities"], normalizer=config.get("normalizer"))
+    # ``max_window`` is forwarded because a document is where a vocabulary the
+    # source cannot bound gets its cap -- a caller reaching this factory by
+    # writing ``kind: scan`` has no other way to supply one.
+    return ScanningSignal(
+        config["entities"],
+        normalizer=config.get("normalizer"),
+        max_window=config.get("max_window"),
+    )
 
 
 def _make_async_exact(config: dict[str, Any]) -> AsyncMatchSignal:
@@ -80,7 +87,11 @@ def _make_async_alias(config: dict[str, Any]) -> AsyncMatchSignal:
 
 
 def _make_async_scan(config: dict[str, Any]) -> AsyncMatchSignal:
-    return AsyncScanningSignal(config["entities"], normalizer=config.get("normalizer"))
+    return AsyncScanningSignal(
+        config["entities"],
+        normalizer=config.get("normalizer"),
+        max_window=config.get("max_window"),
+    )
 
 
 #: Every rung declares its flavour and whether it needs I/O, so a door can

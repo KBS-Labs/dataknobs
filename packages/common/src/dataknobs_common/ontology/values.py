@@ -286,8 +286,12 @@ class Ontology:
         """The ids matching this form, by way of :attr:`entities`."""
         return self.entities.by_surface_form(form)
 
-    def longest_form_tokens(self) -> int:
-        """The longest declared form's token count, by way of :attr:`entities`."""
+    def longest_form_tokens(self) -> int | None:
+        """The longest declared form's token count, by way of :attr:`entities`.
+
+        ``None`` where the source cannot bound a window at all -- see
+        :meth:`~dataknobs_common.ontology.MappingEntitySource.longest_form_tokens`.
+        """
         return self.entities.longest_form_tokens()
 
     def taxonomy(self, name: str) -> Taxonomy:
@@ -384,11 +388,12 @@ class AsyncOntology:
         """The ids matching this form, by way of :attr:`entities`."""
         return await self.entities.by_surface_form(form)
 
-    def longest_form_tokens(self) -> int:
+    def longest_form_tokens(self) -> int | None:
         """The longest declared form's token count, by way of :attr:`entities`.
 
         A plain ``def`` on this twin too -- the source answers it without
-        awaiting, so there is nothing here to suspend for.
+        awaiting, so there is nothing here to suspend for. ``None`` carries
+        the same meaning as on the synchronous twin.
         """
         return self.entities.longest_form_tokens()
 

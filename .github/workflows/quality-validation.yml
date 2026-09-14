@@ -71,6 +71,12 @@ jobs:
               - 'mkdocs.yml'
               - 'packages/*/docs/**'
               - '.dataknobs/*.json'
+              # The common package's changelog, read by the workspace guard
+              # that checks its door-name count against the door. No pattern
+              # above reaches it — it is not under any docs/ tree — so without
+              # this a change to it moves that guard's verdict while skipping
+              # the job that would recompute it.
+              - 'packages/common/CHANGELOG.md'
               # Every workflow, this file among them. Two reasons that arrive
               # at the same pattern:
               #

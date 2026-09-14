@@ -26,6 +26,7 @@ from dataknobs_common.entity_resolution import (
     CascadingResolver,
     EvidenceKind,
     ExactNormalizedSignal,
+    ScanningSignal,
 )
 ```
 
@@ -462,8 +463,16 @@ them proposed.
 `ScanningSignal`, at the top of this page: every span of consecutive tokens
 looked up as the slice it covers, longest first, at most twenty-one lookups for
 a six-token utterance — and no window wider than the longest form the
-vocabulary declares, since no declared form could fill one, so usually fewer. Writing it again is the one thing this section should not
-talk you into.
+vocabulary declares, since no declared form could fill one, so usually fewer.
+Writing it again is the one thing this section should not talk you into.
+
+That bound holds because `default_normalizer` keeps token boundaries where it
+finds them. A vocabulary loaded with a fold that *deletes* them — one
+squashing `C.D.C.` to `cdc` by dropping every non-alphanumeric — has no such
+bound: a one-token key is then reachable from a window of any width, so the
+source reports that it cannot bound and the scan enumerates in full rather
+than quietly stopping short of a declared form. `max_window` is where a caller
+who knows their own queries puts a number back.
 
 What is worth writing yourself is a rung that asks the index a question the
 shipped one cannot, and there is a concrete one. A probe is a slice *between*
@@ -503,6 +512,15 @@ nothing more than that.
 That block is executed: `tests/worked_punctuated_rung.py` is the same text, run
 against a vocabulary declaring `(beagle)`, `C.D.C.` and `K-9`, so the three
 forms named below are measured rather than asserted here.
+
+**And note what it gives up.** A chunk is whitespace-delimited, so this rung
+reaches a form whose edges are punctuated and reaches *no multi-word form at
+all* — `golden retriever` and `domestic dog` are two chunks each, and nothing
+here ever joins two. That is the trade the boundary buys, not an oversight:
+the same test measures it, so a reader copying this block for a vocabulary
+that carries both kinds of form knows before they run it. A vocabulary needing
+both composes this rung with `ScanningSignal` rather than choosing between
+them, which is what the section below is about.
 
 `token_spans` is the boundary policy the shipped scan uses, and it is a
 different question from the fold: `default_normalizer` strips and case-folds,

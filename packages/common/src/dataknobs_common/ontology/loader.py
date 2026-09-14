@@ -1097,6 +1097,12 @@ def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:
     vocabulary had already decided, and this is the door that cannot pass the
     right one down: an ``Ontology`` is a value, and the normalizer it was
     built with is not on it.
+
+    **That they fold not at all is also what keeps the scan's bound.** A rung
+    handed its own ``normalizer`` stops asking the source how wide a window
+    may be, since no source-side measurement can see a fold applied after it;
+    a document that configures nothing hands none over, so the composition
+    here keeps the bound the vocabulary implies.
     """
     return [
         ExactNormalizedSignal(ontology.entities),
