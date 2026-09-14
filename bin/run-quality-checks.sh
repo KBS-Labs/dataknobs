@@ -415,6 +415,10 @@ fi
 # Changed-package detection (pr mode only, when no explicit packages given)
 DOCS_CHANGED="true"
 TESTED_PACKAGES_JSON="[]"
+# Empty until change detection speaks, and read through a :- default at its one
+# use site so an unset value falls back to the full package list rather than to
+# the empty string — which further down is how "test nothing" is spelled.
+TEST_PACKAGES=""
 if [ "$RUN_MODE" = "pr" ] && [ -z "$PACKAGES" ]; then
     print_status "Detecting changed packages..."
     CHANGED_INFO=$(uv run python "$SCRIPT_DIR/changed-packages.py" --base-ref "$BASE_REF" 2>/dev/null) || {
@@ -439,9 +443,26 @@ data = json.load(sys.stdin)
 print(" ".join(data["packages"]))
 print(str(data["docs_changed"]).lower())
 print(data.get("mode", "all"))
-print(json.dumps(data["packages"]))
+# What the test stage actually ran, which is no longer the same list: a
+# global input that moves only the lint step leaves the test result of every
+# package intact, so it is re-validated and not re-tested. Recorded as the
+# narrower list so the artifact cannot claim a suite that did not run.
+_test_packages = data.get("test_packages", data["packages"])
+print(json.dumps(_test_packages))
+# Same default in the same direction: a detector that does not name the test
+# subset falls back to the full list, so an older one over-tests rather than
+# skipping a suite.
+#
+# NOT last, and that is load-bearing. This is the only field that is legitimately
+# empty — a lint-only change moves the test result of no package — and command
+# substitution strips every trailing newline, so an empty value in the final
+# position is not read as an empty field but as no field at all. It happens to
+# reach the same answer here through the :- default below, which is precisely
+# what would make the day it stopped reaching it hard to find.
+print(" ".join(_test_packages))
 # Default "packages", not "none": an older detector that does not emit this
-# field must fall back to running something, never to running nothing.
+# field must fall back to running something, never to running nothing. Last,
+# because it can never be empty.
 print(data.get("test_scope", "packages"))
 '); then
             print_error "Failed to parse change-detection output; aborting so"
@@ -457,7 +478,8 @@ print(data.get("test_scope", "packages"))
         DOCS_CHANGED="${_changed_fields[1]}"
         CHANGE_MODE="${_changed_fields[2]}"
         TESTED_PACKAGES_JSON="${_changed_fields[3]}"
-        TEST_SCOPE="${_changed_fields[4]}"
+        TEST_PACKAGES="${_changed_fields[4]}"
+        TEST_SCOPE="${_changed_fields[5]}"
 
         # Three answers, not two. An empty package list is correct for a change
         # to the workspace guards — they belong to no package — but reading it
@@ -468,7 +490,27 @@ print(data.get("test_scope", "packages"))
                 PACKAGES="$CHANGED_PACKAGES"
                 print_success "Changed packages: $PACKAGES"
                 if [ "$CHANGE_MODE" = "all" ]; then
-                    print_status "Global files changed — testing all packages"
+                    print_status "Global files changed — validating all packages"
+                fi
+                # The two lists differ only when a global input moves one step
+                # and not the other — bin/validate.sh is the lint step, so a
+                # change to it makes every package's recorded *validation*
+                # stale and no package's tests. PACKAGES still carries the
+                # full list, so VALIDATE_ARGS below is unnarrowed; this decides
+                # the test half alone.
+                #
+                # Routed through SKIP_PACKAGE_TESTS rather than left as an
+                # empty PACKAGES_TO_TEST, because empty already means two
+                # different things further down — "test nothing" under that
+                # flag and "test everything" without it — and the run that
+                # picks the second by accident is the one that reports success
+                # over a suite it never ran. This is that flag's existing
+                # meaning: workspace guards yes, package suites no.
+                if [ -z "$TEST_PACKAGES" ]; then
+                    SKIP_PACKAGE_TESTS="yes"
+                    print_status "No package's test result can have moved — running workspace guards only"
+                elif [ "$TEST_PACKAGES" != "$PACKAGES" ]; then
+                    print_status "Test suites to run: $TEST_PACKAGES"
                 fi
                 ;;
             workspace)
@@ -1222,7 +1264,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         if [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
             print_status "No package changed — running workspace guards only"
         elif [ -n "$PACKAGES" ]; then
-            PACKAGES_TO_TEST="$PACKAGES"
+            # The test-step list, not the validation one. They are the same
+            # string on every change set that moves both steps, which is most
+            # of them; see the case statement above for when they part.
+            PACKAGES_TO_TEST="${TEST_PACKAGES:-$PACKAGES}"
         else
             for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
                 if [ -d "$pkg_dir" ]; then
