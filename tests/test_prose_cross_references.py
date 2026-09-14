@@ -72,6 +72,11 @@ ALLOWED_UNRESOLVED = {
         "it only matches the pattern because the contract names its cells after "
         "what they scope"
     ),
+    "test_packages": (
+        "the scheduler's key for which packages the test step runs, not a test "
+        "-- the sibling of the entry above, unresolvable for the same reason: a "
+        "field named after the step it scopes"
+    ),
     "test_every_first_party_python_file_is_linted_by_default": (
         "retired; the comment where it appears exists to say so and to explain "
         "what the quality contract replaced it with"
