@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Five more walks over `Hierarchy`, in both flavours** — `descendants`,
+  `descendants_to_depth`, `children_at_depth`, `flatten` and `leaves`, each
+  with an `async_` twin, beside the `ancestors` pair that was there before.
+  Every guarantee the existing walk makes holds for all of them: the visited
+  set is unconditional, so a walk terminates on cyclic data whatever an
+  acyclicity constraint claims, and results are deduplicated in walk order.
+  `flatten` and `leaves` descend from every root when their anchor is omitted;
+  the other three take one.
+
+  **The anchor boundary is per walk, and it is four answers rather than one.**
+  `descendants` excludes it, as `ancestors` does. `flatten` and
+  `descendants_to_depth` include it — they answer *the axis from a point*
+  rather than *the strict descendants of a point*. `children_at_depth` includes
+  it at `depth=0`, which is the anchor alone. `leaves` includes it only if it
+  is one, since a childless node is its own only leaf.
+
+  **The four flattened descents emit pre-order by discovery**: each node, then
+  everything first reached through it, then the next. One rule across the
+  bound, so `max_depth` decides how far a walk goes and never what order it
+  comes back in — a bounded answer is the unbounded one cut short. Over a tree
+  that is the depth-first order; over a DAG it is not, and the name says which
+  one you get, because a node reachable by several paths is emitted under
+  whichever discovered it first. `ancestors` keeps level order, because
+  *nearest first* is a claim about distance that pre-order does not keep, and
+  `children_at_depth` returns a level, which has no emission order to choose.
+  `Taxonomy.walk()` is unchanged and stays breadth first: it streams, and
+  pre-order cannot be streamed.
+
+  None of this costs a second traversal. The five share one level-synchronous
+  descent with `ancestors` — one request per frontier, which is what lets the
+  asynchronous driver issue one round of concurrency per depth and a bulk
+  backing answer a level in one query — and differ only in how the descent's
+  discovery edges are read afterwards.
+
+- **A walk memo, on by default, and `WalkCache` for callers who want their
+  own.** `drive()` and `async_drive()` now give each walk somewhere to remember
+  an edge reply, so a walk asking its backing for the same edge twice pays for
+  it once: `leaves` descends and then confirms childlessness over nodes the
+  descent already asked about, and the backing now sees each node exactly once.
+
+  The lifetime is **one `drive()` call**, so what it promises is that a walk
+  does not contradict itself — not that the graph held still. A caller who
+  wants a memo to outlive one walk, or to be bounded, passes `cache=` to the
+  driver or to any descending walk and owns when it is stale, because they are
+  the only party that knows how fast their data moves. `WalkCache` is a
+  two-member Protocol — `get` and `__setitem__` — rather than `MutableMapping`,
+  so this package's own `BoundedLRUCache` fits: it implements every member the
+  ABC requires without inheriting it, and an ABC matches nominally.
+
+  `roots()` is deliberately not memoised. One walk asks it, once, and
+  remembering it would cost a caller their only chance to notice the axis grew
+  a root.
+
+- **`Taxonomy.subtree_keys()` and its asynchronous twin** — a root and
+  everything under it, as the keys a subtree filter is built from
+  (`Filter(column, Operator.IN, axis.subtree_keys(node))`). The root is
+  included, the result is deduplicated in walk order, `depth` bounds it and is
+  optional, and a root the axis does not contain is **refused** rather than
+  returned as a one-element list a caller cannot tell from a leaf — which is
+  the refusal `Taxonomy.walk()` already makes, for the same reason: both
+  answers include their anchor.
+
 - **`ScanningSignal` and `AsyncScanningSignal`, registered under
   `kind: "scan"`.** A rung that finds declared forms *inside* a query rather
   than comparing the whole of it, and reports where each one sat: every span of
@@ -106,7 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 116 names, taking the package's `__all__` to 321. Every one of them was already importable by module path; what
+  the resolution cascade — 127 names, taking the package's `__all__` to 332. Every one of them was already importable by module path; what
   changes is that they are now a promise this package keeps rather than a path
   that happened to work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the

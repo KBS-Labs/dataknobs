@@ -41,6 +41,10 @@ from dataknobs_common.hierarchy import (
     DEFAULT_FRONTIER_CONCURRENCY,
     AsyncHierarchyView,
     HierarchyView,
+    async_descendants_to_depth,
+    async_flatten,
+    descendants_to_depth,
+    flatten,
 )
 from dataknobs_common.ontology.hierarchy import edge_criteria
 from dataknobs_common.ontology.model import EntityRef
@@ -164,6 +168,45 @@ class Taxonomy:
             frontier = tuple(child for reply in replies for child in reply)
             depth += 1
 
+    def subtree_keys(self, root_id: str, *, depth: int | None = None) -> list[str]:
+        """``root_id`` and everything under it, as the keys a query filters on.
+
+        The member a taxonomy is usually resolved *for*: one line then builds
+        the filter -- ``Filter(column, Operator.IN, axis.subtree_keys(node))``
+        -- and a count over a foreign table covers the subtree rather than the
+        one node a synonym list would have matched just as well.
+
+        Four properties, each of which is a way to get it wrong:
+
+        * **the root is included.** Naming an interior node means *this and
+          everything under it*, and an off-by-one here under-counts silently
+          while the count is the whole answer. This is the including half of
+          the boundary :func:`~dataknobs_common.hierarchy.descendants`
+          supplies the excluding half of;
+        * **deduplicated, in walk order** -- a DAG node is reachable by several
+          paths, so a raw walk repeats. A repeated key changes no ``IN`` result
+          and does change a length a caller may be reporting;
+        * **``depth`` is the bound, and it is optional.** Unbounded by default,
+          because the ordinary question is *everything under this*;
+        * **an unknown root is refused**, for :meth:`walk`'s reason and not a
+          new one: this walk includes its anchor, so an unknown one would come
+          back as a one-element list that the caller cannot tell from a leaf.
+
+        The keys are the structure axis's own, which is what a source-keyed
+        foreign table is keyed by.
+
+        Two delegations rather than an algorithm: unbounded this *is*
+        :func:`~dataknobs_common.hierarchy.flatten` and bounded it *is*
+        :func:`~dataknobs_common.hierarchy.descendants_to_depth`, which is why
+        it emits their pre-order and needs no rule of its own at either end of
+        the bound.
+        """
+        if not self.structure.contains(root_id):
+            _refuse_an_unknown_anchor(self.definition.id, root_id)
+        if depth is None:
+            return list(flatten(self.structure, from_id=root_id))
+        return list(descendants_to_depth(self.structure, root_id, depth))
+
     def at(self, node_id: str) -> TaxonomyView:
         """The cursor over this axis, anchored at ``node_id`` -- the door in.
 
@@ -233,6 +276,32 @@ class AsyncTaxonomy:
             )
             frontier = tuple(child for reply in replies for child in reply)
             depth += 1
+
+    async def subtree_keys(
+        self,
+        root_id: str,
+        *,
+        depth: int | None = None,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    ) -> list[str]:
+        """:meth:`Taxonomy.subtree_keys`, awaited.
+
+        The four properties are that method's; what is twinned here is the
+        driving and nothing else.
+        """
+        if not await self.structure.contains(root_id):
+            _refuse_an_unknown_anchor(self.definition.id, root_id)
+        if depth is None:
+            return list(
+                await async_flatten(
+                    self.structure, from_id=root_id, max_concurrency=max_concurrency
+                )
+            )
+        return list(
+            await async_descendants_to_depth(
+                self.structure, root_id, depth, max_concurrency=max_concurrency
+            )
+        )
 
     def at(self, node_id: str) -> AsyncTaxonomyView:
         """:meth:`Taxonomy.at`, and a plain ``def`` for the same reason.

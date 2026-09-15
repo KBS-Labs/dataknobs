@@ -37,8 +37,18 @@ from dataknobs_common.hierarchy import (
     MappingHierarchy,
     ancestors,
     async_ancestors,
+    async_children_at_depth,
+    async_descendants,
+    async_descendants_to_depth,
     async_drive,
+    async_flatten,
+    async_leaves,
+    children_at_depth,
+    descendants,
+    descendants_to_depth,
     drive,
+    flatten,
+    leaves,
 )
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.hierarchy import (
@@ -246,6 +256,32 @@ def test_a_cyclic_walk_returns_each_node_once() -> None:
     walked = ancestors(MappingParents(CYCLIC_PARENTS), "f")
 
     assert len(walked) == len(set(walked))
+
+
+def test_the_anchor_is_excluded_by_the_walks_and_included_by_subtree_keys(
+    mammals_v11_path: Path,
+) -> None:
+    """The boundary, asserted from both sides in one test.
+
+    ``ancestors`` and ``descendants`` walk *away* from the anchor and exclude
+    it; ``subtree_keys`` answers *this and everything under it* and includes
+    it. Either alone is a sentence about one function. Together they are the
+    boundary, and the boundary is what a caller has to know: a filter built
+    from a walk that silently dropped the node the user named under-counts, and
+    the count is the whole answer.
+
+    One test because the difference is the subject. Two tests asserting one
+    inclusion each would both keep passing if the two walks were made to agree.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+    view = axis.at("dog")
+    structure = axis.structure
+
+    assert view.node not in ancestors(structure, view.node)
+    assert view.node not in descendants(structure, view.node)
+    assert view.node in axis.subtree_keys(view.node)
+
+    assert set(axis.subtree_keys(view.node)) == {view.node, *descendants(structure, view.node)}
 
 
 def test_the_anchor_is_excluded_from_its_own_ancestors(mammals_path: Path) -> None:
@@ -607,8 +643,38 @@ def test_the_assertion_axis_bulk_members_agree_with_the_singular_ones(
 # --------------------------------------------------------------------------
 
 
+#: Each core this module wraps, and one call into each of its two surfaces.
+#:
+#: Parametrised over **six** of the eight walks rather than over one. A
+#: parametrised guard run over a set of one is green for the same reason an
+#: empty one is, and this table was that until the six compositions existed --
+#: so a walk added without a row here is a walk whose delegation nothing checks.
+_CORES: tuple[tuple[str, Callable[..., Any], Callable[..., Any]], ...] = (
+    ("_ancestors", lambda h: ancestors(h, "f"), lambda h: async_ancestors(h, "f")),
+    ("_descendants", lambda h: descendants(h, "f"), lambda h: async_descendants(h, "f")),
+    (
+        "_descendants_to_depth",
+        lambda h: descendants_to_depth(h, "f", 2),
+        lambda h: async_descendants_to_depth(h, "f", 2),
+    ),
+    (
+        "_children_at_depth",
+        lambda h: children_at_depth(h, "f", 2),
+        lambda h: async_children_at_depth(h, "f", 2),
+    ),
+    ("_flatten", flatten, async_flatten),
+    ("_leaves", leaves, async_leaves),
+)
+
+
+@pytest.mark.parametrize(
+    ("core", "sync_call", "async_call"), _CORES, ids=[name for name, _, _ in _CORES]
+)
 def test_patching_the_core_moves_both_flavours(
     monkeypatch: pytest.MonkeyPatch,
+    core: str,
+    sync_call: Callable[..., Any],
+    async_call: Callable[..., Any],
 ) -> None:
     """Both wrappers *invoke* the shared generator rather than agreeing with it.
 
@@ -618,13 +684,17 @@ def test_patching_the_core_moves_both_flavours(
     """
     sentinel = object()
 
-    def sentinel_walk(node_id: str) -> object:
+    def sentinel_walk(*_args: object, **_kwargs: object) -> object:
         """A walk that asks nothing and returns a value nothing else produces.
 
         A generator rather than ``iter(())``, and returning a sentinel rather
         than ``None``, for the same reason in both halves: ``None`` out of an
         empty iterator is an answer the *unpatched* driver could also give, so
         it proves the surfaces agree rather than that the patch was reached.
+
+        It takes whatever it is handed, because the six cores do not share a
+        signature -- a bound, a depth and an optional anchor are three
+        different shapes and the patch is about neither.
         """
 
         def _asks_nothing() -> object:
@@ -633,10 +703,10 @@ def test_patching_the_core_moves_both_flavours(
 
         return _asks_nothing()
 
-    monkeypatch.setattr(hierarchy_module, "_ancestors", sentinel_walk)
+    monkeypatch.setattr(hierarchy_module, core, sentinel_walk)
 
-    assert ancestors(MappingParents(CYCLIC_PARENTS), "f") is sentinel
-    assert asyncio.run(async_ancestors(AsyncMappingParents(CYCLIC_PARENTS), "f")) is sentinel
+    assert sync_call(MappingParents(CYCLIC_PARENTS)) is sentinel
+    assert asyncio.run(async_call(AsyncMappingParents(CYCLIC_PARENTS))) is sentinel
 
 
 # --------------------------------------------------------------------------

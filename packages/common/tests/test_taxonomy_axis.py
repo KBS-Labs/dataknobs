@@ -647,3 +647,100 @@ async def test_the_async_twin_declines_a_negated_edge_alike() -> None:
     assert sorted(await axis.roots()) == ["mammal", "whale"]
     assert await axis.contains("fish") is False
     assert "fish" not in await axis.parent_edges()
+
+
+# --------------------------------------------------------------------------
+# Spending the axis on a query -- subtree_keys
+# --------------------------------------------------------------------------
+
+
+def test_subtree_keys_is_the_axis_from_a_point_including_the_point(
+    mammals_v11_path: Path,
+) -> None:
+    """What a filter over a foreign table is built from.
+
+    The root is included because naming an interior node means *this and
+    everything under it*. An off-by-one here under-counts silently while the
+    count is the whole answer, which is why the inclusion is asserted rather
+    than left to whichever walk the method happens to delegate to.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    keys = axis.subtree_keys("dog")
+
+    assert keys[0] == "dog"
+    assert set(keys) == {"dog", "retriever", "beagle", "golden_retriever"}
+    assert len(keys) == len(set(keys)), "a repeated key changes a length a caller reports"
+
+
+def test_subtree_keys_emits_the_delegated_pre_order_rather_than_the_walks_breadth(
+    mammals_v11_path: Path,
+) -> None:
+    """It delegates, and the delegation is observable.
+
+    ``walk`` is breadth first because it streams; ``subtree_keys`` collects, so
+    it emits what the descending flattened walks emit. Over this vocabulary the
+    two are different tuples, which is what makes the delegation assertable at
+    all rather than merely plausible.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    assert axis.subtree_keys("dog") == ["dog", "retriever", "golden_retriever", "beagle"]
+    assert tuple(axis.walk(from_id="dog")) == (
+        "dog",
+        "retriever",
+        "beagle",
+        "golden_retriever",
+    )
+
+
+def test_subtree_keys_bounds_on_depth_and_is_unbounded_by_default(
+    mammals_v11_path: Path,
+) -> None:
+    """``depth`` is the bound, and the ordinary question is *everything under this*."""
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    assert axis.subtree_keys("dog", depth=0) == ["dog"]
+    assert set(axis.subtree_keys("dog", depth=1)) == {"dog", "retriever", "beagle"}
+    assert axis.subtree_keys("dog", depth=None) == axis.subtree_keys("dog")
+
+
+def test_subtree_keys_refuses_an_unknown_root(mammals_v11_path: Path) -> None:
+    """``walk``'s refusal, for ``walk``'s reason and not a new one.
+
+    This walk *includes* its anchor, so an unknown one comes back as a
+    one-element list -- a wrong answer indistinguishable from a leaf, arriving
+    as the filter a caller is about to count with.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    with pytest.raises(NotFoundError) as raised:
+        axis.subtree_keys("marmoset")
+
+    assert raised.value.context["anchor"] == "marmoset"
+    assert raised.value.context["taxonomy"] == "species"
+
+
+@pytest.mark.asyncio
+async def test_both_flavours_of_subtree_keys_agree(mammals_v11_path: Path) -> None:
+    """The differential: what is twinned here is the driving and nothing else.
+
+    Including the refusal, which is the half a hand-twinned pair loses first --
+    the containment question is the ``await``, and the refusal below it is not.
+    """
+    onto = load_ontology(mammals_v11_path)
+    async_onto = await async_load_ontology(mammals_v11_path)
+
+    assert onto.taxonomy("species").subtree_keys("dog") == await async_onto.taxonomy(
+        "species"
+    ).subtree_keys("dog")
+    assert onto.taxonomy("species").subtree_keys("dog", depth=1) == await async_onto.taxonomy(
+        "species"
+    ).subtree_keys("dog", depth=1)
+
+    with pytest.raises(NotFoundError) as sync_raised:
+        onto.taxonomy("species").subtree_keys("marmoset")
+    with pytest.raises(NotFoundError) as async_raised:
+        await async_onto.taxonomy("species").subtree_keys("marmoset")
+
+    assert str(sync_raised.value) == str(async_raised.value)
