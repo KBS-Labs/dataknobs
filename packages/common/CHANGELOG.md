@@ -9,6 +9,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Five more walks over `Hierarchy`, in both flavours** — `descendants`,
+  `descendants_to_depth`, `children_at_depth`, `flatten` and `leaves`, each
+  with an `async_` twin, beside the `ancestors` pair that was there before.
+  Every guarantee the existing walk makes holds for all of them: the visited
+  set is unconditional, so a walk terminates on cyclic data whatever an
+  acyclicity constraint claims, and results are deduplicated in walk order.
+  `flatten` and `leaves` descend from every root when their anchor is omitted;
+  the other three take one.
+
+  **The anchor boundary is per walk, and it is four answers rather than one.**
+  `descendants` excludes it, as `ancestors` does. `flatten` and
+  `descendants_to_depth` include it — they answer *the axis from a point*
+  rather than *the strict descendants of a point*. `children_at_depth` includes
+  it at `depth=0`, which is the anchor alone. `leaves` includes it only if it
+  is one, since a childless node is its own only leaf.
+
+  **Every walk that includes its anchor refuses one the axis does not
+  contain**, raising `NotFoundError` with the anchor in its `context`. It has
+  to: a one-element result is exactly what a childless node returns, so an
+  unchecked anchor comes back as a term of the axis with nothing to
+  distinguish it from a real leaf — the refusal `Taxonomy.walk()` already
+  made, now made by every walk with the same reason to make it. The excluding
+  walks still do not refuse, because they return nothing false about an
+  unknown anchor: there the answer is ambiguous rather than wrong, and
+  `contains()` resolves it in one call.
+
+  **The four flattened descents emit pre-order by discovery**: each node, then
+  everything first reached through it, then the next. One rule across the
+  bound, so `max_depth` decides how far a walk goes and never what order it
+  comes back in — a bounded answer is the unbounded one cut short. Over a tree
+  that is the depth-first order; over a DAG it is not, and the name says which
+  one you get, because a node reachable by several paths is emitted under
+  whichever discovered it first. `ancestors` keeps level order, because
+  *nearest first* is a claim about distance that pre-order does not keep, and
+  `children_at_depth` returns a level, which has no emission order to choose.
+  `Taxonomy.walk()` stays breadth first: it streams, and pre-order by
+  discovery is not an order a level-synchronous descent can stream. A node's
+  place depends on everything under its earlier siblings, so over a root whose
+  first child leads a chain the second child waits for the whole chain — a lag
+  bounded by the branch's depth and by nothing else, which is a collecting walk
+  with extra steps rather than a stream. Streaming it with a bounded lag means
+  one request per node instead of one per level, which is the round trip the
+  shared descent exists not to make.
+
+  None of this costs a second traversal. The five share one level-synchronous
+  descent with `ancestors` — one request per frontier, which is what lets the
+  asynchronous driver issue one round of concurrency per depth and a bulk
+  backing answer a level in one query — and differ only in how the descent's
+  discovery edges are read afterwards.
+
+  **`leaves` costs no second request either.** A node that discovered nothing
+  is either a leaf or a node whose every child had already been reached along
+  another path, and over a DAG those are different answers — but which one is
+  in the *reply*, and the descent keeps it rather than asking again for edges
+  it already had. So the walk is the descent and nothing more, and the backing
+  sees each node exactly once with or without a cache.
+
+- **`WalkCache` and `WalkCacheKey` — a cache a caller owns, for spending edge
+  replies across walks.** `cache=` is a keyword on every walk here: the two
+  drivers, `ancestors`, the five descending walks, both flavours of each, and
+  `Taxonomy.walk()` and `Taxonomy.subtree_keys()`. It lives in the frontier
+  read both drivers share, which is why the streaming walk — the one walk that
+  goes through no driver at all — reaches it by forwarding a parameter rather
+  than needing an implementation of its own. A cache filled by a collecting
+  walk therefore answers a streaming one.
+
+  **There is no default cache, because no walk here asks twice.** The descent
+  asks each node once, and `leaves` reads childlessness off the reply rather
+  than asking a second time, so a memo built per walk would fill with entries
+  that walk will never read back: a 20,000-node `MappingHierarchy.snapshot()`
+  held one at 107% of the edge map it returns. Lifetime is therefore the
+  caller's, which is also the only place it can be decided — how stale a reply
+  may be is a fact about their data, not about a walk.
+
+  `WalkCache` is a two-member Protocol — `get` and `__setitem__` — rather than
+  `MutableMapping`, so this package's own `BoundedLRUCache` fits: it implements
+  every member the ABC requires without inheriting it, and an ABC matches
+  nominally. `hierarchy.py` carries that as a type-checked assignment rather
+  than a claim, which is how the value parameter got pinned: it has to be the
+  reply type, since `get` is read covariantly and a cache of `object` does not
+  satisfy the seam. A bounded cache is admitted too, and costs at most
+  re-fetches — no walk's answer depends on a hit.
+
+  A caller-supplied cache is scoped to **one axis**. The key is
+  `(member, node_id)` and names no hierarchy, so a cache spent on a second axis
+  answers it from the first's edges. There is no discriminator available to put
+  there: a `Hierarchy` is arbitrary consumer code and need not be hashable — a
+  plain `@dataclass` backing has `__hash__` of `None` — while `id()` is reused
+  after a collection and would answer a new axis from a dead one's entries.
+
+  `roots()` is deliberately not cached. One walk asks it, once, and remembering
+  it would cost a caller their only chance to notice the axis grew a root.
+
+- **`Taxonomy.subtree_keys()` and its asynchronous twin** — a root and
+  everything under it, as the keys a subtree filter is built from
+  (`Filter(column, Operator.IN, axis.subtree_keys(node))`). The root is
+  included, the result is deduplicated in walk order, `depth` bounds it and is
+  optional, and a root the axis does not contain is **refused** rather than
+  returned as a one-element list a caller cannot tell from a leaf — which is
+  the refusal `Taxonomy.walk()` already makes, for the same reason: both
+  answers include their anchor.
+
 - **`ScanningSignal` and `AsyncScanningSignal`, registered under
   `kind: "scan"`.** A rung that finds declared forms *inside* a query rather
   than comparing the whole of it, and reports where each one sat: every span of
@@ -106,7 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 116 names, taking the package's `__all__` to 321. Every one of them was already importable by module path; what
+  the resolution cascade — 128 names, taking the package's `__all__` to 333. Every one of them was already importable by module path; what
   changes is that they are now a promise this package keeps rather than a path
   that happened to work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the
@@ -732,6 +834,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **A bulk member that answers the wrong number of replies is refused by
+  name.** `BulkHierarchy` states a positional contract — one reply per node
+  asked about, in the order asked, an empty sequence where there is no answer —
+  and the natural implementation breaks it, because a query returning one row
+  per match returns no row for a node with none. Every walk already caught the
+  breach, by pairing the frontier with its replies under `zip(strict=True)`:
+  `ValueError: zip() argument 2 is shorter than argument 1`, which names an
+  argument position and neither the backing, the member, nor the counts. The
+  refusal now happens where a bulk member answers and says all three; the
+  strict pairings stay, as the assertion that the check ran.
 
 - **`Coverage` holds offsets rather than text, and reports what the evidence
   *located* rather than what reached a candidate.** `matched` is the union of

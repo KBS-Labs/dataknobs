@@ -27,6 +27,17 @@ distinction is the bet, and it is the part to keep watching. The shape it
 exists to avoid is ``dataknobs_data``'s ``_search_with_complex_query``: 57
 lines in each flavour, differing in three.
 
+Both halves have since been paid again, and the bet held both times. Five more
+walks arrived -- ``descendants``, ``descendants_to_depth``,
+``children_at_depth``, ``flatten`` and ``leaves`` -- and each cost one
+generator in the core and two one-expression wrappers here, the driver pair
+unchanged. And a **capability** arrived too, which is the half that was
+supposed to be expensive: the walk cache went into the frontier read both
+drivers already call rather than into either of them, so it cost one
+implementation instead of a twinned pair -- and the streaming walk that goes
+through no driver at all reaches the same seam for the cost of forwarding a
+parameter, rather than needing a second implementation of its own.
+
 The key type is a parameter with ``str`` **defaulted**, so a bare ``Hierarchy``
 is ``Hierarchy[str]`` and reads as it always did. It exists because the walks
 never *inspect* a node id -- they only hash one -- so an object tree with no id
@@ -43,6 +54,7 @@ from typing import (
     Any,
     Generic,
     Literal,
+    NoReturn,
     Protocol,
     cast,
     runtime_checkable,
@@ -54,13 +66,21 @@ from typing import (
 # only -- the core names these protocols in annotations and nothing more.
 from dataknobs_common._nested_core import _mint_tree
 from dataknobs_common._walk_core import (
+    WalkCache,
+    WalkCacheKey,
     _ancestors,
     _async_reply,
+    _children_at_depth,
+    _descendants,
+    _descendants_to_depth,
+    _flatten,
+    _leaves,
     _parent_edges,
     _refuse_a_spent_walk,
     _refuse_an_unusable_bound,
     _sync_reply,
 )
+from dataknobs_common.exceptions import NotFoundError
 
 if sys.version_info >= (3, 13):  # pragma: no cover - 3.12 is the floor and what runs
     from typing import TypeVar
@@ -87,10 +107,22 @@ __all__ = [
     "MappingHierarchy",
     "Member",
     "Walk",
+    "WalkCache",
+    "WalkCacheKey",
     "ancestors",
     "async_ancestors",
+    "async_children_at_depth",
+    "async_descendants",
+    "async_descendants_to_depth",
     "async_drive",
+    "async_flatten",
+    "async_leaves",
+    "children_at_depth",
+    "descendants",
+    "descendants_to_depth",
     "drive",
+    "flatten",
+    "leaves",
 ]
 
 #: How many singular calls an asynchronous frontier read may have outstanding.
@@ -321,8 +353,22 @@ class AsyncEnumerableHierarchy(AsyncHierarchy[K], Protocol):
 # --------------------------------------------------------------------------
 
 
-def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
+def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T], *, cache: WalkCache | None = None) -> _T:
     """Run a walk against a synchronous hierarchy.
+
+    ``cache`` is where the walk remembers an edge reply, and there is **no
+    default one**: a walk composed here asks the backing about a node exactly
+    once, so a memo built per call would hold a second copy of every reply for
+    a walk that will never read it back. A whole-axis walk is where that shows
+    -- :meth:`MappingHierarchy.snapshot` is one -- and it measured 107% of what
+    the walk returns.
+
+    So a cache here is for spending edge replies **across** walks, and it is
+    the caller's because only they can say when it is stale. It is also theirs
+    to scope: the key names the member and the node and not the hierarchy, so
+    one cache spent on two axes answers the second from the first.
+    :data:`~dataknobs_common._walk_core.WalkCacheKey` says why no discriminator
+    is available to put there.
 
     The ``except`` below must see the walk's own return and nothing else.
     ``StopIteration`` from the *core* cannot reach it -- PEP 479 converts one
@@ -341,7 +387,7 @@ def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T]) -> _T:
     try:
         member, node_ids = next(walk)
         while True:
-            member, node_ids = walk.send(_sync_reply(hierarchy, member, node_ids))
+            member, node_ids = walk.send(_sync_reply(hierarchy, member, node_ids, cache=cache))
     except StopIteration as stop:
         # ``StopIteration.value`` is typed ``Any`` by the standard library.
         # Not a suppression -- there is no finding to suppress; it is a
@@ -354,6 +400,7 @@ async def async_drive(
     walk: Walk[_K, _T],
     *,
     max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
 ) -> _T:
     """Run a walk against an asynchronous hierarchy.
 
@@ -365,16 +412,75 @@ async def async_drive(
     members; see :data:`DEFAULT_FRONTIER_CONCURRENCY` for why a bound is not
     optional. It is a keyword here and a constant nowhere the core can read,
     which is what keeps the walk core free of configuration.
+
+    ``cache`` is :func:`drive`'s, and means the same thing: nothing unless the
+    caller supplies one they own -- including the one-cache-one-axis scope that
+    function states.
     """
     _refuse_a_spent_walk(walk)
     try:
         member, node_ids = next(walk)
         while True:
             member, node_ids = walk.send(
-                await _async_reply(hierarchy, member, node_ids, max_concurrency=max_concurrency)
+                await _async_reply(
+                    hierarchy,
+                    member,
+                    node_ids,
+                    max_concurrency=max_concurrency,
+                    cache=cache,
+                )
             )
     except StopIteration as stop:
         return cast("_T", stop.value)
+
+
+# --------------------------------------------------------------------------
+# The anchor boundary -- what an including walk owes an anchor it cannot find
+# --------------------------------------------------------------------------
+
+
+def _refuse_an_unknown_anchor(node_id: object) -> NoReturn:
+    """Refuse an anchor the axis does not contain, for an *including* walk.
+
+    The anchor is emitted by four of the walks below, so seeding a frontier
+    with it unchecked returns an id the hierarchy does not contain as though it
+    were a term of it -- and the caller cannot tell, because a one-element
+    result is exactly what a childless node gives. That collapses *nothing
+    below this node* into *this node is not here*, which are the two answers
+    :meth:`Hierarchy.contains` says in its own docstring it exists to keep
+    apart.
+
+    Yielding nothing was the other candidate and is the worse one for the same
+    reason: it destroys the same distinction at the other end. An *excluding*
+    walk needs neither -- :func:`ancestors` and :func:`descendants` return
+    nothing false about an unknown anchor, so the answer there is ambiguous
+    rather than incorrect and one ``contains`` call resolves it.
+
+    Shared by both flavours rather than written into each: the ``await`` is on
+    the containment question, not on the refusal, so the message is
+    single-sourced while each twin keeps its own call.
+    """
+    raise NotFoundError(
+        f"no node {node_id!r} in this hierarchy, so it cannot anchor a walk "
+        f"that includes its anchor",
+        context={"anchor": node_id},
+    )
+
+
+def _refuse_unless_known(hierarchy: Hierarchy[K], node_id: K | None) -> None:
+    """Ask the containment question an including walk needs, where there is one.
+
+    ``None`` is not an anchor: :func:`flatten` and :func:`leaves` descend from
+    the axis's roots when it is omitted, and there is nothing to refuse.
+    """
+    if node_id is not None and not hierarchy.contains(node_id):
+        _refuse_an_unknown_anchor(node_id)
+
+
+async def _async_refuse_unless_known(hierarchy: AsyncHierarchy[K], node_id: K | None) -> None:
+    """:func:`_refuse_unless_known`'s twin. The ``await`` is the whole difference."""
+    if node_id is not None and not await hierarchy.contains(node_id):
+        _refuse_an_unknown_anchor(node_id)
 
 
 # --------------------------------------------------------------------------
@@ -382,24 +488,30 @@ async def async_drive(
 # --------------------------------------------------------------------------
 
 
-def ancestors(hierarchy: Hierarchy[K], node_id: K) -> tuple[K, ...]:
+def ancestors(
+    hierarchy: Hierarchy[K], node_id: K, *, cache: WalkCache | None = None
+) -> tuple[K, ...]:
     """Every node above ``node_id``, nearest first.
 
     Excludes ``node_id`` itself, terminates on cyclic data, and returns each
     node once. ``K`` is inferred from ``hierarchy``.
 
     **An empty result means either a root or an unknown node**, and this does
-    not refuse the second — unlike
-    :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.walk`, which refuses an anchor
-    its axis does not contain. The difference is recoverability rather than
-    taste. ``walk`` *includes* its anchor, so an unknown one is emitted as a
-    term of the axis and the caller receives a wrong answer they cannot
-    detect. This excludes its anchor, so nothing false is returned: the answer
-    is ambiguous, not incorrect, and ``hierarchy.contains(node_id)`` — a member
-    every backing must implement — resolves it in one call. Ask it first where
-    the distinction matters.
+    not refuse the second — unlike the four walks here that *include* their
+    anchor, which do. The difference is recoverability rather than taste. An
+    including walk emits an unknown anchor as a term of the axis, so the caller
+    receives a wrong answer they cannot detect; see
+    :func:`_refuse_an_unknown_anchor`. This excludes its anchor, so nothing
+    false is returned: the answer is ambiguous, not incorrect, and
+    ``hierarchy.contains(node_id)`` — a member every backing must implement —
+    resolves it in one call. Ask it first where the distinction matters.
+
+    ``cache`` is :func:`drive`'s, on every walk here rather than on the ones
+    that happened to arrive with it. This walk shipped first and the seam came
+    later, which is exactly the shape the module docstring describes a surface
+    drifting into.
     """
-    return drive(hierarchy, _ancestors(node_id))
+    return drive(hierarchy, _ancestors(node_id), cache=cache)
 
 
 async def async_ancestors(
@@ -407,6 +519,7 @@ async def async_ancestors(
     node_id: K,
     *,
     max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
 ) -> tuple[K, ...]:
     """:func:`ancestors` over an asynchronous hierarchy.
 
@@ -418,7 +531,216 @@ async def async_ancestors(
     An empty result carries the same ambiguity :func:`ancestors` describes, and
     is resolved the same way.
     """
-    return await async_drive(hierarchy, _ancestors(node_id), max_concurrency=max_concurrency)
+    return await async_drive(
+        hierarchy, _ancestors(node_id), max_concurrency=max_concurrency, cache=cache
+    )
+
+
+def descendants(
+    hierarchy: Hierarchy[K], node_id: K, *, cache: WalkCache | None = None
+) -> tuple[K, ...]:
+    """Every node below ``node_id``, **pre-order by discovery**.
+
+    Excludes ``node_id`` itself -- the exclusion :func:`ancestors` makes, at
+    the other end of the same axis. :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.subtree_keys`
+    is the including counterpart, and the difference between the two is a
+    boundary rather than a preference.
+
+    Terminates on cyclic data and returns each node once. An empty result means
+    either a leaf or an unknown node, and ``hierarchy.contains(node_id)``
+    separates them -- see :func:`_refuse_an_unknown_anchor` for why that
+    ambiguity is acceptable here and is a refusal in the walks that include
+    their anchor.
+
+    **Pre-order by discovery, not depth-first**, and over a DAG the two differ:
+    a node reachable by several paths is emitted under whichever reached it
+    first. Over a tree they coincide.
+    """
+    return drive(hierarchy, _descendants(node_id), cache=cache)
+
+
+async def async_descendants(
+    hierarchy: AsyncHierarchy[K],
+    node_id: K,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """:func:`descendants` over an asynchronous hierarchy.
+
+    The same generator drives both flavours -- this is not a second
+    implementation of the walk.
+    """
+    return await async_drive(
+        hierarchy, _descendants(node_id), max_concurrency=max_concurrency, cache=cache
+    )
+
+
+def descendants_to_depth(
+    hierarchy: Hierarchy[K],
+    node_id: K,
+    max_depth: int,
+    *,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """``node_id`` and everything at most ``max_depth`` levels below it.
+
+    **Includes** ``node_id``: ``max_depth=0`` returns the anchor alone and
+    ``1`` returns the anchor and its children. A negative bound reads as ``0``.
+
+    :func:`flatten` is this walk with no bound, in the same order --
+    ``max_depth`` bounds the descent and never selects an order, so a caller
+    cannot get one ordering by asking for a depth and another by asking for
+    all of them.
+
+    **An anchor the axis does not contain is refused**, because this walk emits
+    it: see :func:`_refuse_an_unknown_anchor` for why an including walk owes
+    that and an excluding one does not.
+    """
+    _refuse_unless_known(hierarchy, node_id)
+    return drive(hierarchy, _descendants_to_depth(node_id, max_depth), cache=cache)
+
+
+async def async_descendants_to_depth(
+    hierarchy: AsyncHierarchy[K],
+    node_id: K,
+    max_depth: int,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """:func:`descendants_to_depth` over an asynchronous hierarchy."""
+    await _async_refuse_unless_known(hierarchy, node_id)
+    return await async_drive(
+        hierarchy,
+        _descendants_to_depth(node_id, max_depth),
+        max_concurrency=max_concurrency,
+        cache=cache,
+    )
+
+
+def children_at_depth(
+    hierarchy: Hierarchy[K], node_id: K, depth: int, *, cache: WalkCache | None = None
+) -> tuple[K, ...]:
+    """Exactly the nodes ``depth`` levels below ``node_id`` -- one level.
+
+    ``depth=0`` is ``node_id`` itself, ``1`` its children, ``2`` its
+    grandchildren. A negative depth reads as ``0`` -- the anchor alone -- as it
+    does on :func:`descendants_to_depth`, rather than as an error. A depth the
+    axis does not reach returns ``()``, which is an answer and not a failure:
+    nothing is that far below the anchor. The two are different answers, and
+    the difference is the point -- ``()`` says *nothing is that deep*, while a
+    one-element result says *this node is*.
+
+    **The one walk here with no emission order to choose.** A level is a set of
+    equals; what orders it is the order the backing answered in.
+
+    **An anchor the axis does not contain is refused**, for the reason
+    :func:`_refuse_an_unknown_anchor` gives -- at ``depth=0`` this walk is the
+    anchor alone, which is where an unchecked one would be returned as a term
+    of the axis with nothing to distinguish it.
+    """
+    _refuse_unless_known(hierarchy, node_id)
+    return drive(hierarchy, _children_at_depth(node_id, depth), cache=cache)
+
+
+async def async_children_at_depth(
+    hierarchy: AsyncHierarchy[K],
+    node_id: K,
+    depth: int,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """:func:`children_at_depth` over an asynchronous hierarchy."""
+    await _async_refuse_unless_known(hierarchy, node_id)
+    return await async_drive(
+        hierarchy,
+        _children_at_depth(node_id, depth),
+        max_concurrency=max_concurrency,
+        cache=cache,
+    )
+
+
+def flatten(
+    hierarchy: Hierarchy[K],
+    *,
+    from_id: K | None = None,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """The axis from a point, or the whole of it, **pre-order by discovery**.
+
+    ``from_id`` is **included**. Omitting it descends from every root, and each
+    root's subtree is emitted whole before the next begins.
+
+    What ``roots()`` reaches is what this returns: a node no edge mentions is
+    not in the hierarchy at all, and a cyclic component with no root above it
+    is unreachable from here. That is a property of the protocol rather than of
+    this walk.
+
+    **A ``from_id`` the axis does not contain is refused**, because this walk
+    emits it; see :func:`_refuse_an_unknown_anchor`. Omitting it refuses
+    nothing, there being no anchor to check -- an axis with no roots at all is
+    walked and returns ``()``.
+    """
+    _refuse_unless_known(hierarchy, from_id)
+    return drive(hierarchy, _flatten(from_id), cache=cache)
+
+
+async def async_flatten(
+    hierarchy: AsyncHierarchy[K],
+    *,
+    from_id: K | None = None,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """:func:`flatten` over an asynchronous hierarchy."""
+    await _async_refuse_unless_known(hierarchy, from_id)
+    return await async_drive(
+        hierarchy, _flatten(from_id), max_concurrency=max_concurrency, cache=cache
+    )
+
+
+def leaves(
+    hierarchy: Hierarchy[K],
+    *,
+    under: K | None = None,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """Every node with no children at or under ``under``, in :func:`flatten`'s order.
+
+    ``under`` is **included if it is one**: a childless node is its own only
+    leaf. Omitting it takes the leaves of the whole axis.
+
+    **Childlessness is the reply, not the discovery edges.** A node the descent
+    discovered nothing through is either a leaf or a node whose every child had
+    already been reached along another path, and over a DAG those are different
+    answers -- so what separates them is whether the *reply* was empty, which
+    the descent sees and keeps. This walk therefore costs exactly the descent:
+    the backing is asked about each node once, with a cache or without one.
+
+    **An ``under`` the axis does not contain is refused**, and this walk is the
+    one that reaches that answer by the longest route: an unknown anchor
+    discovers nothing, is confirmed childless because a backing has no children
+    for a node it has never heard of, and would come back as a leaf of the
+    axis. See :func:`_refuse_an_unknown_anchor`.
+    """
+    _refuse_unless_known(hierarchy, under)
+    return drive(hierarchy, _leaves(under), cache=cache)
+
+
+async def async_leaves(
+    hierarchy: AsyncHierarchy[K],
+    *,
+    under: K | None = None,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[K, ...]:
+    """:func:`leaves` over an asynchronous hierarchy."""
+    await _async_refuse_unless_known(hierarchy, under)
+    return await async_drive(
+        hierarchy, _leaves(under), max_concurrency=max_concurrency, cache=cache
+    )
 
 
 # --------------------------------------------------------------------------
@@ -907,6 +1229,39 @@ class AsyncMappingHierarchy(_MappingBacking[K]):
 
 if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
     from typing import assert_type
+
+    from dataknobs_common.bounded_cache import BoundedLRUCache
+
+    def _the_cache_seam_admits_the_cache_this_package_ships() -> None:
+        """``BoundedLRUCache`` satisfies :class:`WalkCache`, checked not claimed.
+
+        The reason that seam is a two-member Protocol rather than
+        ``MutableMapping`` is that this class implements every member the ABC
+        requires *without inheriting it*, and an ABC matches nominally. That is
+        a claim about a relationship between two modules, and nothing executed
+        can notice it lapsing: the behavioural test hands one to ``flatten``
+        and would go on passing whatever the annotations said.
+
+        **The value parameter is the half that is easy to get wrong.** It has
+        to be the reply type, because ``get`` is read covariantly: annotate the
+        cache ``BoundedLRUCache[..., object]`` and ``get`` returns
+        ``object | None`` where the seam promises ``Sequence[Any] | None``, so
+        the cache does not satisfy the seam a caller is about to hand it to.
+        This package's own guide carried that annotation until this proof was
+        written, which is the argument for writing it here.
+        """
+
+        def _satisfies(cache: BoundedLRUCache[WalkCacheKey, Sequence[Any]]) -> WalkCache:
+            return cache
+
+        def _spends(
+            axis: Hierarchy[str], cache: BoundedLRUCache[WalkCacheKey, Sequence[Any]]
+        ) -> None:
+            """And it is accepted where a caller would actually pass one."""
+            flatten(axis, cache=cache)
+            leaves(axis, cache=cache)
+
+        del _satisfies, _spends
 
     def _the_key_defaults_to_str() -> None:
         """A bare ``Hierarchy`` annotation means ``Hierarchy[str]``.

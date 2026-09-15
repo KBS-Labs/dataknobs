@@ -248,12 +248,11 @@ are deduplicated in walk order, so a DAG node reachable by several paths is
 still one entry.
 
 An empty result means **either a root or a node the axis does not have**, and
-`ancestors` does not refuse the second — unlike `Taxonomy.walk` below, which
-refuses an anchor its axis does not contain. The difference is recoverability:
-`walk` includes its anchor, so an unknown one would be emitted as a term of the
-axis and the caller could not detect it, where `ancestors` excludes its anchor
-and returns nothing false. The answer is ambiguous rather than wrong, and
-`contains()` resolves it in one call:
+`ancestors` does not refuse the second — unlike every walk that *includes* its
+anchor, which does. The difference is recoverability: an including walk emits
+an unknown anchor as a term of the axis and the caller cannot detect it, where
+`ancestors` excludes its anchor and returns nothing false. The answer is
+ambiguous rather than wrong, and `contains()` resolves it in one call:
 
 ```python
 assert ancestors(species.structure, "mammal") == ()      # a root
@@ -261,6 +260,201 @@ assert ancestors(species.structure, "marmoset") == ()    # not in the axis
 assert species.structure.contains("mammal")
 assert not species.structure.contains("marmoset")
 ```
+
+### Descending
+
+Five walks go the other way, and the two guarantees above hold for all of them:
+the visited set is unconditional and results are deduplicated in walk order.
+
+```python
+from dataknobs_common import (
+    children_at_depth, descendants, descendants_to_depth, flatten, leaves,
+)
+
+assert descendants(species.structure, "dog") == ("retriever", "beagle")
+assert flatten(species.structure, from_id="dog") == ("dog", "retriever", "beagle")
+assert flatten(species.structure) == ("mammal", "dog", "retriever", "beagle")
+assert descendants_to_depth(species.structure, "mammal", 1) == ("mammal", "dog")
+assert children_at_depth(species.structure, "mammal", 2) == ("retriever", "beagle")
+assert leaves(species.structure) == ("retriever", "beagle")
+```
+
+Each has an `async_` twin taking the same arguments. `flatten` and `leaves`
+descend from every root when their anchor is omitted; the other three require
+one.
+
+#### Where the anchor is
+
+Five walks, four answers, and none of them follows from the others:
+
+| Walk | The anchor is |
+|---|---|
+| `ancestors`, `descendants` | **excluded** — they walk *away* from it |
+| `flatten`, `descendants_to_depth` | **included** — the axis from a point, not the strict descendants of it |
+| `children_at_depth` | **included at `depth=0`**, which is the anchor alone |
+| `leaves` | **included if it is one** — a childless node is its own only leaf |
+
+`Taxonomy.subtree_keys()` below is the fifth answer's counterpart: it includes
+its root deliberately, because *this and everything under it* is the question a
+subtree filter is built to ask.
+
+**A walk that includes its anchor refuses one the axis does not contain.** It
+has to: a one-element result is exactly what a childless node returns, so an
+unchecked anchor comes back as a term of the axis with nothing to distinguish
+it from a real leaf.
+
+```python
+from dataknobs_common.exceptions import NotFoundError
+
+for walk in (
+    lambda: flatten(species.structure, from_id="marmoset"),
+    lambda: descendants_to_depth(species.structure, "marmoset", 3),
+    lambda: children_at_depth(species.structure, "marmoset", 0),
+    lambda: leaves(species.structure, under="marmoset"),
+):
+    try:
+        walk()
+    except NotFoundError as refusal:
+        assert refusal.context == {"anchor": "marmoset"}
+
+assert descendants(species.structure, "marmoset") == ()   # excluding: ambiguous, not refused
+```
+
+`leaves` is on that list by the longest route: an unknown anchor discovers
+nothing, is confirmed childless because a backing has no children for a node it
+has never heard of, and would be returned as a leaf of the axis. Omitting the
+anchor refuses nothing — there is none to check, and an axis with no roots at
+all is walked and returns `()`.
+
+#### What each one emits
+
+**`descendants`, `flatten`, `descendants_to_depth` and `leaves` emit pre-order
+by discovery**: each node, then everything first reached through it, then the
+next. One rule across the bound — `max_depth` decides how far the walk goes and
+never which order it comes back in, so a bounded answer is the unbounded one
+cut short rather than a differently sorted one.
+
+```python
+from dataknobs_common import MappingHierarchy
+
+tree = MappingHierarchy({
+    "root": (), "a": ("root",), "b": ("root",),
+    "a1": ("a",), "a2": ("a",), "b1": ("b",),
+})
+
+assert flatten(tree) == ("root", "a", "a1", "a2", "b", "b1")
+#                                    ^^^^^^^^^^^^  a's subtree, before b
+```
+
+**`ancestors` is the exception, and it is not a preference.** It publishes
+*nearest first*, which is a claim about distance: over a node with two parents
+where a chain sits above only one of them, level order gives distances
+1, 1, 2, 3 and pre-order gives 1, 2, 3, 1. The two promises conflict, so that
+walk keeps level order.
+
+**`children_at_depth` has no emission order to choose.** It returns one level,
+and a level is a set of equals — what orders it is the order the backing
+answered in. A depth the axis does not reach returns `()`, which is an answer
+rather than a failure: nothing is that far below the anchor.
+
+#### Pre-order by discovery is not depth-first
+
+Over a tree the two coincide. Over a DAG they do not, and the name says which
+one you get: a node reachable by several paths is emitted under whichever
+*discovered it first*, and a level-at-a-time descent discovers it along the
+shortest path rather than the leftmost one.
+
+```python
+dag = MappingHierarchy({
+    "root": (), "a": ("root",), "b": ("root",), "y": ("a",), "x": ("b", "y"),
+})
+
+assert flatten(dag) == ("root", "a", "y", "b", "x")
+#   x is under b, which reached it at depth 2 — not under y, which is depth 3.
+#   A depth-first walk would return ("root", "a", "y", "x", "b").
+```
+
+The same distinction is why `leaves` reads the **reply** rather than the
+discovery edges. A node that discovered nothing is either a leaf or a node
+whose every child had already been reached along another path — and which one
+it is is in the reply the descent already received:
+
+```python
+assert dag.children("y") == ("x",)     # y has a child
+assert leaves(dag) == ("x",)           # ...and is not reported as a leaf
+```
+
+### Spending edge replies across walks
+
+No walk here asks its backing about a node twice. The descent asks each node
+once, and `leaves` reads childlessness off that reply rather than asking again,
+so there is no memo to build and nothing a cache has to rescue:
+
+```python
+class CountingAxis:
+    def __init__(self, inner):
+        self._inner, self.asked = inner, []
+
+    def roots(self): return self._inner.roots()
+    def parents(self, node_id): return self._inner.parents(node_id)
+    def contains(self, node_id): return self._inner.contains(node_id)
+
+    def children(self, node_id):
+        self.asked.append(node_id)
+        return self._inner.children(node_id)
+
+
+axis = CountingAxis(tree)
+leaves(axis)
+assert sorted(axis.asked) == ["a", "a1", "a2", "b", "b1", "root"]   # each node once
+```
+
+So what a cache is *for* is the **next** walk. Nothing is cached by default —
+a per-walk memo would hold a second copy of every reply the walk will never
+read back — and a caller who wants replies to outlive one walk supplies their
+own:
+
+```python
+from collections.abc import Sequence
+from typing import Any
+
+from dataknobs_common import WalkCache, WalkCacheKey   # a Protocol: `get` and `__setitem__`
+from dataknobs_common.bounded_cache import BoundedLRUCache
+
+shared: BoundedLRUCache[WalkCacheKey, Sequence[Any]] = BoundedLRUCache(max_size=4096)
+seam: WalkCache = shared        # it satisfies the seam without inheriting anything
+
+flatten(axis, cache=shared)
+flatten(axis, cache=shared)     # answered from `shared`, not from the backing
+```
+
+The value type is the reply type, and `Sequence[Any]` rather than `object` is
+load-bearing: `get` is read covariantly, so a cache whose values are `object`
+does not satisfy the seam it is about to be handed to. `hierarchy.py` carries
+that assignment as a type-checked proof rather than as a claim.
+
+`cache=` is a keyword on **every** walk here — `drive()`, `async_drive()`,
+`ancestors`, the five descending walks, both flavours of each, and
+`Taxonomy.walk()` and `Taxonomy.subtree_keys()` below — because only the caller
+knows how fast their data moves, and staleness is therefore theirs to decide.
+Two members rather than `MutableMapping` so that a cache implementing the whole
+mapping interface without inheriting the ABC — `BoundedLRUCache` is one — still
+fits. It may also be **bounded**: nothing a walk does depends on a hit, so a
+cache too small to hold a frontier costs re-fetches and never an answer.
+
+A cache outliving one walk is scoped to **one axis**. The key is
+`(member, node_id)` and names no hierarchy, so a cache spent on a second axis
+answers it from the first's edges. There is no discriminator to put there: a
+`Hierarchy` is arbitrary consumer code and need not be hashable — a plain
+`@dataclass` backing has `__hash__` of `None` — while `id()` is reused after a
+collection and would answer a new axis from a dead one's entries. One axis, one
+cache.
+
+`roots()` is deliberately **not** memoised: one walk asks it, once, and
+remembering it would cost a caller their only chance to notice the axis grew a
+root.
+
+### The axis's own traversal
 
 `Taxonomy.walk()` is the axis's own traversal — every node at or under a point,
 breadth first, **including** the anchor:
@@ -291,6 +485,59 @@ axis, and the caller could not tell — a walk is exactly what they asked for.
 Yielding nothing instead would be worse: it collapses *nothing below this node*
 into *this node is not here*, which are the two answers `contains()` exists to
 keep apart. This is the walk that asks it.
+
+### Spending the axis on a query
+
+A taxonomy earns its place when a query covers a *subtree*. If the answer is an
+equality on the node the user named, a synonym list would have matched the
+phrase equally well.
+
+`subtree_keys()` is the member that makes the join expressible — the node and
+everything under it, as keys:
+
+```python
+from dataknobs_data.query import Filter, Operator
+
+assert species.subtree_keys("dog") == ["dog", "retriever", "beagle"]
+assert species.subtree_keys("dog", depth=0) == ["dog"]
+
+subtree_filter = Filter("species_id", Operator.IN, species.subtree_keys("dog"))
+```
+
+Four things to rely on:
+
+* **the root is included.** Naming an interior node means *this and everything
+  under it*, and an off-by-one here under-counts silently while the count is
+  the whole answer;
+* **deduplicated, in walk order** — a DAG node reachable by several paths is
+  one key, not several, so a length a caller reports stays right;
+* **`depth` is the bound and it is optional** — unbounded by default, because
+  the ordinary question is *everything under this*;
+* **an unknown root is refused**, for the reason `walk()` refuses one: this
+  answer includes its anchor, so an unknown one would come back as a
+  one-element list indistinguishable from a leaf.
+
+It is two delegations rather than an algorithm — `flatten` unbounded,
+`descendants_to_depth` bounded — so it emits their pre-order at both ends of
+the bound.
+
+**So this package answers *everything at or under X* in two orders, and the
+difference is not a preference.** `Taxonomy.walk()` streams and is breadth
+first; `subtree_keys()` collects and is pre-order by discovery. A stream cannot
+be pre-ordered with any bound on its lag: a node's place depends on everything
+under its earlier siblings, so over a root whose first child leads a chain the
+second child waits for the whole chain. Streaming it with a bounded lag means
+one request per node instead of one per level — the round trip the shared
+descent exists not to make. Pick by what you are doing rather than by order:
+`subtree_keys()` builds a filter, where order does not survive the `IN` clause
+anyway, and `walk()` is for consuming nodes as they arrive.
+
+```python
+assert species.subtree_keys("dog") == ["dog", "retriever", "beagle"]
+assert tuple(species.walk(from_id="dog")) == ("dog", "retriever", "beagle")
+#   the same here, because this axis branches in only one place; they differ
+#   wherever a branch has a branch under it.
+```
 
 ### Writing a walk of your own
 

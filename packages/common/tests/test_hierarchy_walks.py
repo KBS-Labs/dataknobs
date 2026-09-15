@@ -37,8 +37,18 @@ from dataknobs_common.hierarchy import (
     MappingHierarchy,
     ancestors,
     async_ancestors,
+    async_children_at_depth,
+    async_descendants,
+    async_descendants_to_depth,
     async_drive,
+    async_flatten,
+    async_leaves,
+    children_at_depth,
+    descendants,
+    descendants_to_depth,
     drive,
+    flatten,
+    leaves,
 )
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.hierarchy import (
@@ -246,6 +256,32 @@ def test_a_cyclic_walk_returns_each_node_once() -> None:
     walked = ancestors(MappingParents(CYCLIC_PARENTS), "f")
 
     assert len(walked) == len(set(walked))
+
+
+def test_the_anchor_is_excluded_by_the_walks_and_included_by_subtree_keys(
+    mammals_v11_path: Path,
+) -> None:
+    """The boundary, asserted from both sides in one test.
+
+    ``ancestors`` and ``descendants`` walk *away* from the anchor and exclude
+    it; ``subtree_keys`` answers *this and everything under it* and includes
+    it. Either alone is a sentence about one function. Together they are the
+    boundary, and the boundary is what a caller has to know: a filter built
+    from a walk that silently dropped the node the user named under-counts, and
+    the count is the whole answer.
+
+    One test because the difference is the subject. Two tests asserting one
+    inclusion each would both keep passing if the two walks were made to agree.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+    view = axis.at("dog")
+    structure = axis.structure
+
+    assert view.node not in ancestors(structure, view.node)
+    assert view.node not in descendants(structure, view.node)
+    assert view.node in axis.subtree_keys(view.node)
+
+    assert set(axis.subtree_keys(view.node)) == {view.node, *descendants(structure, view.node)}
 
 
 def test_the_anchor_is_excluded_from_its_own_ancestors(mammals_path: Path) -> None:
@@ -525,6 +561,57 @@ def test_the_bulk_reply_is_positional() -> None:
     assert tuple(replies[1]) == ()
 
 
+class DroppingBulk(BulkParents):
+    """A bulk member that drops a node rather than answering it empty.
+
+    The plausible way to break the positional contract, and therefore the one
+    worth a test: a query returning one row per match returns *no* row for a
+    node with no parents, so the natural implementation silently shortens the
+    reply.
+    """
+
+    def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        self.bulk_calls += 1
+        return tuple(reply for n in node_ids if (reply := self._inner.parents(n)))
+
+
+def test_a_bulk_member_that_breaks_the_positional_contract_is_named() -> None:
+    """The walk refuses, and the refusal says whose contract was broken.
+
+    Every path here pairs a frontier with its replies positionally, so a short
+    reply is caught -- but caught by ``zip(strict=True)``, whose message names
+    an argument number and no backing, no member and no counts. The contract is
+    ``BulkHierarchy``'s, so the refusal belongs where a bulk member answers,
+    not three frames later where the pairing happens to notice.
+    """
+    dropping = DroppingBulk(WIDE_PARENTS)
+
+    with pytest.raises(ValueError) as caught:
+        ancestors(dropping, "a")
+
+    message = str(caught.value)
+    assert "parents_many" in message, message
+    assert "DroppingBulk" in message, message
+    assert "one reply per node" in message, message
+
+
+class AsyncDroppingBulk(AsyncBulkParents):
+    """:class:`DroppingBulk`, awaited."""
+
+    async def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+        self.bulk_calls += 1
+        return tuple(reply for n in node_ids if (reply := self._inner.parents(n)))
+
+
+def test_the_async_flavour_names_it_too() -> None:
+    """The check is in the step both fetches call, so neither flavour has it alone."""
+    with pytest.raises(ValueError) as caught:
+        asyncio.run(async_ancestors(AsyncDroppingBulk(WIDE_PARENTS), "a"))
+
+    assert "parents_many" in str(caught.value)
+    assert "AsyncDroppingBulk" in str(caught.value)
+
+
 def test_the_async_driver_asks_a_wide_level_concurrently() -> None:
     """Without bulk members, a level is gathered rather than awaited in turn.
 
@@ -607,8 +694,38 @@ def test_the_assertion_axis_bulk_members_agree_with_the_singular_ones(
 # --------------------------------------------------------------------------
 
 
+#: Each core this module wraps, and one call into each of its two surfaces.
+#:
+#: Parametrised over **six** of the eight walks rather than over one. A
+#: parametrised guard run over a set of one is green for the same reason an
+#: empty one is, and this table was that until the six compositions existed --
+#: so a walk added without a row here is a walk whose delegation nothing checks.
+_CORES: tuple[tuple[str, Callable[..., Any], Callable[..., Any]], ...] = (
+    ("_ancestors", lambda h: ancestors(h, "f"), lambda h: async_ancestors(h, "f")),
+    ("_descendants", lambda h: descendants(h, "f"), lambda h: async_descendants(h, "f")),
+    (
+        "_descendants_to_depth",
+        lambda h: descendants_to_depth(h, "f", 2),
+        lambda h: async_descendants_to_depth(h, "f", 2),
+    ),
+    (
+        "_children_at_depth",
+        lambda h: children_at_depth(h, "f", 2),
+        lambda h: async_children_at_depth(h, "f", 2),
+    ),
+    ("_flatten", flatten, async_flatten),
+    ("_leaves", leaves, async_leaves),
+)
+
+
+@pytest.mark.parametrize(
+    ("core", "sync_call", "async_call"), _CORES, ids=[name for name, _, _ in _CORES]
+)
 def test_patching_the_core_moves_both_flavours(
     monkeypatch: pytest.MonkeyPatch,
+    core: str,
+    sync_call: Callable[..., Any],
+    async_call: Callable[..., Any],
 ) -> None:
     """Both wrappers *invoke* the shared generator rather than agreeing with it.
 
@@ -618,13 +735,17 @@ def test_patching_the_core_moves_both_flavours(
     """
     sentinel = object()
 
-    def sentinel_walk(node_id: str) -> object:
+    def sentinel_walk(*_args: object, **_kwargs: object) -> object:
         """A walk that asks nothing and returns a value nothing else produces.
 
         A generator rather than ``iter(())``, and returning a sentinel rather
         than ``None``, for the same reason in both halves: ``None`` out of an
         empty iterator is an answer the *unpatched* driver could also give, so
         it proves the surfaces agree rather than that the patch was reached.
+
+        It takes whatever it is handed, because the six cores do not share a
+        signature -- a bound, a depth and an optional anchor are three
+        different shapes and the patch is about neither.
         """
 
         def _asks_nothing() -> object:
@@ -633,10 +754,10 @@ def test_patching_the_core_moves_both_flavours(
 
         return _asks_nothing()
 
-    monkeypatch.setattr(hierarchy_module, "_ancestors", sentinel_walk)
+    monkeypatch.setattr(hierarchy_module, core, sentinel_walk)
 
-    assert ancestors(MappingParents(CYCLIC_PARENTS), "f") is sentinel
-    assert asyncio.run(async_ancestors(AsyncMappingParents(CYCLIC_PARENTS), "f")) is sentinel
+    assert sync_call(MappingParents(CYCLIC_PARENTS)) is sentinel
+    assert asyncio.run(async_call(AsyncMappingParents(CYCLIC_PARENTS))) is sentinel
 
 
 # --------------------------------------------------------------------------
@@ -1017,17 +1138,40 @@ def test_a_bound_below_one_is_refused() -> None:
 
 @pytest.mark.parametrize(
     ("sync_fn", "async_fn"),
-    [(ancestors, async_ancestors), (drive, async_drive)],
-    ids=["ancestors", "drive"],
+    [
+        (drive, async_drive),
+        (ancestors, async_ancestors),
+        (descendants, async_descendants),
+        (descendants_to_depth, async_descendants_to_depth),
+        (children_at_depth, async_children_at_depth),
+        (flatten, async_flatten),
+        (leaves, async_leaves),
+    ],
+    ids=[
+        "drive",
+        "ancestors",
+        "descendants",
+        "descendants_to_depth",
+        "children_at_depth",
+        "flatten",
+        "leaves",
+    ],
 )
 def test_the_module_twins_differ_by_two_declared_things(
     sync_fn: Callable[..., Any], async_fn: Callable[..., Any]
 ) -> None:
-    """The driving pair and the walk over it stay signature-compatible.
+    """The driving pair and every walk over it stay signature-compatible.
 
-    A caller writing flavour-agnostic code against these four needs the
-    difference to be exactly what is declared, not merely small. Two things are
-    declared and both are real:
+    **One row per pair, and the set is the module's public surface.** A
+    parametrised guard run over a subset is green for the reason an empty one
+    is: it asserts about the pairs it lists and says nothing about the rest, so
+    a walk added without a row here is a walk whose twin nothing checks. The
+    same argument the core table makes, applied to the surface that table
+    delegates to.
+
+    A caller writing flavour-agnostic code against these needs the difference
+    to be exactly what is declared, not merely small. Two things are declared
+    and both are real:
 
     ``max_concurrency`` bounds a frontier read with no bulk member to use, and
     the synchronous driver issues no concurrent calls at all -- a knob that does
@@ -1065,3 +1209,43 @@ def test_an_empty_ancestors_does_not_distinguish_a_root_from_an_unknown_node() -
 
     assert hierarchy.contains("root")
     assert not hierarchy.contains("nonesuch")
+
+
+# --------------------------------------------------------------------------
+# The memo reaches every walk, including the oldest one
+# --------------------------------------------------------------------------
+
+
+def test_ancestors_takes_the_memo_its_siblings_take() -> None:
+    """Twelve walks, and the cache is on all of them rather than on the ten newest.
+
+    ``ancestors`` shipped before the memo existed, which is the whole way a
+    surface drifts: a capability arrives with the walks that prompted it and
+    the incumbent keeps the older signature. The module's own docstring names
+    that drift for ``max_concurrency``, so the same gap reopened one parameter
+    over is the one worth closing rather than recording.
+    """
+    hierarchy = CountingParents(
+        {"gg": (), "g": ("gg",), "p": ("g",), "z": ("p",)},
+    )
+    warm: dict[tuple[str, Any], Sequence[str]] = {}
+
+    first = ancestors(hierarchy, "z", cache=warm)
+    asked_once = hierarchy.singular_calls
+    second = ancestors(hierarchy, "z", cache=warm)
+
+    assert first == second == ("p", "g", "gg")
+    assert hierarchy.singular_calls == asked_once, "the second walk re-asked the backing"
+
+
+@pytest.mark.asyncio
+async def test_async_ancestors_takes_it_too() -> None:
+    """The twin, because a parameter on one half is the drift this closes."""
+    hierarchy = AsyncMappingHierarchy({"gg": (), "g": ("gg",), "p": ("g",), "z": ("p",)})
+    warm: dict[tuple[str, Any], Sequence[str]] = {}
+
+    first = await async_ancestors(hierarchy, "z", cache=warm)
+    second = await async_ancestors(hierarchy, "z", cache=warm)
+
+    assert first == second == ("p", "g", "gg")
+    assert warm, "the walk filled no memo"

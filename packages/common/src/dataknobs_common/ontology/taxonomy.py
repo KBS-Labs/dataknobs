@@ -41,6 +41,10 @@ from dataknobs_common.hierarchy import (
     DEFAULT_FRONTIER_CONCURRENCY,
     AsyncHierarchyView,
     HierarchyView,
+    async_descendants_to_depth,
+    async_flatten,
+    descendants_to_depth,
+    flatten,
 )
 from dataknobs_common.ontology.hierarchy import edge_criteria
 from dataknobs_common.ontology.model import EntityRef
@@ -49,6 +53,7 @@ from dataknobs_common.ontology.sources import object_entity_id
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator, Sequence
 
+    from dataknobs_common._walk_core import WalkCache
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
     from dataknobs_common.ontology.model import Assertion, TaxonomyDefinition
     from dataknobs_common.ontology.sources import (
@@ -79,6 +84,15 @@ def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: str) -> NoReturn:
     Shared by both flavours rather than written into each: the ``await`` is on
     the containment question, not on the refusal, so the message and its
     context are single-sourced while each twin keeps its own call.
+
+    **Not a second copy of the rule.**
+    :func:`~dataknobs_common.hierarchy._refuse_an_unknown_anchor` keeps it for
+    every walk that includes its anchor, and :meth:`Taxonomy.subtree_keys`
+    reaches that one through the walk it delegates to. This exists because
+    :meth:`Taxonomy.walk` delegates to no walk -- it streams, and drives
+    itself -- and because only this frame can name the taxonomy in the
+    refusal. What differs between the two is the message; what does not is
+    which walks owe one.
     """
     raise NotFoundError(
         f"no node {anchor!r} in the structure axis of taxonomy {taxonomy_id!r}, "
@@ -127,7 +141,13 @@ class Taxonomy:
     entities: EntitySource
     assertions: AssertionSource | None = None
 
-    def walk(self, *, from_id: str | None = None, max_depth: int | None = None) -> Iterator[str]:
+    def walk(
+        self,
+        *,
+        from_id: str | None = None,
+        max_depth: int | None = None,
+        cache: WalkCache | None = None,
+    ) -> Iterator[str]:
         """Every node at or under ``from_id``, breadth first, each one once.
 
         From the axis's roots when ``from_id`` is omitted. The anchor is
@@ -141,6 +161,23 @@ class Taxonomy:
         is measured and deliberately not taken here. What it does share is the
         step that reads a frontier, so this walk and the drivers cannot drift
         over which backings answer a level in one query.
+
+        **Breadth first because it streams, which is arithmetic and not a
+        preference.** :meth:`subtree_keys` answers this same question and emits
+        *pre-order by discovery*, which places a node after everything under
+        its earlier siblings -- so a stream in that order would hold a root's
+        second child until the whole first branch was in, a lag bounded by that
+        branch's depth and by nothing else. Emitting pre-order with a bounded
+        lag means one request per node instead of one per level, which is what
+        the shared frontier read exists not to do. The two therefore diverge
+        wherever a branch has a branch under it, and both are right.
+
+        ``cache`` is that shared step's memo, and this walk reaching it is the
+        whole reason the memo lives there rather than in either driver. There is
+        no default one: a streaming walk asks about each node exactly once, so a
+        per-walk memo would buy nothing and retain the axis for the caller's
+        iteration. What a caller *supplies* outlives the walk, which is what
+        makes a cache filled by a collecting walk readable here.
         """
         seen: set[str] = set()
         if from_id is not None:
@@ -160,9 +197,65 @@ class Taxonomy:
                 yield node_id
             if max_depth is not None and depth == max_depth:
                 return
-            replies = _sync_reply(self.structure, "children", tuple(fresh))
+            replies = _sync_reply(self.structure, "children", tuple(fresh), cache=cache)
             frontier = tuple(child for reply in replies for child in reply)
             depth += 1
+
+    def subtree_keys(
+        self,
+        root_id: str,
+        *,
+        depth: int | None = None,
+        cache: WalkCache | None = None,
+    ) -> list[str]:
+        """``root_id`` and everything under it, as the keys a query filters on.
+
+        The member a taxonomy is usually resolved *for*: one line then builds
+        the filter -- ``Filter(column, Operator.IN, axis.subtree_keys(node))``
+        -- and a count over a foreign table covers the subtree rather than the
+        one node a synonym list would have matched just as well.
+
+        Four properties, each of which is a way to get it wrong:
+
+        * **the root is included.** Naming an interior node means *this and
+          everything under it*, and an off-by-one here under-counts silently
+          while the count is the whole answer. This is the including half of
+          the boundary :func:`~dataknobs_common.hierarchy.descendants`
+          supplies the excluding half of;
+        * **deduplicated, in walk order** -- a DAG node is reachable by several
+          paths, so a raw walk repeats. A repeated key changes no ``IN`` result
+          and does change a length a caller may be reporting;
+        * **``depth`` is the bound, and it is optional.** Unbounded by default,
+          because the ordinary question is *everything under this*;
+        * **an unknown root is refused**, for :meth:`walk`'s reason and not a
+          new one: this walk includes its anchor, so an unknown one would come
+          back as a one-element list that the caller cannot tell from a leaf.
+
+        The keys are the structure axis's own, which is what a source-keyed
+        foreign table is keyed by.
+
+        Two delegations rather than an algorithm: unbounded this *is*
+        :func:`~dataknobs_common.hierarchy.flatten` and bounded it *is*
+        :func:`~dataknobs_common.hierarchy.descendants_to_depth`, which is why
+        it emits their pre-order and needs no rule of its own at either end of
+        the bound -- which is a different order from :meth:`walk`'s over the
+        same question, for the reason that method gives. Nothing here depends
+        on the difference, since an ``IN`` clause has none. ``cache`` is
+        forwarded to whichever one runs, because a delegation that drops a
+        parameter its delegate grew is how the layer above a walk ends up
+        unable to do what the walk can.
+
+        The containment question is asked **here as well as** by the walk this
+        delegates to, which also refuses an unknown anchor. Only this frame can
+        name the taxonomy in the refusal, and the axis a caller filters on is
+        where that context is worth one lookup; the walk's own refusal is what
+        makes the rule true for somebody who reaches it directly.
+        """
+        if not self.structure.contains(root_id):
+            _refuse_an_unknown_anchor(self.definition.id, root_id)
+        if depth is None:
+            return list(flatten(self.structure, from_id=root_id, cache=cache))
+        return list(descendants_to_depth(self.structure, root_id, depth, cache=cache))
 
     def at(self, node_id: str) -> TaxonomyView:
         """The cursor over this axis, anchored at ``node_id`` -- the door in.
@@ -200,6 +293,7 @@ class AsyncTaxonomy:
         from_id: str | None = None,
         max_depth: int | None = None,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
     ) -> AsyncIterator[str]:
         """:meth:`Taxonomy.walk`, awaited.
 
@@ -209,6 +303,9 @@ class AsyncTaxonomy:
         frontier read is shared, so this gets the driver's per-level behaviour
         -- one bulk query where the backing offers one, concurrency where it
         does not -- rather than a sequential await per node.
+
+        ``cache`` is that shared step's memo, and means what it means on the
+        synchronous twin.
         """
         seen: set[str] = set()
         if from_id is not None:
@@ -229,10 +326,48 @@ class AsyncTaxonomy:
             if max_depth is not None and depth == max_depth:
                 return
             replies = await _async_reply(
-                self.structure, "children", tuple(fresh), max_concurrency=max_concurrency
+                self.structure,
+                "children",
+                tuple(fresh),
+                max_concurrency=max_concurrency,
+                cache=cache,
             )
             frontier = tuple(child for reply in replies for child in reply)
             depth += 1
+
+    async def subtree_keys(
+        self,
+        root_id: str,
+        *,
+        depth: int | None = None,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> list[str]:
+        """:meth:`Taxonomy.subtree_keys`, awaited.
+
+        The four properties are that method's; what is twinned here is the
+        driving and nothing else.
+        """
+        if not await self.structure.contains(root_id):
+            _refuse_an_unknown_anchor(self.definition.id, root_id)
+        if depth is None:
+            return list(
+                await async_flatten(
+                    self.structure,
+                    from_id=root_id,
+                    max_concurrency=max_concurrency,
+                    cache=cache,
+                )
+            )
+        return list(
+            await async_descendants_to_depth(
+                self.structure,
+                root_id,
+                depth,
+                max_concurrency=max_concurrency,
+                cache=cache,
+            )
+        )
 
     def at(self, node_id: str) -> AsyncTaxonomyView:
         """:meth:`Taxonomy.at`, and a plain ``def`` for the same reason.
