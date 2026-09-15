@@ -26,7 +26,7 @@ assertion backing here rather than beside the protocols.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Generic, NoReturn
 
 # The walk core's frontier read: the one implementation of "ask the frontier in
@@ -48,15 +48,21 @@ from dataknobs_common.hierarchy import (
     flatten,
 )
 from dataknobs_common.ontology.hierarchy import edge_criteria
-from dataknobs_common.ontology.model import EntityRef
+from dataknobs_common.ontology.model import ENTITY_TYPE_ISA_KEY, EntityRef
 from dataknobs_common.ontology.sources import object_entity_id
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator, Sequence
+    from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 
     from dataknobs_common._walk_core import WalkCache
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
-    from dataknobs_common.ontology.model import Assertion, Entity, TaxonomyDefinition
+    from dataknobs_common.ontology.model import (
+        Assertion,
+        AttributeDef,
+        Entity,
+        EntityType,
+        TaxonomyDefinition,
+    )
     from dataknobs_common.ontology.sources import (
         AssertionSource,
         AsyncAssertionSource,
@@ -102,6 +108,75 @@ def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: object) -> NoReturn:
     )
 
 
+def _refuse_an_undeclared_type(taxonomy_id: str, entity_type: str) -> NoReturn:
+    """Refuse an entity type the type store does not declare.
+
+    Returning ``[]`` was the other candidate and is the worse one, for
+    :func:`_refuse_an_unknown_anchor`'s reason at one remove: a type declared
+    with no attributes and no parent **legitimately** inherits nothing, so an
+    empty list for an undeclared one collapses *this type declares nothing*
+    into *this type is not here*. The caller cannot tell those apart, and the
+    reading they will reach for is the one that is not their fault.
+
+    It is also what makes the store safe to default. An axis built without one
+    answers nothing at all rather than answering *nothing is declared* about
+    every type in the vocabulary.
+    """
+    raise NotFoundError(
+        f"no entity type {entity_type!r} in the type store of taxonomy "
+        f"{taxonomy_id!r}, so nothing can be said about what it inherits",
+        context={"taxonomy": taxonomy_id, "entity_type": entity_type},
+    )
+
+
+def _inherited_attributes(
+    entity_types: Mapping[str, EntityType], taxonomy_id: str, entity_type: str
+) -> list[AttributeDef]:
+    """The attribute declarations ``entity_type`` may be asked for, nearest first.
+
+    **Shared by both flavours rather than written into each, and it is shared
+    entire rather than in its frontier step**: the store is a mapping the
+    caller is already holding, so there is no read here to await and therefore
+    no half of this that differs between the twins. :meth:`Taxonomy.walk` is
+    duplicated because it streams over a backing; this is not.
+
+    **A nearer declaration shadows a farther one of the same name.** A subtype
+    redeclaring ``sku`` is *specialising* it -- a different description, a
+    different ``required`` -- and returning both would build a schema with two
+    fields of one name and no rule for choosing between them.
+
+    **The visited set is unconditional**, like every walk over the structure
+    axis, and for a reason that is measured rather than defensive: a document
+    declaring ``A isa B`` and ``B isa A`` **loads**. The loader refuses an
+    ``isa:`` naming an undeclared type and nothing refuses one that closes a
+    loop, so a cycle here is reachable from a valid document.
+
+    Each type has at most one parent -- ``isa:`` is a scalar field on the
+    declaration -- so there is no ordering to choose between branches, which is
+    the one way this differs from the lattice ``structure`` walks.
+    """
+    if entity_type not in entity_types:
+        _refuse_an_undeclared_type(taxonomy_id, entity_type)
+
+    collected: list[AttributeDef] = []
+    claimed: set[str] = set()
+    seen: set[str] = set()
+    current: str | None = entity_type
+    while current is not None and current not in seen:
+        seen.add(current)
+        declaration = entity_types.get(current)
+        if declaration is None:
+            break
+        for attribute in declaration.attributes:
+            if attribute.name in claimed:
+                continue
+            claimed.add(attribute.name)
+            collected.append(attribute)
+        parent = declaration.metadata.get(ENTITY_TYPE_ISA_KEY)
+        current = str(parent) if parent is not None else None
+    return collected
+
+
 @dataclass(frozen=True, eq=False)
 class Taxonomy(Generic[K]):
     """One relation of a vocabulary, walkable, with synchronous backings.
@@ -139,6 +214,26 @@ class Taxonomy(Generic[K]):
     structure: Hierarchy[K]
     entities: EntitySource[K]
     assertions: AssertionSource[K] | None = None
+
+    #: The **type** lattice and the attribute declarations on it -- a different
+    #: store from the ``isa`` assertions :attr:`structure` walks, and the one
+    #: :meth:`inherited_attributes` reads.
+    #:
+    #: A ``Mapping`` rather than a source, and the asymmetry with
+    #: :attr:`entities` is the design: a vocabulary's *instances* may be
+    #: millions behind a store, and its *types* are tens, authored in the
+    #: document and loaded whole. :class:`~dataknobs_common.ontology.Ontology`
+    #: already carries them exactly this way.
+    #:
+    #: **Optional, because the member refuses rather than answering emptily.**
+    #: An axis with no type store is an ordinary thing -- one built from a
+    #: ``parent_id`` column has no ``EntityType`` any more than it has an
+    #: ``Assertion`` -- and asking it what a type inherits is refused, naming
+    #: the type. **Appended last** for the reason
+    #: :attr:`~dataknobs_common.ontology.model.Assertion.polarity` carries: any
+    #: earlier position moves ``assertions`` under a caller who passes it
+    #: positionally.
+    entity_types: Mapping[str, EntityType] = field(default_factory=dict)
 
     def walk(
         self,
@@ -271,6 +366,37 @@ class Taxonomy(Generic[K]):
             return list(flatten(self.structure, from_id=root_id, cache=cache))
         return list(descendants_to_depth(self.structure, root_id, depth, cache=cache))
 
+    def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
+        """Every attribute declaration ``entity_type`` may be asked for, nearest first.
+
+        **The other lattice.** :attr:`structure` walks the ``isa`` *assertions*
+        between entities; this walks the ``isa:`` *field* on entity type
+        declarations, which is a different store carrying a different kind of
+        thing. ``ancestors`` over ``beagle`` gives ``dog`` and ``mammal``;
+        this over ``Breed`` gives ``akc_group``, ``latin_name`` and
+        ``lifespan_years``. A reader who reaches for this expecting ancestors
+        gets declarations, which is why the two are asserted to differ in one
+        test rather than described in a paragraph.
+
+        Its own declarations first, then each ancestor's going up, and **a
+        nearer declaration shadows a farther one of the same name** -- see
+        :func:`_inherited_attributes` for why, and for the visited set.
+
+        **An undeclared type is refused, and a type declared with nothing
+        returns ``[]``.** Those are answers to different questions and this
+        keeps them apart, the way ``contains()`` and the unknown-anchor
+        refusal do everywhere else in this family.
+
+        **It reads none of :attr:`structure`**, and that is worth saying
+        rather than leaving to be noticed: two taxonomies over one vocabulary
+        answer identically here, because the type lattice is neither of their
+        relations -- it is the schema both are declared in. The member is on
+        the axis because that is the surface a schema projector can reach
+        without holding a resolution, which is the whole of the ruling that
+        placed it.
+        """
+        return _inherited_attributes(self.entity_types, self.definition.id, entity_type)
+
     def at(self, node_id: K) -> TaxonomyView[K]:
         """The cursor over this axis, anchored at ``node_id`` -- the door in.
 
@@ -299,6 +425,9 @@ class AsyncTaxonomy(Generic[K]):
     structure: AsyncHierarchy[K]
     entities: AsyncEntitySource[K]
     assertions: AsyncAssertionSource[K] | None = None
+
+    #: :attr:`Taxonomy.entity_types`, unflavoured -- a mapping awaits nothing.
+    entity_types: Mapping[str, EntityType] = field(default_factory=dict)
 
     async def walk(
         self,
@@ -381,6 +510,17 @@ class AsyncTaxonomy(Generic[K]):
                 cache=cache,
             )
         )
+
+    def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
+        """:meth:`Taxonomy.inherited_attributes`, and a plain ``def``.
+
+        Synchronous on this flavour for :meth:`at`'s reason: the store is a
+        mapping the caller is already holding, so there is nothing here to
+        await, and making it awaitable would cost every caller an ``await``
+        for a walk over their own data. The parity guard compares it as an
+        unflavoured member rather than skipping it.
+        """
+        return _inherited_attributes(self.entity_types, self.definition.id, entity_type)
 
     def at(self, node_id: K) -> AsyncTaxonomyView[K]:
         """:meth:`Taxonomy.at`, and a plain ``def`` for the same reason.

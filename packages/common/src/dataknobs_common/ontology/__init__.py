@@ -46,7 +46,6 @@ from dataknobs_common.ontology.hierarchy import (
 from dataknobs_common.ontology.loader import (
     AUTHORED_SOURCE_KINDS,
     DEFAULT_NESTED_RELATION,
-    ENTITY_TYPE_ISA_KEY,
     RESERVED_ONTOLOGY_ID,
     async_build_resolver,
     async_load_ontology,
@@ -57,6 +56,7 @@ from dataknobs_common.ontology.loader import (
 from dataknobs_common.ontology.model import (
     DK_ENTITY_TYPE,
     DK_RELATION_TYPE,
+    ENTITY_TYPE_ISA_KEY,
     Assertion,
     AttributeDef,
     CyclePolicy,

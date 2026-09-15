@@ -46,6 +46,7 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.ontology.model import (
+    ENTITY_TYPE_ISA_KEY,
     Assertion,
     AttributeDef,
     Entity,
@@ -100,15 +101,6 @@ AUTHORED_SOURCE_KINDS = frozenset({"inline", "nested"})
 #: What a nested source's parent-child edges are asserted as, absent a
 #: ``relation:`` of its own.
 DEFAULT_NESTED_RELATION = "isa"
-
-#: Where an entity type's declared ``isa:`` parent is kept for now.
-#:
-#: The type lattice is a *different store* from the ``isa`` assertions between
-#: instances, and which store it is has not been settled. ``EntityType``
-#: declares no field for it, so the alternative to parking it here is dropping
-#: a line the document author wrote -- and a validated value that vanishes is
-#: worse than one kept under a documented key until its home is decided.
-ENTITY_TYPE_ISA_KEY = "isa"
 
 
 def build_ontology(config: OntologyConfig) -> OntologyParts:

@@ -59,6 +59,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first answers `()`, the second raises `NotFoundError`. One member would
   select between two contracts by the presence of a keyword.
 
+- **`Taxonomy.inherited_attributes(type_id)` and its asynchronous twin**, and
+  the fifth field they read — `entity_types`, a `Mapping[str, EntityType]`.
+
+  A vocabulary writes `isa` twice and they are **different stores**: the
+  assertions between entities, which a taxonomy's `structure` walks, and the
+  `isa:` field on an entity type declaration, which carries the schema. This
+  member walks the second and returns what a type may be asked for — its own
+  attribute declarations first, then each ancestor's, **a nearer declaration
+  shadowing a farther one of the same name**, because a subtype redeclaring
+  `sku` is specialising it rather than adding a second field.
+
+  **An undeclared type is refused; a type declared with nothing returns `[]`.**
+  Those answer different questions, and collapsing them would report a caller's
+  typo as a fact about their vocabulary.
+
+  `entity_types` is a mapping rather than a source, because a vocabulary's
+  instances may be millions behind a backing and its types are tens, authored
+  in the document — `Ontology` already carries them that way, and
+  `Ontology.taxonomy()` now hands them to the axis. It is **optional**: an axis
+  built without one refuses every call to this member, which is an answer
+  rather than a gap. It is **appended last**, so nothing constructing a
+  `Taxonomy` positionally moves.
+
+  **A plain `def` on the asynchronous twin**, because a mapping awaits nothing —
+  the rule that already makes `AsyncTaxonomy.at()` synchronous.
+
 - **`TaxonomyView.entity()` and its asynchronous twin** — what a node **is**,
   read off the content axis. `None` from it is a state rather than an error and
   is not what `exists()` answers: a node the structure knows with nothing

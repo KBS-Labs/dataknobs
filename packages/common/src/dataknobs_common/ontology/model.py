@@ -42,6 +42,22 @@ if TYPE_CHECKING:
 
     from dataknobs_common.entity_resolution.values import ResolutionRef
 
+#: Where an entity type's declared ``isa:`` parent is kept.
+#:
+#: The type lattice is a *different store* from the ``isa`` assertions between
+#: instances, and reading one as the other would put a schema node in a walk
+#: over instances. ``EntityType`` declares no field for it, so a loader parks
+#: it here, and :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.inherited_attributes`
+#: reads it back.
+#:
+#: **It lived in the loader until it had a second reader.** Its note there said
+#: it was parked *"until its home is decided"*, on the grounds that dropping a
+#: line the document author wrote is worse than keeping it under a documented
+#: key. The home is here, beside the type it describes, by the ordinary rule: a
+#: constant two modules read belongs with its subject rather than with the one
+#: that happened to write it.
+ENTITY_TYPE_ISA_KEY = "isa"
+
 #: The root of the type lattice, and its own type.
 DK_ENTITY_TYPE = "dk:EntityType"
 #: An ordinary instance of the root, naming the kind a relation is.

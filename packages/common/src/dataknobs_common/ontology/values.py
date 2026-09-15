@@ -383,6 +383,11 @@ class Ontology(Generic[K]):
         content is its entity source, and the assertions travel along so a
         cursor over the axis can report the edge it walked.
 
+        **Four fields now, and the fourth is the type store**: an axis that
+        could not be asked what a type inherits was an axis holding three of
+        the ontology's four relevant fields. The accessor still takes nothing
+        but the name, which is what keeps it an accessor.
+
         The structure is the live read unless the definition asked for a copy,
         in which case it is the one this ontology is carrying -- see
         :func:`_structure_for`. Refuses, naming the axis, a definition whose
@@ -400,6 +405,7 @@ class Ontology(Generic[K]):
             ),
             entities=self.entities,
             assertions=self.assertions,
+            entity_types=self.entity_types,
         )
 
     def qualify(self, local_id: K, source_id: str | None = None) -> str:
@@ -510,6 +516,7 @@ class AsyncOntology(Generic[K]):
             ),
             entities=self.entities,
             assertions=self.assertions,
+            entity_types=self.entity_types,
         )
 
     def qualify(self, local_id: K, source_id: str | None = None) -> str:

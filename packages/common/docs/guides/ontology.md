@@ -340,6 +340,72 @@ ones. The walks themselves are in
 [Walking a Structure](hierarchy.md), and the cursor `taxonomy().at()` returns
 has its own page — [The Anchored View](anchored-view.md).
 
+## Two `isa` lattices, and the one that carries the schema
+
+A vocabulary writes `isa` twice, and they are different stores:
+
+| | Where it is written | What it relates |
+|---|---|---|
+| **instance** | `assertions: - {subject: beagle, relation: isa, object: dog}` | entities, and it is what a taxonomy's `structure` walks |
+| **type** | `entity_types: - {id: Breed, isa: Species}` | *declarations*, and it is what attribute inheritance runs on |
+
+**The second must not leak into the first.** If it did, walking up from
+`beagle` would return `Species` beside `dog` — a schema node in a walk over
+instances, which a consumer folding ancestors into a prompt has no way to spot.
+It does not: an axis is built from the assertion store, and the type store is
+read only by the member below.
+
+`Taxonomy.inherited_attributes(type_id)` is that member. It walks the **type**
+lattice and returns what a type may be asked for — its own declarations first,
+then each ancestor's:
+
+```python
+catalogue = load_ontology(
+    {
+        "id": "catalogue",
+        "entity_types": [
+            {
+                "id": "Item",
+                "attributes": [{"name": "sku", "type": "string"}, {"name": "weight", "type": "number"}],
+            },
+            {"id": "Product", "isa": "Item", "attributes": [{"name": "warranty", "type": "string"}]},
+        ],
+        "entities": [{"id": "widget", "type": "Product"}],
+        "relation_types": [{"id": "isa"}],
+        "taxonomies": [{"id": "kinds", "relation": "isa"}],
+    }
+)
+kinds = catalogue.taxonomy("kinds")
+
+assert [a.name for a in kinds.inherited_attributes("Product")] == ["warranty", "sku", "weight"]
+```
+
+**A nearer declaration shadows a farther one of the same name**, because a
+subtype redeclaring `sku` is specialising it rather than adding a second field.
+
+**An undeclared type is refused rather than answered with `[]`.** A type
+declared with nothing legitimately inherits nothing, so an empty list for a
+type the store has never heard of would report a caller's typo as a fact about
+their vocabulary:
+
+```python
+from dataknobs_common.exceptions import NotFoundError
+
+try:
+    kinds.inherited_attributes("NoSuchType")
+except NotFoundError as refusal:
+    assert refusal.context["entity_type"] == "NoSuchType"
+```
+
+The store is `Taxonomy.entity_types`, a plain mapping rather than a source —
+a vocabulary's instances may be millions behind a backing, and its types are
+tens, authored in the document. `onto.taxonomy()` fills it. An axis you build
+by hand may leave it out, and then this member refuses every call, which is the
+answer rather than a gap in it.
+
+**It is a plain `def` on the asynchronous twin too**, because a mapping awaits
+nothing.
+
 ## What a resolution leaves behind
 
 Placing a surface form is [its own guide](entity-resolution.md); two of its
