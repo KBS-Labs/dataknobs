@@ -27,6 +27,7 @@ from dataknobs_common.ontology.model import (
     InferenceMode,
     Materialization,
     TaxonomyDefinition,
+    split_qualified,
 )
 from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 from dataknobs_common.testing import assert_twins_agree
@@ -758,6 +759,64 @@ async def test_both_flavours_of_subtree_keys_agree(mammals_v11_path: Path) -> No
         await async_onto.taxonomy("species").subtree_keys("marmoset")
 
     assert str(sync_raised.value) == str(async_raised.value)
+
+
+#: A structure axis whose keys a localising parse would change, and which is
+#: nonetheless entirely local-keyed.
+#:
+#: The two are different claims, which is the whole reason the guard below is a
+#: round trip rather than a parse: ``split_qualified('mammal:carnivore')`` reads
+#: ``mammal`` as an ontology segment and answers ``carnivore``, over an axis
+#: where nothing was ever qualified.
+COLON_KEYED = {"mammal:felid": ("mammal:carnivore",), "mammal:carnivore": ()}
+
+
+def test_every_key_subtree_keys_returns_is_one_the_axis_answers_for(
+    mammals_v11_path: Path,
+) -> None:
+    """The keys are the axis's own, and that is a round trip rather than a spelling.
+
+    ``root_id`` arrives in the structure axis's space, so a key returned in any
+    other space could not be fed back -- not to :meth:`Taxonomy.at`, not to
+    ``structure.contains``, not to this method. Asserted as the round trip
+    rather than as a parse, because *the axis is local-keyed* and *no key holds
+    a colon* are different claims and only the second is one a parse can check.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    for key in axis.subtree_keys("dog"):
+        assert axis.structure.contains(key)
+        assert axis.subtree_keys(key)[0] == key
+        assert axis.at(key).exists()
+
+
+def test_the_round_trip_is_what_a_localising_parse_would_break(
+    mammals_v11_path: Path,
+) -> None:
+    """The control, without which the guard above is green by saying nothing.
+
+    Over the mammals vocabulary a localising parse changes no key, so that
+    guard would pass against a member that localised. This axis is the case
+    that separates them: entirely local-keyed, and every key changed by the
+    parse. The contract holds, and the assertion at the end is what it would
+    cost to break it -- every key handed out would be one the axis refuses.
+    """
+    onto = load_ontology(mammals_v11_path)
+    colonised = Taxonomy(
+        definition=onto.taxonomies["species"],
+        structure=MappingHierarchy(COLON_KEYED),
+        entities=onto.entities,
+    )
+
+    keys = colonised.subtree_keys("mammal:carnivore")
+
+    assert keys == ["mammal:carnivore", "mammal:felid"]
+    for key in keys:
+        assert colonised.structure.contains(key)
+
+    localised = [split_qualified(key).local_id for key in keys]
+    assert localised == ["carnivore", "felid"], "the parse changes every one of them"
+    assert not any(colonised.structure.contains(key) for key in localised)
 
 
 # --------------------------------------------------------------------------

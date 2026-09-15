@@ -109,7 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   optional, and a root the axis does not contain is **refused** rather than
   returned as a one-element list a caller cannot tell from a leaf — which is
   the refusal `Taxonomy.walk()` already makes, for the same reason: both
-  answers include their anchor.
+  answers include their anchor. **The keys are the structure axis's own**, so
+  the filter is right exactly when the axis and the column are keyed alike --
+  a property of how the axis was bound, not of the call, which has never been
+  told which table it is about to be filtered against. That is also what lets
+  a key it returns go back in as a `root_id`.
 
 - **`ScanningSignal` and `AsyncScanningSignal`, registered under
   `kind: "scan"`.** A rung that finds declared forms *inside* a query rather

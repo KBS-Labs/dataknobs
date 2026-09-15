@@ -231,8 +231,23 @@ class Taxonomy:
           new one: this walk includes its anchor, so an unknown one would come
           back as a one-element list that the caller cannot tell from a leaf.
 
-        The keys are the structure axis's own, which is what a source-keyed
-        foreign table is keyed by.
+        **The keys are the structure axis's own, and that is the whole of the
+        contract.** ``Filter(column, Operator.IN, axis.subtree_keys(node))`` is
+        right exactly when the axis and that column are keyed alike, which is a
+        property of how the axis was *bound* and not of this call: this frame
+        knows the axis and has never been told which foreign table it is about
+        to be filtered against, so a translation here would be a guess wearing
+        a service's clothes. Where the two spaces do differ it is the caller who
+        holds both, and
+        :func:`~dataknobs_common.ontology.model.split_qualified` is on the
+        package door for exactly that.
+
+        It is also what keeps this surface coherent, which is why the
+        translation could not be bolted on later either: ``root_id`` arrives in the
+        axis's space, so a return in another one could not be fed back --
+        neither to :meth:`at`, nor to :meth:`walk`, nor to
+        ``structure.contains``, nor to this method. Every key it handed out
+        would be a key it refuses.
 
         Two delegations rather than an algorithm: unbounded this *is*
         :func:`~dataknobs_common.hierarchy.flatten` and bounded it *is*

@@ -504,7 +504,7 @@ assert species.subtree_keys("dog", depth=0) == ["dog"]
 subtree_filter = Filter("species_id", Operator.IN, species.subtree_keys("dog"))
 ```
 
-Four things to rely on:
+Five things to rely on:
 
 * **the root is included.** Naming an interior node means *this and everything
   under it*, and an off-by-one here under-counts silently while the count is
@@ -515,7 +515,14 @@ Four things to rely on:
   the ordinary question is *everything under this*;
 * **an unknown root is refused**, for the reason `walk()` refuses one: this
   answer includes its anchor, so an unknown one would come back as a
-  one-element list indistinguishable from a leaf.
+  one-element list indistinguishable from a leaf;
+* **the keys are the axis's own** — the filter above is right exactly when the
+  axis and `species_id` are keyed alike, which is a property of how you *bound*
+  the axis rather than of this call. `subtree_keys()` has never been told which
+  table you are about to filter, so it does not translate; where the two spaces
+  differ you hold both, and `split_qualified` is on the package door for it.
+  It is also what lets a returned key go straight back in — as a `root_id`, to
+  `at()`, or to `contains()` — which a translated one could not.
 
 It is two delegations rather than an algorithm — `flatten` unbounded,
 `descendants_to_depth` bounded — so it emits their pre-order at both ends of
