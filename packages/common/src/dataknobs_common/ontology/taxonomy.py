@@ -27,7 +27,7 @@ assertion backing here rather than beside the protocols.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Generic, NoReturn
 
 # The walk core's frontier read: the one implementation of "ask the frontier in
 # bulk where the backing offers it, else one node at a time". The streaming
@@ -39,6 +39,7 @@ from dataknobs_common._walk_core import _async_reply, _sync_reply
 from dataknobs_common.exceptions import NotFoundError
 from dataknobs_common.hierarchy import (
     DEFAULT_FRONTIER_CONCURRENCY,
+    K,
     AsyncHierarchyView,
     HierarchyView,
     async_descendants_to_depth,
@@ -66,7 +67,7 @@ if TYPE_CHECKING:
 __all__ = ["AsyncTaxonomy", "AsyncTaxonomyView", "Taxonomy", "TaxonomyView"]
 
 
-def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: str) -> NoReturn:
+def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: object) -> NoReturn:
     """Refuse a ``from_id`` the structure axis does not contain.
 
     The anchor is *included* in a walk's output by design, so seeding a
@@ -102,7 +103,7 @@ def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: str) -> NoReturn:
 
 
 @dataclass(frozen=True, eq=False)
-class Taxonomy:
+class Taxonomy(Generic[K]):
     """One relation of a vocabulary, walkable, with synchronous backings.
 
     ``assertions`` is what lets a cursor over this axis report the **edge** it
@@ -111,21 +112,19 @@ class Taxonomy:
     has rows and no ``Assertion`` -- and ``assertions is None`` is the question
     that tells an unannotated edge from an axis that has no annotations to give.
 
-    **The key is pinned to ``str``, and the pin is written out.**
-    :class:`~dataknobs_common.hierarchy.Hierarchy` is generic in its key because
-    the walks only ever *hash* a node id, so an object tree with no ids can bind
-    the parameter to its own node type and share the traversals. A taxonomy
-    cannot: it is both axes at once, and the content axis is an
-    ``EntitySource`` addressed by ``str`` because an ``Entity`` has a ``str``
-    id. Making the structure axis generic here would let a caller hold an
-    integer-keyed hierarchy beside an entity lookup that cannot be asked about
-    an integer.
+    **The key is a parameter, defaulted to ``str``.** It was pinned, and the
+    pin was written out with its prerequisite: *the content side has to become
+    generic first, or explicitly stay behind*. It became generic, so the pin is
+    gone and the sentence it was written in is what this paragraph replaces.
 
-    So ``K`` serves the walks and the module-level drivers, and this pin is a
-    boundary rather than an oversight -- spelled ``Hierarchy[str]`` rather than
-    bare so that it reads as one. Moving it is a design question with a
-    prerequisite: the content side has to become generic first, or explicitly
-    stay behind.
+    The reason for the pin survives the change and is worth keeping, because it
+    is what the codec now carries. An ``EntitySource``'s keys are the
+    ontology's local entity ids: they have an owner, a space and a
+    qualification rule, and none of that survives being *parameterised*. What
+    it does survive is being made an **object** -- a
+    :class:`~dataknobs_common.ontology.values.KeyCodec` the ontology holds --
+    so the rule has a home rather than a pin. A bare ``Taxonomy`` is
+    ``Taxonomy[str]`` and reads exactly as it did.
 
     **Frozen, and compared by identity.** Frozen because nothing mutates a
     built axis: swapping a backing is :func:`dataclasses.replace`, which says
@@ -137,17 +136,17 @@ class Taxonomy:
     """
 
     definition: TaxonomyDefinition
-    structure: Hierarchy[str]
-    entities: EntitySource
-    assertions: AssertionSource | None = None
+    structure: Hierarchy[K]
+    entities: EntitySource[K]
+    assertions: AssertionSource[K] | None = None
 
     def walk(
         self,
         *,
-        from_id: str | None = None,
+        from_id: K | None = None,
         max_depth: int | None = None,
         cache: WalkCache | None = None,
-    ) -> Iterator[str]:
+    ) -> Iterator[K]:
         """Every node at or under ``from_id``, breadth first, each one once.
 
         From the axis's roots when ``from_id`` is omitted. The anchor is
@@ -179,16 +178,16 @@ class Taxonomy:
         iteration. What a caller *supplies* outlives the walk, which is what
         makes a cache filled by a collecting walk readable here.
         """
-        seen: set[str] = set()
+        seen: set[K] = set()
         if from_id is not None:
             if not self.structure.contains(from_id):
                 _refuse_an_unknown_anchor(self.definition.id, from_id)
-            frontier: tuple[str, ...] = (from_id,)
+            frontier: tuple[K, ...] = (from_id,)
         else:
             frontier = tuple(self.structure.roots())
         depth = 0
         while frontier and (max_depth is None or depth <= max_depth):
-            fresh: list[str] = []
+            fresh: list[K] = []
             for node_id in frontier:
                 if node_id in seen:
                     continue
@@ -203,11 +202,11 @@ class Taxonomy:
 
     def subtree_keys(
         self,
-        root_id: str,
+        root_id: K,
         *,
         depth: int | None = None,
         cache: WalkCache | None = None,
-    ) -> list[str]:
+    ) -> list[K]:
         """``root_id`` and everything under it, as the keys a query filters on.
 
         The member a taxonomy is usually resolved *for*: one line then builds
@@ -272,7 +271,7 @@ class Taxonomy:
             return list(flatten(self.structure, from_id=root_id, cache=cache))
         return list(descendants_to_depth(self.structure, root_id, depth, cache=cache))
 
-    def at(self, node_id: str) -> TaxonomyView:
+    def at(self, node_id: K) -> TaxonomyView[K]:
         """The cursor over this axis, anchored at ``node_id`` -- the door in.
 
         Pure over fields this object already holds, so it takes nothing but
@@ -286,30 +285,29 @@ class Taxonomy:
 
 
 @dataclass(frozen=True, eq=False)
-class AsyncTaxonomy:
+class AsyncTaxonomy(Generic[K]):
     """The asynchronous twin. Same four fields, asynchronous backings.
 
-    The key is pinned to ``str`` here too, for the reason
-    :class:`Taxonomy` states: a taxonomy carries the content axis as well as
-    the structure one, and the content axis is ``str``-addressed. Frozen and
-    identity-compared for the reason it states as well -- a difference here
-    would be one :func:`assert_twin_types_agree` cannot see, since it reads
-    members and these are decisions about the type.
+    The key is a parameter here too, defaulted to ``str``, for the reason
+    :class:`Taxonomy` states. Frozen and identity-compared for the reason it
+    states as well -- a difference here would be one
+    :func:`assert_twin_types_agree` cannot see, since it reads members and
+    these are decisions about the type.
     """
 
     definition: TaxonomyDefinition
-    structure: AsyncHierarchy[str]
-    entities: AsyncEntitySource
-    assertions: AsyncAssertionSource | None = None
+    structure: AsyncHierarchy[K]
+    entities: AsyncEntitySource[K]
+    assertions: AsyncAssertionSource[K] | None = None
 
     async def walk(
         self,
         *,
-        from_id: str | None = None,
+        from_id: K | None = None,
         max_depth: int | None = None,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
         cache: WalkCache | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[K]:
         """:meth:`Taxonomy.walk`, awaited.
 
         The same traversal, and it is duplicated for one reason: a streaming
@@ -322,16 +320,16 @@ class AsyncTaxonomy:
         ``cache`` is that shared step's memo, and means what it means on the
         synchronous twin.
         """
-        seen: set[str] = set()
+        seen: set[K] = set()
         if from_id is not None:
             if not await self.structure.contains(from_id):
                 _refuse_an_unknown_anchor(self.definition.id, from_id)
-            frontier: tuple[str, ...] = (from_id,)
+            frontier: tuple[K, ...] = (from_id,)
         else:
             frontier = tuple(await self.structure.roots())
         depth = 0
         while frontier and (max_depth is None or depth <= max_depth):
-            fresh: list[str] = []
+            fresh: list[K] = []
             for node_id in frontier:
                 if node_id in seen:
                     continue
@@ -352,12 +350,12 @@ class AsyncTaxonomy:
 
     async def subtree_keys(
         self,
-        root_id: str,
+        root_id: K,
         *,
         depth: int | None = None,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
         cache: WalkCache | None = None,
-    ) -> list[str]:
+    ) -> list[K]:
         """:meth:`Taxonomy.subtree_keys`, awaited.
 
         The four properties are that method's; what is twinned here is the
@@ -384,7 +382,7 @@ class AsyncTaxonomy:
             )
         )
 
-    def at(self, node_id: str) -> AsyncTaxonomyView:
+    def at(self, node_id: K) -> AsyncTaxonomyView[K]:
         """:meth:`Taxonomy.at`, and a plain ``def`` for the same reason.
 
         Checking containment here would drag an accessor into the loop for a
@@ -399,14 +397,14 @@ class AsyncTaxonomy:
 # --------------------------------------------------------------------------
 
 
-def _written_by_object(written: Sequence[Assertion]) -> dict[str, list[Assertion]]:
+def _written_by_object(written: Sequence[Assertion[K]]) -> dict[K, list[Assertion[K]]]:
     """Edge assertions grouped by the entity their object names, in source order.
 
     An assertion whose object is a literal names no neighbour and is dropped,
     for the reason the assertion backing gives: ``dog lifespan_years 12`` is a
     value rather than a place in a structure.
     """
-    grouped: dict[str, list[Assertion]] = {}
+    grouped: dict[K, list[Assertion[K]]] = {}
     for assertion in written:
         neighbour = object_entity_id(assertion.object)
         if neighbour is not None:
@@ -414,22 +412,25 @@ def _written_by_object(written: Sequence[Assertion]) -> dict[str, list[Assertion
     return grouped
 
 
-def _written_by_subject(written: Sequence[Assertion]) -> dict[str, list[Assertion]]:
+def _written_by_subject(written: Sequence[Assertion[K]]) -> dict[K, list[Assertion[K]]]:
     """The mirror: edge assertions grouped by subject, in source order."""
-    grouped: dict[str, list[Assertion]] = {}
+    grouped: dict[K, list[Assertion[K]]] = {}
     for assertion in written:
         grouped.setdefault(assertion.subject, []).append(assertion)
     return grouped
 
 
 @dataclass(frozen=True)
-class TaxonomyView:
+class TaxonomyView(Generic[K]):
     """The cursor over a taxonomy, so it can also report what is written on an edge.
 
-    **Not generic in a key.** A taxonomy binds an ``EntitySource`` and an
-    ``AssertionSource`` whose keys are the ontology's local entity ids --
-    ``taxonomy.structure`` is a ``Hierarchy[str]``, and this cursor's node is a
-    ``str``.
+    **Generic in the key, defaulted to ``str``.** It was not, and the sentence
+    that said so gave the reason: a taxonomy binds an ``EntitySource`` and an
+    ``AssertionSource`` whose keys are the ontology's local entity ids, which
+    carry an owner, a space and a qualification rule. That reason is kept and
+    moved -- it is a :class:`~dataknobs_common.ontology.values.KeyCodec` the
+    ontology holds, so it survives as an object rather than as a pin. A bare
+    ``TaxonomyView`` is ``TaxonomyView[str]``.
 
     **Every structural member invokes the ``HierarchyView`` member of the same
     name over ``taxonomy.structure`` and re-wraps; it does not re-walk.** That
@@ -463,17 +464,17 @@ class TaxonomyView:
     built axis**, which is the sentence this class was already documented by.
     """
 
-    taxonomy: Taxonomy
-    node: str
+    taxonomy: Taxonomy[K]
+    node: K
 
-    def _structural(self) -> HierarchyView[str]:
+    def _structural(self) -> HierarchyView[K]:
         """The cursor every structural member forwards to."""
         return HierarchyView(self.taxonomy.structure, self.node)
 
-    def _wrap(self, views: tuple[HierarchyView[str], ...]) -> tuple[TaxonomyView, ...]:
+    def _wrap(self, views: tuple[HierarchyView[K], ...]) -> tuple[TaxonomyView[K], ...]:
         return tuple(TaxonomyView(self.taxonomy, view.node) for view in views)
 
-    def entity(self) -> Entity | None:
+    def entity(self) -> Entity[K] | None:
         """What this node **is**, by way of the content axis. ``None`` if it carries none.
 
         The member the cursor over a taxonomy has and the cursor over a bare
@@ -506,15 +507,15 @@ class TaxonomyView:
         """Present, with nothing below it. ``False`` for an absent node."""
         return self._structural().is_leaf()
 
-    def parents(self) -> tuple[TaxonomyView, ...]:
+    def parents(self) -> tuple[TaxonomyView[K], ...]:
         """One view per node directly above this one. Plural, always."""
         return self._wrap(self._structural().parents())
 
-    def children(self) -> tuple[TaxonomyView, ...]:
+    def children(self) -> tuple[TaxonomyView[K], ...]:
         """One view per node directly below this one."""
         return self._wrap(self._structural().children())
 
-    def ancestors(self, *, cache: WalkCache | None = None) -> tuple[TaxonomyView, ...]:
+    def ancestors(self, *, cache: WalkCache | None = None) -> tuple[TaxonomyView[K], ...]:
         """:meth:`~dataknobs_common.hierarchy.HierarchyView.ancestors`, re-wrapped.
 
         The structural member, not a second walk: it invokes the cursor over
@@ -523,13 +524,13 @@ class TaxonomyView:
         """
         return self._wrap(self._structural().ancestors(cache=cache))
 
-    def descendants(self, *, cache: WalkCache | None = None) -> tuple[TaxonomyView, ...]:
+    def descendants(self, *, cache: WalkCache | None = None) -> tuple[TaxonomyView[K], ...]:
         """:meth:`~dataknobs_common.hierarchy.HierarchyView.descendants`, re-wrapped."""
         return self._wrap(self._structural().descendants(cache=cache))
 
     def descendants_to_depth(
         self, max_depth: int, *, cache: WalkCache | None = None
-    ) -> tuple[TaxonomyView, ...]:
+    ) -> tuple[TaxonomyView[K], ...]:
         """:meth:`~dataknobs_common.hierarchy.HierarchyView.descendants_to_depth`, re-wrapped.
 
         Includes this node and refuses one the structure axis does not contain,
@@ -541,7 +542,7 @@ class TaxonomyView:
 
     def paths_to_root(
         self, *, max_paths: int | None = None, cache: WalkCache | None = None
-    ) -> tuple[tuple[str, ...], ...]:
+    ) -> tuple[tuple[K, ...], ...]:
         """:meth:`~dataknobs_common.hierarchy.HierarchyView.paths_to_root` -- keys, not cursors.
 
         The one walk-shaped member here that does not re-wrap, for the reason
@@ -549,11 +550,11 @@ class TaxonomyView:
         """
         return self._structural().paths_to_root(max_paths=max_paths, cache=cache)
 
-    def at(self, node_id: str) -> TaxonomyView:
+    def at(self, node_id: K) -> TaxonomyView[K]:
         """Re-anchor at another node of the same axis. Constructs; checks nothing."""
         return TaxonomyView(self.taxonomy, node_id)
 
-    def parent_edges(self) -> tuple[tuple[TaxonomyView, Assertion], ...]:
+    def parent_edges(self) -> tuple[tuple[TaxonomyView[K], Assertion[K]], ...]:
         """What is written on each edge up from here: one pair per assertion.
 
         The neighbour cursor and the ``Assertion`` together, so one call gives
@@ -588,7 +589,7 @@ class TaxonomyView:
             (parent, assertion) for parent in above for assertion in written.get(parent.node, ())
         )
 
-    def child_edges(self) -> tuple[tuple[TaxonomyView, Assertion], ...]:
+    def child_edges(self) -> tuple[tuple[TaxonomyView[K], Assertion[K]], ...]:
         """:meth:`parent_edges` in the other direction: the edges down from here."""
         source = self.taxonomy.assertions
         if source is None:
@@ -608,7 +609,7 @@ class TaxonomyView:
 
 
 @dataclass(frozen=True)
-class AsyncTaxonomyView:
+class AsyncTaxonomyView(Generic[K]):
     """The twin, over an :class:`AsyncTaxonomy`.
 
     The structural members invoke :class:`~dataknobs_common.hierarchy.AsyncHierarchyView`,
@@ -621,17 +622,17 @@ class AsyncTaxonomyView:
     equivalent of.
     """
 
-    taxonomy: AsyncTaxonomy
-    node: str
+    taxonomy: AsyncTaxonomy[K]
+    node: K
 
-    def _structural(self) -> AsyncHierarchyView[str]:
+    def _structural(self) -> AsyncHierarchyView[K]:
         """The cursor every structural member forwards to."""
         return AsyncHierarchyView(self.taxonomy.structure, self.node)
 
-    def _wrap(self, views: tuple[AsyncHierarchyView[str], ...]) -> tuple[AsyncTaxonomyView, ...]:
+    def _wrap(self, views: tuple[AsyncHierarchyView[K], ...]) -> tuple[AsyncTaxonomyView[K], ...]:
         return tuple(AsyncTaxonomyView(self.taxonomy, view.node) for view in views)
 
-    async def entity(self) -> Entity | None:
+    async def entity(self) -> Entity[K] | None:
         """:meth:`TaxonomyView.entity`, awaited."""
         return await self.taxonomy.entities.get(self.node)
 
@@ -647,11 +648,11 @@ class AsyncTaxonomyView:
         """Present, with nothing below it. ``False`` for an absent node."""
         return await self._structural().is_leaf()
 
-    async def parents(self) -> tuple[AsyncTaxonomyView, ...]:
+    async def parents(self) -> tuple[AsyncTaxonomyView[K], ...]:
         """One view per node directly above this one. Plural, always."""
         return self._wrap(await self._structural().parents())
 
-    async def children(self) -> tuple[AsyncTaxonomyView, ...]:
+    async def children(self) -> tuple[AsyncTaxonomyView[K], ...]:
         """One view per node directly below this one."""
         return self._wrap(await self._structural().children())
 
@@ -660,7 +661,7 @@ class AsyncTaxonomyView:
         *,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
         cache: WalkCache | None = None,
-    ) -> tuple[AsyncTaxonomyView, ...]:
+    ) -> tuple[AsyncTaxonomyView[K], ...]:
         """:meth:`TaxonomyView.ancestors`, awaited."""
         return self._wrap(
             await self._structural().ancestors(max_concurrency=max_concurrency, cache=cache)
@@ -671,7 +672,7 @@ class AsyncTaxonomyView:
         *,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
         cache: WalkCache | None = None,
-    ) -> tuple[AsyncTaxonomyView, ...]:
+    ) -> tuple[AsyncTaxonomyView[K], ...]:
         """:meth:`TaxonomyView.descendants`, awaited."""
         return self._wrap(
             await self._structural().descendants(max_concurrency=max_concurrency, cache=cache)
@@ -683,7 +684,7 @@ class AsyncTaxonomyView:
         *,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
         cache: WalkCache | None = None,
-    ) -> tuple[AsyncTaxonomyView, ...]:
+    ) -> tuple[AsyncTaxonomyView[K], ...]:
         """:meth:`TaxonomyView.descendants_to_depth`, awaited."""
         return self._wrap(
             await self._structural().descendants_to_depth(
@@ -697,7 +698,7 @@ class AsyncTaxonomyView:
         max_paths: int | None = None,
         max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
         cache: WalkCache | None = None,
-    ) -> tuple[tuple[str, ...], ...]:
+    ) -> tuple[tuple[K, ...], ...]:
         """:meth:`TaxonomyView.paths_to_root`, awaited -- keys, not cursors.
 
         ``max_concurrency`` is inert here for the reason the cursor below it
@@ -707,11 +708,11 @@ class AsyncTaxonomyView:
             max_paths=max_paths, max_concurrency=max_concurrency, cache=cache
         )
 
-    def at(self, node_id: str) -> AsyncTaxonomyView:
+    def at(self, node_id: K) -> AsyncTaxonomyView[K]:
         """Re-anchor at another node of the same axis. Constructs; checks nothing."""
         return AsyncTaxonomyView(self.taxonomy, node_id)
 
-    async def parent_edges(self) -> tuple[tuple[AsyncTaxonomyView, Assertion], ...]:
+    async def parent_edges(self) -> tuple[tuple[AsyncTaxonomyView[K], Assertion[K]], ...]:
         """:meth:`TaxonomyView.parent_edges`, awaited."""
         source = self.taxonomy.assertions
         if source is None:
@@ -726,7 +727,7 @@ class AsyncTaxonomyView:
             (parent, assertion) for parent in above for assertion in written.get(parent.node, ())
         )
 
-    async def child_edges(self) -> tuple[tuple[AsyncTaxonomyView, Assertion], ...]:
+    async def child_edges(self) -> tuple[tuple[AsyncTaxonomyView[K], Assertion[K]], ...]:
         """:meth:`TaxonomyView.child_edges`, awaited."""
         source = self.taxonomy.assertions
         if source is None:

@@ -101,7 +101,13 @@ from dataknobs_common.ontology.taxonomy import (
     TaxonomyView,
 )
 from dataknobs_common.text import default_normalizer
-from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
+from dataknobs_common.ontology.values import (
+    AsyncOntology,
+    KeyCodec,
+    Ontology,
+    OntologyParts,
+    StrCodec,
+)
 
 __all__ = [
     "AUTHORED_SOURCE_ID",
@@ -134,6 +140,7 @@ __all__ = [
     "EntityType",
     "EvidenceKind",
     "InferenceMode",
+    "KeyCodec",
     "Literal",
     "MatchEvidence",
     "MappingAssertionSource",
@@ -156,6 +163,7 @@ __all__ = [
     "SiblingOrder",
     "SourceDescription",
     "SourceRef",
+    "StrCodec",
     "Taxonomy",
     "TaxonomyDefinition",
     "TaxonomyView",

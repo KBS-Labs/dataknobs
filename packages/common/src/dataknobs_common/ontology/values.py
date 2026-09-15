@@ -15,9 +15,10 @@ is fixed by which door was called rather than inferred from the config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, runtime_checkable
 
 from dataknobs_common.exceptions import NotFoundError, ValidationError
+from dataknobs_common.hierarchy import K
 from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
@@ -28,6 +29,7 @@ from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from dataknobs_common.ontology.taxonomy import TaxonomyView
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
     from dataknobs_common.ontology.model import (
         Assertion,
@@ -48,6 +50,73 @@ if TYPE_CHECKING:
 #: because :func:`_structure_for` only ever *returns one of its arguments* --
 #: it never reads a member, so the two flavours need nothing in common.
 _S = TypeVar("_S")
+
+
+@runtime_checkable
+class KeyCodec(Protocol[K]):
+    """How an entity key is written down when it leaves, and read back when it arrives.
+
+    **The owner, the space and the qualification rule, as an object.** The
+    content axis was pinned to ``str`` because an entity id carries all three
+    and *"none of that survives being parameterised"*. That is true, and it is
+    an argument about where the rule lives rather than about whether the axis
+    can be generic: here the rule is a value the ontology holds, so it survives
+    parameterisation by not being parameterised.
+
+    **A pair rather than a rendering, because a shipped member needs the
+    inverse.** :meth:`Ontology.localize` is documented as *what ``entity()``
+    takes*; if ``entity()`` takes ``K``, ``localize`` returns ``K``, and that
+    is a parse. ``repr()`` has no inverse.
+
+    **There is no default for a non-``str`` key, and that is the whole safety
+    property.** *A type that has a string representation* cannot be written as
+    a bound, because in Python every type has one -- ``str``, ``int``,
+    ``list``, a bare class and ``object()`` all satisfy a structural ``HasStr``
+    -- and a bound narrow enough to discriminate would have to be nominal,
+    which ``str`` itself would then fail. Nor can ``__repr__`` stand in: the
+    key is addressed by **equality** and ``object.__repr__`` is a function of
+    **identity**, so two equal keys would render to two strings and one node
+    would address two entities, type-checked and silent.
+
+    So it is an argument the type checker will not let you forget: the field on
+    :class:`Ontology` is **required**, which is stronger than a defaulted one
+    guarded by overloads and needs no overload to say it. Two constructions of
+    an ontology exist in this package and both are doors here, so the cost of
+    requiring it is two lines rather than a migration.
+
+    Both members are positional-only: a codec is called by this package and its
+    parameter names are not a surface a consumer writes.
+    """
+
+    def to_id(self, key: K, /) -> str:
+        """What the key becomes when it leaves -- an index row, a stored ref."""
+        ...
+
+    def from_id(self, rendered: str, /) -> K:
+        """What it is again at every door back in. The inverse of :meth:`to_id`."""
+        ...
+
+
+@dataclass(frozen=True)
+class StrCodec:
+    """The identity, and what ``K = str`` resolves to.
+
+    Ships so that the ``str`` path costs a value rather than a decision: every
+    ontology this package loads is keyed by the ids its document authored, and
+    this is what those ids are.
+
+    Frozen and stateless, so one instance would do; it is constructed per
+    ontology anyway because a value that costs nothing is not worth a module
+    singleton whose identity somebody might come to rely on.
+    """
+
+    def to_id(self, key: str, /) -> str:
+        """The key, unchanged."""
+        return key
+
+    def from_id(self, rendered: str, /) -> str:
+        """The rendering, unchanged."""
+        return rendered
 
 
 def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> TaxonomyDefinition:
@@ -226,7 +295,7 @@ class OntologyParts:
 
 
 @dataclass(frozen=True, eq=False)
-class Ontology:
+class Ontology(Generic[K]):
     """A loaded vocabulary whose backings are synchronous.
 
     A value with accessors. Every member below is pure over the fields --
@@ -247,10 +316,17 @@ class Ontology:
     version: str
     entity_types: Mapping[str, EntityType]
     relation_types: Mapping[str, RelationType]
-    entities: EntitySource
-    assertions: AssertionSource
+    entities: EntitySource[K]
+    assertions: AssertionSource[K]
     taxonomies: Mapping[str, TaxonomyDefinition]
     describes: tuple[SourceDescription, ...]
+
+    #: How this vocabulary's keys are written down and read back --
+    #: :class:`KeyCodec`. **Required, and that is the guard**: a defaulted one
+    #: would let an ``Ontology[Sku]`` be built carrying the identity codec,
+    #: which type-checks and renders a ``Sku`` as its ``repr``. Pass
+    #: ``StrCodec()`` for the ``str`` case, which is what both doors here do.
+    codec: KeyCodec[K]
 
     #: The copied structure axes, keyed by the name the axis is reached
     #: under -- the key in :attr:`taxonomies`, which an alias may spell
@@ -262,7 +338,7 @@ class Ontology:
     #: loader door fills this; a caller building an ontology directly may fill
     #: it with any :class:`~dataknobs_common.hierarchy.Hierarchy`, and is
     #: refused at :meth:`taxonomy` if they declare a copy and supply none.
-    structures: Mapping[str, Hierarchy[str]] = field(default_factory=dict)
+    structures: Mapping[str, Hierarchy[K]] = field(default_factory=dict)
 
     #: The ontology ids this vocabulary declares as ``imports:``, **carried
     #: and never followed**. Resolving a reference across an import needs a
@@ -272,7 +348,7 @@ class Ontology:
     #: it.
     imports: tuple[str, ...] = ()
 
-    def entity(self, entity_id: str) -> Entity | None:
+    def entity(self, entity_id: K) -> Entity[K] | None:
         """The entity with this id, by way of :attr:`entities`.
 
         An accessor *invokes* the one way rather than reproducing it: this is
@@ -282,8 +358,12 @@ class Ontology:
         """
         return self.entities.get(entity_id)
 
-    def by_surface_form(self, form: str) -> frozenset[str]:
-        """The ids matching this form, by way of :attr:`entities`."""
+    def by_surface_form(self, form: str) -> frozenset[K]:
+        """The ids matching this form, by way of :attr:`entities`.
+
+        ``form`` is surface text a person typed and stays ``str``; what comes
+        back is keys. One signature, one annotation of each kind.
+        """
         return self.entities.by_surface_form(form)
 
     def longest_form_tokens(self) -> int | None:
@@ -294,7 +374,7 @@ class Ontology:
         """
         return self.entities.longest_form_tokens()
 
-    def taxonomy(self, name: str) -> Taxonomy:
+    def taxonomy(self, name: str) -> Taxonomy[K]:
         """The axis this ontology declares under ``name``, built.
 
         Built from three fields this object already holds and **no consumer
@@ -322,7 +402,7 @@ class Ontology:
             assertions=self.assertions,
         )
 
-    def qualify(self, local_id: str, source_id: str | None = None) -> str:
+    def qualify(self, local_id: K, source_id: str | None = None) -> str:
         """This ontology's external id for ``local_id``.
 
         Fills the ontology segment from :attr:`id` and composes the rest
@@ -331,10 +411,14 @@ class Ontology:
         spelling of a namespaced id lives. An ``f"{a}:{b}"`` here would be a
         second spelling of it, and a malformed id is unfixable once it is
         written into stored data.
-        """
-        return _qualify(self.id, local_id, source_id)
 
-    def localize(self, qualified_id: str) -> str:
+        **One of the four doors a key leaves by**, so it is one of the four
+        places :attr:`codec` is spent: the key is rendered here and nowhere
+        between here and the value types, which simply carry it.
+        """
+        return _qualify(self.id, self.codec.to_id(local_id), source_id)
+
+    def localize(self, qualified_id: str) -> K:
         """``qualified_id`` in this ontology's own space -- what :meth:`entity` takes.
 
         For a single-source ontology that is the bare local id, which is every
@@ -346,12 +430,17 @@ class Ontology:
         Refuses an id belonging to another ontology, **naming both**. That
         refusal is what these two members have that the free functions do not:
         only an ontology knows whose ids it is parsing. See :func:`_localize`.
+
+        **The inverse door to :meth:`qualify`**, and the reason the codec is a
+        pair rather than a rendering: this member's documented contract is
+        *what ``entity()`` takes*, and ``entity()`` takes ``K``. A rendering
+        with no inverse could not satisfy it.
         """
-        return _localize(self.id, qualified_id)
+        return self.codec.from_id(_localize(self.id, qualified_id))
 
 
 @dataclass(frozen=True, eq=False)
-class AsyncOntology:
+class AsyncOntology(Generic[K]):
     """The same ten fields, with asynchronous backings.
 
     ``entities`` is an :class:`~dataknobs_common.ontology.sources.AsyncEntitySource`
@@ -369,22 +458,25 @@ class AsyncOntology:
     version: str
     entity_types: Mapping[str, EntityType]
     relation_types: Mapping[str, RelationType]
-    entities: AsyncEntitySource
-    assertions: AsyncAssertionSource
+    entities: AsyncEntitySource[K]
+    assertions: AsyncAssertionSource[K]
     taxonomies: Mapping[str, TaxonomyDefinition]
     describes: tuple[SourceDescription, ...]
 
+    #: :attr:`Ontology.codec`, and required here for the same reason.
+    codec: KeyCodec[K]
+
     #: :attr:`Ontology.structures`, in an asynchronous slot.
-    structures: Mapping[str, AsyncHierarchy[str]] = field(default_factory=dict)
+    structures: Mapping[str, AsyncHierarchy[K]] = field(default_factory=dict)
 
     #: :attr:`Ontology.imports`, unflavoured -- a list of ids awaits nothing.
     imports: tuple[str, ...] = ()
 
-    async def entity(self, entity_id: str) -> Entity | None:
+    async def entity(self, entity_id: K) -> Entity[K] | None:
         """The entity with this id, by way of :attr:`entities`."""
         return await self.entities.get(entity_id)
 
-    async def by_surface_form(self, form: str) -> frozenset[str]:
+    async def by_surface_form(self, form: str) -> frozenset[K]:
         """The ids matching this form, by way of :attr:`entities`."""
         return await self.entities.by_surface_form(form)
 
@@ -397,7 +489,7 @@ class AsyncOntology:
         """
         return self.entities.longest_form_tokens()
 
-    def taxonomy(self, name: str) -> AsyncTaxonomy:
+    def taxonomy(self, name: str) -> AsyncTaxonomy[K]:
         """The axis this ontology declares under ``name``, built.
 
         A plain ``def`` on this twin, and deliberately: it constructs over
@@ -420,16 +512,118 @@ class AsyncOntology:
             assertions=self.assertions,
         )
 
-    def qualify(self, local_id: str, source_id: str | None = None) -> str:
+    def qualify(self, local_id: K, source_id: str | None = None) -> str:
         """:meth:`Ontology.qualify`, unflavoured.
 
         A plain ``def`` on this twin as well, and for the same reason
         :meth:`taxonomy` is one: it reads two fields and awaits nothing, so
         making it awaitable would cost every caller an ``await`` for a string
-        concatenation.
+        concatenation. One of the four doors, so the codec is spent here.
         """
-        return _qualify(self.id, local_id, source_id)
+        return _qualify(self.id, self.codec.to_id(local_id), source_id)
 
-    def localize(self, qualified_id: str) -> str:
+    def localize(self, qualified_id: str) -> K:
         """:meth:`Ontology.localize`, unflavoured."""
-        return _localize(self.id, qualified_id)
+        return self.codec.from_id(_localize(self.id, qualified_id))
+
+
+if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
+    from dataclasses import dataclass as _dataclass
+    from typing import assert_type
+
+    def _a_consumer_may_bind_a_key_of_their_own() -> None:
+        """The whole point of the widening, written as the type checker sees it.
+
+        **This is the red half of the change, and it is red at the type level
+        rather than at runtime.** Every call site in this repository binds
+        ``K = str``, so a widening that reached the members and not the values
+        they carry compiled verbatim here and did not type-check for the first
+        consumer who bound anything else. The existing call sites were never
+        who the widening was for; this function is.
+
+        Written here rather than as a test for the reason
+        :func:`~dataknobs_common.hierarchy._the_key_defaults_to_str` gives:
+        this file is type-checked and the test tree is not.
+
+        The codec is what makes it composable rather than merely declarable.
+        A ``Sku`` has no useful ``__repr__`` contract -- it is addressed by
+        equality and rendered by agreement -- so the rendering is an argument,
+        and the field is required so that it cannot be an omission.
+        """
+
+        @_dataclass(frozen=True)
+        class Sku:
+            """A consumer's own key: hashable, value-equal, and not a ``str``."""
+
+            plant: str
+            line: int
+
+        class SkuCodec:
+            """Their rendering, and its inverse. Two functions, and both are theirs."""
+
+            def to_id(self, key: Sku, /) -> str:
+                return f"{key.plant}-{key.line}"
+
+            def from_id(self, rendered: str, /) -> Sku:
+                plant, _, line = rendered.rpartition("-")
+                return Sku(plant=plant, line=int(line))
+
+        def _composes(
+            entities: EntitySource[Sku],
+            assertions: AssertionSource[Sku],
+            definitions: Mapping[str, TaxonomyDefinition],
+            described: tuple[SourceDescription, ...],
+            types: Mapping[str, EntityType],
+            relations: Mapping[str, RelationType],
+        ) -> None:
+            onto = Ontology(
+                id="acme",
+                version="1.0",
+                entity_types=types,
+                relation_types=relations,
+                entities=entities,
+                assertions=assertions,
+                taxonomies=definitions,
+                describes=described,
+                codec=SkuCodec(),
+            )
+            assert_type(onto, "Ontology[Sku]")
+
+            # The content axis answers in the caller's space, all the way down
+            # to what the entity itself says its id is.
+            assert_type(onto.entity(Sku("ACME", 3)), "Entity[Sku] | None")
+            assert_type(onto.by_surface_form("line three"), "frozenset[Sku]")
+
+            # The two doors: out through the codec, and back through it. The
+            # inverse is why the codec is a pair -- `localize` is documented as
+            # *what entity() takes*, and entity() takes a Sku.
+            assert_type(onto.qualify(Sku("ACME", 3)), "str")
+            assert_type(onto.localize("acme:ACME-3"), "Sku")
+
+            # And the layer above: the axis, its cursor, and the walk members
+            # this leg put on the cursor, all in the same space.
+            axis = onto.taxonomy("lines")
+            assert_type(axis, "Taxonomy[Sku]")
+            assert_type(axis.subtree_keys(Sku("ACME", 3)), "list[Sku]")
+            assert_type(axis.at(Sku("ACME", 3)), "TaxonomyView[Sku]")
+
+        def _the_cursor_walks_in_that_space(cursor: TaxonomyView[Sku]) -> None:
+            """And the members this leg put on it answer in it too."""
+            assert_type(cursor.ancestors(), "tuple[TaxonomyView[Sku], ...]")
+            assert_type(cursor.descendants_to_depth(2), "tuple[TaxonomyView[Sku], ...]")
+            assert_type(cursor.paths_to_root(), "tuple[tuple[Sku, ...], ...]")
+            assert_type(cursor.entity(), "Entity[Sku] | None")
+
+        def _the_str_case_is_unchanged(onto: Ontology) -> None:
+            """A bare ``Ontology`` is ``Ontology[str]``, as everything else here is.
+
+            The half that regresses silently: without the default on the key
+            parameter a bare annotation would be ``Ontology[Any]``,
+            ``disallow_any_generics`` is not set in this repository, and a
+            wrong-typed key would then type-check with nothing to report it.
+            """
+            assert_type(onto, "Ontology[str]")
+            assert_type(onto.localize("acme:beagle"), "str")
+            assert_type(onto.taxonomy("species").at("beagle").entity(), "Entity[str] | None")
+
+        del _composes, _the_cursor_walks_in_that_space, _the_str_case_is_unchanged

@@ -66,7 +66,7 @@ from dataknobs_common.ontology.sources import (
     MappingAssertionSource,
     MappingEntitySource,
 )
-from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
+from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts, StrCodec
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -177,12 +177,20 @@ def load_ontology(
     source: Path | Mapping[str, Any],
     *,
     normalizer: Callable[[str], str] | None = None,
-) -> Ontology:
+) -> Ontology[str]:
     """Load a vocabulary with synchronous backings.
 
     No database, no embedder, no event loop. A hand-edited file is already a
     list once read, so nothing here has anything to await and the caller is
     not made to pretend otherwise.
+
+    **``Ontology[str]``, and the parameter is bound rather than passed
+    through.** This door reads an *authored* document, whose ids are the
+    strings its author typed -- it refuses every live source kind, so there is
+    no path here by which a caller's own key space could arrive. The codec is
+    therefore :class:`~dataknobs_common.ontology.values.StrCodec`, supplied
+    rather than defaulted: an ontology's codec field is required, so a door
+    that builds one says which it is.
 
     Args:
         source: A path to a YAML or JSON document, or the document itself
@@ -217,6 +225,7 @@ def load_ontology(
         assertions=assertions,
         taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
+        codec=StrCodec(),
         structures={
             name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
             for name, definition in _axes_to_copy(parts.taxonomies)
@@ -229,7 +238,7 @@ async def async_load_ontology(
     source: Path | Mapping[str, Any],
     *,
     normalizer: Callable[[str], str] | None = None,
-) -> AsyncOntology:
+) -> AsyncOntology[str]:
     """Load a vocabulary with asynchronous backings.
 
     The same file and the same refusals as :func:`load_ontology`; only the
@@ -268,6 +277,7 @@ async def async_load_ontology(
         assertions=assertions,
         taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
+        codec=StrCodec(),
         structures={
             name: await AsyncMappingHierarchy.snapshot(
                 AsyncAssertionHierarchy(assertions, definition.relation)
