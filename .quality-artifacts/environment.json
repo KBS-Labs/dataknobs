@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-15T19:21:13Z",
+  "timestamp": "2026-09-15T21:17:06Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-second-algorithm-scopes-its-guard-to-the-path",
-  "git_commit": "20e030ec673c6e9c5dde5bc30b1f7ac308539902",
+  "git_branch": "sbk/the-cursors-walk-and-the-content-axis-goes-generic",
+  "git_commit": "05ba7de41ab50636dc0ad736db53c2adfd42dadd",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
