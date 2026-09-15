@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-15T14:35:33Z",
+  "timestamp": "2026-09-15T15:19:24Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "b69da5e427be3cc87653951abddabe8deb9d017b3b5eb666f04410df164c5bec",
-    "common": "9e424f70669e81f017da0e51990f706e76a1ee7376603eb8dd762fc25786d3f0",
+    "common": "a46a2a012b9720b3c84f2cb392003285cd6e141b20cdce8b929bdeb1a6b709a6",
     "config": "a73f7f02bb35e7d998c1c4bcd7babf1466398c3c657636d71682d6c670fc29d6",
     "data": "9563901caac689ab9b8764a8ab523d141b7fe3671a739fd95ecc61433d308bfa",
     "fsm": "2303bdb3ef0356f50fc2bd7c92d9492921bdfa04e88ad497361edba742a9c419",
@@ -35,7 +35,7 @@
     "toolchain_test": "a3c996e51c661e2fc0d1c26400dbbe16708cad0bd629827aec331bf99a4c82b1",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "e40e52071a78190e2346fa1fcdb915c37e0abad0d559ab26a9fc8636b461498e",
-    "docs": "417a1c872da742e8a1704baba1e5f62a3b6fa71e106eed3d13dd4a3bbbe9d3e8"
+    "docs": "5a3bf6ac604564c5d37e66dd3a317c54636036936bd1b684b50f9e5b071493d7"
   },
   "total_seconds": 398,
   "checks": {
@@ -49,13 +49,13 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 6
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 2
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
@@ -90,13 +90,13 @@
       "exit_code": 0,
       "skipped": false,
       "duration_seconds": 160,
-      "workspace_guards_seconds": 93
+      "workspace_guards_seconds": 92
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 92
+      "duration_seconds": 91
     }
   }
 }
