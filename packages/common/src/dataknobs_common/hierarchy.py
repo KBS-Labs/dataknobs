@@ -71,11 +71,13 @@ from dataknobs_common._walk_core import (
     _ancestors,
     _async_reply,
     _children_at_depth,
+    _deepest_common_ancestor,
     _descendants,
     _descendants_to_depth,
     _flatten,
     _leaves,
     _parent_edges,
+    _paths_to_root,
     _refuse_a_spent_walk,
     _refuse_an_unusable_bound,
     _sync_reply,
@@ -112,17 +114,21 @@ __all__ = [
     "ancestors",
     "async_ancestors",
     "async_children_at_depth",
+    "async_deepest_common_ancestor",
     "async_descendants",
     "async_descendants_to_depth",
     "async_drive",
     "async_flatten",
     "async_leaves",
+    "async_paths_to_root",
     "children_at_depth",
+    "deepest_common_ancestor",
     "descendants",
     "descendants_to_depth",
     "drive",
     "flatten",
     "leaves",
+    "paths_to_root",
 ]
 
 #: How many singular calls an asynchronous frontier read may have outstanding.
@@ -740,6 +746,117 @@ async def async_leaves(
     await _async_refuse_unless_known(hierarchy, under)
     return await async_drive(
         hierarchy, _leaves(under), max_concurrency=max_concurrency, cache=cache
+    )
+
+
+def paths_to_root(
+    hierarchy: Hierarchy[K], node_id: K, *, cache: WalkCache | None = None
+) -> tuple[tuple[K, ...], ...]:
+    """Every way up from ``node_id``, one tuple per path, the node at index 0.
+
+    A node with two parents gives **two paths**, which is the answer
+    :func:`ancestors` cannot give: that walk returns the set of nodes above,
+    deduplicated, and a consumer asking *how did we get here* needs the routes
+    rather than the membership. The cycle guard is scoped to the path for the
+    same reason -- a node reachable two ways appears on both.
+
+    Each path runs from ``node_id`` outward to a node that cannot be extended:
+    a root, or a node whose every parent is already on that path. **Cyclic
+    data therefore returns paths that reach no root**, and nothing is raised:
+    the far end is simply a node whose parents are all behind it.
+
+    Paths come back in **parent order, outermost first** -- every path through
+    a node's first parent precedes every path through its second, with
+    ``parents()``'s own order deciding which is which.
+
+    **An anchor the axis does not contain is refused**, because this walk emits
+    it: an unknown node comes back as ``((node_id,),)``, which is exactly the
+    shape a root gives. See :func:`_refuse_an_unknown_anchor`.
+
+    **This walk keeps its own edge replies**, because it is the one walk here
+    that asks about a node more than once by construction -- a node on ``k``
+    paths is reached ``k`` times. The memo is per call and costs the caller
+    nothing to ask for; ``cache`` is still :func:`drive`'s and still for
+    spending replies across *other* walks.
+    """
+    _refuse_unless_known(hierarchy, node_id)
+    return drive(hierarchy, _paths_to_root(node_id), cache=cache)
+
+
+async def async_paths_to_root(
+    hierarchy: AsyncHierarchy[K],
+    node_id: K,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[tuple[K, ...], ...]:
+    """:func:`paths_to_root` over an asynchronous hierarchy.
+
+    ``max_concurrency`` is forwarded and **never binds**, which is worth saying
+    rather than leaving to be measured: this walk is a depth-first descent and
+    asks about one node at a time, so there is no frontier for a bound to
+    narrow. It is taken because the driver takes it and because a twin that
+    quietly refused a keyword its siblings accept is the surface drift the
+    parity guard exists to catch -- not because setting it changes anything
+    here.
+    """
+    await _async_refuse_unless_known(hierarchy, node_id)
+    return await async_drive(
+        hierarchy, _paths_to_root(node_id), max_concurrency=max_concurrency, cache=cache
+    )
+
+
+def deepest_common_ancestor(
+    hierarchy: Hierarchy[K], a: K, b: K, *, cache: WalkCache | None = None
+) -> K | None:
+    """The nearest node above both ``a`` and ``b``, or ``None`` if there is none.
+
+    **Either argument may be the answer**: each chain includes its own end, so
+    an ancestor of the other node is returned rather than passed over.
+
+    **The tie-break is asymmetric.** The answer is the first of ``a``'s
+    ancestry, nearest first, that also stands above ``b``. Over a tree that
+    names one node however the arguments are ordered; over a DAG two common
+    ancestors can be incomparable, and then the one nearer ``a`` wins --
+    swapping the arguments can swap the answer.
+
+    **``None`` is ambiguous and is not refused.** A disjoint pair, an unknown
+    ``a`` and an unknown ``b`` all answer ``None``. That is ambiguous rather
+    than wrong -- nothing false is returned -- and ``contains()`` separates
+    them in one call, which is :func:`ancestors`' treatment and for the same
+    reason.
+
+    **This walk re-asks the ancestry the two nodes share, and a ``cache`` is
+    the only thing that stops it.** It composes two ancestor walks, and a
+    composed walk cannot see the replies its parts receive, so the shared chain
+    above the meeting point is asked for twice: 44 requests against 23 distinct
+    edges over a 23-node axis, and 23 with ``cache={}``. The excess is bounded
+    by the depth of the shared chain rather than by the size of the axis. Pass
+    a cache where that matters; there is no other mechanism.
+    """
+    return drive(hierarchy, _deepest_common_ancestor(a, b), cache=cache)
+
+
+async def async_deepest_common_ancestor(
+    hierarchy: AsyncHierarchy[K],
+    a: K,
+    b: K,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> K | None:
+    """:func:`deepest_common_ancestor` over an asynchronous hierarchy.
+
+    The two ancestor walks it composes run **in sequence**, not concurrently:
+    ``max_concurrency`` bounds the frontier read inside each of them, which is
+    where the concurrency in this walk is. The re-ask its synchronous twin
+    documents is the same here, and so is the remedy.
+    """
+    return await async_drive(
+        hierarchy,
+        _deepest_common_ancestor(a, b),
+        max_concurrency=max_concurrency,
+        cache=cache,
     )
 
 

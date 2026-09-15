@@ -261,6 +261,63 @@ assert species.structure.contains("mammal")
 assert not species.structure.contains("marmoset")
 ```
 
+### Paths, and the nearest node above two
+
+`ancestors()` answers *what is above me* and deduplicates, so a node reachable
+two ways appears once. `paths_to_root()` answers *how did I get here*, which is
+a different question with a different shape — one tuple per route, the anchor
+at index 0:
+
+```python
+from dataknobs_common import (
+    MappingHierarchy, async_deepest_common_ancestor, async_paths_to_root,
+    deepest_common_ancestor, paths_to_root,
+)
+
+diamond = MappingHierarchy(
+    {"x": ("a", "b"), "a": ("root",), "b": ("root",), "root": ()}
+)
+
+assert paths_to_root(diamond, "x") == (("x", "a", "root"), ("x", "b", "root"))
+assert ancestors(diamond, "x") == ("a", "b", "root")     # one entry for `root`
+```
+
+**Its cycle guard is scoped to the path**, which is why it dedups differently
+from every other walk here. Reachability is a property of a route: a node on two
+routes is two answers, and a walk-scoped visited set would return one path where
+two exist. A path ends where it cannot be extended — at a root, or at a node
+whose every parent is already on that path — so **cyclic data returns paths that
+reach no root**, and nothing is raised. Paths come back in parent order,
+outermost first: every route through a node's first parent precedes every route
+through its second.
+
+`deepest_common_ancestor()` is the nearest node standing above two others, or
+`None`:
+
+```python
+assert deepest_common_ancestor(diamond, "a", "b") == "root"
+assert deepest_common_ancestor(diamond, "x", "a") == "a"   # either may be the answer
+assert deepest_common_ancestor(diamond, "x", "marmoset") is None
+```
+
+Each has an `async_` twin taking the same arguments. `async_paths_to_root`
+takes `max_concurrency` like every other twin and it never binds there: this
+walk descends one node at a time, so there is no frontier for a bound to
+narrow. `async_deepest_common_ancestor`'s bound is real — it applies inside
+each of the two ancestor walks it composes, which run in sequence.
+
+**The tie-break is asymmetric and is part of the definition.** The answer is the
+first of the *first* argument's ancestry, nearest first, that also stands above
+the second. Over a tree that is one node however the arguments are ordered; over
+a DAG two common ancestors can be incomparable, and then the one nearer the
+first argument wins — so swapping the arguments can swap the answer.
+
+`None` is ambiguous: a disjoint pair and an unknown node both give it. That is
+`ancestors`' treatment rather than the refusal the including walks make —
+nothing false is returned, and `contains()` separates the two cases in one call.
+`paths_to_root` *does* refuse an unknown anchor, because it emits it: `(("x",),)`
+is exactly the shape a root gives.
+
 ### Descending
 
 Five walks go the other way, and the two guarantees above hold for all of them:
@@ -285,7 +342,7 @@ one.
 
 #### Where the anchor is
 
-Five walks, four answers, and none of them follows from the others:
+Six walks, five answers, and none of them follows from the others:
 
 | Walk | The anchor is |
 |---|---|
@@ -293,6 +350,10 @@ Five walks, four answers, and none of them follows from the others:
 | `flatten`, `descendants_to_depth` | **included** — the axis from a point, not the strict descendants of it |
 | `children_at_depth` | **included at `depth=0`**, which is the anchor alone |
 | `leaves` | **included if it is one** — a childless node is its own only leaf |
+| `paths_to_root` | **included at the near end of every path** — a route from a node that omits the node is not a route from it |
+
+`deepest_common_ancestor` is on none of these rows: it takes two nodes and
+returns one key rather than a sequence, and either of the two may be the answer.
 
 `Taxonomy.subtree_keys()` below is the fifth answer's counterpart: it includes
 its root deliberately, because *this and everything under it* is the question a
@@ -311,6 +372,7 @@ for walk in (
     lambda: descendants_to_depth(species.structure, "marmoset", 3),
     lambda: children_at_depth(species.structure, "marmoset", 0),
     lambda: leaves(species.structure, under="marmoset"),
+    lambda: paths_to_root(species.structure, "marmoset"),
 ):
     try:
         walk()
@@ -318,6 +380,7 @@ for walk in (
         assert refusal.context == {"anchor": "marmoset"}
 
 assert descendants(species.structure, "marmoset") == ()   # excluding: ambiguous, not refused
+assert deepest_common_ancestor(species.structure, "dog", "marmoset") is None   # likewise
 ```
 
 `leaves` is on that list by the longest route: an unknown anchor discovers
@@ -386,9 +449,24 @@ assert leaves(dag) == ("x",)           # ...and is not reported as a leaf
 
 ### Spending edge replies across walks
 
-No walk here asks its backing about a node twice. The descent asks each node
-once, and `leaves` reads childlessness off that reply rather than asking again,
-so there is no memo to build and nothing a cache has to rescue:
+**Which walks ask about a node twice, and what each of them does about it.**
+Most never do; one would and keeps its own replies so that it does not; one
+cannot and says so. The rule is about **where a reply is held** — the frame that
+received it keeps it — rather than a count over the walks that happen to exist,
+because a count is a claim the next walk falsifies without anyone editing this
+page:
+
+| Walks | Asks twice? | Because |
+|---|---|---|
+| `ancestors`, the five descending walks, `Taxonomy.walk()` and `Taxonomy.subtree_keys()`, both flavours of each | **no** | they share one level-synchronous descent that asks each node once, and `leaves` reads childlessness off that reply rather than asking again |
+| `paths_to_root` | **no, and it would** | a node on `k` routes is reached `k` times, so it keeps the replies it has already received. Measured over sixteen nodes carrying thirty-two paths: 125 requests without that memo, 16 with |
+| `deepest_common_ancestor` | **yes** | it composes two ancestor walks, and a composing frame never sees the replies its parts receive — so the ancestry the two nodes share is asked for twice. 44 requests against 23 distinct edges over a 23-node axis, and 23 with a `cache`. The excess is the depth of the shared chain, not the size of the axis |
+
+So a caller's cache is for spending replies across **other** walks in every case
+but one: for `deepest_common_ancestor` it is also the only thing that stops the
+walk re-asking its own shared prefix, and there is no other mechanism.
+
+The descent's own promise is what the first row measures:
 
 ```python
 class CountingAxis:
@@ -409,10 +487,11 @@ leaves(axis)
 assert sorted(axis.asked) == ["a", "a1", "a2", "b", "b1", "root"]   # each node once
 ```
 
-So what a cache is *for* is the **next** walk. Nothing is cached by default —
-a per-walk memo would hold a second copy of every reply the walk will never
-read back — and a caller who wants replies to outlive one walk supplies their
-own:
+Nothing is cached by default: for a walk that asks each node once, a per-walk
+memo would hold a second copy of every reply the walk will never read back — a
+20,000-node snapshot held one at 107% of what the walk returns — and the walk
+that does re-ask keeps what it needs in its own frame. A caller who wants
+replies to outlive one walk supplies their own:
 
 ```python
 from collections.abc import Sequence
@@ -434,9 +513,10 @@ does not satisfy the seam it is about to be handed to. `hierarchy.py` carries
 that assignment as a type-checked proof rather than as a claim.
 
 `cache=` is a keyword on **every** walk here — `drive()`, `async_drive()`,
-`ancestors`, the five descending walks, both flavours of each, and
-`Taxonomy.walk()` and `Taxonomy.subtree_keys()` below — because only the caller
-knows how fast their data moves, and staleness is therefore theirs to decide.
+`ancestors`, the five descending walks, `paths_to_root`,
+`deepest_common_ancestor`, both flavours of each, and `Taxonomy.walk()` and
+`Taxonomy.subtree_keys()` below — because only the caller knows how fast their
+data moves, and staleness is therefore theirs to decide.
 Two members rather than `MutableMapping` so that a cache implementing the whole
 mapping interface without inheriting the ABC — `BoundedLRUCache` is one — still
 fits. It may also be **bounded**: nothing a walk does depends on a hit, so a

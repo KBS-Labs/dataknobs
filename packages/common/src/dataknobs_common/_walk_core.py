@@ -8,9 +8,12 @@ follow.
 Three shared cores live here, and they are shared with different callers:
 
 * the **algorithms** -- ``_expand``, the two ways of reading what it
-  discovers, the walks composed from those, and ``_parent_edges`` -- which
-  :mod:`dataknobs_common.hierarchy`'s public wrappers and its snapshot
-  constructors drive;
+  discovers, the walks composed from those, ``_paths_to_root``, and
+  ``_parent_edges`` -- which :mod:`dataknobs_common.hierarchy`'s public
+  wrappers and its snapshot constructors drive. There are **two** expansions
+  here and not one: ``_expand`` dedups per walk, which six walks want, and
+  ``_paths_to_root`` guards per path, which is the whole of why a walk that
+  returns paths cannot be composed over the other one;
 * the **frontier read** -- ``_sync_reply`` / ``_async_reply`` -- which the
   drivers call, and which :class:`~dataknobs_common.ontology.taxonomy.Taxonomy`'s
   streaming walk calls too. That walk cannot go through the collecting core,
@@ -705,6 +708,118 @@ def _leaves(under: _K | None) -> Walk[_K, tuple[_K, ...]]:
     discovered, childless = yield from _expand(seeds, "children")
     order = _preorder_of(discovered, seeds, exclude_seeds=False)
     return tuple(node_id for node_id in order if node_id in childless)
+
+
+def _paths_to_root(node_id: _K) -> Walk[_K, tuple[tuple[_K, ...], ...]]:
+    """Every maximal path upward from ``node_id``, the anchor at the near end.
+
+    **The second algorithm**, and the whole of what makes it one is the scope
+    of its cycle guard. :func:`_expand` dedups **per walk**, which is right for
+    the six walks composed over it and wrong here: a node reachable by two
+    paths is two answers, not one, and a walk-scoped visited set collapses them
+    into whichever path arrived first. So the guard is a membership test
+    against **the path being extended**, and the same node appears on as many
+    paths as reach it.
+
+    **A path is emitted when it cannot be extended**, which is one rule
+    covering two endings: a node with no parents is a root, and a node whose
+    every parent is already on the path closed a cycle. Neither is emitted as a
+    *prefix* of a longer path -- a path truncated where one of several parents
+    cycled would be exactly that, and a caller reading the result as *the ways
+    up from here* would count a way that is really the beginning of another.
+
+    **Cyclic data therefore terminates without reaching a root**, and the
+    result says so by shape rather than by a flag: the far end of such a path
+    is a node whose parents are all behind it. An axis with no root above a
+    cyclic component has no root to offer, which is a property of the data --
+    :func:`_parent_edges` says the same thing from the other direction.
+
+    **Parent order, outermost first.** The stack reverses, so parents are
+    pushed reversed to come back in the order ``parents()`` gave them: every
+    path through the first parent precedes every path through the second. That
+    is a decision rather than an accident of the container -- what a walk is
+    made of and what it emits are two questions, and a stack answers the second
+    one by default if nobody answers it deliberately.
+
+    **A repeated parent in one reply is one edge, not two routes.** ``parents``
+    is arbitrary consumer code -- a query over a join answers one row per match
+    -- and an unguarded repeat here would return the same path twice, where
+    :func:`_expand`'s visited set absorbs one silently and
+    :func:`_parent_edges` guards against one by name. The dedup is inside the
+    reply and nothing wider: a parent reached again on a *different* path is
+    two routes and stays two.
+
+    **The reply memo is scoped to the walk, and that is not the guard's
+    scope.** The two structures sit four lines apart and hold opposite scopes
+    on purpose: reachability is a property of a *path*, so the guard is
+    per-path; an edge is not, so ``parents(n)`` is the same reply whichever
+    path arrived at ``n`` and asking again buys nothing. Sharing one scope
+    between them is a defect in either direction -- a path-scoped memo
+    memoises nothing, and a walk-scoped guard returns one path where two are
+    owed.
+
+    This walk is the reason that memo exists at all. Every walk over
+    :func:`_expand` asks each node once by construction, so a memo built for
+    one would fill with entries it never reads back; this one re-asks by
+    construction, because a node on ``k`` paths is popped ``k`` times. Measured
+    over a chain of stacked diamonds: **125 requests for 16 nodes** without it,
+    **16** with, identical to what a caller's ``cache={}`` achieves -- and the
+    memo is kept here rather than left to that cache because a walk that can
+    keep its own replies should not need a caller to notice.
+    """
+    paths: list[tuple[_K, ...]] = []
+    stack: list[tuple[_K, ...]] = [(node_id,)]
+    replies: dict[_K, Sequence[_K]] = {}
+    while stack:
+        path = stack.pop()
+        tip = path[-1]
+        if tip in replies:
+            above = replies[tip]
+        else:
+            (above,) = yield ("parents", (tip,))
+            replies[tip] = above
+        onward = tuple(dict.fromkeys(p for p in above if p not in path))
+        if not onward:
+            paths.append(path)
+            continue
+        stack.extend((*path, parent) for parent in reversed(onward))
+    return tuple(paths)
+
+
+def _deepest_common_ancestor(a: _K, b: _K) -> Walk[_K, _K | None]:
+    """The nearest node above both ``a`` and ``b``, or ``None``.
+
+    **A composition, not a third algorithm**: :func:`_ancestors` twice, joined
+    by a membership test. ``yield from`` has no flavour, which is the property
+    this is the worked example of -- written as twins the asynchronous half
+    would have to call an asynchronous ``ancestors`` where the synchronous half
+    calls a synchronous one, and two wrappers deep is where a re-walk gets
+    written by accident.
+
+    **Either argument may be the answer.** Each chain includes its own end, so
+    a node that is an ancestor of the other is returned rather than skipped
+    over -- *deepest common ancestor* and not *deepest proper common
+    ancestor*.
+
+    **The tie-break is asymmetric and is part of the definition.** The answer
+    is the first of ``a``'s chain, nearest first, that also stands above ``b``.
+    Over a tree there is only one candidate and the asymmetry is invisible;
+    over a DAG two common ancestors can be incomparable, and then the one
+    nearer ``a`` wins. Swapping the arguments can therefore swap the answer,
+    which is why this is stated rather than left to be discovered.
+
+    **It re-asks the chain the two share, and cannot stop itself.** ``yield
+    from`` delegates a request straight past this frame, so the replies its two
+    sub-walks receive are never observed here and there is nowhere to keep
+    them: measured, this frame sees **0** of them. The cost is the depth of the
+    shared chain and not the size of the axis -- 44 requests against 23
+    distinct edges over a 23-node axis, 23 of them with a caller's cache. For
+    this walk a cache is not a refinement a careful caller reaches for; it is
+    the only mechanism there is.
+    """
+    a_chain = (a, *(yield from _ancestors(a)))
+    b_chain = {b, *(yield from _ancestors(b))}
+    return next((above for above in a_chain if above in b_chain), None)
 
 
 def _parent_edges() -> Walk[_K, dict[_K, tuple[_K, ...]]]:

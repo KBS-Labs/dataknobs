@@ -19,10 +19,13 @@ only become claims once there is more than one walk to make them:
   descent already received -- so the backing sees each node exactly once
   whatever cache the caller did or did not supply.
 
-The differential and the parity claims the neighbouring suite makes are not
-repeated here; what is repeated, deliberately, is that every walk runs over a
-cyclic fixture, because a walk that terminates by luck is indistinguishable
-from one that terminates by construction until it does not.
+The differential and the parity claims are the neighbouring suite's and are not
+repeated here. The cyclic differential used to be: five of these walks were run
+over a cyclic fixture of this file's own while ``ancestors`` was run over an
+identical one next door, which is two tests over two copies making one claim
+about six of eight walks. It is now one parametrisation over one fixture
+reaching all eight, and it lives beside the other differential because the
+walks it covers are not all descending ones.
 """
 
 from __future__ import annotations
@@ -99,16 +102,6 @@ ASCENDING_DIAMOND: Mapping[str, tuple[str, ...]] = {
     "p1": ("g",),
     "p2": (),
     "z": ("p1", "p2"),
-}
-
-#: root -> a -> c -> f -> root. Every walk here runs over it.
-CYCLIC: Mapping[str, tuple[str, ...]] = {
-    "f": ("c", "d"),
-    "c": ("a",),
-    "d": ("b", "root"),
-    "a": ("root",),
-    "b": ("root",),
-    "root": ("f",),
 }
 
 
@@ -502,44 +495,12 @@ def test_the_memo_answers_in_request_order() -> None:
 
 
 # --------------------------------------------------------------------------
-# Cycles, and both flavours
+# The awaited fixture these walks are driven over
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("sync_walk", "async_walk"),
-    [
-        (lambda h: descendants(h, "root"), lambda h: async_descendants(h, "root")),
-        (lambda h: flatten(h, from_id="root"), lambda h: async_flatten(h, from_id="root")),
-        (
-            lambda h: descendants_to_depth(h, "root", 2),
-            lambda h: async_descendants_to_depth(h, "root", 2),
-        ),
-        (
-            lambda h: children_at_depth(h, "root", 2),
-            lambda h: async_children_at_depth(h, "root", 2),
-        ),
-        (lambda h: leaves(h, under="root"), lambda h: async_leaves(h, under="root")),
-    ],
-    ids=["descendants", "flatten", "descendants_to_depth", "children_at_depth", "leaves"],
-)
-def test_every_walk_terminates_on_cyclic_data_and_both_flavours_agree(
-    sync_walk: Any, async_walk: Any
-) -> None:
-    """A cycle is the input that separates a correct walk from a lucky one.
-
-    Both halves in one test because they are one claim: a visited set that is
-    unconditional in one flavour and conditional in the other is a difference
-    the answers show and the surfaces do not.
-    """
-    result = sync_walk(MappingHierarchy(CYCLIC))
-
-    assert len(set(result)) == len(result), "a node was emitted twice"
-    assert result == asyncio.run(async_walk(_AsyncMapping(CYCLIC)))
-
-
 class _AsyncMapping:
-    """The cyclic fixture, awaited. Local because only this file's twin needs it."""
+    """A parent mapping, awaited. Local because only this file's twins need it."""
 
     def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
         self._inner = MappingHierarchy(parents)
