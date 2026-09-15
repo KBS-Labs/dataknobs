@@ -32,10 +32,12 @@ from dataknobs_common.hierarchy import (
     AsyncBulkHierarchy,
     AsyncEnumerableHierarchy,
     AsyncHierarchy,
+    AsyncHierarchyView,
     AsyncMappingHierarchy,
     BulkHierarchy,
     EnumerableHierarchy,
     Hierarchy,
+    HierarchyView,
     MappingHierarchy,
     ancestors,
     async_ancestors,
@@ -61,6 +63,9 @@ from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
 )
+from dataknobs_common.ontology.model import TaxonomyDefinition
+from dataknobs_common.ontology.sources import AsyncMappingEntitySource, MappingEntitySource
+from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 from dataknobs_common.testing import assert_twin_types_agree, assert_twins_agree
 
 if TYPE_CHECKING:
@@ -573,6 +578,34 @@ class BulkParents(CountingParents):
         self.bulk_calls += 1
         self.widest_frontier = max(self.widest_frontier, len(node_ids))
         return tuple(self._inner.children(n) for n in node_ids)
+
+
+class AsyncCountingParents:
+    """:class:`CountingParents`, awaited -- singular-only, and counting.
+
+    Singular-only for :class:`ConcurrencyProbe`'s reason turned around: a
+    backing that answers a level in one call is asked once per *level*, so a
+    count over one is a count of levels and says nothing about how many nodes
+    were asked about. This counts nodes, which is what a memo saves.
+    """
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        self._inner = MappingParents(parents)
+        self.singular_calls = 0
+
+    async def roots(self) -> Sequence[str]:
+        return self._inner.roots()
+
+    async def parents(self, node_id: str) -> Sequence[str]:
+        self.singular_calls += 1
+        return self._inner.parents(node_id)
+
+    async def children(self, node_id: str) -> Sequence[str]:
+        self.singular_calls += 1
+        return self._inner.children(node_id)
+
+    async def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
 
 
 class AsyncBulkParents:
@@ -1478,103 +1511,226 @@ def test_the_ascent_seeded_by_both_asks_a_bulk_backing_one_query_per_level() -> 
 # --------------------------------------------------------------------------
 
 
-#: Each core this module wraps, and one call into each of its two surfaces.
+#: The key a patched core answers with, and nothing else can.
+#:
+#: A *value* assertion rather than an identity one, because four of the six
+#: surfaces re-wrap what the core returns and a re-wrapped tuple is a new
+#: object. What makes the value sound is that it is not a node: no walk over
+#: ``CYCLIC_PARENTS`` can produce it, so an unpatched surface cannot answer
+#: with it by agreeing rather than by delegating -- which is the reason the
+#: sentinel is not ``None``.
+_PATCHED: tuple[str, ...] = ("__the_core_was_patched__",)
+
+
+def _nodes(views: Sequence[Any]) -> tuple[str, ...]:
+    """The keys a tuple of cursors is anchored on."""
+    return tuple(view.node for view in views)
+
+
+def _as_axis(structure: Hierarchy[str]) -> Taxonomy:
+    """Any structure, in a taxonomy-shaped slot, with an empty content axis.
+
+    The taxonomy cursor's walk members forward to the structural cursor's, so
+    what a delegation test needs from the axis is the structure and nothing
+    else -- an entity source that carries nothing answers every question these
+    surfaces ask.
+    """
+    return Taxonomy(
+        definition=TaxonomyDefinition(id="delegation", relation="isa"),
+        structure=structure,
+        entities=MappingEntitySource({}),
+    )
+
+
+def _as_async_axis(structure: AsyncHierarchy[str]) -> AsyncTaxonomy:
+    """:func:`_as_axis`'s twin."""
+    return AsyncTaxonomy(
+        definition=TaxonomyDefinition(id="delegation", relation="isa"),
+        structure=structure,
+        entities=AsyncMappingEntitySource({}),
+    )
+
+
+#: Each core this module wraps, and one call into **every** surface written
+#: over it.
 #:
 #: Parametrised over **all eight** walks rather than over one. A parametrised
 #: guard run over a set of one is green for the same reason an empty one is,
 #: and this table was that until the six compositions existed -- so a walk
 #: added without a row here is a walk whose delegation nothing checks.
 #:
-#: The last two rows are the ones a reader should expect to be absent. They
-#: arrived as separate algorithms and were re-read as projections of the same
-#: descent, which is the point in a walk's life where a wrapper quietly keeps
-#: the old traversal: it would pass every answer test in this file and drift
-#: from the core it claims to call. That is exactly the claim equality of
-#: results cannot make.
-_CORES: tuple[tuple[str, Callable[..., Any], Callable[..., Any]], ...] = (
-    ("_ancestors", lambda h: ancestors(h, "f"), lambda h: async_ancestors(h, "f")),
-    ("_descendants", lambda h: descendants(h, "f"), lambda h: async_descendants(h, "f")),
+#: **And over every surface rather than the two module functions**, which is
+#: the other axis and was a set of two until the cursors gained walk members.
+#: Four of the eight walks now have six surfaces -- two module functions, the
+#: structural cursor, the taxonomy cursor, and both asynchronous twins -- and
+#: a cursor member that reimplemented the traversal would pass every answer
+#: test in this file while drifting from the core it claims to call. The other
+#: four have two surfaces because ``02w``'s fence puts no cursor member over
+#: them, and a row claiming six for those would be asserting a member nobody
+#: declared.
+#:
+#: The last two walk rows are the ones a reader should expect to be absent.
+#: They arrived as separate algorithms and were re-read as projections of the
+#: same descent, which is the point in a walk's life where a wrapper quietly
+#: keeps the old traversal. That is exactly the claim equality of results
+#: cannot make.
+_CORES: tuple[tuple[str, tuple[Callable[..., Any], ...], tuple[Callable[..., Any], ...]], ...] = (
+    (
+        "_ancestors",
+        (
+            lambda h: ancestors(h, "f"),
+            lambda h: _nodes(HierarchyView(h, "f").ancestors()),
+            lambda h: _nodes(_as_axis(h).at("f").ancestors()),
+        ),
+        (
+            lambda h: async_ancestors(h, "f"),
+            lambda h: _async_nodes(AsyncHierarchyView(h, "f").ancestors()),
+            lambda h: _async_nodes(_as_async_axis(h).at("f").ancestors()),
+        ),
+    ),
+    (
+        "_descendants",
+        (
+            lambda h: descendants(h, "f"),
+            lambda h: _nodes(HierarchyView(h, "f").descendants()),
+            lambda h: _nodes(_as_axis(h).at("f").descendants()),
+        ),
+        (
+            lambda h: async_descendants(h, "f"),
+            lambda h: _async_nodes(AsyncHierarchyView(h, "f").descendants()),
+            lambda h: _async_nodes(_as_async_axis(h).at("f").descendants()),
+        ),
+    ),
     (
         "_descendants_to_depth",
-        lambda h: descendants_to_depth(h, "f", 2),
-        lambda h: async_descendants_to_depth(h, "f", 2),
+        (
+            lambda h: descendants_to_depth(h, "f", 2),
+            lambda h: _nodes(HierarchyView(h, "f").descendants_to_depth(2)),
+            lambda h: _nodes(_as_axis(h).at("f").descendants_to_depth(2)),
+        ),
+        (
+            lambda h: async_descendants_to_depth(h, "f", 2),
+            lambda h: _async_nodes(AsyncHierarchyView(h, "f").descendants_to_depth(2)),
+            lambda h: _async_nodes(_as_async_axis(h).at("f").descendants_to_depth(2)),
+        ),
+    ),
+    (
+        "_paths_to_root",
+        (
+            lambda h: paths_to_root(h, "f"),
+            lambda h: HierarchyView(h, "f").paths_to_root(),
+            lambda h: _as_axis(h).at("f").paths_to_root(),
+        ),
+        (
+            lambda h: async_paths_to_root(h, "f"),
+            lambda h: AsyncHierarchyView(h, "f").paths_to_root(),
+            lambda h: _as_async_axis(h).at("f").paths_to_root(),
+        ),
     ),
     (
         "_children_at_depth",
-        lambda h: children_at_depth(h, "f", 2),
-        lambda h: async_children_at_depth(h, "f", 2),
+        (lambda h: children_at_depth(h, "f", 2),),
+        (lambda h: async_children_at_depth(h, "f", 2),),
     ),
-    ("_flatten", flatten, async_flatten),
-    ("_leaves", leaves, async_leaves),
-    ("_paths_to_root", lambda h: paths_to_root(h, "f"), lambda h: async_paths_to_root(h, "f")),
+    ("_flatten", (flatten,), (async_flatten,)),
+    ("_leaves", (leaves,), (async_leaves,)),
     (
         "_deepest_common_ancestor",
-        lambda h: deepest_common_ancestor(h, "c", "d"),
-        lambda h: async_deepest_common_ancestor(h, "c", "d"),
+        (lambda h: deepest_common_ancestor(h, "c", "d"),),
+        (lambda h: async_deepest_common_ancestor(h, "c", "d"),),
     ),
 )
 
 
-def test_the_snapshot_walk_is_a_reading_of_the_shared_descent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The claim this package makes everywhere, asserted of the walk that made it false.
+async def _async_nodes(awaitable: Any) -> tuple[str, ...]:
+    """:func:`_nodes` over a coroutine that answers with cursors."""
+    return _nodes(await awaitable)
 
-    ``_parent_edges`` is driven by both snapshot constructors, so it is a walk
-    this package ships -- and it ran its own frontier loop, its own visited set
-    and its own ``roots`` fetch, which is a second expansion beside the one
-    every docstring here says is the only one. Equality of snapshots cannot
-    tell a reading of the descent from a copy of it that agrees today, which is
-    the same reason ``_CORES`` exists for the eight public walks.
 
-    It could not have been a reading before: a spanning record drops the second
-    parent of a DAG node, and that edge is the one thing a parent-edge snapshot
-    cannot lose. Keeping the whole reply is what made this possible, so the
-    walk that motivated the change is the walk that now demonstrates it.
+def test_a_snapshot_forwards_a_cache_so_a_later_walk_spends_its_replies() -> None:
+    """The constructor drives a walk, so it takes the walk's memo.
+
+    ``snapshot`` is the one ``drive()`` call site in this module that is not a
+    walk, and it was the one that forwarded no ``cache=`` -- the drift the
+    module docstring names for ``max_concurrency`` and the memo closed for the
+    twelve walks, reopened at the one construct kind a census over *walks*
+    cannot see.
+
+    **The reproduction is a count rather than an exception**, which is what
+    makes it the kind of defect a green suite keeps: every answer is identical
+    either way. Thirteen nodes, each asked for its children once by the
+    snapshot and once again by the walk after it; with one memo across both the
+    second asks nothing.
     """
-    seen: list[tuple[str, tuple[str, ...]]] = []
-    unpatched = walk_core._expand
+    axis = _stacked_diamonds(4)
+    assert len(axis) == 13, "the count below is the axis's size, so it is stated"
 
-    def recording_expand(
-        seeds: tuple[str, ...], direction: str, **kwargs: Any
-    ) -> Generator[Any, Any, Any]:
-        seen.append((direction, tuple(seeds)))
-        return unpatched(seeds, direction, **kwargs)
+    cold = CountingParents(axis)
+    MappingHierarchy.snapshot(cold)
+    uncached_leaves = leaves(cold)
+    assert cold.singular_calls == 26, "thirteen nodes asked twice"
 
-    monkeypatch.setattr(walk_core, "_expand", recording_expand)
+    warm = CountingParents(axis)
+    memo: dict[tuple[str, Any], Sequence[str]] = {}
+    snapshot = MappingHierarchy.snapshot(warm, cache=memo)
 
-    # A walk-only axis: `MappingHierarchy` publishes `parent_edges`, so
-    # snapshotting one takes the enumerable branch and walks nothing at all.
-    snapshot = MappingHierarchy.snapshot(MappingParents(DIAMOND))
+    assert leaves(warm, cache=memo) == uncached_leaves, "the memo changed an answer"
+    assert warm.singular_calls == 13, "thirteen nodes asked once"
+    assert snapshot.parent_edges() == MappingHierarchy.snapshot(cold).parent_edges()
 
-    assert seen == [("children", ("root",))], "one descent, seeded by the roots"
-    assert snapshot.parents("x") == ("a", "b"), "...and both parents of the DAG node kept"
+
+@pytest.mark.asyncio
+async def test_the_async_snapshot_forwards_it_too() -> None:
+    """The twin, because a parameter on one half is the drift this closes.
+
+    ``max_concurrency`` was already here and ``cache`` was not, which is the
+    asymmetry rather than a second one: the asynchronous constructor had the
+    keyword its flavour needs and neither had the keyword both flavours need.
+    """
+    axis = _stacked_diamonds(4)
+
+    cold = AsyncCountingParents(axis)
+    await AsyncMappingHierarchy.snapshot(cold)
+    uncached_leaves = await async_leaves(cold)
+    assert cold.singular_calls == 26, "thirteen nodes asked twice"
+
+    warm = AsyncCountingParents(axis)
+    memo: dict[tuple[str, Any], Sequence[str]] = {}
+    await AsyncMappingHierarchy.snapshot(warm, cache=memo)
+
+    assert await async_leaves(warm, cache=memo) == uncached_leaves
+    assert warm.singular_calls == 13, "thirteen nodes asked once"
 
 
 @pytest.mark.parametrize(
-    ("core", "sync_call", "async_call"), _CORES, ids=[name for name, _, _ in _CORES]
+    ("core", "sync_calls", "async_calls"), _CORES, ids=[name for name, _, _ in _CORES]
 )
-def test_patching_the_core_moves_both_flavours(
+def test_patching_the_core_moves_every_surface_over_it(
     monkeypatch: pytest.MonkeyPatch,
     core: str,
-    sync_call: Callable[..., Any],
-    async_call: Callable[..., Any],
+    sync_calls: tuple[Callable[..., Any], ...],
+    async_calls: tuple[Callable[..., Any], ...],
 ) -> None:
-    """Both wrappers *invoke* the shared generator rather than agreeing with it.
+    """Every surface *invokes* the shared generator rather than agreeing with it.
 
-    Equality of results cannot make this claim. A flavour that inlined the
+    Equality of results cannot make this claim. A surface that inlined the
     traversal would return the same answer on the day it was written and drift
-    a year later, silently, which is the failure this shape exists to catch.
+    a year later, silently, which is the failure this shape exists to catch --
+    and a cursor member is where it is likeliest, because re-walking is one
+    line and forwarding is one line.
+
+    Patching the **core** rather than the public walk is the point: the public
+    walk is per flavour, so patching it would not move the twin, while the
+    thing both are written over is below both.
     """
-    sentinel = object()
 
     def sentinel_walk(*_args: object, **_kwargs: object) -> object:
         """A walk that asks nothing and returns a value nothing else produces.
 
-        A generator rather than ``iter(())``, and returning a sentinel rather
-        than ``None``, for the same reason in both halves: ``None`` out of an
-        empty iterator is an answer the *unpatched* driver could also give, so
-        it proves the surfaces agree rather than that the patch was reached.
+        A generator rather than ``iter(())``, and returning a key rather than
+        ``None``, for the same reason in both halves: ``None`` out of an empty
+        iterator is an answer the *unpatched* driver could also give, so it
+        proves the surfaces agree rather than that the patch was reached.
 
         It takes whatever it is handed, because the cores do not share a
         signature -- a bound, a depth and an optional anchor are three
@@ -1582,15 +1738,17 @@ def test_patching_the_core_moves_both_flavours(
         """
 
         def _asks_nothing() -> object:
-            return sentinel
+            return _PATCHED
             yield  # unreachable, and what makes this a generator
 
         return _asks_nothing()
 
     monkeypatch.setattr(hierarchy_module, core, sentinel_walk)
 
-    assert sync_call(MappingParents(CYCLIC_PARENTS)) is sentinel
-    assert asyncio.run(async_call(AsyncMappingParents(CYCLIC_PARENTS))) is sentinel
+    for surface in sync_calls:
+        assert surface(MappingParents(CYCLIC_PARENTS)) == _PATCHED
+    for async_surface in async_calls:
+        assert asyncio.run(async_surface(AsyncMappingParents(CYCLIC_PARENTS))) == _PATCHED
 
 
 # --------------------------------------------------------------------------

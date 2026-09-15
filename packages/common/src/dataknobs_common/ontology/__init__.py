@@ -46,7 +46,6 @@ from dataknobs_common.ontology.hierarchy import (
 from dataknobs_common.ontology.loader import (
     AUTHORED_SOURCE_KINDS,
     DEFAULT_NESTED_RELATION,
-    ENTITY_TYPE_ISA_KEY,
     RESERVED_ONTOLOGY_ID,
     async_build_resolver,
     async_load_ontology,
@@ -57,6 +56,7 @@ from dataknobs_common.ontology.loader import (
 from dataknobs_common.ontology.model import (
     DK_ENTITY_TYPE,
     DK_RELATION_TYPE,
+    ENTITY_TYPE_ISA_KEY,
     Assertion,
     AttributeDef,
     CyclePolicy,
@@ -101,7 +101,13 @@ from dataknobs_common.ontology.taxonomy import (
     TaxonomyView,
 )
 from dataknobs_common.text import default_normalizer
-from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
+from dataknobs_common.ontology.values import (
+    AsyncOntology,
+    KeyCodec,
+    Ontology,
+    OntologyParts,
+    StrCodec,
+)
 
 __all__ = [
     "AUTHORED_SOURCE_ID",
@@ -134,6 +140,7 @@ __all__ = [
     "EntityType",
     "EvidenceKind",
     "InferenceMode",
+    "KeyCodec",
     "Literal",
     "MatchEvidence",
     "MappingAssertionSource",
@@ -156,6 +163,7 @@ __all__ = [
     "SiblingOrder",
     "SourceDescription",
     "SourceRef",
+    "StrCodec",
     "Taxonomy",
     "TaxonomyDefinition",
     "TaxonomyView",

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from dataknobs_common.exceptions import NotFoundError
 from dataknobs_common.hierarchy import (
     AsyncHierarchyView,
     AsyncMappingHierarchy,
@@ -61,11 +62,16 @@ def species(mammals_path: Path) -> AssertionHierarchy:
 def test_the_members_answer_with_no_store_no_embedder_and_no_loop(
     species: AssertionHierarchy,
 ) -> None:
-    """The six members this increment builds, over a file and nothing else.
+    """**All ten members**, over a file and nothing else.
 
     The loop assertion is inside the test: a test that merely *is not* async
     proves nothing about the members, since a synchronous call can still be
     made from inside a running loop.
+
+    Six of the ten answered here before the four walk-shaped members existed,
+    and the list is the fence's rather than what happens to be present -- a
+    member added to the cursor and not to this call is a member nothing asserts
+    can be reached without a loop.
     """
     with pytest.raises(RuntimeError):
         asyncio.get_running_loop()
@@ -78,6 +84,55 @@ def test_the_members_answer_with_no_store_no_embedder_and_no_loop(
     assert [above.node for above in view.parents()] == ["mammal"]
     assert [below.node for below in view.children()] == ["beagle"]
     assert view.at("beagle").node == "beagle"
+    assert [above.node for above in view.ancestors()] == ["mammal"]
+    assert [below.node for below in view.descendants()] == ["beagle"]
+    assert [n.node for n in view.descendants_to_depth(1)] == ["dog", "beagle"]
+    assert view.paths_to_root() == (("dog", "mammal"),)
+
+
+def test_the_two_descending_members_differ_and_a_re_fold_would_fail_here(
+    species: AssertionHierarchy,
+) -> None:
+    """The two are asserted to differ, in one test, over one fixture.
+
+    They were declared as **one** member taking ``depth=`` until the functions
+    under them were built and the fold could be priced. Built, they differ in
+    what they emit and in what they do with an anchor the structure does not
+    contain -- so one member would be two contracts selected by a keyword.
+
+    Nothing else here can catch a re-fold: the parity test compares the two
+    *flavours* of the cursor, never the cursor against the module it delegates
+    to, so a collapse back into one ``depth=``-keyed member passes every other
+    test in this file. This is the test that fails.
+    """
+    view = HierarchyView(species, "dog")
+
+    assert [n.node for n in view.descendants()] == ["beagle"], "the anchor is excluded"
+    assert [n.node for n in view.descendants_to_depth(1)] == ["dog", "beagle"], "and included"
+
+    absent = view.at("no_such_node")
+
+    assert absent.descendants() == (), "an excluding walk answers, ambiguously and not wrongly"
+    with pytest.raises(NotFoundError):
+        absent.descendants_to_depth(1)
+
+
+@pytest.mark.asyncio
+async def test_the_two_descending_members_differ_on_the_twin_too(
+    mammals_path: Path,
+) -> None:
+    """The same pair, awaited -- ``D25``'s rule over the one asymmetry it has."""
+    onto = await async_load_ontology(mammals_path)
+    view = AsyncHierarchyView(AsyncAssertionHierarchy(onto.assertions, "isa"), "dog")
+
+    assert [n.node for n in await view.descendants()] == ["beagle"]
+    assert [n.node for n in await view.descendants_to_depth(1)] == ["dog", "beagle"]
+
+    absent = view.at("no_such_node")
+
+    assert await absent.descendants() == ()
+    with pytest.raises(NotFoundError):
+        await absent.descendants_to_depth(1)
 
 
 def test_parents_are_plural() -> None:
@@ -516,11 +571,34 @@ _BOOL_MEMBERS = ("exists", "is_root", "is_leaf")
 #: annotation differs by flavour and is not compared.
 _VIEW_MEMBERS = ("parents", "children")
 
+#: The walk-shaped members that return views. Same exception as
+#: ``_VIEW_MEMBERS`` on the return, plus the one keyword the asynchronous
+#: flavour has and the synchronous one has no equivalent of.
+_WALK_MEMBERS = ("ancestors", "descendants", "descendants_to_depth")
+
 
 def test_the_view_twins_expose_the_same_annotated_surface() -> None:
-    """Same members, same parameters, same annotations; return compared where it can be."""
+    """Same members, same parameters, same annotations; return compared where it can be.
+
+    Four lists rather than one, because the exceptions differ by member and a
+    list that took the widest set of exceptions would stop guarding the members
+    that need none. ``paths_to_root`` is its own call for the reason it is its
+    own shape: it answers with **keys**, so its return type is the same on both
+    flavours and is compared, which none of the other view-returning members'
+    can be.
+    """
     assert_twin_types_agree(HierarchyView, AsyncHierarchyView, _BOOL_MEMBERS, compare_return=True)
     assert_twin_types_agree(HierarchyView, AsyncHierarchyView, _VIEW_MEMBERS)
+    assert_twin_types_agree(
+        HierarchyView, AsyncHierarchyView, _WALK_MEMBERS, async_only={"max_concurrency"}
+    )
+    assert_twin_types_agree(
+        HierarchyView,
+        AsyncHierarchyView,
+        ("paths_to_root",),
+        async_only={"max_concurrency"},
+        compare_return=True,
+    )
 
 
 def test_at_is_a_plain_def_on_both_twins_with_one_signature() -> None:

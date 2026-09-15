@@ -9,6 +9,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An entity id may be any `Hashable`, defaulting to `str`** — `EntitySource`,
+  `AssertionSource`, `Entity`, `Assertion`, every `entity_id` on a resolution,
+  and `Ontology`, `Taxonomy` and both cursors above them are generic in the
+  entity key.
+
+  **Existing code is unchanged.** A bare `EntitySource` is an
+  `EntitySource[str]`, `load_ontology` returns an `Ontology[str]` because a
+  document's ids are the strings its author typed, and every call site written
+  before the parameter existed means what it meant.
+
+  **A non-`str` key supplies a `KeyCodec`, and the type checker will not let it
+  be forgotten.** The codec says how a key is written down when it leaves and
+  read back when it arrives — `to_id` and `from_id`, a pair rather than a
+  rendering, because `Ontology.localize` is documented as *what `entity()`
+  takes* and `entity()` takes the key. `StrCodec` is the identity and what the
+  `str` path uses.
+
+  It has **no default for a non-`str` key**, and neither refused alternative
+  was a matter of taste. A bound cannot express *a type that has a string
+  representation*, because in Python every type has one. And `repr()` cannot
+  stand in: a key is addressed by **equality** while a default `repr` is a
+  function of **identity**, so two equal keys would render to two strings, one
+  node would address two entities, and it would type-check and pass every test
+  that holds a single key object. The field is required rather than defaulted,
+  so omitting it is an error at the construction rather than a wrong answer
+  later.
+
+  Rendering happens only where an id **leaves** — `qualify` out, `localize`
+  back. Everything in between carries the key, so a frozen value type never
+  reaches for a codec and a key never becomes a string by accident.
+
+- **The four walk-shaped members on all four cursors** — `ancestors`,
+  `descendants`, `descendants_to_depth` and `paths_to_root`, on
+  `HierarchyView`, `TaxonomyView` and both asynchronous twins. Each is one line
+  over the module-level walk of the same name, so what each returns, which of
+  them include their anchor and which refuse an unknown one are that function's
+  contract rather than a second one. Every keyword the walk takes, the member
+  takes: `cache=` on all four, `max_paths=` on `paths_to_root`, and
+  `max_concurrency=` on every asynchronous twin.
+
+  `ancestors`, `descendants` and `descendants_to_depth` answer with **cursors**,
+  so a walk composes; `paths_to_root` answers with **keys**, because it returns
+  routes and a route's meaning is its order.
+
+  **`descendants` and `descendants_to_depth` are two members rather than one
+  taking `depth=`.** They differ in what they emit — the second includes the
+  anchor — and in what they do with an anchor the structure does not contain:
+  the first answers `()`, the second raises `NotFoundError`. One member would
+  select between two contracts by the presence of a keyword.
+
+- **`Taxonomy.inherited_attributes(type_id)` and its asynchronous twin**, and
+  the fifth field they read — `entity_types`, a `Mapping[str, EntityType]`.
+
+  A vocabulary writes `isa` twice and they are **different stores**: the
+  assertions between entities, which a taxonomy's `structure` walks, and the
+  `isa:` field on an entity type declaration, which carries the schema. This
+  member walks the second and returns what a type may be asked for — its own
+  attribute declarations first, then each ancestor's, **a nearer declaration
+  shadowing a farther one of the same name**, because a subtype redeclaring
+  `sku` is specialising it rather than adding a second field.
+
+  **An undeclared type is refused; a type declared with nothing returns `[]`.**
+  Those answer different questions, and collapsing them would report a caller's
+  typo as a fact about their vocabulary.
+
+  `entity_types` is a mapping rather than a source, because a vocabulary's
+  instances may be millions behind a backing and its types are tens, authored
+  in the document — `Ontology` already carries them that way, and
+  `Ontology.taxonomy()` now hands them to the axis. It is **optional**: an axis
+  built without one refuses every call to this member, which is an answer
+  rather than a gap. It is **appended last**, so nothing constructing a
+  `Taxonomy` positionally moves.
+
+  **A plain `def` on the asynchronous twin**, because a mapping awaits nothing —
+  the rule that already makes `AsyncTaxonomy.at()` synchronous.
+
+- **`TaxonomyView.entity()` and its asynchronous twin** — what a node **is**,
+  read off the content axis. `None` from it is a state rather than an error and
+  is not what `exists()` answers: a node the structure knows with nothing
+  written about it is ordinary under a live backing. `exists()` asks the
+  structure; this asks the content.
+
 - **`paths_to_root` and `deepest_common_ancestor`, in both flavours** — the
   last two walks over `Hierarchy`, each with an `async_` twin, and both
   readings of the descent the other six share.
@@ -928,6 +1010,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **`MappingHierarchy.snapshot` and its asynchronous twin take `cache=`** — both
+  drive a walk, and both dropped the caller's memo. A caller who snapshotted a
+  live axis and then walked the same axis paid for the descent twice: over a
+  thirteen-node axis, twenty-six backing calls where thirteen suffice, with
+  identical answers either way. The memo reaches the walking branch only — an
+  axis that publishes `parent_edges` is asked once and never descends, so
+  supplying one there saves nothing and is not an error.
 
 - **A bulk member that answers the wrong number of replies is refused by
   name.** `BulkHierarchy` states a positional contract — one reply per node
