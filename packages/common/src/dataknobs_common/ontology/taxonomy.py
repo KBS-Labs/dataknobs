@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
     from dataknobs_common._walk_core import WalkCache
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
-    from dataknobs_common.ontology.model import Assertion, TaxonomyDefinition
+    from dataknobs_common.ontology.model import Assertion, Entity, TaxonomyDefinition
     from dataknobs_common.ontology.sources import (
         AssertionSource,
         AsyncAssertionSource,
@@ -439,9 +439,14 @@ class TaxonomyView:
     a ``TaxonomyView``, which no ``HierarchyView`` member can return, so it
     forwards to nothing.
 
-    The two edge members are the reason this class exists over
-    ``HierarchyView``: they read the assertions the edges were made of, which
-    a bare ``Hierarchy`` has none of.
+    **Three members are the reason this class exists over ``HierarchyView``**,
+    and they read the two axes a bare ``Hierarchy`` does not carry:
+    :meth:`entity` reads the *content* axis, and the two edge members read the
+    *assertions* the edges were made of.
+
+    ``paths_to_root`` is the one walk-shaped member that does not re-wrap: it
+    answers with routes, whose meaning is their order, so it hands back keys
+    for the reason its own docstring gives.
 
     **The axis is compared by identity, and that is what makes this hashable.**
     A frozen dataclass hashes its field tuple, so a cursor can only hash if the
@@ -468,6 +473,27 @@ class TaxonomyView:
     def _wrap(self, views: tuple[HierarchyView[str], ...]) -> tuple[TaxonomyView, ...]:
         return tuple(TaxonomyView(self.taxonomy, view.node) for view in views)
 
+    def entity(self) -> Entity | None:
+        """What this node **is**, by way of the content axis. ``None`` if it carries none.
+
+        The member the cursor over a taxonomy has and the cursor over a bare
+        structure cannot: an axis is two axes, and this reads the second.
+
+        **``None`` is a state rather than an error, and it is not
+        :meth:`exists`' answer.** ``exists()`` asks the *structure*; this asks
+        the *content*, and the four combinations are all reachable. A node in
+        the structure with no entity behind it is ordinary under a live
+        backing -- an axis built from a parent-id column knows an id the entity
+        store has not been given -- so the two questions are asked separately
+        and answered separately. A caller wanting *is this node here at all*
+        asks ``exists()``; one wanting *what is it* asks this and reads
+        ``None`` as **nothing is written about it**.
+
+        An accessor, in the sense :meth:`Ontology.entity` states: it invokes
+        the one lookup rather than reproducing it.
+        """
+        return self.taxonomy.entities.get(self.node)
+
     def exists(self) -> bool:
         """Whether the structure axis knows this node at all."""
         return self._structural().exists()
@@ -487,6 +513,41 @@ class TaxonomyView:
     def children(self) -> tuple[TaxonomyView, ...]:
         """One view per node directly below this one."""
         return self._wrap(self._structural().children())
+
+    def ancestors(self, *, cache: WalkCache | None = None) -> tuple[TaxonomyView, ...]:
+        """:meth:`~dataknobs_common.hierarchy.HierarchyView.ancestors`, re-wrapped.
+
+        The structural member, not a second walk: it invokes the cursor over
+        ``taxonomy.structure`` and re-anchors each answer on this axis, so a
+        caller who walks up can keep asking what a node *is*.
+        """
+        return self._wrap(self._structural().ancestors(cache=cache))
+
+    def descendants(self, *, cache: WalkCache | None = None) -> tuple[TaxonomyView, ...]:
+        """:meth:`~dataknobs_common.hierarchy.HierarchyView.descendants`, re-wrapped."""
+        return self._wrap(self._structural().descendants(cache=cache))
+
+    def descendants_to_depth(
+        self, max_depth: int, *, cache: WalkCache | None = None
+    ) -> tuple[TaxonomyView, ...]:
+        """:meth:`~dataknobs_common.hierarchy.HierarchyView.descendants_to_depth`, re-wrapped.
+
+        Includes this node and refuses one the structure axis does not contain,
+        both inherited. :meth:`Taxonomy.subtree_keys` answers the same question
+        as *keys* and refuses with the taxonomy's own message; this answers it
+        as cursors and refuses with the structure's.
+        """
+        return self._wrap(self._structural().descendants_to_depth(max_depth, cache=cache))
+
+    def paths_to_root(
+        self, *, max_paths: int | None = None, cache: WalkCache | None = None
+    ) -> tuple[tuple[str, ...], ...]:
+        """:meth:`~dataknobs_common.hierarchy.HierarchyView.paths_to_root` -- keys, not cursors.
+
+        The one walk-shaped member here that does not re-wrap, for the reason
+        the cursor below it gives: a path's meaning is its order.
+        """
+        return self._structural().paths_to_root(max_paths=max_paths, cache=cache)
 
     def at(self, node_id: str) -> TaxonomyView:
         """Re-anchor at another node of the same axis. Constructs; checks nothing."""
@@ -550,9 +611,14 @@ class TaxonomyView:
 class AsyncTaxonomyView:
     """The twin, over an :class:`AsyncTaxonomy`.
 
-    The structural members invoke :class:`~dataknobs_common.hierarchy.AsyncHierarchyView`
-    and the edge members read an ``AsyncAssertionSource``; every one is
-    ``async def`` bar :meth:`at`, which constructs.
+    The structural members invoke :class:`~dataknobs_common.hierarchy.AsyncHierarchyView`,
+    :meth:`entity` reads an ``AsyncEntitySource`` and the edge members read an
+    ``AsyncAssertionSource``; every one is ``async def`` bar :meth:`at`, which
+    constructs.
+
+    The four walk-shaped members each also carry ``max_concurrency``, which
+    the cursor below them carries and the synchronous flavour has no
+    equivalent of.
     """
 
     taxonomy: AsyncTaxonomy
@@ -564,6 +630,10 @@ class AsyncTaxonomyView:
 
     def _wrap(self, views: tuple[AsyncHierarchyView[str], ...]) -> tuple[AsyncTaxonomyView, ...]:
         return tuple(AsyncTaxonomyView(self.taxonomy, view.node) for view in views)
+
+    async def entity(self) -> Entity | None:
+        """:meth:`TaxonomyView.entity`, awaited."""
+        return await self.taxonomy.entities.get(self.node)
 
     async def exists(self) -> bool:
         """Whether the structure axis knows this node at all."""
@@ -584,6 +654,58 @@ class AsyncTaxonomyView:
     async def children(self) -> tuple[AsyncTaxonomyView, ...]:
         """One view per node directly below this one."""
         return self._wrap(await self._structural().children())
+
+    async def ancestors(
+        self,
+        *,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> tuple[AsyncTaxonomyView, ...]:
+        """:meth:`TaxonomyView.ancestors`, awaited."""
+        return self._wrap(
+            await self._structural().ancestors(max_concurrency=max_concurrency, cache=cache)
+        )
+
+    async def descendants(
+        self,
+        *,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> tuple[AsyncTaxonomyView, ...]:
+        """:meth:`TaxonomyView.descendants`, awaited."""
+        return self._wrap(
+            await self._structural().descendants(max_concurrency=max_concurrency, cache=cache)
+        )
+
+    async def descendants_to_depth(
+        self,
+        max_depth: int,
+        *,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> tuple[AsyncTaxonomyView, ...]:
+        """:meth:`TaxonomyView.descendants_to_depth`, awaited."""
+        return self._wrap(
+            await self._structural().descendants_to_depth(
+                max_depth, max_concurrency=max_concurrency, cache=cache
+            )
+        )
+
+    async def paths_to_root(
+        self,
+        *,
+        max_paths: int | None = None,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> tuple[tuple[str, ...], ...]:
+        """:meth:`TaxonomyView.paths_to_root`, awaited -- keys, not cursors.
+
+        ``max_concurrency`` is inert here for the reason the cursor below it
+        states, and is declared rather than dropped for the same reason.
+        """
+        return await self._structural().paths_to_root(
+            max_paths=max_paths, max_concurrency=max_concurrency, cache=cache
+        )
 
     def at(self, node_id: str) -> AsyncTaxonomyView:
         """Re-anchor at another node of the same axis. Constructs; checks nothing."""

@@ -24,7 +24,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dataknobs_common.exceptions import NotFoundError
-from dataknobs_common.hierarchy import AsyncHierarchyView, HierarchyView, MappingHierarchy
+from dataknobs_common.hierarchy import (
+    AsyncHierarchyView,
+    AsyncMappingHierarchy,
+    HierarchyView,
+    MappingHierarchy,
+)
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology import hierarchy as axis_module
 from dataknobs_common.ontology import taxonomy as taxonomy_module
@@ -33,7 +38,14 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
     edge_criteria,
 )
-from dataknobs_common.ontology.model import EntityRef, Polarity
+from dataknobs_common.ontology.model import (
+    Entity,
+    EntityRef,
+    Literal,
+    Polarity,
+    TaxonomyDefinition,
+)
+from dataknobs_common.ontology.sources import AsyncMappingEntitySource, MappingEntitySource
 from dataknobs_common.ontology.taxonomy import (
     AsyncTaxonomy,
     AsyncTaxonomyView,
@@ -528,15 +540,134 @@ async def test_the_async_cursor_answers_the_same(mammals_v11_path: Path) -> None
     assert await absent.parent_edges() == ()
 
 
+# --------------------------------------------------------------------------
+# The content axis -- what a node IS, and what that is not
+# --------------------------------------------------------------------------
+
+
+def test_entity_answers_from_the_content_axis_and_exists_from_the_structure() -> None:
+    """Three states, one test, because the middle one is what the member is for.
+
+    ``exists()`` asks the structure and :meth:`entity` asks the content, and a
+    node present in the first and absent from the second is an ordinary state
+    rather than an error -- an axis built from a parent-id column knows ids the
+    entity store has never been given. Collapsing the two questions into one
+    would make that state unreportable, which is why they are asked separately
+    here and answered separately.
+    """
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({"dog": ("mammal",), "beagle": ("dog",)}),
+        entities=MappingEntitySource({"dog": Entity(id="dog", type="Species", name="Dog")}),
+    )
+
+    carried = axis.at("dog")
+    assert carried.exists() is True
+    entity = carried.entity()
+    assert entity is not None
+    assert entity.name == "Dog"
+
+    structural_only = axis.at("mammal")
+    assert structural_only.exists() is True, "the structure knows it"
+    assert structural_only.entity() is None, "and the content axis carries nothing for it"
+
+    absent = axis.at("no_such_node")
+    assert absent.exists() is False
+    assert absent.entity() is None
+
+    assert structural_only.entity() == absent.entity(), (
+        "so `entity()` alone cannot separate them -- `exists()` is what does"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_async_cursor_answers_from_the_content_axis_too() -> None:
+    """The twin, over an asynchronous entity source."""
+    axis = AsyncTaxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=AsyncMappingHierarchy({"dog": ("mammal",), "beagle": ("dog",)}),
+        entities=AsyncMappingEntitySource({"dog": Entity(id="dog", type="Species", name="Dog")}),
+    )
+
+    entity = await axis.at("dog").entity()
+    assert entity is not None
+    assert entity.name == "Dog"
+
+    structural_only = axis.at("mammal")
+    assert await structural_only.exists() is True
+    assert await structural_only.entity() is None
+
+
+def test_an_ancestor_walk_and_the_ontology_fold_into_what_a_prompt_needs(
+    onto: Ontology, axis: Taxonomy
+) -> None:
+    """Case 4's ``Out`` column, assembled from the two axes it actually lives on.
+
+    Each ancestor's ``description`` comes off the **content** axis through
+    :meth:`TaxonomyView.entity`; what is *asserted about* it comes off the
+    ontology's assertion source. The second is reached through ``onto`` and
+    **not** through the cursor, which is the boundary this asserts rather than
+    describes: the assertion axis stays off the view, so a consumer folding
+    facts into a prompt reaches for the vocabulary rather than for a structural
+    cursor that happens to hold one.
+
+    The walk is the cursor's, so the whole fold is *one* traversal and one
+    lookup per ancestor rather than a second axis assembled by the caller.
+    """
+    folded = []
+    for ancestor in axis.at("golden_retriever").ancestors():
+        entity = ancestor.entity()
+        assert entity is not None, "every node of this axis is declared"
+        facts = [
+            (a.relation, a.object.value)
+            for a in onto.assertions.find(subject=ancestor.node)
+            if isinstance(a.object, Literal)
+        ]
+        folded.append((entity.name, entity.description, facts))
+
+    assert folded == [
+        ("Retriever", None, []),
+        ("Dog", "A domesticated carnivoran.", [("lifespan_years", 12)]),
+        ("Mammal", "Warm-blooded, milk-producing vertebrates.", []),
+    ]
+
+    assert not hasattr(axis.at("dog"), "assertions"), (
+        "the assertion axis is the ontology's; the cursor reports the edge it "
+        "walked and nothing else"
+    )
+
+
 def test_the_cursor_twins_expose_the_same_annotated_surface() -> None:
     """Return compared where it is the same type; the view-returning members
     each land in their own flavour's slot, so theirs is not.
+
+    ``entity`` joins the first list rather than the second: it answers with an
+    ``Entity``, which has no flavour, so its return type is comparable and is
+    compared. The walk-shaped members take a third list, for the one keyword
+    the asynchronous flavour carries and the synchronous one has no equivalent
+    of, and ``paths_to_root`` a fourth because it answers with keys.
     """
     assert_twin_types_agree(
-        TaxonomyView, AsyncTaxonomyView, ("exists", "is_root", "is_leaf"), compare_return=True
+        TaxonomyView,
+        AsyncTaxonomyView,
+        ("exists", "is_root", "is_leaf", "entity"),
+        compare_return=True,
     )
     assert_twin_types_agree(
         TaxonomyView, AsyncTaxonomyView, ("parents", "children", "parent_edges", "child_edges")
+    )
+    assert_twin_types_agree(
+        TaxonomyView,
+        AsyncTaxonomyView,
+        ("ancestors", "descendants", "descendants_to_depth"),
+        async_only={"max_concurrency"},
+    )
+    assert_twin_types_agree(
+        TaxonomyView,
+        AsyncTaxonomyView,
+        ("paths_to_root",),
+        async_only={"max_concurrency"},
+        compare_return=True,
     )
 
 
