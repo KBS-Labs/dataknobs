@@ -137,18 +137,35 @@ def _refuse_an_unusable_bound(max_concurrency: int) -> None:
 #: it would cost that walk its only chance to notice the axis grew a root --
 #: which is precisely the promise about the *world* that a memo over one walk
 #: refuses to make.
+#:
+#: **What is not in it: which hierarchy was asked.** A cache is therefore
+#: scoped to *one axis*, and handing one to walks over two different axes
+#: answers the second from the first's edges -- a wrong answer with no
+#: exception anywhere. That is a limit rather than an omission: the only
+#: discriminator available is the backing's own identity, and a
+#: :class:`~dataknobs_common.hierarchy.Hierarchy` is arbitrary consumer code
+#: that need not be hashable -- a plain ``@dataclass`` backing has
+#: ``__hash__`` of ``None`` -- while ``id()`` is reused after a collection and
+#: would answer a *new* axis from a dead one's entries. So the scope is stated
+#: and kept by the caller, who is also the only party that knows how many axes
+#: they hold.
 WalkCacheKey = tuple["Member", Any]
 
 
 class WalkCache(Protocol):
-    """Somewhere a walk can remember an edge reply. Two members, and no more.
+    """Somewhere edge replies outlive the walk that fetched them. Two members.
 
-    A walk asks its backing for the same edge more than once -- ``leaves``
-    descends and then confirms childlessness over nodes the descent already
-    asked about -- and the second ask is answered from here rather than from
-    the backing. The lifetime is one :func:`~dataknobs_common.hierarchy.drive`
-    call unless the caller supplies their own, so what this promises is that a
-    walk does not contradict *itself*, never that the graph held still.
+    **Always the caller's, and never a default.** No walk composed here asks
+    its backing about a node twice -- the descent asks each node once and
+    :func:`_leaves` reads childlessness off the reply rather than asking again
+    -- so a memo built per walk would fill with entries that walk will never
+    read. What a cache is *for* is the next walk: a second walk over the same
+    axis, a streaming walk warmed by a collecting one, or the two walks
+    ``Taxonomy.subtree_keys`` delegates to.
+
+    That is also why the lifetime cannot live here. A cache that outlives a
+    walk is a claim about how fast the axis changes, and the caller is the only
+    party who knows.
 
     **Two members because the walk only ever reads and fills.** It never
     invalidates, never expires an entry and never asks whether one is still
@@ -166,6 +183,16 @@ class WalkCache(Protocol):
 
     What it holds is **edge replies, not results**. A caller who needs a
     result's *order* to survive keeps the result.
+
+    **It may be bounded, and nothing here assumes it is not.** A cache smaller
+    than a frontier evicts its own entries while that frontier is being filled,
+    which is why :func:`_partition` carries its hits out rather than reading
+    them back after the fetch -- and why a walk's cost never depends on a hit.
+
+    **One cache, one axis.** :data:`WalkCacheKey` says why the hierarchy is not
+    in the key and cannot be; the consequence is that a cache outliving a walk
+    belongs to the axis it was filled from, and a caller holding several axes
+    holds several caches.
     """
 
     def get(self, key: WalkCacheKey, default: None = None) -> Sequence[Any] | None:
@@ -236,6 +263,42 @@ def _stitch(
     return tuple(answers[node_id] for node_id in node_ids)
 
 
+def _checked_bulk_reply(
+    hierarchy: object,
+    member: Member,
+    node_ids: tuple[_K, ...],
+    replies: tuple[Sequence[_K], ...],
+) -> tuple[Sequence[_K], ...]:
+    """Refuse a bulk reply that is not one sequence per node, naming whose it is.
+
+    :class:`~dataknobs_common.hierarchy.BulkHierarchy` states the contract --
+    one reply per node asked about, in the order asked, an empty sequence where
+    there is no answer -- and a backing that drops the empty ones breaks it in
+    the way a query naturally does, since a join returns no row for a node with
+    no match.
+
+    **Every path already catches it, and catches it badly.** The frontier and
+    its replies are paired with ``zip(..., strict=True)`` three frames further
+    on, so a short reply raises ``zip() argument 2 is shorter than argument 1``
+    -- a message naming an argument position and neither the backing, the
+    member, nor the counts. The contract is the bulk member's, so this is where
+    its breach is reported; the ``strict`` pairings stay, as the assertion that
+    this ran.
+
+    Both flavours call it for the reason every rule here is shared: a check one
+    twin re-implements is a check that drifts.
+    """
+    if len(replies) != len(node_ids):
+        raise ValueError(
+            f"{type(hierarchy).__name__}.{member}_many() answered {len(replies)} "
+            f"replies for {len(node_ids)} nodes. A bulk member answers one reply "
+            f"per node, in the order asked, with an empty sequence where there is "
+            f"no answer -- a dropped reply silently shifts every later node's "
+            f"edges onto the wrong id."
+        )
+    return replies
+
+
 def _sync_fetch(
     hierarchy: Hierarchy[_K], member: Member, node_ids: tuple[_K, ...]
 ) -> tuple[Sequence[_K], ...]:
@@ -248,7 +311,7 @@ def _sync_fetch(
     """
     bulk = getattr(hierarchy, f"{member}_many", None)
     if bulk is not None:
-        return tuple(bulk(node_ids))
+        return _checked_bulk_reply(hierarchy, member, node_ids, tuple(bulk(node_ids)))
     one = hierarchy.parents if member == "parents" else hierarchy.children
     return tuple(one(node_id) for node_id in node_ids)
 
@@ -278,7 +341,7 @@ async def _async_fetch(
     """
     bulk = getattr(hierarchy, f"{member}_many", None)
     if bulk is not None:
-        return tuple(await bulk(node_ids))
+        return _checked_bulk_reply(hierarchy, member, node_ids, tuple(await bulk(node_ids)))
     one = hierarchy.parents if member == "parents" else hierarchy.children
     limit = asyncio.Semaphore(max_concurrency)
 
@@ -304,9 +367,10 @@ def _sync_reply(
     through a driver. A memo written into the drivers would leave the one walk
     that does not use them as the only walk without it.
 
-    ``cache=None`` means no memo at all -- not a fresh one. The lifetime
-    belongs to whoever owns the walk, so :func:`~dataknobs_common.hierarchy.drive`
-    is where a default one is built.
+    ``cache=None`` means no memo at all, and it is the default everywhere: no
+    walk composed here asks about a node twice, so there is nothing for a
+    per-walk memo to answer. A cache is the caller's, and it is for the walks
+    that come after this one.
 
     It also guarantees no ``StopIteration`` escapes.
 
@@ -343,7 +407,7 @@ async def _async_reply(
     max_concurrency: int,
     cache: WalkCache | None = None,
 ) -> tuple[Sequence[_K], ...]:
-    """:func:`_sync_reply`'s twin, memo and all.
+    """:func:`_sync_reply`'s twin, cache and all.
 
     The bound is validated here rather than in :func:`_async_fetch`, because a
     request answered entirely from the memo never reaches the fetch -- and a
@@ -381,11 +445,11 @@ def _expand(
     direction: Direction,
     *,
     max_depth: int | None = None,
-) -> Walk[_K, dict[_K, tuple[_K, ...]]]:
+) -> Walk[_K, tuple[dict[_K, tuple[_K, ...]], set[_K]]]:
     """Expand level by level, keeping **which node discovered which**.
 
     The one descent every walk below is written over, and the only place a
-    request is issued. Three properties, each of which is a way to get a walk
+    request is issued. Four properties, each of which is a way to get a walk
     wrong:
 
     * the visited set is **unconditional** -- the data may be cyclic whatever
@@ -399,7 +463,14 @@ def _expand(
       well defined;
     * the frontier is asked **one level at a time**, which is what lets
       :func:`~dataknobs_common.hierarchy.async_drive` issue one round of
-      concurrency per depth and a bulk backing answer a level in one query.
+      concurrency per depth and a bulk backing answer a level in one query;
+    * **childlessness is recorded here, because here is the only place it is
+      visible.** A node whose discovery edges are empty is either childless or
+      a node whose every child had already been reached by another path, and
+      over a DAG those are two different answers. Which one it is is in the
+      *reply*, and the reply is in this frame -- so the one bit is kept rather
+      than thrown away and asked for again. That is the whole of why
+      :func:`_leaves` issues no second request.
 
     **What it keeps and a flat level list discards is the pairing** between a
     frontier and its replies. Both projections below are recoverable from it
@@ -412,9 +483,17 @@ def _expand(
     seeds are the whole answer. It is a bound on the descent and never an
     order selector -- both projections read the same discovery edges whether
     the descent stopped early or ran out.
+
+    **What ``childless`` covers is exactly what was asked**, and ``discovered``
+    says which nodes those were: it takes a key for every node that entered a
+    frontier and for no other. A bounded descent stops before asking its last
+    level, so a node absent from ``discovered`` has had no reply about it and
+    is neither childless nor known to have children. A reader wanting leafness
+    over a bound has to consult both, which is why both are returned.
     """
     seen = set(seeds)
     discovered: dict[_K, tuple[_K, ...]] = {}
+    childless: set[_K] = set()
     frontier = seeds
     depth = 0
     while frontier and (max_depth is None or depth < max_depth):
@@ -428,9 +507,11 @@ def _expand(
                     mine.append(neighbour)
                     fresh.append(neighbour)
             discovered[node_id] = tuple(mine)
+            if not reply:
+                childless.add(node_id)
         frontier = tuple(fresh)
         depth += 1
-    return discovered
+    return discovered, childless
 
 
 def _levels_of(
@@ -506,7 +587,7 @@ def _levels(
     composition's choice rather than a decision this makes on every caller's
     behalf.
     """
-    discovered = yield from _expand(seeds, direction, max_depth=max_depth)
+    discovered, _ = yield from _expand(seeds, direction, max_depth=max_depth)
     return _levels_of(discovered, seeds, exclude_seeds=exclude_seeds)
 
 
@@ -528,11 +609,22 @@ def _seeds_under(anchor: _K | None) -> Walk[_K, tuple[_K, ...]]:
     difference costs. It is deliberately **not** memoised: ``roots`` is asked
     once per walk, and remembering it across walks would cost a caller their
     only chance to notice the axis grew a root.
+
+    **The reply is deduplicated here**, which is where the descent's promise
+    about repeated ids begins rather than a tidiness. The seed tuple is read by
+    three steps -- the descent and both of its projections -- so it is the one
+    frontier none of them can dedup on its own behalf: :func:`_expand` records
+    discovery against the *first* node to reach something, and a seed visited
+    twice reaches nothing the second time, so an unguarded repeat replaces a
+    real record with an empty one and the whole subtree stops being reachable.
+    ``roots()`` is arbitrary consumer code -- a query over a join answers one
+    row per match -- and every later frontier is already deduplicated by the
+    visited set, so this reply is the only one that can arrive repeated.
     """
     if anchor is not None:
         return (anchor,)
     (roots,) = yield ("roots", ())
-    return tuple(roots)
+    return tuple(dict.fromkeys(roots))
 
 
 def _descendants(node_id: _K) -> Walk[_K, tuple[_K, ...]]:
@@ -542,7 +634,7 @@ def _descendants(node_id: _K) -> Walk[_K, tuple[_K, ...]]:
     including half over the same descent, and the difference between them is
     the whole of what that boundary is.
     """
-    discovered = yield from _expand((node_id,), "children")
+    discovered, _ = yield from _expand((node_id,), "children")
     return _preorder_of(discovered, (node_id,), exclude_seeds=True)
 
 
@@ -555,7 +647,7 @@ def _flatten(from_id: _K | None) -> Walk[_K, tuple[_K, ...]]:
     bounded.
     """
     seeds = yield from _seeds_under(from_id)
-    discovered = yield from _expand(seeds, "children")
+    discovered, _ = yield from _expand(seeds, "children")
     return _preorder_of(discovered, seeds, exclude_seeds=False)
 
 
@@ -570,7 +662,7 @@ def _descendants_to_depth(node_id: _K, max_depth: int) -> Walk[_K, tuple[_K, ...
     :func:`_flatten` are one rule read at two depths, so the unbounded walk is
     exactly this one with nothing to stop it.
     """
-    discovered = yield from _expand((node_id,), "children", max_depth=max(max_depth, 0))
+    discovered, _ = yield from _expand((node_id,), "children", max_depth=max(max_depth, 0))
     return _preorder_of(discovered, (node_id,), exclude_seeds=False)
 
 
@@ -595,27 +687,23 @@ def _leaves(under: _K | None) -> Walk[_K, tuple[_K, ...]]:
     The anchor is **included if it is one**: a childless node is its own only
     leaf.
 
-    **Childlessness cannot be read off the descent**, which is why there is a
-    second request. A node whose discovery edges are empty is either a leaf or
-    a node whose every child had already been reached by another path, and over
-    a DAG those are different answers. So the candidates -- the nodes that
-    discovered nothing -- are asked, and only a genuinely empty reply is a leaf.
+    **Childlessness is the reply, not the discovery edges** -- and this walk
+    reads it rather than asking for it again. A node whose discovery edges are
+    empty is either a leaf or a node whose every child had already been reached
+    by another path, and over a DAG those are different answers; what tells
+    them apart is whether the *reply* was empty, which :func:`_expand` sees and
+    now keeps.
 
-    That second ask is what :func:`_sync_reply`'s memo is for. Every candidate
-    was already asked about during the descent, so under a driver the whole
-    confirmation is answered from the memo and costs the backing nothing;
-    without one it is the double fetch this walk used to be unable to avoid.
+    **So there is no second request**, and the walk costs exactly the descent.
+    There was one: the candidates -- the nodes that discovered nothing -- were
+    asked again, for edges the descent already had and discarded. A memo made
+    that ask free when a caller happened to supply one big enough to hold the
+    frontier, which is two conditions a walk should not have to meet to avoid
+    fetching the same edge twice.
     """
     seeds = yield from _seeds_under(under)
-    discovered = yield from _expand(seeds, "children")
+    discovered, childless = yield from _expand(seeds, "children")
     order = _preorder_of(discovered, seeds, exclude_seeds=False)
-    candidates = tuple(node_id for node_id in order if not discovered.get(node_id, ()))
-    if not candidates:
-        return ()
-    replies = yield ("children", candidates)
-    childless = {
-        node_id for node_id, children in zip(candidates, replies, strict=True) if not children
-    }
     return tuple(node_id for node_id in order if node_id in childless)
 
 

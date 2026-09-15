@@ -14,10 +14,10 @@ only become claims once there is more than one walk to make them:
   ``flatten`` and ``descendants_to_depth``, included at depth ``0`` by
   ``children_at_depth``, and included by ``leaves`` only if it is one. Five
   walks and four answers, none of them inferable from the others;
-* **what the backing is asked.** The descent asks each node once, and
-  ``leaves`` confirms childlessness over nodes the descent already asked
-  about -- so the second ask is answered from the walk's memo and the backing
-  sees each node exactly once.
+* **what the backing is asked.** The descent asks each node once and no walk
+  here asks a second time -- ``leaves`` reads childlessness off the reply the
+  descent already received -- so the backing sees each node exactly once
+  whatever cache the caller did or did not supply.
 
 The differential and the parity claims the neighbouring suite makes are not
 repeated here; what is repeated, deliberately, is that every walk runs over a
@@ -28,12 +28,13 @@ from one that terminates by construction until it does not.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from dataknobs_common.bounded_cache import BoundedLRUCache
+from dataknobs_common.exceptions import NotFoundError
 from dataknobs_common.hierarchy import (
     MappingHierarchy,
     ancestors,
@@ -52,6 +53,8 @@ from dataknobs_common.hierarchy import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from dataknobs_common.hierarchy import WalkCache
 
 # --------------------------------------------------------------------------
 # Fixtures -- each one exists to make a specific pair of answers differ
@@ -344,12 +347,14 @@ def test_leaves_includes_the_anchor_only_if_it_is_one() -> None:
     assert leaves(hierarchy, under="a") == ("a1", "a2")
 
 
-def test_childlessness_is_asked_rather_than_read_off_the_descent() -> None:
+def test_childlessness_is_the_reply_and_not_the_discovery_edges() -> None:
     """Over a DAG a node can discover nothing and still have children.
 
     ``y`` reaches only ``x``, which the descent had already found under ``b`` --
-    so ``y``'s discovery edges are empty while ``y`` is not a leaf. A walk that
-    read leafness off the descent would return it.
+    so ``y``'s discovery edges are empty while ``y`` is not a leaf. A walk
+    reading leafness off *discovery* would return it. The descent keeps the
+    other fact, which is whether the reply itself was empty, and those two
+    differ on exactly this node.
     """
     hierarchy = MappingHierarchy(DIAMOND_DAG)
 
@@ -357,21 +362,63 @@ def test_childlessness_is_asked_rather_than_read_off_the_descent() -> None:
     assert leaves(hierarchy, under="root") == ("x",)
 
 
+def test_a_bounded_descent_records_childlessness_only_for_what_it_asked() -> None:
+    """The invariant the descent's pair carries, and the one way to misread it.
+
+    ``childless`` is a fact about *replies*, so it covers exactly the nodes a
+    reply arrived for -- and a bounded descent stops before asking its last
+    level. ``discovered`` takes a key for every node that entered a frontier
+    and for no other, so the two together say which is which: absent from
+    ``discovered`` means *never asked*, never *has children*. ``a1`` is the
+    case, a genuine leaf the bound stopped short of, and a reader concluding
+    from its absence that it has children would be wrong about it.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    hierarchy = MappingHierarchy(BRANCHING)
+
+    discovered, childless = drive(hierarchy, _expand(("root",), "children", max_depth=2))
+
+    assert set(discovered) == {"root", "a", "b"}, "a key per node that entered a frontier"
+    assert childless == set(), "nothing that was asked answered empty"
+    assert "a1" not in discovered, "the bound stopped before asking it"
+    assert hierarchy.children("a1") == (), "and it is childless all the same"
+
+
 # --------------------------------------------------------------------------
 # What the backing is asked -- the memo
 # --------------------------------------------------------------------------
 
 
-def test_leaves_asks_the_backing_about_each_node_once() -> None:
-    """The descent asks every node; the confirmation asks the candidates again.
+def _a_dict() -> dict[tuple[str, Any], Sequence[str]]:
+    return {}
 
-    Without a memo those are two asks for every leaf -- the descent already had
-    the reply and threw it away. With one, the backing sees each node exactly
-    once and the second ask is answered from the walk's own memory.
+
+def _a_cache_below_the_frontier() -> BoundedLRUCache[tuple[str, Any], Sequence[str]]:
+    return BoundedLRUCache(max_size=1)
+
+
+@pytest.mark.parametrize(
+    "make_cache",
+    [lambda: None, _a_dict, _a_cache_below_the_frontier],
+    ids=["no cache", "a dict", "a cache bounded below the frontier"],
+)
+def test_leaves_asks_the_backing_about_each_node_once(
+    make_cache: Callable[[], WalkCache | None],
+) -> None:
+    """And whatever the caller hands it, because it never asks a second time.
+
+    Childlessness is the **reply** the descent already received, not a question
+    the walk asks again -- so there is no second ask for a memo to answer and
+    nothing a caller's cache can do to this count. The three rows are the three
+    shapes that used to differ: a walk whose second ask went to the backing, one
+    whose driver happened to remember the first, and one whose caller supplied a
+    cache too small to hold the frontier and so evicted the answer before it was
+    read back.
     """
     hierarchy = CountingChildren(BRANCHING)
 
-    assert leaves(hierarchy) == ("a1", "a2", "b1")
+    assert leaves(hierarchy, cache=make_cache()) == ("a1", "a2", "b1")
 
     assert sorted(hierarchy.asked) == sorted(BRANCHING)
     assert len(hierarchy.asked) == len(BRANCHING), (
@@ -382,7 +429,7 @@ def test_leaves_asks_the_backing_about_each_node_once() -> None:
 
 @pytest.mark.asyncio
 async def test_the_async_leaves_asks_each_node_once_too() -> None:
-    """The memo is in the step both drivers call, so neither flavour has it alone."""
+    """The descent is the shared one, so neither flavour has this alone."""
     hierarchy = AsyncCountingChildren(BRANCHING)
 
     assert await async_leaves(hierarchy) == ("a1", "a2", "b1")
@@ -394,7 +441,7 @@ def test_roots_is_not_remembered() -> None:
 
     One walk asks for it, once, and remembering it across walks would cost a
     caller their only chance to notice the axis grew a root -- which is the
-    promise about the world that a per-walk memo exists in order not to make.
+    promise about the *world* that a cache over edge replies does not make.
     """
     hierarchy = CountingChildren(BRANCHING)
     cache: dict[tuple[str, Any], Sequence[str]] = {}
@@ -532,3 +579,208 @@ def _a_walk() -> Any:
     from dataknobs_common._walk_core import _flatten
 
     return _flatten("root")
+
+
+# --------------------------------------------------------------------------
+# What the backing is allowed to be -- a roots() that repeats itself
+# --------------------------------------------------------------------------
+
+
+class DuplicateRoots:
+    """A backing whose ``roots()`` names the same node twice.
+
+    Not perverse. ``roots()`` is arbitrary consumer code, and a query over a
+    join returns one row per match -- a ``DISTINCT`` nobody wrote is the whole
+    of the difference. The protocol asks for *the nodes with no parent* and
+    says nothing about a backing counting one of them once.
+
+    Every frontier after the seeds is deduplicated by the descent's visited
+    set, so this is the one request whose reply can reach the core repeated.
+    """
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        self._inner = MappingHierarchy(parents)
+
+    def roots(self) -> Sequence[str]:
+        found = tuple(self._inner.roots())
+        return (*found, *found)
+
+    def parents(self, node_id: str) -> Sequence[str]:
+        return self._inner.parents(node_id)
+
+    def children(self, node_id: str) -> Sequence[str]:
+        return self._inner.children(node_id)
+
+    def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+class AsyncDuplicateRoots:
+    """:class:`DuplicateRoots`, awaited."""
+
+    def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
+        self._inner = DuplicateRoots(parents)
+
+    async def roots(self) -> Sequence[str]:
+        return self._inner.roots()
+
+    async def parents(self, node_id: str) -> Sequence[str]:
+        return self._inner.parents(node_id)
+
+    async def children(self, node_id: str) -> Sequence[str]:
+        return self._inner.children(node_id)
+
+    async def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+def test_a_root_named_twice_still_yields_the_whole_axis() -> None:
+    """A repeated seed must not cost the walk everything under it.
+
+    The descent records discovery against the node that reached it, and a
+    frontier entry visited twice reaches nothing the second time -- everything
+    below was already claimed by the first visit. Kept unguarded, the second
+    visit's empty record replaces the first's real one and the whole subtree
+    stops being reachable from the seed, while the backing is still asked for
+    every edge of it.
+
+    Both flavours, because the seeds are read by one flavour-agnostic step and
+    a fix written into either driver would be the wrong layer.
+    """
+    hierarchy = DuplicateRoots(BRANCHING)
+
+    assert flatten(hierarchy) == PRE_ORDER
+    assert leaves(hierarchy) == ("a1", "a2", "b1")
+
+    assert asyncio.run(async_flatten(AsyncDuplicateRoots(BRANCHING))) == PRE_ORDER
+    assert asyncio.run(async_leaves(AsyncDuplicateRoots(BRANCHING))) == ("a1", "a2", "b1")
+
+
+def test_a_repeated_seed_is_not_emitted_twice() -> None:
+    """Deduplicated *in walk order* is a claim about the seeds as well.
+
+    A repeated key changes no membership answer and does change a length a
+    caller is reporting, which is the reason the descent dedups at all.
+    """
+    assert flatten(DuplicateRoots(BRANCHING)).count("root") == 1
+
+
+# --------------------------------------------------------------------------
+# Where the anchor is, at the boundary of the axis -- an anchor it does not hold
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("walk", "async_walk"),
+    [
+        (
+            lambda h: flatten(h, from_id="marmoset"),
+            lambda h: async_flatten(h, from_id="marmoset"),
+        ),
+        (
+            lambda h: descendants_to_depth(h, "marmoset", 3),
+            lambda h: async_descendants_to_depth(h, "marmoset", 3),
+        ),
+        (
+            lambda h: children_at_depth(h, "marmoset", 0),
+            lambda h: async_children_at_depth(h, "marmoset", 0),
+        ),
+        (
+            lambda h: leaves(h, under="marmoset"),
+            lambda h: async_leaves(h, under="marmoset"),
+        ),
+    ],
+    ids=["flatten", "descendants_to_depth", "children_at_depth-0", "leaves"],
+)
+def test_a_walk_that_includes_its_anchor_refuses_one_the_axis_does_not_hold(
+    walk: Any, async_walk: Any
+) -> None:
+    """Every walk here that *includes* its anchor, and the whole reason it must.
+
+    Seeding a frontier with an unchecked anchor emits an id the axis does not
+    contain as though it were a term of it, and the caller cannot tell: a
+    one-element result is exactly what a childless node returns. That collapses
+    *nothing below this node* into *this node is not here* -- the two answers
+    ``contains`` says in its own docstring it exists to keep apart -- inside the
+    one walk that needs the distinction.
+
+    ``leaves`` belongs to the list for the same reason and by a longer route:
+    an unknown anchor discovers nothing, is confirmed childless because the
+    backing has no children for a node it has never heard of, and comes back as
+    a leaf of the axis.
+    """
+    hierarchy = MappingHierarchy(BRANCHING)
+
+    with pytest.raises(NotFoundError) as raised:
+        walk(hierarchy)
+
+    assert raised.value.context["anchor"] == "marmoset"
+
+    with pytest.raises(NotFoundError):
+        asyncio.run(async_walk(_AsyncMapping(BRANCHING)))
+
+
+@pytest.mark.parametrize(
+    ("walk", "async_walk"),
+    [
+        (lambda h: descendants(h, "marmoset"), lambda h: async_descendants(h, "marmoset")),
+        (lambda h: ancestors(h, "marmoset"), None),
+    ],
+    ids=["descendants", "ancestors"],
+)
+def test_a_walk_that_excludes_its_anchor_still_does_not_refuse_one(
+    walk: Any, async_walk: Any
+) -> None:
+    """The other half of the boundary, pinned so the refusal cannot spread.
+
+    An excluding walk returns nothing false about an unknown anchor -- the
+    answer is ambiguous, not incorrect, and one ``contains`` call resolves it.
+    Refusing here would cost a caller the cheap ambiguous answer and buy
+    nothing, so the difference between the two halves is deliberate and this is
+    what keeps it so.
+    """
+    hierarchy = MappingHierarchy(BRANCHING)
+
+    assert walk(hierarchy) == ()
+
+    if async_walk is not None:
+        assert asyncio.run(async_walk(_AsyncMapping(BRANCHING))) == ()
+
+
+def test_the_anchor_check_does_not_reach_a_walk_that_has_no_anchor() -> None:
+    """``flatten`` and ``leaves`` descend from the roots when the anchor is omitted.
+
+    There is nothing to refuse there, and an axis with no roots at all is still
+    walked rather than refused -- which the empty-axis test pins from the other
+    side.
+    """
+    hierarchy = MappingHierarchy(BRANCHING)
+
+    assert flatten(hierarchy) == PRE_ORDER
+    assert leaves(hierarchy) == ("a1", "a2", "b1")
+
+
+def test_a_caller_supplied_cache_is_scoped_to_one_axis() -> None:
+    """The limit the key has, pinned so it stays a stated one.
+
+    ``WalkCacheKey`` is ``(member, node_id)`` and names no hierarchy, so a
+    cache spent on a second axis answers it from the first's edges. There is no
+    discriminator to add: a ``Hierarchy`` is arbitrary consumer code and need
+    not be hashable, and ``id()`` is reused after a collection -- which would
+    trade a documented scope for a silent wrong answer that depends on garbage
+    collection.
+
+    This asserts the consequence rather than wishing it away, so a future key
+    that *can* discriminate fails here and takes the docstrings with it.
+    """
+    one = MappingHierarchy(BRANCHING)
+    other = MappingHierarchy({"root": (), "z": ("root",)})
+    shared: dict[tuple[str, Any], Sequence[str]] = {}
+
+    assert flatten(one, from_id="root", cache=shared) == PRE_ORDER
+
+    assert flatten(other, from_id="root", cache=shared) == PRE_ORDER
+    assert flatten(other, from_id="root") == ("root", "z")
+
+    fresh: dict[tuple[str, Any], Sequence[str]] = {}
+    assert flatten(other, from_id="root", cache=fresh) == ("root", "z")

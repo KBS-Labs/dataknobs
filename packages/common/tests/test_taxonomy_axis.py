@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from dataknobs_common.exceptions import NotFoundError, ValidationError
-from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy
+from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy, flatten
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
@@ -402,11 +402,17 @@ def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
     nothing is worse than an asymmetry that is stated. The guard compares that
     set by equality, so a second divergence fails rather than joining it.
 
-    No ``compare_return``: this pair is the one that streams, so its return
-    annotations differ by flavour (``Iterator[str]`` against
+    No ``compare_return`` on ``walk``: that pair is the one that streams, so its
+    return annotations differ by flavour (``Iterator[str]`` against
     ``AsyncIterator[str]``) and asserting on them would pin the flavour rather
-    than the contract. The hierarchy members, which do not stream, are checked
-    the other way.
+    than the contract. ``subtree_keys`` collects, returns ``list[str]`` on both
+    halves, and is checked the other way -- which is the whole reason it gets
+    its own call rather than joining the first.
+
+    **Both members, because this type's surface is two walks and not one.** A
+    guard over ``walk`` alone is green about ``subtree_keys`` by saying nothing
+    about it, and a parameter added to one half of the member it does not name
+    is exactly the drift it exists to catch.
     """
     sync_fields = Taxonomy.__dataclass_fields__
     async_fields = AsyncTaxonomy.__dataclass_fields__
@@ -418,6 +424,14 @@ def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
         AsyncTaxonomy.walk,
         async_only={"max_concurrency"},
         label="Taxonomy.walk",
+    )
+
+    assert_twins_agree(
+        Taxonomy.subtree_keys,
+        AsyncTaxonomy.subtree_keys,
+        async_only={"max_concurrency"},
+        compare_return=True,
+        label="Taxonomy.subtree_keys",
     )
 
 
@@ -744,3 +758,181 @@ async def test_both_flavours_of_subtree_keys_agree(mammals_v11_path: Path) -> No
         await async_onto.taxonomy("species").subtree_keys("marmoset")
 
     assert str(sync_raised.value) == str(async_raised.value)
+
+
+# --------------------------------------------------------------------------
+# The memo, and the walk that goes through no driver
+# --------------------------------------------------------------------------
+
+
+class CountingStructure:
+    """A structure axis that records every ``children`` call.
+
+    Offers no bulk member deliberately: ``children_many`` answers a frontier in
+    one call and hides the per-node question these tests ask.
+    """
+
+    def __init__(self, parents: dict[str, tuple[str, ...]]) -> None:
+        self._inner = MappingHierarchy(parents)
+        self.asked: list[str] = []
+
+    def roots(self) -> tuple[str, ...]:
+        return tuple(self._inner.roots())
+
+    def parents(self, node_id: str) -> tuple[str, ...]:
+        return tuple(self._inner.parents(node_id))
+
+    def children(self, node_id: str) -> tuple[str, ...]:
+        self.asked.append(node_id)
+        return tuple(self._inner.children(node_id))
+
+    def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+class AsyncCountingStructure:
+    """:class:`CountingStructure`, awaited."""
+
+    def __init__(self, parents: dict[str, tuple[str, ...]]) -> None:
+        self._inner = CountingStructure(parents)
+
+    @property
+    def asked(self) -> list[str]:
+        return self._inner.asked
+
+    async def roots(self) -> tuple[str, ...]:
+        return self._inner.roots()
+
+    async def parents(self, node_id: str) -> tuple[str, ...]:
+        return self._inner.parents(node_id)
+
+    async def children(self, node_id: str) -> tuple[str, ...]:
+        return self._inner.children(node_id)
+
+    async def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+#: mammal -> dog -> {retriever, beagle}. Two levels, so the streaming walk
+#: issues more than one frontier read and a memo has something to answer.
+STRUCTURE = {
+    "mammal": (),
+    "dog": ("mammal",),
+    "retriever": ("dog",),
+    "beagle": ("dog",),
+}
+
+
+def _axis_over(structure: object, path: Path) -> Taxonomy:
+    onto = load_ontology(path)
+    return replace(onto.taxonomy("species"), structure=structure)  # type: ignore[arg-type]
+
+
+def test_the_streaming_walk_reads_a_caller_supplied_memo(mammals_v11_path: Path) -> None:
+    """The memo lives in the frontier read *because* this walk calls it directly.
+
+    ``walk`` cannot go through the collecting core, so a memo written into the
+    drivers would have left it as the only walk without one -- which is the
+    stated reason the memo is in the shared step rather than in either driver.
+    A reason is only load-bearing if the walk it names can actually be given a
+    cache, so this is what makes the claim true rather than merely available.
+    """
+    structure = CountingStructure(STRUCTURE)
+    axis = _axis_over(structure, mammals_v11_path)
+    warm: dict[tuple[str, object], object] = {}
+
+    first = tuple(axis.walk())
+    asked_once = len(structure.asked)
+    assert asked_once > 0
+
+    structure.asked.clear()
+    second = tuple(axis.walk(cache=warm))
+    third = tuple(axis.walk(cache=warm))
+
+    assert first == second == third
+    assert len(structure.asked) == asked_once, (
+        f"the warmed walk re-asked the backing: {structure.asked}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_async_streaming_walk_reads_one_too(mammals_v11_path: Path) -> None:
+    """The memo is in the step both flavours of the streaming walk call."""
+    structure = AsyncCountingStructure(STRUCTURE)
+    onto = await async_load_ontology(mammals_v11_path)
+    axis = replace(onto.taxonomy("species"), structure=structure)  # type: ignore[arg-type]
+    warm: dict[tuple[str, object], object] = {}
+
+    first = [node async for node in axis.walk(cache=warm)]
+    asked_once = len(structure.asked)
+
+    structure.asked.clear()
+    second = [node async for node in axis.walk(cache=warm)]
+
+    assert first == second
+    assert asked_once > 0
+    assert structure.asked == [], "the warmed walk re-asked the backing"
+
+
+def test_a_memo_warmed_by_a_collecting_walk_answers_the_streaming_one(
+    mammals_v11_path: Path,
+) -> None:
+    """One memo, one axis, both kinds of walk -- which is what sharing the step buys.
+
+    The collecting walks and the streaming one issue the same request against
+    the same step, so a cache filled by either is readable by the other. A memo
+    written into the drivers could not have done this.
+    """
+    structure = CountingStructure(STRUCTURE)
+    axis = _axis_over(structure, mammals_v11_path)
+    shared: dict[tuple[str, object], object] = {}
+
+    flatten(structure, cache=shared)  # type: ignore[arg-type]
+    warmed = len(structure.asked)
+
+    walked = tuple(axis.walk(cache=shared))
+
+    assert walked == ("mammal", "dog", "retriever", "beagle")
+    assert len(structure.asked) == warmed, "the streaming walk re-asked the backing"
+
+
+def test_subtree_keys_forwards_a_memo_to_the_walks_it_delegates_to(
+    mammals_v11_path: Path,
+) -> None:
+    """The two delegations carry the caller's cache, or the delegation is partial.
+
+    ``subtree_keys`` *is* ``flatten`` unbounded and ``descendants_to_depth``
+    bounded, and both of those take a memo. A member that delegates to a walk
+    and drops the one parameter that walk grew is the same drift one layer up:
+    the caller holding a long-lived cache pays the backing again on every call.
+    """
+    structure = CountingStructure(STRUCTURE)
+    axis = _axis_over(structure, mammals_v11_path)
+    shared: dict[tuple[str, object], object] = {}
+
+    first = axis.subtree_keys("dog", cache=shared)
+    asked_once = len(structure.asked)
+    second = axis.subtree_keys("dog", cache=shared)
+    bounded = axis.subtree_keys("dog", depth=1, cache=shared)
+
+    assert first == second == ["dog", "retriever", "beagle"]
+    assert bounded == ["dog", "retriever", "beagle"]
+    assert len(structure.asked) == asked_once, (
+        f"a delegated walk re-asked the backing: {structure.asked}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_async_subtree_keys_forwards_one_too(mammals_v11_path: Path) -> None:
+    """The twin, for the reason every twin here is checked: a parameter on one half."""
+    structure = AsyncCountingStructure(STRUCTURE)
+    onto = await async_load_ontology(mammals_v11_path)
+    axis = replace(onto.taxonomy("species"), structure=structure)  # type: ignore[arg-type]
+    shared: dict[tuple[str, object], object] = {}
+
+    first = await axis.subtree_keys("dog", cache=shared)
+    asked_once = len(structure.asked)
+    second = await axis.subtree_keys("dog", cache=shared)
+
+    assert first == second == ["dog", "retriever", "beagle"]
+    assert len(structure.asked) == asked_once
