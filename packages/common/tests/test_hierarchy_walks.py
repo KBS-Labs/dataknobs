@@ -25,8 +25,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from dataknobs_common import _walk_core as walk_core
 from dataknobs_common import hierarchy as hierarchy_module
-from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common.exceptions import NotFoundError, OperationError
 from dataknobs_common.hierarchy import (
     AsyncBulkHierarchy,
     AsyncEnumerableHierarchy,
@@ -287,13 +288,39 @@ _FLAT_CYCLIC_WALKS = tuple(
 )
 
 
+#: The two backing kinds a differential has to cover, and why both.
+#:
+#: ``MappingHierarchy`` implements ``parents_many``, so the frontier read
+#: returns on the **bulk** branch and never builds the bounded ``gather`` the
+#: singular branch does. Driving only that pair leaves the asynchronous
+#: semaphore path unexercised over cyclic data -- which is exactly the branch a
+#: walk taken node-at-a-time never reaches and a walk taken a frontier at a
+#: time depends on. The pair is parametrised rather than chosen because the
+#: claim is about the walks, and a walk that terminates against one backing and
+#: not the other is the drift this suite exists to catch.
+_CYCLIC_BACKINGS: tuple[tuple[str, Callable[..., Any], Callable[..., Any]], ...] = (
+    ("bulk", MappingHierarchy, AsyncMappingHierarchy),
+    ("singular", MappingParents, AsyncMappingParents),
+)
+
+
+@pytest.mark.parametrize(
+    ("backing", "sync_axis", "async_axis"),
+    _CYCLIC_BACKINGS,
+    ids=[name for name, _, _ in _CYCLIC_BACKINGS],
+)
 @pytest.mark.parametrize(
     ("walk", "sync_walk", "async_walk"),
     _CYCLIC_WALKS,
     ids=[name for name, _, _ in _CYCLIC_WALKS],
 )
 def test_every_walk_terminates_on_cyclic_data_and_both_flavours_agree(
-    walk: str, sync_walk: Callable[..., Any], async_walk: Callable[..., Any]
+    walk: str,
+    sync_walk: Callable[..., Any],
+    async_walk: Callable[..., Any],
+    backing: str,
+    sync_axis: Callable[..., Any],
+    async_axis: Callable[..., Any],
 ) -> None:
     """A cycle is the input that separates a correct walk from a lucky one.
 
@@ -308,24 +335,39 @@ def test_every_walk_terminates_on_cyclic_data_and_both_flavours_agree(
     that is why the shape assertions are elsewhere. Two of the eight do not
     return a flat tuple of ids, so the dedup assertion that used to live in
     this body covers six of them and moved to the row set it is true of.
+
+    **Both backing kinds**, because the frontier read branches on them: a
+    backing offering the bulk members never reaches the bounded ``gather``, so
+    a differential run only against one of the two is green about a branch it
+    never entered.
     """
-    del walk  # named for the failure message pytest prints, not read here
-    result = sync_walk(MappingHierarchy(CYCLIC_PARENTS))
+    del walk, backing  # named for the failure message pytest prints
+    result = sync_walk(sync_axis(CYCLIC_PARENTS))
 
-    assert result == asyncio.run(async_walk(AsyncMappingHierarchy(CYCLIC_PARENTS)))
+    assert result == asyncio.run(async_walk(async_axis(CYCLIC_PARENTS)))
 
 
+@pytest.mark.parametrize(
+    ("backing", "sync_axis", "async_axis"),
+    _CYCLIC_BACKINGS,
+    ids=[name for name, _, _ in _CYCLIC_BACKINGS],
+)
 @pytest.mark.parametrize(
     ("walk", "sync_walk", "async_walk"),
     _FLAT_CYCLIC_WALKS,
     ids=[name for name, _, _ in _FLAT_CYCLIC_WALKS],
 )
 def test_a_cyclic_walk_returns_each_node_once(
-    walk: str, sync_walk: Callable[..., Any], async_walk: Callable[..., Any]
+    walk: str,
+    sync_walk: Callable[..., Any],
+    async_walk: Callable[..., Any],
+    backing: str,
+    sync_axis: Callable[..., Any],
+    async_axis: Callable[..., Any],
 ) -> None:
     """The visited set is unconditional, so a cycle terminates and dedups."""
-    del walk, async_walk
-    result = sync_walk(MappingHierarchy(CYCLIC_PARENTS))
+    del walk, async_walk, backing, async_axis
+    result = sync_walk(sync_axis(CYCLIC_PARENTS))
 
     assert len(set(result)) == len(result), "a node was emitted twice"
 
@@ -496,6 +538,7 @@ class CountingParents:
     def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
         self._inner = MappingParents(parents)
         self.singular_calls = 0
+        self.contains_calls = 0
 
     def roots(self) -> Sequence[str]:
         return self._inner.roots()
@@ -509,6 +552,7 @@ class CountingParents:
         return self._inner.children(node_id)
 
     def contains(self, node_id: str) -> bool:
+        self.contains_calls += 1
         return self._inner.contains(node_id)
 
 
@@ -778,7 +822,7 @@ def test_the_assertion_axis_bulk_members_agree_with_the_singular_ones(
 
 
 # --------------------------------------------------------------------------
-# The second algorithm -- paths, where the six compositions give a set
+# The seventh reading -- routes, where the other six give a set
 # --------------------------------------------------------------------------
 
 
@@ -909,6 +953,14 @@ def test_a_path_is_emitted_only_where_it_cannot_be_extended() -> None:
     assert paths == (("t", "u", "top"),)
     assert not any(a != b and a == b[: len(a)] for a in paths for b in paths)
 
+    # The degenerate cycle is the same rule: a node naming itself is a parent
+    # already on the path, so the route extends through the other parent and
+    # the one-element prefix is not also emitted.
+    self_looped = MappingHierarchy({"n": ("n", "top"), "top": ()})
+
+    assert self_looped.parents("n") == ("n", "top")
+    assert paths_to_root(self_looped, "n") == (("n", "top"),)
+
 
 def test_a_cyclic_component_with_no_root_returns_paths_that_reach_none() -> None:
     """Termination is by the guard, and the shape says the walk found no root.
@@ -926,9 +978,11 @@ def test_a_cyclic_component_with_no_root_returns_paths_that_reach_none() -> None
 def test_an_unknown_anchor_is_refused_because_this_walk_emits_it() -> None:
     """``((node,),)`` is exactly the shape a root gives, so it cannot be returned.
 
-    The fifth walk to join the refusal, and it reaches it the same way the
-    other four do: an including walk that emitted an unknown anchor would hand
-    back a term of the axis the caller cannot tell from a real one.
+    It reaches the refusal the way every emitting walk does: one that handed
+    back an unknown anchor would hand back a term of the axis the caller cannot
+    tell from a real one. The count of such walks is deliberately not stated --
+    it was four when the rule was written and it moved twice while this branch
+    was open, which is a number a docstring cannot keep.
     """
     hierarchy = MappingHierarchy(DIAMOND)
 
@@ -940,49 +994,278 @@ def test_an_unknown_anchor_is_refused_because_this_walk_emits_it() -> None:
     assert refusal.value.context == {"anchor": "marmoset"}
 
 
-def test_the_path_walk_keeps_its_own_replies() -> None:
-    """The one walk here that asks about a node twice by construction, and stops.
+def test_the_path_walk_asks_each_node_once_and_a_frontier_at_a_time() -> None:
+    """The cost that decided the shape: per node, not per route.
 
-    A node on ``k`` paths is reached ``k`` times, so the requests follow the
-    *paths* without a memo and the *nodes* with one -- 125 against 16 over the
-    same sixteen-node axis. The memo is the walk's rather than the caller's
-    because a walk that can keep its own replies should not need a caller to
-    notice that it cannot.
+    A walk that descends route by route asks about a node once per route that
+    reaches it -- 125 requests for the sixteen nodes carrying these thirty-two
+    routes -- and has to buy that back with a memo of its own. Reading the
+    routes off a level-synchronous ascent instead, the ascent visits each node
+    once and the enumeration issues no request at all.
 
-    Asserted against the answer as well as the count: a memo that changed what
-    came back would be a different walk rather than a cheaper one.
+    Asserted against the answer as well as the count: a cheaper walk that
+    returned something else would be a different walk rather than a faster one.
     """
     axis = _stacked_diamonds(5)
-    memoised = CountingParents(axis)
-    with_cache = CountingParents(axis)
+    counting = CountingParents(axis)
+    cached = CountingParents(axis)
 
-    walked = paths_to_root(memoised, "n5")
+    walked = paths_to_root(counting, "n5")
 
     assert len(walked) == 32, "thirty-two ways up five stacked diamonds"
-    assert memoised.singular_calls == len(axis) == 16
-    assert walked == paths_to_root(with_cache, "n5", cache={})
-    assert with_cache.singular_calls == memoised.singular_calls
+    assert counting.singular_calls == len(axis) == 16, "one request per node, not per route"
+    assert walked == paths_to_root(cached, "n5", cache={})
+    assert cached.singular_calls == counting.singular_calls, (
+        "a caller's cache has nothing here to save -- the walk already asks each node once"
+    )
 
 
-def test_the_memo_is_scoped_to_the_walk_and_the_guard_to_the_path() -> None:
-    """Two structures, four lines apart, and sharing a scope breaks one of them.
+def test_the_path_walk_asks_a_bulk_backing_one_query_per_level() -> None:
+    """The frontier property is the module's, and this walk is not exempt.
 
-    A path-scoped memo memoises nothing -- every pop would start empty. A
-    walk-scoped guard returns one path where two are owed. So the count and the
-    answer are asserted together: either scope collapsed on its own shows up in
-    exactly one of these two lines, and a test asserting only one would pass
-    the other defect.
+    Every walk here asks about a frontier rather than a node, which is what
+    earns a bulk backing its per-level query and the asynchronous driver its
+    round of concurrency per depth. A route-at-a-time walk asks about one node
+    per request, so a backing offering ``parents_many`` gets a one-element
+    frontier N times -- green on every answer test, and paying N queries where
+    it should pay one per level.
+
+    Eight roots above one node is the shape that shows it: two levels, nine
+    nodes, and eight routes.
+    """
+    wide: dict[str, tuple[str, ...]] = {"x": tuple(f"p{i}" for i in range(8))}
+    wide.update({f"p{i}": () for i in range(8)})
+
+    axis = BulkParents(wide)
+    routes = paths_to_root(axis, "x")
+
+    assert len(routes) == 8
+    assert axis.bulk_calls == 2, "two levels, so two queries -- not one per node"
+    assert axis.widest_frontier == 8, "the whole level went in one request"
+    assert axis.singular_calls == 0, "a bulk backing never sees the singular member"
+
+
+def test_the_async_path_walks_bound_binds() -> None:
+    """A keyword a twin accepts and ignores is a surface that lies quietly.
+
+    The bound is real here because the walk reads a frontier: eight parents of
+    one node go out in a single bounded round. A route-at-a-time walk awaits
+    them one after another, so the widest overlap is one however the bound is
+    set -- which reads as *the keyword is taken for parity* rather than as
+    *the walk forgot to use a level*.
+    """
+    wide: dict[str, tuple[str, ...]] = {"x": tuple(f"p{i}" for i in range(8))}
+    wide.update({f"p{i}": () for i in range(8)})
+
+    probe = ConcurrencyProbe(wide)
+    routes = asyncio.run(async_paths_to_root(probe, "x", max_concurrency=4))
+
+    assert len(routes) == 8
+    assert probe.widest_overlap == 4, "the level was read concurrently, within the bound"
+
+
+def test_the_two_endings_are_told_apart_by_one_call() -> None:
+    """The result is routes, not a verdict, and the recovery is stated.
+
+    A path ends at a root or at a node whose every parent is already behind it,
+    and the tuple looks the same either way. A caller counting *routes that
+    reach a root* over possibly-cyclic data has to ask, so the question that
+    answers it is pinned here rather than left in prose.
+    """
+    #   t -> u -> t   is a cycle, and `u` also has a root above it
+    axis = MappingHierarchy(
+        {"t": ("u",), "u": ("t", "top"), "top": (), "loop": ("spin",), "spin": ("loop",)}
+    )
+
+    reaches_a_root = paths_to_root(axis, "t")
+    reaches_nothing = paths_to_root(axis, "loop")
+
+    assert reaches_a_root == (("t", "u", "top"),)
+    assert reaches_nothing == (("loop", "spin"),)
+    assert axis.parents(reaches_a_root[0][-1]) == (), "empty parents is the root ending"
+    assert axis.parents(reaches_nothing[0][-1]) == ("loop",), "non-empty is the cycle ending"
+
+
+def test_the_guard_is_per_route_and_the_ascent_is_per_node() -> None:
+    """Two scopes, and collapsing either one shows up in exactly one line.
+
+    A walk-scoped guard over the *routes* returns one path where a diamond owes
+    two. A route-scoped visited set over the *ascent* asks ``root`` once per
+    route rather than once. Both are asserted together because a test asserting
+    only the answer would pass the second defect and one asserting only the
+    count would pass the first.
     """
     hierarchy = CountingParents(DIAMOND)
 
-    paths = paths_to_root(hierarchy, "x")
+    routes = paths_to_root(hierarchy, "x")
 
-    assert paths == (("x", "a", "root"), ("x", "b", "root")), "the guard is per path"
-    assert hierarchy.singular_calls == 4, "the memo is per walk: `root` is asked once"
+    assert routes == (("x", "a", "root"), ("x", "b", "root")), "the guard is per route"
+    assert hierarchy.singular_calls == 4, "the ascent is per node: `root` is asked once"
+
+
+def test_a_route_bound_refuses_rather_than_truncating() -> None:
+    """The answer's own size is the one cost the ascent cannot bound.
+
+    The fetch is linear in nodes however branchy the axis is; what doubles per
+    stacked branch point is the *result*. A caller reading an axis they do not
+    control needs a ceiling, and a ceiling that silently returned the first
+    ``k`` routes would collapse *there were exactly k ways up* into *there were
+    at least k*, which is the pair of answers this module adds a member or a
+    refusal to keep apart everywhere else.
+    """
+    hierarchy = MappingHierarchy(_stacked_diamonds(3))
+
+    assert len(paths_to_root(hierarchy, "n3")) == 8
+
+    with pytest.raises(OperationError) as refusal:
+        paths_to_root(hierarchy, "n3", max_paths=4)
+
+    assert refusal.value.context == {"anchor": "n3", "max_paths": 4}
+
+
+def test_a_bound_at_or_above_the_count_returns_every_route() -> None:
+    """The bounded walk is the unbounded one with something to stop it.
+
+    A ceiling the axis stays under changes nothing at all -- so a caller who
+    sets one defensively and never reaches it holds exactly the answer they
+    would have held without it, rather than a differently-ordered or
+    differently-truncated one.
+    """
+    hierarchy = MappingHierarchy(_stacked_diamonds(3))
+    every = paths_to_root(hierarchy, "n3")
+
+    assert paths_to_root(hierarchy, "n3", max_paths=8) == every, "exactly the count"
+    assert paths_to_root(hierarchy, "n3", max_paths=9) == every
+    assert paths_to_root(hierarchy, "n3", max_paths=10_000) == every
+
+
+def test_the_bound_refuses_before_building_the_answer_it_would_refuse() -> None:
+    """A ceiling checked after enumerating is a ceiling that already spent the memory.
+
+    Twenty stacked diamonds is a sixty-one node axis with 1,048,576 routes up
+    it. The ascent is sixty-one requests either way; what this asserts is that
+    the *enumeration* stops at the ceiling rather than completing and then
+    reporting. Like the termination tests above, the failure mode is one an
+    assertion cannot phrase -- an eager enumeration does not fail here, it
+    spends a million tuples first, and the test's own runtime is the proof.
+    """
+    hierarchy = MappingHierarchy(_stacked_diamonds(20))
+
+    assert 2**20 == 1_048_576, "the answer this never builds"
+
+    with pytest.raises(OperationError):
+        paths_to_root(hierarchy, "n20", max_paths=10)
+
+    # ...and the same refusal against the projection directly, over an edge map
+    # that counts what the enumeration touched. An eager enumeration passes the
+    # assertion above and fails this one: it reaches every node of every route
+    # before it looks at the ceiling, which is upward of a million lookups
+    # against the few hundred a bounded one needs.
+    class CountingEdges(dict):  # type: ignore[type-arg]
+        reads = 0
+
+        def __getitem__(self, key: object) -> object:
+            type(self).reads += 1
+            return super().__getitem__(key)
+
+    _, edges = drive(hierarchy, walk_core._expand(("n20",), "parents"))
+
+    with pytest.raises(OperationError):
+        walk_core._paths_of(CountingEdges(edges), "n20", 10)
+
+    assert CountingEdges.reads < 1_000, (
+        f"a bounded enumeration reads a few hundred edges, not {CountingEdges.reads}"
+    )
+
+
+def test_the_ceiling_bounds_routes_because_depth_is_not_what_explodes() -> None:
+    """Why the bound is not ``max_depth``, which is the module's other bound.
+
+    ``descendants_to_depth`` bounds its sibling by depth, so depth is the
+    vocabulary a reader expects -- and it is the wrong dimension here. Routes
+    multiply with *branching*, not with distance: three levels of ten parents
+    each is a thirty-one node axis carrying a thousand routes, all of them
+    within ``max_depth=3``. A descent bound would leave that unbounded, and
+    would also end each route at a node the walk never asked about, which is
+    *unknown* rather than *unextendable*.
+    """
+    wide: dict[str, tuple[str, ...]] = {"x": tuple(f"p{i}" for i in range(10))}
+    wide.update({f"p{i}": tuple(f"q{j}" for j in range(10)) for i in range(10)})
+    wide.update({f"q{j}": tuple(f"r{k}" for k in range(10)) for j in range(10)})
+    wide.update({f"r{k}": () for k in range(10)})
+
+    hierarchy = MappingHierarchy(wide)
+    routes = paths_to_root(hierarchy, "x")
+
+    assert len(wide) == 31, "a small axis"
+    assert max(len(route) for route in routes) - 1 == 3, "and a shallow one"
+    assert len(routes) == 1000, "...carrying a thousand routes a depth bound would admit"
+
+    with pytest.raises(OperationError):
+        paths_to_root(hierarchy, "x", max_paths=100)
+
+
+def test_a_route_bound_below_one_is_refused() -> None:
+    """A ceiling that cannot admit an answer is refused, not clamped.
+
+    ``max_paths=0`` rejects every axis including a bare root, which is a
+    guaranteed failure rather than a narrow budget -- the same reason a
+    frontier bound of zero is refused rather than raised to one.
+    """
+    hierarchy = MappingHierarchy(DIAMOND)
+
+    for bound in (0, -1):
+        with pytest.raises(ValueError, match="max_paths must be at least 1"):
+            paths_to_root(hierarchy, "x", max_paths=bound)
+
+
+def test_an_unusable_route_bound_is_refused_before_the_ascent_is_spent() -> None:
+    """A bound that can admit nothing is wrong at call time, not at emission time.
+
+    ``max_paths=0`` is a guaranteed failure whatever the axis holds, so the
+    ascent it would refuse is work already known to be wasted. Refusing it
+    after that ascent spends one request per node above the anchor -- over a
+    remote backing, an arbitrary number of queries -- to report a mistake in
+    the literal the caller typed.
+
+    This is the posture ``_refuse_an_unusable_bound`` states for the frontier
+    bound in its own docstring: a width that cannot admit anybody is refused on
+    the way past. One rule, so both bounds keep it.
+    """
+    hierarchy = CountingParents(_stacked_diamonds(5))
+
+    with pytest.raises(ValueError, match="max_paths must be at least 1"):
+        paths_to_root(hierarchy, "n5", max_paths=0)
+
+    assert hierarchy.singular_calls == 0, "refused before a single edge was asked for"
+
+
+def test_both_flavours_refuse_an_unusable_route_bound_before_the_ascent() -> None:
+    """The twin refuses on the same terms, and as early."""
+    hierarchy = AsyncBulkParents(_stacked_diamonds(5))
+
+    with pytest.raises(ValueError, match="max_paths must be at least 1"):
+        asyncio.run(async_paths_to_root(hierarchy, "n5", max_paths=0))
+
+    assert hierarchy.bulk_calls == 0, "refused before a single frontier was asked for"
+
+
+def test_both_flavours_bound_the_routes_alike() -> None:
+    """The ceiling is on the twin too, and refuses on the same axis."""
+    axis = _stacked_diamonds(3)
+
+    assert asyncio.run(
+        async_paths_to_root(AsyncMappingHierarchy(axis), "n3", max_paths=8)
+    ) == paths_to_root(MappingHierarchy(axis), "n3")
+
+    with pytest.raises(OperationError) as refusal:
+        asyncio.run(async_paths_to_root(AsyncMappingHierarchy(axis), "n3", max_paths=4))
+
+    assert refusal.value.context == {"anchor": "n3", "max_paths": 4}
 
 
 # --------------------------------------------------------------------------
-# The composition -- two ancestor walks, joined
+# The eighth reading -- one ascent seeded by both, and what `deepest` means
 # --------------------------------------------------------------------------
 
 
@@ -992,6 +1275,62 @@ def test_the_deepest_common_ancestor_is_the_nearest_node_above_both() -> None:
 
     assert deepest_common_ancestor(hierarchy, "left", "right") == "mid"
     assert ancestors(hierarchy, "left") == ("mid", "top"), "`top` is common too, and higher"
+
+
+def test_deepest_is_not_nearest_once_the_axis_has_a_shortcut_edge() -> None:
+    """The defect a tree cannot show, and the reason this is not a distance.
+
+    ``beagle`` names ``mammal`` directly *and* reaches it the long way through
+    ``hound``, ``dog`` and ``canine``. Read as a distance from ``beagle``,
+    ``mammal`` is one hop and ``dog`` is two, so *the nearest common ancestor*
+    answers ``mammal`` -- while ``dog`` is a common ancestor of both arguments
+    standing strictly **below** it. The two candidates are perfectly
+    comparable, which is the case the asymmetric tie-break tells a reader is
+    safe, so nothing about the published contract warned that this could
+    happen.
+
+    The shape is ordinary rather than pathological: a term asserted under both
+    a narrow and a broad category is what a ``broader`` relation collects, and
+    a consumer reaching for the most specific shared category would have been
+    handed the least specific one.
+    """
+    hierarchy = MappingHierarchy(
+        {
+            "beagle": ("mammal", "hound"),
+            "hound": ("dog",),
+            "dog": ("canine",),
+            "canine": ("mammal",),
+            "puppy": ("dog",),
+            "mammal": (),
+        }
+    )
+
+    assert deepest_common_ancestor(hierarchy, "beagle", "puppy") == "dog"
+    assert ancestors(hierarchy, "beagle")[0] == "mammal", (
+        "`mammal` is nearest by distance, and is the answer a level-ordered "
+        "chain read first-match-wins returns"
+    )
+    assert "mammal" in ancestors(hierarchy, "dog"), "...and it stands above `dog`"
+
+
+def test_the_answer_does_not_depend_on_the_order_a_reply_names_parents_in() -> None:
+    """A tie-break is a decision; a reply's row order deciding the answer is not.
+
+    Reading a level-ordered chain first-match-wins puts both of ``beagle``'s
+    parents at distance one, so whichever the backing named first won -- and a
+    query over a join does not promise an order. Minimality is a property of
+    the axis, so reversing the reply must not move the answer.
+    """
+    forward = {
+        "beagle": ("mammal", "dog"),
+        "dog": ("mammal",),
+        "puppy": ("dog",),
+        "mammal": (),
+    }
+    reversed_reply = {**forward, "beagle": ("dog", "mammal")}
+
+    assert deepest_common_ancestor(MappingHierarchy(forward), "beagle", "puppy") == "dog"
+    assert deepest_common_ancestor(MappingHierarchy(reversed_reply), "beagle", "puppy") == "dog"
 
 
 def test_either_argument_may_be_the_answer() -> None:
@@ -1005,51 +1344,81 @@ def test_either_argument_may_be_the_answer() -> None:
 def test_the_tie_break_is_asymmetric_over_a_dag() -> None:
     """Swapping the arguments can swap the answer, and that is the definition.
 
-    Two common ancestors that are incomparable -- neither above the other --
-    are both correct answers to *a* common ancestor, and the rule picks the one
-    nearer the **first** argument. Over a tree this never arises, which is why
-    it is asserted over a DAG or not at all.
+    A real tie needs two **minimal** common ancestors -- neither above the
+    other, so there is nothing to choose between them on depth -- and then the
+    rule picks the one nearer the *first* argument. The fixture makes the tie
+    by giving both nodes the same two roots in opposite orders, so neither
+    argument's chain agrees with the other's about which comes first.
     """
     hierarchy = MappingHierarchy(
         {
-            "l": ("shared_l",),
-            "r": ("shared_r",),
+            "l": ("shared_l", "shared_r"),
+            "r": ("shared_r", "shared_l"),
             "shared_l": (),
             "shared_r": (),
-            "both": ("shared_l", "shared_r"),
         }
     )
 
-    assert deepest_common_ancestor(hierarchy, "l", "both") == "shared_l"
-    assert deepest_common_ancestor(hierarchy, "r", "both") == "shared_r"
+    assert deepest_common_ancestor(hierarchy, "l", "r") == "shared_l"
+    assert deepest_common_ancestor(hierarchy, "r", "l") == "shared_r"
+    assert ancestors(hierarchy, "shared_l") == (), "neither candidate stands above the other"
+    assert ancestors(hierarchy, "shared_r") == ()
 
 
-def test_none_is_ambiguous_here_and_is_not_refused() -> None:
-    """Disjoint, unknown ``a`` and unknown ``b`` all answer ``None``.
+def test_a_cycle_is_a_tie_rather_than_an_exclusion() -> None:
+    """Mutual ancestry has no deepest member, so it falls through to the tie-break.
 
-    The excluding walks' treatment rather than the including walks' refusal:
-    nothing false is returned, so the answer is ambiguous rather than wrong and
-    ``contains`` resolves it. Pinned so that the difference from
-    ``paths_to_root`` next door stays a decision.
+    Two nodes on one cycle are each strictly above the other. A minimality rule
+    reading only *is some other common ancestor below me* drops both and
+    answers ``None`` where a common ancestor plainly exists, so the rule reads
+    *below me, and I am not also below it* -- which makes mutual ancestry a tie.
+    """
+    hierarchy = MappingHierarchy({"p": ("q",), "q": ("p",), "x": ("p",), "y": ("q",)})
+
+    assert deepest_common_ancestor(hierarchy, "x", "y") == "p", "`x`'s chain reaches `p` first"
+    assert deepest_common_ancestor(hierarchy, "y", "x") == "q"
+
+
+def test_an_unknown_argument_is_refused_because_this_walk_emits_it() -> None:
+    """Either argument may be the answer, which makes both of them anchors.
+
+    This answered ``None`` for an unknown node and the ambiguity was defended
+    the way :func:`ancestors`' is -- nothing false returned, one ``contains``
+    call to resolve it. That held for two *different* unknown nodes and failed
+    for the same one twice: both chains contained it, so the intersection did
+    too and it came back as a term of the axis. A walk that can emit an
+    argument has to know it.
     """
     hierarchy = MappingHierarchy({"p": (), "q": ()})
 
-    assert deepest_common_ancestor(hierarchy, "p", "q") is None
-    assert deepest_common_ancestor(hierarchy, "p", "marmoset") is None
-    assert deepest_common_ancestor(hierarchy, "marmoset", "p") is None
+    assert deepest_common_ancestor(hierarchy, "p", "q") is None, "disjoint is still `None`"
 
-    assert hierarchy.contains("p")
-    assert not hierarchy.contains("marmoset")
+    for a, b in (("marmoset", "p"), ("p", "marmoset"), ("marmoset", "marmoset")):
+        with pytest.raises(NotFoundError) as refusal:
+            deepest_common_ancestor(hierarchy, a, b)
+        assert refusal.value.context == {"anchor": "marmoset"}
+
+    assert (
+        asyncio.run(async_deepest_common_ancestor(AsyncMappingHierarchy({"p": ()}), "p", "p"))
+        == "p"
+    )
+    with pytest.raises(NotFoundError):
+        asyncio.run(
+            async_deepest_common_ancestor(AsyncMappingHierarchy({"p": ()}), "marmoset", "p")
+        )
 
 
-def test_the_composition_re_asks_the_shared_chain_and_a_cache_is_the_only_remedy() -> None:
-    """The cost this walk publishes rather than fixes, measured rather than claimed.
+def test_one_ascent_seeded_by_both_asks_each_node_once() -> None:
+    """The cost the composition published rather than fixed, now absent.
 
-    ``yield from`` delegates a request straight past the composing frame, so
-    the replies the two ancestor walks receive are never observed where they
-    could be kept. The excess is the depth of the chain the two nodes share and
-    not the size of the axis -- which is what makes publishing it enough, and
-    is the property to re-measure if it ever stops holding.
+    Two composed ancestor walks asked the ancestry the two nodes share twice --
+    44 requests against 23 distinct edges here -- because ``yield from``
+    delegates a request past the composing frame and there is nowhere to keep
+    what comes back. One descent seeded by both asks each node once, and each
+    argument's own chain is recovered from the replies at no request.
+
+    A caller's cache is asserted to change nothing, which is the whole claim:
+    the walk no longer needs one to reach this count.
     """
     depth = 20
     axis: dict[str, tuple[str, ...]] = {"r0": ()}
@@ -1065,12 +1434,43 @@ def test_the_composition_re_asks_the_shared_chain_and_a_cache_is_the_only_remedy
     assert deepest_common_ancestor(cached, "x", "y", cache={}) == f"r{depth}"
 
     assert len(axis) == 23
-    assert plain.singular_calls == 44, "the shared chain is asked for twice"
-    assert cached.singular_calls == 23, "a caller's cache is what stops it"
-    assert plain.singular_calls - cached.singular_calls == depth + 1, (
-        "the excess is bounded by the depth of the shared chain, not by the "
-        "size of the axis -- the property that makes publishing this enough"
-    )
+    assert plain.singular_calls == 23, "each node above either argument, once"
+    assert cached.singular_calls == plain.singular_calls, "a cache has nothing to save"
+
+
+def test_a_repeated_seed_does_not_lose_an_argument_to_the_visited_set() -> None:
+    """``a == b`` is a fair question, and the descent records against the first reach.
+
+    :func:`_expand` records discovery against the first node to reach
+    something, so a frontier carrying the same seed twice records the second
+    one as reaching nothing -- the failure ``_seeds_under`` dedups ``roots()``
+    to avoid. This walk seeds a descent with both arguments, so it dedups them.
+    """
+    hierarchy = CountingParents(DIAMOND)
+
+    assert deepest_common_ancestor(hierarchy, "x", "x") == "x"
+    assert hierarchy.singular_calls == 4, "four nodes, asked once each"
+    assert hierarchy.contains_calls == 1, "one anchor, so one containment question"
+
+
+def test_the_ascent_seeded_by_both_asks_a_bulk_backing_one_query_per_level() -> None:
+    """The eighth walk on the frontier path, which a singular counter cannot see.
+
+    ``CountingParents`` has no bulk members, so every count test above it
+    measures the fan-out path. The claim *one frontier per level* is about the
+    other one: two seeds go up as a single widening frontier rather than as two
+    ascents, and a backing that answers a level in one query sees one query.
+    """
+    bulk = BulkParents(_stacked_diamonds(3))
+
+    assert deepest_common_ancestor(bulk, "a2", "b2") == "n2"
+
+    # Six levels: {a2,b2} {n2} {a1,b1} {n1} {a0,b0} {n0}. The ascent runs to the
+    # root rather than stopping at the answer -- minimality is a question about
+    # the whole shared ancestry, so there is no level it can stop early at.
+    assert bulk.bulk_calls == 6, "one query per level of the shared ascent"
+    assert bulk.widest_frontier == 2, "both arguments in one frontier"
+    assert bulk.singular_calls == 0, "and nothing fell back to per-node asks"
 
 
 # --------------------------------------------------------------------------
@@ -1085,10 +1485,12 @@ def test_the_composition_re_asks_the_shared_chain_and_a_cache_is_the_only_remedy
 #: and this table was that until the six compositions existed -- so a walk
 #: added without a row here is a walk whose delegation nothing checks.
 #:
-#: The last two rows are the ones a reader should expect to be absent: they
-#: are not compositions over ``_expand``, so a wrapper that reimplemented
-#: either would pass every answer test in this file and drift from the core it
-#: claims to call. That is exactly the claim equality of results cannot make.
+#: The last two rows are the ones a reader should expect to be absent. They
+#: arrived as separate algorithms and were re-read as projections of the same
+#: descent, which is the point in a walk's life where a wrapper quietly keeps
+#: the old traversal: it would pass every answer test in this file and drift
+#: from the core it claims to call. That is exactly the claim equality of
+#: results cannot make.
 _CORES: tuple[tuple[str, Callable[..., Any], Callable[..., Any]], ...] = (
     ("_ancestors", lambda h: ancestors(h, "f"), lambda h: async_ancestors(h, "f")),
     ("_descendants", lambda h: descendants(h, "f"), lambda h: async_descendants(h, "f")),
@@ -1111,6 +1513,42 @@ _CORES: tuple[tuple[str, Callable[..., Any], Callable[..., Any]], ...] = (
         lambda h: async_deepest_common_ancestor(h, "c", "d"),
     ),
 )
+
+
+def test_the_snapshot_walk_is_a_reading_of_the_shared_descent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim this package makes everywhere, asserted of the walk that made it false.
+
+    ``_parent_edges`` is driven by both snapshot constructors, so it is a walk
+    this package ships -- and it ran its own frontier loop, its own visited set
+    and its own ``roots`` fetch, which is a second expansion beside the one
+    every docstring here says is the only one. Equality of snapshots cannot
+    tell a reading of the descent from a copy of it that agrees today, which is
+    the same reason ``_CORES`` exists for the eight public walks.
+
+    It could not have been a reading before: a spanning record drops the second
+    parent of a DAG node, and that edge is the one thing a parent-edge snapshot
+    cannot lose. Keeping the whole reply is what made this possible, so the
+    walk that motivated the change is the walk that now demonstrates it.
+    """
+    seen: list[tuple[str, tuple[str, ...]]] = []
+    unpatched = walk_core._expand
+
+    def recording_expand(
+        seeds: tuple[str, ...], direction: str, **kwargs: Any
+    ) -> Generator[Any, Any, Any]:
+        seen.append((direction, tuple(seeds)))
+        return unpatched(seeds, direction, **kwargs)
+
+    monkeypatch.setattr(walk_core, "_expand", recording_expand)
+
+    # A walk-only axis: `MappingHierarchy` publishes `parent_edges`, so
+    # snapshotting one takes the enumerable branch and walks nothing at all.
+    snapshot = MappingHierarchy.snapshot(MappingParents(DIAMOND))
+
+    assert seen == [("children", ("root",))], "one descent, seeded by the roots"
+    assert snapshot.parents("x") == ("a", "b"), "...and both parents of the DAG node kept"
 
 
 @pytest.mark.parametrize(
@@ -1138,7 +1576,7 @@ def test_patching_the_core_moves_both_flavours(
         empty iterator is an answer the *unpatched* driver could also give, so
         it proves the surfaces agree rather than that the patch was reached.
 
-        It takes whatever it is handed, because the six cores do not share a
+        It takes whatever it is handed, because the cores do not share a
         signature -- a bound, a depth and an optional anchor are three
         different shapes and the patch is about neither.
         """
@@ -1617,7 +2055,7 @@ def test_an_empty_ancestors_does_not_distinguish_a_root_from_an_unknown_node() -
 
 
 def test_ancestors_takes_the_memo_its_siblings_take() -> None:
-    """Twelve walks, and the cache is on all of them rather than on the ten newest.
+    """Every walk takes the memo, rather than the ones that happened to arrive with it.
 
     ``ancestors`` shipped before the memo existed, which is the whole way a
     surface drifts: a capability arrives with the walks that prompted it and

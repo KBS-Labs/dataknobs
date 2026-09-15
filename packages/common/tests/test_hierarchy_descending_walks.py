@@ -355,27 +355,88 @@ def test_childlessness_is_the_reply_and_not_the_discovery_edges() -> None:
     assert leaves(hierarchy, under="root") == ("x",)
 
 
-def test_a_bounded_descent_records_childlessness_only_for_what_it_asked() -> None:
+def test_a_bounded_descent_keeps_replies_only_for_what_it_asked() -> None:
     """The invariant the descent's pair carries, and the one way to misread it.
 
-    ``childless`` is a fact about *replies*, so it covers exactly the nodes a
-    reply arrived for -- and a bounded descent stops before asking its last
-    level. ``discovered`` takes a key for every node that entered a frontier
-    and for no other, so the two together say which is which: absent from
-    ``discovered`` means *never asked*, never *has children*. ``a1`` is the
-    case, a genuine leaf the bound stopped short of, and a reader concluding
-    from its absence that it has children would be wrong about it.
+    ``edges`` is a record of *replies*, so it takes a key for exactly the nodes
+    a reply arrived for -- and a bounded descent stops before asking its last
+    level. Absent from it means *never asked*, never *has no children*: ``a1``
+    is the case, a genuine leaf the bound stopped short of, and a reader
+    concluding anything from its absence would be wrong about it.
+
+    That is why the keys and not a separate set carry the boundary. Reading
+    childlessness as ``not edges[node_id]`` raises on a node the descent never
+    asked about, where a membership test against a ``childless`` set answered
+    ``False`` and looked like an answer.
     """
     from dataknobs_common._walk_core import _expand
 
     hierarchy = MappingHierarchy(BRANCHING)
 
-    discovered, childless = drive(hierarchy, _expand(("root",), "children", max_depth=2))
+    discovered, edges = drive(hierarchy, _expand(("root",), "children", max_depth=2))
 
     assert set(discovered) == {"root", "a", "b"}, "a key per node that entered a frontier"
-    assert childless == set(), "nothing that was asked answered empty"
-    assert "a1" not in discovered, "the bound stopped before asking it"
+    assert set(edges) == set(discovered), "a reply per node that entered a frontier"
+    assert not any(reply == () for reply in edges.values()), "nothing asked answered empty"
+    assert "a1" not in edges, "the bound stopped before asking it"
     assert hierarchy.children("a1") == (), "and it is childless all the same"
+
+
+def test_the_descent_keeps_the_edges_its_discovery_record_drops() -> None:
+    """The discard that made two readings look like two algorithms.
+
+    ``discovered`` is a *spanning* record: an edge into a node another frontier
+    already reached is dropped, because a node reachable two ways is one member
+    of a set. ``edges`` is the induced subgraph, which is what a reading that
+    counts routes, or one that asks whether this node stands above that one,
+    has to have. Over a tree the two coincide, so a fixture that is not a DAG
+    cannot show the difference.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    discovered, edges = drive(MappingHierarchy(DIAMOND_DAG), _expand(("root",), "children"))
+
+    assert discovered["y"] == (), "`x` was already reached by `b`, so `y` discovered nothing"
+    assert edges["y"] == ("x",), "...and the edge from `y` to `x` is kept all the same"
+
+
+def test_the_descent_holds_one_tuple_per_node_where_it_discarded_nothing() -> None:
+    """The cost the descent publishes as *nothing over a tree*, asserted as nothing.
+
+    ``discovered`` is a subsequence of ``edges`` by construction, and over a
+    tree it is the whole of it -- every reply is fresh, because no node has a
+    second parent to have reached it first. Rebuilding a tuple there holds two
+    equal tuples per node and doubles the descent's memory against the shape
+    that pays it most, which is the opposite of the claim ``_expand`` makes for
+    keeping the replies at all.
+
+    Identity rather than equality, because equality is what the old shape also
+    satisfied. Both tuples are immutable, so sharing one is a memory question
+    and never a visible one.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    discovered, edges = drive(MappingHierarchy(BRANCHING), _expand(("root",), "children"))
+
+    assert set(discovered) == set(edges)
+    for node_id in edges:
+        assert discovered[node_id] is edges[node_id], (
+            f"`{node_id}` discarded nothing, so the descent should keep one tuple"
+        )
+
+
+def test_the_descent_still_separates_the_two_records_where_it_did_discard() -> None:
+    """Sharing the tuple where nothing was dropped does not merge the records.
+
+    The DAG case is the one the two records exist for, so it is asserted beside
+    the tree case rather than trusted to the test above it.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    discovered, edges = drive(MappingHierarchy(DIAMOND_DAG), _expand(("root",), "children"))
+
+    assert discovered["y"] is not edges["y"]
+    assert discovered["y"] == () and edges["y"] == ("x",)
 
 
 # --------------------------------------------------------------------------
