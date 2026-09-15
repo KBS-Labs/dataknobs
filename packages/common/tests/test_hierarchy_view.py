@@ -30,6 +30,7 @@ from dataknobs_common.hierarchy import (
     HierarchyView,
     MappingHierarchy,
     _MappingBacking,
+    paths_to_root,
 )
 from dataknobs_common.ontology import (
     AsyncMappingAssertionSource,
@@ -80,14 +81,20 @@ def test_the_members_answer_with_no_store_no_embedder_and_no_loop(
 
 
 def test_parents_are_plural() -> None:
-    """A node with two parents gives two views, never a chosen one.
+    """A node with two parents gives two views **and two paths up**.
 
     A single-parent answer anywhere in the view would silently pick one edge
-    of a DAG, which is the lie the structure axis exists not to tell.
+    of a DAG, which is the lie the structure axis exists not to tell. The
+    second clause is where that lie is easiest to tell by accident: the six
+    walks composed over the shared descent deduplicate per walk, and a path
+    walk written over one of them returns one route where two exist. One edge
+    with two consumers, so both are asserted here rather than a file apart.
     """
-    view = HierarchyView(MappingHierarchy({"f": ("c", "d"), "c": (), "d": ()}), "f")
+    diamond = MappingHierarchy({"f": ("c", "d"), "c": ("top",), "d": ("top",), "top": ()})
+    view = HierarchyView(diamond, "f")
 
     assert [above.node for above in view.parents()] == ["c", "d"]
+    assert paths_to_root(diamond, "f") == (("f", "c", "top"), ("f", "d", "top"))
 
 
 def test_a_non_string_key_round_trips() -> None:

@@ -71,11 +71,13 @@ from dataknobs_common._walk_core import (
     _ancestors,
     _async_reply,
     _children_at_depth,
+    _deepest_common_ancestor,
     _descendants,
     _descendants_to_depth,
     _flatten,
     _leaves,
     _parent_edges,
+    _paths_to_root,
     _refuse_a_spent_walk,
     _refuse_an_unusable_bound,
     _sync_reply,
@@ -112,17 +114,21 @@ __all__ = [
     "ancestors",
     "async_ancestors",
     "async_children_at_depth",
+    "async_deepest_common_ancestor",
     "async_descendants",
     "async_descendants_to_depth",
     "async_drive",
     "async_flatten",
     "async_leaves",
+    "async_paths_to_root",
     "children_at_depth",
+    "deepest_common_ancestor",
     "descendants",
     "descendants_to_depth",
     "drive",
     "flatten",
     "leaves",
+    "paths_to_root",
 ]
 
 #: How many singular calls an asynchronous frontier read may have outstanding.
@@ -357,11 +363,16 @@ def drive(hierarchy: Hierarchy[_K], walk: Walk[_K, _T], *, cache: WalkCache | No
     """Run a walk against a synchronous hierarchy.
 
     ``cache`` is where the walk remembers an edge reply, and there is **no
-    default one**: a walk composed here asks the backing about a node exactly
-    once, so a memo built per call would hold a second copy of every reply for
-    a walk that will never read it back. A whole-axis walk is where that shows
-    -- :meth:`MappingHierarchy.snapshot` is one -- and it measured 107% of what
+    default one**: a walk here asks the backing about a node exactly once, so a
+    memo built per call would hold a second copy of every reply for a walk that
+    will never read it back. A whole-axis walk is where that shows --
+    :meth:`MappingHierarchy.snapshot` is one -- and it measured 107% of what
     the walk returns.
+
+    That is a property of how the walks are *built* rather than a count of
+    them: each is a reading of one level-synchronous descent, and the descent
+    keeps every reply it receives, so a reading wanting an edge twice finds it
+    in hand rather than asking again.
 
     So a cache here is for spending edge replies **across** walks, and it is
     the caller's because only they can say when it is stale. It is also theirs
@@ -442,9 +453,9 @@ async def async_drive(
 def _refuse_an_unknown_anchor(node_id: object) -> NoReturn:
     """Refuse an anchor the axis does not contain, for an *including* walk.
 
-    The anchor is emitted by four of the walks below, so seeding a frontier
-    with it unchecked returns an id the hierarchy does not contain as though it
-    were a term of it -- and the caller cannot tell, because a one-element
+    An anchor a walk can **emit** is one it has to know, so seeding a frontier
+    with an id the hierarchy does not contain returns it as though it were a
+    term of the axis -- and the caller cannot tell, because a one-element
     result is exactly what a childless node gives. That collapses *nothing
     below this node* into *this node is not here*, which are the two answers
     :meth:`Hierarchy.contains` says in its own docstring it exists to keep
@@ -455,6 +466,15 @@ def _refuse_an_unknown_anchor(node_id: object) -> NoReturn:
     walk needs neither -- :func:`ancestors` and :func:`descendants` return
     nothing false about an unknown anchor, so the answer there is ambiguous
     rather than incorrect and one ``contains`` call resolves it.
+
+    **Emitting is the test, and it is not the same as returning a sequence.**
+    :func:`deepest_common_ancestor` returns one key rather than a tuple and may
+    return either argument, which makes both of its arguments anchors this
+    refuses. It read as an excluding walk for a while on the strength of
+    answering ``None`` for an unknown node -- true of two *different* unknown
+    nodes, and false of the same one twice, which came back as itself. A rule
+    that holds for one shape of a walk's input and not another is not the rule
+    it was taken for.
 
     Shared by both flavours rather than written into each: the ``await`` is on
     the containment question, not on the refusal, so the message is
@@ -483,6 +503,30 @@ async def _async_refuse_unless_known(hierarchy: AsyncHierarchy[K], node_id: K | 
         _refuse_an_unknown_anchor(node_id)
 
 
+def _refuse_unless_both_known(hierarchy: Hierarchy[K], a: K, b: K) -> None:
+    """Refuse either anchor the axis does not contain, asking about each once.
+
+    The two-anchor walk's version of :func:`_refuse_unless_known`, and shared
+    rather than written into both flavours for the reason every refusal here is
+    shared: which of two unknown anchors gets reported is observable, so it is
+    a rule, and a rule a twin re-implements is a rule that drifts.
+
+    **The pair is deduplicated**, like the seeds the walk then descends from.
+    ``a == b`` is a question a caller may legitimately ask -- it is the one
+    :func:`_deduped_seeds` exists for on the other side of this call -- and
+    asking a backing the same containment question twice to answer it is a
+    round trip bought for nothing.
+    """
+    for node_id in dict.fromkeys((a, b)):
+        _refuse_unless_known(hierarchy, node_id)
+
+
+async def _async_refuse_unless_both_known(hierarchy: AsyncHierarchy[K], a: K, b: K) -> None:
+    """:func:`_refuse_unless_both_known`'s twin. The ``await`` is the whole difference."""
+    for node_id in dict.fromkeys((a, b)):
+        await _async_refuse_unless_known(hierarchy, node_id)
+
+
 # --------------------------------------------------------------------------
 # The public walks
 # --------------------------------------------------------------------------
@@ -497,8 +541,8 @@ def ancestors(
     node once. ``K`` is inferred from ``hierarchy``.
 
     **An empty result means either a root or an unknown node**, and this does
-    not refuse the second — unlike the four walks here that *include* their
-    anchor, which do. The difference is recoverability rather than taste. An
+    not refuse the second — unlike every walk here that can *emit* its anchor,
+    which does. The difference is recoverability rather than taste. An
     including walk emits an unknown anchor as a term of the axis, so the caller
     receives a wrong answer they cannot detect; see
     :func:`_refuse_an_unknown_anchor`. This excludes its anchor, so nothing
@@ -740,6 +784,154 @@ async def async_leaves(
     await _async_refuse_unless_known(hierarchy, under)
     return await async_drive(
         hierarchy, _leaves(under), max_concurrency=max_concurrency, cache=cache
+    )
+
+
+def paths_to_root(
+    hierarchy: Hierarchy[K],
+    node_id: K,
+    *,
+    max_paths: int | None = None,
+    cache: WalkCache | None = None,
+) -> tuple[tuple[K, ...], ...]:
+    """Every way up from ``node_id``, one tuple per route, the node at index 0.
+
+    A node with two parents gives **two paths**, which is the answer
+    :func:`ancestors` cannot give: that walk returns the set of nodes above,
+    deduplicated, and a consumer asking *how did we get here* needs the routes
+    rather than the membership. The cycle guard is scoped to the route for the
+    same reason -- a node reachable two ways appears on both.
+
+    Each path runs from ``node_id`` outward to a node that cannot be extended:
+    a root, or a node whose every parent is already on that path. **Cyclic data
+    therefore returns paths that reach no root**, and nothing is raised.
+
+    **The result does not say which ending a path had**, and a caller counting
+    *routes that reach a root* has to ask: ``hierarchy.parents(path[-1])`` is
+    empty for a root and non-empty for a path that closed a cycle. Over acyclic
+    data every path reaches a root and the question does not arise, which is
+    why the distinction is one call rather than a second return value.
+
+    Paths come back in **parent order, outermost first** -- every path through
+    a node's first parent precedes every path through its second, with
+    ``parents()``'s own order deciding which is which.
+
+    **An anchor the axis does not contain is refused**, because this walk emits
+    it: an unknown node comes back as ``((node_id,),)``, which is exactly the
+    shape a root gives. See :func:`_refuse_an_unknown_anchor`.
+
+    **The cost is the ascent, and the result is the question's own size.** The
+    walk asks each node above the anchor exactly once, one frontier per level,
+    like every other walk here -- the routes are enumerated afterwards from
+    replies already in hand. What the ascent cannot bound is the *answer*:
+    maximal routes double per stacked branch point, so a sixty-one node axis
+    can carry a million ways up and this returns all of them.
+
+    **``max_paths`` is the ceiling for that, and it refuses rather than
+    truncating.** Exceeding it raises
+    :class:`~dataknobs_common.exceptions.OperationError` carrying the anchor
+    and the ceiling. Returning the first ``max_paths`` routes was the other
+    candidate and is the worse one: it collapses *there were exactly this many
+    ways up* into *there were at least this many*, which is the pair of answers
+    ``contains()`` and the unknown-anchor refusal exist to keep apart. So what
+    comes back is every maximal route or nothing, and a caller who sets a
+    ceiling the axis stays under holds exactly what they would have held
+    without one.
+
+    The ceiling is read while the routes are emitted rather than afterwards, so
+    a refusal costs the ascent and not the answer it declined to build. It
+    bounds the **routes** and not the depth, because depth is not what
+    explodes: an axis three levels deep whose every node has ten parents
+    carries a thousand routes, and a bound on the descent would both miss that
+    and truncate each route at a node the walk never asked about -- which is
+    not *unextendable* but *unknown*, and would report a bound as a property of
+    the axis.
+
+    A caller who cannot afford even a bounded enumeration wants membership
+    rather than routes, which :func:`ancestors` answers over the same ascent
+    for the size of the axis.
+    """
+    _refuse_unless_known(hierarchy, node_id)
+    return drive(hierarchy, _paths_to_root(node_id, max_paths), cache=cache)
+
+
+async def async_paths_to_root(
+    hierarchy: AsyncHierarchy[K],
+    node_id: K,
+    *,
+    max_paths: int | None = None,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> tuple[tuple[K, ...], ...]:
+    """:func:`paths_to_root` over an asynchronous hierarchy.
+
+    **Two bounds, and they bound different things.** ``max_concurrency`` is the
+    frontier's, shared with every twin here, and narrows how much of one level
+    goes out at once. ``max_paths`` is the answer's, shared with the
+    synchronous half, and is reached after the last request has returned.
+    """
+    await _async_refuse_unless_known(hierarchy, node_id)
+    return await async_drive(
+        hierarchy,
+        _paths_to_root(node_id, max_paths),
+        max_concurrency=max_concurrency,
+        cache=cache,
+    )
+
+
+def deepest_common_ancestor(
+    hierarchy: Hierarchy[K], a: K, b: K, *, cache: WalkCache | None = None
+) -> K | None:
+    """The deepest node above both ``a`` and ``b``, or ``None`` if there is none.
+
+    **Deepest, which over a DAG is not the same as nearest.** The answer is a
+    common ancestor with no other common ancestor standing below it. Distance
+    from ``a`` cannot decide that: one shortcut edge -- a node naming both a
+    broad category and a narrow one -- puts the broad category *closer* to
+    ``a`` than a common ancestor that stands strictly beneath it, and the
+    answer a caller wants is the specific one.
+
+    **Either argument may be the answer**: each chain includes its own end, so
+    an ancestor of the other node is returned rather than passed over.
+
+    **The tie-break is asymmetric.** Over a DAG several common ancestors can be
+    minimal and pairwise incomparable, with nothing to choose between them on
+    depth; the answer is then the first in ``a``'s own ancestry, nearest first,
+    so swapping the arguments can swap the answer. Over a tree there is one
+    candidate and the asymmetry is invisible.
+
+    **An argument the axis does not contain is refused**, like every walk here
+    that can emit its anchor -- and this one emits either of them. ``None``
+    means the two nodes have no common ancestor and nothing else; it used to
+    mean that *or* that an argument was unknown, which was defended as
+    ambiguous-rather-than-wrong until the same unknown node passed twice came
+    back as itself.
+
+    **It asks each node above either argument exactly once**, one frontier per
+    level: a single ascent seeded by both, with each argument's own chain
+    recovered afterwards from the replies. ``cache`` is :func:`drive`'s, and it
+    is for spending replies across *other* walks -- there is nothing here for
+    it to save.
+    """
+    _refuse_unless_both_known(hierarchy, a, b)
+    return drive(hierarchy, _deepest_common_ancestor(a, b), cache=cache)
+
+
+async def async_deepest_common_ancestor(
+    hierarchy: AsyncHierarchy[K],
+    a: K,
+    b: K,
+    *,
+    max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+    cache: WalkCache | None = None,
+) -> K | None:
+    """:func:`deepest_common_ancestor` over an asynchronous hierarchy."""
+    await _async_refuse_unless_both_known(hierarchy, a, b)
+    return await async_drive(
+        hierarchy,
+        _deepest_common_ancestor(a, b),
+        max_concurrency=max_concurrency,
+        cache=cache,
     )
 
 
@@ -1220,7 +1412,7 @@ class AsyncMappingHierarchy(_MappingBacking[K]):
         axis that can enumerate never reaches the walk, so it never reaches the
         bound either -- one query has no frontier to fan out over.
         """
-        _refuse_an_unusable_bound(max_concurrency)
+        _refuse_an_unusable_bound(max_concurrency, "max_concurrency")
         edges = getattr(hierarchy, "parent_edges", None)
         if edges is not None:
             return cls(dict(cast("Mapping[K, Sequence[K]]", await edges())))

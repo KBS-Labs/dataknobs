@@ -9,6 +9,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`paths_to_root` and `deepest_common_ancestor`, in both flavours** — the
+  last two walks over `Hierarchy`, each with an `async_` twin, and both
+  readings of the descent the other six share.
+
+  **`paths_to_root` answers a question `ancestors` cannot.** That walk returns
+  the set of nodes above one, deduplicated, which is *what is above me*;
+  this returns one tuple per route, anchor at index 0, which is *how did I get
+  here*. A node with two parents gives two paths where `ancestors` gives one
+  entry for each shared node above it.
+
+  **Its cycle guard is scoped to the route rather than to the walk.**
+  Reachability is a property of a route: a node on two routes is two answers,
+  and a walk-scoped visited set returns one path where two exist. A path is
+  emitted when it cannot be extended — at a root, or at a node whose every
+  parent is already on that path — so no path here is a prefix of another, and
+  **cyclic data returns paths that reach no root** rather than raising. The two
+  endings look alike in the result, because the result is routes and not a
+  verdict about the axis; `parents(path[-1])` is empty for a root and non-empty
+  for a path that closed a cycle. Paths come back in parent order, outermost
+  first. An anchor the axis does not contain is refused, because `(("x",),)` is
+  exactly the shape a root gives.
+
+  **`max_paths` bounds the one cost the ascent cannot.** The fetch is one
+  request per node however branchy the axis is; the number of maximal routes up
+  it doubles per stacked branch point, so a sixty-one node axis can carry a
+  million. Exceeding the ceiling raises `OperationError` carrying the anchor
+  and the ceiling, rather than returning the first `max_paths` routes —
+  truncating would collapse *there were exactly this many ways up* into *there
+  were at least this many*, which is the pair of answers `contains()` and the
+  unknown-anchor refusal exist to keep apart. The ceiling is read while routes
+  are emitted, so a refusal costs the ascent and not the answer it declined to
+  build, and a ceiling the axis stays under changes nothing. It bounds routes
+  rather than depth deliberately: an axis three levels deep whose every node
+  has ten parents carries a thousand routes, and a bound on the descent would
+  both miss that and end each route at a node the walk never asked about —
+  which is *unknown* rather than *unextendable*. `max_paths=None` is the
+  default and is unbounded, because a ceiling nobody asked for turns a correct
+  answer into an exception.
+
+  The bound refusal below one is now shared with `max_concurrency` and names
+  the caller's keyword: two bounds, one rule, one message shape.
+
+  **`deepest_common_ancestor` returns the deepest node above two others, or
+  `None`** — a common ancestor with no *other* common ancestor standing below
+  it. Deepest is a claim about the partial order and not about distance, and
+  those agree only over a tree: one shortcut edge, a node asserted under both a
+  broad category and a narrow one, puts the broad category *nearer* than a
+  common ancestor standing strictly beneath it. Either argument may be the
+  answer. The tie-break is **asymmetric** and is part of the definition: over a
+  DAG several common ancestors can be minimal and pairwise incomparable, with
+  nothing to choose between them on depth, and the answer is then the first in
+  the first argument's own ancestry, nearest first — so swapping the arguments
+  can swap the answer. Mutual ancestry is a tie rather than an exclusion, which
+  is the only sense *deepest* has inside a cycle. Both arguments are anchors
+  and an unknown one is refused, like every walk here that can emit its anchor;
+  `None` means the two nodes have no common ancestor and nothing else.
+
+- **One descent underneath every walk, keeping every edge it is told about.**
+  A walk answering *what is above me* can drop the second edge into a node two
+  frontiers reach, because a node reachable two ways is one member of a set. A
+  walk answering *how did I get here*, or *does this ancestor stand above that
+  one*, cannot: those are the questions the dropped edge is the answer to. The
+  shared descent keeps the whole reply, so the readings that need the induced
+  subgraph have it and the readings that do not are unaffected — over a tree
+  the two coincide and the difference costs nothing.
+
+  Repeated neighbours are collapsed there too, once, for every reading:
+  `parents()` and `children()` are arbitrary consumer code and a query over a
+  join answers one row per match, so a backing naming the same edge twice is
+  one edge rather than two routes.
+
+  **Every walk this package ships is now a reading of that one descent**, which
+  restores three properties as structural claims rather than tallies. Each asks
+  its backing about a node exactly once — `deepest_common_ancestor` seeds one
+  ascent with both arguments where two composed ancestor walks re-asked the
+  ancestry they shared, 44 requests over a 23-node axis where 23 answer it,
+  with no cache and nothing to publish. Each asks about a
+  **frontier** rather than a node, so a bulk backing gets one query per level
+  and `async_drive` its round of concurrency per depth: `paths_to_root` over a
+  node with eight parents is two queries rather than nine, and
+  `async_paths_to_root`'s `max_concurrency` binds like every other twin's. And
+  no walk keeps a memo of its own: the route enumeration reads replies already
+  in hand — 16 requests for the sixteen nodes carrying thirty-two routes, where
+  a route-at-a-time descent needed 125 and a memo to buy them back.
+
+  `cache=` stays what it always was on all four new names, as on every walk
+  this package ships: for spending replies across *other* walks, with no
+  exception and no walk depending on one.
+
 - **Five more walks over `Hierarchy`, in both flavours** — `descendants`,
   `descendants_to_depth`, `children_at_depth`, `flatten` and `leaves`, each
   with an `async_` twin, beside the `ancestors` pair that was there before.
@@ -212,9 +301,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 128 names, taking the package's `__all__` to 333. Every one of them was already importable by module path; what
-  changes is that they are now a promise this package keeps rather than a path
-  that happened to work. Nothing is renamed and nothing shadows an existing
+  the resolution cascade — 132 names, taking the package's `__all__` to 337.
+  Every one of them was already importable by module path; what changes is that
+  they are now a promise this package keeps rather than a path that happened to
+  work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the
   file's own bindings, since a name published by an import line the list never
   mentions is the collision the list cannot see.

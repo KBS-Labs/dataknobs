@@ -19,10 +19,13 @@ only become claims once there is more than one walk to make them:
   descent already received -- so the backing sees each node exactly once
   whatever cache the caller did or did not supply.
 
-The differential and the parity claims the neighbouring suite makes are not
-repeated here; what is repeated, deliberately, is that every walk runs over a
-cyclic fixture, because a walk that terminates by luck is indistinguishable
-from one that terminates by construction until it does not.
+The differential and the parity claims are the neighbouring suite's and are not
+repeated here. The cyclic differential used to be: five of these walks were run
+over a cyclic fixture of this file's own while ``ancestors`` was run over an
+identical one next door, which is two tests over two copies making one claim
+about six of eight walks. It is now one parametrisation over one fixture
+reaching all eight, and it lives beside the other differential because the
+walks it covers are not all descending ones.
 """
 
 from __future__ import annotations
@@ -99,16 +102,6 @@ ASCENDING_DIAMOND: Mapping[str, tuple[str, ...]] = {
     "p1": ("g",),
     "p2": (),
     "z": ("p1", "p2"),
-}
-
-#: root -> a -> c -> f -> root. Every walk here runs over it.
-CYCLIC: Mapping[str, tuple[str, ...]] = {
-    "f": ("c", "d"),
-    "c": ("a",),
-    "d": ("b", "root"),
-    "a": ("root",),
-    "b": ("root",),
-    "root": ("f",),
 }
 
 
@@ -362,27 +355,88 @@ def test_childlessness_is_the_reply_and_not_the_discovery_edges() -> None:
     assert leaves(hierarchy, under="root") == ("x",)
 
 
-def test_a_bounded_descent_records_childlessness_only_for_what_it_asked() -> None:
+def test_a_bounded_descent_keeps_replies_only_for_what_it_asked() -> None:
     """The invariant the descent's pair carries, and the one way to misread it.
 
-    ``childless`` is a fact about *replies*, so it covers exactly the nodes a
-    reply arrived for -- and a bounded descent stops before asking its last
-    level. ``discovered`` takes a key for every node that entered a frontier
-    and for no other, so the two together say which is which: absent from
-    ``discovered`` means *never asked*, never *has children*. ``a1`` is the
-    case, a genuine leaf the bound stopped short of, and a reader concluding
-    from its absence that it has children would be wrong about it.
+    ``edges`` is a record of *replies*, so it takes a key for exactly the nodes
+    a reply arrived for -- and a bounded descent stops before asking its last
+    level. Absent from it means *never asked*, never *has no children*: ``a1``
+    is the case, a genuine leaf the bound stopped short of, and a reader
+    concluding anything from its absence would be wrong about it.
+
+    That is why the keys and not a separate set carry the boundary. Reading
+    childlessness as ``not edges[node_id]`` raises on a node the descent never
+    asked about, where a membership test against a ``childless`` set answered
+    ``False`` and looked like an answer.
     """
     from dataknobs_common._walk_core import _expand
 
     hierarchy = MappingHierarchy(BRANCHING)
 
-    discovered, childless = drive(hierarchy, _expand(("root",), "children", max_depth=2))
+    discovered, edges = drive(hierarchy, _expand(("root",), "children", max_depth=2))
 
     assert set(discovered) == {"root", "a", "b"}, "a key per node that entered a frontier"
-    assert childless == set(), "nothing that was asked answered empty"
-    assert "a1" not in discovered, "the bound stopped before asking it"
+    assert set(edges) == set(discovered), "a reply per node that entered a frontier"
+    assert not any(reply == () for reply in edges.values()), "nothing asked answered empty"
+    assert "a1" not in edges, "the bound stopped before asking it"
     assert hierarchy.children("a1") == (), "and it is childless all the same"
+
+
+def test_the_descent_keeps_the_edges_its_discovery_record_drops() -> None:
+    """The discard that made two readings look like two algorithms.
+
+    ``discovered`` is a *spanning* record: an edge into a node another frontier
+    already reached is dropped, because a node reachable two ways is one member
+    of a set. ``edges`` is the induced subgraph, which is what a reading that
+    counts routes, or one that asks whether this node stands above that one,
+    has to have. Over a tree the two coincide, so a fixture that is not a DAG
+    cannot show the difference.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    discovered, edges = drive(MappingHierarchy(DIAMOND_DAG), _expand(("root",), "children"))
+
+    assert discovered["y"] == (), "`x` was already reached by `b`, so `y` discovered nothing"
+    assert edges["y"] == ("x",), "...and the edge from `y` to `x` is kept all the same"
+
+
+def test_the_descent_holds_one_tuple_per_node_where_it_discarded_nothing() -> None:
+    """The cost the descent publishes as *nothing over a tree*, asserted as nothing.
+
+    ``discovered`` is a subsequence of ``edges`` by construction, and over a
+    tree it is the whole of it -- every reply is fresh, because no node has a
+    second parent to have reached it first. Rebuilding a tuple there holds two
+    equal tuples per node and doubles the descent's memory against the shape
+    that pays it most, which is the opposite of the claim ``_expand`` makes for
+    keeping the replies at all.
+
+    Identity rather than equality, because equality is what the old shape also
+    satisfied. Both tuples are immutable, so sharing one is a memory question
+    and never a visible one.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    discovered, edges = drive(MappingHierarchy(BRANCHING), _expand(("root",), "children"))
+
+    assert set(discovered) == set(edges)
+    for node_id in edges:
+        assert discovered[node_id] is edges[node_id], (
+            f"`{node_id}` discarded nothing, so the descent should keep one tuple"
+        )
+
+
+def test_the_descent_still_separates_the_two_records_where_it_did_discard() -> None:
+    """Sharing the tuple where nothing was dropped does not merge the records.
+
+    The DAG case is the one the two records exist for, so it is asserted beside
+    the tree case rather than trusted to the test above it.
+    """
+    from dataknobs_common._walk_core import _expand
+
+    discovered, edges = drive(MappingHierarchy(DIAMOND_DAG), _expand(("root",), "children"))
+
+    assert discovered["y"] is not edges["y"]
+    assert discovered["y"] == () and edges["y"] == ("x",)
 
 
 # --------------------------------------------------------------------------
@@ -502,44 +556,12 @@ def test_the_memo_answers_in_request_order() -> None:
 
 
 # --------------------------------------------------------------------------
-# Cycles, and both flavours
+# The awaited fixture these walks are driven over
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("sync_walk", "async_walk"),
-    [
-        (lambda h: descendants(h, "root"), lambda h: async_descendants(h, "root")),
-        (lambda h: flatten(h, from_id="root"), lambda h: async_flatten(h, from_id="root")),
-        (
-            lambda h: descendants_to_depth(h, "root", 2),
-            lambda h: async_descendants_to_depth(h, "root", 2),
-        ),
-        (
-            lambda h: children_at_depth(h, "root", 2),
-            lambda h: async_children_at_depth(h, "root", 2),
-        ),
-        (lambda h: leaves(h, under="root"), lambda h: async_leaves(h, under="root")),
-    ],
-    ids=["descendants", "flatten", "descendants_to_depth", "children_at_depth", "leaves"],
-)
-def test_every_walk_terminates_on_cyclic_data_and_both_flavours_agree(
-    sync_walk: Any, async_walk: Any
-) -> None:
-    """A cycle is the input that separates a correct walk from a lucky one.
-
-    Both halves in one test because they are one claim: a visited set that is
-    unconditional in one flavour and conditional in the other is a difference
-    the answers show and the surfaces do not.
-    """
-    result = sync_walk(MappingHierarchy(CYCLIC))
-
-    assert len(set(result)) == len(result), "a node was emitted twice"
-    assert result == asyncio.run(async_walk(_AsyncMapping(CYCLIC)))
-
-
 class _AsyncMapping:
-    """The cyclic fixture, awaited. Local because only this file's twin needs it."""
+    """A parent mapping, awaited. Local because only this file's twins need it."""
 
     def __init__(self, parents: Mapping[str, tuple[str, ...]]) -> None:
         self._inner = MappingHierarchy(parents)
