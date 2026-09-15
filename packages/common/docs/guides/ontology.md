@@ -189,6 +189,87 @@ the relation a nested declaration means when it names none.
 A relation can be written as a bare string or as a `RelationType`;
 `relation_id` reduces either to the string, which is what every holder stores.
 
+## What an entity id may be
+
+**Whatever your records are keyed by.** An id is a `str` unless you say
+otherwise, and every vocabulary loaded from a document is `str`-keyed, because
+an author types strings. What changed is that the type is a parameter rather
+than a pin, so a source over your own key works with the same axes, cursors and
+walks:
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Sku:
+    plant: str
+    line: int
+```
+
+Binding it costs one thing, and the type checker will not let you skip it: a
+**`KeyCodec`**, which says how the key is written down when it leaves and read
+back when it arrives.
+
+```python
+from dataknobs_common.ontology import KeyCodec, StrCodec, load_ontology
+
+
+class SkuCodec:
+    def to_id(self, key: Sku, /) -> str:
+        return f"{key.plant}/{key.line}"
+
+    def from_id(self, rendered: str, /) -> Sku:
+        plant, _, line = rendered.rpartition("/")
+        return Sku(plant=plant, line=int(line))
+
+
+assert isinstance(SkuCodec(), KeyCodec)
+```
+
+**It has no default, and that is the point rather than an omission.** It cannot
+be inferred: *a type that has a string representation* describes every type in
+Python, so no bound can single out the ones that mean it. And it cannot be
+`repr()`: a key is addressed by **equality**, while a default `repr` is a
+function of **identity** — so two equal keys would render to two different
+strings, one node would address two entities, and nothing would report it.
+
+```python
+class Opaque:
+    def __init__(self, part): self.part = part
+    def __eq__(self, other): return isinstance(other, Opaque) and other.part == self.part
+    def __hash__(self): return hash(self.part)
+
+
+first, second = Opaque("a-1"), Opaque("a-1")
+
+assert first == second and hash(first) == hash(second)   # the structure axis is fine
+assert repr(first) != repr(second)                       # the rendering is not
+```
+
+So the codec is a field an `Ontology` requires. `StrCodec` is the identity and
+what `load_ontology` supplies, so **nothing you already wrote changes**: a
+vocabulary from a document keeps its string ids, `onto.entity("beagle")` takes
+the same argument it always took, and `qualify` / `localize` answer what they
+always answered.
+
+```python
+vocabulary = load_ontology(
+    {"id": "mammals", "entities": [{"id": "beagle", "type": "Species"}],
+     "entity_types": [{"id": "Species"}]}
+)
+
+assert isinstance(vocabulary.codec, StrCodec)
+assert vocabulary.qualify("beagle") == "mammals:beagle"
+assert vocabulary.localize("mammals:beagle") == "beagle"
+assert vocabulary.entity("beagle").name == "beagle"
+```
+
+The rendering happens only where an id **leaves** — `qualify` out, `localize`
+back. Everything between simply carries the key: `Entity.id`, `Assertion.subject`,
+every `entity_id` on a resolution. So a value type never reaches for a codec,
+and a key that is not a `str` never becomes one by accident.
+
 ## Sources, and why they are protocols
 
 `EntitySource` and `AssertionSource` are what an `Ontology` holds, and each has
