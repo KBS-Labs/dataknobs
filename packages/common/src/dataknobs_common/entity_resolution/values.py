@@ -15,10 +15,21 @@ re-exported, not a copy.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Generic
+from typing import TYPE_CHECKING, Any, Generic, assert_type
+
+if sys.version_info >= (3, 13):  # pragma: no cover - 3.12 is the floor and what runs
+    from typing import TypeAliasType
+else:
+    # ``type_params`` is ``typing``'s only from 3.13 and ``requires-python`` is
+    # >=3.12, so this is a *runtime* need rather than a typing-only one:
+    # ``typing.TypeAliasType`` rejects the argument. Same shape, and same
+    # reason, as ``hierarchy``'s split over ``TypeVar``; the branch above
+    # deletes this dependency the day the floor rises.
+    from typing_extensions import TypeAliasType
 
 from dataknobs_common.entity_resolution.protocols import MembershipOracle
 from dataknobs_common.hierarchy import K
@@ -84,7 +95,22 @@ Within = str | Collection[str] | Mapping[str, str | Collection[str]] | None
 #: all three members of the union are, so a bare ``ScopeAuthority`` is
 #: ``ScopeAuthority[str]`` and every annotation written before the parameter
 #: existed means what it meant.
-type ScopeAuthority[K] = EntitySource[K] | AsyncEntitySource[K] | MembershipOracle[K] | None
+#:
+#: **Spelled with an explicit** :class:`~typing.TypeAliasType` **rather than a
+#: ``type`` statement**, and the difference is the whole default. ``type
+#: ScopeAuthority[K] = ...`` declares a *fresh* parameter in the alias's own
+#: scope -- unbounded, undefaulted, and shadowing the module-level :data:`K` it
+#: is spelled the same as -- so a bare ``ScopeAuthority`` binds ``Any`` into all
+#: three members and every wrong-typed source below type-checks. PEP 696 reaches
+#: ``type`` statements only at 3.13 and the floor is 3.12, so the default is not
+#: expressible in that form here. Passing :data:`K` as ``type_params`` carries
+#: the bound and the default that make the paragraph above true, and the
+#: **string** value keeps the lazy evaluation the three names require.
+ScopeAuthority = TypeAliasType(
+    "ScopeAuthority",
+    "EntitySource[K] | AsyncEntitySource[K] | MembershipOracle[K] | None",
+    type_params=(K,),
+)
 
 
 class Scoring(Enum):
@@ -604,7 +630,7 @@ def within_memberships(entity: Entity[K], source: ScopeAuthority[K] = None) -> M
     return {ENTITY_TYPE_KEY: entity.type}
 
 
-def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
+def within_axis_names(source: ScopeAuthority[Any] = None) -> frozenset[str]:
     """The axis names a source can be scoped on -- **the legal set**.
 
     A source satisfying
@@ -617,6 +643,15 @@ def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
     twice described as being. ``declares`` holds the type ids a source
     carries -- one axis's *values*, not the set of axis names -- so it could
     never have answered this question.
+
+    **``ScopeAuthority[Any]`` rather than the bare form**, here and on
+    :func:`refuse_unknown_axes`, and the two are the only places on this axis
+    that want it. :meth:`~dataknobs_common.entity_resolution.protocols.MembershipOracle.axes`
+    answers in axis *names* whatever the source is keyed by, so this reads
+    nothing that depends on the key -- and the bare form now means
+    ``[str]``, which would refuse a consumer's non-``str`` source for a
+    parameter neither function looks at. ``Any`` is the annotation that admits
+    any key rather than the one that silently claims one.
     """
     if isinstance(source, MembershipOracle):
         return frozenset(source.axes())
@@ -625,7 +660,7 @@ def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
 
 def refuse_unknown_axes(
     axes: Mapping[str, frozenset[str]],
-    source: ScopeAuthority = None,
+    source: ScopeAuthority[Any] = None,
 ) -> None:
     """Refuse a scope naming an axis the source does not publish.
 
@@ -680,3 +715,20 @@ def within_admits(axes: Mapping[str, frozenset[str]], memberships: Mapping[str, 
             every filter on it.
     """
     return all(memberships.get(axis) in admitted for axis, admitted in axes.items())
+
+
+if TYPE_CHECKING:  # pragma: no cover - a fence the type checker reads
+
+    def _the_scope_authority_defaults_to_str(source: ScopeAuthority) -> None:
+        """A bare :data:`ScopeAuthority` is ``ScopeAuthority[str]``.
+
+        The half that regresses silently, and the half a ``str``-bound suite
+        cannot see: this alias pairs an entity key with three protocols that
+        take one, so losing the default here binds ``Any`` into all three and a
+        wrong-typed source then type-checks with nothing to report it.
+        """
+        assert_type(
+            source, "EntitySource[str] | AsyncEntitySource[str] | MembershipOracle[str] | None"
+        )
+
+    del _the_scope_authority_defaults_to_str

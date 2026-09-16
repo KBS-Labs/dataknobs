@@ -193,10 +193,15 @@ class MembershipOracle(Protocol[K]):
     **Generic in the entity key**, and it is here rather than with the four
     sources because the type checker asked for it: the published default
     reads an ``Entity[K]``, so an oracle declared over an ``Entity[str]``
-    could not be handed one. It is the first protocol outside the widened four
-    that carrying a widened *value* forced, and it is not the last -- see
-    ``axes`` and the resolver protocols below, which carry widened values and
-    are still declared over ``str``.
+    could not be handed one. It is one of the protocols outside the widened
+    four that carrying a widened *value* forced -- the two resolvers above are
+    the others, for the same reason at one remove: a ``ResolutionResult``
+    carries candidates and a candidate carries an entity id.
+
+    :meth:`axes` below is the counter-case and is **correctly** ``str``. Its
+    answer is a set of axis *names*, which are authored in a scope rather than
+    keyed by an entity, so it reads the same whatever this protocol is bound
+    to. The two kinds of ``str`` in this class are not the same kind.
 
     The library derives membership from ``Entity.type`` -- see
     :func:`~dataknobs_common.entity_resolution.values.within_memberships`,

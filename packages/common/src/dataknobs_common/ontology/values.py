@@ -24,7 +24,11 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.ontology.model import InferenceMode, qualify as _qualify
-from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
+from dataknobs_common.ontology.taxonomy import (
+    AsyncTaxonomy,
+    Taxonomy,
+    _inherited_attributes,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -33,6 +37,7 @@ if TYPE_CHECKING:
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
     from dataknobs_common.ontology.model import (
         Assertion,
+        AttributeDef,
         Entity,
         EntityType,
         RelationType,
@@ -268,10 +273,12 @@ def _localize(ontology_id: str, qualified_id: str) -> str:
 class OntologyParts:
     """A validated config, mapped onto values, with no source bound yet.
 
-    Six of :class:`Ontology`'s ten fields verbatim, plus the declared rows
-    and the still-unbound ``sources:`` specs. The four it omits are all
+    Six of :class:`Ontology`'s eleven fields verbatim, plus the declared rows
+    and the still-unbound ``sources:`` specs. The five it omits are all
     downstream of binding: the two sources, the descriptions a door derives
-    from them, and the structure axes a door copies once they exist.
+    from them, the structure axes a door copies once they exist, and the codec
+    a door chooses -- ``StrCodec`` for a document, whose ids are the strings
+    its author typed.
 
     Returning this rather than an ontology is what lets one core serve every
     door: a core that inspected the config to decide which flavour to build
@@ -326,7 +333,20 @@ class Ontology(Generic[K]):
     #: would let an ``Ontology[Sku]`` be built carrying the identity codec,
     #: which type-checks and renders a ``Sku`` as its ``repr``. Pass
     #: ``StrCodec()`` for the ``str`` case, which is what both doors here do.
-    codec: KeyCodec[K]
+    #:
+    #: **Keyword-only, and still required** -- ``kw_only`` decides how an
+    #: argument may be *passed*, not whether it may be omitted, so this keeps
+    #: the guard above whole while removing the one thing it could not guard
+    #: against. A required field may not follow a defaulted one, so this could
+    #: not simply be appended the way :attr:`Taxonomy.entity_types` was; it
+    #: therefore lands at position nine, where :attr:`structures` used to be,
+    #: and a nine-positional construction would bind a structures mapping to a
+    #: codec. Both are objects, so nothing reports it at the construction and
+    #: the first symptom is a rendered key somewhere else entirely. Nothing
+    #: released depends on the order and all four construction sites in this
+    #: repository are keyword, so the fix is to make the misbinding
+    #: unspellable rather than to preserve a position.
+    codec: KeyCodec[K] = field(kw_only=True)
 
     #: The copied structure axes, keyed by the name the axis is reached
     #: under -- the key in :attr:`taxonomies`, which an alias may spell
@@ -408,6 +428,40 @@ class Ontology(Generic[K]):
             entity_types=self.entity_types,
         )
 
+    def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
+        """The attribute declarations ``entity_type`` may be asked for, nearest first.
+
+        **On the object that owns the store it reads.** The walk is over
+        :attr:`entity_types` and nothing else -- not :attr:`assertions`, not a
+        structure axis -- which is why the same question put to any taxonomy of
+        this vocabulary comes back with the same answer. Reaching it only
+        through :meth:`taxonomy` would mean building an axis to ask a question
+        that is purely about this object's own field, and choosing which axis
+        to build would be choosing something the answer does not depend on.
+
+        :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.inherited_attributes`
+        keeps its place and is the same walk over the same store: that is the
+        surface a schema projector holding an axis can reach without coming back
+        here, and this is the one a caller holding the vocabulary can reach
+        without building an axis. Neither is a second implementation -- both are
+        one line over the shared walk.
+
+        Args:
+            entity_type: The type to read the lattice up from.
+
+        Returns:
+            Nearest declaration first, one entry per attribute **name**: a
+            nearer declaration shadows a farther one of the same name, because
+            a subtype redeclaring a field is specialising it. ``[]`` for a type
+            declared with nothing, which is a different answer from the refusal
+            below and is why the two are kept apart.
+
+        Raises:
+            NotFoundError: Naming a type this vocabulary does not declare --
+                whether it is the one asked about or one reached from it.
+        """
+        return _inherited_attributes(self.entity_types, self.id, entity_type)
+
     def qualify(self, local_id: K, source_id: str | None = None) -> str:
         """This ontology's external id for ``local_id``.
 
@@ -441,13 +495,27 @@ class Ontology(Generic[K]):
         pair rather than a rendering: this member's documented contract is
         *what ``entity()`` takes*, and ``entity()`` takes ``K``. A rendering
         with no inverse could not satisfy it.
+
+        **A codec's own failures are the codec's**, and reach the caller
+        unwrapped. This member raises :class:`ValidationError` for an id
+        belonging to another ontology -- the part it can judge -- and then hands
+        the local segment to :attr:`codec`, whose ``from_id`` is a consumer's
+        function parsing a consumer's key space. An ``int("abc")`` in there
+        arrives as ``ValueError``. Wrapping it would put this package's name on
+        a diagnosis it did not make and cannot improve: the codec knows what
+        shape it expected and this frame does not.
+
+        Raises:
+            ValidationError: For an id qualified by a different ontology,
+                naming both. Whatever :attr:`codec` raises, unchanged, for a
+                local segment it cannot read.
         """
         return self.codec.from_id(_localize(self.id, qualified_id))
 
 
 @dataclass(frozen=True, eq=False)
 class AsyncOntology(Generic[K]):
-    """The same ten fields, with asynchronous backings.
+    """The same eleven fields, with asynchronous backings.
 
     ``entities`` is an :class:`~dataknobs_common.ontology.sources.AsyncEntitySource`
     and ``assertions`` an
@@ -469,8 +537,10 @@ class AsyncOntology(Generic[K]):
     taxonomies: Mapping[str, TaxonomyDefinition]
     describes: tuple[SourceDescription, ...]
 
-    #: :attr:`Ontology.codec`, and required here for the same reason.
-    codec: KeyCodec[K]
+    #: :attr:`Ontology.codec`, and required **and keyword-only** here for the
+    #: same two reasons. A twin that took it positionally would be the one
+    #: place the misbinding stayed spellable.
+    codec: KeyCodec[K] = field(kw_only=True)
 
     #: :attr:`Ontology.structures`, in an asynchronous slot.
     structures: Mapping[str, AsyncHierarchy[K]] = field(default_factory=dict)
@@ -518,6 +588,44 @@ class AsyncOntology(Generic[K]):
             assertions=self.assertions,
             entity_types=self.entity_types,
         )
+
+    def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
+        """The attribute declarations ``entity_type`` may be asked for, nearest first.
+
+        **On the object that owns the store it reads.** The walk is over
+        :attr:`entity_types` and nothing else -- not :attr:`assertions`, not a
+        structure axis -- which is why the same question put to any taxonomy of
+        this vocabulary comes back with the same answer. Reaching it only
+        through :meth:`taxonomy` would mean building an axis to ask a question
+        that is purely about this object's own field, and choosing which axis
+        to build would be choosing something the answer does not depend on.
+
+        :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.inherited_attributes`
+        keeps its place and is the same walk over the same store: that is the
+        surface a schema projector holding an axis can reach without coming back
+        here, and this is the one a caller holding the vocabulary can reach
+        without building an axis. Neither is a second implementation -- both are
+        one line over the shared walk.
+
+        **A plain ``def`` on this twin**, for the reason its
+        :meth:`taxonomy` gives: the store is a mapping this object is
+        already holding, so there is nothing here to suspend for.
+
+        Args:
+            entity_type: The type to read the lattice up from.
+
+        Returns:
+            Nearest declaration first, one entry per attribute **name**: a
+            nearer declaration shadows a farther one of the same name, because
+            a subtype redeclaring a field is specialising it. ``[]`` for a type
+            declared with nothing, which is a different answer from the refusal
+            below and is why the two are kept apart.
+
+        Raises:
+            NotFoundError: Naming a type this vocabulary does not declare --
+                whether it is the one asked about or one reached from it.
+        """
+        return _inherited_attributes(self.entity_types, self.id, entity_type)
 
     def qualify(self, local_id: K, source_id: str | None = None) -> str:
         """:meth:`Ontology.qualify`, unflavoured.

@@ -1475,8 +1475,16 @@ class MappingHierarchy(_MappingBacking[K]):
         a walk -- the only call site here that does so without being one. A
         caller who snapshots an axis and then walks the live axis pays for the
         descent twice without it, which is a count rather than a wrong answer
-        and therefore invisible in a green suite. **It reaches only the walking
-        branch**: an axis that publishes ``parent_edges`` is asked once and
+        and therefore invisible in a green suite.
+
+        **What it holds is ``children`` replies**, because that is the member a
+        descent asks -- so it is spent by a later ``descendants``,
+        ``descendants_to_depth``, ``flatten`` or ``leaves``, and an ``ancestors``
+        or ``paths_to_root`` after it gets nothing from it and asks ``parents``
+        as it would have. One cache belongs to one axis: replies keyed by node
+        say nothing about *which* structure answered, so a memo carried to a
+        second axis answers the first one's questions. **It reaches only the
+        walking branch**: an axis that publishes ``parent_edges`` is asked once and
         never descends, so there is no reply for a memo to hold. Supplying one
         there is not an error and saves nothing.
         """

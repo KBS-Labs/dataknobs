@@ -42,22 +42,6 @@ if TYPE_CHECKING:
 
     from dataknobs_common.entity_resolution.values import ResolutionRef
 
-#: Where an entity type's declared ``isa:`` parent is kept.
-#:
-#: The type lattice is a *different store* from the ``isa`` assertions between
-#: instances, and reading one as the other would put a schema node in a walk
-#: over instances. ``EntityType`` declares no field for it, so a loader parks
-#: it here, and :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.inherited_attributes`
-#: reads it back.
-#:
-#: **It lived in the loader until it had a second reader.** Its note there said
-#: it was parked *"until its home is decided"*, on the grounds that dropping a
-#: line the document author wrote is worse than keeping it under a documented
-#: key. The home is here, beside the type it describes, by the ordinary rule: a
-#: constant two modules read belongs with its subject rather than with the one
-#: that happened to write it.
-ENTITY_TYPE_ISA_KEY = "isa"
-
 #: The root of the type lattice, and its own type.
 DK_ENTITY_TYPE = "dk:EntityType"
 #: An ordinary instance of the root, naming the kind a relation is.
@@ -222,6 +206,28 @@ class EntityType(Entity[str]):
 
     type: str = DK_ENTITY_TYPE
     attributes: list[AttributeDef] = field(default_factory=list)
+    isa: str | None = None
+    """The type this one specialises, or ``None`` for a root of the lattice.
+
+    **A declared field rather than a documented key in** :attr:`metadata`,
+    which is where it was parked while nothing read it. The parking was
+    defensible then and is not now, for a reason measured rather than
+    anticipated: ``metadata`` is an open dict a loader copies **wholesale**
+    from the document, so while the parent lived in it a row could write one
+    the loader's own check never saw -- that check reads the declared ``isa:``,
+    and a parent written a level down inside ``metadata:`` reached the lattice
+    without passing it. A field is the fix at the source: there is no second
+    place a parent can be written, so there is nothing for a check to miss.
+
+    Same shape and same reason as :attr:`RelationType.inverse_of` one class
+    down -- a scalar reference to another declaration in the same section,
+    validated by the loader when the document is read.
+
+    Scalar rather than a collection: a type has at most one parent, which is
+    what lets
+    :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.inherited_attributes`
+    walk without choosing an order between branches.
+    """
 
 
 @dataclass
@@ -521,10 +527,18 @@ class ParentChoice(Protocol[K]):
 
 
 @dataclass(frozen=True)
-class TreeProjection:
-    """How a multi-parent axis is narrowed to a tree."""
+class TreeProjection(Generic[K]):
+    """How a multi-parent axis is narrowed to a tree.
 
-    choice: ParentChoice
+    **Generic in the node key**, like the two types it is written over:
+    :class:`ParentChoice` picks a parent from ``Sequence[K]`` and
+    :class:`ProjectionContext` carries the roots and depths in the same space,
+    so a holder that named the policy *bare* pinned both to ``str`` and left a
+    consumer's non-``str`` axis unable to declare a projection over itself. The
+    default keeps every existing spelling meaning what it meant.
+    """
+
+    choice: ParentChoice[K]
     on_cycle: CyclePolicy = CyclePolicy.REPORT
     order: SiblingOrder = SiblingOrder.BY_NAME
     order_key: str | None = None
@@ -580,7 +594,12 @@ class TaxonomyDefinition:
     name: str = ""
     description: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    projection: TreeProjection | None = None
+    #: ``TreeProjection[Any]`` rather than a bare one: this definition is the
+    #: authored half of an axis and is ``str``-keyed whatever the *instances*
+    #: are keyed by, so it cannot name the key its policy is written over.
+    #: ``Any`` admits a projection over any of them; a bare name would admit
+    #: only ``str``.
+    projection: TreeProjection[Any] | None = None
     materialization: Materialization = Materialization()
 
     def __post_init__(self) -> None:

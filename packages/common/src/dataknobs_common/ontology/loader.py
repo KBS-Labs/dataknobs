@@ -46,7 +46,6 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.ontology.model import (
-    ENTITY_TYPE_ISA_KEY,
     Assertion,
     AttributeDef,
     Entity,
@@ -645,27 +644,17 @@ def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
         type_id = str(_required(row, "id", "entity_types"))
         _refuse_colon("entity type id", type_id)
         _refuse_duplicate_id(built, type_id, "entity_types")
+        parent = row.get("isa")
         built[type_id] = EntityType(
             id=type_id,
             name=str(row.get("name", "")),
             description=row.get("description"),
             aliases=list(row.get("aliases", [])),
-            metadata=_type_metadata(row),
+            metadata=dict(row.get("metadata", {})),
             attributes=[_build_attribute(a) for a in row.get("attributes", [])],
+            isa=str(parent) if parent is not None else None,
         )
     return built
-
-
-def _type_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
-    """An entity type's metadata, with its declared ``isa:`` folded in.
-
-    See :data:`ENTITY_TYPE_ISA_KEY` for why the lattice lives here for now.
-    """
-    metadata = dict(row.get("metadata", {}))
-    parent = row.get("isa")
-    if parent is not None:
-        metadata[ENTITY_TYPE_ISA_KEY] = str(parent)
-    return metadata
 
 
 def _build_attribute(row: Mapping[str, Any]) -> AttributeDef:

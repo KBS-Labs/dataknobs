@@ -601,7 +601,7 @@ async def test_the_async_cursor_answers_from_the_content_axis_too() -> None:
 def test_an_ancestor_walk_and_the_ontology_fold_into_what_a_prompt_needs(
     onto: Ontology, axis: Taxonomy
 ) -> None:
-    """Case 4's ``Out`` column, assembled from the two axes it actually lives on.
+    """What a prompt needs, assembled from the two axes it actually lives on.
 
     Each ancestor's ``description`` comes off the **content** axis through
     :meth:`TaxonomyView.entity`; what is *asserted about* it comes off the

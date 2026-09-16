@@ -182,9 +182,10 @@ split_qualified("mammals:beagle")           # QualifiedId(ontology_id=..., sourc
 
 `RESERVED_ONTOLOGY_ID` is `dk`, the prefix this package keeps for itself:
 `DK_ENTITY_TYPE` and `DK_RELATION_TYPE` are the two built-in types every
-vocabulary has without declaring them. `ENTITY_TYPE_ISA_KEY` is the key an
-entity type's own parent is declared under, and `DEFAULT_NESTED_RELATION` is
-the relation a nested declaration means when it names none.
+vocabulary has without declaring them, and `DEFAULT_NESTED_RELATION` is the
+relation a nested declaration means when it names none. An entity type's own
+parent is `EntityType.isa` — a declared field, like `RelationType.inverse_of`,
+rather than a key in the open `metadata` dict.
 
 A relation can be written as a bare string or as a `RelationType`;
 `relation_id` reduces either to the string, which is what every holder stores.

@@ -56,7 +56,6 @@ from dataknobs_common.ontology.loader import (
 from dataknobs_common.ontology.model import (
     DK_ENTITY_TYPE,
     DK_RELATION_TYPE,
-    ENTITY_TYPE_ISA_KEY,
     Assertion,
     AttributeDef,
     CyclePolicy,
@@ -115,7 +114,6 @@ __all__ = [
     "DEFAULT_NESTED_RELATION",
     "DK_ENTITY_TYPE",
     "DK_RELATION_TYPE",
-    "ENTITY_TYPE_ISA_KEY",
     "RESERVED_ONTOLOGY_ID",
     "AliasFormSource",
     "Assertion",

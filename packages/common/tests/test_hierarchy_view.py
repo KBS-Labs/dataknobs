@@ -121,7 +121,13 @@ def test_the_two_descending_members_differ_and_a_re_fold_would_fail_here(
 async def test_the_two_descending_members_differ_on_the_twin_too(
     mammals_path: Path,
 ) -> None:
-    """The same pair, awaited -- ``D25``'s rule over the one asymmetry it has."""
+    """The same pair, awaited: two members rather than one taking ``depth=``.
+
+    The asymmetry is the whole reason they are two -- ``descendants`` excludes
+    its anchor and answers ``()`` for an unknown one, ``descendants_to_depth``
+    includes it and refuses one -- so a keyword would be selecting between two
+    contracts rather than bounding one.
+    """
     onto = await async_load_ontology(mammals_path)
     view = AsyncHierarchyView(AsyncAssertionHierarchy(onto.assertions, "isa"), "dog")
 

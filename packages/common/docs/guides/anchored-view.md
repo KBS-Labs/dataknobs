@@ -15,8 +15,9 @@ in it to go stale.
 ## Where the names live
 
 On the package door, with the rest of this family. All four are complete now —
-`HierarchyView` carries its ten members and `TaxonomyView` its thirteen — and
-they were published before they were, because adding a member to a class breaks
+`HierarchyView` carries its ten members and `TaxonomyView` its thirteen, and the
+four module walks that deliberately have no member are named in [What is not on
+it](#what-is-not-on-it) — and they were published before they were, because adding a member to a class breaks
 nobody while withholding the name costs a consumer something real. For the
 taxonomy cursors that cost was an annotation: `at()` hands you one, and the
 import only lets you write down what you hold. For `HierarchyView` it was the
@@ -327,20 +328,51 @@ except NotFoundError as refusal:
 
 Each carries the keywords its module function carries — `cache=` on all four,
 `max_paths=` on `paths_to_root()`, and `max_concurrency=` on every asynchronous
-twin. A cache spent across two walks is the caller's, and a snapshot taken from
-the same axis can fill it:
+twin. A cache spent across two walks is the caller's, and
+`MappingHierarchy.snapshot` takes one too — so a snapshot and a later walk over
+the same backing can share the replies instead of each paying for them:
 
 ```python
-from dataknobs_common import MappingHierarchy
+from dataknobs_common import HierarchyView, MappingHierarchy
 
+class CountingParents:
+    # A backing that reports how often it was asked to descend.
+    def __init__(self, parents):
+        self._parents, self.calls = parents, 0
+
+    def parents(self, node_id):
+        return self._parents.get(node_id, ())
+
+    def children(self, node_id):
+        self.calls += 1
+        return tuple(n for n, ps in self._parents.items() if node_id in ps)
+
+    def roots(self):
+        return tuple(n for n, ps in self._parents.items() if not ps)
+
+    def contains(self, node_id):
+        return node_id in self._parents
+
+edges = {"mammal": (), "dog": ("mammal",), "retriever": ("dog",),
+         "golden_retriever": ("retriever",), "beagle": ("dog",)}
+
+cold = CountingParents(edges)
+MappingHierarchy.snapshot(cold)
+answer = [d.node for d in HierarchyView(cold, "dog").descendants()]
+assert cold.calls == 9                      # five for the snapshot, four to descend
+
+warm = CountingParents(edges)
 memo: dict = {}
-copied = MappingHierarchy.snapshot(axis.structure, cache=memo)
-assert [d.node for d in axis.at("dog").descendants(cache=memo)] == [
-    "retriever",
-    "golden_retriever",
-    "beagle",
-]
+MappingHierarchy.snapshot(warm, cache=memo)
+assert [d.node for d in HierarchyView(warm, "dog").descendants(cache=memo)] == answer
+assert warm.calls == 5                      # the descent asks nothing new
 ```
+
+**The memo reaches the descending branch only.** An axis that publishes
+`parent_edges()` — `MappingHierarchy` does, and so does the `AssertionHierarchy`
+behind the `axis.structure` above — is asked for its edges in one call and never
+descends, so there is no reply for a memo to hold. Passing one there is not an
+error and saves nothing.
 
 ## What a node is
 
@@ -373,9 +405,26 @@ them could not keep the promise.
 
 ## What is not on it
 
-There is no cursor member for `deepest_common_ancestor`, and there will not be:
-a cursor names one node and that walk takes two anchors. Call the module
-function with both.
+Four module walks have no cursor member, and the reasons differ:
+
+`deepest_common_ancestor` will never have one — a cursor names one node and that
+walk takes two anchors. Call the module function with both.
+
+`children_at_depth`, `flatten` and `leaves` each take a single anchor and would
+fit a cursor, and are left off because the anchor means something different in
+each: on a cursor an anchor is *where you are*, and on those three it is a
+**filter over the whole axis** — `flatten(from_id=…)` and `leaves(under=…)`
+default to every root and narrow from there, and `children_at_depth` counts
+depth from the axis's roots rather than from the node handed to it. A member
+that read the cursor's node as that argument would be answering a different
+question from the one the same name answers a line above. Call the module
+function with the axis and the node:
+
+```python
+from dataknobs_common import leaves
+
+assert leaves(axis.structure, under="dog") == ("golden_retriever", "beagle")
+```
 
 A walk you write yourself may key its `seen` set on the cursors rather than on
 bare ids — they hash, and two cursors over one axis collide exactly when they

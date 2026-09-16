@@ -48,7 +48,7 @@ from dataknobs_common.hierarchy import (
     flatten,
 )
 from dataknobs_common.ontology.hierarchy import edge_criteria
-from dataknobs_common.ontology.model import ENTITY_TYPE_ISA_KEY, EntityRef
+from dataknobs_common.ontology.model import EntityRef
 from dataknobs_common.ontology.sources import object_entity_id
 
 if TYPE_CHECKING:
@@ -108,7 +108,9 @@ def _refuse_an_unknown_anchor(taxonomy_id: str, anchor: object) -> NoReturn:
     )
 
 
-def _refuse_an_undeclared_type(taxonomy_id: str, entity_type: str) -> NoReturn:
+def _refuse_an_undeclared_type(
+    taxonomy_id: str, entity_type: str, *, asked_about: str | None = None
+) -> NoReturn:
     """Refuse an entity type the type store does not declare.
 
     Returning ``[]`` was the other candidate and is the worse one, for
@@ -121,11 +123,35 @@ def _refuse_an_undeclared_type(taxonomy_id: str, entity_type: str) -> NoReturn:
     It is also what makes the store safe to default. An axis built without one
     answers nothing at all rather than answering *nothing is declared* about
     every type in the vocabulary.
+
+    **Both ends of the walk are refused by this one rule**, which is the whole
+    reason ``asked_about`` exists. The argument above is about a name the store
+    does not hold, and it does not care whether that name arrived from the
+    caller or from an ``isa:`` two hops up: a truncated answer and a complete
+    one are indistinguishable either way. Refusing only the anchor left the
+    ancestor case collapsing exactly as this docstring says it must not --
+    silently, and reachable from any partial store.
+
+    Args:
+        taxonomy_id: The axis the question was asked of.
+        entity_type: The type that is absent.
+        asked_about: The type the caller actually named, when the absent one
+            was reached from it. ``None`` when they are the same, which is the
+            anchor case and needs no second name.
     """
+    reached = (
+        f", reached from {asked_about!r}"
+        if asked_about is not None and asked_about != entity_type
+        else ""
+    )
     raise NotFoundError(
         f"no entity type {entity_type!r} in the type store of taxonomy "
-        f"{taxonomy_id!r}, so nothing can be said about what it inherits",
-        context={"taxonomy": taxonomy_id, "entity_type": entity_type},
+        f"{taxonomy_id!r}{reached}, so nothing can be said about what it inherits",
+        context={
+            "taxonomy": taxonomy_id,
+            "entity_type": entity_type,
+            "asked_about": asked_about if asked_about is not None else entity_type,
+        },
     )
 
 
@@ -151,13 +177,28 @@ def _inherited_attributes(
     ``isa:`` naming an undeclared type and nothing refuses one that closes a
     loop, so a cycle here is reachable from a valid document.
 
-    Each type has at most one parent -- ``isa:`` is a scalar field on the
-    declaration -- so there is no ordering to choose between branches, which is
-    the one way this differs from the lattice ``structure`` walks.
-    """
-    if entity_type not in entity_types:
-        _refuse_an_undeclared_type(taxonomy_id, entity_type)
+    **An ancestor the store does not hold is refused, exactly as the anchor
+    is** -- by the same line, which is why they cannot drift. Stopping quietly
+    at an absent parent was the other candidate and is the same collapse
+    :func:`_refuse_an_undeclared_type` rules out one frame down: a truncated
+    list and a complete one are the same list, so a caller reading a schema off
+    a partial store got a short answer with nothing to say it was short. The
+    loader validates every ``isa:`` in a document it reads, but ``entity_types``
+    is a mapping the **caller** supplies and it defaults to empty -- a partial
+    store is invited by the field rather than excluded by it, and
+    :class:`~dataknobs_common.ontology.model.EntityType` is public and
+    constructible.
 
+    The anchor needs no separate check ahead of the loop: an absent one is
+    absent on the first iteration, and the refusal reads ``asked_about`` equal
+    to ``entity_type`` and says nothing about a route. A guard there would be a
+    second site to keep in step with this one, for a message it already gives.
+
+    Each type has at most one parent -- :attr:`EntityType.isa` is a scalar
+    field on the declaration -- so there is no ordering to choose between
+    branches, which is the one way this differs from the lattice ``structure``
+    walks.
+    """
     collected: list[AttributeDef] = []
     claimed: set[str] = set()
     seen: set[str] = set()
@@ -166,14 +207,13 @@ def _inherited_attributes(
         seen.add(current)
         declaration = entity_types.get(current)
         if declaration is None:
-            break
+            _refuse_an_undeclared_type(taxonomy_id, current, asked_about=entity_type)
         for attribute in declaration.attributes:
             if attribute.name in claimed:
                 continue
             claimed.add(attribute.name)
             collected.append(attribute)
-        parent = declaration.metadata.get(ENTITY_TYPE_ISA_KEY)
-        current = str(parent) if parent is not None else None
+        current = declaration.isa
     return collected
 
 
@@ -412,7 +452,7 @@ class Taxonomy(Generic[K]):
 
 @dataclass(frozen=True, eq=False)
 class AsyncTaxonomy(Generic[K]):
-    """The asynchronous twin. Same four fields, asynchronous backings.
+    """The asynchronous twin. Same five fields, asynchronous backings.
 
     The key is a parameter here too, defaulted to ``str``, for the reason
     :class:`Taxonomy` states. Frozen and identity-compared for the reason it
@@ -591,11 +631,11 @@ class TaxonomyView(Generic[K]):
 
     **The axis is compared by identity, and that is what makes this hashable.**
     A frozen dataclass hashes its field tuple, so a cursor can only hash if the
-    axis it holds can. Two of a taxonomy's four fields cannot be made to:
-    ``definition`` carries a ``metadata`` dict, and a ``MappingHierarchy``
-    structure carries two more, so freezing them would leave ``__hash__``
-    generated and still raising -- promising the capability at ``isinstance``
-    and failing at the call. Identity closes that for every backing at once,
+    axis it holds can. Three of a taxonomy's five fields cannot be made to:
+    ``definition`` carries a ``metadata`` dict, a ``MappingHierarchy``
+    structure carries two more, and ``entity_types`` is a ``Mapping``, so
+    freezing them would leave ``__hash__`` generated and still raising --
+    promising the capability at ``isinstance`` and failing at the call. Identity closes that for every backing at once,
     and it costs nothing that was being used: an axis is *built* by
     :meth:`Ontology.taxonomy` from a definition, and it is the definition that
     this module calls the value.

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Ontology.inherited_attributes(entity_type)` and its asynchronous twin** —
+  the same walk `Taxonomy` publishes, on the object that owns the store it
+  reads. It walks `entity_types` and nothing else, which is why every taxonomy
+  of one vocabulary answers it identically; reaching it only through an axis
+  meant building one to ask a question the axis has no part in, and choosing
+  which axis to build would have been choosing something the answer does not
+  depend on. Both surfaces are one line over the shared walk.
+
+- **`EntityType.isa`** — the type this one specialises, as a declared field.
+  Same shape and same reason as `RelationType.inverse_of` beside it: a scalar
+  reference to another declaration in the same section, validated by the loader.
+
 - **An entity id may be any `Hashable`, defaulting to `str`** — `EntitySource`,
   `AssertionSource`, `Entity`, `Assertion`, every `entity_id` on a resolution,
   and `Ontology`, `Taxonomy` and both cursors above them are generic in the
@@ -1011,6 +1023,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`KeyCodec` and `StrCodec` are on the top-level door**, beside the `Ontology`
+  that now requires one. A required constructor argument whose only two possible
+  values were published a module deeper is a name withheld at the moment it
+  became mandatory.
+
+- **`Ontology.codec` and `AsyncOntology.codec` are keyword-only.** A required
+  field may not follow a defaulted one, so the codec lands at position nine —
+  where `structures` used to be — and a nine-positional construction would bind
+  a structures mapping to a codec. Both are objects, so nothing reports it at
+  the construction and the first symptom is a rendered key somewhere else.
+  `kw_only` keeps the field required while making the misbinding unspellable.
+
+- **`TreeProjection` is generic in the node key.** It holds a `ParentChoice`,
+  which picks a parent from `Sequence[K]`, and a `ProjectionContext[K]` travels
+  with it — so a holder that named the policy bare pinned both to `str` and left
+  a consumer's non-`str` axis unable to declare a projection over itself.
+
+- **`EntityType`'s parent moved out of `metadata`** into the `isa` field above.
+  While it lived in the open dict the loader copied a row's `metadata` wholesale
+  before folding the declared `isa:` in, so a document writing the parent one
+  level down reached the type lattice without passing the check that refuses an
+  undeclared one. `ENTITY_TYPE_ISA_KEY`, the constant that named the parking
+  spot, is gone with it.
+
 - **`MappingHierarchy.snapshot` and its asynchronous twin take `cache=`** — both
   drive a walk, and both dropped the caller's memo. A caller who snapshotted a
   live axis and then walked the same axis paid for the descent twice: over a
@@ -1079,6 +1115,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
+
+- **A bare `ScopeAuthority` meant `ScopeAuthority[Any]`, not `[str]`.** The
+  alias was spelled with a PEP 695 `type` statement, which declares a *fresh*
+  parameter in the alias's own scope — unbounded, undefaulted, and shadowing the
+  module-level key parameter it was spelled the same as. PEP 696 defaults reach
+  `type` statements only at 3.13 and the floor is 3.12, so the default was not
+  expressible in that form; an explicit `TypeAliasType` carrying the key as
+  `type_params` restores it while keeping the lazy evaluation the union needs.
+  The regression was silent in a suite that binds `str` everywhere, which is
+  what the new `assert_type` fence in the source exists to catch.
+
+- **`inherited_attributes` truncated silently on an undeclared *ancestor*.** An
+  absent anchor was refused and an absent parent was not, so a schema read off a
+  partial type store came back short with nothing to say it was short — the same
+  collapse of *declares nothing* into *is not here* that the anchor's refusal
+  exists to prevent. Both ends are now refused by one rule, and the refusal
+  names the type asked about alongside the one that is missing.
 
 - **`requires_elasticsearch` skips a cluster that cannot host a test index,
   instead of letting the suite time out against it.** `is_elasticsearch_available()`

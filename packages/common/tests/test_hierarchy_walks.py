@@ -1551,6 +1551,51 @@ def _as_async_axis(structure: AsyncHierarchy[str]) -> AsyncTaxonomy:
     )
 
 
+def test_the_snapshot_walk_is_a_reading_of_the_shared_descent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim this package makes everywhere, asserted of the walk that made it false.
+
+    ``_parent_edges`` is driven by both snapshot constructors, so it is a walk
+    this package ships -- and it ran its own frontier loop, its own visited set
+    and its own ``roots`` fetch, which is a second expansion beside the one
+    every docstring here says is the only one. Equality of snapshots cannot
+    tell a reading of the descent from a copy of it that agrees today, which is
+    the same reason ``_CORES`` exists for the eight public walks.
+
+    It could not have been a reading before: a spanning record drops the second
+    parent of a DAG node, and that edge is the one thing a parent-edge snapshot
+    cannot lose. Keeping the whole reply is what made this possible, so the
+    walk that motivated the change is the walk that now demonstrates it.
+
+    **Not a ``_CORES`` row, and the shape is why.** Every surface in that table
+    answers *with* what the core returned, so a sentinel travels out unchanged
+    and equality catches it. ``snapshot`` answers with a ``MappingHierarchy``
+    built *around* the reply, so a sentinel would be wrapped rather than
+    returned -- and the two things this asserts beyond delegation, that the
+    descent is seeded once from the roots and that both parents of a DAG node
+    survive it, are claims no sentinel can make. It is kept here for the same
+    reason the table exists and in the shape that walk needs.
+    """
+    seen: list[tuple[str, tuple[str, ...]]] = []
+    unpatched = walk_core._expand
+
+    def recording_expand(
+        seeds: tuple[str, ...], direction: str, **kwargs: Any
+    ) -> Generator[Any, Any, Any]:
+        seen.append((direction, tuple(seeds)))
+        return unpatched(seeds, direction, **kwargs)
+
+    monkeypatch.setattr(walk_core, "_expand", recording_expand)
+
+    # A walk-only axis: `MappingHierarchy` publishes `parent_edges`, so
+    # snapshotting one takes the enumerable branch and walks nothing at all.
+    snapshot = MappingHierarchy.snapshot(MappingParents(DIAMOND))
+
+    assert seen == [("children", ("root",))], "one descent, seeded by the roots"
+    assert snapshot.parents("x") == ("a", "b"), "...and both parents of the DAG node kept"
+
+
 #: Each core this module wraps, and one call into **every** surface written
 #: over it.
 #:
@@ -1565,9 +1610,10 @@ def _as_async_axis(structure: AsyncHierarchy[str]) -> AsyncTaxonomy:
 #: structural cursor, the taxonomy cursor, and both asynchronous twins -- and
 #: a cursor member that reimplemented the traversal would pass every answer
 #: test in this file while drifting from the core it claims to call. The other
-#: four have two surfaces because ``02w``'s fence puts no cursor member over
-#: them, and a row claiming six for those would be asserting a member nobody
-#: declared.
+#: four have two surfaces because no cursor member is declared over them --
+#: ``deepest_common_ancestor`` takes two anchors and a cursor names one, and
+#: the other three were left off the cursor deliberately -- so a row claiming
+#: six for those would be asserting a member nobody declared.
 #:
 #: The last two walk rows are the ones a reader should expect to be absent.
 #: They arrived as separate algorithms and were re-read as projections of the

@@ -1055,10 +1055,12 @@ hierarchy with only the four members stays a valid one.
 
 ## What a taxonomy carries, and what it refuses
 
-`Taxonomy` has four fields: the `definition` it was declared by, the
-`structure`, the `entities` source, and the `assertions` the edges were made of.
+`Taxonomy` has five fields: the `definition` it was declared by, the
+`structure`, the `entities` source, the `assertions` the edges were made of, and
+the `entity_types` store the *type* lattice lives in — a different lattice from
+the one `structure` walks, and what `inherited_attributes` reads.
 
-The last is optional, and `assertions is None` is a question worth asking: it
+`assertions` is optional, and `assertions is None` is a question worth asking: it
 distinguishes *this edge carries no annotation* from *this axis has no
 annotations to give*. A hierarchy built from a `parent_id` column has rows and
 no assertions at all.
