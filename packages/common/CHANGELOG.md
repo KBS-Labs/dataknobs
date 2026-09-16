@@ -395,7 +395,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 132 names, taking the package's `__all__` to 337.
+  the resolution cascade — 133 names, taking the package's `__all__` to 338.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing
