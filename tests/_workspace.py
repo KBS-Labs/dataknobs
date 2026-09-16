@@ -552,7 +552,9 @@ def published_fence(path: Path, marker: str) -> str:
     Shared by the worked-call-site guards rather than copied into each. There
     are three of them now, one per guide, and the failure mode above is exactly
     the kind a second copy loses silently: a guard that stopped refusing still
-    passes every test written for the guard that did.
+    passes every test written for the guard that did. :func:`door_imports` is
+    shared by the same three for the same reason, and its docstring records
+    what the copies had already lost.
     """
     fences = [f for f in code_fences(path) if f.marker == marker]
     if len(fences) != 1:
@@ -565,6 +567,40 @@ def published_fence(path: Path, marker: str) -> str:
     if not body.strip():
         raise LookupError(f"the <!-- {marker} --> fence in {rel(path)} is empty")
     return body
+
+
+def door_imports(fence: str, package: str = "dataknobs_common") -> set[str]:
+    """Every module of ``package`` that ``fence`` imports, however it spells it.
+
+    Shared by the worked-call-site guards for :func:`published_fence`'s reason
+    at one remove. Each of the three carried its own copy of this, differing
+    only in the ``doors`` set it compared against -- and the copies read
+    ``line.startswith("from ...")``, which is a prefix scan over source text
+    rather than a reading of it.
+
+    **The prefix scan had a hole, and it was the shape the guard exists to
+    catch.** ``import dataknobs_common.ontology.taxonomy`` reaches past a door
+    exactly as the ``from`` spelling does and does not begin with ``from``, so
+    it was invisible: a call site carrying one door import and one module path
+    passed. Parsing closes that, and closes it in one place rather than in
+    whichever copy is edited next.
+
+    Relative imports are not doors and are skipped; a fence that is not
+    parseable Python raises, which is what a guard over an executed copy
+    should do.
+    """
+    reached: set[str] = set()
+    for node in ast.walk(ast.parse(fence)):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:  # `from . import x` reaches no door
+                continue
+            named = [node.module or ""]
+        elif isinstance(node, ast.Import):
+            named = [alias.name for alias in node.names]
+        else:
+            continue
+        reached.update(name for name in named if name == package or name.startswith(f"{package}."))
+    return reached
 
 
 def executed_source(path: Path) -> str:

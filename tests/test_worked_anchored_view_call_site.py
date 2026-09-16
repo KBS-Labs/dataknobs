@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from tests._workspace import ROOT, executed_source, published_fence
+from tests._workspace import ROOT, door_imports, executed_source, published_fence
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -108,11 +108,7 @@ def test_the_call_site_imports_only_through_the_doors() -> None:
     the subject and not an incidental.
     """
     doors = {"dataknobs_common", "dataknobs_common.hierarchy", "dataknobs_common.ontology"}
-    reached = {
-        line.split()[1]
-        for line in published_fence(GUIDE, CALL_SITE_MARKER).splitlines()
-        if line.startswith("from dataknobs_common")
-    }
+    reached = door_imports(published_fence(GUIDE, CALL_SITE_MARKER))
 
     assert reached, "the call site imports nothing from this package"
     assert reached <= doors, (

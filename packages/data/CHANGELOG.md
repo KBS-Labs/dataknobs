@@ -9,27 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`TopicNode`'s four walk methods now share one implementation.** `flatten`,
-  `leaves`, `children_at_depth` and `descendants_to_depth` are each a single
-  call into the generic hierarchy walks in `dataknobs-common`, over a new
-  adapter. Their signatures, their parameter names and the orders they return
-  are unchanged: each still emits pre-order by discovery, and the order a
-  retrieval reads when `max_expanded_results` truncates its region is the same
-  order it was.
+- **`TopicNode`'s five walk methods now share one implementation.** `flatten`,
+  `leaves`, `children_at_depth`, `descendants_to_depth` and
+  `descendant_chunk_ids` are each a single call into the generic hierarchy
+  walks in `dataknobs-common`, over a new adapter. Their signatures, their
+  parameter names and the orders they return are unchanged: each still emits
+  pre-order by discovery, and the order a retrieval reads when
+  `max_expanded_results` truncates its region is the same order it was.
 
   Two behaviours do change, and both are on trees that were never well formed:
 
   - A `children` list that forms a **cycle** is now walked to its end. It
-    previously raised `RecursionError` from `flatten()` and `leaves()`, and
-    `descendants_to_depth(n)` returned the same nodes repeated once per level
-    until the depth bound ran out.
-  - A subtree hung under **two parents** is now walked once, at the first
-    position that reaches it, rather than once per route. `expand_region`
-    already deduplicated chunks by id, so a region built from such a tree is
-    unaffected; a caller reading `flatten()` directly saw the repeat.
+    previously raised `RecursionError` from `flatten()`, `leaves()` and
+    `descendant_chunk_ids()`; the two bounded walks terminated instead and
+    answered on the repeat, `children_at_depth(n)` returning whichever of a
+    two-node cycle the parity of `n` selected and `descendants_to_depth(n)`
+    the same nodes once per level, until the depth bound ran out. Both bounded
+    walks now stop at the projection's edge and return what is below it.
+  - A subtree hung under **two parents** is now walked once rather than once
+    per route, at the **shortest** route that reaches it. A caller reading
+    `flatten()` or `descendant_chunk_ids()` directly saw the repeat and no
+    longer does; `expand_region` already deduplicated chunks by id, so a
+    region built from such a tree is unaffected.
 
-  `descendant_chunk_ids` is unchanged and still descends on its own, so it
-  still raises `RecursionError` on a cyclic tree.
+    Shortest matters because every depth bound is a bound on the route the
+    walk recorded. `children_at_depth`, `descendants_to_depth` and
+    `expand_region`'s `max_expansion_depth` therefore measure distance from
+    the anchor, as their docstrings say, rather than the length of whichever
+    route happened to be found first.
 
 ### Added
 
@@ -42,7 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   What it gives a consumer is the rest of the walk family over a topic tree:
   `ancestors`, `paths_to_root` and `deepest_common_ancestor`, none of which
-  `TopicNode` carries.
+  `TopicNode` carries. `key_of` is how a node becomes a key for them; it
+  refuses an unknown node with `NotFoundError`, which is what the walks raise
+  for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Licensing
 

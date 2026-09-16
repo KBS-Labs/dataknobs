@@ -139,7 +139,12 @@ That block is executed as written by a workspace test, and the test asserts it
 is character-identical to the fence above. If this page and the code ever
 disagree, the suite goes red rather than the page going quietly wrong.
 
-The rest of this guide is those five steps taken one at a time.
+Every example below runs against that same `mammals.yaml` and the `axis` it
+yields. The sections take one question at a time rather than one step at a
+time — what the door is and what it refuses, what a walked edge carries, what
+the cursor deliberately does not hold — and two of them (`twice`,
+`contradiction`) load a deliberately malformed vocabulary of their own, which
+is said where they do it.
 
 ## The door, and the move
 
@@ -147,29 +152,11 @@ The door is on the axis. It takes the node and nothing else, because everything
 a cursor needs is a field the taxonomy already holds:
 
 ```python
+from pathlib import Path
+
 from dataknobs_common.ontology import load_ontology
 
-onto = load_ontology(
-    {
-        "id": "mammals",
-        "entity_types": [{"id": "Species"}, {"id": "Breed", "isa": "Species"}],
-        "relation_types": [{"id": "isa", "transitive": True}],
-        "entities": [
-            {"id": "mammal", "type": "Species", "name": "Mammal"},
-            {"id": "dog", "type": "Species", "name": "Dog"},
-            {"id": "retriever", "type": "Breed", "name": "Retriever"},
-            {"id": "golden_retriever", "type": "Breed", "name": "Golden Retriever"},
-            {"id": "beagle", "type": "Breed", "name": "Beagle"},
-        ],
-        "assertions": [
-            {"subject": "dog", "relation": "isa", "object": "mammal"},
-            {"subject": "retriever", "relation": "isa", "object": "dog"},
-            {"subject": "golden_retriever", "relation": "isa", "object": "retriever"},
-            {"subject": "beagle", "relation": "isa", "object": "dog"},
-        ],
-        "taxonomies": [{"id": "species", "relation": "isa"}],
-    }
-)
+onto = load_ontology(Path("mammals.yaml"))   # the file above, unchanged
 axis = onto.taxonomy("species")           # no store, no embedder, no loop
 
 here = axis.at("golden_retriever")        # the door: from an axis
@@ -561,6 +548,8 @@ bare ids — they hash, and two cursors over one axis collide exactly when they
 name the same node, which is the property such a set needs:
 
 ```python
+from dataknobs_common.ontology import TaxonomyView
+
 seen: set[TaxonomyView] = set()
 frontier = [here]
 while frontier:

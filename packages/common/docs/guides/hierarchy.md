@@ -46,6 +46,14 @@ and `AsyncMappingHierarchy` are the concretes over edges already in memory, and
 `AssertionHierarchy` and `AsyncAssertionHierarchy` are the ones over a
 vocabulary's assertions.
 
+Other packages implement the same four members over structures of their own,
+which is the point of the protocol being four members wide.
+`dataknobs_data`'s `TopicNodeHierarchy` is one: a `Hierarchy` over a heading or
+cluster tree, keyed by a node's position because a `TopicNode` carries no id.
+It is worth reading as a worked adapter — it shows what a structure has to
+supply (four members and a key that is a value) and what it gets back (every
+walk on this page, including the ones its own type never had).
+
 **The walks, and the core they are written against.** `ancestors` and
 `async_ancestors` are module-level functions generic over `Hierarchy`, not
 methods on it — implementing the protocol earns every walk and overrides none.
