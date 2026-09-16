@@ -62,9 +62,14 @@ print(node.data)  # "updated"
 ### children
 ```python
 @property
-def children(self) -> Optional[List[Tree]]
+def children(self) -> Optional[Tuple[Tree, ...]]
 ```
-Returns the list of child nodes, or None if no children.
+Returns the child nodes in order, or None if no children.
+
+The tuple is a snapshot rather than the list the node is holding, so a tree can
+only be changed through `add_child` and `prune` — the two that keep the parent
+and child links in agreement. Appending to what this returns raises
+`AttributeError` at the call site instead of quietly corrupting the structure.
 
 **Example:**
 ```python
@@ -72,6 +77,8 @@ root = Tree("root")
 child1 = root.add_child("child1")
 child2 = root.add_child("child2")
 print(len(root.children))  # 2
+
+root.children.append(Tree("child3"))  # AttributeError -- use add_child
 ```
 
 ### parent
@@ -79,14 +86,23 @@ print(len(root.children))  # 2
 @property
 def parent(self) -> Optional[Tree]
 ```
-Gets or sets the parent node.
+Gets or sets the parent node. Setting it is `parent.add_child(self)` written
+the other way round: the new parent gains the child, the old one loses it, and
+setting it to `None` detaches the node from both sides.
+
+**Raises:** `ValidationError` if the new parent is this node itself or one of
+its descendants, which would make the node its own ancestor.
 
 **Example:**
 ```python
 child = Tree("child")
 parent = Tree("parent")
 child.parent = parent
-print(child.parent.data)  # "parent"
+print(child.parent.data)     # "parent"
+print(parent.children)       # (child,) -- both halves agree
+
+child.parent = None
+print(parent.children)       # ()
 ```
 
 ### root
@@ -193,6 +209,10 @@ Adds a child node, pruning it from any other tree first.
 
 **Returns:** The child node
 
+**Raises:** `ValidationError` if `node_or_data` is this node itself or one of
+its ancestors. Attaching either would make a node its own descendant, which no
+traversal on this class survives.
+
 **Example:**
 ```python
 parent = Tree("parent")
@@ -215,6 +235,11 @@ Adds a parent-child relationship, creating nodes if needed.
 - `child_node_or_data` (Tree | Any): Child node or data
 
 **Returns:** Tuple of (parent_node, child_node)
+
+**Raises:** `ValidationError` if the edge would put a node under one of its own
+descendants — asking for an edge that inverts one already present, for
+instance. The refusal comes from `add_child`, which this reaches the structure
+through.
 
 **Example:**
 ```python
