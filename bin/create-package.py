@@ -547,7 +547,8 @@ uv run mypy src/
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)\nfor attribution requirements.
+Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)
+for attribution requirements.
 """
 
     def _generate_test_file(self, name: str) -> str:
