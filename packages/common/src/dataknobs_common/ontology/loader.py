@@ -898,9 +898,20 @@ def _mint_nested(
 
 def build_resolver(
     config: Path | Mapping[str, Any],
-    ontology: Ontology,
-) -> EntityResolver:
+    ontology: Ontology[str],
+) -> EntityResolver[str]:
     """Build the placement cascade a document configures.
+
+    **The key parameter is bound here rather than carried**, and the binding is
+    written down rather than left to the default. The rungs this assembles and
+    the cascade under them are ``str``-keyed: every annotation in
+    ``entity_resolution.cascade`` and ``entity_resolution.signals`` names the
+    key as ``str``, so a resolver built here answers with ``str`` ids whatever
+    the ontology handed in is keyed by. Spelling that as ``Ontology[str]``
+    makes a vocabulary keyed by something else a **type error at this call**
+    instead of an ``Any`` that type-checks and comes back with keys of the
+    wrong space. See :class:`~dataknobs_common.entity_resolution.CascadeState`
+    for the boundary and what it would take to move it.
 
     A second function rather than something :func:`load_ontology` returns,
     because an ``Ontology`` is a **value**: it owns no lifecycle and has
@@ -933,9 +944,12 @@ def build_resolver(
 
 async def async_build_resolver(
     config: Path | Mapping[str, Any],
-    ontology: AsyncOntology,
-) -> AsyncEntityResolver:
+    ontology: AsyncOntology[str],
+) -> AsyncEntityResolver[str]:
     """:func:`build_resolver` for a cascade whose rungs reach for data.
+
+    Keyed by ``str`` for the reason the synchronous door states, and declared
+    the same way.
 
     The remedy the synchronous door's refusal names. A refusal whose remedy
     builds nothing is not a remedy, which is why this ships in the same

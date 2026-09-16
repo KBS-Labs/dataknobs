@@ -720,6 +720,16 @@ class TaxonomyView(Generic[K]):
         """
         return self._wrap(self._structural().descendants_to_depth(max_depth, cache=cache))
 
+    def children_at_depth(
+        self, depth: int, *, cache: WalkCache | None = None
+    ) -> tuple[TaxonomyView[K], ...]:
+        """:meth:`~dataknobs_common.hierarchy.HierarchyView.children_at_depth`, re-wrapped.
+
+        One level rather than a span, and the anchor means *where you are*.
+        Both are the structural member's, inherited rather than restated.
+        """
+        return self._wrap(self._structural().children_at_depth(depth, cache=cache))
+
     def paths_to_root(
         self, *, max_paths: int | None = None, cache: WalkCache | None = None
     ) -> tuple[tuple[K, ...], ...]:
@@ -797,9 +807,9 @@ class AsyncTaxonomyView(Generic[K]):
     ``AsyncAssertionSource``; every one is ``async def`` bar :meth:`at`, which
     constructs.
 
-    The four walk-shaped members each also carry ``max_concurrency``, which
-    the cursor below them carries and the synchronous flavour has no
-    equivalent of.
+    The walk-shaped members each also carry ``max_concurrency``, which the
+    cursor below them carries and the synchronous flavour has no equivalent
+    of.
     """
 
     taxonomy: AsyncTaxonomy[K]
@@ -872,6 +882,20 @@ class AsyncTaxonomyView(Generic[K]):
             )
         )
 
+    async def children_at_depth(
+        self,
+        depth: int,
+        *,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> tuple[AsyncTaxonomyView[K], ...]:
+        """:meth:`TaxonomyView.children_at_depth`, awaited."""
+        return self._wrap(
+            await self._structural().children_at_depth(
+                depth, max_concurrency=max_concurrency, cache=cache
+            )
+        )
+
     async def paths_to_root(
         self,
         *,
@@ -881,8 +905,9 @@ class AsyncTaxonomyView(Generic[K]):
     ) -> tuple[tuple[K, ...], ...]:
         """:meth:`TaxonomyView.paths_to_root`, awaited -- keys, not cursors.
 
-        ``max_concurrency`` is inert here for the reason the cursor below it
-        states, and is declared rather than dropped for the same reason.
+        ``max_concurrency`` bounds the **ascent** and ``max_paths`` the
+        **answer**, for the reason the cursor below it states. Both are
+        forwarded.
         """
         return await self._structural().paths_to_root(
             max_paths=max_paths, max_concurrency=max_concurrency, cache=cache

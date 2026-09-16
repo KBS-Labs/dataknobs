@@ -356,9 +356,9 @@ instances, which a consumer folding ancestors into a prompt has no way to spot.
 It does not: an axis is built from the assertion store, and the type store is
 read only by the member below.
 
-`Taxonomy.inherited_attributes(type_id)` is that member. It walks the **type**
-lattice and returns what a type may be asked for — its own declarations first,
-then each ancestor's:
+`inherited_attributes(type_id)` is that member, and it is on **both** the
+vocabulary and the axis. It walks the **type** lattice and returns what a type
+may be asked for — its own declarations first, then each ancestor's:
 
 ```python
 catalogue = load_ontology(
@@ -380,6 +380,20 @@ kinds = catalogue.taxonomy("kinds")
 
 assert [a.name for a in kinds.inherited_attributes("Product")] == ["warranty", "sku", "weight"]
 ```
+
+**Ask the vocabulary directly when you are not already holding an axis.**
+`Ontology.inherited_attributes` is the same walk over the same store, and it is
+the surface to reach for first — the answer is a function of `entity_types` and
+nothing else, so building an axis to ask would mean choosing a relation the
+answer does not depend on:
+
+```python
+assert catalogue.inherited_attributes("Product") == kinds.inherited_attributes("Product")
+```
+
+Every taxonomy of one vocabulary therefore answers this identically, and
+neither surface is a second implementation: both are one line over the shared
+walk.
 
 **A nearer declaration shadows a farther one of the same name**, because a
 subtype redeclaring `sku` is specialising it rather than adding a second field.
@@ -404,8 +418,8 @@ tens, authored in the document. `onto.taxonomy()` fills it. An axis you build
 by hand may leave it out, and then this member refuses every call, which is the
 answer rather than a gap in it.
 
-**It is a plain `def` on the asynchronous twin too**, because a mapping awaits
-nothing.
+**It is a plain `def` on both asynchronous twins too**, because a mapping
+awaits nothing.
 
 ## What a resolution leaves behind
 

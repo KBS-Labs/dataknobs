@@ -954,20 +954,29 @@ class HierarchyView(Generic[K]):
     **No member below has an algorithm of its own.** ``exists``, ``parents``
     and ``children`` each invoke one protocol member and re-wrap; ``is_root``
     and ``is_leaf`` invoke ``exists`` and one more; ``ancestors``,
-    ``descendants``, ``descendants_to_depth`` and ``paths_to_root`` each invoke
-    one module-level walk and re-wrap; ``at`` constructs. ``roots`` never will
-    be a member here: it is the protocol's, asked as
-    ``view.structure.roots()``.
+    ``descendants``, ``descendants_to_depth``, ``children_at_depth`` and
+    ``paths_to_root`` each invoke one module-level walk and re-wrap; ``at``
+    constructs. ``roots`` never will be a member here: it is the protocol's,
+    asked as ``view.structure.roots()``.
 
-    **The four walk-shaped members inherit their contracts entire**, which is
-    why none of them restates one. Two of the four exclude this node and refuse
-    nothing; ``descendants_to_depth`` includes it and refuses an anchor the
-    structure does not contain; ``paths_to_root`` includes it, refuses the
-    same, and returns **keys rather than cursors** because what it answers with
-    is routes. Each also carries every keyword its module function carries --
-    ``cache`` on all four, ``max_depth`` positionally on one, ``max_paths`` on
-    another -- because a member short of one is a member that cannot do what
-    the walk under it can.
+    **The five walk-shaped members inherit their contracts entire**, which is
+    why none of them restates one. ``ancestors`` and ``descendants`` exclude
+    this node and refuse nothing; ``descendants_to_depth`` and
+    ``children_at_depth`` include it and refuse an anchor the structure does
+    not contain; ``paths_to_root`` includes it, refuses the same, and returns
+    **keys rather than cursors** because what it answers with is routes. Each
+    also carries every keyword its module function carries -- ``cache`` on all
+    five, a depth positionally on two, ``max_paths`` on one -- because a member
+    short of one is a member that cannot do what the walk under it can.
+
+    **A walk is a member here when its anchor means *where you are*.** That is
+    the rule the set is drawn by, and it is what puts ``children_at_depth``
+    inside it and keeps ``flatten`` and ``leaves`` out: those two take an
+    *optional* anchor that defaults to every root and narrows from there, so a
+    member reading the cursor's node as that argument would answer a different
+    question from the one the same name answers a line above.
+    ``deepest_common_ancestor`` is out for a plainer reason -- it takes two
+    anchors and a cursor names one.
 
     **A node that is not here is neither a root nor a leaf.** ``is_root()`` and
     ``is_leaf()`` are ``False`` wherever ``exists()`` is ``False``, and that
@@ -1067,6 +1076,28 @@ class HierarchyView(Generic[K]):
         """
         return self._wrap(descendants_to_depth(self.structure, self.node, max_depth, cache=cache))
 
+    def children_at_depth(
+        self, depth: int, *, cache: WalkCache | None = None
+    ) -> tuple[HierarchyView[K], ...]:
+        """:func:`children_at_depth` from here, as cursors. **One level, not a span.**
+
+        The sibling of :meth:`descendants_to_depth` and the reason both are
+        members: that one answers *everything down to here* and this one
+        answers *exactly this far down*, and a caller who wants the second from
+        the first has to subtract two results. ``depth=0`` is this node, ``1``
+        its children. Its anchor means what every anchor on this class means --
+        *where you are* -- which is why it is a member at all, and it refuses
+        an anchor the structure does not contain for the same reason
+        :meth:`descendants_to_depth` does: at ``depth=0`` the walk is the
+        anchor alone.
+
+        A depth the axis does not reach answers ``()``, which is the walk's
+        answer and not a refusal -- *nothing is that deep* rather than *no such
+        node*. ``depth`` is positional because the module function takes it
+        positionally.
+        """
+        return self._wrap(children_at_depth(self.structure, self.node, depth, cache=cache))
+
     def paths_to_root(
         self, *, max_paths: int | None = None, cache: WalkCache | None = None
     ) -> tuple[tuple[K, ...], ...]:
@@ -1102,16 +1133,16 @@ class HierarchyView(Generic[K]):
 
 @dataclass(frozen=True)
 class AsyncHierarchyView(Generic[K]):
-    """The twin: the same ten members over an :class:`AsyncHierarchy`.
+    """The twin: the same eleven members over an :class:`AsyncHierarchy`.
 
     Every one is ``async def`` bar :meth:`at`, which awaits nothing because it
     constructs rather than reads -- the same rule that makes
     :meth:`AsyncMappingHierarchy.from_nested` a plain ``def``.
 
-    The four walk-shaped members each also carry ``max_concurrency``, which
-    their module functions carry and the synchronous flavour has no equivalent
-    of. On :meth:`paths_to_root` it is **inert**, and that is declared in the
-    member rather than dropped.
+    The walk-shaped members each also carry ``max_concurrency``, which their
+    module functions carry and the synchronous flavour has no equivalent of.
+    On :meth:`paths_to_root` it bounds the **ascent** rather than the answer,
+    which is the one place two bounds meet and the member says so.
 
     It hashes on the same terms :class:`HierarchyView` states, from both of the
     same fields: both asynchronous backings this package ships hash, and so
@@ -1189,6 +1220,24 @@ class AsyncHierarchyView(Generic[K]):
             )
         )
 
+    async def children_at_depth(
+        self,
+        depth: int,
+        *,
+        max_concurrency: int = DEFAULT_FRONTIER_CONCURRENCY,
+        cache: WalkCache | None = None,
+    ) -> tuple[AsyncHierarchyView[K], ...]:
+        """:meth:`HierarchyView.children_at_depth`, awaited."""
+        return self._wrap(
+            await async_children_at_depth(
+                self.structure,
+                self.node,
+                depth,
+                max_concurrency=max_concurrency,
+                cache=cache,
+            )
+        )
+
     async def paths_to_root(
         self,
         *,
@@ -1198,12 +1247,13 @@ class AsyncHierarchyView(Generic[K]):
     ) -> tuple[tuple[K, ...], ...]:
         """:meth:`HierarchyView.paths_to_root`, awaited -- keys, not cursors.
 
-        ``max_concurrency`` is declared and inert, which is stated rather than
-        hidden: the ascent this bounds is the same one :meth:`ancestors` makes,
-        and the routes are enumerated afterwards from replies already in hand.
-        It is here because every asynchronous entry point in this module takes
-        it, and a member that quietly dropped it would be the drift the module
-        docstring names.
+        **Two bounds, and they bound different things**, which is
+        :func:`async_paths_to_root`'s sentence and is inherited entire.
+        ``max_concurrency`` is the frontier's: the ascent here is the one
+        :meth:`ancestors` makes, and this narrows how much of one level goes
+        out at once. ``max_paths`` is the answer's, and is reached afterwards
+        from replies already in hand. Both are forwarded, and neither stands in
+        for the other.
         """
         return await async_paths_to_root(
             self.structure,

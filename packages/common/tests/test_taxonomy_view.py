@@ -167,6 +167,27 @@ def test_the_structural_members_answer_over_the_declared_axis(axis: Taxonomy) ->
     assert here.at("beagle").parents()[0] == axis.at("dog")
 
 
+def test_children_at_depth_answers_one_level_and_re_wraps(axis: Taxonomy) -> None:
+    """The fifth walk-shaped member, re-anchored on this axis like the other four.
+
+    ``descendants_to_depth(2)`` answers the span and this answers the level, so
+    a caller who wants *exactly two down* does not subtract two walks. What
+    comes back are :class:`TaxonomyView` cursors rather than the structural
+    ones the member forwards to, which is the re-wrap every member here does
+    and the reason a walk can keep asking what a node **is**.
+    """
+    here = axis.at("mammal")
+
+    assert [n.node for n in here.children_at_depth(1)] == ["dog"]
+    assert [n.node for n in here.children_at_depth(2)] == ["retriever", "beagle"]
+    assert all(isinstance(n, TaxonomyView) for n in here.children_at_depth(2))
+    assert [n.entity().name for n in here.children_at_depth(1)] == ["Dog"]
+
+    assert here.children_at_depth(9) == (), "an answer: the axis is not that deep"
+    with pytest.raises(NotFoundError):
+        axis.at("no_such_node").children_at_depth(1)
+
+
 # --------------------------------------------------------------------------
 # A cursor is a value, and a value hashes
 # --------------------------------------------------------------------------
@@ -659,7 +680,7 @@ def test_the_cursor_twins_expose_the_same_annotated_surface() -> None:
     assert_twin_types_agree(
         TaxonomyView,
         AsyncTaxonomyView,
-        ("ancestors", "descendants", "descendants_to_depth"),
+        ("ancestors", "descendants", "descendants_to_depth", "children_at_depth"),
         async_only={"max_concurrency"},
     )
     assert_twin_types_agree(

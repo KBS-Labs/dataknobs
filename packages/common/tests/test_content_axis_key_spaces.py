@@ -66,6 +66,12 @@ _ROOTS = (
 #:             Six rows: the two on the codec, which is what renders
 #:             it, and the four doors it is spent at -- ``qualify``
 #:             out and ``localize`` back, on each flavour of ontology
+#: ``bound``   a key parameter **bound** to ``str`` by a door that
+#:             knows what the keys are. A document's ids are the
+#:             strings its author typed, and the shipped cascade is
+#:             ``str``-keyed, so both loader doors and both resolver
+#:             doors say so in the annotation rather than leaving the
+#:             default to say it silently
 #: =========== ====================================================
 _CARRIES_THE_KEY = "key"
 
@@ -73,6 +79,38 @@ _CARRIES_THE_KEY = "key"
 #: verdict. Hand-declared: a table derived from the tree would agree with the
 #: tree by construction, which is the one thing it must not do.
 _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
+    ("<module>", "async_build_resolver", "config", "payload"),
+    ("<module>", "async_build_resolver", "ontology", "bound"),
+    ("<module>", "async_build_resolver", "->", "bound"),
+    ("<module>", "async_load_ontology", "normalizer", "text"),
+    ("<module>", "async_load_ontology", "source", "payload"),
+    ("<module>", "async_load_ontology", "->", "bound"),
+    ("<module>", "build_resolver", "config", "payload"),
+    ("<module>", "build_resolver", "ontology", "bound"),
+    ("<module>", "build_resolver", "->", "bound"),
+    ("<module>", "finish", "->", "bound"),
+    ("<module>", "load_ontology", "normalizer", "text"),
+    ("<module>", "load_ontology", "source", "payload"),
+    ("<module>", "load_ontology", "->", "bound"),
+    ("<module>", "merge_rung", "produced", "bound"),
+    ("<module>", "merge_rung", "signal", "schema"),
+    ("<module>", "object_entity_id", "term", "key"),
+    ("<module>", "object_entity_id", "->", "key"),
+    ("<module>", "qualify", "local_id", "door"),
+    ("<module>", "qualify", "ontology_id", "schema"),
+    ("<module>", "qualify", "source_id", "schema"),
+    ("<module>", "qualify", "->", "door"),
+    ("<module>", "relation_id", "->", "schema"),
+    ("<module>", "split_qualified", "qualified_id", "door"),
+    ("<module>", "split_qualified", "source_ids", "schema"),
+    ("<module>", "within_admits", "axes", "schema"),
+    ("<module>", "within_admits", "memberships", "schema"),
+    ("<module>", "within_axes", "->", "schema"),
+    ("<module>", "within_axis_names", "->", "schema"),
+    ("<module>", "within_memberships", "entity", "key"),
+    ("<module>", "within_memberships", "source", "key"),
+    ("<module>", "within_memberships", "->", "schema"),
+    ("<module>", "refuse_unknown_axes", "axes", "schema"),
     ("AliasFormSource", "by_alias_form", "->", "key"),
     ("AliasFormSource", "by_alias_form", "form", "text"),
     ("Assertion", "<field>", "derived_from", "schema"),
@@ -173,7 +211,6 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncOntology", "localize", "qualified_id", "door"),
     ("AsyncOntology", "qualify", "->", "door"),
     ("AsyncOntology", "qualify", "local_id", "key"),
-    ("AsyncOntology", "qualify", "source_id", "schema"),
     ("AsyncOntology", "taxonomy", "->", "key"),
     ("AsyncOntology", "taxonomy", "name", "schema"),
     ("AsyncTaxonomy", "<field>", "assertions", "key"),
@@ -198,6 +235,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncTaxonomyView", "child_edges", "->", "key"),
     ("AsyncTaxonomyView", "children", "->", "key"),
     ("AsyncTaxonomyView", "descendants", "->", "key"),
+    ("AsyncTaxonomyView", "children_at_depth", "->", "key"),
     ("AsyncTaxonomyView", "descendants_to_depth", "->", "key"),
     ("AsyncTaxonomyView", "entity", "->", "key"),
     ("AsyncTaxonomyView", "parent_edges", "->", "key"),
@@ -270,7 +308,6 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("Ontology", "localize", "qualified_id", "door"),
     ("Ontology", "qualify", "->", "door"),
     ("Ontology", "qualify", "local_id", "key"),
-    ("Ontology", "qualify", "source_id", "schema"),
     ("Ontology", "taxonomy", "->", "key"),
     ("Ontology", "taxonomy", "name", "schema"),
     ("ParentChoice", "choose", "->", "key"),
@@ -337,6 +374,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("TaxonomyView", "child_edges", "->", "key"),
     ("TaxonomyView", "children", "->", "key"),
     ("TaxonomyView", "descendants", "->", "key"),
+    ("TaxonomyView", "children_at_depth", "->", "key"),
     ("TaxonomyView", "descendants_to_depth", "->", "key"),
     ("TaxonomyView", "entity", "->", "key"),
     ("TaxonomyView", "parent_edges", "->", "key"),
@@ -355,7 +393,10 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
 #: rows it brings with it.
 _PROTOCOLS = 13
 _REACHABLE_VALUE_TYPES = 36
-_ROWS = 271
+
+#: Class rows plus the published module-level ones -- see :func:`_module_rows`
+#: for why a function belonging to no class is in the population at all.
+_ROWS = 303
 
 
 def _modules() -> Iterator[ast.Module]:
@@ -423,6 +464,45 @@ def _alias_value(node: ast.expr) -> str:
     ):
         return node.args[1].value
     return ast.unparse(node)
+
+
+def _module_rows() -> list[tuple[str, str, str]]:
+    """Every annotated position on a **published module-level function**.
+
+    The other half of the surface, and the half the frontier could not reach:
+    it is seeded from class annotations, so a function that belongs to no class
+    was outside the population however many keys it carried.
+    ``object_entity_id(term: Term[K]) -> K | None`` and
+    ``within_memberships(entity: Entity[K], source: ScopeAuthority[K])`` are
+    key-carrying surfaces a consumer calls directly, and a regression narrowing
+    either return to ``str`` was invisible to all three tests here.
+
+    **Published only, and the boundary is an argument rather than a
+    convenience.** A module-private helper is not a surface: it is reached
+    through the published function that calls it, whose row *is* in the table,
+    so a helper narrowed to ``str`` shows up at the door above it. A private
+    *method* stays in, because the class it hangs on is in the population by
+    declaration -- the two halves are drawn by the same rule, which is whether
+    something outside these files can name it.
+
+    The owner is ``"<module>"`` rather than a file name: these two subpackages
+    export from their package door, so which module a function is written in is
+    not a fact a caller knows, and keying on it would make a row move when a
+    function did.
+    """
+    rows: list[tuple[str, str, str]] = []
+    for module in _modules():
+        for node in module.body:
+            if isinstance(
+                node, ast.FunctionDef | ast.AsyncFunctionDef
+            ) and not node.name.startswith("_"):
+                arguments = node.args
+                for arg in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]:
+                    if arg.annotation is not None:
+                        rows.append((node.name, arg.arg, ast.unparse(arg.annotation)))
+                if node.returns is not None:
+                    rows.append((node.name, "->", ast.unparse(node.returns)))
+    return rows
 
 
 def _generic_aliases() -> set[str]:
@@ -543,12 +623,20 @@ def _population() -> tuple[dict[str, ast.ClassDef], list[str], list[str]]:
 def _measured() -> dict[tuple[str, str, str], str]:
     """Every row in the tree, mapped to the annotation the source carries."""
     classes, protocols, values = _population()
-    return {
+    measured = {
         (owner, member, position): annotation
         for owner in [*protocols, *values]
         for member, position, annotation in _rows_of(classes[owner])
         if {"str", "K", "K_co"} & _named(annotation)
     }
+    measured.update(
+        {
+            ("<module>", member, position): annotation
+            for member, position, annotation in _module_rows()
+            if {"str", "K", "K_co"} & _named(annotation)
+        }
+    )
+    return measured
 
 
 def test_the_population_is_what_the_table_was_written_against() -> None:
@@ -628,9 +716,12 @@ def test_no_generic_is_named_bare_inside_the_population() -> None:
         if any(ast.unparse(b).startswith(("Protocol[", "Generic[")) for b in node.bases)
     } | _generic_aliases()
 
+    surfaces = [(owner, _rows_of(classes[owner])) for owner in [*protocols, *values]]
+    surfaces.append(("<module>", _module_rows()))
+
     bare: list[str] = []
-    for owner in [*protocols, *values]:
-        for member, position, annotation in _rows_of(classes[owner]):
+    for owner, rows in surfaces:
+        for member, position, annotation in rows:
             tree = ast.parse(annotation, mode="eval").body
             parameterised = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Subscript)}
             bare += [

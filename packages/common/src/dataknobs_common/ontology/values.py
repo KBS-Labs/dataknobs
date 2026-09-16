@@ -33,16 +33,18 @@ from dataknobs_common.ontology.taxonomy import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from dataknobs_common.ontology.taxonomy import TaxonomyView
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
     from dataknobs_common.ontology.model import (
         Assertion,
         AttributeDef,
         Entity,
         EntityType,
+        ParentChoice,
         RelationType,
         TaxonomyDefinition,
+        TreeProjection,
     )
+    from dataknobs_common.ontology.taxonomy import TaxonomyView
     from dataknobs_common.ontology.sources import (
         AssertionSource,
         AsyncAssertionSource,
@@ -89,16 +91,39 @@ class KeyCodec(Protocol[K]):
     an ontology exist in this package and both are doors here, so the cost of
     requiring it is two lines rather than a migration.
 
+    **The space is the ontology's own, which is the whole post-ontology
+    remainder and not the bare local id.** Those differ exactly when a
+    vocabulary binds more than one source: :meth:`Ontology.localize` keeps the
+    source segment then, because that is the space :attr:`Ontology.entities`
+    speaks and what a layered source routes on -- and ``localize`` is the
+    member documented as *what* ``entity()`` *takes*. So ``from_id`` receives
+    that whole remainder, and ``to_id`` must therefore produce it. A codec for
+    a multi-source vocabulary renders and parses the segment; one for a
+    single-source vocabulary never sees it, because there is none.
+
+    Saying so is not a formality. It is the half that was missing while
+    :meth:`Ontology.qualify` took a ``source_id`` and composed a segment behind
+    the codec, which handed ``from_id`` a string ``to_id`` had never produced.
+    Over ``str`` nothing showed, because the identity codec parses anything.
+
     Both members are positional-only: a codec is called by this package and its
     parameter names are not a surface a consumer writes.
     """
 
     def to_id(self, key: K, /) -> str:
-        """What the key becomes when it leaves -- an index row, a stored ref."""
+        """What the key becomes when it leaves -- an index row, a stored ref.
+
+        The whole of the ontology's local space, which carries the source
+        segment for a vocabulary that binds more than one.
+        """
         ...
 
     def from_id(self, rendered: str, /) -> K:
-        """What it is again at every door back in. The inverse of :meth:`to_id`."""
+        """What it is again at every door back in. The inverse of :meth:`to_id`.
+
+        It receives exactly what :meth:`to_id` produced, and this package holds
+        no door that hands it anything else.
+        """
         ...
 
 
@@ -338,14 +363,14 @@ class Ontology(Generic[K]):
     #: argument may be *passed*, not whether it may be omitted, so this keeps
     #: the guard above whole while removing the one thing it could not guard
     #: against. A required field may not follow a defaulted one, so this could
-    #: not simply be appended the way :attr:`Taxonomy.entity_types` was; it
-    #: therefore lands at position nine, where :attr:`structures` used to be,
-    #: and a nine-positional construction would bind a structures mapping to a
-    #: codec. Both are objects, so nothing reports it at the construction and
-    #: the first symptom is a rendered key somewhere else entirely. Nothing
-    #: released depends on the order and all four construction sites in this
-    #: repository are keyword, so the fix is to make the misbinding
-    #: unspellable rather than to preserve a position.
+    #: not simply be appended the way :attr:`Taxonomy.entity_types` was.
+    #: Without ``kw_only`` it would land at position nine, where
+    #: :attr:`structures` still is, and a nine-positional construction would
+    #: bind a structures mapping to a codec -- both are objects, so nothing
+    #: would report it at the construction and the first symptom would be a
+    #: rendered key somewhere else entirely. ``kw_only`` takes the field out of
+    #: the positional list altogether, so ``structures`` keeps its position and
+    #: the misbinding is unspellable rather than merely unlikely.
     codec: KeyCodec[K] = field(kw_only=True)
 
     #: The copied structure axes, keyed by the name the axis is reached
@@ -462,7 +487,7 @@ class Ontology(Generic[K]):
         """
         return _inherited_attributes(self.entity_types, self.id, entity_type)
 
-    def qualify(self, local_id: K, source_id: str | None = None) -> str:
+    def qualify(self, local_id: K) -> str:
         """This ontology's external id for ``local_id``.
 
         Fills the ontology segment from :attr:`id` and composes the rest
@@ -475,8 +500,25 @@ class Ontology(Generic[K]):
         **One of the four doors a key leaves by**, so it is one of the four
         places :attr:`codec` is spent: the key is rendered here and nowhere
         between here and the value types, which simply carry it.
+
+        **It takes the key and nothing else, and the parameter it used to take
+        is why.** A ``source_id`` here composed a segment *inside* the space
+        :attr:`codec` owns -- :meth:`localize` hands the whole post-ontology
+        remainder to ``from_id``, so a segment this member prepended arrived at
+        a parser with no contract to expect it. Over ``str`` that was invisible,
+        because ``StrCodec`` is the identity and every string parses; over a
+        key of a consumer's own it produced a key that addresses nothing, with
+        nothing raised. Dropping the parameter makes the pair inverses
+        unconditionally: **every id this builds, :meth:`localize` reads back.**
+
+        A caller holding the parts separately still composes them with the free
+        :func:`~dataknobs_common.ontology.model.qualify`, which is what it is
+        for -- ``qualify(onto.id, local, source)``. A caller holding a key of
+        this vocabulary calls this, and the key already carries whatever the
+        source segment would have said, because that is the space
+        :attr:`entities` speaks.
         """
-        return _qualify(self.id, self.codec.to_id(local_id), source_id)
+        return _qualify(self.id, self.codec.to_id(local_id))
 
     def localize(self, qualified_id: str) -> K:
         """``qualified_id`` in this ontology's own space -- what :meth:`entity` takes.
@@ -627,7 +669,7 @@ class AsyncOntology(Generic[K]):
         """
         return _inherited_attributes(self.entity_types, self.id, entity_type)
 
-    def qualify(self, local_id: K, source_id: str | None = None) -> str:
+    def qualify(self, local_id: K) -> str:
         """:meth:`Ontology.qualify`, unflavoured.
 
         A plain ``def`` on this twin as well, and for the same reason
@@ -635,7 +677,7 @@ class AsyncOntology(Generic[K]):
         making it awaitable would cost every caller an ``await`` for a string
         concatenation. One of the four doors, so the codec is spent here.
         """
-        return _qualify(self.id, self.codec.to_id(local_id), source_id)
+        return _qualify(self.id, self.codec.to_id(local_id))
 
     def localize(self, qualified_id: str) -> K:
         """:meth:`Ontology.localize`, unflavoured."""
@@ -726,8 +768,30 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
             """And the members this leg put on it answer in it too."""
             assert_type(cursor.ancestors(), "tuple[TaxonomyView[Sku], ...]")
             assert_type(cursor.descendants_to_depth(2), "tuple[TaxonomyView[Sku], ...]")
+            assert_type(cursor.children_at_depth(2), "tuple[TaxonomyView[Sku], ...]")
             assert_type(cursor.paths_to_root(), "tuple[tuple[Sku, ...], ...]")
             assert_type(cursor.entity(), "Entity[Sku] | None")
+
+        def _a_projection_may_be_written_over_that_key_too(
+            choice: ParentChoice[Sku],
+        ) -> None:
+            """What widening :class:`TreeProjection` buys, written as a call.
+
+            :attr:`TaxonomyDefinition.projection` is ``TreeProjection[Any]``
+            because the definition is the *authored* half of an axis and is
+            ``str``-keyed whatever the instances are -- so it cannot name the
+            key its policy is written over. ``Any`` is what admits a policy over
+            any of them; a **bare** ``TreeProjection`` would admit only ``str``,
+            because the key parameter defaults. That is the whole of the
+            widening's reach, and it is reachable rather than notional: this
+            assignment is an error without it.
+            """
+            declared: TaxonomyDefinition = TaxonomyDefinition(
+                id="lines",
+                relation="isa",
+                projection=TreeProjection(choice=choice),
+            )
+            assert_type(declared.projection, "TreeProjection[Any] | None")
 
         def _the_str_case_is_unchanged(onto: Ontology) -> None:
             """A bare ``Ontology`` is ``Ontology[str]``, as everything else here is.
@@ -742,3 +806,4 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
             assert_type(onto.taxonomy("species").at("beagle").entity(), "Entity[str] | None")
 
         del _composes, _the_cursor_walks_in_that_space, _the_str_case_is_unchanged
+        del _a_projection_may_be_written_over_that_key_too

@@ -68,6 +68,26 @@ class CascadeState:
     Pure: no rung, no store, no ``await``. Everything a cascade does apart
     from calling a rung is a function of this value, which is what lets one
     core sit under both flavours.
+
+    **Keyed by ``str``, and this is the boundary of the key widening.** The
+    protocols this module implements -- :class:`MatchSignal`,
+    :class:`EntityResolver`, :class:`EntityCandidate`,
+    :class:`ResolutionResult` -- are generic in the entity key; the shipped
+    cascade and the shipped rungs are not. So a vocabulary keyed by something
+    other than ``str`` gets the axes, the cursors and the vocabulary, and
+    brings its own resolver.
+
+    **Stated rather than left to the default, because the default is silent.**
+    An unparameterised ``MatchSignal`` in a signature binds ``Any``, so a
+    consumer's ``MatchSignal[Sku]`` would be accepted here and its ids would
+    land in the three fields below, which are annotated ``str``. Nothing
+    reports that. :func:`~dataknobs_common.ontology.build_resolver` therefore
+    declares ``Ontology[str]``, so the refusal arrives at the call.
+
+    Moving the boundary is mechanical rather than blocked: the rungs read
+    :meth:`EntitySource.by_surface_form`, which already answers in the key, so
+    what stands between here and a generic cascade is annotations rather than a
+    transport. It is a change of its own size and is not made here.
     """
 
     query: str
@@ -110,7 +130,7 @@ class CascadeState:
 
 def merge_rung(
     state: CascadeState,
-    produced: Sequence[EntityCandidate],
+    produced: Sequence[EntityCandidate[str]],
     *,
     signal: str,
     kind: EvidenceKind,
@@ -245,7 +265,9 @@ def _coverage(
     return tuple(merged), tuple(residue)
 
 
-def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -> ResolutionResult:
+def finish(
+    state: CascadeState, *, compatibility: CompatibilityVerdict | None
+) -> ResolutionResult[str]:
     """Turn the state into the result a caller gets back.
 
     Coverage is derived here too, from the evidence the candidates carry --

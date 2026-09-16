@@ -17,7 +17,8 @@ Three claims, and the first is the measurement that decided the shape:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import inspect
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from dataknobs_common.ontology import (
     AsyncOntology,
     KeyCodec,
     Ontology,
+    SourceDescription,
     StrCodec,
     async_load_ontology,
     load_ontology,
@@ -191,6 +193,50 @@ def test_a_rendered_key_round_trips_through_both_doors(key: object, codec: objec
 
     assert qualified.startswith("acme:")
     assert onto.localize(qualified) == key
+
+
+def _every_spelling(onto: Ontology, key: object) -> list[str]:
+    """Every id ``qualify`` can be asked to build for ``key``.
+
+    Derived from what the member *declares* rather than listed here, so the
+    test below states a law over the whole surface and needs no edit when the
+    surface changes. A spelling nobody can write is a spelling nothing has to
+    read back.
+    """
+    spellings = [onto.qualify(key)]
+    if "source_id" in inspect.signature(type(onto).qualify).parameters:
+        spellings.append(onto.qualify(key, "plant_a"))  # type: ignore[call-arg]
+    return spellings
+
+
+def test_every_id_qualify_builds_localize_reads_back() -> None:
+    """The law the codec is a **pair** for, over a vocabulary binding two sources.
+
+    ``localize`` hands its result to ``from_id``, which is documented as the
+    inverse of ``to_id`` -- so every string ``to_id`` never produced is a
+    string ``from_id`` has no contract to parse, and parsing it anyway is
+    silent. ``SkuCodec.from_id`` splits on the last ``/``, so a source segment
+    in front of a rendered key comes back as a ``Sku`` whose plant is
+    ``'plant_a:ACME'``: no exception, and a key that addresses nothing.
+
+    The multi-source ontology is the whole point. ``localize`` keeps the source
+    segment where one applies -- that is the space ``entities`` speaks -- so
+    the segment is *inside* what the codec parses, and anything that composes
+    one behind the codec's back breaks the pair.
+    """
+    onto = replace(
+        _onto(SkuCodec()),
+        describes=(
+            SourceDescription("plant_a", "memory", None, {}, frozenset()),
+            SourceDescription("plant_b", "memory", None, {}, frozenset()),
+        ),
+    )
+    key = Sku("ACME", 3)
+
+    for qualified in _every_spelling(onto, key):
+        assert onto.localize(qualified) == key, (
+            f"{qualified!r} was built by qualify and does not read back"
+        )
 
 
 def test_the_str_path_is_the_identity_and_reads_as_it_always_did(mammals_path: Path) -> None:

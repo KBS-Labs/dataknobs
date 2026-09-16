@@ -15,9 +15,9 @@ in it to go stale.
 ## Where the names live
 
 On the package door, with the rest of this family. All four are complete now —
-`HierarchyView` carries its ten members and `TaxonomyView` its thirteen, and the
-four module walks that deliberately have no member are named in [What is not on
-it](#what-is-not-on-it) — and they were published before they were, because adding a member to a class breaks
+`HierarchyView` carries its eleven members and `TaxonomyView` its fourteen, and
+the three module walks that deliberately have no member are named in [What is
+not on it](#what-is-not-on-it) — and they were published before they were, because adding a member to a class breaks
 nobody while withholding the name costs a consumer something real. For the
 taxonomy cursors that cost was an annotation: `at()` hands you one, and the
 import only lets you write down what you hold. For `HierarchyView` it was the
@@ -286,7 +286,7 @@ on `AsyncTaxonomy` — have the same members, every one `async def` except
 
 ## The whole way up, and everything below
 
-Four members walk, and each is one line over the module-level walk of the same
+Five members walk, and each is one line over the module-level walk of the same
 name — so what each one does, and what it refuses, is that function's contract
 rather than a second one written here:
 
@@ -326,7 +326,30 @@ except NotFoundError as refusal:
     assert refusal.context["anchor"] == "no_such_node"
 ```
 
-Each carries the keywords its module function carries — `cache=` on all four,
+**`children_at_depth()` is the third of that family and answers one level
+rather than a span** — *exactly this far down*, where `descendants_to_depth()`
+answers *everything down to here*. A caller who wants the one from the other
+has to subtract two results, which is why both are members:
+
+```python
+assert [n.node for n in dog.descendants_to_depth(2)] == [
+    "dog",
+    "retriever",
+    "golden_retriever",
+    "beagle",
+]
+assert [n.node for n in dog.children_at_depth(2)] == ["golden_retriever"]
+assert dog.children_at_depth(9) == ()          # nothing is that deep: an answer
+```
+
+Its anchor is *where you are* — `depth=0` is the node itself — which is what
+makes it a member here at all, and it emits that anchor, so it refuses one the
+axis does not contain exactly as `descendants_to_depth()` does. A depth the axis
+does not reach is a different answer from an anchor it does not know, and the
+two stay apart: `()` says *nothing is that deep*, the refusal says *no such
+node*.
+
+Each carries the keywords its module function carries — `cache=` on all five,
 `max_paths=` on `paths_to_root()`, and `max_concurrency=` on every asynchronous
 twin. A cache spent across two walks is the caller's, and
 `MappingHierarchy.snapshot` takes one too — so a snapshot and a later walk over
@@ -405,20 +428,19 @@ them could not keep the promise.
 
 ## What is not on it
 
-Four module walks have no cursor member, and the reasons differ:
+Three module walks have no cursor member, and the reasons differ:
 
 `deepest_common_ancestor` will never have one — a cursor names one node and that
 walk takes two anchors. Call the module function with both.
 
-`children_at_depth`, `flatten` and `leaves` each take a single anchor and would
-fit a cursor, and are left off because the anchor means something different in
-each: on a cursor an anchor is *where you are*, and on those three it is a
-**filter over the whole axis** — `flatten(from_id=…)` and `leaves(under=…)`
-default to every root and narrow from there, and `children_at_depth` counts
-depth from the axis's roots rather than from the node handed to it. A member
-that read the cursor's node as that argument would be answering a different
-question from the one the same name answers a line above. Call the module
-function with the axis and the node:
+`flatten` and `leaves` each take a single anchor and would fit a cursor, and are
+left off because the anchor means something different on them: on a cursor an
+anchor is *where you are*, and on those two it is a **filter over the whole
+axis** — `flatten(from_id=…)` and `leaves(under=…)` take an *optional* anchor
+that defaults to every root and narrows from there. A member that read the
+cursor's node as that argument would be answering a different question from the
+one the same name answers a line above. Call the module function with the axis
+and the node:
 
 ```python
 from dataknobs_common import leaves

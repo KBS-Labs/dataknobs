@@ -62,16 +62,16 @@ def species(mammals_path: Path) -> AssertionHierarchy:
 def test_the_members_answer_with_no_store_no_embedder_and_no_loop(
     species: AssertionHierarchy,
 ) -> None:
-    """**All ten members**, over a file and nothing else.
+    """**All eleven members**, over a file and nothing else.
 
     The loop assertion is inside the test: a test that merely *is not* async
     proves nothing about the members, since a synchronous call can still be
     made from inside a running loop.
 
-    Six of the ten answered here before the four walk-shaped members existed,
-    and the list is the fence's rather than what happens to be present -- a
-    member added to the cursor and not to this call is a member nothing asserts
-    can be reached without a loop.
+    Six of the eleven answered here before the five walk-shaped members
+    existed, and the list is the fence's rather than what happens to be
+    present -- a member added to the cursor and not to this call is a member
+    nothing asserts can be reached without a loop.
     """
     with pytest.raises(RuntimeError):
         asyncio.get_running_loop()
@@ -87,6 +87,7 @@ def test_the_members_answer_with_no_store_no_embedder_and_no_loop(
     assert [above.node for above in view.ancestors()] == ["mammal"]
     assert [below.node for below in view.descendants()] == ["beagle"]
     assert [n.node for n in view.descendants_to_depth(1)] == ["dog", "beagle"]
+    assert [n.node for n in view.children_at_depth(1)] == ["beagle"]
     assert view.paths_to_root() == (("dog", "mammal"),)
 
 
@@ -139,6 +140,67 @@ async def test_the_two_descending_members_differ_on_the_twin_too(
     assert await absent.descendants() == ()
     with pytest.raises(NotFoundError):
         await absent.descendants_to_depth(1)
+
+
+def test_children_at_depth_answers_one_level_where_its_sibling_answers_a_span(
+    species: AssertionHierarchy,
+) -> None:
+    """The third descending member, and why it is a member rather than a subtraction.
+
+    ``descendants_to_depth(2)`` answers *everything down to here* and this
+    answers *exactly this far down*. A caller holding only the first has to
+    subtract ``descendants_to_depth(1)`` from it to get the second, which is
+    two walks and an arithmetic step to ask a question one walk already
+    answers -- and the module function has answered it since before the cursor
+    existed.
+
+    Its anchor is *where you are*: ``depth=0`` is this node. That is the
+    property the cursor's member set is drawn by, and it is why this walk is on
+    the cursor while ``flatten`` and ``leaves``, whose anchors are optional and
+    default to every root, are not.
+    """
+    view = HierarchyView(species, "mammal")
+
+    assert [n.node for n in view.descendants_to_depth(2)] == ["mammal", "dog", "beagle"]
+    assert [n.node for n in view.children_at_depth(0)] == ["mammal"]
+    assert [n.node for n in view.children_at_depth(1)] == ["dog"]
+    assert [n.node for n in view.children_at_depth(2)] == ["beagle"]
+
+
+def test_children_at_depth_keeps_too_deep_apart_from_not_here(
+    species: AssertionHierarchy,
+) -> None:
+    """``()`` says *nothing is that deep*; the refusal says *no such node*.
+
+    Both are inherited from the module function rather than decided here, and
+    keeping them apart is the same distinction ``descendants_to_depth`` draws
+    against ``descendants``: a walk that emits its anchor cannot return an
+    unknown one as a term of the axis.
+    """
+    view = HierarchyView(species, "mammal")
+
+    assert view.children_at_depth(9) == (), "an answer: the axis is not that deep"
+
+    with pytest.raises(NotFoundError) as refusal:
+        view.at("no_such_node").children_at_depth(1)
+
+    assert refusal.value.context["anchor"] == "no_such_node"
+
+
+@pytest.mark.asyncio
+async def test_children_at_depth_answers_one_level_on_the_twin_too(
+    mammals_path: Path,
+) -> None:
+    """The same member, awaited, with both endings it can have."""
+    onto = await async_load_ontology(mammals_path)
+    view = AsyncHierarchyView(AsyncAssertionHierarchy(onto.assertions, "isa"), "mammal")
+
+    assert [n.node for n in await view.children_at_depth(1)] == ["dog"]
+    assert [n.node for n in await view.children_at_depth(2)] == ["beagle"]
+    assert await view.children_at_depth(9) == ()
+
+    with pytest.raises(NotFoundError):
+        await view.at("no_such_node").children_at_depth(1)
 
 
 def test_parents_are_plural() -> None:
@@ -580,7 +642,7 @@ _VIEW_MEMBERS = ("parents", "children")
 #: The walk-shaped members that return views. Same exception as
 #: ``_VIEW_MEMBERS`` on the return, plus the one keyword the asynchronous
 #: flavour has and the synchronous one has no equivalent of.
-_WALK_MEMBERS = ("ancestors", "descendants", "descendants_to_depth")
+_WALK_MEMBERS = ("ancestors", "descendants", "descendants_to_depth", "children_at_depth")
 
 
 def test_the_view_twins_expose_the_same_annotated_surface() -> None:

@@ -150,11 +150,23 @@ def test_the_members_round_trip_a_local_id() -> None:
 def test_qualify_composes_the_free_function_rather_than_a_second_spelling() -> None:
     """One builder for a namespaced id, because a malformed one is unfixable
     once it has been written into stored data.
+
+    **The member takes the key and nothing else**, so a caller who holds the
+    parts separately composes them with the free function -- which is what the
+    free function is for, and which this member is asserted to invoke. The
+    member once took a ``source_id`` too, and that segment landed inside the
+    space ``codec`` owns: ``localize`` hands the whole post-ontology remainder
+    to ``from_id``, so the pair stopped being inverses for any key type whose
+    parse is not the identity. Over ``str`` it was invisible.
     """
     onto = _retail()
 
     assert onto.qualify("cat-1183") == qualify("retail", "cat-1183")
-    assert onto.qualify("cat-1183", "catalog") == qualify("retail", "cat-1183", "catalog")
+    assert "source_id" not in inspect.signature(type(onto).qualify).parameters
+    assert onto.qualify("catalog:cat-1183") == qualify("retail", "cat-1183", "catalog"), (
+        "the source-qualified key is a key of this ontology's space, so it "
+        "goes through the one parameter rather than beside it"
+    )
 
 
 def test_localize_refuses_another_ontologys_id_naming_both() -> None:

@@ -52,24 +52,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back. Everything in between carries the key, so a frozen value type never
   reaches for a codec and a key never becomes a string by accident.
 
-- **The four walk-shaped members on all four cursors** — `ancestors`,
-  `descendants`, `descendants_to_depth` and `paths_to_root`, on
-  `HierarchyView`, `TaxonomyView` and both asynchronous twins. Each is one line
-  over the module-level walk of the same name, so what each returns, which of
-  them include their anchor and which refuse an unknown one are that function's
-  contract rather than a second one. Every keyword the walk takes, the member
-  takes: `cache=` on all four, `max_paths=` on `paths_to_root`, and
-  `max_concurrency=` on every asynchronous twin.
+  **The codec's space is the ontology's own — the whole post-ontology
+  remainder**, which carries the source segment for a vocabulary binding more
+  than one. That is the space `entities` is keyed by and the space `localize`
+  returns, so it is the space `to_id` renders and `from_id` parses.
+  `Ontology.qualify` therefore takes **the key and nothing else**: the
+  `source_id` it used to take composed a segment *inside* that space, so
+  `from_id` received a string `to_id` had never produced. Over `str` nothing
+  showed, because the identity codec parses anything; over a key of a
+  consumer's own it returned a key that addresses nothing, silently. Every id
+  `qualify` builds, `localize` now reads back — unconditionally. A caller
+  holding the parts separately still composes them with the free
+  `qualify(ontology_id, local_id, source_id)`, which is what it is for.
 
-  `ancestors`, `descendants` and `descendants_to_depth` answer with **cursors**,
-  so a walk composes; `paths_to_root` answers with **keys**, because it returns
-  routes and a route's meaning is its order.
+  **The resolution cascade is the boundary, and it is declared rather than
+  defaulted.** `MatchSignal`, `EntityResolver`, `EntityCandidate` and
+  `ResolutionResult` are generic in the key; the shipped `CascadingResolver`,
+  its rungs and `CascadeState` are `str`-keyed. An unparameterised generic in a
+  signature binds `Any`, so a consumer's non-`str` signal would have been
+  accepted and its ids would have landed in fields annotated `str` with nothing
+  reporting it. `build_resolver` and `async_build_resolver` now say
+  `Ontology[str]` and `EntityResolver[str]`, so a vocabulary keyed by something
+  else is a type error at the call rather than a wrong answer later. Moving the
+  boundary is annotations rather than transport — the rungs already read
+  `by_surface_form`, which answers in the key — and is a change of its own
+  size.
 
-  **`descendants` and `descendants_to_depth` are two members rather than one
-  taking `depth=`.** They differ in what they emit — the second includes the
-  anchor — and in what they do with an anchor the structure does not contain:
-  the first answers `()`, the second raises `NotFoundError`. One member would
-  select between two contracts by the presence of a keyword.
+- **The five walk-shaped members on all four cursors** — `ancestors`,
+  `descendants`, `descendants_to_depth`, `children_at_depth` and
+  `paths_to_root`, on `HierarchyView`, `TaxonomyView` and both asynchronous
+  twins. Each is one line over the module-level walk of the same name, so what
+  each returns, which of them include their anchor and which refuse an unknown
+  one are that function's contract rather than a second one. Every keyword the
+  walk takes, the member takes: `cache=` on all five, `max_paths=` on
+  `paths_to_root`, and `max_concurrency=` on every asynchronous twin — and each
+  of those is asserted to be *forwarded*, not merely declared, because a
+  signature comparison cannot tell a member that passes a keyword on from one
+  that accepts it and drops it.
+
+  **A walk is a member when its anchor means *where you are*.** That is the
+  rule the set is drawn by. It puts `children_at_depth` inside — its anchor is
+  required and `depth=0` is the node itself — and leaves `flatten` and `leaves`
+  out, because their anchors are *optional* and default to every root, so a
+  member reading the cursor's node as that argument would answer a different
+  question from the one the same name answers beside it.
+  `deepest_common_ancestor` is out for a plainer reason: it takes two anchors
+  and a cursor names one.
+
+  `ancestors`, `descendants`, `descendants_to_depth` and `children_at_depth`
+  answer with **cursors**, so a walk composes; `paths_to_root` answers with
+  **keys**, because it returns routes and a route's meaning is its order.
+
+  **`descendants`, `descendants_to_depth` and `children_at_depth` are three
+  members rather than one taking `depth=`.** The first two differ in what they
+  emit — the second includes the anchor — and in what they do with an anchor the
+  structure does not contain: the first answers `()`, the second raises
+  `NotFoundError`. The third answers *one level* where the second answers a
+  *span*, so a caller wanting it from the second subtracts two walks. One
+  member would select between three contracts by the presence of a keyword.
 
 - **`Taxonomy.inherited_attributes(type_id)` and its asynchronous twin**, and
   the fifth field they read — `entity_types`, a `Mapping[str, EntityType]`.
