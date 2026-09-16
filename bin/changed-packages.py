@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -179,21 +180,29 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
     ".dataknobs/release-readiness.json",  # the pointers release-helper.sh reads and verifies
     # The licensing surface, read by test_licensing.py: the root LICENSE and
-    # NOTICE that every package's copy is pinned against, and the historical MIT
-    # text whose per-package version list that guard checks against
-    # packages.json. Editing one moves that guard's verdict and no package's,
-    # which is what this tier is for.
+    # NOTICE, each package's copy of the pair pinned byte-for-byte against
+    # them, and the historical MIT text whose per-package version list that
+    # guard checks against packages.json. Editing one moves that guard's verdict and
+    # no package's, which is what this tier is for.
     #
-    # Three file entries rather than a "LICENSES/" directory entry, for the
-    # reason the workflows note above gives in the other direction: a directory
-    # entry expands through the suffix predicate in package-hashes.py, and
-    # ".txt" is not a quality-input suffix, so it would expand to nothing and
-    # read exactly like coverage. A file entry is tested with is_file() and
-    # never consults that predicate, which is also what lets the two
-    # extensionless names here be declared at all.
+    # File entries rather than a "LICENSES/" directory entry, for the reason the
+    # workflows note above gives in the other direction: a directory entry
+    # expands through the suffix predicate in package-hashes.py, and ".txt" is
+    # not a quality-input suffix, so it would expand to nothing and read exactly
+    # like coverage. A file entry is tested with is_file() and never consults
+    # that predicate, which is also what lets the extensionless names here be
+    # declared at all.
+    #
+    # The copies are globbed rather than listed one per package, for the
+    # reason scope_entry_files gives about "packages/*/docs/": a list leaves
+    # the next package's copy unhashed the day it is created, while still
+    # reading like coverage. They are the guard's actual subject, so leaving
+    # them out is the whole of what it asserts about.
     "LICENSE",
     "NOTICE",
     "LICENSES/MIT-historical.txt",
+    "packages/*/LICENSE",
+    "packages/*/NOTICE",
     # The root README, read by the documented-import guard along with every
     # package README and the site tree. The per-package copies ride their own
     # package scope and docs/ rides the docs scope; this one is reached by no
@@ -463,6 +472,13 @@ def strip_release_noise(content: bytes) -> bytes:
 #: for transclusion into the site in a way a changelog is not, and the entry
 #: that would make that safe is a docs-scope one, not this.
 _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
+
+#: The licensing files every package carries a copy of. Not documentation —
+#: no recorded documentation check reads either — but like the set above they
+#: sit at a package root and belong to no package's suite, so the generic
+#: path-to-package rule must not claim them. The guard that does read them is
+#: tests/test_licensing.py, which the workspace-only tier schedules.
+_PACKAGE_LICENSE_FILES = frozenset({"LICENSE", "NOTICE"})
 
 #: Directories directly under a package whose contents that package's own suite
 #: reads and no other package can. A change to one schedules that package and
@@ -1093,12 +1109,29 @@ def _is_workspace_only_input(filepath: str) -> bool:
     """Whether a path is a workspace-only quality input.
 
     Directory entries end in "/" and cover everything beneath them; file
-    entries match exactly. Spelled to the same convention
-    WORKSPACE_QUALITY_INPUTS documents, so the list stays the declaration.
+    entries match exactly, or segment-wise when they carry a "*". Spelled to
+    the same convention WORKSPACE_QUALITY_INPUTS documents, so the list stays
+    the declaration.
+
+    The "*" is matched per segment rather than with a bare fnmatch over the
+    whole path, because fnmatch's "*" crosses a separator: it would read
+    ``packages/a/b/LICENSE`` as a match for ``packages/*/LICENSE``, which is
+    neither what scope_entry_files hashes nor what the CI filter triggers on.
+    Three readers of one entry disagreeing about which files it names is the
+    defect this whole declaration exists to prevent.
     """
-    return any(
-        filepath.startswith(entry) if entry.endswith("/") else filepath == entry
-        for entry in WORKSPACE_ONLY_TRIGGERS
+    return any(_entry_matches(filepath, entry) for entry in WORKSPACE_ONLY_TRIGGERS)
+
+
+def _entry_matches(filepath: str, entry: str) -> bool:
+    """Whether one declared entry names ``filepath``."""
+    if entry.endswith("/"):
+        return filepath.startswith(entry)
+    if "*" not in entry:
+        return filepath == entry
+    parts, pattern = filepath.split("/"), entry.split("/")
+    return len(parts) == len(pattern) and all(
+        fnmatchcase(part, glob) for part, glob in zip(parts, pattern, strict=True)
     )
 
 
@@ -1216,14 +1249,18 @@ def map_files_to_packages(
             workspace_changed = True
 
         if filepath.startswith("packages/"):
-            # The one exclusion that survives, and the only one the tree
-            # exhibits: a package *document* must not map to its package by the
-            # generic rule below. 158 files match both — 148 under docs/ and
-            # ten changelogs — and mapping them ran a whole suite and its
-            # dependents for a prose edit while running none of the four guards
-            # that actually read the file. A document reaches its package only
-            # by being declared in PACKAGE_TEST_DOC_INPUTS.
-            is_package_document = False
+            # What the generic rule below must not map to its package. A
+            # package *document* is the bulk of it: 158 files match both — 148
+            # under docs/ and ten changelogs — and mapping them ran a whole
+            # suite and its dependents for a prose edit while running none of
+            # the four guards that actually read the file. A document reaches
+            # its package only by being declared in PACKAGE_TEST_DOC_INPUTS.
+            #
+            # The flag is named for what it gates rather than for that majority
+            # case, because the licensing copies below are the member that is
+            # not a document at all — and under the narrower name they read like
+            # a category error rather than like the third thing the rule covers.
+            belongs_to_no_suite = False
 
             # Package documentation. It belongs to no package's suite unless a
             # test in that suite reads it — see PACKAGE_TEST_DOC_INPUTS, which
@@ -1232,7 +1269,7 @@ def map_files_to_packages(
             if "/docs/" in filepath:
                 docs_changed = True
                 workspace_changed = True
-                is_package_document = True
+                belongs_to_no_suite = True
                 # Declared because a test *in* that package reads it, which
                 # is also why it does not export: the document decides one
                 # suite's result, and no dependent's run opens it.
@@ -1246,12 +1283,26 @@ def map_files_to_packages(
             # why nothing about a package's recorded verdict depends on one.
             if filepath.rsplit("/", 1)[-1] in _PACKAGE_DOC_FILES:
                 docs_changed = True
-                is_package_document = True
+                belongs_to_no_suite = True
+
+            # A package's LICENSE and NOTICE copy. Read by one workspace guard
+            # and by no package's suite, so mapping one to its package is wrong
+            # in both directions at once: it schedules that suite and — the
+            # path being three segments, so _is_local_only_package_input says
+            # no — the whole dependent closure behind it, while making
+            # classify_test_scope answer "packages" and skip the only suite
+            # that opens the file.
+            #
+            # No docs_changed here, unlike the two cases above. The three
+            # recorded documentation checks read neither file: docs/license.md
+            # links to them on GitHub rather than including them.
+            if filepath.rsplit("/", 1)[-1] in _PACKAGE_LICENSE_FILES:
+                belongs_to_no_suite = True
 
             # Map to package, and decide separately whether the change is
             # one a dependent's run can see. Only the second drives the
             # closure — see _LOCAL_ONLY_PACKAGE_DIRS for which it is.
-            if not is_package_document:
+            if not belongs_to_no_suite:
                 parts = filepath.split("/")
                 if len(parts) >= 2:
                     pkg_name = parts[1]
