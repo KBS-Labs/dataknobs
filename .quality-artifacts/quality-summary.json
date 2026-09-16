@@ -1,27 +1,21 @@
 {
-  "timestamp": "2026-09-16T14:20:47Z",
+  "timestamp": "2026-09-16T15:46:55Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots common config data fsm legacy llm structures utils xization",
   "tested_packages": [
     "bots",
-    "common",
-    "config",
     "data",
     "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
+    "llm"
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "181e0f0f842293c340ac0b24cef7432f62ba65fa0fd15ed3225c7db5cb08d87c",
+    "bots": "e788871acdc95973d589a3a33ae848b38223d185ee422a3bafab15d7a5dd4488",
     "common": "890b531a81c50f7e40671fb3ab173c8edea94639ec6e634130cda601b80ecef0",
     "config": "a448b3d794e33834056097a5489390bb0fc87f25dce0ae66e6bd256e719e0dc8",
-    "data": "0b6702df0eae1f47a8bfea52c6b59cace3a258ea4767a3ad4af3ae077fd4eb7c",
+    "data": "1d19d5e2df8ddd1e949d68a0153ba2b09a6e37b10b91642f48aee334efca67e4",
     "fsm": "cd29d920e4ebab7a0211c05ee9323d7f71f056ed4087b1005d16ae6c89715d71",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "4138f4562702df2e57b402396689682d3badc7113f23cc6be68a6b10afe066fa",
@@ -31,13 +25,13 @@
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "5b41e4d6b7748cad205c4ff14bc685f22188a10d11b934fa238e4509a99a9ef9",
+    "toolchain": "021e30fac8df7f1778866002aeb7fec6e7fc126da719426499e42667716964f6",
     "toolchain_test": "a3c996e51c661e2fc0d1c26400dbbe16708cad0bd629827aec331bf99a4c82b1",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
-    "workspace_tests": "2f493df3db208e82f1f34c0f704461869fcb1cd7595ce0eec219f03c75612a00",
-    "docs": "5259ac46b335d2e4cc58a1a571b839aae755d83e529fd07450f5734004efbdc5"
+    "workspace_tests": "dc07152baedbd5746bfce6387c265901e690edd3277594a1e28ed86215bee126",
+    "docs": "b540bd7afcaaa196e5b44dbffc22a1d542275ce3726ca64734b102a1a4c334c3"
   },
-  "total_seconds": 407,
+  "total_seconds": 364,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -62,7 +56,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 107
+      "duration_seconds": 105
     },
     "documentation": {
       "status": "pass",
@@ -83,20 +77,20 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 161,
+      "duration_seconds": 129,
       "workspace_guards_seconds": 94
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 92
+      "duration_seconds": 89
     }
   }
 }
