@@ -84,8 +84,16 @@ class PackageCreator:
             # Apache-2.0 requires the license and NOTICE to travel with every
             # distribution, and `license-files` in the generated pyproject.toml
             # names them, so a package without these copies fails to build.
-            package_dir / "LICENSE": (self.repo_root / "LICENSE").read_text(),
-            package_dir / "NOTICE": (self.repo_root / "NOTICE").read_text(),
+            #
+            # Explicitly utf-8 on the read, and on the write below, because
+            # test_licensing.py compares the copy against the root as utf-8. A
+            # locale-dependent round trip would fail that comparison on the one
+            # package this script is supposed to make compliant by
+            # construction — and the sibling MIT-historical.txt already carries
+            # an em dash, so the two files being ASCII today is not a property
+            # anything holds them to.
+            package_dir / "LICENSE": (self.repo_root / "LICENSE").read_text(encoding="utf-8"),
+            package_dir / "NOTICE": (self.repo_root / "NOTICE").read_text(encoding="utf-8"),
         }
 
         if not self.dry_run:
@@ -95,7 +103,7 @@ class PackageCreator:
 
             # Create files
             for file_path, content in files_to_create.items():
-                file_path.write_text(content)
+                file_path.write_text(content, encoding="utf-8")
 
         for dir_path in dirs_to_create:
             self.log_change(f"✅ Created directory: {dir_path.relative_to(self.repo_root)}")
