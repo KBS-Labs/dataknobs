@@ -1,10 +1,11 @@
 # The Anchored View
 
-`Taxonomy.at(node_id)` returns a cursor: one axis, one node, and six questions
-asked from there — *am I here, am I a root, am I a leaf, what is above me, what
-is below me,* and *what was written on the edge I just walked*. `HierarchyView`
-is the same cursor over a bare `Hierarchy`, for a structure with no vocabulary
-behind it.
+`Taxonomy.at(node_id)` returns a cursor: one axis, one node, and every question
+asked from there — *am I here, am I a root, am I a leaf, what is one step above
+me, what is one step below me, what is the whole way above me, what is
+everything below me, how did I get here, what am I,* and *what was written on
+the edge I just walked*. `HierarchyView` is the same cursor over a bare
+`Hierarchy`, for a structure with no vocabulary behind it.
 
 A view holds the structure, not a copy of it. It owns nothing, caches nothing,
 and two views over one axis are equal exactly when they name the same node — so
@@ -13,15 +14,15 @@ in it to go stale.
 
 ## Where the names live
 
-On the package door, with the rest of this family. These four are still
-unfinished — `HierarchyView` carries six of its nine planned members and
-`TaxonomyView` eight of twelve — and are published anyway, because adding a
-member to a class breaks nobody while withholding the name costs a consumer
-something real. For the taxonomy cursors that cost is an annotation: `at()`
-hands you one, and the import only lets you write down what you hold. For
-`HierarchyView` it is the whole capability — nothing published returns or
-constructs one, so over a `Hierarchy` of your own the import is the only door
-in.
+On the package door, with the rest of this family. All four are complete now —
+`HierarchyView` carries its eleven members and `TaxonomyView` its fourteen, and
+the three module walks that deliberately have no member are named in [What is
+not on it](#what-is-not-on-it) — and they were published before they were, because adding a member to a class breaks
+nobody while withholding the name costs a consumer something real. For the
+taxonomy cursors that cost was an annotation: `at()` hands you one, and the
+import only lets you write down what you hold. For `HierarchyView` it was the
+whole capability — nothing published returns or constructs one, so over a
+`Hierarchy` of your own the import is the only door in.
 
 ```python
 from dataknobs_common import (
@@ -283,16 +284,168 @@ The asynchronous twins — `AsyncHierarchyView`, `AsyncTaxonomyView`, and `at()`
 on `AsyncTaxonomy` — have the same members, every one `async def` except
 `at()`, which constructs rather than reads and so awaits nothing.
 
-## What is not on it yet
+## The whole way up, and everything below
 
-The three walks — `ancestors()`, `descendants()`, `paths_to_root()` — and
-`TaxonomyView.entity()` are declared and arrive in a later release. Until then,
-walk from a view's node with the module-level walks:
+Five members walk, and each is one line over the module-level walk of the same
+name — so what each one does, and what it refuses, is that function's contract
+rather than a second one written here:
 
 ```python
-from dataknobs_common import ancestors
+here = axis.at("golden_retriever")
 
-assert ancestors(axis.structure, here.node) == ("retriever", "dog", "mammal")
+assert [up.node for up in here.ancestors()] == ["retriever", "dog", "mammal"]
+assert [down.node for down in axis.at("dog").descendants()] == [
+    "retriever",
+    "golden_retriever",
+    "beagle",
+]
+assert here.paths_to_root() == (("golden_retriever", "retriever", "dog", "mammal"),)
+```
+
+`ancestors()` and `descendants()` come back as **cursors**, so a walk composes:
+each answer is a place to keep asking from. `paths_to_root()` comes back as
+**keys**, because what it answers with is routes and a route's meaning is its
+order — ask `at()` for a cursor on a node you found in one.
+
+**`descendants()` and `descendants_to_depth()` are two members, not one member
+with a `depth=`.** They differ in both of the things a walk can differ in, and
+folding them would make a keyword select between two contracts:
+
+```python
+from dataknobs_common.exceptions import NotFoundError
+
+dog = axis.at("dog")
+
+assert [n.node for n in dog.descendants()] == ["retriever", "golden_retriever", "beagle"]
+assert [n.node for n in dog.descendants_to_depth(1)] == ["dog", "retriever", "beagle"]
+
+assert axis.at("no_such_node").descendants() == ()      # excludes its anchor: answers
+try:                                                     # includes it: refuses
+    axis.at("no_such_node").descendants_to_depth(1)
+except NotFoundError as refusal:
+    assert refusal.context["anchor"] == "no_such_node"
+```
+
+**`children_at_depth()` is the third of that family and answers one level
+rather than a span** — *exactly this far down*, where `descendants_to_depth()`
+answers *everything down to here*. A caller who wants the one from the other
+has to subtract two results, which is why both are members:
+
+```python
+assert [n.node for n in dog.descendants_to_depth(2)] == [
+    "dog",
+    "retriever",
+    "golden_retriever",
+    "beagle",
+]
+assert [n.node for n in dog.children_at_depth(2)] == ["golden_retriever"]
+assert dog.children_at_depth(9) == ()          # nothing is that deep: an answer
+```
+
+Its anchor is *where you are* — `depth=0` is the node itself — which is what
+makes it a member here at all, and it emits that anchor, so it refuses one the
+axis does not contain exactly as `descendants_to_depth()` does. A depth the axis
+does not reach is a different answer from an anchor it does not know, and the
+two stay apart: `()` says *nothing is that deep*, the refusal says *no such
+node*.
+
+Each carries the keywords its module function carries — `cache=` on all five,
+`max_paths=` on `paths_to_root()`, and `max_concurrency=` on every asynchronous
+twin. A cache spent across two walks is the caller's, and
+`MappingHierarchy.snapshot` takes one too — so a snapshot and a later walk over
+the same backing can share the replies instead of each paying for them:
+
+```python
+from dataknobs_common import HierarchyView, MappingHierarchy
+
+class CountingParents:
+    # A backing that reports how often it was asked to descend.
+    def __init__(self, parents):
+        self._parents, self.calls = parents, 0
+
+    def parents(self, node_id):
+        return self._parents.get(node_id, ())
+
+    def children(self, node_id):
+        self.calls += 1
+        return tuple(n for n, ps in self._parents.items() if node_id in ps)
+
+    def roots(self):
+        return tuple(n for n, ps in self._parents.items() if not ps)
+
+    def contains(self, node_id):
+        return node_id in self._parents
+
+edges = {"mammal": (), "dog": ("mammal",), "retriever": ("dog",),
+         "golden_retriever": ("retriever",), "beagle": ("dog",)}
+
+cold = CountingParents(edges)
+MappingHierarchy.snapshot(cold)
+answer = [d.node for d in HierarchyView(cold, "dog").descendants()]
+assert cold.calls == 9                      # five for the snapshot, four to descend
+
+warm = CountingParents(edges)
+memo: dict = {}
+MappingHierarchy.snapshot(warm, cache=memo)
+assert [d.node for d in HierarchyView(warm, "dog").descendants(cache=memo)] == answer
+assert warm.calls == 5                      # the descent asks nothing new
+```
+
+**The memo reaches the descending branch only.** An axis that publishes
+`parent_edges()` — `MappingHierarchy` does, and so does the `AssertionHierarchy`
+behind the `axis.structure` above — is asked for its edges in one call and never
+descends, so there is no reply for a memo to hold. Passing one there is not an
+error and saves nothing.
+
+## What a node is
+
+`TaxonomyView.entity()` reads the other axis — the content one — and answers
+what a node **is** rather than where it sits:
+
+```python
+assert here.entity().name == "Golden Retriever"
+assert [up.entity().name for up in here.ancestors()] == ["Retriever", "Dog", "Mammal"]
+```
+
+**`None` from it is a state, not an error, and it is not what `exists()`
+answers.** `exists()` asks the structure; this asks the content, and a node the
+structure knows with nothing written about it is ordinary — an axis built from
+a parent-id column knows ids the entity store has never been given. Ask
+`exists()` for *is this node here*, and read `None` here as *nothing is written
+about it*.
+
+What is **asserted about** an ancestor is the ontology's, not the cursor's:
+
+```python
+facts = onto.assertions.find(subject="dog")
+assert [(a.relation, a.object.entity_id) for a in facts] == [("isa", "mammal")]
+```
+
+That boundary is deliberate. The cursor reports the **edge it walked** and
+nothing else; the assertion axis stays on the vocabulary, because a taxonomy
+over a `parent_id` column has no assertions anywhere and a cursor that promised
+them could not keep the promise.
+
+## What is not on it
+
+Three module walks have no cursor member, and the reasons differ:
+
+`deepest_common_ancestor` will never have one — a cursor names one node and that
+walk takes two anchors. Call the module function with both.
+
+`flatten` and `leaves` each take a single anchor and would fit a cursor, and are
+left off because the anchor means something different on them: on a cursor an
+anchor is *where you are*, and on those two it is a **filter over the whole
+axis** — `flatten(from_id=…)` and `leaves(under=…)` take an *optional* anchor
+that defaults to every root and narrows from there. A member that read the
+cursor's node as that argument would be answering a different question from the
+one the same name answers a line above. Call the module function with the axis
+and the node:
+
+```python
+from dataknobs_common import leaves
+
+assert leaves(axis.structure, under="dog") == ("golden_retriever", "beagle")
 ```
 
 A walk you write yourself may key its `seen` set on the cursors rather than on

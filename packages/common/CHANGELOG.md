@@ -9,6 +9,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Ontology.inherited_attributes(entity_type)` and its asynchronous twin** —
+  the same walk `Taxonomy` publishes, on the object that owns the store it
+  reads. It walks `entity_types` and nothing else, which is why every taxonomy
+  of one vocabulary answers it identically; reaching it only through an axis
+  meant building one to ask a question the axis has no part in, and choosing
+  which axis to build would have been choosing something the answer does not
+  depend on. Both surfaces are one line over the shared walk.
+
+- **`EntityType.isa`** — the type this one specialises, as a declared field.
+  Same shape and same reason as `RelationType.inverse_of` beside it: a scalar
+  reference to another declaration in the same section, validated by the loader.
+
+- **An entity id may be any `Hashable`, defaulting to `str`** — `EntitySource`,
+  `AssertionSource`, `Entity`, `Assertion`, every `entity_id` on a resolution,
+  and `Ontology`, `Taxonomy` and both cursors above them are generic in the
+  entity key.
+
+  **Existing code is unchanged.** A bare `EntitySource` is an
+  `EntitySource[str]`, `load_ontology` returns an `Ontology[str]` because a
+  document's ids are the strings its author typed, and every call site written
+  before the parameter existed means what it meant.
+
+  **A non-`str` key supplies a `KeyCodec`, and the type checker will not let it
+  be forgotten.** The codec says how a key is written down when it leaves and
+  read back when it arrives — `to_id` and `from_id`, a pair rather than a
+  rendering, because `Ontology.localize` is documented as *what `entity()`
+  takes* and `entity()` takes the key. `StrCodec` is the identity and what the
+  `str` path uses.
+
+  It has **no default for a non-`str` key**, and neither refused alternative
+  was a matter of taste. A bound cannot express *a type that has a string
+  representation*, because in Python every type has one. And `repr()` cannot
+  stand in: a key is addressed by **equality** while a default `repr` is a
+  function of **identity**, so two equal keys would render to two strings, one
+  node would address two entities, and it would type-check and pass every test
+  that holds a single key object. The field is required rather than defaulted,
+  so omitting it is an error at the construction rather than a wrong answer
+  later.
+
+  Rendering happens only where an id **leaves** — `qualify` out, `localize`
+  back. Everything in between carries the key, so a frozen value type never
+  reaches for a codec and a key never becomes a string by accident.
+
+  **The codec's space is the ontology's own — the whole post-ontology
+  remainder**, which carries the source segment for a vocabulary binding more
+  than one. That is the space `entities` is keyed by and the space `localize`
+  returns, so it is the space `to_id` renders and `from_id` parses.
+  `Ontology.qualify` therefore takes **the key and nothing else**: the
+  `source_id` it used to take composed a segment *inside* that space, so
+  `from_id` received a string `to_id` had never produced. Over `str` nothing
+  showed, because the identity codec parses anything; over a key of a
+  consumer's own it returned a key that addresses nothing, silently. Every id
+  `qualify` builds, `localize` now reads back — unconditionally. A caller
+  holding the parts separately still composes them with the free
+  `qualify(ontology_id, local_id, source_id)`, which is what it is for.
+
+  **The resolution cascade is the boundary, and it is declared rather than
+  defaulted.** `MatchSignal`, `EntityResolver`, `EntityCandidate` and
+  `ResolutionResult` are generic in the key; the shipped `CascadingResolver`,
+  its rungs and `CascadeState` are `str`-keyed. An unparameterised generic in a
+  signature binds `Any`, so a consumer's non-`str` signal would have been
+  accepted and its ids would have landed in fields annotated `str` with nothing
+  reporting it. `build_resolver` and `async_build_resolver` now say
+  `Ontology[str]` and `EntityResolver[str]`, so a vocabulary keyed by something
+  else is a type error at the call rather than a wrong answer later. Moving the
+  boundary is annotations rather than transport — the rungs already read
+  `by_surface_form`, which answers in the key — and is a change of its own
+  size.
+
+- **The five walk-shaped members on all four cursors** — `ancestors`,
+  `descendants`, `descendants_to_depth`, `children_at_depth` and
+  `paths_to_root`, on `HierarchyView`, `TaxonomyView` and both asynchronous
+  twins. Each is one line over the module-level walk of the same name, so what
+  each returns, which of them include their anchor and which refuse an unknown
+  one are that function's contract rather than a second one. Every keyword the
+  walk takes, the member takes: `cache=` on all five, `max_paths=` on
+  `paths_to_root`, and `max_concurrency=` on every asynchronous twin — and each
+  of those is asserted to be *forwarded*, not merely declared, because a
+  signature comparison cannot tell a member that passes a keyword on from one
+  that accepts it and drops it.
+
+  **A walk is a member when its anchor means *where you are*.** That is the
+  rule the set is drawn by. It puts `children_at_depth` inside — its anchor is
+  required and `depth=0` is the node itself — and leaves `flatten` and `leaves`
+  out, because their anchors are *optional* and default to every root, so a
+  member reading the cursor's node as that argument would answer a different
+  question from the one the same name answers beside it.
+  `deepest_common_ancestor` is out for a plainer reason: it takes two anchors
+  and a cursor names one.
+
+  `ancestors`, `descendants`, `descendants_to_depth` and `children_at_depth`
+  answer with **cursors**, so a walk composes; `paths_to_root` answers with
+  **keys**, because it returns routes and a route's meaning is its order.
+
+  **`descendants`, `descendants_to_depth` and `children_at_depth` are three
+  members rather than one taking `depth=`.** The first two differ in what they
+  emit — the second includes the anchor — and in what they do with an anchor the
+  structure does not contain: the first answers `()`, the second raises
+  `NotFoundError`. The third answers *one level* where the second answers a
+  *span*, so a caller wanting it from the second subtracts two walks. One
+  member would select between three contracts by the presence of a keyword.
+
+- **`Taxonomy.inherited_attributes(type_id)` and its asynchronous twin**, and
+  the fifth field they read — `entity_types`, a `Mapping[str, EntityType]`.
+
+  A vocabulary writes `isa` twice and they are **different stores**: the
+  assertions between entities, which a taxonomy's `structure` walks, and the
+  `isa:` field on an entity type declaration, which carries the schema. This
+  member walks the second and returns what a type may be asked for — its own
+  attribute declarations first, then each ancestor's, **a nearer declaration
+  shadowing a farther one of the same name**, because a subtype redeclaring
+  `sku` is specialising it rather than adding a second field.
+
+  **An undeclared type is refused; a type declared with nothing returns `[]`.**
+  Those answer different questions, and collapsing them would report a caller's
+  typo as a fact about their vocabulary.
+
+  `entity_types` is a mapping rather than a source, because a vocabulary's
+  instances may be millions behind a backing and its types are tens, authored
+  in the document — `Ontology` already carries them that way, and
+  `Ontology.taxonomy()` now hands them to the axis. It is **optional**: an axis
+  built without one refuses every call to this member, which is an answer
+  rather than a gap. It is **appended last**, so nothing constructing a
+  `Taxonomy` positionally moves.
+
+  **A plain `def` on the asynchronous twin**, because a mapping awaits nothing —
+  the rule that already makes `AsyncTaxonomy.at()` synchronous.
+
+- **`TaxonomyView.entity()` and its asynchronous twin** — what a node **is**,
+  read off the content axis. `None` from it is a state rather than an error and
+  is not what `exists()` answers: a node the structure knows with nothing
+  written about it is ordinary under a live backing. `exists()` asks the
+  structure; this asks the content.
+
 - **`paths_to_root` and `deepest_common_ancestor`, in both flavours** — the
   last two walks over `Hierarchy`, each with an `async_` twin, and both
   readings of the descent the other six share.
@@ -301,7 +435,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 132 names, taking the package's `__all__` to 337.
+  the resolution cascade — 133 names, taking the package's `__all__` to 338.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing
@@ -929,6 +1063,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`KeyCodec` and `StrCodec` are on the top-level door**, beside the `Ontology`
+  that now requires one. A required constructor argument whose only two possible
+  values were published a module deeper is a name withheld at the moment it
+  became mandatory.
+
+- **`Ontology.codec` and `AsyncOntology.codec` are keyword-only.** A required
+  field may not follow a defaulted one, so the codec lands at position nine —
+  where `structures` used to be — and a nine-positional construction would bind
+  a structures mapping to a codec. Both are objects, so nothing reports it at
+  the construction and the first symptom is a rendered key somewhere else.
+  `kw_only` keeps the field required while making the misbinding unspellable.
+
+- **`TreeProjection` is generic in the node key.** It holds a `ParentChoice`,
+  which picks a parent from `Sequence[K]`, and a `ProjectionContext[K]` travels
+  with it — so a holder that named the policy bare pinned both to `str` and left
+  a consumer's non-`str` axis unable to declare a projection over itself.
+
+- **`EntityType`'s parent moved out of `metadata`** into the `isa` field above.
+  While it lived in the open dict the loader copied a row's `metadata` wholesale
+  before folding the declared `isa:` in, so a document writing the parent one
+  level down reached the type lattice without passing the check that refuses an
+  undeclared one. `ENTITY_TYPE_ISA_KEY`, the constant that named the parking
+  spot, is gone with it.
+
+- **`MappingHierarchy.snapshot` and its asynchronous twin take `cache=`** — both
+  drive a walk, and both dropped the caller's memo. A caller who snapshotted a
+  live axis and then walked the same axis paid for the descent twice: over a
+  thirteen-node axis, twenty-six backing calls where thirteen suffice, with
+  identical answers either way. The memo reaches the walking branch only — an
+  axis that publishes `parent_edges` is asked once and never descends, so
+  supplying one there saves nothing and is not an error.
+
 - **A bulk member that answers the wrong number of replies is refused by
   name.** `BulkHierarchy` states a positional contract — one reply per node
   asked about, in the order asked, an empty sequence where there is no answer —
@@ -989,6 +1155,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
+
+- **A bare `ScopeAuthority` meant `ScopeAuthority[Any]`, not `[str]`.** The
+  alias was spelled with a PEP 695 `type` statement, which declares a *fresh*
+  parameter in the alias's own scope — unbounded, undefaulted, and shadowing the
+  module-level key parameter it was spelled the same as. PEP 696 defaults reach
+  `type` statements only at 3.13 and the floor is 3.12, so the default was not
+  expressible in that form; an explicit `TypeAliasType` carrying the key as
+  `type_params` restores it while keeping the lazy evaluation the union needs.
+  The regression was silent in a suite that binds `str` everywhere, which is
+  what the new `assert_type` fence in the source exists to catch.
+
+- **`inherited_attributes` truncated silently on an undeclared *ancestor*.** An
+  absent anchor was refused and an absent parent was not, so a schema read off a
+  partial type store came back short with nothing to say it was short — the same
+  collapse of *declares nothing* into *is not here* that the anchor's refusal
+  exists to prevent. Both ends are now refused by one rule, and the refusal
+  names the type asked about alongside the one that is missing.
 
 - **`requires_elasticsearch` skips a cluster that cannot host a test index,
   instead of letting the suite time out against it.** `is_elasticsearch_available()`

@@ -1010,6 +1010,52 @@ copied = await AsyncMappingHierarchy.snapshot(
 point here, and a snapshot walks the *whole* axis rather than one branch of it —
 when it has to walk at all.
 
+**Both flavours take `cache=` as well, and it is the same memo the walks take.**
+A snapshot that descends is a walk, so a snapshot and a later walk over one
+backing can share the replies instead of each paying for them:
+
+```python
+from dataknobs_common import MappingHierarchy, leaves
+
+EDGES = {"mammal": (), "dog": ("mammal",), "beagle": ("dog",)}
+
+
+class CountingAxis:
+    # The four members and nothing else, so snapshot has to descend.
+    def __init__(self):
+        self.calls = 0
+
+    def roots(self):
+        return tuple(n for n, ps in EDGES.items() if not ps)
+
+    def parents(self, node_id):
+        return EDGES.get(node_id, ())
+
+    def children(self, node_id):
+        self.calls += 1
+        return tuple(n for n, ps in EDGES.items() if node_id in ps)
+
+    def contains(self, node_id):
+        return node_id in EDGES
+
+
+cold = CountingAxis()
+MappingHierarchy.snapshot(cold)
+leaves(cold)
+assert cold.calls == 6                # three nodes, asked for children twice
+
+warm, memo = CountingAxis(), {}
+MappingHierarchy.snapshot(warm, cache=memo)
+leaves(warm, cache=memo)
+assert warm.calls == 3                # the second descent spent the memo
+```
+
+The memo reaches the descending branch only — a backing that can enumerate its
+edges is asked for them in one call and has nothing to memoise, which is why
+the axis above is `CountingParents` and not a `MappingHierarchy`. It is the
+same keyword every walk carries, and the same one an anchored view's walk
+members take: see [The Anchored View](anchored-view.md).
+
 ### How complete the copy is, is a property of the axis
 
 `roots()` is not an extent, so the four members of `Hierarchy` offer exactly one
@@ -1055,10 +1101,12 @@ hierarchy with only the four members stays a valid one.
 
 ## What a taxonomy carries, and what it refuses
 
-`Taxonomy` has four fields: the `definition` it was declared by, the
-`structure`, the `entities` source, and the `assertions` the edges were made of.
+`Taxonomy` has five fields: the `definition` it was declared by, the
+`structure`, the `entities` source, the `assertions` the edges were made of, and
+the `entity_types` store the *type* lattice lives in — a different lattice from
+the one `structure` walks, and what `inherited_attributes` reads.
 
-The last is optional, and `assertions is None` is a question worth asking: it
+`assertions` is optional, and `assertions is None` is a question worth asking: it
 distinguishes *this edge carries no annotation* from *this axis has no
 annotations to give*. A hierarchy built from a `parent_id` column has rows and
 no assertions at all.

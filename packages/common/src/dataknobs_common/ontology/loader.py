@@ -66,7 +66,7 @@ from dataknobs_common.ontology.sources import (
     MappingAssertionSource,
     MappingEntitySource,
 )
-from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
+from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts, StrCodec
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -100,15 +100,6 @@ AUTHORED_SOURCE_KINDS = frozenset({"inline", "nested"})
 #: What a nested source's parent-child edges are asserted as, absent a
 #: ``relation:`` of its own.
 DEFAULT_NESTED_RELATION = "isa"
-
-#: Where an entity type's declared ``isa:`` parent is kept for now.
-#:
-#: The type lattice is a *different store* from the ``isa`` assertions between
-#: instances, and which store it is has not been settled. ``EntityType``
-#: declares no field for it, so the alternative to parking it here is dropping
-#: a line the document author wrote -- and a validated value that vanishes is
-#: worse than one kept under a documented key until its home is decided.
-ENTITY_TYPE_ISA_KEY = "isa"
 
 
 def build_ontology(config: OntologyConfig) -> OntologyParts:
@@ -177,12 +168,20 @@ def load_ontology(
     source: Path | Mapping[str, Any],
     *,
     normalizer: Callable[[str], str] | None = None,
-) -> Ontology:
+) -> Ontology[str]:
     """Load a vocabulary with synchronous backings.
 
     No database, no embedder, no event loop. A hand-edited file is already a
     list once read, so nothing here has anything to await and the caller is
     not made to pretend otherwise.
+
+    **``Ontology[str]``, and the parameter is bound rather than passed
+    through.** This door reads an *authored* document, whose ids are the
+    strings its author typed -- it refuses every live source kind, so there is
+    no path here by which a caller's own key space could arrive. The codec is
+    therefore :class:`~dataknobs_common.ontology.values.StrCodec`, supplied
+    rather than defaulted: an ontology's codec field is required, so a door
+    that builds one says which it is.
 
     Args:
         source: A path to a YAML or JSON document, or the document itself
@@ -217,6 +216,7 @@ def load_ontology(
         assertions=assertions,
         taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
+        codec=StrCodec(),
         structures={
             name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
             for name, definition in _axes_to_copy(parts.taxonomies)
@@ -229,7 +229,7 @@ async def async_load_ontology(
     source: Path | Mapping[str, Any],
     *,
     normalizer: Callable[[str], str] | None = None,
-) -> AsyncOntology:
+) -> AsyncOntology[str]:
     """Load a vocabulary with asynchronous backings.
 
     The same file and the same refusals as :func:`load_ontology`; only the
@@ -268,6 +268,7 @@ async def async_load_ontology(
         assertions=assertions,
         taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
+        codec=StrCodec(),
         structures={
             name: await AsyncMappingHierarchy.snapshot(
                 AsyncAssertionHierarchy(assertions, definition.relation)
@@ -643,27 +644,17 @@ def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
         type_id = str(_required(row, "id", "entity_types"))
         _refuse_colon("entity type id", type_id)
         _refuse_duplicate_id(built, type_id, "entity_types")
+        parent = row.get("isa")
         built[type_id] = EntityType(
             id=type_id,
             name=str(row.get("name", "")),
             description=row.get("description"),
             aliases=list(row.get("aliases", [])),
-            metadata=_type_metadata(row),
+            metadata=dict(row.get("metadata", {})),
             attributes=[_build_attribute(a) for a in row.get("attributes", [])],
+            isa=str(parent) if parent is not None else None,
         )
     return built
-
-
-def _type_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
-    """An entity type's metadata, with its declared ``isa:`` folded in.
-
-    See :data:`ENTITY_TYPE_ISA_KEY` for why the lattice lives here for now.
-    """
-    metadata = dict(row.get("metadata", {}))
-    parent = row.get("isa")
-    if parent is not None:
-        metadata[ENTITY_TYPE_ISA_KEY] = str(parent)
-    return metadata
 
 
 def _build_attribute(row: Mapping[str, Any]) -> AttributeDef:
@@ -907,9 +898,20 @@ def _mint_nested(
 
 def build_resolver(
     config: Path | Mapping[str, Any],
-    ontology: Ontology,
-) -> EntityResolver:
+    ontology: Ontology[str],
+) -> EntityResolver[str]:
     """Build the placement cascade a document configures.
+
+    **The key parameter is bound here rather than carried**, and the binding is
+    written down rather than left to the default. The rungs this assembles and
+    the cascade under them are ``str``-keyed: every annotation in
+    ``entity_resolution.cascade`` and ``entity_resolution.signals`` names the
+    key as ``str``, so a resolver built here answers with ``str`` ids whatever
+    the ontology handed in is keyed by. Spelling that as ``Ontology[str]``
+    makes a vocabulary keyed by something else a **type error at this call**
+    instead of an ``Any`` that type-checks and comes back with keys of the
+    wrong space. See :class:`~dataknobs_common.entity_resolution.CascadeState`
+    for the boundary and what it would take to move it.
 
     A second function rather than something :func:`load_ontology` returns,
     because an ``Ontology`` is a **value**: it owns no lifecycle and has
@@ -942,9 +944,12 @@ def build_resolver(
 
 async def async_build_resolver(
     config: Path | Mapping[str, Any],
-    ontology: AsyncOntology,
-) -> AsyncEntityResolver:
+    ontology: AsyncOntology[str],
+) -> AsyncEntityResolver[str]:
     """:func:`build_resolver` for a cascade whose rungs reach for data.
+
+    Keyed by ``str`` for the reason the synchronous door states, and declared
+    the same way.
 
     The remedy the synchronous door's refusal names. A refusal whose remedy
     builds nothing is not a remedy, which is why this ships in the same

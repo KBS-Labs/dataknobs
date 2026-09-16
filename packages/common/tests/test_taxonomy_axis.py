@@ -24,11 +24,15 @@ from dataknobs_common.ontology.hierarchy import (
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.ontology.model import (
+    AttributeDef,
+    EntityType,
     InferenceMode,
     Materialization,
     TaxonomyDefinition,
     split_qualified,
 )
+from dataknobs_common.ontology.sources import MappingEntitySource
+from dataknobs_common.ontology.values import AsyncOntology
 from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 from dataknobs_common.testing import assert_twins_agree
 
@@ -410,10 +414,12 @@ def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
     halves, and is checked the other way -- which is the whole reason it gets
     its own call rather than joining the first.
 
-    **Both members, because this type's surface is two walks and not one.** A
-    guard over ``walk`` alone is green about ``subtree_keys`` by saying nothing
-    about it, and a parameter added to one half of the member it does not name
-    is exactly the drift it exists to catch.
+    **All three members, because this type's surface is not one walk.** A guard
+    over ``walk`` alone is green about ``subtree_keys`` by saying nothing about
+    it, and a parameter added to one half of the member it does not name is
+    exactly the drift it exists to catch. The field lists are compared too, so
+    a field added to one flavour and not the other fails here -- which is the
+    assertion the fifth field arrived under.
     """
     sync_fields = Taxonomy.__dataclass_fields__
     async_fields = AsyncTaxonomy.__dataclass_fields__
@@ -433,6 +439,20 @@ def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
         async_only={"max_concurrency"},
         compare_return=True,
         label="Taxonomy.subtree_keys",
+    )
+
+    # The third member, and the one that is synchronous on both flavours: it
+    # reads a mapping the caller already holds, so there is nothing to await.
+    # `unflavoured` is how that is *declared* rather than skipped -- the guard
+    # refuses a synchronous async-half by default, and an exception written
+    # down is what keeps it from also being how a member drops out of the
+    # comparison unnoticed.
+    assert_twins_agree(
+        Taxonomy.inherited_attributes,
+        AsyncTaxonomy.inherited_attributes,
+        unflavoured=True,
+        compare_return=True,
+        label="Taxonomy.inherited_attributes",
     )
 
 
@@ -995,3 +1015,336 @@ async def test_the_async_subtree_keys_forwards_one_too(mammals_v11_path: Path) -
 
     assert first == second == ["dog", "retriever", "beagle"]
     assert len(structure.asked) == asked_once
+
+
+# --------------------------------------------------------------------------
+# inherited_attributes -- the OTHER lattice, and the store that answers for it
+# --------------------------------------------------------------------------
+
+
+def test_the_two_lattices_answer_different_questions_about_one_node(
+    mammals_v11_path: Path,
+) -> None:
+    """The criterion this member exists for, asserted rather than described.
+
+    ``beagle`` sits on both lattices and they are different stores. The
+    **instance** lattice -- ``isa`` assertions between entities -- puts ``dog``
+    and ``mammal`` above it; the **type** lattice -- the ``isa:`` field on an
+    entity type declaration -- puts ``Species`` above ``Breed``. Walking one
+    and reading the other are not the same operation, and a reader who reaches
+    for ``inherited_attributes`` expecting ancestors gets declarations.
+
+    Both in one test, because a paragraph saying so is what this replaces.
+    """
+    onto = load_ontology(mammals_v11_path)
+    axis = onto.taxonomy("species")
+
+    beagle = axis.at("beagle")
+    entity = beagle.entity()
+    assert entity is not None
+
+    ancestors = [above.node for above in beagle.ancestors()]
+    inherited = [attribute.name for attribute in axis.inherited_attributes(entity.type)]
+
+    assert ancestors == ["dog", "mammal"], "the instance lattice, as entity ids"
+    assert inherited == ["akc_group", "latin_name", "lifespan_years"], (
+        "the type lattice, as attribute declarations -- Breed's own first, then Species'"
+    )
+    assert set(ancestors).isdisjoint(inherited), "and they name different things entirely"
+
+
+def test_the_nearer_declaration_shadows_the_farther_one(mammals_v11_path: Path) -> None:
+    """A subtype redeclaring an attribute is specialising it, not adding a second.
+
+    Returning both would build an extraction schema with two fields of one
+    name, and the caller has no rule for choosing between them. The nearer one
+    wins because it is the more specific statement about the type that was
+    asked about.
+    """
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "shadowed",
+                "version": "1.0",
+                "entity_types": [
+                    {
+                        "id": "Item",
+                        "attributes": [
+                            {"name": "sku", "type": "string", "description": "the general one"},
+                            {"name": "weight", "type": "number"},
+                        ],
+                    },
+                    {
+                        "id": "Product",
+                        "isa": "Item",
+                        "attributes": [
+                            {
+                                "name": "sku",
+                                "type": "string",
+                                "required": True,
+                                "description": "the specific one",
+                            }
+                        ],
+                    },
+                ],
+            }
+        }
+    )
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+
+    inherited = axis.inherited_attributes("Product")
+
+    assert [attribute.name for attribute in inherited] == ["sku", "weight"], "one sku, not two"
+    assert inherited[0].description == "the specific one"
+    assert inherited[0].required is True
+
+
+def test_a_cyclic_type_lattice_terminates(mammals_v11_path: Path) -> None:
+    """The loader does not refuse one, so the walk has to survive it.
+
+    Measured rather than assumed: ``_refuse_undeclared_isa`` checks that a
+    declared parent *exists* and nothing checks that the chain *ends*, so a
+    document naming ``A isa B`` and ``B isa A`` loads without complaint. The
+    visited set here is unconditional for the same reason every walk over the
+    structure axis carries one.
+    """
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "cyclic",
+                "version": "1.0",
+                "entity_types": [
+                    {"id": "A", "isa": "B", "attributes": [{"name": "a", "type": "string"}]},
+                    {"id": "B", "isa": "A", "attributes": [{"name": "b", "type": "string"}]},
+                ],
+            }
+        }
+    )
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+
+    assert [attribute.name for attribute in axis.inherited_attributes("A")] == ["a", "b"]
+    assert [attribute.name for attribute in axis.inherited_attributes("B")] == ["b", "a"]
+
+
+def test_a_type_the_store_does_not_declare_is_refused(mammals_v11_path: Path) -> None:
+    """Refused, not answered with ``[]``, because the two are different states.
+
+    A type declared with no attributes and no parent legitimately inherits
+    nothing; a type the store has never heard of is a caller error, and an
+    empty list would report the second as the first. It is also what makes the
+    field safe to default: an axis built without types answers nothing at all
+    rather than answering *nothing is declared*.
+    """
+    onto = load_ontology(mammals_v11_path)
+    axis = onto.taxonomy("species")
+
+    with pytest.raises(NotFoundError) as refusal:
+        axis.inherited_attributes("NoSuchType")
+
+    assert refusal.value.context["entity_type"] == "NoSuchType"
+    assert refusal.value.context["taxonomy"] == "species"
+
+    typeless = replace(axis, entity_types={})
+    with pytest.raises(NotFoundError):
+        typeless.inherited_attributes("Breed")
+
+
+def test_the_vocabulary_answers_the_lattice_question_without_building_an_axis(
+    mammals_v11_path: Path,
+) -> None:
+    """The store is the ontology's, so the ontology is a place to ask about it.
+
+    ``inherited_attributes`` reads ``entity_types`` and nothing else -- which is
+    why every taxonomy of one vocabulary answers it identically, and why
+    reaching it only through :meth:`Ontology.taxonomy` meant building an axis to
+    ask a question the axis has no part in. Both surfaces are one line over the
+    same walk, so the two answers are the same object-for-object.
+    """
+    onto = load_ontology(mammals_v11_path)
+
+    direct = onto.inherited_attributes("Breed")
+    via_axis = onto.taxonomy("species").inherited_attributes("Breed")
+
+    assert [a.name for a in direct] == ["akc_group", "latin_name", "lifespan_years"]
+    assert direct == via_axis
+
+    # And the refusal travels with it rather than being re-argued per surface.
+    with pytest.raises(NotFoundError) as refusal:
+        onto.inherited_attributes("NoSuchType")
+    assert refusal.value.context["entity_type"] == "NoSuchType"
+
+
+@pytest.mark.asyncio
+async def test_the_async_vocabulary_answers_it_without_awaiting(mammals_v11_path: Path) -> None:
+    """A plain ``def`` on this twin too, for the mapping's reason."""
+    onto = await async_load_ontology(mammals_v11_path)
+
+    assert not inspect.iscoroutinefunction(AsyncOntology.inherited_attributes)
+    assert [a.name for a in onto.inherited_attributes("Breed")] == [
+        "akc_group",
+        "latin_name",
+        "lifespan_years",
+    ]
+
+
+def test_an_ancestor_the_store_does_not_declare_is_refused_too() -> None:
+    """The same rule as the anchor's, applied to the ancestor the walk reaches for.
+
+    ``_refuse_an_undeclared_type`` argues that answering ``[]`` for a type the
+    store never heard of collapses *this type declares nothing* into *this type
+    is not here*, and that the reading a caller reaches for is the one that is
+    not their fault. Two lines into the walk the same collapse was performed on
+    the anchor's **parent**, silently: a ``Breed`` whose declared ``Species`` is
+    absent answered with Breed's own attributes and said nothing, so a caller
+    could not tell a complete answer from a truncated one.
+
+    It is reachable without a malformed document. ``entity_types`` is a mapping
+    the caller supplies and it defaults to empty -- a partial store is invited
+    by the field rather than guarded against -- and :class:`EntityType` is a
+    public dataclass anyone may construct.
+    """
+    types = {
+        "Breed": EntityType(
+            id="Breed",
+            name="Breed",
+            isa="Species",
+            attributes=[AttributeDef(name="sku", value_type="string")],
+        ),
+        # `Species` deliberately absent: the store is partial, not malformed.
+    }
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=MappingEntitySource({}),
+        entity_types=types,
+    )
+
+    with pytest.raises(NotFoundError) as refusal:
+        axis.inherited_attributes("Breed")
+
+    # The refusal names both ends: what was asked about, and what is missing.
+    assert refusal.value.context["entity_type"] == "Species"
+    assert refusal.value.context["asked_about"] == "Breed"
+    assert refusal.value.context["taxonomy"] == "species"
+
+
+def test_an_isa_is_a_declared_field_rather_than_an_open_metadata_key() -> None:
+    """A parent the loader cannot see is a parent the loader cannot check.
+
+    ``isa`` was parked in :attr:`EntityType.metadata` under a documented key
+    while nothing read it. Once a walk reads it back, the open dict is a hole:
+    ``_type_metadata`` copied a row's ``metadata`` **wholesale** before folding
+    the top-level ``isa:`` in, so a document writing the parent one level down
+    reached the lattice without passing ``_refuse_undeclared_isa`` -- which
+    reads only ``row.get("isa")``.
+
+    A declared field closes it at the source rather than adding a second
+    check: there is no longer a second place a parent can be written.
+    """
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "smuggled",
+                "version": "1.0",
+                "entity_types": [
+                    {
+                        "id": "Breed",
+                        "metadata": {"isa": "NotDeclaredAnywhere"},
+                        "attributes": [{"name": "sku", "type": "string"}],
+                    }
+                ],
+            }
+        }
+    )
+
+    # The key in `metadata` is now inert -- it is not where a parent is kept.
+    assert onto.entity_types["Breed"].isa is None
+    assert onto.entity_types["Breed"].metadata == {"isa": "NotDeclaredAnywhere"}
+
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+    assert [a.name for a in axis.inherited_attributes("Breed")] == ["sku"]
+
+
+def test_the_loader_refuses_an_undeclared_parent_however_it_is_written() -> None:
+    """And the top-level spelling is still refused, which is the half that shipped."""
+    with pytest.raises(ValidationError) as refusal:
+        load_ontology(
+            {
+                "ontology": {
+                    "id": "dangling",
+                    "version": "1.0",
+                    "entity_types": [{"id": "Breed", "isa": "NotDeclaredAnywhere"}],
+                }
+            }
+        )
+
+    assert "NotDeclaredAnywhere" in str(refusal.value)
+
+
+def test_a_type_declaring_nothing_inherits_nothing_and_says_so(mammals_v11_path: Path) -> None:
+    """The other half of the pair above: declared, with nothing to give."""
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "bare",
+                "version": "1.0",
+                "entity_types": [{"id": "Thing"}],
+            }
+        }
+    )
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+
+    assert axis.inherited_attributes("Thing") == []
+
+
+def test_the_accessor_hands_the_axis_the_type_store(mammals_v11_path: Path) -> None:
+    """A field the accessor forgets to pass is an axis that refuses everything.
+
+    The field defaults to empty, which is what makes a hand-built axis cheap
+    and what makes this assertion necessary: nothing else in the suite would
+    notice ``Ontology.taxonomy`` dropping it, because every other member
+    answers the same either way.
+    """
+    onto = load_ontology(mammals_v11_path)
+
+    assert onto.taxonomy("species").entity_types == onto.entity_types
+    assert onto.taxonomy("species").inherited_attributes("Breed")
+
+
+@pytest.mark.asyncio
+async def test_the_async_twin_answers_without_awaiting(mammals_v11_path: Path) -> None:
+    """A plain ``def`` on both flavours, because a mapping awaits nothing.
+
+    The same rule that makes ``at()`` synchronous on the asynchronous twin:
+    making this awaitable would cost every caller an ``await`` for a walk over
+    a mapping they are already holding.
+    """
+    onto = await async_load_ontology(mammals_v11_path)
+    axis = onto.taxonomy("species")
+
+    assert not inspect.iscoroutinefunction(AsyncTaxonomy.inherited_attributes)
+    assert [a.name for a in axis.inherited_attributes("Breed")] == [
+        "akc_group",
+        "latin_name",
+        "lifespan_years",
+    ]

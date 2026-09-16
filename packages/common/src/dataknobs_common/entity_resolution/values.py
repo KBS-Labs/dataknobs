@@ -15,12 +15,24 @@ re-exported, not a copy.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, assert_type
+
+if sys.version_info >= (3, 13):  # pragma: no cover - 3.12 is the floor and what runs
+    from typing import TypeAliasType
+else:
+    # ``type_params`` is ``typing``'s only from 3.13 and ``requires-python`` is
+    # >=3.12, so this is a *runtime* need rather than a typing-only one:
+    # ``typing.TypeAliasType`` rejects the argument. Same shape, and same
+    # reason, as ``hierarchy``'s split over ``TypeVar``; the branch above
+    # deletes this dependency the day the floor rises.
+    from typing_extensions import TypeAliasType
 
 from dataknobs_common.entity_resolution.protocols import MembershipOracle
+from dataknobs_common.hierarchy import K
 from dataknobs_common.exceptions import ValidationError
 
 if TYPE_CHECKING:
@@ -79,7 +91,26 @@ Within = str | Collection[str] | Mapping[str, str | Collection[str]] | None
 #: of any of them closes a cycle through ``ontology/__init__``, reproduced
 #: rather than assumed -- and a lazy alias is what lets the union still be a
 #: real object a consumer can import and annotate with.
-type ScopeAuthority = EntitySource | AsyncEntitySource | MembershipOracle | None
+#: **Generic in the entity key**, defaulted like everything else on this axis:
+#: all three members of the union are, so a bare ``ScopeAuthority`` is
+#: ``ScopeAuthority[str]`` and every annotation written before the parameter
+#: existed means what it meant.
+#:
+#: **Spelled with an explicit** :class:`~typing.TypeAliasType` **rather than a
+#: ``type`` statement**, and the difference is the whole default. ``type
+#: ScopeAuthority[K] = ...`` declares a *fresh* parameter in the alias's own
+#: scope -- unbounded, undefaulted, and shadowing the module-level :data:`K` it
+#: is spelled the same as -- so a bare ``ScopeAuthority`` binds ``Any`` into all
+#: three members and every wrong-typed source below type-checks. PEP 696 reaches
+#: ``type`` statements only at 3.13 and the floor is 3.12, so the default is not
+#: expressible in that form here. Passing :data:`K` as ``type_params`` carries
+#: the bound and the default that make the paragraph above true, and the
+#: **string** value keeps the lazy evaluation the three names require.
+ScopeAuthority = TypeAliasType(
+    "ScopeAuthority",
+    "EntitySource[K] | AsyncEntitySource[K] | MembershipOracle[K] | None",
+    type_params=(K,),
+)
 
 
 class Scoring(Enum):
@@ -161,7 +192,7 @@ class MatchEvidence:
 
 
 @dataclass(frozen=True)
-class FormHit:
+class FormHit(Generic[K]):
     """One declared form, found at one place in a query.
 
     What a scanning rung's hook answers with, and the smallest thing that can
@@ -177,7 +208,7 @@ class FormHit:
     by a rule nobody wrote down.
     """
 
-    entity_id: str
+    entity_id: K
     """In the **resolver's ontology's** id space, as
     :attr:`EntityCandidate.entity_id` is."""
 
@@ -191,10 +222,16 @@ class FormHit:
 
 
 @dataclass(frozen=True)
-class EntityCandidate:
-    """An entity a cascade produced, with every rung's reason for it."""
+class EntityCandidate(Generic[K]):
+    """An entity a cascade produced, with every rung's reason for it.
 
-    entity_id: str
+    **Generic in the entity key.** It is not an implementation of anything; it
+    is what a widened member *carries*, and a value type holding a ``str``
+    entity id beside a source addressed by ``K`` is the gap that made the
+    widening one layer down incoherent.
+    """
+
+    entity_id: K
     """In the **resolver's ontology's** id space.
 
     A rung reading an index answers in qualified ids and localizes on the way
@@ -231,7 +268,7 @@ class EntityCandidate:
 
 
 @dataclass(frozen=True)
-class Coverage:
+class Coverage(Generic[K]):
     """Which parts of a query the evidence located, and which parts none did.
 
     **Offsets, and the type is the question.** These two fields held the query
@@ -278,7 +315,7 @@ class Coverage:
     filter it.
     """
 
-    beyond_authority: tuple[str, ...] = ()
+    beyond_authority: tuple[K, ...] = ()
     """Entity **ids** a rung produced that the scope could not be applied to.
 
     Not offsets into the query, which is what the two fields above hold --
@@ -312,10 +349,10 @@ class Coverage:
 
 
 @dataclass(frozen=True)
-class ResolutionResult:
+class ResolutionResult(Generic[K]):
     """What a resolver returns: the candidates, and what they can be trusted for."""
 
-    candidates: tuple[EntityCandidate, ...]
+    candidates: tuple[EntityCandidate[K], ...]
     """Ordered, best first. A miss is an empty tuple -- there is no separate
     outcome enum, because ``RESOLVED`` and ``UNRESOLVED`` between them said
     exactly ``bool(candidates)``."""
@@ -327,10 +364,10 @@ class ResolutionResult:
     authored path: signals that embed nothing establish nothing, and saying
     ``COMPATIBLE`` because nobody looked is the same failure one level over."""
 
-    coverage: Coverage = Coverage()
+    coverage: Coverage[K] = Coverage()
     """What the query left unaccounted for."""
 
-    def ranked(self) -> tuple[EntityCandidate, ...]:
+    def ranked(self) -> tuple[EntityCandidate[K], ...]:
         """The candidates in order.
 
         Order survives every scoring kind -- a cascade positions by rung, so
@@ -365,7 +402,7 @@ class ResolutionResult:
         """
         return tuple(self.query[start:end] for start, end in self.coverage.unmatched)
 
-    def as_distribution(self) -> dict[str, float] | None:
+    def as_distribution(self) -> dict[K, float] | None:
         """The scores as a distribution, or ``None`` where they are not one.
 
         ``None`` rather than an approximation, ever. Two things can refuse:
@@ -394,7 +431,7 @@ class ResolutionResult:
             return None
         return {candidate.entity_id: candidate.score / total for candidate in self.candidates}
 
-    def explain(self, entity_id: str) -> tuple[MatchEvidence, ...]:
+    def explain(self, entity_id: K) -> tuple[MatchEvidence, ...]:
         """One candidate's evidence -- the field, not a projection of it.
 
         A field read over :attr:`candidates` rather than a parallel structure
@@ -421,7 +458,7 @@ class ResolutionResult:
 
 
 @dataclass(frozen=True)
-class RunnerUp:
+class RunnerUp(Generic[K]):
     """One entity a resolution ranked below the one it kept.
 
     **Evidence, not a bare number**, which is the whole of the change here.
@@ -440,7 +477,7 @@ class RunnerUp:
     produced for it says everything a list entry needs to.
     """
 
-    entity_id: str
+    entity_id: K
     """In the **resolver's ontology's** id space, as
     :attr:`ResolutionRef.entity_id` is."""
 
@@ -455,7 +492,7 @@ class RunnerUp:
 
 
 @dataclass(eq=True, frozen=False)
-class ResolutionRef:
+class ResolutionRef(Generic[K]):
     """What an entity-valued attribute was resolved on.
 
     Identifiers and numbers. No handle, no I/O: the discipline
@@ -476,7 +513,7 @@ class ResolutionRef:
     """
 
     query: str
-    entity_id: str
+    entity_id: K
     score: float
     scoring: Scoring
 
@@ -501,7 +538,7 @@ class ResolutionRef:
     :attr:`MatchEvidence.span`'s terms and for its reasons.
     """
 
-    runners_up: tuple[RunnerUp, ...] = ()
+    runners_up: tuple[RunnerUp[K], ...] = ()
 
 
 #: The scope axis a bare ``within`` value scopes on.
@@ -550,7 +587,7 @@ def within_axes(within: Within) -> Mapping[str, frozenset[str]]:
     return {ENTITY_TYPE_KEY: frozenset(within)}
 
 
-def within_memberships(entity: Entity, source: ScopeAuthority = None) -> Mapping[str, str]:
+def within_memberships(entity: Entity[K], source: ScopeAuthority[K] = None) -> Mapping[str, str]:
     """What one entity **is**, per scope axis -- the one projection.
 
     Every place a scope is applied reads membership through here: the cascade,
@@ -593,7 +630,7 @@ def within_memberships(entity: Entity, source: ScopeAuthority = None) -> Mapping
     return {ENTITY_TYPE_KEY: entity.type}
 
 
-def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
+def within_axis_names(source: ScopeAuthority[Any] = None) -> frozenset[str]:
     """The axis names a source can be scoped on -- **the legal set**.
 
     A source satisfying
@@ -606,6 +643,15 @@ def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
     twice described as being. ``declares`` holds the type ids a source
     carries -- one axis's *values*, not the set of axis names -- so it could
     never have answered this question.
+
+    **``ScopeAuthority[Any]`` rather than the bare form**, here and on
+    :func:`refuse_unknown_axes`, and the two are the only places on this axis
+    that want it. :meth:`~dataknobs_common.entity_resolution.protocols.MembershipOracle.axes`
+    answers in axis *names* whatever the source is keyed by, so this reads
+    nothing that depends on the key -- and the bare form now means
+    ``[str]``, which would refuse a consumer's non-``str`` source for a
+    parameter neither function looks at. ``Any`` is the annotation that admits
+    any key rather than the one that silently claims one.
     """
     if isinstance(source, MembershipOracle):
         return frozenset(source.axes())
@@ -614,7 +660,7 @@ def within_axis_names(source: ScopeAuthority = None) -> frozenset[str]:
 
 def refuse_unknown_axes(
     axes: Mapping[str, frozenset[str]],
-    source: ScopeAuthority = None,
+    source: ScopeAuthority[Any] = None,
 ) -> None:
     """Refuse a scope naming an axis the source does not publish.
 
@@ -669,3 +715,20 @@ def within_admits(axes: Mapping[str, frozenset[str]], memberships: Mapping[str, 
             every filter on it.
     """
     return all(memberships.get(axis) in admitted for axis, admitted in axes.items())
+
+
+if TYPE_CHECKING:  # pragma: no cover - a fence the type checker reads
+
+    def _the_scope_authority_defaults_to_str(source: ScopeAuthority) -> None:
+        """A bare :data:`ScopeAuthority` is ``ScopeAuthority[str]``.
+
+        The half that regresses silently, and the half a ``str``-bound suite
+        cannot see: this alias pairs an entity key with three protocols that
+        take one, so losing the default here binds ``Any`` into all three and a
+        wrong-typed source then type-checks with nothing to report it.
+        """
+        assert_type(
+            source, "EntitySource[str] | AsyncEntitySource[str] | MembershipOracle[str] | None"
+        )
+
+    del _the_scope_authority_defaults_to_str

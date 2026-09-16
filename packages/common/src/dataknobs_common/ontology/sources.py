@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from dataknobs_common.capabilities import Capability
+from dataknobs_common.hierarchy import K
 from dataknobs_common.ontology.model import (
     Assertion,
     Entity,
@@ -64,8 +65,23 @@ class SourceDescription:
 
 
 @runtime_checkable
-class EntitySource(Protocol):
+class EntitySource(Protocol[K]):
     """Read access to entities, synchronously.
+
+    **Generic in the entity key, defaulted to ``str``.** The structure axis is
+    generic because a walk only ever hashes a node id; this is generic because
+    an axis carries both axes at once, and a hierarchy over a caller's own key
+    beside a lookup that could only be asked about a ``str`` was a pair that
+    could not be used together. A source written before the parameter existed
+    is an ``EntitySource[str]`` and conforms unchanged.
+
+    **Four of its members move with the key and four do not**, which is the
+    distinction a reader cannot get from the diff: ``get``, ``get_many``,
+    ``by_surface_form`` and ``by_type`` each carry an entity id somewhere. What
+    stays ``str`` is a *surface form* a person typed, an entity **type** id the
+    document authored, and the origin members' record types.
+    ``by_surface_form(form: str) -> frozenset[K]`` is the member with one of
+    each in one signature.
 
     **Reporting alias forms is not here**, although
     :class:`MappingEntitySource` answers for them:
@@ -97,9 +113,9 @@ class EntitySource(Protocol):
     may cache it; it is fixed for the life of the vocabulary.
     """
 
-    def get(self, entity_id: str) -> Entity | None: ...
+    def get(self, entity_id: K) -> Entity[K] | None: ...
 
-    def get_many(self, entity_ids: Sequence[str]) -> dict[str, Entity]: ...
+    def get_many(self, entity_ids: Sequence[K]) -> dict[K, Entity[K]]: ...
 
     def fetch_origin(self, ref: SourceRef) -> Record | None: ...
 
@@ -107,15 +123,15 @@ class EntitySource(Protocol):
 
     def describe(self) -> SourceDescription: ...
 
-    def by_surface_form(self, form: str) -> frozenset[str]: ...
+    def by_surface_form(self, form: str) -> frozenset[K]: ...
 
-    def by_type(self, type_id: str) -> frozenset[str]: ...
+    def by_type(self, type_id: str) -> frozenset[K]: ...
 
     def longest_form_tokens(self) -> int | None: ...
 
 
 @runtime_checkable
-class AsyncEntitySource(Protocol):
+class AsyncEntitySource(Protocol[K]):
     """The same members with ``async`` added to those that reach for data.
 
     Alias forms are absent here too, for the reason :class:`EntitySource`
@@ -135,9 +151,9 @@ class AsyncEntitySource(Protocol):
     allowance.
     """
 
-    async def get(self, entity_id: str) -> Entity | None: ...
+    async def get(self, entity_id: K) -> Entity[K] | None: ...
 
-    async def get_many(self, entity_ids: Sequence[str]) -> dict[str, Entity]: ...
+    async def get_many(self, entity_ids: Sequence[K]) -> dict[K, Entity[K]]: ...
 
     async def fetch_origin(self, ref: SourceRef) -> Record | None: ...
 
@@ -145,16 +161,21 @@ class AsyncEntitySource(Protocol):
 
     def describe(self) -> SourceDescription: ...
 
-    async def by_surface_form(self, form: str) -> frozenset[str]: ...
+    async def by_surface_form(self, form: str) -> frozenset[K]: ...
 
-    async def by_type(self, type_id: str) -> frozenset[str]: ...
+    async def by_type(self, type_id: str) -> frozenset[K]: ...
 
     def longest_form_tokens(self) -> int | None: ...
 
 
 @runtime_checkable
-class AssertionSource(Protocol):
+class AssertionSource(Protocol[K]):
     """Read access to assertions, synchronously.
+
+    **Generic in the entity key**, for :class:`EntitySource`'s reason and with
+    the same split: ``find`` and ``find_many`` name entities, and ``get`` names
+    an **assertion**, whose id is minted where the assertion is written rather
+    than supplied by a consumer. So two of the three members move.
 
     ``polarity`` is on both read members from the start, and that is the one
     decision here a later release could not take back. This is a
@@ -164,54 +185,57 @@ class AssertionSource(Protocol):
     a migration for code we never see, to add a keyword they can ignore.
     """
 
-    def get(self, assertion_id: str) -> Assertion | None: ...
+    def get(self, assertion_id: str) -> Assertion[K] | None: ...
 
     def find(
         self,
         *,
-        subject: str | None = None,
+        subject: K | None = None,
         relation: RelationRef | None = None,
-        object: Term | None = None,
+        object: Term[K] | None = None,
         polarity: Polarity | None = None,
-    ) -> list[Assertion]: ...
+    ) -> list[Assertion[K]]: ...
 
     def find_many(
         self,
         *,
-        subjects: Sequence[str] | None = None,
-        objects: Sequence[str] | None = None,
+        subjects: Sequence[K] | None = None,
+        objects: Sequence[K] | None = None,
         relation: RelationRef | None = None,
         polarity: Polarity | None = None,
-    ) -> dict[str, list[Assertion]]: ...
+    ) -> dict[K, list[Assertion[K]]]: ...
 
 
 @runtime_checkable
-class AsyncAssertionSource(Protocol):
+class AsyncAssertionSource(Protocol[K]):
     """The asynchronous twin."""
 
-    async def get(self, assertion_id: str) -> Assertion | None: ...
+    async def get(self, assertion_id: str) -> Assertion[K] | None: ...
 
     async def find(
         self,
         *,
-        subject: str | None = None,
+        subject: K | None = None,
         relation: RelationRef | None = None,
-        object: Term | None = None,
+        object: Term[K] | None = None,
         polarity: Polarity | None = None,
-    ) -> list[Assertion]: ...
+    ) -> list[Assertion[K]]: ...
 
     async def find_many(
         self,
         *,
-        subjects: Sequence[str] | None = None,
-        objects: Sequence[str] | None = None,
+        subjects: Sequence[K] | None = None,
+        objects: Sequence[K] | None = None,
         relation: RelationRef | None = None,
         polarity: Polarity | None = None,
-    ) -> dict[str, list[Assertion]]: ...
+    ) -> dict[K, list[Assertion[K]]]: ...
 
 
-def object_entity_id(term: Term) -> str | None:
+def object_entity_id(term: Term[K]) -> K | None:
     """The entity id an assertion object points at, or None for a literal.
+
+    Generic in the key, so an edge read out of an assertion comes back in the
+    space the assertion was written in rather than in ``str``.
 
     Public for the reason :func:`~dataknobs_common.ontology.model.relation_id`
     is: two readers ask this question -- the index below, and the

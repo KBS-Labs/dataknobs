@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-15T19:21:13Z",
+  "timestamp": "2026-09-16T12:36:04Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "b69da5e427be3cc87653951abddabe8deb9d017b3b5eb666f04410df164c5bec",
-    "common": "6c18f97f4af7653155f66cfe43035c90f3913d866127fcdb7c9405aa84507b10",
+    "common": "db93b8514d6a909ff2fc5249efe07d66e92b32d6cf5e129863e5a98f2ef74b17",
     "config": "a73f7f02bb35e7d998c1c4bcd7babf1466398c3c657636d71682d6c670fc29d6",
     "data": "9563901caac689ab9b8764a8ab523d141b7fe3671a739fd95ecc61433d308bfa",
     "fsm": "2303bdb3ef0356f50fc2bd7c92d9492921bdfa04e88ad497361edba742a9c419",
@@ -35,9 +35,9 @@
     "toolchain_test": "a3c996e51c661e2fc0d1c26400dbbe16708cad0bd629827aec331bf99a4c82b1",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "e40e52071a78190e2346fa1fcdb915c37e0abad0d559ab26a9fc8636b461498e",
-    "docs": "eb646a5f1257c9543e449c8b0808457933f13cf5be135f78ffdc17664a83c73a"
+    "docs": "33fc82303429565111ae43ca85d0435cd6d34ad3ab13e00ecb59fb48029f7232"
   },
-  "total_seconds": 397,
+  "total_seconds": 400,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -62,7 +62,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 105
+      "duration_seconds": 108
     },
     "documentation": {
       "status": "pass",
@@ -76,7 +76,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -89,14 +89,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 159,
-      "workspace_guards_seconds": 92
+      "duration_seconds": 160,
+      "workspace_guards_seconds": 94
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 93
+      "duration_seconds": 92
     }
   }
 }
