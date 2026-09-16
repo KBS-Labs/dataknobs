@@ -655,6 +655,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # noticed.
 "tests/worked_ontology_call_site.py" = ["B018"]  # transcribed doc fence: its bare attribute reads ARE the documentation, and a per-line noqa would have to be published on the page
 "tests/worked_entity_resolution_call_site.py" = ["B018"]  # same, for the entity-resolution guide's scanning call site: 5 bare reads of candidates, spans and coverage
+"tests/worked_anchored_view_call_site.py" = ["B018"]  # same, for the anchored-view guide's cursor call site: 4 bare reads of a node id and an ancestor's name and description
 
 [tool.ruff.lint.isort]
 # Configure import sorting

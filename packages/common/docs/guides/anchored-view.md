@@ -33,6 +33,114 @@ from dataknobs_common import (
 )
 ```
 
+## The whole input
+
+Hand-edited, no tooling, no second file. Two entity types where one is declared
+`isa:` the other, five entities, the edges between them, and a taxonomy naming
+the relation those edges are made of:
+
+<!-- worked-input -->
+
+```yaml
+# mammals.yaml — one hand-edited file. No tooling, no second file.
+ontology:
+  id: mammals
+  version: "1.1"
+
+  entity_types:
+    - id: Species
+      attributes:
+        - {name: latin_name, type: string}
+        - {name: lifespan_years, type: number, field_type: float}
+    - id: Breed
+      isa: Species                      # the TYPE lattice
+      attributes:
+        - {name: akc_group, type: string}
+
+  relation_types:
+    - id: isa
+      transitive: true
+
+  entities:
+    - {id: mammal, type: Species, name: Mammal,
+       description: "Warm-blooded, milk-producing vertebrates."}
+    - {id: dog, type: Species, name: Dog, aliases: [Canine, "Domestic dog"],
+       description: "A domesticated carnivoran."}
+    - {id: retriever, type: Breed, name: Retriever}
+    - {id: golden_retriever, type: Breed, name: Golden Retriever, aliases: [Goldie]}
+    - {id: beagle, type: Breed, name: Beagle, aliases: [Beagles],
+       source: {source_id: clinic_db, table: species, key: "sp-2291"}}
+
+  assertions:
+    - {subject: dog, relation: isa, object: mammal}
+    - {subject: retriever, relation: isa, object: dog}
+    - {subject: golden_retriever, relation: isa, object: retriever}
+    - {subject: beagle, relation: isa, object: dog}
+
+  taxonomies:
+    - {id: species, name: Species, relation: isa}
+```
+
+Two `isa` lattices are in that file and they are not the same set of edges. The
+`isa:` on `Breed` is a **type** declaration — `Breed` inherits `Species`'
+attributes. The `isa` assertions are between **entities** — `beagle` is a kind
+of `dog`. They share a relation id and nothing else, which is why the call site
+below asks about each one of a different object.
+
+## The worked call site
+
+Five things a cursor is for, in the order someone meets them. Every line runs
+against the file above, exactly as written:
+
+<!-- worked-call-site -->
+
+```python
+from pathlib import Path
+
+from dataknobs_common.ontology import build_resolver, load_ontology
+
+onto = load_ontology(Path("mammals.yaml"))
+axis = onto.taxonomy("species")  # no store, no embedder, no event loop
+
+# (1) the triage flow places a message
+resolver = build_resolver(Path("mammals.yaml"), onto)
+hit = resolver.resolve("golden retriever", k=5).ranked()[0]
+hit.entity_id  # "golden_retriever"
+
+# (2) anchor a cursor there, and widen to the context above it
+here = axis.at(hit.entity_id)  # the anchored view
+here.node  # "golden_retriever"
+here.parents()  # (view("retriever"),) -- PLURAL, always
+here.ancestors()  # retriever, dog, mammal
+
+for above in here.ancestors():
+    entity = above.entity()  # -> Entity | None
+    assert entity is not None  # an id that misses is a typo, not a result
+    entity.name  # "Retriever", "Dog", "Mammal"
+    entity.description  # what folds into the prompt
+    onto.assertions.find(subject=above.node)  # what is TRUE of it -- and it is
+    # NOT on the view: a taxonomy holds no assertion axis
+
+# (3) what does this type inherit? -- the OTHER isa lattice, on the axis
+placed = here.entity()
+assert placed is not None
+axis.inherited_attributes(placed.type)  # akc_group, latin_name, lifespan_years
+
+# (4) see what is still unspecified
+there = here.at("dog")  # re-anchor: the message stopped here
+there.is_leaf()  # False -- the CONSUMER concludes
+there.children()  # retriever, beagle -- ask which
+
+# (5) leave with keys, in your own id space
+axis.subtree_keys(there.node)  # ["dog", "retriever", "golden_retriever", "beagle"]
+```
+
+That block is executed as written by a workspace test, and the test asserts it
+is character-identical to the fence above. If this page and the code ever
+disagree, the suite goes red rather than the page going quietly wrong.
+
+The rest of this guide is those five steps taken one at a time.
+
 ## The door, and the move
 
 The door is on the axis. It takes the node and nothing else, because everything

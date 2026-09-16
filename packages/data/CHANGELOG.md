@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`TopicNode`'s four walk methods now share one implementation.** `flatten`,
+  `leaves`, `children_at_depth` and `descendants_to_depth` are each a single
+  call into the generic hierarchy walks in `dataknobs-common`, over a new
+  adapter. Their signatures, their parameter names and the orders they return
+  are unchanged: each still emits pre-order by discovery, and the order a
+  retrieval reads when `max_expanded_results` truncates its region is the same
+  order it was.
+
+  Two behaviours do change, and both are on trees that were never well formed:
+
+  - A `children` list that forms a **cycle** is now walked to its end. It
+    previously raised `RecursionError` from `flatten()` and `leaves()`, and
+    `descendants_to_depth(n)` returned the same nodes repeated once per level
+    until the depth bound ran out.
+  - A subtree hung under **two parents** is now walked once, at the first
+    position that reaches it, rather than once per route. `expand_region`
+    already deduplicated chunks by id, so a region built from such a tree is
+    unaffected; a caller reading `flatten()` directly saw the repeat.
+
+  `descendant_chunk_ids` is unchanged and still descends on its own, so it
+  still raises `RecursionError` on a cyclic tree.
+
+### Added
+
+- **`TopicNodeHierarchy`**, a `Hierarchy` over a `TopicNode` subtree, on the
+  `dataknobs_data.sources` door with `TopicKey`. It keys nodes by position —
+  `()` is the anchor, `(0, 1)` the second child of the first — because
+  `TopicNode` has no id and its labels repeat. Build one per call and discard
+  it: the map is a snapshot, and `build_heading_tree` grows a tree by appending
+  to `children`.
+
+  What it gives a consumer is the rest of the walk family over a topic tree:
+  `ancestors`, `paths_to_root` and `deepest_common_ancestor`, none of which
+  `TopicNode` carries.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

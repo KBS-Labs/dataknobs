@@ -550,7 +550,7 @@ def published_fence(path: Path, marker: str) -> str:
     it exists to read.
 
     Shared by the worked-call-site guards rather than copied into each. There
-    are two of them now, one per guide, and the failure mode above is exactly
+    are three of them now, one per guide, and the failure mode above is exactly
     the kind a second copy loses silently: a guard that stopped refusing still
     passes every test written for the guard that did.
     """

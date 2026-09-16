@@ -16,14 +16,28 @@ live in the package best suited to their dependencies:
   optional heading selection.
 - :class:`ClusterTopicIndex` (``dataknobs-data``) — purely
   deterministic centroid matching.
+
+**Walking a topic tree.**  :class:`TopicNode`'s four walk methods —
+:meth:`~TopicNode.flatten`, :meth:`~TopicNode.leaves`,
+:meth:`~TopicNode.children_at_depth` and
+:meth:`~TopicNode.descendants_to_depth` — are each one call into the generic
+hierarchy walks in ``dataknobs-common``, over :class:`TopicNodeHierarchy`.  They
+return what they always returned, in the order they always returned it; what
+sharing buys is that a malformed tree terminates rather than recursing until the
+stack is gone, and that the walks the family has and this class never had —
+``ancestors``, ``paths_to_root``, ``deepest_common_ancestor`` — are available
+over a topic tree by constructing the same adapter the methods construct.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
+
+from dataknobs_common import children_at_depth, descendants_to_depth, flatten, leaves
 
 from .base import RetrievalIntent, SourceResult
 
@@ -208,10 +222,8 @@ class TopicNode:
 
     def flatten(self) -> list[TopicNode]:
         """Return self + all descendants in pre-order."""
-        nodes = [self]
-        for child in self.children:
-            nodes.extend(child.flatten())
-        return nodes
+        axis = TopicNodeHierarchy(self)
+        return axis.nodes(flatten(axis, from_id=axis.ANCHOR))
 
     def descendant_chunk_ids(self) -> list[str]:
         """All chunk IDs under this node (self + descendants)."""
@@ -226,21 +238,13 @@ class TopicNode:
         ``depth=1`` returns immediate children; ``depth=2`` returns
         grandchildren; etc.
         """
-        if depth <= 0:
-            return [self]
-        result: list[TopicNode] = []
-        for child in self.children:
-            result.extend(child.children_at_depth(depth - 1))
-        return result
+        axis = TopicNodeHierarchy(self)
+        return axis.nodes(children_at_depth(axis, axis.ANCHOR, depth))
 
     def leaves(self) -> list[TopicNode]:
         """Return leaf nodes (no children) under this node."""
-        if not self.children:
-            return [self]
-        result: list[TopicNode] = []
-        for child in self.children:
-            result.extend(child.leaves())
-        return result
+        axis = TopicNodeHierarchy(self)
+        return axis.nodes(leaves(axis, under=axis.ANCHOR))
 
     def descendants_to_depth(self, max_depth: int) -> list[TopicNode]:
         """Return all descendants up to ``max_depth`` levels below.
@@ -248,12 +252,152 @@ class TopicNode:
         ``max_depth=0`` returns only self.  ``max_depth=1`` returns
         self + immediate children.
         """
-        nodes = [self]
-        if max_depth <= 0:
-            return nodes
-        for child in self.children:
-            nodes.extend(child.descendants_to_depth(max_depth - 1))
-        return nodes
+        axis = TopicNodeHierarchy(self)
+        return axis.nodes(descendants_to_depth(axis, axis.ANCHOR, max_depth))
+
+
+#: A node's position in the tree, and the key :class:`TopicNodeHierarchy` uses.
+#:
+#: ``()`` is the anchor, ``(0,)`` its first child, ``(0, 1)`` the second child
+#: of that.  The integers index ``TopicNode.children`` directly, so a key reads
+#: as the route taken to reach the node.
+TopicKey = tuple[int, ...]
+
+
+@dataclass(frozen=True, eq=False)
+class TopicNodeHierarchy:
+    """A :class:`~dataknobs_common.hierarchy.Hierarchy` over a topic subtree.
+
+    :class:`TopicNode` has no id.  Its fields are ``label``, ``level``,
+    ``children``, ``chunk_ids`` and ``metadata``; ``label`` is not unique,
+    because a document repeats its headings, and the class is a plain dataclass
+    so two distinct nodes with the same fields compare equal.  There is
+    therefore nothing on the node to key an axis by, and this adapter mints the
+    key instead: **a node's position**, as a tuple of child indices from the
+    anchor.
+
+    A positional key is a value, it is hashable, and it fails legibly -- an
+    unknown anchor is refused with ``no node (0, 1)`` rather than with an
+    address nobody can look up.
+
+    **Build one per call and discard it.**  The map is a snapshot, and
+    :func:`build_heading_tree` grows a tree by appending to ``children``, so a
+    key minted before an append can name a different node after one.  The four
+    :class:`TopicNode` methods that use this build one, walk, project and drop
+    it, which is why staleness cannot arise there.  A consumer holding one for
+    longer owns that question, exactly as they would holding any index built
+    from a mutable structure.
+
+    What it buys a consumer is the rest of the family: ``paths_to_root``,
+    ``ancestors`` and ``deepest_common_ancestor`` over a topic tree, none of
+    which :class:`TopicNode` has.
+
+    .. code-block:: python
+
+        from dataknobs_common import ancestors, paths_to_root
+        from dataknobs_data.sources import TopicNodeHierarchy
+
+        axis = TopicNodeHierarchy(tree)
+        deepest = axis.key_of(some_node)
+        [n.label for n in axis.nodes(ancestors(axis, deepest))]
+
+    **The axis is a tree projection of the node graph**, which is what makes
+    the walks terminate.  Construction visits each node once, by identity, and
+    a node reachable by two routes is placed at the first one found; the edge
+    that would have reached it again is not in the axis.  So a ``children``
+    list that forms a cycle is walked to its end instead of recursing until the
+    stack is gone, and a subtree hung under two parents is walked once.
+    Identity is used here and nowhere else, privately, for the one question it
+    answers well: *have I already seen this object*.
+    """
+
+    #: The node the axis is rooted at.  It is the axis's only root.
+    anchor: TopicNode
+
+    #: Every node the anchor reaches, at the first key that reached it.
+    nodes_by_key: Mapping[TopicKey, TopicNode] = field(init=False, repr=False)
+
+    #: A key's children, in ``TopicNode.children`` order, skipping any edge
+    #: that led to a node already placed.
+    child_keys: Mapping[TopicKey, tuple[TopicKey, ...]] = field(init=False, repr=False)
+
+    #: The anchor's key.  Named rather than spelled ``()`` at four call sites,
+    #: because an empty tuple in an argument list reads as an oversight.
+    ANCHOR: ClassVar[TopicKey] = ()
+
+    def __post_init__(self) -> None:
+        nodes: dict[TopicKey, TopicNode] = {self.ANCHOR: self.anchor}
+        edges: dict[TopicKey, tuple[TopicKey, ...]] = {}
+        seen: set[int] = {id(self.anchor)}
+        stack: list[tuple[TopicKey, TopicNode]] = [(self.ANCHOR, self.anchor)]
+        while stack:
+            key, node = stack.pop()
+            found: list[tuple[TopicKey, TopicNode]] = []
+            for index, child in enumerate(node.children):
+                if id(child) in seen:
+                    continue
+                seen.add(id(child))
+                child_key = (*key, index)
+                nodes[child_key] = child
+                found.append((child_key, child))
+            edges[key] = tuple(child_key for child_key, _ in found)
+            stack.extend(reversed(found))
+        object.__setattr__(self, "nodes_by_key", nodes)
+        object.__setattr__(self, "child_keys", edges)
+
+    # -- the protocol -------------------------------------------------
+
+    def roots(self) -> Sequence[TopicKey]:
+        """The anchor, and only ever the anchor."""
+        return (self.ANCHOR,)
+
+    def parents(self, node_id: TopicKey) -> Sequence[TopicKey]:
+        """The key one step up, which a positional key already carries."""
+        if not node_id or node_id not in self.nodes_by_key:
+            return ()
+        return (node_id[:-1],)
+
+    def children(self, node_id: TopicKey) -> Sequence[TopicKey]:
+        """The keys one step down, in ``children`` order."""
+        return self.child_keys.get(node_id, ())
+
+    def contains(self, node_id: TopicKey) -> bool:
+        """Whether the anchor reaches that position at all."""
+        return node_id in self.nodes_by_key
+
+    # -- the projection -----------------------------------------------
+
+    def node(self, node_id: TopicKey) -> TopicNode:
+        """The node at ``node_id``.
+
+        Raises:
+            KeyError: if the axis does not reach that position.
+        """
+        return self.nodes_by_key[node_id]
+
+    def nodes(self, node_ids: Sequence[TopicKey]) -> list[TopicNode]:
+        """A walk's keys as the nodes they name, in the order given.
+
+        Every walk over this axis answers in keys, and every caller here wants
+        nodes.  One projection serves all of them, which is what keeps each
+        delegating method to a single line.
+        """
+        return [self.nodes_by_key[node_id] for node_id in node_ids]
+
+    def key_of(self, node: TopicNode) -> TopicKey:
+        """Where ``node`` sits, by identity rather than by equality.
+
+        Two distinct :class:`TopicNode` objects with the same fields compare
+        equal, so a search by ``==`` would return whichever came first.  This
+        answers about the object handed in.
+
+        Raises:
+            KeyError: if that object is not in this axis.
+        """
+        for key, candidate in self.nodes_by_key.items():
+            if candidate is node:
+                return key
+        raise KeyError("that node is not in this hierarchy")
 
 
 # ------------------------------------------------------------------

@@ -791,6 +791,45 @@ class TestResultLimits:
         assert len(results) <= 3
 
     @pytest.mark.asyncio
+    async def test_max_expanded_results_keeps_the_deepest_branch_first(self) -> None:
+        """*Which* three survive the cap, not merely how many.
+
+        The cap is applied to a list whose order comes from the walk that
+        expanded the matched heading: ``_select_expansion_nodes`` reads the
+        topic tree, ``expand_region`` appends in the order it is handed, and
+        this is where the tail is discarded.  So the walk's emission order does
+        not decide presentation — it decides **which chunks reach the model**.
+
+        Nothing asserted that.  ``test_max_expanded_results`` above asserts the
+        count, the expansion tests build sets, and the topic-tree tests assert
+        membership, so a walk that returned the same nodes in a different order
+        would change the answer with every one of them green.
+
+        The discriminating fact is that ``10.12 CSRF`` has a child and its
+        siblings do not: a descent that finishes a subtree before starting the
+        next sibling keeps ``csrf_mit``, and one that takes a whole level at a
+        time keeps ``token`` instead.  Both return the same six chunks
+        uncapped, so the cap is the only place the difference is observable.
+        """
+        chunks = _rfc_chunks()
+        index = HeadingTreeIndex.from_chunks(
+            chunks,
+            config=HeadingTreeConfig(entry_strategy="heading_match", max_expanded_results=3),
+        )
+        uncapped = HeadingTreeIndex.from_chunks(
+            chunks,
+            config=HeadingTreeConfig(entry_strategy="heading_match", max_expanded_results=50),
+        )
+
+        capped_ids = [r.source_id for r in await index.resolve("security considerations")]
+        all_ids = [r.source_id for r in await uncapped.resolve("security considerations")]
+
+        assert capped_ids == ["sec_overview", "csrf", "csrf_mit"]
+        assert all_ids == ["sec_overview", "csrf", "csrf_mit", "token", "redirect", "client_auth"]
+        # The cap takes a prefix: it discards a tail and never permutes the head.
+        assert capped_ids == all_ids[: len(capped_ids)]
+
+    @pytest.mark.asyncio
     async def test_seed_score_threshold_filters_weak_seeds(self) -> None:
         """Vector seeds below the threshold are dropped."""
 

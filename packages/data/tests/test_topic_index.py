@@ -7,10 +7,19 @@ from typing import Any
 import pytest
 
 from dataknobs_data.sources.base import SourceResult
+from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common import (
+    Hierarchy,
+    ancestors,
+    deepest_common_ancestor,
+    flatten,
+    paths_to_root,
+)
 from dataknobs_data.sources.topic_index import (
     DEFAULT_HEADING_STOPWORDS,
     HeadingMatchConfig,
     TopicNode,
+    TopicNodeHierarchy,
     build_heading_tree,
     expand_region,
     extract_query_words,
@@ -641,3 +650,324 @@ class TestHeadingPipelineIntegration:
         assert "csrf" in result_ids
         assert "csrf_mit" in result_ids
         assert "token" not in result_ids
+
+
+# ------------------------------------------------------------------
+# The orders the walks emit, and the cycle that used to not terminate
+# ------------------------------------------------------------------
+
+
+def _level_order(root: TopicNode) -> list[str]:
+    """The labels a level-synchronous descent would emit — the negative control.
+
+    Not a walk anything ships, and deliberately so.  It exists to show that the
+    assertions below are *capable* of failing: a fixture whose pre-order and
+    level-order coincide would pass whichever discipline the walk used, which is
+    a test that guards nothing while reporting green.
+    """
+    labels: list[str] = []
+    frontier = [root]
+    while frontier:
+        labels.extend(node.label for node in frontier)
+        frontier = [child for node in frontier for child in node.children]
+    return labels
+
+
+def _branching_tree() -> TopicNode:
+    """A tree that branches at two levels, which is what tells the orders apart.
+
+    ``root -> (c1 -> gc1, c2 -> gc2)``.  A chain cannot discriminate — every
+    descent visits a chain in the same sequence — so the second branch is the
+    whole point of the shape.
+    """
+    gc1 = TopicNode(label="gc1", level=2, chunk_ids=["x_gc1"])
+    gc2 = TopicNode(label="gc2", level=2, chunk_ids=["x_gc2"])
+    c1 = TopicNode(label="c1", level=1, chunk_ids=["x_c1"], children=[gc1])
+    c2 = TopicNode(label="c2", level=1, chunk_ids=["x_c2"], children=[gc2])
+    return TopicNode(label="root", level=0, chunk_ids=["x_root"], children=[c1, c2])
+
+
+class TestWalkOrdersAreAsserted:
+    """Each walk's emission order, pinned with a control that can tell it apart.
+
+    The existing tests in :class:`TestTopicNode` assert membership, counts and —
+    for ``flatten`` — one order over a fixture that branches once.  None of them
+    can see the difference between *pre-order by discovery* and a
+    level-synchronous descent on the walk whose order a consumer actually reads,
+    which is ``descendants_to_depth``: its own test asserts only that ``ggc`` is
+    absent and ``gc`` is present.
+
+    That gap is what these assertions close.  They are the proof obligation for
+    replacing four hand-written descents with delegations to one shared walk:
+    the suite passed before the swap and would pass after a swap that changed
+    the order, so it validates nothing about the swap on its own.
+    """
+
+    def test_flatten_is_pre_order_by_discovery(self) -> None:
+        root = _branching_tree()
+
+        assert [n.label for n in root.flatten()] == ["root", "c1", "gc1", "c2", "gc2"]
+        assert _level_order(root) == ["root", "c1", "c2", "gc1", "gc2"]
+
+    def test_descendants_to_depth_is_pre_order_by_discovery(self) -> None:
+        """The one whose order reaches a consumer, and whose own test cannot see it."""
+        root = _branching_tree()
+
+        assert [n.label for n in root.descendants_to_depth(2)] == [
+            "root",
+            "c1",
+            "gc1",
+            "c2",
+            "gc2",
+        ]
+        assert _level_order(root) == ["root", "c1", "c2", "gc1", "gc2"]
+
+    def test_leaves_is_pre_order_by_discovery(self) -> None:
+        """Mixed depth, because equal-depth leaves cannot tell the orders apart."""
+        l1 = TopicNode(label="l1", level=2)
+        branch = TopicNode(label="b", level=1, children=[l1])
+        leaf_sibling = TopicNode(label="ls", level=1)
+        root = TopicNode(label="r", level=0, children=[branch, leaf_sibling])
+
+        assert [n.label for n in root.leaves()] == ["l1", "ls"]
+        # The control: a level-synchronous descent reaches ``ls`` first.
+        assert [label for label in _level_order(root) if label in {"l1", "ls"}] == [
+            "ls",
+            "l1",
+        ]
+
+    def test_children_at_depth_is_one_level_and_has_no_order_to_choose(self) -> None:
+        """The one walk with nothing to discriminate, asserted as such.
+
+        A level *is* the set of nodes at one depth, so every descent that
+        reaches it reaches the same nodes in the order the parents were visited.
+        Recorded here rather than left out, so that a reader looking for the
+        fourth order assertion finds the reason there is none instead of a gap.
+        """
+        root = _branching_tree()
+
+        assert [n.label for n in root.children_at_depth(2)] == ["gc1", "gc2"]
+        assert [label for label in _level_order(root) if label.startswith("gc")] == [
+            "gc1",
+            "gc2",
+        ]
+
+
+class TestExpansionArmsAgree:
+    """Bounded and unbounded expansion agree on order, not only on membership.
+
+    ``expansion_mode`` has two arms per mode: a bounded one reached when
+    ``max_expansion_depth`` is set, and an unbounded one when it is not.  They
+    have always agreed, because each pair happened to be written in the same
+    discipline — so ``max_expansion_depth`` is a depth bound rather than also a
+    reordering switch.  Nothing said so, which made it true by coincidence.
+    """
+
+    def test_subtree_arms_agree_when_the_bound_reaches_the_whole_tree(self) -> None:
+        root = _branching_tree()
+        by_id = _chunks_by_id([_chunk(cid) for cid in ["x_root", "x_c1", "x_gc1", "x_c2", "x_gc2"]])
+
+        unbounded = expand_region(root, by_id, expansion_mode="subtree")
+        bounded = expand_region(root, by_id, expansion_mode="subtree", max_expansion_depth=2)
+
+        assert [r.source_id for r in bounded] == [r.source_id for r in unbounded]
+        assert [r.source_id for r in unbounded] == ["x_root", "x_c1", "x_gc1", "x_c2", "x_gc2"]
+
+    def test_leaves_arms_agree_when_the_bound_reaches_the_whole_tree(self) -> None:
+        root = _branching_tree()
+        by_id = _chunks_by_id([_chunk(cid) for cid in ["x_root", "x_c1", "x_gc1", "x_c2", "x_gc2"]])
+
+        unbounded = expand_region(root, by_id, expansion_mode="leaves")
+        bounded = expand_region(root, by_id, expansion_mode="leaves", max_expansion_depth=2)
+
+        assert [r.source_id for r in bounded] == [r.source_id for r in unbounded]
+        assert [r.source_id for r in unbounded] == ["x_gc1", "x_gc2"]
+
+    def test_the_bound_selects_rather_than_reorders(self) -> None:
+        """A tighter bound drops a tail; it does not permute what remains."""
+        root = _branching_tree()
+        by_id = _chunks_by_id([_chunk(cid) for cid in ["x_root", "x_c1", "x_gc1", "x_c2", "x_gc2"]])
+
+        shallow = expand_region(root, by_id, expansion_mode="subtree", max_expansion_depth=1)
+        deep = expand_region(root, by_id, expansion_mode="subtree", max_expansion_depth=2)
+
+        shallow_ids = [r.source_id for r in shallow]
+        assert shallow_ids == ["x_root", "x_c1", "x_c2"]
+        # Every chunk the shallow bound keeps appears in the deep one, in order.
+        assert [i for i in (r.source_id for r in deep) if i in set(shallow_ids)] == shallow_ids
+
+
+class TestAMalformedTreeTerminates:
+    """A ``children`` list that is not a tree, and what the walks do with it.
+
+    ``TopicNode`` is a public dataclass with a mutable ``children`` list, so
+    nothing stops a caller from building a cycle or from hanging one subtree
+    under two parents.  ``build_heading_tree`` never does either, which is why
+    this went unnoticed: every walk descended with no record of where it had
+    been, so a cycle recursed until the interpreter stopped it.
+
+    These assert the behaviour *after* the walks are shared.  Before it,
+    ``flatten`` and ``leaves`` raised ``RecursionError`` here — not a hang, and
+    not a wrong answer, but an answer a consumer cannot act on.
+    """
+
+    @staticmethod
+    def _cycle() -> TopicNode:
+        """``a -> b -> a``. Two nodes, each listing the other as a child."""
+        a = TopicNode(label="a", level=0)
+        b = TopicNode(label="b", level=1)
+        a.children.append(b)
+        b.children.append(a)
+        return a
+
+    @staticmethod
+    def _shared_subtree() -> TopicNode:
+        """One subtree hung under two parents — a DAG, not a cycle."""
+        shared = TopicNode(label="shared", level=2, children=[TopicNode(label="deep", level=3)])
+        p1 = TopicNode(label="p1", level=1, children=[shared])
+        p2 = TopicNode(label="p2", level=1, children=[shared])
+        return TopicNode(label="root", level=0, children=[p1, p2])
+
+    def test_flatten_terminates_on_a_cycle(self) -> None:
+        assert [n.label for n in self._cycle().flatten()] == ["a", "b"]
+
+    def test_leaves_terminates_on_a_cycle(self) -> None:
+        """``b`` is a leaf, because the edge that closed the cycle is not walked.
+
+        Nothing in a cycle is childless in the *graph*, so this answer is a
+        property of the projection rather than of the input: the walk reaches
+        ``b``, finds its only child already visited, and has nothing left to
+        descend into.  It is the same rule that makes ``p2`` a leaf in
+        :meth:`test_a_node_reachable_twice_is_emitted_once` — a node whose every
+        edge led somewhere already seen.
+        """
+        assert [n.label for n in self._cycle().leaves()] == ["b"]
+
+    def test_descendants_to_depth_stops_repeating_on_a_cycle(self) -> None:
+        """It terminated before — by exhausting the depth bound — and repeated.
+
+        The depth bound made this the one walk a cycle did not crash, and the
+        answer it gave was ``a, b, a, b``: the same two nodes emitted once per
+        level until the bound ran out.  A caller reading that as a region got
+        each node as many times as the bound allowed.
+        """
+        assert [n.label for n in self._cycle().descendants_to_depth(3)] == ["a", "b"]
+
+    def test_a_node_reachable_twice_is_emitted_once(self) -> None:
+        """The other half of the same guard, and the one with no cycle in it.
+
+        A subtree hung under two parents used to be walked twice, so a region
+        built from it carried every chunk below the shared node twice over.
+        ``expand_region`` deduplicates chunks by id and so hid this, but
+        ``flatten()`` is public and its caller sees the repeat.
+        """
+        root = self._shared_subtree()
+
+        assert [n.label for n in root.flatten()] == ["root", "p1", "shared", "deep", "p2"]
+        assert [n.label for n in root.leaves()] == ["deep", "p2"]
+
+    def test_the_second_parent_is_still_reached(self) -> None:
+        """Dropping the repeat must not drop the branch that carried it.
+
+        ``p2`` has exactly one child and it is the shared node, so a guard that
+        skipped a seen node by skipping its parent's edge *and* its parent
+        would lose ``p2`` itself — a node nothing else reaches.
+        """
+        root = self._shared_subtree()
+
+        assert "p2" in [n.label for n in root.flatten()]
+        assert [n.label for n in root.children_at_depth(1)] == ["p1", "p2"]
+
+
+class TestTopicNodeHierarchy:
+    """The adapter, as the public construct it is rather than as an internal.
+
+    Its four protocol members are what the delegations above run on, so those
+    are exercised heavily by every other test in this file.  What is asserted
+    here is the part a consumer touches directly: the key, the projection back
+    to nodes, and the walks ``TopicNode`` does not itself carry.
+    """
+
+    def test_it_satisfies_the_protocol(self) -> None:
+        axis = TopicNodeHierarchy(_branching_tree())
+
+        assert isinstance(axis, Hierarchy)
+
+    def test_the_key_is_a_route_through_children(self) -> None:
+        """``(0, 1)`` means ``children[0].children[1]``, and reads that way."""
+        root = _branching_tree()
+        axis = TopicNodeHierarchy(root)
+
+        assert axis.roots() == ((),)
+        assert axis.children(()) == ((0,), (1,))
+        assert axis.children((0,)) == ((0, 0),)
+        assert axis.node((0, 0)).label == "gc1"
+        assert axis.node((1, 0)) is root.children[1].children[0]
+
+    def test_a_position_the_tree_does_not_reach_is_absent_rather_than_empty(self) -> None:
+        """``contains`` is what separates *nothing below* from *not here*."""
+        axis = TopicNodeHierarchy(_branching_tree())
+
+        assert axis.contains((0, 0)) is True
+        assert axis.contains((9,)) is False
+        assert axis.children((9,)) == ()
+        assert axis.children((0, 0)) == ()
+
+    def test_parents_is_the_prefix_and_the_anchor_has_none(self) -> None:
+        axis = TopicNodeHierarchy(_branching_tree())
+
+        assert axis.parents((0, 0)) == ((0,),)
+        assert axis.parents((0,)) == ((),)
+        assert axis.parents(()) == ()
+        assert axis.parents((9,)) == ()
+
+    def test_an_unknown_anchor_is_refused_legibly(self) -> None:
+        """The reason the key is a value: the refusal names a position."""
+        axis = TopicNodeHierarchy(_branching_tree())
+
+        with pytest.raises(NotFoundError, match=r"no node \(9, 9\) in this hierarchy"):
+            flatten(axis, from_id=(9, 9))
+
+    def test_it_carries_the_walks_topicnode_does_not(self) -> None:
+        """What making the adapter public is for."""
+        root = _branching_tree()
+        axis = TopicNodeHierarchy(root)
+        gc2 = axis.key_of(root.children[1].children[0])
+
+        assert axis.nodes(ancestors(axis, gc2)) == [root.children[1], root]
+        assert paths_to_root(axis, gc2) == (((1, 0), (1,), ()),)
+        assert deepest_common_ancestor(axis, (0, 0), (1, 0)) == ()
+
+    def test_key_of_answers_by_identity_not_by_equality(self) -> None:
+        """Two nodes with the same fields are ``==``; they are not the same node."""
+        first = TopicNode(label="same", level=1)
+        second = TopicNode(label="same", level=1)
+        root = TopicNode(label="root", level=0, children=[first, second])
+        axis = TopicNodeHierarchy(root)
+
+        assert first == second
+        assert axis.key_of(first) == (0,)
+        assert axis.key_of(second) == (1,)
+
+    def test_key_of_refuses_a_node_from_another_tree(self) -> None:
+        axis = TopicNodeHierarchy(_branching_tree())
+
+        with pytest.raises(KeyError):
+            axis.key_of(TopicNode(label="elsewhere", level=0))
+
+    def test_the_index_survives_a_skipped_edge(self) -> None:
+        """A dropped duplicate edge leaves a gap in the indices, not a shift.
+
+        ``p2``'s only child is already placed, so ``p2`` has no children here —
+        but the *second* child of a node whose first was dropped must keep
+        index 1, or the key stops naming a route through ``children``.
+        """
+        shared = TopicNode(label="shared", level=2)
+        holder = TopicNode(label="holder", level=1, children=[shared])
+        second = TopicNode(label="second", level=2)
+        reuser = TopicNode(label="reuser", level=1, children=[shared, second])
+        root = TopicNode(label="root", level=0, children=[holder, reuser])
+        axis = TopicNodeHierarchy(root)
+
+        assert axis.children((1,)) == ((1, 1),)
+        assert axis.node((1, 1)) is second

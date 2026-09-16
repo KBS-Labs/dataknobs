@@ -1073,6 +1073,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compared, and a member that later becomes genuinely asynchronous fails rather
   than going quiet.
 
+### Documentation
+
+- **The anchored-view guide now carries a worked call site that is executed.**
+  Two fences — the vocabulary and the code that reads it — with a workspace test
+  that writes the first to disk, runs the second against it, and asserts the
+  executed copy is character-identical to the published one. The guide is the
+  third to carry the pair, after the ontology and entity-resolution guides.
+
+  It is run from the workspace root rather than from inside the package, which
+  is the point: a test living beside the code can reach a name whether or not
+  the door exports it, so it cannot fail for the one reason this test exists.
+
 ### Changed
 
 - **`KeyCodec` and `StrCodec` are on the top-level door**, beside the `Ontology`
