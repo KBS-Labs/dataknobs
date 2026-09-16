@@ -540,7 +540,7 @@ Contributions are welcome! Please:
 4. Ensure all tests pass
 5. Submit a pull request
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for detailed guidelines.
+See the [Contributing Guide](../../docs/development/contributing.md) for detailed guidelines.
 
 ## License
 

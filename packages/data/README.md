@@ -2,7 +2,6 @@
 
 A unified data abstraction layer that provides consistent database operations across multiple storage technologies.
 
-**Version**: 0.1.0  
 **Status**: Released ([PyPI](https://pypi.org/project/dataknobs-data/))  
 **Python**: 3.12+  
 **License**: Apache-2.0  
@@ -521,7 +520,7 @@ The package is designed for optimal performance:
 
 ## Contributing
 
-Contributions are welcome! Please see our [Contributing Guide](../../CONTRIBUTING.md) for details.
+Contributions are welcome! Please see our [Contributing Guide](../../docs/development/contributing.md) for details.
 
 ## License
 
