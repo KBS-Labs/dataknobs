@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Extraction utilities for structured data extraction from text.
 
 This module provides SchemaExtractor for extracting structured data

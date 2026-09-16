@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """What a rung produces, what a resolution returns, and what a commit keeps.
 
 Pure data and pure accessors. Nothing here opens a connection, reads a file or

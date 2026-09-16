@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """FSM CLI tool for managing and executing FSM configurations.
 
 This module provides a command-line interface for:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Adapter to use dataknobs_data backends as RegistryBackend.
 
 The adapter composes :class:`AsyncKeyedRecordStore[Registration]` rather

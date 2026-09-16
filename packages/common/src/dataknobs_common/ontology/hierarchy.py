@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """A hierarchy whose edges are assertions of one relation.
 
 The component behind the sentence *a taxonomy is a view of an ontology's

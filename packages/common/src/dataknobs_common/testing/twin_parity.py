@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Drift-guard for a sync/async twin pair: one surface, one stated difference.
 
 A twinned API is two callables a caller is invited to treat as one. That

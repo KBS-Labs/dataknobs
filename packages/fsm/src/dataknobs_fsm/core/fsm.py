@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Core FSM class for managing state machines.
 
 This module provides the core FSM class that serves as the foundation for all

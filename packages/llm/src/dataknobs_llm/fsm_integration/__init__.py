@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """FSM integration for LLM workflows.
 
 This module provides integration between the dataknobs-fsm state machine

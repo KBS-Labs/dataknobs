@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """DataKnobs Data Package - Unified data abstraction layer.
 
 The `dataknobs-data` package provides a unified interface for working with various

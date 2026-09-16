@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Draft management for interactive configuration creation.
 
 Provides file-based draft persistence during wizard-driven config building.

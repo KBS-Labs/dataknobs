@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Grounded source implementations for DynaBot.
 
 Re-exports core types from ``dataknobs-data`` and ``dataknobs-llm``,

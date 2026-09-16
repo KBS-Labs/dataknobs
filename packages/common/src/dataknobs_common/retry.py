@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Retry utilities for resilient operation execution.
 
 This module provides general-purpose retry primitives with configurable

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """JSON chunking utilities for RAG applications.
 
 This module provides utilities for chunking JSON data (objects, arrays, JSONL files)

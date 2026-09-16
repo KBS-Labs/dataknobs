@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """``InProcessLock`` — the default single-process :class:`DistributedLock`.
 
 Behaviour-identical to a bare :class:`asyncio.Lock` per key, so it is

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """File system utility functions for traversing, reading, and writing files.
 
 Provides generators and helpers for working with files, directories,

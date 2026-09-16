@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Context formatting utilities for RAG retrieval.
 
 This module provides formatting for retrieved chunks to optimize

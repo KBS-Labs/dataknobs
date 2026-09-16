@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Re-export of the shared dotted-path resolvers.
 
 The implementation lives in :mod:`dataknobs_common.imports`, where every

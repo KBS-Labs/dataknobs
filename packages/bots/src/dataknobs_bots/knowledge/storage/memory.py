@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """In-memory knowledge resource backend for testing.
 
 This backend stores all files in memory, making it ideal for unit tests

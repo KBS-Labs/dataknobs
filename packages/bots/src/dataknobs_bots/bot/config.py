@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Typed top-level configuration for :class:`~dataknobs_bots.bot.base.DynaBot`.
 
 ``DynaBotConfig`` is the one typed configuration snapshot for a bot. It is

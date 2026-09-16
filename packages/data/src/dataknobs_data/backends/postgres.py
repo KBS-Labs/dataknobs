@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """PostgreSQL backend implementation with proper connection management and vector support."""
 
 from __future__ import annotations

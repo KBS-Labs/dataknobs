@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Wizard state transition observability and task tracking.
 
 This module provides data structures for recording wizard state transitions

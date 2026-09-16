@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Field derivation rules for wizard extraction recovery.
 
 Derivation rules define deterministic relationships between fields.

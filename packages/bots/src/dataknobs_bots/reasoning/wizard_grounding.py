@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Schema-driven extraction grounding and merge filtering.
 
 Verifies that extracted values are grounded in the user's actual

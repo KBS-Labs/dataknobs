@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Protocol definition for knowledge resource backends.
 
 This module defines the KnowledgeResourceBackend protocol, which provides

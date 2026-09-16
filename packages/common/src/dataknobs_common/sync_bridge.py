@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Run a coroutine to completion from a synchronous caller — safely.
 
 This is the async->sync counterpart to :func:`aiter_sync_in_thread` (the

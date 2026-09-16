@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Configuration versioning for bot configurations.
 
 This module provides version tracking and management for bot configurations,

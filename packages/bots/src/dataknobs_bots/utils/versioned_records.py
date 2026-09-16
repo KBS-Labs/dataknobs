@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Helpers for registries built on the dual-write versioning pattern.
 
 Several registries in ``dataknobs_bots`` (``ArtifactRegistry``,

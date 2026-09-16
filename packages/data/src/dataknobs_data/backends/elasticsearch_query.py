@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared Elasticsearch filter-to-Query-DSL translation.
 
 The sync and async Elasticsearch backends and the vector-pre-filter mixin all

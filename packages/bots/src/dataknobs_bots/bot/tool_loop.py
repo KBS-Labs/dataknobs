@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Delivery seam for the shared monolithic tool-execution loop.
 
 ``DynaBot`` runs the *same* cap / wall-clock-timeout / execute / budget /

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Common utilities and base classes for dataknobs packages.
 
 This package provides shared functionality used across all dataknobs packages:

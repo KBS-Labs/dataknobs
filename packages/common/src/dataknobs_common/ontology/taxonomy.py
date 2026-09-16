@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """A taxonomy: one relation of a vocabulary, reified as a walkable axis.
 
 A :class:`Taxonomy` is a *definition* plus the three backings that answer it --

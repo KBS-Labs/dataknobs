@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Vector field type, and the record field vocabulary re-exported.
 
 ``FieldType``, ``Field`` and the field-type registry are defined in

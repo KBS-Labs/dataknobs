@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Where an ontology's entities and assertions come from, and two concretes.
 
 Four protocols, twinned. The twins exist because a taxonomy over an in-memory

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Data wrapper for FSM that provides a consistent interface for data access.
 
 This module implements a hybrid solution for data handling in the FSM:

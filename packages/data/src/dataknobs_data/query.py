@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Query construction and filtering for database operations.
 
 This module provides classes for building queries with filters, operators,

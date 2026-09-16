@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Conditional dictionary with validation using the strategy pattern.
 
 This module provides cdict, a dictionary subclass that validates key-value pairs

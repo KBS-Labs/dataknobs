@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Environment variable substitution for configuration values.
 
 DEPRECATED: Use :func:`substitute_env_vars` from

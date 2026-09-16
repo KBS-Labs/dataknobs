@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared utility functions for wizard extraction and grounding.
 
 The canonical home for :func:`word_in_text` is

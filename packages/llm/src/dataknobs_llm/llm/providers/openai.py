@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """OpenAI LLM provider implementation.
 
 This module provides OpenAI API integration for dataknobs-llm, supporting:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared ``ConversationManager`` adapter over the orphan-``tool_use`` core.
 
 A dangling assistant ``tool_use`` (a tool call with no following

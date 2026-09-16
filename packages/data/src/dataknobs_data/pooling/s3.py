@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """S3-specific boto3 / aioboto3 helpers for dataknobs.
 
 The AWS-session-generic pieces — :class:`AwsSessionConfig`,

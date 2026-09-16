@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """How source fields become the text a vector was built from.
 
 A vector is stale when the text that produced it is no longer the text the

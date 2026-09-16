@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Environment-specific configuration and resource bindings.
 
 This module provides environment-aware configuration management for deploying

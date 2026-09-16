@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Streaming support for large data processing in FSM."""
 
 from dataknobs_fsm.streaming.core import (

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Extraction observability for tracking and auditing schema extraction operations.
 
 This module provides data structures for recording extraction operations,

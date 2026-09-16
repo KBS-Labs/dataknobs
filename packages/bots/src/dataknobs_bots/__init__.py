@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """DataKnobs Bots - Configuration-driven AI agents."""
 
 from .behavior_packs import (

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The control flow, and the two resolvers that drive it.
 
 A cascade asks its rungs in order and stops when it has enough. It does not

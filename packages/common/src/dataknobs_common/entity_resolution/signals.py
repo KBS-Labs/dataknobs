@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The rungs an authored vocabulary can run with no dependency at all.
 
 Three matchers, twinned. All of them read an entity source and nothing else --

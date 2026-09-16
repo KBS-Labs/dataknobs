@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Custom exceptions and exception handlers for FastAPI applications.
 
 This module provides a consistent exception hierarchy and handlers

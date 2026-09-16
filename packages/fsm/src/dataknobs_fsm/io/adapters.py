@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """I/O adapters for specific data sources.
 
 This module provides adapters for different I/O sources like files, databases, and APIs.

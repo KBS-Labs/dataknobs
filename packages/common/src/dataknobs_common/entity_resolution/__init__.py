@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Placing a string against a vocabulary, with the reason each candidate won.
 
 A **cascade**: rungs asked in order, stopping when ``k`` is filled. There is

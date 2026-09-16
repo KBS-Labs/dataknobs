@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The doors: one pure core, and a flavour on each side of it.
 
 ``build_ontology`` validates a config and maps it onto values. It binds no

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Environment-aware configuration with late-binding resource resolution.
 
 This module provides the EnvironmentAwareConfig class that supports:

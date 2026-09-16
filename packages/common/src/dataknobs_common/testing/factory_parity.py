@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Drift-guard helpers for factory ↔ ctor parity in dataknobs registries.
 
 These helpers exist because the SQS event bus shipped with a ctor knob

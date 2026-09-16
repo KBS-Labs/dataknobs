@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Default prompt definitions for the dataknobs-bots package.
 
 This package contains all default LLM prompts used by DynaBot components,

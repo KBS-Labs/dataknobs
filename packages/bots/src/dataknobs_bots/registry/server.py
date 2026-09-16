@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Reference HTTP router exposing :class:`RegistryBackend` as the wire protocol.
 
 :class:`HTTPRegistryBackend` speaks a small REST contract over

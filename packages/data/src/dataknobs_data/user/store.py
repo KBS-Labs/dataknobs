@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-user cross-session state coordinator.
 
 :class:`UserStateStore` and :class:`AsyncUserStateStore` coordinate a user's

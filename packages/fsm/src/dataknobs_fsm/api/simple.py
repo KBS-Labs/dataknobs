@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Simple synchronous API for FSM operations.
 
 This module provides a simplified synchronous interface for common FSM use cases,

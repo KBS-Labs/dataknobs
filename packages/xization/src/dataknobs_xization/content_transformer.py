@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Content transformation utilities for converting various formats to markdown.
 
 This module provides tools for converting structured data formats (JSON, YAML, CSV,

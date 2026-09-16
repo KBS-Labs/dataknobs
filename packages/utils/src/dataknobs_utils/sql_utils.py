@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """SQL database utility functions and connection management.
 
 Provides utilities for working with SQL databases including PostgreSQL,

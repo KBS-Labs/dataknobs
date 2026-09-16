@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Advanced prompt engineering library for dataknobs_llm.
 
 This package provides a comprehensive prompt management system with:

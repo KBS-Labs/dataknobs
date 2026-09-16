@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """In-process named-callback dispatch with pluggable ordering and error policy.
 
 The :class:`CallbackRegistry` is the canonical in-process callback

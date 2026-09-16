@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Race-free allocation of a new record under a caller-computed monotonic key.
 
 A consumer allocating a new immutable record under a monotonic key — a version

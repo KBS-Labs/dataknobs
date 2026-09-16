@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared message-sequence invariants over ``list[LLMMessage]``.
 
 Provider Messages APIs impose structural invariants on the conversation

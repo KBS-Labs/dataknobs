@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Conjunction-bounded value expansion for extraction grounding.
 
 When an LLM extraction model returns a partial string value (e.g.,

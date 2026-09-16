@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Folding a surface form for lookup, and locating one inside a string.
 
 One fold and two spans, and the module exists because of *who* needs them

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 r"""Advanced API for debugging and profiling FSM workflows.
 
 This module provides advanced interfaces for users who need fine-grained

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The ontology value types: entities, relations, assertions and their axes.
 
 Pure data. Nothing here opens a connection, reads a file or awaits, which is

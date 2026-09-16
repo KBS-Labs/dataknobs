@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Prompt resolution utility for DynaBot components.
 
 Provides a simple interface for components to resolve and render prompts
