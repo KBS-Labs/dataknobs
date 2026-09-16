@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Quality filters for markdown chunks.
 
 This module provides filtering utilities to identify and remove low-quality

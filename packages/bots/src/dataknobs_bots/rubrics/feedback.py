@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Feedback summary generation for rubric evaluations.
 
 This module provides functions to generate human-readable feedback summaries

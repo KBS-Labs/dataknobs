@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Embedding-cluster topic index for structured content retrieval.
 
 Clusters chunks by embedding similarity to identify topic regions.

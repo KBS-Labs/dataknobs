@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """What a loaded ontology is: the neutral core, and the two flavours over it.
 
 Three dataclasses. :class:`OntologyParts` is everything the two flavours share

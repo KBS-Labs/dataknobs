@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Heading enrichment utilities for RAG-optimized chunk embeddings.
 
 This module provides utilities to enrich chunk content with heading context

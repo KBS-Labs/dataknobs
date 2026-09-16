@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Storage-agnostic document source protocol for ingestion.
 
 Decouples ``DirectoryProcessor`` from the local filesystem so the same

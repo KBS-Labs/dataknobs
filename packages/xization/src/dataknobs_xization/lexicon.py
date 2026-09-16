@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Lexical matching and token alignment for text processing.
 
 Provides classes for lexical expansion, normalization, token alignment,

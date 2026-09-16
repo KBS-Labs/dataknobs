@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """DynaBot configuration schema registry.
 
 Provides a queryable registry of valid DynaBot config options. A ConfigBot

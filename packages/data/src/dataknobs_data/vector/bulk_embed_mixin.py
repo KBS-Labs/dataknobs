@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Mixin providing default bulk_embed_and_store implementation.
 
 There are two of them, sync and async, and they were ~100-line near-copies

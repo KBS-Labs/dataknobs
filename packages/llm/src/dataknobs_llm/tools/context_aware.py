@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Context-aware tool base class for tools that need execution context.
 
 This module provides ContextAwareTool, a base class for tools that need

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The grammar of a stage's skip-time defaults.
 
 ``skip_default`` writes values into the wizard's collected data when the

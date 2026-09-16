@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared mixins for PostgreSQL database backends.
 
 These mixins provide common functionality for both sync and async PostgreSQL implementations,

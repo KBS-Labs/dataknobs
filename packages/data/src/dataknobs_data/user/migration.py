@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-section schema migration for the per-user state coordinator.
 
 Each user-state section carries a schema ``version`` (stamped onto every

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Where a rung is looked up by the name a consumer writes as ``kind:``.
 
 **Two registries, one per flavour, each guarded.** Not one registry holding

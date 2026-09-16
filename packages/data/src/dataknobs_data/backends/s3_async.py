@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Native async S3 backend implementation with aioboto3 and connection pooling."""
 
 from __future__ import annotations

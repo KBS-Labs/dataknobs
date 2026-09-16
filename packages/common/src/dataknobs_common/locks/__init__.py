@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Distributed lock abstraction for cross-replica critical sections.
 
 The missing third member of DataKnobs' concurrency-primitive set

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Validation Module v2 - Clean, predictable validation API.
 
 This module provides a complete rewrite of the validation system with:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """One answer to "which backend?", shared by every factory that asks it.
 
 Three factories read a ``backend`` key out of a config, fall back to the

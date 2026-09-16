@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Drive a blocking sync iterator from async without blocking the loop.
 
 An async surface that needs to consume a *lazy, blocking* synchronous

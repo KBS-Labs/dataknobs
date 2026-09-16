@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Source guard against unbounded text in error messages.
 
 An error message built from a caught exception is only as bounded as the

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """File import/export for ArtifactBank artifacts.
 
 Provides functions to save artifacts as JSON files and load them back,

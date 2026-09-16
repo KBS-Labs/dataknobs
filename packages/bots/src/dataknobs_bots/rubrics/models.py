@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Rubric data models for structured evaluation of artifacts and content.
 
 This module provides the core data structures for:

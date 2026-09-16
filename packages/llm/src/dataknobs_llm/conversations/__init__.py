@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Conversation management system for dataknobs-llm.
 
 This module provides tools for managing multi-turn conversations with:

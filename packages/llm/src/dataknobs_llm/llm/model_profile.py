@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Unified model-metadata substrate — one ``ModelProfile`` per ``(provider, model)``.
 
 Four kinds of model-keyed fact — **capabilities, request-shape validation, token

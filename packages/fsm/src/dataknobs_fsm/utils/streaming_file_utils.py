@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Streaming file utilities for processing large files efficiently.
 
 This module provides memory-efficient streaming utilities for reading and writing

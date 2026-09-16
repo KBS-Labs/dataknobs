@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Database storage backend for execution history using dataknobs_data.
 
 This module provides a unified storage backend that works with ANY dataknobs_data

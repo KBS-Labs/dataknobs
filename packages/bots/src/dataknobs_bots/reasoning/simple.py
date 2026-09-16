@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Simple reasoning strategy - direct LLM call."""
 
 from collections.abc import AsyncIterator

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared change-detection core for knowledge resource backends.
 
 `get_checksum` / `has_changes_since` / `list_changes_since` are one

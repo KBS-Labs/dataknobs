@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The walk core: the algorithms, and the step that reads a frontier.
 
 Private, and a module rather than a convention. A core that is only a

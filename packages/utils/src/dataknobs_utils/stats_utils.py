@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Statistical utility functions and timing helpers.
 
 Provides utilities for timing operations, random waits, rate limiting,

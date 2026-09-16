@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base prompt builder with shared functionality for sync and async builders.
 
 This module provides BasePromptBuilder, an abstract base class that contains

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Jinja-templating-side ScopeProjector reference implementation.
 
 This module lives in the bots layer because ``jinja2`` is a bots

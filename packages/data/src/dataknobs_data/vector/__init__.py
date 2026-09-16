@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Vector store support for DataKnobs data package.
 
 This module provides vector field types, operations, and backend integrations

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Prompt envelope — one helper for labeled context blocks.
 
 A :class:`PromptEnvelope` renders a labeled context section ("Knowledge

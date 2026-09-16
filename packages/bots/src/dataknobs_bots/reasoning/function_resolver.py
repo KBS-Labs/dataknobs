@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Function resolution utilities for loading callables from module paths.
 
 This module provides utilities for resolving function references

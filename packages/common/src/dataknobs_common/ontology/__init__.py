@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Vocabularies: entities, the relations between them, and the axes they form.
 
 An ontology here is a **value**. It holds sources rather than entities, owns no

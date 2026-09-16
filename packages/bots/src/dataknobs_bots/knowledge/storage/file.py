@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """File-based knowledge resource backend for local development.
 
 This backend stores files on the local filesystem, making it ideal for

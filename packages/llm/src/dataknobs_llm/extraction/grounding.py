@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Extraction grounding — validate extracted values against user input.
 
 Checks whether values produced by :class:`SchemaExtractor` (or any

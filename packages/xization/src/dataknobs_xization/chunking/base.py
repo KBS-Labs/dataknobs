@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base chunker and transform abstractions for pluggable document chunking."""
 
 from __future__ import annotations

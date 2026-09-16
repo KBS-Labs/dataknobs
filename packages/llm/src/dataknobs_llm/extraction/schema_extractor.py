@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Schema-based data extraction using LLM providers.
 
 This module provides SchemaExtractor for extracting structured data

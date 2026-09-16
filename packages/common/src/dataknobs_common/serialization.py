@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Serialization protocols and utilities for dataknobs packages.
 
 This module provides standard interfaces for objects that can be serialized

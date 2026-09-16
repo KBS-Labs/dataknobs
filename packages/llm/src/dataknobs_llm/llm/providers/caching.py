@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Caching embedding provider that wraps any AsyncLLMProvider.
 
 Embeddings are deterministic: the same text, embedded the same way, always

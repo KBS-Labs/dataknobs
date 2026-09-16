@@ -4,6 +4,8 @@ version = "0.11.0"
 description = "Unified data abstraction layer for consistent database operations across multiple storage technologies"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
     {name = "DataKnobs Team", email = "team@dataknobs.com"}
 ]
@@ -93,7 +95,10 @@ dataknobs-utils = { workspace = true }
 dataknobs-config = { workspace = true }
 
 [build-system]
-requires = ["hatchling"]
+# hatchling gained PEP 639 support (a bare-string `license` and a list-form
+# `license-files`) in 1.27; both are declared above, so an older backend
+# rejects this manifest rather than silently dropping the metadata.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [dependency-groups]

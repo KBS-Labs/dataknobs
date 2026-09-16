@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Knowledge ingestion manager for coordinating file storage to vector storage.
 
 This module provides the KnowledgeIngestionManager which coordinates loading

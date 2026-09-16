@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Tree data structure with parent-child relationships and traversal methods.
 
 This module provides a flexible Tree implementation where each node contains

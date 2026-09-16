@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The structure axis: what a node's parents and children are, and the walks over it.
 
 Two protocols and the traversals over them. A hierarchy here is **read-only,

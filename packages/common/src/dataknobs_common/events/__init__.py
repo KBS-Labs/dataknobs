@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Event bus abstraction for distributed event handling.
 
 This module provides a unified event bus interface supporting multiple backends

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Stateless transition validation for declarative status graphs.
 
 This module provides a lightweight transition validator for systems that

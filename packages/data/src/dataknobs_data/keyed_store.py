@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Id-keyed record store abstractions over ``AsyncDatabase`` / ``SyncDatabase``.
 
 ``AsyncKeyedRecordStore[T]`` and ``SyncKeyedRecordStore[T]`` are generic

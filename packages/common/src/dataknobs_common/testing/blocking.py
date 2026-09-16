@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Detect blocking I/O on the event loop in async tests.
 
 An ``async def`` method promises to keep the event loop free while it

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Database abstraction layer providing unified interfaces for data operations.
 
 This module defines abstract base classes for synchronous and asynchronous database

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The four protocols a placement is written against.
 
 Two pairs, twinned. A cascade over a vocabulary someone typed is dictionary

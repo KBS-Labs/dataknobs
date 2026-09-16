@@ -247,8 +247,21 @@ def scope_entry_files(entry: str) -> list[Path]:
     A directory entry may name several directories through a "*", which is how
     ``packages/*/docs/`` reaches all seven without listing them — a list would
     leave the eighth package's documentation silently unhashed.
+
+    A *file* entry may do the same, and for exactly that argument rather than by
+    analogy with it. ``packages/*/LICENSE`` is one file per package, and they
+    all have to stay one statement; spelled as a list, the next package's copy
+    is unhashed the day it is created and the declaration still reads like
+    coverage. Globbing here is also what keeps the suffix predicate out of the
+    way: these two names carry no extension, and ``_is_quality_input`` — which
+    only a *directory* entry expands through — would reject them.
+
+    ``Path.glob`` does not let a "*" cross a separator, so ``packages/*/LICENSE``
+    reaches a package's own copy and nothing nested deeper.
     """
     if not entry.endswith("/"):
+        if "*" in entry:
+            return sorted(p for p in _ROOT.glob(entry) if p.is_file())
         target = _ROOT / entry
         return [target] if target.is_file() else []
 

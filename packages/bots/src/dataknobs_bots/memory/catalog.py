@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """ArtifactBankCatalog — data-store-backed collection of artifacts.
 
 Manages multiple compiled artifacts (e.g. recipes) in a ``SyncDatabase``,

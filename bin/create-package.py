@@ -81,6 +81,19 @@ class PackageCreator:
             package_dir / "README.md": self._generate_package_readme(name, description),
             package_dir / "tests" / "__init__.py": "",
             package_dir / "tests" / f"test_{name}.py": self._generate_test_file(name),
+            # Apache-2.0 requires the license and NOTICE to travel with every
+            # distribution, and `license-files` in the generated pyproject.toml
+            # names them, so a package without these copies fails to build.
+            #
+            # Explicitly utf-8 on the read, and on the write below, because
+            # test_licensing.py compares the copy against the root as utf-8. A
+            # locale-dependent round trip would fail that comparison on the one
+            # package this script is supposed to make compliant by
+            # construction — and the sibling MIT-historical.txt already carries
+            # an em dash, so the two files being ASCII today is not a property
+            # anything holds them to.
+            package_dir / "LICENSE": (self.repo_root / "LICENSE").read_text(encoding="utf-8"),
+            package_dir / "NOTICE": (self.repo_root / "NOTICE").read_text(encoding="utf-8"),
         }
 
         if not self.dry_run:
@@ -90,7 +103,7 @@ class PackageCreator:
 
             # Create files
             for file_path, content in files_to_create.items():
-                file_path.write_text(content)
+                file_path.write_text(content, encoding="utf-8")
 
         for dir_path in dirs_to_create:
             self.log_change(f"✅ Created directory: {dir_path.relative_to(self.repo_root)}")
@@ -470,13 +483,17 @@ name = "dataknobs-{name}"
 version = "{version}"
 description = "{description}"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 dependencies = [
     "dataknobs-common>=1.0.0",
 ]
 
 [build-system]
-requires = ["hatchling"]
+# >=1.27 is where hatchling gained PEP 639 support for the two license
+# fields above; an older backend rejects this manifest.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -485,7 +502,10 @@ packages = ["src/dataknobs_{name}"]
 
     def _generate_init_py(self, name: str, version: str) -> str:
         """Generate __init__.py content for new package."""
-        return f'''"""DataKnobs {name.capitalize()} package.
+        return f'''# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
+"""DataKnobs {name.capitalize()} package.
 
 {name.capitalize()} functionality for the DataKnobs ecosystem.
 """
@@ -537,7 +557,8 @@ uv run mypy src/
 
 ## License
 
-See the [LICENSE](../../LICENSE) file for details.
+Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)
+for attribution requirements.
 """
 
     def _generate_test_file(self, name: str) -> str:

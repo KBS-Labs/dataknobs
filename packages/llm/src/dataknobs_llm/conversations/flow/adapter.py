@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Conversation flow adapter for FSM execution.
 
 This module provides the adapter that converts high-level ConversationFlow

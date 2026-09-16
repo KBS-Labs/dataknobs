@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Utility functions for JSON processing, streaming, and manipulation.
 
 Provides functions for working with JSON data including nested value access,

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """A small access-ordered LRU cache with an optional size bound.
 
 A long-running process that caches per-key state (a chatbot caching one

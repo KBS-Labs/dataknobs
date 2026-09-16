@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Chunker and transform registries backed by PluginRegistry."""
 
 from __future__ import annotations

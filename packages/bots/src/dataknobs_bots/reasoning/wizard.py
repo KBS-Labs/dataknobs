@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Wizard reasoning strategy for guided conversational flows.
 
 This module implements FSM-backed reasoning for DynaBot, enabling

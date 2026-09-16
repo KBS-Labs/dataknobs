@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The shape of a thing that turns text into vectors.
 
 Eight mutually incompatible spellings of "embed this text" were in use across

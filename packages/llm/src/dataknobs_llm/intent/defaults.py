@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared defaults: vocabulary, tokenizer, LLM prompt template.
 
 This module is the canonical home for the small text-classification

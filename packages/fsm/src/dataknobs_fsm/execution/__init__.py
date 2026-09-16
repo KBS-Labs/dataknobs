@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Execution module for FSM state machines."""
 
 from dataknobs_fsm.execution.batch import BatchExecutor, BatchProgress, BatchResult

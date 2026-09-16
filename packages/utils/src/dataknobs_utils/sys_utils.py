@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """System and environment utility functions.
 
 Provides utilities for loading environment variables, network discovery,

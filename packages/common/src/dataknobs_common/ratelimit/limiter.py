@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """RateLimiter protocol and registry-driven factory function.
 
 ``create_rate_limiter()`` parses the top-level rate / category config and

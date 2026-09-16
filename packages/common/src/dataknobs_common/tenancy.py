@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Tenant-scoped backend operations Protocol and reference implementations.
 
 A :class:`TenantContext` describes the tenant scope of a backend operation

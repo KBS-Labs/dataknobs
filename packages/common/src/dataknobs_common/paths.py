@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Turn an untrusted name into a location without it addressing elsewhere.
 
 **Two questions, and a name usually has to answer both.** *May this name

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Properties custom resource for testing and demonstration.
 
 This module provides a simple dictionary-based resource that can be used

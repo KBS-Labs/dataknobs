@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Utility for formatting execution results in a standardized way.
 
 This module provides consistent result formatting across Simple and Advanced APIs,

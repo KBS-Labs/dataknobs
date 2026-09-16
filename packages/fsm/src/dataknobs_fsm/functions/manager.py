@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Unified function management for FSM.
 
 This module provides a central, robust system for managing both sync and async functions

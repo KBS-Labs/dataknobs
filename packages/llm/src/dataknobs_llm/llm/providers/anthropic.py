@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Anthropic Claude LLM provider implementation.
 
 This module provides Anthropic Claude API integration for dataknobs-llm, supporting:

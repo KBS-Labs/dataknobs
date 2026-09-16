@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract and repair JSON objects from text strings.
 
 Provides the JSONExtractor class for finding, extracting, and repairing

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Field type definitions and metadata for structured data records.
 
 This module defines field types, validation, and metadata structures used by

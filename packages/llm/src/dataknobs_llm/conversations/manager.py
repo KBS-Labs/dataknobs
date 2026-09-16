@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Conversation manager for multi-turn interactions with LLMs.
 
 This module provides ConversationManager, a comprehensive system for managing

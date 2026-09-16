@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Configuration validation for DynaBot configs.
 
 Provides a universal validation result type and a pluggable validation engine

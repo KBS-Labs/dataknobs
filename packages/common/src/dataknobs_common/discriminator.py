@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Generic discriminator Protocol for value-to-kind classification.
 
 A discriminator classifies an input value into a kind (label, enum

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Fluent builder for wizard configurations.
 
 Provides a composable builder for creating wizard configurations

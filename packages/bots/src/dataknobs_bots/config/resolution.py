@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Resource resolution utilities for DynaBot configuration.
 
 This module provides utilities to create a ConfigBindingResolver with

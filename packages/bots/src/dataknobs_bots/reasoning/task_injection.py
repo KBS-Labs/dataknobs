@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Task injection for dynamic wizard task management.
 
 This module provides a system for dynamically injecting tasks into wizard flows

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """HTTP registry backend for external configuration services.
 
 This module provides an HTTP/REST backend for fetching bot configurations

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Middleware system for conversation processing.
 
 This module provides middleware capabilities for processing messages before they

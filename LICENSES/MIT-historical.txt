@@ -1,0 +1,52 @@
+DataKnobs — historical MIT license
+==================================
+
+DataKnobs was released under the MIT License from its first release through
+the releases listed below. Beginning with the versions that carry this file,
+DataKnobs is licensed under the Apache License, Version 2.0 (see the root
+LICENSE file).
+
+This change is not retroactive. **Every version published before the switch
+remains available under the MIT License reproduced below**, on the terms under
+which it was published. If you obtained a copy of DataKnobs under MIT, nothing
+here withdraws or alters that grant.
+
+The last MIT-licensed release of each package:
+
+    dataknobs-bots         0.13.1
+    dataknobs-common       3.2.0
+    dataknobs-config       0.7.1
+    dataknobs-data         0.11.0
+    dataknobs-fsm          0.5.0
+    dataknobs-llm          0.10.0
+    dataknobs-structures   1.0.17
+    dataknobs-utils        2.0.2
+    dataknobs-xization     2.2.1
+    dataknobs (legacy)     0.2.2
+
+This file is a historical record. It is not the license of the source tree it
+ships in; that is the Apache License, Version 2.0, in the root LICENSE file.
+
+---------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2022-2026 KBS Labs
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

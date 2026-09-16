@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Typed-configuration base class and consumer-side dispatch mixin.
 
 ``StructuredConfig`` is the typed successor to

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """AsyncDatabase ETL (Extract, Transform, Load) pattern implementation.
 
 This module provides pre-configured FSM patterns for ETL operations,

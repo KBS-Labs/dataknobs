@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Ordered, precedence-resolved composition of named declaration bundles.
 
 A *pack* is a named, frozen, partial declaration. A *binding* selects

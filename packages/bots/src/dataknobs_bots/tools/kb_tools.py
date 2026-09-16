@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Generic knowledge base resource tools for wizard-driven bot configuration.
 
 Provides reusable LLM-callable tools for managing RAG resources during

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Topic-index abstractions for structured content retrieval.
 
 A topic index maps user queries to content regions — heading subtrees,
