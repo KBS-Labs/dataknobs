@@ -20,7 +20,8 @@ package, which for most of them was nothing but the version number.
   text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
   `LICENSE` and `NOTICE`, the package metadata declares
   `License-Expression: Apache-2.0`, and every shipped source file carries an
-  SPDX `Apache-2.0` header.
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
 
 ## v1.0.17 - 2026-08-26
 

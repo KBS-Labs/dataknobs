@@ -483,7 +483,9 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+# >=1.27 is where hatchling gained PEP 639 support for the two license
+# fields above; an older backend rejects this manifest.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

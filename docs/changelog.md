@@ -26,7 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `License-Expression: Apache-2.0`. No distribution carried license text
     before this change;
   - every shipped Python source file carries the SPDX short-form header
-    `# SPDX-License-Identifier: Apache-2.0`.
+    `# SPDX-License-Identifier: Apache-2.0`;
+  - every manifest now requires `hatchling>=1.27` to build. PEP 639's
+    bare-string `license` and list-form `license-files` are the two fields
+    above, and an older backend rejects them rather than dropping them
+    quietly.
 
   No patent grant file is included; `NOTICE` and the Apache-2.0 text are the
   whole of the licensing surface.

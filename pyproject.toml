@@ -21,7 +21,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "hatchling>=1.21.0",
+    "hatchling>=1.27",  # PEP 639 license-files; see [build-system] below
     "editables>=0.3",
     "pytest>=9.0.3",  # GHSA-6w46-j5rx-g56g (CVSS 6.8) fixed in 9.0.3
     "pytest-cov>=6.0.0",
@@ -694,5 +694,8 @@ line-ending = "lf"
 packages = ["src/dataknobs_workspace"]
 
 [build-system]
-requires = ["hatchling"]
+# hatchling gained PEP 639 support (a bare-string `license` and a list-form
+# `license-files`) in 1.27; both are declared above, so an older backend
+# rejects this manifest rather than silently dropping the metadata.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"

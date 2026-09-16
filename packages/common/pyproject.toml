@@ -74,7 +74,10 @@ dataknobs_common_localstack = "dataknobs_common.testing.localstack_fixtures"
 dataknobs_common_blocking = "dataknobs_common.testing.blocking"
 
 [build-system]
-requires = ["hatchling"]
+# hatchling gained PEP 639 support (a bare-string `license` and a list-form
+# `license-files`) in 1.27; both are declared above, so an older backend
+# rejects this manifest rather than silently dropping the metadata.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
