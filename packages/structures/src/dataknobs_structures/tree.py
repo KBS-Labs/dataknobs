@@ -14,6 +14,13 @@ The Tree class supports various operations including:
 - Collecting terminal nodes
 - Building visual representations with Graphviz
 
+Every traversal here assumes that following children down, or parents up,
+terminates. That assumption cannot be checked at the point of use without
+paying for a visited set on every walk, so it is kept where the structure is
+written instead: the writers refuse a child that is the node itself or one of
+its ancestors, and ``children`` answers with a snapshot rather than the list
+the node is holding.
+
 Typical usage example:
 
     ```python
@@ -42,6 +49,8 @@ from typing import Any, Deque, List, Tuple, Union
 
 import graphviz
 from pyparsing import OneOrMore, nested_expr
+
+from dataknobs_common.exceptions import ValidationError
 
 
 class Tree:
@@ -154,13 +163,17 @@ class Tree:
         self._data = data
 
     @property
-    def children(self) -> List[Tree] | None:
-        """This node's children as an ordered list.
+    def children(self) -> Tuple[Tree, ...] | None:
+        """This node's children, in order.
+
+        The tuple is a snapshot: mutating it is refused rather than silently
+        discarded, and the way to change a node's children is ``add_child`` or
+        ``prune``, both of which keep the parent and child links in agreement.
 
         Returns:
-            List of child Tree nodes, or None if this node has no children.
+            Tuple of child Tree nodes, or None if this node has no children.
         """
-        return self._children
+        return tuple(self._children) if self._children is not None else None
 
     @property
     def parent(self) -> Tree | None:
@@ -173,12 +186,26 @@ class Tree:
 
     @parent.setter
     def parent(self, parent: Tree | None) -> None:
-        """Set this node's parent.
+        """Re-attach this node under a new parent, or detach it entirely.
+
+        This is ``parent.add_child(self)`` written the other way round, and it
+        is that rather than a bare assignment because the two halves of the
+        structure have to agree: a node that names a parent which does not list
+        it as a child is malformed, and several traversals answer wrongly or
+        not at all on one.
 
         Args:
-            parent: The new parent node, or None to make this a root node.
+            parent: The new parent node, or None to detach this node from
+                whatever parent it currently has.
+
+        Raises:
+            ValidationError: If the new parent is this node itself or one of
+                its descendants, which would make this node its own ancestor.
         """
-        self._parent = parent
+        if parent is None:
+            self.prune()
+        else:
+            parent.add_child(self)
 
     @property
     def root(self) -> Tree:
@@ -202,8 +229,8 @@ class Tree:
             0-based index among parent's children, or 0 if this is a root node.
         """
         return (
-            self._parent.children.index(self)
-            if self._parent is not None and self._parent.children is not None
+            self._parent._children.index(self)
+            if self._parent is not None and self._parent._children is not None
             else 0
         )
 
@@ -225,8 +252,8 @@ class Tree:
             the last child or a root node.
         """
         result = None
-        if self._parent and self._parent.children:
-            sibs = self._parent.children
+        if self._parent and self._parent._children:
+            sibs = self._parent._children
             nextsib = sibs.index(self) + 1
             if nextsib < len(sibs):
                 result = sibs[nextsib]
@@ -241,8 +268,8 @@ class Tree:
             is the first child or a root node.
         """
         result = None
-        if self._parent and self._parent.children:
-            sibs = self._parent.children
+        if self._parent and self._parent._children:
+            sibs = self._parent._children
             prevsib = sibs.index(self) - 1
             if prevsib >= 0:
                 result = sibs[prevsib]
@@ -321,6 +348,11 @@ class Tree:
         Returns:
             The child Tree node (either the provided node or a newly created one).
 
+        Raises:
+            ValidationError: If node_or_data is this node itself or one of its
+                ancestors. Attaching either would make a node its own
+                descendant, which no traversal on this class survives.
+
         Example:
             ```python
             # Create parent and add children
@@ -337,11 +369,15 @@ class Tree:
 
         Note:
             The child's parent attribute is automatically updated to reference
-            this node, maintaining the tree's structural integrity.
+            this node, maintaining the tree's structural integrity. That is the
+            only way to change a node's children: ``children`` answers with a
+            snapshot, so appending to what it returns is refused rather than
+            quietly discarded.
         """
-        if self._children is None:
-            self._children = []
         if isinstance(node_or_data, Tree):
+            self._refuse_a_cycle(node_or_data)
+            if self._children is None:
+                self._children = []
             child = node_or_data
             child.prune()
             if child_pos is not None and child_pos < len(self._children) and child_pos >= 0:
@@ -350,8 +386,47 @@ class Tree:
                 self._children.append(child)
         else:
             child = Tree(node_or_data, self, child_pos=child_pos)
-        child.parent = self
+        child._parent = self
         return child
+
+    def _refuse_a_cycle(self, child: Tree) -> None:
+        """Refuse a child that is this node, or one of this node's ancestors.
+
+        Attaching either makes a node its own descendant, and every traversal
+        this class ships then loops or overflows rather than answering.
+
+        The walk carries its own ``seen`` set rather than calling
+        :meth:`is_ancestor`, which is the same question asked of the same
+        edges. The difference is what each does on a tree that is *already*
+        cyclic -- one assembled through the private attributes, or unpickled
+        from before this guard existed: ``is_ancestor`` returns only if it
+        happens to meet its target, and otherwise circles the ring forever.
+        A guard that can hang is not a guard against hanging.
+
+        Args:
+            child: The node about to be attached under this one.
+
+        Raises:
+            ValidationError: If ``child`` is this node or one of its ancestors,
+                or if this node's ancestor chain is already cyclic.
+        """
+        seen: set[int] = set()
+        node: Tree | None = self
+        while node is not None:
+            if node is child:
+                raise ValidationError(
+                    "a node cannot be added under itself or under one of its own "
+                    "descendants: that would make it its own ancestor",
+                    context={"child": child.data, "parent": self.data},
+                )
+            if id(node) in seen:
+                raise ValidationError(
+                    "this node's ancestor chain is already cyclic, so nothing "
+                    "can be attached under it",
+                    context={"parent": self.data},
+                )
+            seen.add(id(node))
+            node = node._parent
 
     def add_edge(
         self,
@@ -371,6 +446,12 @@ class Tree:
 
         Returns:
             Tuple of (parent_node, child_node) Tree instances.
+
+        Raises:
+            ValidationError: If the edge would put a node under one of its own
+                descendants -- asking for an edge that inverts one already
+                present, for instance. The refusal comes from ``add_child``,
+                which this reaches the structure through.
 
         Example:
             ```python
@@ -455,8 +536,8 @@ class Tree:
         """
         result = self._parent
         if self._parent is not None:
-            if self._parent.children is not None:
-                self._parent.children.remove(self)
+            if self._parent._children is not None:
+                self._parent._children.remove(self)
             self._parent = None
         return result
 
@@ -515,8 +596,8 @@ class Tree:
         found: List[Tree] = []
         if include_self:
             queue.append(self)
-        elif self.children:
-            queue.extend(self.children)
+        elif self._children:
+            queue.extend(self._children)
         while bool(queue):  # true while length(queue) > 0
             item = queue.popleft()
             if accept_node_fn(item):
@@ -525,11 +606,11 @@ class Tree:
                     break
                 elif highest_only:
                     continue
-            if item.children:
+            if item._children:
                 if traversal == "dfs":
-                    queue.extendleft(reversed(item.children))
+                    queue.extendleft(reversed(item._children))
                 elif traversal == "bfs":
-                    queue.extend(item.children)
+                    queue.extend(item._children)
         return found
 
     def collect_terminal_nodes(
@@ -618,18 +699,18 @@ class Tree:
         """
         queue: Deque[Tree] = deque()
         result: List[Tuple[Union[Tree, Any], Union[Tree, Any]]] = []
-        if self.children:
-            queue.extend(self.children)
+        if self._children:
+            queue.extend(self._children)
         while bool(queue):  # true while length(queue) > 0
             item = queue.popleft()
             if item.parent:
                 if item.parent != self or include_self:
                     result.append((item.parent.data, item.data) if as_data else (item.parent, item))
-            if item.children:
+            if item._children:
                 if traversal == "dfs":
-                    queue.extendleft(reversed(item.children))
+                    queue.extendleft(reversed(item._children))
                 elif traversal == "bfs":
-                    queue.extend(item.children)
+                    queue.extend(item._children)
         return result
 
     def get_path(self) -> List[Tree]:
@@ -809,8 +890,8 @@ class Tree:
             ```
         """
         node = self
-        while node.has_children() and node.children is not None:
-            node = node.children[0]
+        while node._children:
+            node = node._children[0]
         return node
 
     def get_deepest_right(self) -> Tree:
@@ -833,8 +914,8 @@ class Tree:
             ```
         """
         node = self
-        while node.has_children() and node.children is not None:
-            node = node.children[-1]
+        while node._children:
+            node = node._children[-1]
         return node
 
     def build_dot(
