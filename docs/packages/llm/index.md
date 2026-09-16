@@ -367,7 +367,10 @@ Contributions are welcome! Please see the [Contributing Guide](../../development
 
 ## License
 
-MIT License - see [LICENSE](../../license.md) for details.
+Licensed under the [Apache License, Version 2.0](../../license.md); see the
+NOTICE file in the repository root for attribution requirements.
+
+Versions released before this change remain available under the MIT License.
 
 ## Related Packages
 

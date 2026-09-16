@@ -27,3 +27,6 @@
 
 # style: apply the formatter that has been declared since the repository began
 20585a7883cebf88eddbafa73ef024d1ac9fca0a
+
+# style: add the SPDX Apache-2.0 header to every shipped source file
+6b8a38b81c925927e9c07b1bbdb9f31d4f6baff7

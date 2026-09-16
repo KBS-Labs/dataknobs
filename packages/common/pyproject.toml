@@ -7,6 +7,8 @@ authors = [
     { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 # The package's posture is zero hard dependencies -- every optional backend
 # below is lazy-imported behind an extra. This one entry is the exception and
 # it is scoped so that it is not an exception for long: PEP 696 type-parameter

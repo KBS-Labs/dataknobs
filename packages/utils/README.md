@@ -59,4 +59,8 @@ This package depends on:
 
 ## License
 
-See LICENSE file in the root repository.
+Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)
+for attribution requirements.
+
+Versions released before this change remain available under the MIT License,
+preserved in [LICENSES/MIT-historical.txt](../../LICENSES/MIT-historical.txt).

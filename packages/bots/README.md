@@ -3,7 +3,7 @@
 **Configuration-driven AI agents and chatbots for the DataKnobs ecosystem**
 
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
 ## Overview
 
@@ -544,7 +544,11 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for detailed guidelines.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)
+for attribution requirements.
+
+Versions released before this change remain available under the MIT License,
+preserved in [LICENSES/MIT-historical.txt](../../LICENSES/MIT-historical.txt).
 
 ## Support
 

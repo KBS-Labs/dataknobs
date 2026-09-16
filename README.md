@@ -196,4 +196,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is licensed under the terms specified in the LICENSE file.
+DataKnobs is licensed under the [Apache License, Version 2.0](LICENSE).
+Attribution requirements are in [NOTICE](NOTICE).
+
+Versions released before this change remain available under the MIT License,
+preserved in [LICENSES/MIT-historical.txt](LICENSES/MIT-historical.txt).

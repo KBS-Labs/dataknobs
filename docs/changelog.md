@@ -5,6 +5,32 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Licensing
+
+- **DataKnobs is relicensed from MIT to Apache-2.0.** This version and every
+  later version of all ten packages is licensed under the Apache License,
+  Version 2.0. **All previously released versions remain available under the
+  MIT License**, on the terms under which they were published — the change is
+  not retroactive.
+
+  What moved:
+
+  - the root `LICENSE` now holds the Apache-2.0 text, and a `NOTICE` file
+    carries the attribution the license requires on redistribution;
+  - the MIT text is preserved in `LICENSES/MIT-historical.txt`, alongside the
+    last MIT-licensed release of each package;
+  - every package declares `license = "Apache-2.0"` and ships `LICENSE` and
+    `NOTICE` inside its wheel and sdist, so the published metadata reads
+    `License-Expression: Apache-2.0`. No distribution carried license text
+    before this change;
+  - every shipped Python source file carries the SPDX short-form header
+    `# SPDX-License-Identifier: Apache-2.0`.
+
+  No patent grant file is included; `NOTICE` and the Apache-2.0 text are the
+  whole of the licensing surface.
+
 ## Release - 2026-09-03
 
 ### dataknobs-llm [0.10.0]

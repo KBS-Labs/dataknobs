@@ -81,6 +81,11 @@ class PackageCreator:
             package_dir / "README.md": self._generate_package_readme(name, description),
             package_dir / "tests" / "__init__.py": "",
             package_dir / "tests" / f"test_{name}.py": self._generate_test_file(name),
+            # Apache-2.0 requires the license and NOTICE to travel with every
+            # distribution, and `license-files` in the generated pyproject.toml
+            # names them, so a package without these copies fails to build.
+            package_dir / "LICENSE": (self.repo_root / "LICENSE").read_text(),
+            package_dir / "NOTICE": (self.repo_root / "NOTICE").read_text(),
         }
 
         if not self.dry_run:
@@ -470,6 +475,8 @@ name = "dataknobs-{name}"
 version = "{version}"
 description = "{description}"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 dependencies = [
     "dataknobs-common>=1.0.0",
@@ -485,7 +492,10 @@ packages = ["src/dataknobs_{name}"]
 
     def _generate_init_py(self, name: str, version: str) -> str:
         """Generate __init__.py content for new package."""
-        return f'''"""DataKnobs {name.capitalize()} package.
+        return f'''# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
+"""DataKnobs {name.capitalize()} package.
 
 {name.capitalize()} functionality for the DataKnobs ecosystem.
 """
@@ -537,7 +547,7 @@ uv run mypy src/
 
 ## License
 
-See the [LICENSE](../../LICENSE) file for details.
+Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)\nfor attribution requirements.
 """
 
     def _generate_test_file(self, name: str) -> str:
