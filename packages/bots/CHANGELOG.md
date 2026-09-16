@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`HeadingTreeIndex` expands a region through the shared hierarchy walks.**
+  The selection lives in `dataknobs-data` and the change is recorded in full
+  there; this entry is what a consumer of this package sees. On a well-formed
+  heading tree, nothing changes — the same chunks in the same order, so
+  `max_expanded_results` truncates exactly as it did.
+
+  On a heading tree whose nodes do **not** form one, three things do. A
+  `children` list that closes a cycle is walked to its end instead of raising
+  `RecursionError` or answering on the repeat. A node several headings reach
+  contributes its chunks once rather than once per route. And
+  `max_expansion_depth` measures distance from the matched heading, rather than
+  the length of whichever route happened to reach a node first.
+
+  `expansion_mode: "leaves"` also now agrees with itself at a bound that
+  reaches the whole region. Its bounded arm decided leaf-ness from the raw
+  `children` list, which still holds an edge the walk does not take, so it
+  could report a node as a leaf that the unbounded arm did not — making
+  `max_expansion_depth` a mode switch as well as a bound on exactly the trees
+  where that is hardest to notice.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version
