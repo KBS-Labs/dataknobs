@@ -252,11 +252,20 @@ def test_a_change_to_these_guards_still_schedules_them() -> None:
     assert _scopes.plan_for_files(["bin/run-quality-checks.sh"])["test_scope"] == "workspace"
 
     # The other two answers, so the fix cannot be "always run everything".
-    # LICENSE rather than README.md: the root README used to be the inert file
-    # here, and stopped being one when the documented-import guard started
-    # reading it. A negative control has to name something that feeds no check
-    # *today*, or it silently becomes an assertion that a real input is ignored.
-    assert _scopes.plan_for_files(["LICENSE"])["test_scope"] == "none"
+    # A negative control has to name something that feeds no check *today*, or
+    # it silently becomes an assertion that a real input is ignored. This one
+    # has now moved twice for exactly that reason: README.md stopped being inert
+    # when the documented-import guard started reading it, and LICENSE stopped
+    # being inert when test_licensing.py started reading it and the relicense
+    # declared it in _WORKSPACE_ONLY_QUALITY_INPUTS.
+    #
+    # .nojekyll should be the last move. The two files it replaced were inert by
+    # accident — ordinary repository content nothing happened to read yet — so
+    # each was one new guard away from inverting this assertion. This one is
+    # inert by construction: a zero-byte marker whose only consumer is GitHub
+    # Pages' own build (see .github/GITHUB_PAGES_SETUP.md), with no content for
+    # a local check to have an opinion about.
+    assert _scopes.plan_for_files([".nojekyll"])["test_scope"] == "none"
     assert _scopes.plan_for_files(["packages/common/src/x.py"])["test_scope"] == "packages"
 
 

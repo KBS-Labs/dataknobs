@@ -112,6 +112,17 @@ jobs:
               # is deliberately absent — 'bin/**' already matches it.)
               - '.gitignore'
               - '.gitattributes'
+              # The licensing surface, read by tests/test_licensing.py: it pins
+              # each package's LICENSE and NOTICE copy against the root pair and
+              # checks the historical MIT file's version list against
+              # packages.json. No pattern above reaches any of the three — they
+              # are not code, not under a docs/ tree, and '.dataknobs/*.json'
+              # covers only the registry side of that last comparison. Without
+              # these, editing the license text moves that guard's verdict while
+              # skipping the job that would have recomputed it.
+              - 'LICENSE'
+              - 'NOTICE'
+              - 'LICENSES/**'
             docs:
               - 'docs/**'
               - '!docs/changelog.md'

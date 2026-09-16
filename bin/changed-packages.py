@@ -178,6 +178,22 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
     ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
     ".dataknobs/release-readiness.json",  # the pointers release-helper.sh reads and verifies
+    # The licensing surface, read by test_licensing.py: the root LICENSE and
+    # NOTICE that every package's copy is pinned against, and the historical MIT
+    # text whose per-package version list that guard checks against
+    # packages.json. Editing one moves that guard's verdict and no package's,
+    # which is what this tier is for.
+    #
+    # Three file entries rather than a "LICENSES/" directory entry, for the
+    # reason the workflows note above gives in the other direction: a directory
+    # entry expands through the suffix predicate in package-hashes.py, and
+    # ".txt" is not a quality-input suffix, so it would expand to nothing and
+    # read exactly like coverage. A file entry is tested with is_file() and
+    # never consults that predicate, which is also what lets the two
+    # extensionless names here be declared at all.
+    "LICENSE",
+    "NOTICE",
+    "LICENSES/MIT-historical.txt",
     # The root README, read by the documented-import guard along with every
     # package README and the site tree. The per-package copies ride their own
     # package scope and docs/ rides the docs scope; this one is reached by no
