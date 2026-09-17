@@ -3,6 +3,7 @@
 
 """Base adapter for synchronous LLM provider access."""
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from typing import Any, List, TypeVar, Union
 
@@ -149,22 +150,29 @@ class SyncProviderAdapter(SyncBridgeAdapter):
         Unlike the base's other two adopters, the provider was not handed in
         by a consumer who keeps a reference: the factory builds it and hands
         back only this adapter, so nothing else can close it.
-
-        Not through :meth:`_run`, which refuses once ``_closed`` is set --- and
-        :meth:`~SyncBridgeAdapter.close` has just set it before calling here.
-        Teardown is the one call allowed after the adapter is marked closed.
         """
-        self._ensure_bridge().run(self.async_provider.close(), timeout=self._timeout)
+        self._run_teardown(self.async_provider.close())
 
     async def _aclose_inner(self) -> None:
-        """Await the provider's close, for an async holder.
+        """Close the provider on the bridge, off the holder's loop.
 
-        The whole reason :meth:`~SyncBridgeAdapter.aclose` exists: the
-        synchronous path reaches the provider *through* the bridge, so an
-        async holder calling ``close()`` blocks its own event loop for what is
-        an HTTP round trip on a real provider.
+        Not ``await self.async_provider.close()``. :meth:`initialize` goes
+        through :meth:`~SyncBridgeAdapter._run`, so a real provider's
+        ``aiohttp.ClientSession`` --- and every transport under it, and every
+        task :class:`AsyncLLMProvider` tracks in ``_in_flight`` --- is created
+        on the **bridge's** loop and belongs to it. Awaiting the teardown on
+        the holder's loop instead closes loop-bound objects from a loop that
+        owns none of them: ``AsyncLLMProvider.close``'s ``asyncio.gather``
+        over those tasks raises ``got Future ... attached to a different
+        loop``, and what does not raise is doing its cleanup across a thread
+        boundary it was never meant to cross.
+
+        What :meth:`~SyncBridgeAdapter.aclose` actually promises is that the
+        *holder's* loop is not blocked, and :func:`asyncio.to_thread` keeps
+        that promise without moving the teardown. The provider is closed on
+        the bridge either way; only the thread that waits for it differs.
         """
-        await self.async_provider.close()
+        await asyncio.to_thread(self._close_inner)
 
     def complete(self, messages: Union[str, List[LLMMessage]], **kwargs: Any) -> LLMResponse:
         """Generate completion synchronously."""
@@ -196,19 +204,39 @@ class SyncProviderAdapter(SyncBridgeAdapter):
                 except StopAsyncIteration:
                     break
         finally:
-            # Skipped once the adapter is closed: a ``run`` after ``close``
-            # raises, and this ``finally`` runs from a finalizer whenever the
-            # consumer merely dropped the stream. Nothing is left undone ---
-            # the bridge's own teardown runs ``shutdown_asyncgens``, which is
-            # what closed this generator.
-            #
-            # ``stream_complete`` is declared ``-> AsyncIterator`` while every
-            # implementation is an async *generator* (the base says so, in a
-            # comment on the abstract method). ``aclose`` belongs to the
-            # narrower type, so the check is what lets a conforming iterator
-            # that is not a generator through rather than crashing on it.
-            if not self._closed and isinstance(async_gen, AsyncGenerator):
-                self._run(async_gen.aclose())
+            self._close_stream(async_gen)
+
+    def _close_stream(self, async_gen: AsyncIterator[LLMStreamResponse]) -> None:
+        """Close an abandoned provider generator, on the loop it is bound to.
+
+        The question is whether there is still a loop to close it *on*, which
+        is not the same as whether this adapter is open. Reading ``_closed``
+        answered it correctly for an adapter that owns its bridge --- teardown
+        runs ``shutdown_asyncgens``, which closes the generator --- and wrongly
+        for one that borrowed it: ``close()`` deliberately leaves a borrowed
+        bridge running, so nothing drains it, the provider's ``finally`` never
+        runs, and the HTTP response it was reading is held until the shared
+        bridge closes. Asking the bridge covers both, and covers the adapter
+        that was closed before it ever built one.
+
+        A ``run`` issued here still races a concurrent close of a *borrowed*
+        bridge, which the bridge documents as undefined; quiesce a shared
+        bridge's holders before closing it, as its own docstring says.
+
+        ``stream_complete`` is declared ``-> AsyncIterator`` while every
+        implementation is an async *generator* (the base says so, in a comment
+        on the abstract method). ``aclose`` belongs to the narrower type, so
+        the check is what lets a conforming iterator that is not a generator
+        through rather than crashing on it.
+        """
+        if not isinstance(async_gen, AsyncGenerator):
+            return
+        bridge = self._bridge
+        if bridge is None or bridge.is_closed:
+            return
+        # Not `_run`: this also has to work after `close()`, which is exactly
+        # the borrowed-bridge case above.
+        self._run_teardown(async_gen.aclose())
 
     def embed(
         self, texts: Union[str, List[str]], **kwargs: Any
