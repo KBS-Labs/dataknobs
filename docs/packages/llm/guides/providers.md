@@ -64,6 +64,19 @@ an async provider rather than subclassing `LLMProvider`, and no
 `SyncLLMProvider` subclass exists in tree — so `initialize()` and `close()` are
 synchronous on that half and awaited only on the async one.
 
+The adapter is callable from inside a running event loop. Every method that
+reaches the wrapped provider runs its coroutine on a private `SyncLoopBridge`
+loop rather than on the caller's — `run_until_complete()` on the caller's own
+loop raises `RuntimeError: This event loop is already running`, which is
+precisely the position a synchronous wrapper reached from async code is in.
+That is the one case a sync wrapper exists to serve, so the adapter does not
+ask the caller to avoid it.
+
+The cost is one daemon thread for the adapter's lifetime, and `close()` ends
+it. So an adapter a caller keeps is an adapter the caller should close — as
+`LLMResource` does for the one it builds per model. An adapter nobody closes
+raises a `ResourceWarning` naming its thread when it is collected.
+
 ### Passing constructor arguments
 
 `LLMProviderFactory.create()` forwards `**kwargs` to the provider constructor.

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The synchronous provider adapter no longer raises inside a running event
+  loop.** All six of `SyncProviderAdapter`'s async-reaching methods —
+  `initialize`, `close`, `complete`, `stream`, `embed`, `validate_model` —
+  reached their provider with `loop.run_until_complete`, which raises
+  `RuntimeError: This event loop is already running` when the caller is
+  already on a loop, and left an un-awaited coroutine behind with it. That is
+  the case a synchronous wrapper exists to serve, and it was the case that
+  failed. Each now runs its coroutine on a private `SyncLoopBridge` loop.
+  `LLMResource` — the FSM integration's LLM resource, which holds one adapter
+  per model — was unusable from async code for the same reason and is fixed
+  with it. The adapter now owns one daemon thread for its lifetime, named
+  `dk-sync-llm-provider`; `close()` ends it and remains idempotent.
 - **`VersionedPromptLibrary` can be constructed.** `AbstractPromptLibrary.reload`
   carried an `@abstractmethod` that its own docstring contradicted — *"This is
   optional… Default implementation does nothing."* The method shipped
