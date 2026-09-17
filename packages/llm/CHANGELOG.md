@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **tree walks bind `children` once per node rather than re-reading it.**
+  `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
+  than the list the node holds, so each read allocates one. `get_node_by_id`
+  read it three times per path segment and the branch and RAG-metadata walks
+  twice per node; each now reads once. No behaviour changed.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

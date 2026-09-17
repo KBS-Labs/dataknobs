@@ -319,9 +319,12 @@ def get_node_by_id(tree: Tree, node_id: str) -> Tree | None:
     # Navigate down the tree
     current = tree
     for idx in indexes:
-        if not current.children or idx >= len(current.children):
+        # `children` answers with a fresh tuple, so bind it once per level
+        # rather than building the same one three times.
+        children = current.children
+        if not children or idx >= len(children):
             return None  # Invalid path
-        current = current.children[idx]
+        current = children[idx]
 
     return current
 

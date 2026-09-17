@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **execution-history walks bind `children` once per node rather than
+  re-reading it.** `dataknobs-structures` now answers `Tree.children` with a
+  fresh tuple rather than the list the node holds, so each read allocates one.
+  All seven recursive walks over the history tree tested `node.children` and
+  then iterated it, paying for two per node visited; each now reads once. No
+  behaviour changed.
+- **`execution/history.py` carries full type annotations.** The nine findings
+  the type checker had against it are cleared and the package ceiling drops
+  with them: six nested walk helpers with no return annotation, a path list
+  and a node variable it could not infer, and an `append` onto a dictionary
+  value it had therefore widened to `object`. Annotations only; no behaviour
+  changed, and a `# type: ignore` that existed to paper over that same
+  uninferred dictionary is gone rather than left in place.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version
