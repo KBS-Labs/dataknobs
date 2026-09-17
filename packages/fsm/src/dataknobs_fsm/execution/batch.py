@@ -577,23 +577,38 @@ class BatchExecutor:
                 batch: restarting it per batch would multiply it by the batch
                 count and bound nothing the caller asked about.
         """
-        all_results = []
-        total_batches = (len(items) + self.batch_size - 1) // self.batch_size
-
         # One operation for the whole call. Opening one per batch put each
         # batch on a loop of its own, so an FSM resource opened during the
         # first was unusable from the second --- a pooled backend fails there
         # with an error naming the connection rather than the loop.
         with self._operation() as op:
-            for batch_num in range(total_batches):
-                start_idx = batch_num * self.batch_size
-                end_idx = min(start_idx + self.batch_size, len(items))
-                batch = items[start_idx:end_idx]
+            return self._execute_batches(op, items, context_template, max_transitions)
 
-                # Process batch
-                batch_results = self._execute_batch(op, batch, context_template, max_transitions)
+    def _execute_batches(
+        self,
+        op: BridgedOperation,
+        items: List[Any],
+        context_template: ExecutionContext | None,
+        max_transitions: int,
+    ) -> Dict[str, Any]:
+        """Run every batch on an already-open operation.
 
-                all_results.extend(batch_results)
+        Split from :meth:`execute_batches` so :meth:`create_benchmark` can
+        drive several configurations within one operation instead of opening a
+        loop --- and restarting the budget --- for each.
+        """
+        all_results = []
+        total_batches = (len(items) + self.batch_size - 1) // self.batch_size
+
+        for batch_num in range(total_batches):
+            start_idx = batch_num * self.batch_size
+            end_idx = min(start_idx + self.batch_size, len(items))
+            batch = items[start_idx:end_idx]
+
+            # Process batch
+            batch_results = self._execute_batch(op, batch, context_template, max_transitions)
+
+            all_results.extend(batch_results)
 
         # Aggregate results
         total = len(all_results)
@@ -635,33 +650,57 @@ class BatchExecutor:
 
         Returns:
             Benchmark results.
+
+        Raises:
+            TimeoutError: If this executor's ``timeout`` elapses before every
+                configuration has run. The budget spans the whole benchmark,
+                not each configuration: restarting it per configuration would
+                multiply it by their number and bound nothing the caller asked
+                about.
         """
         benchmark_results = {}
 
-        for config in configurations:
-            name = config.get("name", "unnamed")
+        # A measurement must not reconfigure what it measured. ``strategy`` is
+        # the half that reaches furthest: it is set on the FSM's *one* async
+        # engine, shared with every other executor, ``SimpleFSM`` and
+        # ``FSM.execute`` over that FSM, so leaving it set re-strategised all
+        # of them.
+        saved_parallelism = self.parallelism
+        saved_batch_size = self.batch_size
+        saved_strategy = self.engine.strategy
 
-            # Update executor settings
-            self.parallelism = config.get("parallelism", self.parallelism)
-            self.batch_size = config.get("batch_size", self.batch_size)
+        try:
+            # One operation for the whole benchmark, for the same reason
+            # ``execute_batches`` holds one across its batches.
+            with self._operation() as op:
+                for config in configurations:
+                    name = config.get("name", "unnamed")
 
-            if "strategy" in config:
-                self.engine.strategy = config["strategy"]
+                    # Update executor settings
+                    self.parallelism = config.get("parallelism", self.parallelism)
+                    self.batch_size = config.get("batch_size", self.batch_size)
 
-            # Run benchmark
-            start_time = time.time()
-            results = self.execute_batches(items)
-            elapsed_time = time.time() - start_time
+                    if "strategy" in config:
+                        self.engine.strategy = config["strategy"]
 
-            # Calculate metrics
-            throughput = len(items) / elapsed_time if elapsed_time > 0 else 0
+                    # Run benchmark
+                    start_time = time.time()
+                    results = self._execute_batches(op, items, None, 1000)
+                    elapsed_time = time.time() - start_time
 
-            benchmark_results[name] = {
-                "configuration": config,
-                "elapsed_time": elapsed_time,
-                "throughput": throughput,
-                "success_rate": results["success_rate"],
-                "average_processing_time": results["average_processing_time"],
-            }
+                    # Calculate metrics
+                    throughput = len(items) / elapsed_time if elapsed_time > 0 else 0
+
+                    benchmark_results[name] = {
+                        "configuration": config,
+                        "elapsed_time": elapsed_time,
+                        "throughput": throughput,
+                        "success_rate": results["success_rate"],
+                        "average_processing_time": results["average_processing_time"],
+                    }
+        finally:
+            self.parallelism = saved_parallelism
+            self.batch_size = saved_batch_size
+            self.engine.strategy = saved_strategy
 
         return benchmark_results

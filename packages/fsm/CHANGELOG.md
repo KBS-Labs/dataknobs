@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`FSM.execute()` takes `bridge=` and `timeout=`.** It is the remaining
+  one-shot synchronous surface, drives the same engine the executors drive, and
+  had neither: two calls ran on two throwaway loops, and neither was the FSM's
+  own — so an `AsyncDatabaseResourceAdapter` opened by a `SimpleFSM.process()`
+  on the same FSM was unusable from `execute`. `bridge=` is how the caller says
+  which loop; passing `fsm.get_sync_bridge()` puts `execute` on the same one as
+  `SimpleFSM`. `timeout=` bounds a call that otherwise blocks a caller inside a
+  `def` indefinitely; on expiry the work is cancelled and the expiry is
+  **reported in the returned result**, not raised, which is what this surface
+  does with every other failure and what `SimpleFSM.process(timeout=)` already
+  did. Both default to the previous behaviour: a bridge scoped to the call and
+  torn down with it, so a one-shot `execute` still leaves no thread behind.
+
 - **`BatchExecutor` and `StreamExecutor` take `bridge=` and `timeout=`.** Both
   reach the async engine through a `SyncLoopBridge` scoped to the operation,
   which keeps a discarded executor from leaving a thread behind but says
@@ -62,6 +75,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FSM whose main network declares none (which `NetworkConfig` refuses to build
   but `FSM.add_network` allows) is resolved by the engine and was not by the
   executors, so the two disagreed about the same FSM.
+
+- **`create_benchmark` spends one budget and restores what it changed.** It
+  calls `execute_batches` once per configuration, and each call opened an
+  operation of its own — so an executor built with `timeout=T` running N
+  configurations admitted N*T, the same multiplication `execute_batches` itself
+  had across its batches, one level up. One operation now spans the benchmark.
+
+  It also assigned each configuration's `parallelism`, `batch_size` and
+  `strategy` and never restored them, leaving the executor holding the last
+  configuration's settings. `strategy` is the half that reaches furthest: it is
+  set on `self.engine`, the FSM's *one* async engine, so a benchmark silently
+  re-strategised every other executor, `SimpleFSM` and `FSM.execute` over that
+  FSM — and with the raw value from the configuration dict, a `str` where a
+  `TraversalStrategy` belongs. All three are restored on the way out, including
+  on the timeout path.
 
 - **Released resources are marked released.** `BatchExecutor._release_resources`
   tested `allocation.status` against the string `"allocated"` rather than the

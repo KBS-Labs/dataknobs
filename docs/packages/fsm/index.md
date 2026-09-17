@@ -290,7 +290,20 @@ The FSM package is built with a modular, layered architecture:
 - `BatchExecutor`: Optimized batch processing
 - `StreamExecutor`: Stream processing with backpressure
 
-##### Which loop an executor runs on
+##### Which loop a synchronous call runs on
+
+`FSM.execute()` takes the same pair, for the same reason — it drives the same
+engine, and two calls otherwise run on two throwaway loops, neither of them the
+FSM's own:
+
+```python
+with SyncLoopBridge() as bridge:
+    fsm.execute(record, bridge=bridge, timeout=30.0)
+```
+
+It *reports* an expiry in its result rather than raising it, as
+`SimpleFSM.process(timeout=)` does; the executors raise, because they return
+lists and statistics with no envelope to put it in.
 
 The synchronous executors reach the engine through a
 [`SyncLoopBridge`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/)

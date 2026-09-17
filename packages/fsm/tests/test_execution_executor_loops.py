@@ -54,7 +54,7 @@ whose size it does not know, and a caller inside a ``def`` has no cancellation
 of its own. It bounds the **operation**, not each item --- a per-item bound
 would be no bound at all on the call the caller actually made.
 
-Three pre-existing defects are pinned here too, because all three are in the
+Four pre-existing defects are pinned here too, because all four are in the
 code these changes open and none could be left in place:
 
 * ``StreamExecutor`` gated execution on ``fsm.name in fsm.networks``, which is
@@ -72,6 +72,10 @@ code these changes open and none could be left in place:
   been measured. Restoring it exposed what it would have done: append to a
   per-type list nothing read back or drained. That list is gone; the status
   transition is what release means here.
+* ``create_benchmark`` restarted the budget for each configuration and left the
+  last one's ``parallelism``, ``batch_size`` and ``strategy`` behind --- the
+  last of them on the FSM's *shared* engine, so it reached every other surface
+  over that FSM.
 """
 
 from __future__ import annotations
@@ -82,7 +86,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_common import SyncLoopBridge
+from dataknobs_common import OperationTimeoutError, SyncLoopBridge
 from dataknobs_common.testing import assert_no_leaked_bridge_threads
 from dataknobs_fsm.config.builder import FSMBuilder
 from dataknobs_fsm.config.schema import (
@@ -581,4 +585,69 @@ def test_a_released_resource_is_marked_released() -> None:
     )
     assert "released_at" in context.metadata["batch_0_resources"], (
         "the release was not recorded against the batch"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 6. create_benchmark: one operation, and the executor it was called on intact
+# --------------------------------------------------------------------------- #
+
+
+def test_a_benchmarks_timeout_spans_its_configurations() -> None:
+    """``timeout`` bounds the benchmark, not each configuration in it.
+
+    ``create_benchmark`` calls ``execute_batches`` once per configuration, and
+    each call opened an operation of its own --- so an executor built with
+    ``timeout=T`` running N configurations admitted N*T. It is the same defect
+    ``execute_batches`` itself had across its batches, one level up, and the
+    same answer: one operation for the public call.
+
+    Each configuration is given work that fits inside the budget on its own ---
+    one item at 0.15s against a 0.4s bound --- so the multiplication is the
+    only thing a failure can be: six of them in sequence is 0.9s, which one
+    budget cannot cover and six can.
+    """
+    recorder = SlowRecorder(0.15)
+    executor = BatchExecutor(fsm=witnessed_fsm(recorder), parallelism=1, batch_size=1, timeout=0.4)
+
+    started = time.monotonic()
+    with pytest.raises(OperationTimeoutError):
+        executor.create_benchmark(
+            items(1),
+            [{"name": f"cfg-{i}", "parallelism": 1, "batch_size": 1} for i in range(6)],
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.8, (
+        f"the benchmark ran {elapsed:.2f}s under a 0.4s bound; the budget "
+        "restarted for each configuration"
+    )
+
+
+def test_a_benchmark_leaves_the_executor_and_engine_as_it_found_them() -> None:
+    """A measurement must not reconfigure what it measured, or what it shares.
+
+    ``create_benchmark`` assigned each configuration's ``parallelism``,
+    ``batch_size`` and ``strategy`` and never restored them, so the executor
+    was left holding the last configuration's settings. ``strategy`` is the
+    worse half: it is set on ``self.engine``, which is the FSM's *one* async
+    engine, so a benchmark silently re-strategised every other executor,
+    ``SimpleFSM`` and ``FSM.execute`` over that FSM.
+    """
+    recorder = LoopRecorder()
+    fsm = witnessed_fsm(recorder)
+    executor = BatchExecutor(fsm=fsm, parallelism=3, batch_size=7)
+
+    before = (executor.parallelism, executor.batch_size, executor.engine.strategy)
+
+    executor.create_benchmark(
+        items(2),
+        [
+            {"name": "wide", "parallelism": 1, "batch_size": 1, "strategy": "BREADTH_FIRST"},
+            {"name": "narrow", "parallelism": 2, "batch_size": 2},
+        ],
+    )
+
+    assert (executor.parallelism, executor.batch_size, executor.engine.strategy) == before, (
+        "create_benchmark left its last configuration on the executor or on the FSM's shared engine"
     )

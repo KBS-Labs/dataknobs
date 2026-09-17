@@ -179,6 +179,11 @@ from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
 from dataknobs_fsm.functions.base import FunctionRegistry
 
+#: Loop-thread name for a one-shot ``FSM.execute``. The bridge registers it, so
+#: ``assert_no_leaked_bridge_threads`` watches this name too --- it is a
+#: diagnostic label, not a way out of the leak guard.
+EXECUTE_BRIDGE_THREAD_NAME = "dk-fsm-execute"
+
 
 class FSM:
     """Finite State Machine core class.
@@ -969,31 +974,55 @@ class FSM:
             # Handle any exception that occurs during execution
             return self._format_execution_result(False, None, None, 0.0, initial_data, str(e))
 
-    def execute(self, initial_data: Dict[str, Any] | None = None) -> Any:
+    def execute(
+        self,
+        initial_data: Dict[str, Any] | None = None,
+        *,
+        bridge: "SyncLoopBridge | None" = None,
+        timeout: float | None = None,
+    ) -> Any:
         """Execute the FSM synchronously with initial data.
 
         This is a simplified, *stateless* convenience API: it runs the single
-        async engine on a throwaway async→sync bridge (spun up and torn down for
-        this one call via :func:`~dataknobs_common.run_coro_sync`), so a
-        one-shot ``FSM(...).execute(...)`` needs no ``close()`` and leaves no
-        background thread behind. For repeated synchronous runs, prefer
+        async engine on a bridge scoped to this one call, so a one-shot
+        ``FSM(...).execute(...)`` needs no ``close()`` and leaves no background
+        thread behind. For repeated synchronous runs, prefer
         :class:`~dataknobs_fsm.api.simple.SimpleFSM` (which owns one shared
         bridge for its lifetime) over calling this in a loop. Safe to call from
-        within a running event loop — the coroutine runs on the throwaway
-        bridge's own thread.
+        within a running event loop — the coroutine runs on the bridge's own
+        thread.
 
         Args:
             initial_data: Initial data for execution.
+            bridge: A loop to run on, owned by the caller; nothing here closes
+                it. Required when this FSM's resources are already bound to a
+                loop — an ``AsyncDatabaseResourceAdapter`` keeps its
+                ``AsyncDatabase`` open across acquisitions, so it belongs to
+                whichever loop opened it, and a pooled backend is unusable from
+                any other. It is also how this call shares a loop with
+                ``SimpleFSM`` or an executor over the same FSM: pass
+                :meth:`get_sync_bridge`. Omitted, the call owns a bridge for
+                its duration and ends it.
+            timeout: Seconds to allow the whole execution. A blocked
+                synchronous caller has no cancellation of its own, so without
+                this a transform that stops answering blocks it indefinitely.
+                On expiry the work is cancelled and the expiry is **reported in
+                the returned result**, not raised — as
+                :meth:`~dataknobs_fsm.api.simple.SimpleFSM.process` does, and
+                as every other failure on this surface is. It bounds the work:
+                ending an owned bridge afterwards can add up to five seconds
+                letting a cancelled transform's cleanup unwind. ``None`` (the
+                default) waits for as long as the execution takes.
 
         Returns:
             Execution result.
         """
         import time
 
-        from dataknobs_common import run_coro_sync
+        from dataknobs_common import bridged_operation
 
         try:
-            # Run the single async engine on a throwaway bridge for this one call
+            # Run the single async engine on a bridge scoped to this one call
             # (the synchronous public surface over the one execution engine).
             engine = self.get_async_engine()
 
@@ -1004,12 +1033,18 @@ class FSM:
             start_time = time.time()
 
             # Execute the FSM
-            success, result = run_coro_sync(
-                engine.execute(
-                    context,
-                    initial_data if self.data_mode == ProcessingMode.SINGLE else None,
+            with bridged_operation(
+                bridge=bridge,
+                timeout=timeout,
+                thread_name=EXECUTE_BRIDGE_THREAD_NAME,
+                label="FSM.execute",
+            ) as op:
+                success, result = op.run(
+                    engine.execute(
+                        context,
+                        initial_data if self.data_mode == ProcessingMode.SINGLE else None,
+                    )
                 )
-            )
 
             # Calculate duration
             duration = time.time() - start_time
@@ -1017,5 +1052,7 @@ class FSM:
             return self._format_execution_result(success, result, context, duration)
 
         except Exception as e:
-            # Handle any exception that occurs during execution
+            # Handle any exception that occurs during execution, the operation's
+            # own deadline included: this surface reports failures in its result
+            # envelope rather than raising them, and a timeout is one.
             return self._format_execution_result(False, None, None, 0.0, initial_data, str(e))
