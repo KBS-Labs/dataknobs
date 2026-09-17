@@ -8,6 +8,7 @@ This guide covers the prompt versioning system in dataknobs-llm, which provides 
 - [Quick Start](#quick-start)
 - [Version Management](#version-management)
 - [Core Concepts](#core-concepts)
+- [Storage](#storage)
 - [API Reference](#api-reference)
 - [Best Practices](#best-practices)
 - [Examples](#examples)
@@ -293,6 +294,102 @@ v3 = await manager.create_version(
 )
 ```
 
+## Storage
+
+The three managers keep nothing of their own. Versions, experiments, user
+assignments, metric aggregates and events all live in a **store**, and which
+store you pass is the only thing that decides whether they outlive the
+process.
+
+### The default is in memory
+
+```python
+from dataknobs_llm.prompts import InMemoryVersionStore, VersionManager
+
+manager = VersionManager()                            # the common case
+manager = VersionManager(InMemoryVersionStore())      # exactly the same thing
+```
+
+### Persisting to a backend
+
+`DatabaseVersionStore` accepts any dataknobs `AsyncDatabase`, which is all
+seven backends -- memory, file, SQLite, PostgreSQL, S3, DuckDB and
+Elasticsearch:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import DatabaseVersionStore, VersionedPromptLibrary
+
+# Any backend key: "memory", "file", "sqlite", "postgres", "s3", "duckdb",
+# "elasticsearch". The factory builds but does not connect.
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
+library = VersionedPromptLibrary(store=DatabaseVersionStore(db))
+await library.create_version(
+    name="greeting",
+    prompt_type="system",
+    template="Hello {{name}}!",
+    version="1.0.0",
+)
+
+# Anything holding the same database reads it back -- including the next
+# time this program runs.
+await db.close()
+```
+
+The store does **not** own the database. You opened it, so you close it;
+nothing on this layer has a `close()` of its own to forget.
+
+### One store, three managers
+
+`VersionedPromptLibrary` builds one store and hands the same object to all
+three of its managers. Do the same when wiring the managers yourself, or each
+one gets a store of its own:
+
+```python
+store = DatabaseVersionStore(db)
+
+vm = VersionManager(store)
+ab = ABTestManager(store)
+mc = MetricsCollector(store)
+```
+
+Separate stores are not an error -- the three hold different things and never
+read each other's -- but they are three databases' worth of configuration
+where one will do.
+
+### The protocols
+
+Each manager declares only the part of the surface it uses, so a store written
+for one of them need not implement the others:
+
+| Protocol | Declared by | Holds |
+|---|---|---|
+| `VersionStore` | `VersionManager` | versions |
+| `ExperimentStore` | `ABTestManager` | experiments, user assignments |
+| `MetricsStore` | `MetricsCollector` | aggregates, events |
+| `VersioningStore` | `VersionedPromptLibrary` | all three at once |
+
+Both shipped stores satisfy all four. To write your own, implement the
+protocol whose manager you are serving; a manager checks at construction and
+names any method it cannot find.
+
+### What a store hands back
+
+A load returns a **value**, not a handle. Mutating what you loaded changes
+nothing until you save it:
+
+```python
+version = await store.load_version(version_id)
+version.tags.append("production")     # changes nothing yet
+await store.save_version(version)     # now it is stored
+```
+
+This holds for `InMemoryVersionStore` too, deliberately: a store that handed
+out live references would make the line above work in development and lose the
+tag in production.
+
 ## API Reference
 
 ### VersionManager
@@ -300,10 +397,12 @@ v3 = await manager.create_version(
 #### Constructor
 
 ```python
-manager = VersionManager(storage=None)
+manager = VersionManager(store=None)
 ```
 
-- `storage`: Optional backend storage (None for in-memory)
+- `store`: A [`VersionStore`](#the-protocols). `None` builds a fresh
+  `InMemoryVersionStore`. Passing anything that is not a `VersionStore` raises
+  `TypeError` naming the methods it lacks.
 
 #### create_version()
 

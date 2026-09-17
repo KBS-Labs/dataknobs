@@ -12,6 +12,7 @@ The versioning system provides:
 - **Metrics Tracking**: Success rates, response times, ratings
 - **Performance Comparison**: Compare variants to find winners
 - **Rollback**: Easy rollback to previous versions
+- **Pluggable storage**: In memory by default, or any dataknobs backend
 
 ## Quick Start
 
@@ -207,6 +208,59 @@ top = await mc.get_top_versions(
     limit=3
 )
 ```
+
+## Storage
+
+The managers keep nothing of their own -- versions, experiments, user
+assignments, aggregates and events all live in a **store**, and which store
+you pass decides whether they outlive the process.
+
+```python
+from dataknobs_llm.prompts import VersionManager
+
+vm = VersionManager()          # in memory: the default
+```
+
+To persist, hand the managers a `DatabaseVersionStore` over any dataknobs
+`AsyncDatabase` -- memory, file, SQLite, PostgreSQL, S3, DuckDB or
+Elasticsearch:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import DatabaseVersionStore, VersionedPromptLibrary
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()                 # the factory builds; it does not connect
+
+library = VersionedPromptLibrary(store=DatabaseVersionStore(db))
+
+# ... use the library ...
+
+await db.close()                   # the store does not own your database
+```
+
+Wiring the managers yourself, give all three the same store, as
+`VersionedPromptLibrary` does:
+
+```python
+store = DatabaseVersionStore(db)
+
+vm = VersionManager(store)
+ab = ABTestManager(store)
+mc = MetricsCollector(store)
+```
+
+Each manager declares only what it uses -- `VersionStore`, `ExperimentStore`
+and `MetricsStore` respectively, with `VersioningStore` for all three at once
+-- so a store you write yourself need only implement the manager you are
+serving. A manager checks its store at construction and names any method it
+cannot find.
+
+A load returns a value rather than a handle: mutate what you loaded and
+nothing is stored until you save it. That is true of the in-memory store too,
+so code developed against it behaves the same against a database.
+
+See `packages/llm/docs/versioning.md` for the full treatment.
 
 ## Detailed Documentation
 

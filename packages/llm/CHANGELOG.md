@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `:` was dropped from its own listing: the index key is `f"{name}:{type}"`
   and the walk split on the *first* colon, putting the tail of the name into
   the type slot — such a prompt could be created and fetched but never listed.
+- **The versioning module's quick start runs.** Both of its load-bearing
+  lines failed: it imported `VersionedPromptLibrary` from
+  `dataknobs_llm.prompts.versioning`, which does not export it, and then
+  constructed it with `backend=`, which the constructor has never accepted. A
+  reader following it got an `ImportError` and, on fixing that, a `TypeError`.
 - **`AsyncPromptBuilder` no longer calls its prompt library on the event loop.**
   All three library reaches — the system-prompt fetch, the user-prompt fetch
   and the RAG-config fetch — ran synchronously inside `async def` bodies over
@@ -132,6 +137,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wins the MRO over `AsyncPromptLibrary`'s `async def` default and left an
   asynchronous library that reused the mixin raising `TypeError` on
   `await library.reload()`.
+
+- **The versioning layer persists, and reads back what it writes
+  (breaking).** `VersionManager`, `ABTestManager`, `MetricsCollector` and
+  `VersionedPromptLibrary` took a `storage: Any` and duck-typed it for `set`,
+  `append` and `delete`. They take a typed `store` instead:
+  `InMemoryVersionStore` when nothing is passed, or `DatabaseVersionStore(db)`
+  over any of the seven dataknobs backends. Every read goes through it.
+
+  "Breaking" understates what the old parameter did. `set` and `append` are on
+  no dataknobs backend, so against any of them every write was dropped in
+  silence, while `delete` matched **by name** and fired — against ids that had
+  therefore never been written. Every read came from an instance dictionary
+  the writes shadowed and nothing replayed. So a version created through a
+  real database was invisible to anything else holding that database,
+  `delete_version` reported `True` over a database that had never held it, and
+  none of these coroutines ever suspended, because a method that never reads
+  has nothing to await. Two of the five entities could not have been stored
+  even had the verbs existed: a user's variant assignment was a bare `str`
+  under a composed key, and metric events were `append`-ed to a list under one
+  key, neither of which is a record.
+
+  What a consumer sees:
+
+  - `storage=` is now `store=`. An object that cannot answer the protocol is a
+    `TypeError` at construction, naming every method it lacks — which is what
+    an object written for the old parameter gets.
+  - Three protocols, one per manager — `VersionStore`, `ExperimentStore`,
+    `MetricsStore` — so a store need only implement the manager it serves.
+    `VersioningStore` is all three, and one object still serves all three
+    managers exactly as one `storage` argument did.
+  - A load returns a value rather than a handle, `InMemoryVersionStore`
+    included. Mutating what a manager returned no longer changes what is
+    stored: `tag_version` and friends return the updated version, and that is
+    the object to read. A store that handed out live references would work in
+    development and lose writes in production.
+  - `VersionedPromptLibrary.get_metadata` reports `store` — the store's class
+    name — where it reported `storage`.
+  - `VersionManager` no longer keeps a name index. Which names exist is
+    derived from the versions themselves, so there is no second record of it
+    to drift.
+  - Nothing on this layer owns a database. `DatabaseVersionStore` is handed
+    one, so the caller closes it, and no class here grows a `close()`.
 
 - **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
   `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly
