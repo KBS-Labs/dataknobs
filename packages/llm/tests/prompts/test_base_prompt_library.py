@@ -28,6 +28,7 @@ import pytest
 
 from dataknobs_llm.prompts.base import (
     AbstractPromptLibrary,
+    AsyncPromptLibrary,
     BasePromptLibrary,
     MessageIndex,
     PromptTemplateDict,
@@ -84,6 +85,7 @@ def test_a_library_missing_a_method_is_refused_at_construction() -> None:
 def test_the_mixin_does_not_answer_for_the_interface() -> None:
     """The mixin is flavour-neutral, so either flavour can reuse it."""
     assert not issubclass(BasePromptLibrary, AbstractPromptLibrary)
+    assert not issubclass(BasePromptLibrary, AsyncPromptLibrary)
 
 
 def test_the_mixin_keeps_the_one_member_it_actually_implements() -> None:

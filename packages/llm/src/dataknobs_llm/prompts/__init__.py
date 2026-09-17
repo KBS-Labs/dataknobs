@@ -49,7 +49,10 @@ from .base import (
     MessageIndex,
     RenderResult,
     AbstractPromptLibrary,
+    AsyncPromptLibrary,
     BasePromptLibrary,
+    as_async,
+    as_sync,
 )
 
 # Resource adapters
@@ -133,7 +136,11 @@ __all__ = [
     "RenderResult",
     # Base classes
     "AbstractPromptLibrary",
+    "AsyncPromptLibrary",
     "BasePromptLibrary",
+    # Flavour conversion
+    "as_async",
+    "as_sync",
     # Adapters
     "ResourceAdapter",
     "AsyncResourceAdapter",
