@@ -54,7 +54,7 @@ class Tree:
 
 **Properties:**
 - `data: Any` - Node data
-- `children: Optional[List[Tree]]` - Child nodes
+- `children: Optional[Tuple[Tree, ...]]` - Child nodes, as a snapshot (use `add_child` / `prune` to change them)
 - `parent: Optional[Tree]` - Parent node  
 - `root: Tree` - Root of tree
 - `depth: int` - Node depth (0-based)

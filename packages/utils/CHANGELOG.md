@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **the JSON index tree binds `children` once rather than re-reading it.**
+  `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
+  than the list the node holds, so each read allocates one. The path builder
+  in `json_utils` tested it and then indexed it, which is two reads per element
+  of every indexed path; it now reads once. No behaviour changed.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

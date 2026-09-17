@@ -34,13 +34,13 @@ child1 = root.add_child("child1_data")
 child2 = root.add_child("child2_data")
 
 # Navigate the tree
-print(root.children)  # List of child nodes
+print(root.children)  # Tuple of child nodes -- a snapshot, not the live list
 print(child1.parent)  # Parent node
 print(root.depth)     # Depth in tree (0 for root)
 
 # Tree operations
-all_descendants = root.get_all_descendants()
-leaves = root.get_leaves()
+all_descendants = root.find_nodes(lambda node: True, include_self=False)
+leaves = root.collect_terminal_nodes()
 ```
 
 ### Documents

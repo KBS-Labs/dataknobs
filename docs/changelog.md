@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### dataknobs-structures
+
+#### Changed
+- **`Tree.children` returns a tuple rather than the live list.** Reading, indexing, iterating, slicing and `len()` are unaffected; a caller that *mutated* what it got back — `node.children.append(x)`, `.remove(x)`, `.sort()` — now gets an `AttributeError` at that line, and the remedy is `add_child` / `prune`, or `list(node.children)` where a mutable copy was what was wanted. In-place mutation walked past every check `add_child` performs, so it could give a node two parents that disagreed about it. A tuple was chosen over a defensive list copy because a copy accepts the write and silently discards it. The package ships `py.typed`, so the annotation change is visible to downstream type checkers as well as at runtime
+
+#### Fixed
+- **a tree can no longer be made its own ancestor.** `add_child`, the `parent` setter and `add_edge` refuse a child that is the node itself or one of its ancestors, raising `ValidationError`. Nothing can have depended on the old behaviour: the object it produced is one that ten of this class's twelve traversals spin on forever and two raise `RecursionError` on, so a tree that accepted the write had no reader left. `add_edge` was the worst entrance — asked for an edge inverting one already present, it built the cycle *and* emptied the tree, because the node it moved was pruned from its parent on the way. This is the first exception this package raises
+- **setting `parent` maintains both halves of the link.** It previously assigned the node's parent reference and nothing else, so the new parent never gained the child and the old one never lost it — a node naming a parent that did not list it, which `sibnum`, `prune` and every edge walk then answered wrongly about. `node.parent = other` is now `other.add_child(node)`, and `node.parent = None` detaches both sides
+
 ### Licensing
 
 - **DataKnobs is relicensed from MIT to Apache-2.0.** This version and every

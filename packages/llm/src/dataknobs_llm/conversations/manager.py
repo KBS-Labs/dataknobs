@@ -1476,12 +1476,13 @@ class ConversationManager:
 
         # Get node
         node = get_node_by_id(self.state.message_tree, node_id)
-        if node is None or not node.children:
+        children = None if node is None else node.children
+        if not children:
             return []
 
         # Build branch info
         branches = []
-        for child in node.children:
+        for child in children:
             data = child.data
             branches.append(
                 {
@@ -1611,8 +1612,9 @@ class ConversationManager:
                         return rag_metadata
 
             # Add children to queue (if any)
-            if tree_node.children:
-                queue.extend(tree_node.children)
+            children = tree_node.children
+            if children:
+                queue.extend(children)
 
         return None
 
