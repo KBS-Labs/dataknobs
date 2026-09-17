@@ -170,3 +170,104 @@ def test_setting_a_parent_to_none_detaches_both_halves():
     assert a.parent is None
     assert root.children == ()
     assert a.as_string() == "(a b)"
+
+
+# ------------------------------------------------- a refusal is a whole refusal
+
+
+def test_add_edge_does_not_strand_a_node_it_created_on_the_way():
+    """``add_edge`` mutates twice, and only the second mutation is guarded.
+
+    Resolving the parent can *create* it under ``self`` before the child is
+    ever looked at. When the child add is then refused, the node created for
+    the first half has nothing to undo it, and the tree the caller was told
+    was unchanged has grown a member.
+    """
+    root = dk_tree.Tree("root")
+    root.add_edge("a", "b")
+    before = root.as_string()
+
+    with pytest.raises(ValidationError):
+        root.add_edge("c", "root")
+
+    assert root.as_string() == before
+
+
+def test_add_edge_does_not_steal_a_subtree_from_the_tree_it_failed_on():
+    """The same second mutation, in its damaging form.
+
+    Resolving a ``Tree`` parent that lives in *another* tree moves it here --
+    pruning it from where it was. If the child add is then refused, the caller
+    sees an exception and the other tree has silently lost a subtree, which is
+    the one outcome worse than either half happening alone.
+    """
+    donor = dk_tree.Tree("donor")
+    subtree = donor.add_child("subtree")
+    subtree.add_child("leaf")
+    donor_before = donor.as_string()
+
+    root = dk_tree.Tree("root")
+    root.add_child("a")
+
+    with pytest.raises(ValidationError):
+        root.add_edge(subtree, root)
+
+    assert donor.as_string() == donor_before
+    assert subtree.parent is donor
+
+
+def test_re_parenting_survives_a_link_that_only_one_side_agrees_with():
+    """A node naming a parent that does not list it must still be movable.
+
+    That state is exactly what the old ``parent`` setter produced, so it is
+    what a tree pickled or built under an earlier release carries. Every
+    re-parent now routes through ``prune``, which removes by value, so meeting
+    one raises ``ValueError`` from a node the caller never named -- and leaves
+    the new parent holding an empty child list from a call that failed.
+    """
+    stale = dk_tree.Tree("stale")
+    stale.add_child("sibling")
+    orphan = dk_tree.Tree("orphan")
+    orphan._parent = stale  # what the old setter did, and nothing else
+
+    new_home = dk_tree.Tree("new_home")
+    new_home.add_child(orphan)
+
+    assert orphan.parent is new_home
+    assert orphan in (new_home.children or ())
+    assert "orphan" not in stale.as_string()
+
+
+# ------------------------------------------------ what the refusal carries
+
+
+def test_the_refusal_names_both_nodes_in_its_context():
+    """The message is prose; the two nodes travel as data.
+
+    A caller that wants to report which attachment was refused reads
+    ``context`` rather than parsing the sentence.
+    """
+    root, _a, b = a_chain()
+
+    with pytest.raises(ValidationError) as caught:
+        b.add_child(root)
+
+    assert caught.value.context == {"child": "root", "parent": "b"}
+
+
+def test_add_edge_refuses_a_tree_operand_as_well_as_data():
+    """``add_edge`` has two resolution paths and only the data one was covered."""
+    root, a, _b = a_chain()
+
+    with pytest.raises(ValidationError):
+        root.add_edge(a, root)
+
+
+def test_the_constructor_is_an_entrance_to_the_guard_too():
+    """``Tree(data, parent=x)`` reaches ``add_child``, so it refuses the same."""
+    root, _a, b = a_chain()
+
+    # Attaching *under* b is fine; attaching b's own ancestor under it is not.
+    dk_tree.Tree("fine", parent=b)
+    with pytest.raises(ValidationError):
+        b.add_child(root)

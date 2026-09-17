@@ -62,6 +62,32 @@ package, which for most of them was nothing but the version number.
   Writing to one now reports it instead of hanging; reading from one was never
   supported and still is not.
 
+- **A link only one side agrees with no longer breaks the node that meets it.**
+  The old `parent` setter left exactly that behind — a node naming a parent
+  whose child list never gained it — and every re-parent now routes through
+  `prune`, which removes by value. Meeting one raised `ValueError` from a node
+  the caller had not named, and left the *new* parent holding an empty child
+  list from a call that had failed. `prune` now checks before removing, so a
+  tree carried across from an earlier release can still be rearranged; the
+  detach it was asked for happens either way.
+
+### Documentation
+
+- **The basic-tree examples page runs.** It described a `Tree` that was never
+  implemented — a container object built with `Tree()`, populated through
+  `add_root` and `tree.add_child(node, data)`, walked with `tree.traverse()`
+  and read through `node.value` and `node.level`. None of those exist on the
+  shipped class, so every block on the page raised on its first line touching
+  the tree; its opening example was quieter and worse, feeding arrow syntax to
+  `build_tree_from_string`, which returns a single node holding the whole input
+  string as its data whenever the input does not start with an open paren. The
+  page is now written against the real surface — the node *is* the tree — and
+  every fenced block was executed, with the printed values in the comments taken
+  from that run rather than written by hand.
+
+  Four other pages on the site still teach the same imagined class. They were
+  left out of this change deliberately, and are recorded as outstanding.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

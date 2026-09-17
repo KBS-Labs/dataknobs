@@ -64,7 +64,9 @@ print(node.data)  # "updated"
 @property
 def children(self) -> Optional[Tuple[Tree, ...]]
 ```
-Returns the child nodes in order, or None if no children.
+Returns the child nodes in order. It is `None` if the node has never held a
+child and an empty tuple once its children have been removed, so test
+`has_children()` rather than comparing against `None`.
 
 The tuple is a snapshot rather than the list the node is holding, so a tree can
 only be changed through `add_child` and `prune` — the two that keep the parent

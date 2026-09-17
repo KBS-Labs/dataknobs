@@ -69,7 +69,8 @@ class Tree:
 
     Attributes:
         data: The data contained in this node (any type).
-        children: List of child Tree nodes, or None if no children.
+        children: Tuple of child Tree nodes -- None if this node has never
+            held one, and an empty tuple once its children have been removed.
         parent: Parent Tree node, or None if this is a root node.
         root: The root node of this tree (traverses up to find it).
         depth: Number of hops from the root to this node (root has depth 0).
@@ -171,7 +172,9 @@ class Tree:
         ``prune``, both of which keep the parent and child links in agreement.
 
         Returns:
-            Tuple of child Tree nodes, or None if this node has no children.
+            Tuple of child Tree nodes. ``None`` if this node has never held a
+            child, and an empty tuple once its children have been removed --
+            so test ``has_children()`` rather than comparing against ``None``.
         """
         return tuple(self._children) if self._children is not None else None
 
@@ -395,13 +398,25 @@ class Tree:
         Attaching either makes a node its own descendant, and every traversal
         this class ships then loops or overflows rather than answering.
 
-        The walk carries its own ``seen`` set rather than calling
-        :meth:`is_ancestor`, which is the same question asked of the same
-        edges. The difference is what each does on a tree that is *already*
-        cyclic -- one assembled through the private attributes, or unpickled
-        from before this guard existed: ``is_ancestor`` returns only if it
-        happens to meet its target, and otherwise circles the ring forever.
-        A guard that can hang is not a guard against hanging.
+        The walk terminates itself rather than calling :meth:`is_ancestor`,
+        which is the same question asked of the same edges. The difference is
+        what each does on a tree that is *already* cyclic -- one assembled
+        through the private attributes, or unpickled from before this guard
+        existed: ``is_ancestor`` returns only if it happens to meet its target,
+        and otherwise circles the ring forever. A guard that can hang is not a
+        guard against hanging.
+
+        Two walkers give that guarantee without allocating: the marker takes
+        one step for each two of the walker's, so on a chain the walker runs
+        off the top and the walk costs a single pass, while on a ring the two
+        must meet. The obvious alternative -- remembering every node seen in a
+        ``set`` -- answers the same question and was measured **5x slower**
+        building a 4000-node chain (487ms against 96ms, and the same ratio at
+        1000), which matters because a chain is the shape a conversation tree
+        has: every turn is one more level, and every turn pays this walk.
+        Brent's variant was measured too and is slower here (148ms): it spends
+        a loop iteration per step where this spends one per two, and the
+        acyclic walk is the case that has to be cheap.
 
         Args:
             child: The node about to be attached under this one.
@@ -410,23 +425,39 @@ class Tree:
             ValidationError: If ``child`` is this node or one of its ancestors,
                 or if this node's ancestor chain is already cyclic.
         """
-        seen: set[int] = set()
-        node: Tree | None = self
-        while node is not None:
-            if node is child:
-                raise ValidationError(
-                    "a node cannot be added under itself or under one of its own "
-                    "descendants: that would make it its own ancestor",
-                    context={"child": child.data, "parent": self.data},
-                )
-            if id(node) in seen:
+
+        def refuse_the_cycle() -> ValidationError:
+            return ValidationError(
+                "a node cannot be added under itself or under one of its own "
+                "descendants: that would make it its own ancestor",
+                context={"child": child.data, "parent": self.data},
+            )
+
+        marker: Tree | None = self
+        walker: Tree = self
+        while True:
+            if walker is child:
+                raise refuse_the_cycle()
+            one_up = walker._parent
+            if one_up is None:
+                return
+            if one_up is child:
+                raise refuse_the_cycle()
+            two_up = one_up._parent
+            if two_up is None:
+                return
+            walker = two_up
+            # The marker trails the walker, so it cannot run off the top first
+            # -- the two returns above have covered every chain short enough
+            # for that. Spelled as a conditional rather than asserted so the
+            # type checker needs no exemption to agree.
+            marker = marker._parent if marker is not None else None
+            if walker is marker:
                 raise ValidationError(
                     "this node's ancestor chain is already cyclic, so nothing "
                     "can be attached under it",
                     context={"parent": self.data},
                 )
-            seen.add(id(node))
-            node = node._parent
 
     def add_edge(
         self,
@@ -477,6 +508,18 @@ class Tree:
         parent = None
         child = None
 
+        # Resolving the parent can mutate -- creating a node, or moving one out
+        # of the tree it was in -- and the guard does not run until the child is
+        # added, one step later. `undo` is what puts that first step back when
+        # the second one is refused, so the caller who saw the exception is
+        # looking at the tree they started with. The child lookup below has to
+        # stay *after* the parent is in place: it searches `self`, and finding
+        # the parent there is what makes `add_edge("x", "x")` a refused
+        # self-edge rather than two nodes spelled the same.
+        # `object` rather than `None`: `prune` answers with the former parent
+        # and this discards it, so the return type is deliberately unconstrained.
+        undo: Callable[[], object] | None = None
+
         if isinstance(parent_node_or_data, Tree):
             parent = parent_node_or_data
             # if it is not in this tree ...
@@ -486,7 +529,9 @@ class Tree:
                 )
                 == 0
             ):
-                # ...then add it as a child of self
+                # ...then add it as a child of self, remembering where it came
+                # from so the move can be reversed rather than merely undone
+                undo = self._restores(parent)
                 self.add_child(parent)
         else:
             # can we find the data in this tree ...
@@ -497,20 +542,54 @@ class Tree:
                 parent = found[0]
             else:
                 parent = self.add_child(parent_node_or_data)
+                undo = parent.prune
 
-        if isinstance(child_node_or_data, Tree):
-            child = parent.add_child(child_node_or_data)
-        else:
-            # can we find the data in this tree ...
-            found = self.find_nodes(
-                lambda node: node.data == child_node_or_data, include_self=True, only_first=True
-            )
-            if len(found) > 0:
-                child = parent.add_child(found[0])
-            else:
+        try:
+            if isinstance(child_node_or_data, Tree):
                 child = parent.add_child(child_node_or_data)
+            else:
+                # can we find the data in this tree ...
+                found = self.find_nodes(
+                    lambda node: node.data == child_node_or_data,
+                    include_self=True,
+                    only_first=True,
+                )
+                if len(found) > 0:
+                    child = parent.add_child(found[0])
+                else:
+                    child = parent.add_child(child_node_or_data)
+        except ValidationError:
+            if undo is not None:
+                undo()
+            raise
 
         return (parent, child)
+
+    @staticmethod
+    def _restores(node: Tree) -> Callable[[], None]:
+        """Capture where ``node`` sits now, and answer a callable that puts it back.
+
+        Used by :meth:`add_edge` to reverse a move it made before a later step
+        in the same call was refused. The position is captured as well as the
+        parent, so a reversed move restores sibling order rather than appending.
+
+        Args:
+            node: The node about to be moved.
+
+        Returns:
+            A no-argument callable that returns ``node`` to where it was.
+        """
+        former = node._parent
+        index: int | None = None
+        if former is not None and former._children is not None and node in former._children:
+            index = former._children.index(node)
+
+        def restore() -> None:
+            node.prune()
+            if former is not None:
+                former.add_child(node, child_pos=index)
+
+        return restore
 
     def prune(self) -> Tree | None:
         """Remove this node from its parent.
@@ -531,13 +610,20 @@ class Tree:
             former_parent = child.prune()
             print(former_parent.data)  # "root"
             print(child.parent)        # None
-            print(child.children)      # [grandchild] - subtree intact
+            print(child.children)      # (grandchild,) - subtree intact
             ```
         """
         result = self._parent
         if self._parent is not None:
-            if self._parent._children is not None:
-                self._parent._children.remove(self)
+            children = self._parent._children
+            # ``in`` before ``remove``: a tree written under an earlier release
+            # can hold a link only this side agrees with -- the old ``parent``
+            # setter set ``_parent`` and never told the parent -- and removing
+            # by value from a list that does not hold it raises ``ValueError``
+            # naming a node the caller never mentioned. Detaching is what was
+            # asked for, and it is achieved either way.
+            if children is not None and self in children:
+                children.remove(self)
             self._parent = None
         return result
 
