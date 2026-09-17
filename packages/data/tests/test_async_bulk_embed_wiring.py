@@ -32,11 +32,14 @@ import numpy as np
 import pytest
 
 from dataknobs_data import Record
-from dataknobs_data.backends.file import AsyncFileDatabase
-from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.backends.file import AsyncFileDatabase, SyncFileDatabase
+from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
+from dataknobs_data.backends.postgres import SyncPostgresDatabase
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.fields import VectorField
 from dataknobs_data.testing import DeterministicEmbedder
+from dataknobs_data.vector.bulk_embed_mixin import BulkEmbedMixin
 from dataknobs_data.vector.content import (
     CONTENT_HASH_KEY,
     FIELD_SEPARATOR_KEY,
@@ -97,6 +100,39 @@ class TestTheAsyncMethodIsAwaitable:
         assert inspect.iscoroutinefunction(cls.bulk_embed_and_store), (
             f"{cls.__name__}.bulk_embed_and_store is not awaitable; it resolves to "
             f"{next(k.__name__ for k in cls.__mro__ if 'bulk_embed_and_store' in k.__dict__)}"
+        )
+
+
+class TestEverySyncBackendResolvesToTheSharedImplementation:
+    """The same wiring question, asked of the synchronous lane.
+
+    ``SyncVectorOperationsMixin`` declares ``bulk_embed_and_store``
+    ``@abstractmethod``, and ``BulkEmbedMixin`` is the implementation every
+    sync backend is supposed to satisfy it with. A backend that instead
+    *stubs* the method satisfies ``abc`` just as well --- to ``abc`` a
+    ``raise NotImplementedError`` body is an implementation --- so the class
+    constructs, the abstract check reports nothing, and the failure waits for
+    the first caller.
+
+    ``SyncPostgresDatabase`` was that backend: the only sync one not listing
+    ``BulkEmbedMixin`` among its bases, carrying a stub whose own docstring
+    said it was "a placeholder implementation to satisfy the abstract method
+    requirement". Its three siblings list the mixin before the vector mixin,
+    with a comment saying why, and so does ``AsyncPostgresDatabase`` one class
+    down the same file.
+    """
+
+    @pytest.mark.parametrize(
+        "cls",
+        [SyncMemoryDatabase, SyncFileDatabase, SyncSQLiteDatabase, SyncPostgresDatabase],
+        ids=lambda c: c.__name__,
+    )
+    def test_resolves_to_the_shared_mixin(self, cls: type) -> None:
+        owner = next(k for k in cls.__mro__ if "bulk_embed_and_store" in k.__dict__)
+        assert owner is BulkEmbedMixin, (
+            f"{cls.__name__}.bulk_embed_and_store resolves to {owner.__name__}, not "
+            f"BulkEmbedMixin. A backend defining its own body here is either a real "
+            f"override worth explaining or a stub standing in for the abstract method"
         )
 
 

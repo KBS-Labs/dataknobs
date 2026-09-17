@@ -30,7 +30,7 @@ from ..streaming import (
     resolve_conflict_write,
     run_stream_write,
 )
-from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
+from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from ..vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from .config import PostgresDatabaseConfig
 from .postgres_mixins import (
@@ -106,6 +106,7 @@ def _ssl_to_sslmode(ssl: Any) -> str | None:
 class SyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
     SyncDatabase,
+    BulkEmbedMixin,  # Must come before SyncVectorOperationsMixin to override bulk_embed_and_store
     SyncVectorOperationsMixin,
     SQLRecordSerializer,
     PostgresBaseConfig,
@@ -1108,23 +1109,6 @@ class SyncPostgresDatabase(
 
         self._detect_vector_support()
         return self._vector_enabled
-
-    def bulk_embed_and_store(
-        self,
-        records: list[Record],
-        text_field: str | list[str],
-        vector_field: str = "embedding",
-        embedding_fn: Any = None,
-        batch_size: int = 100,
-        model_name: str | None = None,
-        model_version: str | None = None,
-    ) -> list[str]:
-        """Embed text fields and store vectors with records (stub for abstract requirement).
-
-        This is a placeholder implementation to satisfy the abstract method requirement.
-        Full implementation would require actual embedding function.
-        """
-        raise NotImplementedError("bulk_embed_and_store requires an embedding function")
 
 
 # Global pool manager instance for async PostgreSQL connections
