@@ -95,6 +95,72 @@ thread for its lifetime. When a synchronous component makes repeated calls,
 **own a long-lived bridge and reuse it** rather than calling
 `run_coro_sync` per call or spawning a bridge per call.
 
+### `SyncBridgeAdapter` — the wrapper shape, declared once
+
+A synchronous wrapper over an asynchronous object is the common case for a
+long-lived bridge, and three of them in this workspace wrote the same surface
+by hand before it had a name: `SyncTextEmbedder` (`dataknobs-data`),
+`BridgedEntityResolver` (here) and `SyncProviderAdapter` (`dataknobs-llm`).
+`SyncBridgeAdapter` is that surface. A subclass supplies only what varies —
+the object it wraps, the methods that forward to it, and, if it *owns* that
+object, how to close it:
+
+```python
+from dataknobs_common import SyncBridgeAdapter
+
+class SyncThing(SyncBridgeAdapter):
+    BRIDGE_THREAD_NAME = "dk-sync-thing"
+
+    def __init__(self, inner, **kwargs):
+        super().__init__(**kwargs)
+        self._inner = inner
+
+    def do(self, x):
+        return self._run(self._inner.do(x))
+```
+
+What a subclass gets for free:
+
+| Member | What it is for |
+|---|---|
+| `bridge=` | run on a bridge the caller owns, so several wrappers cost one thread. `close()` then leaves it running |
+| `timeout=` | an upper bound on a blocking wait a synchronous caller cannot otherwise cancel |
+| `_run(coro)` | the one place the bridge is reached, so forwarding methods cannot disagree about which loop they run on |
+| `close()` / `aclose()` | teardown from sync and from async code. `aclose` awaits the wrapped object instead of blocking the caller's loop on the bridge |
+| `with` / `async with` | the reliable teardown form, one per kind of holder — the async pair is `aclose()`, so it does not block the holder's loop |
+| lazy construction | the thread is allocated on first `_run`, so building one to read a model id or a capability set costs nothing |
+
+The wrapped object is deliberately **not** stored by the base: each of the
+three names it differently and one exposes it publicly, so a base that owned it
+would force a rename on a published attribute to buy nothing.
+
+Override `_close_inner()` / `_aclose_inner()` only if the wrapper **owns** what
+it wraps. Two of the three are handed an object the caller keeps and must not
+close; the third is what a factory returns, so nothing else can close it. That
+is ownership, not drift, which is why it is a hook rather than a shared body.
+
+Both context-manager protocols are present because both teardowns are. A
+wrapper whose purpose is to be *called* synchronously is routinely built and
+torn down by async code that hands it to a `def` site in a worker thread, so
+both kinds of holder are real:
+
+```python
+async with SyncThing(inner) as sync:               # teardown is awaited
+    await asyncio.to_thread(run_sync_pipeline, sync)
+
+with SyncThing(inner) as sync:                     # teardown goes via the bridge
+    run_sync_pipeline(sync)
+```
+
+Neither entry is a mistake, so neither is refused. An async holder that writes
+the synchronous form gets the bridged teardown, which is a cost rather than a
+bug — unlike `AsyncLLMProvider`, where sync entry is *always* wrong and
+`__enter__` therefore raises.
+
+`BRIDGE_THREAD_NAME` is a diagnostic label, not a way out of the leak guard:
+the bridge registers every name it runs under, so
+`assert_no_leaked_bridge_threads()` watches a subclass's name too.
+
 ## sync → async: driving a blocking iterator from async
 
 The counterpart, [`aiter_sync_in_thread`](https://kbs-labs.github.io/dataknobs/packages/common/api/), drives a *lazy,

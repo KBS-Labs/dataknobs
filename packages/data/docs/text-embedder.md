@@ -307,11 +307,25 @@ said `np.ndarray` alone, which understated what they had always accepted — so
 the snippet above was correct at runtime and an `arg-type` error under `mypy`
 at three of the sites. The annotations now say what the code does.
 
-`SyncTextEmbedder` holds one `SyncLoopBridge`: a private event loop on a daemon
-thread, which makes it callable from plain sync code *and* from inside a
-running loop, without the `asyncio.run` / `run_until_complete` deadlock. That
-costs one daemon thread for the object's lifetime, so build one and keep it
-rather than one per call.
+`SyncTextEmbedder` is a
+[`SyncBridgeAdapter`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/):
+it reaches the embedder over a private event loop on a daemon thread, which
+makes it callable from plain sync code *and* from inside a running loop,
+without the `asyncio.run` / `run_until_complete` deadlock. The thread is
+allocated when the embedder is first reached, so building one to read
+`model_id` or `dimensions` costs nothing; after that it is held until
+`close()`, so build one and keep it rather than one per call. Hand several
+embedders the same `bridge` and they share the one thread:
+
+```python
+from dataknobs_common import SyncLoopBridge
+
+with SyncLoopBridge(thread_name="my-service") as bridge:
+    fast = SyncTextEmbedder(small_model, bridge=bridge)
+    slow = SyncTextEmbedder(large_model, bridge=bridge)
+```
+
+A bridge handed in belongs to the caller, so `close()` leaves it running.
 
 **It does not deadlock; it does block.** Called from inside a coroutine, the
 calling thread waits on the bridge's result for the whole embedding, so every
@@ -320,7 +334,10 @@ no exception reports and no single-request test shows. From async code, await
 the embedder directly; this class is for the five `def` sites that cannot.
 
 `close()` is for deterministic teardown, and it closes only the bridge — the
-wrapped embedder was handed in already built and is not its to close. Dropping
+wrapped embedder was handed in already built and is not its to close. `with`
+is its reliable form; an async holder writes `async with` (or
+`await sync.aclose()`), which awaits the teardown rather than putting it
+through the bridge. Dropping
 one without closing it emits a `ResourceWarning` naming the loop thread, and
 the bridge tears itself down; before that it could not, because the live loop
 thread held a reference back to the bridge that kept it permanently alive.

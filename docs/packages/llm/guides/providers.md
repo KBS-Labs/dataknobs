@@ -104,15 +104,32 @@ with create_llm_provider(config, is_async=False) as provider:
     print(provider.complete("hello").content)
 ```
 
-From async code, `await provider.aclose()` instead: it awaits the provider's
-teardown directly rather than blocking the caller's loop on the bridge.
+From async code — a service that builds one of these to hand to a `def` site in
+a worker thread — `async with` is that form, and it awaits the provider's
+teardown directly rather than blocking the caller's loop on the bridge
+(`await provider.aclose()` is the same teardown without the block form):
+
+```python
+async with create_llm_provider(config, is_async=False) as provider:
+    await asyncio.to_thread(provider.initialize)
+    response = await asyncio.to_thread(provider.complete, "hello")
+```
+
+Entry initializes nothing, unlike an async provider's `async with`: every
+method on the adapter blocks the calling thread, `initialize()` included, so an
+async holder runs those in a worker too and takes the async form only for the
+teardown.
 
 An adapter nobody closes emits a `ResourceWarning` naming its thread when it is
 collected. Python ignores `ResourceWarning` by default, so run under
 `-W always::ResourceWarning`, `-X dev`, or pytest to see it.
 
 Several adapters can share one bridge, and one thread, by being handed the same
-one — in which case it belongs to the caller and `close()` leaves it running:
+one — in which case it belongs to the caller and `close()` leaves it running.
+Anything else built on
+[`SyncBridgeAdapter`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/)
+can share it too, so a service holding a sync provider and a
+`SyncTextEmbedder` need not hold two threads:
 
 ```python
 with SyncLoopBridge(thread_name="my-service") as bridge:

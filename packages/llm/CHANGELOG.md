@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
+  `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly
+  as before, and it still closes the provider it wraps, which the base leaves
+  to a hook because the other adopters do not own what they wrap. Two things
+  are new. The bridge it accepts can be shared with anything else built on
+  that base, so a service holding a sync provider and a `SyncTextEmbedder`
+  need not hold two daemon threads. And it answers `async with`, which pairs
+  with the `aclose()` it already had: entry initializes nothing, so an async
+  holder still runs the blocking calls in a worker and takes the async form
+  only for the teardown.
+
 - **A synchronous provider carries a teardown obligation, and a wider surface
   to meet it with.** `create_llm_provider(config, is_async=False)` and
   `LLMProviderFactory(is_async=False).create(...)` return an adapter that
