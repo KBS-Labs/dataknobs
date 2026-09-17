@@ -29,6 +29,44 @@ from ..versioning import (
 )
 
 
+def _normalized_base(
+    library: AbstractPromptLibrary | AsyncPromptLibrary | None,
+) -> AsyncPromptLibrary | None:
+    """The base library in the one flavour this library can await.
+
+    Total over its argument, which is the point. It was a two-way branch ---
+    ``as_async`` for an :class:`AbstractPromptLibrary`, store as-is otherwise
+    --- over a three-way question, so anything it did not recognise was kept as
+    though it were already asynchronous. That constructed cleanly and raised
+    ``TypeError: ... can't be used in 'await' expression`` from a fallback
+    lookup, which only runs for a name carrying no version and so need not
+    happen anywhere near construction.
+
+    Args:
+        library: A library of either flavour, or ``None`` for no base.
+
+    Returns:
+        An :class:`AsyncPromptLibrary`, or ``None``.
+
+    Raises:
+        TypeError: If ``library`` answers to neither protocol.
+    """
+    if library is None:
+        return None
+    if isinstance(library, AsyncPromptLibrary):
+        # Already the flavour this library awaits; wrapping would buy a thread
+        # hop and nothing else. Checked first so a class declaring both is
+        # taken at its asynchronous word rather than offloaded.
+        return library
+    if isinstance(library, AbstractPromptLibrary):
+        return as_async(library)
+    raise TypeError(
+        f"base_library must be an AbstractPromptLibrary or an AsyncPromptLibrary, "
+        f"got {type(library).__name__}. A library extending BasePromptLibrary answers "
+        f"to neither until it names a flavour, because that mixin declares no interface"
+    )
+
+
 class VersionedPromptLibrary(AsyncPromptLibrary):
     """Prompt library with versioning, A/B testing, and metrics tracking.
 
@@ -97,14 +135,15 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
                 fallback lookup cannot stall this library's caller on a
                 filesystem read. ``base_library`` keeps exactly the object that
                 was passed; the view is private.
+
+        Raises:
+            TypeError: If ``base_library`` answers to neither protocol. A class
+                extending :class:`BasePromptLibrary` alone is the likely case:
+                that mixin declares no interface, so such a library has to name
+                a flavour before anything can tell which one it is.
         """
         self.storage = storage
         self.base_library = base_library
-        self._async_base: AsyncPromptLibrary | None = (
-            as_async(base_library)
-            if isinstance(base_library, AbstractPromptLibrary)
-            else base_library
-        )
 
         # Initialize managers
         self.version_manager = VersionManager(storage)
@@ -113,6 +152,22 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
 
         # Cache for converting versions to templates
         self._template_cache: Dict[str, PromptTemplateDict] = {}
+
+    @property
+    def base_library(self) -> AbstractPromptLibrary | AsyncPromptLibrary | None:
+        """The base library exactly as it was handed over, either flavour.
+
+        A property rather than a plain attribute because the flavour-normalised
+        view every lookup actually reaches is derived from it. As a plain pair
+        the two drifted on assignment: ``get_metadata`` reported the new library
+        while every fallback kept consulting the old one.
+        """
+        return self._base_library
+
+    @base_library.setter
+    def base_library(self, library: AbstractPromptLibrary | AsyncPromptLibrary | None) -> None:
+        self._base_library = library
+        self._async_base = _normalized_base(library)
 
     # ===== Version Management API =====
 
@@ -418,10 +473,17 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
     async def list_system_prompts(self) -> List[str]:
         """List all system prompt names.
 
+        The walk belongs to the version manager, which owns the index and its
+        key format. Doing it here meant reading that manager's private
+        dictionary and parsing its keys back --- a second implementation of a
+        private detail, which drifted from it in two ways at once. A listing
+        that asks the manager can follow it to a store; one that reads its
+        in-memory dict cannot.
+
         Returns:
             List of prompt names
         """
-        names = self._names_of_type("system")
+        names = await self.version_manager.list_names("system")
 
         # Add from base library if available
         if self._async_base:
@@ -435,7 +497,7 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
         Returns:
             List of prompt names
         """
-        names = self._names_of_type("user")
+        names = await self.version_manager.list_names("user")
 
         if self._async_base:
             names.update(await self._async_base.list_user_prompts())
@@ -523,19 +585,6 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
         }
 
     # ===== Helper Methods =====
-
-    def _names_of_type(self, prompt_type: str) -> set[str]:
-        """Names carrying at least one version of ``prompt_type``.
-
-        The two listings differ only in the type they filter on, and the index
-        is a plain dict --- reading it awaits nothing, which is why both
-        listings suspend only when a base library is present to consult.
-        """
-        return {
-            key.split(":", 1)[0]
-            for key in self.version_manager._version_index
-            if key.split(":", 1)[1] == prompt_type
-        }
 
     def _version_to_template(self, version: PromptVersion) -> PromptTemplateDict:
         """Convert PromptVersion to PromptTemplateDict for compatibility."""

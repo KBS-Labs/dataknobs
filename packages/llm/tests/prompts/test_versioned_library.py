@@ -24,13 +24,23 @@ the doors themselves.
 import asyncio
 import inspect
 import threading
+from typing import Any
 
 import pytest
-from dataknobs_common.testing import assert_no_leaked_bridge_threads
+from dataknobs_common.testing import assert_no_leaked_bridge_threads, live_dk_daemon_threads
 
 from dataknobs_llm.prompts import VersionedPromptLibrary
-from dataknobs_llm.prompts.base import AsyncPromptLibrary, as_sync
+from dataknobs_llm.prompts.base import (
+    AsyncPromptLibrary,
+    BasePromptLibrary,
+    PromptTemplateDict,
+    as_sync,
+)
+from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
+from dataknobs_llm.prompts.versioning import VersionManager
 from dataknobs_llm.prompts.versioning.types import PromptVariant, VersionStatus
+
+_BASE_CONFIG = {"system": {"inherited": {"template": "From the base library"}}}
 
 
 def test_the_library_can_be_constructed() -> None:
@@ -231,4 +241,188 @@ def test_the_sync_door_installs_no_event_loop_in_the_calling_thread() -> None:
     assert observed["result"] == []
     assert isinstance(observed["after"], RuntimeError), (
         f"a loop was installed and left running: {observed['after']!r}"
+    )
+
+
+# ===== base_library, and the three answers to "which flavour is this?" =====
+
+
+class _ConsumerLibrary(BasePromptLibrary):
+    """A library written the way the mixin's own docstring invites.
+
+    ``BasePromptLibrary`` stopped declaring the interface, so a consumer
+    extending it and forgetting to name a flavour produces exactly this: an
+    object with every accessor, answering to neither protocol. It is the shape
+    the CHANGELOG contemplates, which is why it stands in here for "something
+    the discriminator does not recognise" rather than a bare ``object()``.
+    """
+
+    def get_system_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
+        return {"template": "from the consumer's library"} if name == "known" else None
+
+    def get_user_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
+        return None
+
+    def list_system_prompts(self) -> list[str]:
+        return ["known"]
+
+    def list_user_prompts(self) -> list[str]:
+        return []
+
+    def get_message_index(self, name: str, **kwargs: Any) -> Any:
+        return None
+
+    def list_message_indexes(self) -> list[str]:
+        return []
+
+    def get_rag_config(self, name: str, **kwargs: Any) -> Any:
+        return None
+
+    def get_prompt_rag_configs(
+        self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
+    ) -> list[Any]:
+        return []
+
+
+def test_a_base_library_of_neither_flavour_is_refused_at_construction() -> None:
+    """The discriminator is total, or it guesses --- and it guessed ``async``.
+
+    ``as_async`` if it is an ``AbstractPromptLibrary``, otherwise store it as
+    though it were an ``AsyncPromptLibrary`` is a two-way branch over a
+    three-way question. Anything unrecognised took the second arm, constructed
+    cleanly, and raised ``TypeError: object ... can't be used in 'await'
+    expression`` from a *fallback* path --- reached only for a name that has no
+    version, so possibly long after construction and nowhere near it.
+    """
+    with pytest.raises(TypeError, match=r"AbstractPromptLibrary.*AsyncPromptLibrary"):
+        VersionedPromptLibrary(base_library=_ConsumerLibrary())
+
+
+@pytest.mark.asyncio
+async def test_a_synchronous_base_library_is_reached_without_stalling_the_loop() -> None:
+    """The flavour this library is most likely to be handed, on a migration."""
+    library = VersionedPromptLibrary(base_library=ConfigPromptLibrary(_BASE_CONFIG))
+
+    assert library.base_library is not None
+    # The published attribute is the object that was passed, not the view.
+    assert isinstance(library.base_library, ConfigPromptLibrary)
+
+    fallback = await library.get_system_prompt("inherited")
+    assert fallback is not None
+    assert fallback["template"] == "From the base library"
+    assert await library.list_system_prompts() == ["inherited"]
+
+
+@pytest.mark.asyncio
+async def test_an_asynchronous_base_library_is_reached_unwrapped() -> None:
+    """Already the right flavour, so no door is needed."""
+    base = VersionedPromptLibrary()
+    await base.create_version(
+        name="inherited", prompt_type="system", template="From the base library", version="1.0.0"
+    )
+
+    library = VersionedPromptLibrary(base_library=base)
+
+    fallback = await library.get_system_prompt("inherited")
+    assert fallback is not None
+    assert fallback["template"] == "From the base library"
+
+
+@pytest.mark.asyncio
+async def test_replacing_the_base_library_replaces_what_lookups_reach() -> None:
+    """The published attribute and the private view cannot drift apart.
+
+    ``base_library`` was a plain attribute while the view was computed once in
+    ``__init__``, so assigning a new library changed what ``get_metadata``
+    reported while every lookup kept reaching the old one.
+    """
+    library = VersionedPromptLibrary(base_library=ConfigPromptLibrary(_BASE_CONFIG))
+    library.base_library = ConfigPromptLibrary(
+        {"system": {"inherited": {"template": "From the replacement"}}}
+    )
+
+    fallback = await library.get_system_prompt("inherited")
+    assert fallback is not None
+    assert fallback["template"] == "From the replacement"
+
+    library.base_library = None
+    assert await library.get_system_prompt("inherited") is None
+    assert library.get_metadata()["has_base_library"] is False
+
+
+def test_replacing_the_base_library_with_neither_flavour_is_refused() -> None:
+    """The setter is the same door as the constructor, or it is a hole in it."""
+    library = VersionedPromptLibrary()
+    with pytest.raises(TypeError, match=r"AbstractPromptLibrary.*AsyncPromptLibrary"):
+        library.base_library = _ConsumerLibrary()
+
+
+# ===== What the listings actually walk =====
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_whose_last_version_was_deleted_stops_being_listed() -> None:
+    """Deleting the last version empties the index entry but keeps the key.
+
+    The listing walked the index's *keys*, so the name survived its own last
+    version: ``list_system_prompts`` named a prompt that
+    ``get_system_prompt`` then answered ``None`` for.
+    """
+    library = VersionedPromptLibrary()
+    version = await library.create_version(
+        name="doomed", prompt_type="system", template="Hello!", version="1.0.0"
+    )
+    assert await library.list_system_prompts() == ["doomed"]
+
+    assert await library.version_manager.delete_version(version.version_id) is True
+
+    assert await library.get_system_prompt("doomed") is None
+    assert await library.list_system_prompts() == []
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_name_containing_a_colon_is_still_listed() -> None:
+    """The index key is ``f"{name}:{type}"``, so the name is the *left* part.
+
+    Writing and reading both build the key, so a name carrying a colon round
+    trips through ``get_system_prompt`` --- but the listing parsed the key back
+    with ``split(":", 1)``, which put the rest of the name in the type slot and
+    dropped the prompt from its own listing.
+    """
+    library = VersionedPromptLibrary()
+    await library.create_version(
+        name="team:greeting", prompt_type="system", template="Hello!", version="1.0.0"
+    )
+
+    assert await library.get_system_prompt("team:greeting") is not None
+    assert await library.list_system_prompts() == ["team:greeting"]
+
+
+@pytest.mark.asyncio
+async def test_no_bridge_thread_exists_while_the_library_is_answering() -> None:
+    """The property the rename claimed and the leak check cannot see.
+
+    ``assert_no_leaked_bridge_threads`` samples on entry and fails on threads
+    still alive at *exit*, so a bridge built and closed inside one call passes
+    it --- which is precisely what the old per-call bridge did. Observing from
+    inside the manager call the accessor is awaiting catches allocation itself.
+    """
+    library = VersionedPromptLibrary()
+    observed: list[list[str]] = []
+
+    class Witness(VersionManager):
+        async def get_version(self, *args: Any, **kwargs: Any) -> Any:
+            observed.append([t.name for t in live_dk_daemon_threads()])
+            return await super().get_version(*args, **kwargs)
+
+    library.version_manager = Witness(None)
+    await library.create_version(
+        name="greeting", prompt_type="system", template="Hello!", version="1.0.0"
+    )
+
+    assert await library.get_system_prompt("greeting") is not None
+
+    assert observed, "the witness never ran, so it proves nothing"
+    assert observed == [[] for _ in observed], (
+        f"a bridge thread was alive while the library answered: {observed}"
     )
