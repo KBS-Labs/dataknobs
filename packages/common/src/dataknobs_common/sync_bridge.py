@@ -48,14 +48,26 @@ long-lived bridge over spawning one per call (or per
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import threading
+import time
 import warnings
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, ClassVar, Self, TypeVar
 
-__all__ = ["SyncBridgeAdapter", "SyncLoopBridge", "bridge_thread_names", "run_coro_sync"]
+__all__ = [
+    "BridgedOperation",
+    "OperationTimeoutError",
+    "SyncBridgeAdapter",
+    "SyncLoopBridge",
+    "bridge_thread_names",
+    "bridged_operation",
+    "run_coro_sync",
+]
 
 T = TypeVar("T")
 
@@ -70,6 +82,15 @@ _THREAD_NAME = "dk-sync-loop-bridge"
 # silently. Registering here is what keeps `thread_name=` a diagnostic label
 # rather than a way out of the guard.
 _thread_names: set[str] = {_THREAD_NAME}
+
+logger = logging.getLogger(__name__)
+
+#: Seconds teardown spends letting cancelled tasks unwind before the loop is
+#: closed anyway. Bounded rather than unbounded --- ``close`` joins the loop
+#: thread, so a task that refuses to cancel would otherwise hang the closing
+#: caller forever, which is a worse failure than the one this drain fixes. A
+#: task that cancels promptly costs a single loop iteration, not this budget.
+_TEARDOWN_DRAIN_SECONDS = 5.0
 
 
 def _run_loop(loop: asyncio.AbstractEventLoop, ready: threading.Event) -> None:
@@ -88,13 +109,61 @@ def _run_loop(loop: asyncio.AbstractEventLoop, ready: threading.Event) -> None:
     asyncio.set_event_loop(loop)
     loop.call_soon(ready.set)
     loop.run_forever()
-    # ``run_forever`` returned -> ``close`` stopped the loop. Drain any
-    # leftover async generators and close the loop here, on the loop's own
-    # thread (the only thread allowed to close it cleanly).
+    # ``run_forever`` returned -> ``close`` stopped the loop. Unwind what is
+    # still on it and close it here, on the loop's own thread (the only thread
+    # allowed to close it cleanly). Tasks first, then async generators: a
+    # cancelled task's ``finally`` can be what closes a generator, and draining
+    # the generators first would close it out from under the task.
     try:
+        _cancel_pending_tasks(loop)
         loop.run_until_complete(loop.shutdown_asyncgens())
     finally:
         loop.close()
+
+
+def _cancel_pending_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel whatever is still running on ``loop`` and let it unwind.
+
+    ``loop.close()`` destroys a pending task outright: its ``finally`` never
+    runs and the only report is ``Task was destroyed but it is pending!`` on
+    stderr. That ``finally`` is where a connection goes back to its pool, a
+    transaction is rolled back, a lock is released --- so without this the
+    bridge leaks exactly the resources a teardown exists to reclaim.
+
+    Two shapes reach here, and neither is exotic. A coroutine that spawned a
+    task and returned without awaiting it leaves one behind on a wholly
+    *successful* ``run`` --- a pool's background maintenance is this shape. And
+    a coroutine cancelled by :meth:`SyncLoopBridge.run`'s timeout needs more
+    than the single loop iteration it used to get if its cleanup awaits more
+    than once, which realistic cleanup does.
+
+    This is what makes ``run``'s "not abandoned mid-flight" true on the close
+    path as well as the timeout path. It mirrors what :func:`asyncio.run` does
+    through :class:`asyncio.Runner`, with the wait bounded --- see
+    :data:`_TEARDOWN_DRAIN_SECONDS`.
+    """
+    pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    # ``wait`` returns the two sets rather than raising, so a task that ignores
+    # cancellation costs the budget and nothing else.
+    _, still_pending = loop.run_until_complete(
+        asyncio.wait(pending, timeout=_TEARDOWN_DRAIN_SECONDS)
+    )
+    if still_pending:
+        # Reported rather than swallowed: these are about to be destroyed by
+        # `loop.close()` with their cleanup unrun, which is the original defect
+        # surviving in the one case this cannot fix. Naming them is the
+        # difference between a diagnosable leak and a silent one.
+        logger.warning(
+            "SyncLoopBridge teardown: %d task(s) did not finish cancelling "
+            "within %.1fs and were abandoned: %s",
+            len(still_pending),
+            _TEARDOWN_DRAIN_SECONDS,
+            ", ".join(sorted(task.get_name() for task in still_pending)),
+        )
 
 
 def bridge_thread_names() -> frozenset[str]:
@@ -257,6 +326,16 @@ class SyncLoopBridge:
 
     def close(self) -> None:
         """Stop the background loop and join its thread. Idempotent.
+
+        Whatever is still running on the loop is cancelled and given a bounded
+        window to unwind before the loop is closed --- see
+        :func:`_cancel_pending_tasks`. That is what makes :meth:`run`'s "not
+        abandoned mid-flight" hold on this path too: without it a task whose
+        cancellation had been requested but not yet delivered, or one a
+        coroutine spawned and never awaited, was destroyed by ``loop.close()``
+        with its ``finally`` unrun. Teardown therefore costs a loop iteration
+        rather than nothing, and in the pathological case up to
+        :data:`_TEARDOWN_DRAIN_SECONDS`.
 
         Safe to call from any thread except the bridge's own loop thread:
         calling ``close`` from inside a coroutine running on the bridge would
@@ -718,8 +797,14 @@ def run_coro_sync(coro: Coroutine[Any, Any, T], *, timeout: float | None = None)
 
     Args:
         coro: The coroutine to run.
-        timeout: Maximum seconds to wait, forwarded to
+        timeout: Maximum seconds to wait for ``coro``, forwarded to
             :meth:`SyncLoopBridge.run`. ``None`` (the default) waits forever.
+            It bounds the coroutine, not this call: the throwaway bridge is
+            torn down afterwards, and that waits up to
+            :data:`_TEARDOWN_DRAIN_SECONDS` for a cancelled ``coro`` to unwind
+            rather than destroying its cleanup mid-flight. Prompt cancellation
+            costs one loop iteration; the worst case is ``timeout`` plus the
+            drain.
 
     Returns:
         Whatever ``coro`` returns.
@@ -730,3 +815,193 @@ def run_coro_sync(coro: Coroutine[Any, Any, T], *, timeout: float | None = None)
     """
     with SyncLoopBridge() as bridge:
         return bridge.run(coro, timeout=timeout)
+
+
+class OperationTimeoutError(TimeoutError):
+    """A :class:`BridgedOperation`'s deadline expired.
+
+    A subclass of the **builtin** ``TimeoutError`` --- deliberately, and not of
+    ``dataknobs_common.exceptions.TimeoutError``, which is a ``DataknobsError``
+    that shadows the builtin name. What :meth:`SyncLoopBridge.run` raises for
+    an expired wait is the builtin, so that is what this must widen if
+    ``except TimeoutError`` around a bridged call is to keep catching both.
+
+    The distinct type exists for the caller that must tell *this operation ran
+    out of time* apart from *the work raised a timeout of its own*: a batch
+    executor whose per-item handler absorbs an item's failure has to let the
+    operation's deadline through that handler, and a bare ``TimeoutError``
+    cannot say which of the two it is.
+    """
+
+
+@dataclass(frozen=True)
+class BridgedOperation:
+    """The loop one synchronous call runs on, and the budget it runs within.
+
+    A synchronous wrapper over an asynchronous object reaches that object more
+    than once per public call --- a chunked write per chunk, a batch per item,
+    a stream per record. Both of the things that govern those reaches belong
+    to the *operation* rather than to the wrapper:
+
+    **The loop**, because an object can bind state to the first loop it runs
+    on and then only that loop will do. An ``asyncpg`` pool acquired by
+    ``connect()`` belongs to the loop that acquired it; a second loop finds it
+    unusable, with an error naming the connection rather than the loop.
+
+    **The budget**, because a timeout applied per reach is not a bound on the
+    call the caller made. Spent afresh on each round trip, a 30-second bound on
+    a twenty-chunk write permits ten minutes.
+
+    Carrying both here rather than on the wrapper is what lets one wrapper
+    serve two concurrent operations: instance state would have them writing
+    each other's deadline.
+
+    Build one with :func:`bridged_operation`, which also decides whether the
+    operation owns its bridge or borrows the caller's.
+    """
+
+    #: The loop this operation runs on. ``None`` when the operation's work is
+    #: synchronous and reaches no loop at all --- a wrapper that fronts either
+    #: flavour still has a deadline, and still needs somewhere to put it.
+    bridge: SyncLoopBridge | None
+
+    #: ``time.monotonic()`` value past which this operation stops waiting.
+    #: ``None`` when the caller set no timeout, which waits for as long as the
+    #: work takes.
+    deadline: float | None
+
+    #: What the operation is called, for the message a caller reads when the
+    #: deadline expires several frames from where they set it.
+    label: str = "The operation"
+
+    @property
+    def remaining(self) -> float | None:
+        """Seconds left in the budget, or ``None`` when it is unbounded.
+
+        Can be zero or negative: a caller past its deadline should refuse
+        rather than start another reach, which is what :meth:`run` does.
+        """
+        if self.deadline is None:
+            return None
+        return self.deadline - time.monotonic()
+
+    def run(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Drive one coroutine on this operation's loop, within its budget.
+
+        Args:
+            coro: The coroutine to run. It is closed rather than started when
+                the budget is already spent, so nothing warns about a
+                coroutine that was never awaited.
+
+        Returns:
+            Whatever ``coro`` returns.
+
+        Raises:
+            OperationTimeoutError: If the budget was already spent before this
+                call, or expired while waiting for it.
+            RuntimeError: If this operation has no bridge, which means a
+                synchronous wrapper reached its asynchronous path.
+            BaseException: Whatever ``coro`` raises, re-raised in the caller.
+        """
+        if self.bridge is None:
+            coro.close()
+            raise RuntimeError(
+                f"{self.label} has no operation loop --- its work was detected as "
+                "synchronous, so this asynchronous path should be unreachable"
+            )
+        remaining = self.remaining
+        if remaining is not None and remaining <= 0:
+            # Already over budget: refuse without reaching the object at all,
+            # so a caller past its deadline stops paying for round trips it
+            # has already decided not to wait for.
+            coro.close()
+            raise OperationTimeoutError(f"{self.label} exceeded its timeout before this call ran")
+        try:
+            return self.bridge.run(coro, timeout=remaining)
+        except OperationTimeoutError:
+            # Someone else's deadline, always. A bridge reports an expired wait
+            # as the *builtin* ``TimeoutError``; this type is only ever
+            # constructed here, with the label of the operation that ran out.
+            # So one arriving from the coroutine belongs to an operation nested
+            # inside this one, and relabelling it would erase the deadline that
+            # actually expired and name the wrong one.
+            raise
+        except TimeoutError:
+            # The bridge raises the builtin for a wait that expired, and
+            # re-raises a ``TimeoutError`` the coroutine itself raised through
+            # the same channel. The deadline is what tells them apart: only
+            # the first can have consumed the whole budget.
+            if self.deadline is not None and time.monotonic() >= self.deadline:
+                raise OperationTimeoutError(
+                    f"{self.label} exceeded its timeout while waiting for this call"
+                ) from None
+            raise
+
+
+@contextmanager
+def bridged_operation(
+    *,
+    bridge: SyncLoopBridge | None = None,
+    timeout: float | None = None,
+    thread_name: str = _THREAD_NAME,
+    label: str = "The operation",
+    needs_loop: bool = True,
+) -> Iterator[BridgedOperation]:
+    """Open the loop and the time budget one synchronous call runs within.
+
+    A caller-supplied ``bridge`` is used as-is and **left running**: it
+    belongs to whoever passed it, who may be running other things on it.
+    Otherwise the operation owns a bridge for its duration and leaving this
+    block ends it --- including on the error paths, which is why this is a
+    context manager rather than a pair of calls.
+
+    Scope it to the **public entry point**, not to the individual reach: pass
+    the yielded operation down to the private workers, so a call that reaches
+    its object several times drives all of them on one loop and spends one
+    budget across them.
+
+    Args:
+        bridge: A loop the caller owns. Required for an object that binds
+            state to the loop that connected it, since a wrapper handed such
+            an object has no way to reach that loop for itself. ``None`` (the
+            default) gives the operation a bridge of its own.
+        timeout: Seconds to allow the whole operation --- a bound on the
+            *work*, spent across every reach the call makes. ``None`` (the
+            default) waits for as long as the work takes.
+
+            It does not cover teardown of an **owned** bridge, which happens
+            after the budget is already spent: leaving this block cancels
+            whatever the expired call left running and waits up to
+            :data:`_TEARDOWN_DRAIN_SECONDS` for it to unwind, so the worst
+            case a caller can observe is ``timeout`` plus that. A coroutine
+            that cancels promptly costs one loop iteration and the difference
+            is unmeasurable; one whose cleanup awaits something slow, or
+            ignores cancellation, costs the whole drain. The alternative is
+            destroying that cleanup mid-flight, which is the defect the drain
+            exists to fix --- so the bound is deliberately on the work rather
+            than on the call. A supplied bridge is not closed here and adds
+            nothing.
+        thread_name: Name for an owned bridge's loop thread. A diagnostic
+            label, not a way out of the leak guard --- the bridge registers
+            every name it runs under, so
+            ``assert_no_leaked_bridge_threads`` watches this one too. The
+            default is the same throwaway name :func:`run_coro_sync` uses,
+            which is honest for an unnamed one-off; name it after the wrapper
+            wherever a stack trace or a thread dump would otherwise be
+            ambiguous.
+        label: What the operation is called in a timeout message.
+        needs_loop: ``False`` for a call whose work turns out to be
+            synchronous. It then yields an operation carrying the deadline and
+            no bridge, so no thread is allocated for a loop nothing will use.
+
+    Yields:
+        The :class:`BridgedOperation` for this call.
+    """
+    deadline = None if timeout is None else time.monotonic() + timeout
+    if not needs_loop or bridge is not None:
+        yield BridgedOperation(
+            bridge=bridge if needs_loop else None, deadline=deadline, label=label
+        )
+        return
+    with SyncLoopBridge(thread_name=thread_name) as owned:
+        yield BridgedOperation(bridge=owned, deadline=deadline, label=label)

@@ -115,7 +115,7 @@ async def bulk_insert(db, records):
         record_generator(),
         config=StreamConfig(
             batch_size=500,  # Optimal batch size
-            parallel=True     # Enable parallel processing
+            prefetch=4,      # Read ahead 4 batches while one is written
         )
     )
     return result
@@ -133,7 +133,7 @@ async def read_all_optimized(db, query=None):
     # Use streaming for large result sets
     stream_config = StreamConfig(
         batch_size=1000,  # Fetch 1000 at a time
-        buffer_size=5000   # Buffer up to 5000 records
+        prefetch=5,       # Read ahead 5 batches -- 5,000 records in flight
     )
     
     async for record in db.stream_read(query, stream_config):

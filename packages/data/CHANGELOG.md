@@ -7,7 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A failed batch insert is no longer reported as a success when
+  `error_handling="raise"`.** `BatchOperations.bulk_insert_dataframe` retries a
+  failed `create_batch` one row at a time — which is what identifies *which*
+  rows are bad, and is unchanged — but it re-raised only if a **row** then
+  failed too. A backend whose batch write refuses while its individual writes
+  succeed (a batch size limit, a transient, a timed-out batch) therefore
+  reported every row inserted and raised nothing, having been asked by default
+  to stop. The row-by-row retry still runs and still writes the rows; what is
+  new is that a batch failure every row survives is raised under `"raise"` and
+  recorded under `"log"` instead of vanishing. `"skip"` is unchanged. Callers
+  that relied on the batch error being absorbed should pass
+  `error_handling="log"`, which is what that now says.
+
 ### Changed
+
+- **`BatchOperations` reaches an async database through one loop per operation,
+  and takes a `bridge=` for a database that needs one loop for its life.** It
+  drove the async half with `asyncio.run` at six sites, so every public method
+  — `bulk_insert_dataframe`, `query_as_dataframe`, `update_from_dataframe`,
+  and `aggregate`, `transform_and_save`, `export_to_csv` and
+  `export_to_parquet` behind them — raised `RuntimeError: asyncio.run() cannot
+  be called from a running event loop` for a caller already on a loop. They no
+  longer do. Each public call now holds one `SyncLoopBridge` for its duration,
+  so a chunked insert runs every chunk and every row of its per-record
+  fallback on the same loop, and `transform_and_save` runs its read and its
+  write-back on one. The bridge ends with the call: there is no `close()` to
+  add to your code, and a `SyncDatabase` still allocates no thread at all.
+
+  A backend that binds loop state to its connection needs more than that, and
+  gets it from the new keyword-only `bridge=`. `AsyncPostgresDatabase`
+  acquires its `asyncpg` pool in `connect()`, and the pool belongs to the loop
+  that acquired it — so against a pooled backend this class never worked, in
+  either direction: the *first* operation after `connect()` raised
+  `InterfaceError: cannot perform operation: another operation is in
+  progress`, from synchronous code with no running loop anywhere. Connect on
+  a bridge you own and pass it in, and every operation lands on that loop:
+
+  ```python
+  with SyncLoopBridge() as bridge:
+      bridge.run(database.connect())
+      BatchOperations(database, bridge=bridge).bulk_insert_dataframe(df)
+  ```
+
+  A bridge passed this way belongs to the caller; nothing here closes it. The
+  new `timeout=` bounds the **operation** — one public call, however many
+  database round trips it makes — which is the only upper bound a blocked
+  synchronous caller has; a round trip that finds the deadline already past
+  raises `TimeoutError` without reaching the database at all. Signatures are
+  otherwise unchanged, and `converter` remains the second positional
+  parameter. The `TimeoutError` it raises is now `OperationTimeoutError`
+  (`dataknobs-common`), a subclass, so `except TimeoutError` is unaffected and
+  a caller that wants to tell the operation's deadline apart from a timeout the
+  database itself raised now can.
+
+  **The deadline reaches the caller under every `error_handling` mode.** The
+  per-row handlers in `bulk_insert_dataframe` and `update_from_dataframe`
+  exist to absorb one row's failure and keep going; past the deadline every
+  remaining row is refused pre-flight, so on `"log"` and `"skip"` they absorbed
+  one refusal per row and returned `{"inserted": 0, "failed": n}` — a timed-out
+  operation reported as a dataframe of unwritable rows. `OperationTimeoutError`
+  now passes through all five of them. The wall-clock bound held either way;
+  what was lost was the report.
+
+  `timeout=` bounds the **work**, not the call: when an operation opens its own
+  loop, closing it afterwards waits up to five seconds for a cancelled round
+  trip to unwind rather than destroying its cleanup mid-flight, so the worst
+  case is `timeout` plus that. A `bridge=` you supply is not closed and adds
+  nothing.
 
 - **`SyncTextEmbedder` takes `bridge=` and answers `aclose()`, and builds its
   loop thread on first use.** It is now a `SyncBridgeAdapter` from

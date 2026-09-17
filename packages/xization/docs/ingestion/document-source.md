@@ -17,8 +17,9 @@ The protocol has two built-in implementations:
   plus in-Python glob matching.
 
 Both are async-native. `DirectoryProcessor` drives them through
-`process_async()`; the sync `process()` wrapper collects results via
-`asyncio.run()`.
+`process_async()`; the sync `process()` wrapper collects results
+through `run_coro_sync`, so it is callable from inside a running event
+loop as well as from synchronous code.
 
 ## Protocol
 

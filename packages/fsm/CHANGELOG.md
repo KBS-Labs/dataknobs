@@ -7,7 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`FSM.execute()` takes `bridge=` and `timeout=`.** It is the remaining
+  one-shot synchronous surface, drives the same engine the executors drive, and
+  had neither: two calls ran on two throwaway loops, and neither was the FSM's
+  own — so an `AsyncDatabaseResourceAdapter` opened by a `SimpleFSM.process()`
+  on the same FSM was unusable from `execute`. `bridge=` is how the caller says
+  which loop; passing `fsm.get_sync_bridge()` puts `execute` on the same one as
+  `SimpleFSM`. `timeout=` bounds a call that otherwise blocks a caller inside a
+  `def` indefinitely; on expiry the work is cancelled and the expiry is
+  **reported in the returned result**, not raised, which is what this surface
+  does with every other failure and what `SimpleFSM.process(timeout=)` already
+  did. Both default to the previous behaviour: a bridge scoped to the call and
+  torn down with it, so a one-shot `execute` still leaves no thread behind.
+
+- **`BatchExecutor` and `StreamExecutor` take `bridge=` and `timeout=`.** Both
+  reach the async engine through a `SyncLoopBridge` scoped to the operation,
+  which keeps a discarded executor from leaving a thread behind but says
+  nothing about *which* loop. An FSM's async resources outlive any one
+  operation --- `AsyncDatabaseResourceAdapter` opens its `AsyncDatabase` on
+  first use and keeps it open across acquisitions --- so they belong to
+  whichever loop opened them, and a pooled backend is unusable from any other
+  (`InterfaceError: cannot perform operation: another operation is in
+  progress`). `bridge=` is how the owner says which loop that is; it belongs
+  to the caller and nothing here closes it. It is also how several surfaces
+  over one FSM agree: pass `fsm.get_sync_bridge()`, the bridge `SimpleFSM` and
+  `AdvancedFSM.execute_step_sync` already use.
+
+  ```python
+  with SyncLoopBridge() as bridge:
+      BatchExecutor(fsm, parallelism=4, bridge=bridge).execute_batches(records)
+      StreamExecutor(fsm, bridge=bridge).execute_stream(pipeline)
+  ```
+
+  `timeout=` bounds the **operation** --- one `execute_batch`, one
+  `execute_batches`, one `execute_stream`, however many items or records it
+  carries --- and raises `TimeoutError` on expiry, which is the only upper
+  bound a caller blocked inside a `def` has. It is not an item failure, so it
+  passes the per-item and per-record error handlers rather than being recorded
+  as one more failed result. Both default to the previous behaviour: a bridge
+  of the operation's own, and an unbounded wait.
+
+### Fixed
+
+- **`execute_batches` runs every batch on one loop.** It loops over
+  `execute_batch`, and each of those opened a bridge of its own --- so a single
+  public call reached the engine on one loop per batch, and an FSM resource
+  opened during the first batch was unusable from the second. Measured: six
+  items at `batch_size=2` ran on three loops. One operation now spans the whole
+  call, which is also what lets one `timeout=` bound it.
+
+- **A stream executes the FSM it was given.** `StreamExecutor` resolved its
+  main network by looking up the **FSM's** name in its networks, so it found
+  one only when the FSM happened to be named after its main network. For every
+  other FSM it found nothing, took the "no FSM configured" path, and passed
+  each record through untouched while counting it as successfully processed
+  --- no error, no log, and statistics reporting a clean run. `BatchExecutor`
+  had the same lookup but was unaffected, because it calls the engine either
+  way and the engine resolves the start state for itself.
+
+  Both now ask the engine they drive, through
+  `BaseExecutionEngine.find_initial_state_common` --- the answer the async
+  engine already used, rather than a third and fourth copy of it. That also
+  restores the fallbacks the copies had dropped: after the main network it
+  tries the FSM's own name, then any network declaring an initial state. An
+  FSM whose main network declares none (which `NetworkConfig` refuses to build
+  but `FSM.add_network` allows) is resolved by the engine and was not by the
+  executors, so the two disagreed about the same FSM.
+
+- **`create_benchmark` spends one budget and restores what it changed.** It
+  calls `execute_batches` once per configuration, and each call opened an
+  operation of its own — so an executor built with `timeout=T` running N
+  configurations admitted N*T, the same multiplication `execute_batches` itself
+  had across its batches, one level up. One operation now spans the benchmark.
+
+  It also assigned each configuration's `parallelism`, `batch_size` and
+  `strategy` and never restored them, leaving the executor holding the last
+  configuration's settings. `strategy` is the half that reaches furthest: it is
+  set on `self.engine`, the FSM's *one* async engine, so a benchmark silently
+  re-strategised every other executor, `SimpleFSM` and `FSM.execute` over that
+  FSM — and with the raw value from the configuration dict, a `str` where a
+  `TraversalStrategy` belongs. All three are restored on the way out, including
+  on the timeout path.
+
+- **Released resources are marked released.** `BatchExecutor._release_resources`
+  tested `allocation.status` against the string `"allocated"` rather than the
+  `ResourceStatus` member, so the test was never true and the whole body was
+  unreachable: every allocation stayed marked as held for the life of the
+  context. It now compares members and marks a released allocation
+  `AVAILABLE`, which is what `ExecutionContext.release_resource` does.
+
 ### Changed
+
+- **`BatchExecutor` no longer keeps a per-type list of released resource
+  ids.** The unreachable body above also appended each released id to a list
+  nothing read back or drained --- `_acquire_resources` took its length for a
+  `pool_size` metadata field and nothing else --- so restoring the release
+  would have grown that list once per allocation for the life of the executor.
+  A pool nothing draws from is an accumulator, and the id it accumulated was
+  already the caller's to reuse, so it is gone, along with the per-type
+  `asyncio.Lock` created beside it and never acquired. The `pool_size` and
+  `final_pool_size` keys of `context.metadata["batch_<id>_resources"]` go with
+  it; `resource_type`, `limit`, `acquired_at` and `released_at` remain.
+
+  `enable_resource_pooling` does not pool and never did: nothing in this class
+  hands out a resource or enforces the `limit` in `context.resource_limits`.
+  The flag gates the bookkeeping above and the released-status transition, and
+  its docstring now says so. Whether to implement pooling or drop the
+  parameter is open.
+
+- **Batch bookkeeping is carried in `context.metadata["batch_info"]` alone.**
+  `BatchExecutor` also set a `batch_id` attribute directly on the
+  `ExecutionContext` it cloned per item. It was never part of that class ---
+  the type checker reported it as undeclared at both sites --- and the same
+  value has always been in `batch_info` beside it, written at the same moment.
+  A transform reading `context.batch_id` should read
+  `context.metadata["batch_info"]["batch_id"]`.
 
 - **execution-history walks bind `children` once per node rather than
   re-reading it.** `dataknobs-structures` now answers `Tree.children` with a

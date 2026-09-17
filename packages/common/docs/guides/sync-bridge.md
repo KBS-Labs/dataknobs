@@ -67,9 +67,10 @@ result = run_coro_sync(some_async_function(arg))
   timeout=...)`) raise `TimeoutError` if the coroutine does not finish in
   time. The timed-out coroutine is asked to cancel (best-effort) and the
   bridge stays usable. With no `timeout` the wait is unbounded.
-- **Clean teardown** — `close()` stops the loop and joins the thread; it is
-  idempotent and supported via the context-manager protocol. Concurrent
-  closers all block until teardown completes. The loop thread is a
+- **Clean teardown** — `close()` cancels whatever is still running on the
+  loop, waits up to five seconds (`_TEARDOWN_DRAIN_SECONDS`) for it to unwind,
+  then stops the loop and joins the thread; it is idempotent and supported via the context-manager protocol.
+  Concurrent closers all block until teardown completes. The loop thread is a
   `daemon`, so it can never block process exit.
 - **Reusable, and concurrency-safe for submission** — a single bridge serves
   many `run()` calls, including concurrent calls from multiple threads.
@@ -94,6 +95,111 @@ Each `SyncLoopBridge` (and each `run_coro_sync` call) costs one daemon
 thread for its lifetime. When a synchronous component makes repeated calls,
 **own a long-lived bridge and reuse it** rather than calling
 `run_coro_sync` per call or spawning a bridge per call.
+
+### Whoever owns the object owns its loop
+
+Thread cost is the *cheap* half of choosing a scope. The other half is that
+**an object can bind itself to the first loop it runs on, and then only that
+loop will do.** An `asyncpg` pool acquired by `connect()` belongs to the loop
+that acquired it; a second loop finds it unusable, with an error that names
+the connection rather than the loop —
+`InterfaceError: cannot perform operation: another operation is in progress`.
+
+So a wrapper's bridge scope is bounded above by its object's lifetime, and
+the object's lifetime belongs to whoever *owns* it:
+
+| Who connects the object | Where the loop has to come from |
+|---|---|
+| the wrapper, on first use | the wrapper's own bridge — held for as long as it holds the object |
+| the caller, before handing it in | the **caller's** bridge, passed as `bridge=` |
+
+The second row is the one a wrapper cannot fix for itself. A wrapper handed
+an already-connected object has no way to reach the loop that connected it,
+so `bridge=` is not only a way to save a thread — for such an object it is
+the only way the wrapper can work at all. `BatchOperations`
+(`dataknobs-data`) is the worked example: it takes a database it does not
+own, so it scopes its own bridge to one operation and documents `bridge=` as
+required for any backend that binds.
+
+Uncontended `asyncio` primitives do **not** bind, which is why this is easy
+to miss: `asyncio.Lock.acquire` reaches `_get_loop` only when it has to wait,
+so an in-memory store guarded by one survives any amount of loop churn and a
+test suite built on it reports green.
+
+### `BridgedOperation` — one loop and one budget, per call
+
+`SyncBridgeAdapter` is for a wrapper that **holds** a bridge across its own
+lifetime. The other shape is a wrapper that holds nothing and scopes a bridge
+to a single public call — and three of them wrote it by hand before it had a
+name: `BatchOperations` (`dataknobs-data`) and the FSM's `BatchExecutor` and
+`StreamExecutor`.
+
+What those calls share is not just the bridge. A synchronous wrapper reaches
+its async object **more than once per public call** — a chunked write per
+chunk, a batch per item, a stream per record — and both of the things
+governing those reaches belong to the *operation*:
+
+| | Why it is per-operation |
+|---|---|
+| **the loop** | an object that bound state to one loop is unusable from the next, so every reach of one call must land on the same one |
+| **the budget** | a timeout spent afresh on each reach is no bound on the call the caller made — 30 seconds over twenty chunks is ten minutes |
+
+```python
+from dataknobs_common import bridged_operation
+
+class Wrapper:
+    def __init__(self, obj, *, bridge=None, timeout=None):
+        self._obj, self._bridge, self._timeout = obj, bridge, timeout
+
+    def _operation(self):
+        return bridged_operation(
+            bridge=self._bridge, timeout=self._timeout,
+            thread_name="dk-wrapper", label="Wrapper",
+        )
+
+    def do_many(self, items):                 # the public call
+        with self._operation() as op:
+            return [self._one(op, item) for item in items]
+
+    def _one(self, op, item):                 # a private worker
+        return op.run(self._obj.do(item))     # one loop, one shared budget
+```
+
+Scope it to the **public entry point** and pass the operation down, rather
+than opening one per reach. A `run_coro_sync` per reach is a daemon thread per
+row; a bridge per reach is a different loop per row.
+
+| Member | What it is for |
+|---|---|
+| `bridge=` | the caller's loop, used as-is and **left running** — required for an object the caller connected, since the wrapper cannot reach that loop for itself |
+| `timeout=` | seconds for the whole operation; a reach that finds the deadline past raises without reaching the object at all |
+| `op.run(coro)` | the one place the loop and the budget are applied together |
+| `needs_loop=False` | for a call whose work turns out to be synchronous: it carries the deadline and allocates no thread |
+| `op.remaining` | what is left of the budget, or `None` when unbounded |
+
+Leaving the block ends an **owned** bridge, on the error paths too; a
+**supplied** one is never closed, because whoever passed it may be running
+other things on it.
+
+> **`timeout=` bounds the work, not the call.** Ending an owned bridge happens
+> after the budget is spent, and it waits up to five seconds for a cancelled
+> coroutine to unwind, so `timeout + 5s` is the worst case a caller can
+> observe. Only cleanup that awaits something slow — or ignores cancellation —
+> spends it; prompt cancellation costs one loop iteration. The alternative is
+> destroying that cleanup mid-flight, which is the defect the drain exists to
+> fix, so the bound sits where it does deliberately.
+
+> **`OperationTimeoutError` is a `TimeoutError`,** so `except TimeoutError`
+> keeps working. The distinct type exists because a per-item error handler has
+> to let the *operation's* deadline through it while still absorbing an item's
+> own failure, and a bare `TimeoutError` cannot say which it is holding. Note
+> that it widens the **builtin**, not `dataknobs_common.exceptions.TimeoutError`
+> — the bridge raises the builtin for an expired wait, so that is the one a
+> caller will be catching.
+
+Both shapes are legitimate and the choice is about ownership, not taste: a
+wrapper that owns its object can own a bridge for the object's lifetime, and a
+wrapper handed an object it does not own cannot own a loop past the call.
 
 ### `SyncBridgeAdapter` — the wrapper shape, declared once
 
@@ -184,10 +290,18 @@ bug — unlike `AsyncLLMProvider`, where sync entry is *always* wrong and
 > before leaving the block.
 
 Teardown itself is not guaranteed to be free of I/O, in either form. Ending the
-bridge joins its thread, and the loop drains its async generators on the way
-down — so an abandoned stream's `finally` runs inside that join. Usually
-microseconds; a holder that cannot afford even that wraps `aclose()` in
-`asyncio.to_thread` as well.
+bridge joins its thread, and on the way down the loop cancels whatever is still
+running on it and drains its async generators — so an abandoned stream's
+`finally`, and the cleanup of a task the wrapper never awaited, both run inside
+that join. Usually microseconds, because a task that honours cancellation is
+done in one loop iteration; a holder that cannot afford even that wraps
+`aclose()` in `asyncio.to_thread` as well.
+
+The wait is bounded rather than unbounded: `close()` joins the loop thread, so
+a task that ignores cancellation would otherwise hang the closing caller
+forever — a worse failure than the abandonment the drain exists to prevent.
+One that outlasts the window is logged by name and then abandoned, which is
+the original behaviour surviving in the one case nothing can fix.
 
 `BRIDGE_THREAD_NAME` is **required** — a subclass that omits it raises
 `TypeError` at class-creation time. It is also a diagnostic label rather than a

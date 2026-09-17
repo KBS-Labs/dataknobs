@@ -290,6 +290,63 @@ The FSM package is built with a modular, layered architecture:
 - `BatchExecutor`: Optimized batch processing
 - `StreamExecutor`: Stream processing with backpressure
 
+##### Which loop a synchronous call runs on
+
+`FSM.execute()` takes the same pair, for the same reason — it drives the same
+engine, and two calls otherwise run on two throwaway loops, neither of them the
+FSM's own:
+
+```python
+with SyncLoopBridge() as bridge:
+    fsm.execute(record, bridge=bridge, timeout=30.0)
+```
+
+It *reports* an expiry in its result rather than raising it, as
+`SimpleFSM.process(timeout=)` does; the executors raise, because they return
+lists and statistics with no envelope to put it in.
+
+The synchronous executors reach the engine through a
+[`SyncLoopBridge`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/)
+scoped to the **operation** — one `execute_batch`, one `execute_batches`, one
+`execute_stream` — so every item, batch and record of a call runs on one loop,
+and a discarded executor leaves no thread behind.
+
+That is enough only while nothing outlives the call. An FSM's async resources
+do: `AsyncDatabaseResourceAdapter` opens its `AsyncDatabase` on first use and
+keeps it open across acquisitions, so it belongs to whichever loop opened it.
+A pooled backend is then unusable from any other loop, and says so by naming
+the connection rather than the loop —
+`InterfaceError: cannot perform operation: another operation is in progress`.
+
+Pass `bridge=` when that applies. It is the caller's loop; nothing in the
+executor closes it:
+
+```python
+from dataknobs_common import SyncLoopBridge
+
+# Several surfaces over one FSM, agreeing about which loop its resources
+# belong to. `fsm.get_sync_bridge()` is the one SimpleFSM already uses.
+with SyncLoopBridge() as bridge:
+    batch = BatchExecutor(fsm, parallelism=4, bridge=bridge)
+    stream = StreamExecutor(fsm, bridge=bridge)
+    batch.execute_batches(records)
+    stream.execute_stream(pipeline)
+```
+
+`timeout=` bounds the whole operation, however many items or records it
+carries, and raises `TimeoutError` on expiry. It is the only upper bound a
+caller blocked inside a `def` has; the default, `None`, waits for as long as
+the work takes.
+
+The bound is on the **work**. When the executor opens its own loop, closing
+that loop afterwards cancels whatever the expired call left running and waits
+up to five seconds for it to unwind, so the worst case a caller can observe is
+`timeout` plus that. Prompt cancellation costs a single loop iteration and the
+difference is unmeasurable; the budget is only spent by cleanup that awaits
+something slow or ignores cancellation, and the alternative is destroying that
+cleanup mid-flight. A `bridge=` you supply is not closed by the executor and
+adds nothing.
+
 #### Data Handling
 - `DataModeHandler`: Abstract interface for data operations
 - `CopyModeHandler`: Safe concurrent processing

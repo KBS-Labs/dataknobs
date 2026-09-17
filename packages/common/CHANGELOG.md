@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`BridgedOperation` and `bridged_operation()` --- one loop and one budget,
+  for the span of one synchronous call.** A synchronous wrapper over an
+  asynchronous object reaches that object more than once per public call (a
+  chunked write per chunk, a batch per item, a stream per record), and both of
+  the things governing those reaches belong to the *operation* rather than to
+  the wrapper: the **loop**, because an object that bound state to one loop is
+  unusable from the next, and the **budget**, because a timeout spent afresh on
+  each reach is no bound on the call the caller made --- thirty seconds over
+  twenty chunks is ten minutes.
+
+  ```python
+  def _operation(self):
+      return bridged_operation(
+          bridge=self._bridge, timeout=self._timeout,
+          thread_name="dk-wrapper", label="Wrapper",
+      )
+
+  def do_many(self, items):                  # the public call
+      with self._operation() as op:
+          return [op.run(self._obj.do(item)) for item in items]
+  ```
+
+  A `TimeoutError` reaching `run` from the coroutine is distinguished from an
+  expired wait by the deadline — except when it is already an
+  `OperationTimeoutError`, which is passed through by type. A bridge reports an
+  expired wait as the *builtin*, and this type is only ever constructed by
+  `run` itself, so one arriving from the work belongs to an operation nested
+  inside this one; relabelling it would name the wrong deadline and erase the
+  one that expired.
+
+  `timeout=` bounds the **work**, not the call. Ending an owned bridge happens
+  after the budget is spent and waits up to `_TEARDOWN_DRAIN_SECONDS` for a
+  cancelled coroutine to unwind, so `timeout + 5s` is the worst case a caller
+  can observe. Only cleanup that awaits something slow — or ignores
+  cancellation — spends it; the alternative is destroying that cleanup
+  mid-flight, which is the defect the drain exists to fix. The same is true of
+  `run_coro_sync(coro, timeout=...)`, which opens a throwaway bridge. Both
+  docstrings and the guide now say so.
+
+  A supplied `bridge` is used as-is and **left running**, because it belongs to
+  whoever passed it; otherwise the operation owns one and leaving the block
+  ends it, on the error paths too. `needs_loop=False` is for a call whose work
+  turns out to be synchronous: it carries the deadline and allocates no thread.
+
+  This is the counterpart to `SyncBridgeAdapter`, which is for a wrapper that
+  *holds* a bridge across its own lifetime. A wrapper handed an object it does
+  not own cannot own a loop past the call, and that is the shape three wrappers
+  in this workspace had written by hand.
+
+- **`OperationTimeoutError`**, raised when a `BridgedOperation`'s deadline
+  expires --- either before a reach starts, in which case the coroutine is
+  closed rather than started, or while waiting for one. It subclasses the
+  **builtin** `TimeoutError` (not `dataknobs_common.exceptions.TimeoutError`,
+  which shadows that name), so `except TimeoutError` keeps working. The
+  distinct type is for the caller that must let the *operation's* deadline
+  through a per-item error handler while still absorbing an item's own failure.
+
+### Fixed
+
+- **A closing `SyncLoopBridge` no longer destroys work that is still running
+  on its loop.** Teardown drained the loop's async generators and nothing
+  else, so any task still pending when the loop stopped was destroyed by
+  `loop.close()` with its `finally` unrun — the only report being
+  `Task was destroyed but it is pending!` on stderr, while whatever that
+  `finally` would have released (a pooled connection, an open transaction, a
+  lock) stayed held. Two ordinary shapes reached it: a coroutine that spawned
+  a task and returned without awaiting it, which leaks one from a wholly
+  *successful* `run()`; and a coroutine cancelled by `run(..., timeout=)`
+  whose cleanup awaits more than once, which is what realistic cleanup does.
+  `close()` now cancels what is still running and waits for it to unwind
+  before closing the loop, so `run()`'s documented "not abandoned mid-flight"
+  holds on the close path as well as the timeout path. The wait is bounded at
+  five seconds — `close()` joins the loop thread, so an uncancellable task
+  would otherwise hang the closing caller indefinitely — and a task that
+  outlasts it is logged by name. Teardown therefore costs a loop iteration
+  rather than nothing; a holder that cannot afford that already had the
+  remedy of wrapping `aclose()` in `asyncio.to_thread`.
+
+### Documentation
+
+- **The sync-bridge guide says how long a bridge has to live, not just what it
+  costs.** Thread cost is the cheap half of choosing a scope; the other half
+  is that an object can bind itself to the first loop it runs on — an
+  `asyncpg` pool acquired by `connect()` belongs to that loop and no other —
+  so a wrapper's bridge scope is bounded by its object's lifetime, and a
+  wrapper handed an already-connected object cannot reach the loop that
+  connected it. That is what `bridge=` is for there, and the guide now says
+  so, with the reason the failure is easy to miss: an uncontended
+  `asyncio.Lock` never reaches `_get_loop`, so an in-memory store survives any
+  amount of loop churn and a test suite built on one reports green.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version
@@ -473,7 +566,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 133 names, taking the package's `__all__` to 339.
+  the resolution cascade — 133 names, taking the package's `__all__` to 342,
+  the three beyond them being the operation family added above.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing
