@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A failed batch insert is no longer reported as a success when
+  `error_handling="raise"`.** `BatchOperations.bulk_insert_dataframe` retries a
+  failed `create_batch` one row at a time — which is what identifies *which*
+  rows are bad, and is unchanged — but it re-raised only if a **row** then
+  failed too. A backend whose batch write refuses while its individual writes
+  succeed (a batch size limit, a transient, a timed-out batch) therefore
+  reported every row inserted and raised nothing, having been asked by default
+  to stop. The row-by-row retry still runs and still writes the rows; what is
+  new is that a batch failure every row survives is raised under `"raise"` and
+  recorded under `"log"` instead of vanishing. `"skip"` is unchanged. Callers
+  that relied on the batch error being absorbed should pass
+  `error_handling="log"`, which is what that now says.
+
 ### Changed
 
 - **`BatchOperations` reaches an async database through one loop per operation,
@@ -38,9 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   A bridge passed this way belongs to the caller; nothing here closes it. The
-  new `timeout=` bounds each database call, which is the only upper bound a
-  blocked synchronous caller has. Signatures are otherwise unchanged, and
-  `converter` remains the second positional parameter.
+  new `timeout=` bounds the **operation** — one public call, however many
+  database round trips it makes — which is the only upper bound a blocked
+  synchronous caller has; a round trip that finds the deadline already past
+  raises `TimeoutError` without reaching the database at all. Signatures are
+  otherwise unchanged, and `converter` remains the second positional
+  parameter.
 
 - **`SyncTextEmbedder` takes `bridge=` and answers `aclose()`, and builds its
   loop thread on first use.** It is now a `SyncBridgeAdapter` from

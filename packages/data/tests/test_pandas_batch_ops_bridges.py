@@ -51,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import threading
+import time
 from typing import Any
 
 import pandas as pd
@@ -200,10 +201,18 @@ def test_a_sync_database_is_untouched_by_any_of_this(tmp_path):
     with assert_no_leaked_bridge_threads():
         before = threading.active_count()
         for name, call in _entry_points(ops, tmp_path).items():
-            if name == "export_to_parquet" and not HAVE_PARQUET_ENGINE:
+            if name == "export_to_parquet":
+                # pyarrow's writer allocates threads of its own, which say
+                # nothing about whether *this class* charged one. Exercised
+                # below, outside the count.
                 continue
             call()
-        assert threading.active_count() == before
+        assert threading.active_count() == before, (
+            "a synchronous database was charged a thread it never needed"
+        )
+
+        if HAVE_PARQUET_ENGINE:
+            _entry_points(ops, tmp_path)["export_to_parquet"]()
 
     assert len(db.search(Query())) > 0
 
@@ -269,11 +278,13 @@ def test_an_operation_leaves_no_thread_behind():
     db = LoopWitness()
     ops = BatchOperations(db)
 
+    # The guard *is* the assertion: a bridge this object held past the call
+    # would still have its thread alive here. Asserting the absence of a
+    # `close` method instead would fail the day the class grows an unrelated
+    # one, and be read as a regression in bridge scoping.
     with assert_no_leaked_bridge_threads():
         ops.bulk_insert_dataframe(frame(2))
         ops.query_as_dataframe(Query())
-
-    assert not hasattr(ops, "close"), "BatchOperations must not grow a teardown obligation"
 
 
 # --------------------------------------------------------------------------
@@ -329,7 +340,123 @@ def test_a_timeout_bounds_a_wait_the_caller_cannot_otherwise_cancel():
 
 
 # --------------------------------------------------------------------------
-# 4. The same claim against a backend that really does bind a loop.
+# 4. The fallback path: the one the design rationale is stated in terms of.
+# --------------------------------------------------------------------------
+
+
+class BatchRefusingWitness(LoopWitness):
+    """A real database whose batch path refuses and whose per-record path works.
+
+    The shape the fallback exists for --- a ``create_batch`` that fails for a
+    reason the individual writes do not share: a size limit, a transient, a
+    timeout. Everything else, including the storage the assertions read back,
+    is the real ``AsyncMemoryDatabase``.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.batch_attempts = 0
+
+    async def create_batch(self, records: list[Record], **kwargs: Any) -> list[str]:
+        self._witness()
+        self.batch_attempts += 1
+        raise RuntimeError("create_batch refused this batch")
+
+
+class StallingWitness(LoopWitness):
+    """A real database that takes longer than any timeout the caller sets."""
+
+    def __init__(self, delay: float = 5.0, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.delay = delay
+
+    async def create(self, record: Record, **kwargs: Any) -> str:
+        self._witness()
+        await asyncio.sleep(self.delay)
+        return await AsyncMemoryDatabase.create(self, record, **kwargs)
+
+    async def create_batch(self, records: list[Record], **kwargs: Any) -> list[str]:
+        self._witness()
+        await asyncio.sleep(self.delay)
+        return await AsyncMemoryDatabase.create_batch(self, records, **kwargs)
+
+
+def test_the_per_record_fallback_runs_on_the_operations_loop():
+    """``_insert_chunk``'s fallback reaches the database once per row.
+
+    The claim the operation-scoped bridge is argued from --- "every chunk of a
+    ``bulk_insert_dataframe``, *and every row of its per-record fallback*" ---
+    and the path nothing exercised: a chunked insert over a healthy backend
+    never enters it, so ``chunk_size=1`` produces four chunks rather than one
+    fallback. Forcing the batch to refuse is what reaches it.
+
+    Red before this branch, where each row went through its own
+    ``asyncio.run``: five loops for one operation, one for the batch attempt
+    and one per row.
+    """
+    db = BatchRefusingWitness()
+    ops = BatchOperations(db)
+
+    stats = ops.bulk_insert_dataframe(
+        frame(4), config=BatchConfig(chunk_size=4, error_handling="log")
+    )
+
+    assert db.batch_attempts == 1, "the fallback was never reached"
+    assert stats["inserted"] == 4, "the fallback did not write the rows"
+    assert db.distinct_loops == 1, f"{db.distinct_loops} loops served one operation"
+
+
+def test_a_batch_failure_is_not_swallowed_when_the_caller_asked_to_raise():
+    """``error_handling="raise"`` must raise when the batch write fails.
+
+    ``_insert_chunk`` re-raised only if a **record** failed too. A backend
+    whose ``create_batch`` refuses while its ``create`` works --- a batch size
+    limit, a transient, a timed-out batch --- therefore reported
+    ``inserted == 3`` and raised nothing, having been asked to raise.
+
+    The row-by-row retry itself is deliberate and stays: it is what identifies
+    *which* rows are bad, and a caller that passes ``"log"`` or ``"skip"`` gets
+    exactly what it did before. What changed is that a batch failure every row
+    survives is no longer reported as an unqualified success.
+    """
+    db = BatchRefusingWitness()
+    ops = BatchOperations(db)
+
+    with pytest.raises(RuntimeError, match="refused"):
+        ops.bulk_insert_dataframe(frame(3))
+
+
+def test_the_timeout_bounds_the_operation_not_each_database_call():
+    """``timeout`` is an upper bound on the *operation*, as documented.
+
+    It was applied per ``bridge.run``, so a chunked write multiplied it by the
+    chunk count --- and again by the chunk size on the fallback path, where a
+    timed-out batch was retried one row at a time, each row given the full
+    timeout afresh. ``timeout=0.1`` over eight single-row chunks therefore
+    admitted sixteen waits of 0.1s, and the class docstring's "an upper bound
+    on a wait a synchronous caller has no other way to cancel" was false by
+    that factor.
+
+    ``error_handling="log"`` is the shape that shows it: ``"raise"`` now
+    propagates the first timeout, so the multiplication needs a mode that
+    keeps going after one.
+    """
+    db = StallingWitness()
+    ops = BatchOperations(db, timeout=0.1)
+
+    started = time.monotonic()
+    ops.bulk_insert_dataframe(frame(8), config=BatchConfig(chunk_size=1, error_handling="log"))
+    elapsed = time.monotonic() - started
+
+    assert len(db.loops) == 1, (
+        f"the database was reached {len(db.loops)} times after the deadline passed; "
+        "each reach was given the full timeout again"
+    )
+    assert elapsed < 1.0, f"the operation ran {elapsed:.2f}s under a 0.1s bound"
+
+
+# --------------------------------------------------------------------------
+# 5. The same claim against a backend that really does bind a loop.
 # --------------------------------------------------------------------------
 
 
