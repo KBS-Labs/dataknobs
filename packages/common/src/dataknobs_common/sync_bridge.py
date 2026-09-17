@@ -241,6 +241,20 @@ class SyncLoopBridge:
             future.cancel()
             raise
 
+    @property
+    def is_closed(self) -> bool:
+        """Whether :meth:`close` has been claimed. Never rises again once true.
+
+        For a caller deciding whether this bridge is still somewhere a
+        coroutine *can* be run --- a teardown path that must not raise, most
+        of all one reached from a finalizer, where an exception has nowhere to
+        go and is printed as "Exception ignored". It answers about the moment
+        it was asked, so a ``run`` issued on the strength of it still races an
+        in-flight ``close`` exactly as the class docstring says: quiesce, or
+        pass a ``timeout``.
+        """
+        return self._closed
+
     def close(self) -> None:
         """Stop the background loop and join its thread. Idempotent.
 
@@ -379,15 +393,53 @@ class SyncBridgeAdapter:
     From async code, await the wrapped object directly; a subclass of this is
     for the ``def`` sites that cannot. :meth:`aclose` exists so that an async
     holder's *teardown*, at least, does not pay that cost, and ``async with``
-    is its context-manager form — both protocols are here because both
+    is its context-manager form --- both protocols are here because both
     teardowns are.
+
+    **Quiesce the callers before closing.** :class:`SyncLoopBridge` states the
+    rule for itself and it reaches every subclass of this: a ``run`` that races
+    an in-flight ``close`` from another thread is undefined. The shape that
+    hits it is the one ``async with`` invites --- an async holder handing this
+    to a ``def`` site through :func:`asyncio.to_thread`, which cannot cancel
+    the thread it started. Cancel the holding task and the body unwinds while
+    the worker is still inside a call, and teardown stops the loop under it;
+    ``timeout=`` is then the only upper bound that worker has. Join or
+    cancel-and-await the workers before leaving the block.
+
+    Concurrent *closers* are safe, and are the one race this class resolves
+    rather than forwards: exactly one caller of :meth:`close` or :meth:`aclose`
+    tears the wrapped object down and the rest wait for it, so two holders
+    closing at once cannot stop the loop under each other's teardown.
     """
 
     #: Loop-thread name for this class's bridge. Registered by the bridge
     #: itself, so the leaked-thread guard sees it rather than being escaped by
-    #: it; it is a diagnostic label, not an opt-out. Subclasses override it so
-    #: a stack dump names which wrapper allocated the thread.
-    BRIDGE_THREAD_NAME: ClassVar[str] = _THREAD_NAME
+    #: it; it is a diagnostic label, not an opt-out. Every subclass must set
+    #: it --- see :meth:`__init_subclass__` for why it is required rather than
+    #: defaulted.
+    BRIDGE_THREAD_NAME: ClassVar[str] = ""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse a subclass that did not name its loop thread.
+
+        The attribute's whole stated purpose is that a stack dump names which
+        wrapper allocated the thread. A default would be the shared
+        ``dk-sync-loop-bridge`` that :func:`run_coro_sync`'s throwaway bridges
+        already use, so a subclass that forgot would lose exactly the
+        diagnostic this exists for --- silently, while still passing the
+        leaked-thread guard, because the name it reported was a real
+        registered name belonging to something else.
+
+        Inherited names are fine: an intermediate subclass names the thread
+        and its specialisations share it, which is the same wrapper as far as
+        a stack dump is concerned.
+        """
+        super().__init_subclass__(**kwargs)
+        if not cls.BRIDGE_THREAD_NAME:
+            raise TypeError(
+                f"{cls.__name__} must set BRIDGE_THREAD_NAME; it is what names "
+                f"the daemon thread this wrapper allocates"
+            )
 
     def __init__(
         self, *, bridge: SyncLoopBridge | None = None, timeout: float | None = None
@@ -404,10 +456,17 @@ class SyncBridgeAdapter:
         self._timeout = timeout
         self._owns_bridge = bridge is None
         self._bridge = bridge
-        # Guards lazy construction only. The bridge itself is thread-safe, so
-        # nothing past the first `_ensure_bridge` needs serializing.
-        self._bridge_lock = threading.Lock()
+        # Guards the bridge slot *and* the closed flag together, because the
+        # two are one decision: whether this object may still reach a loop.
+        # Held only across the slot and the flag, never across a teardown or
+        # a `run` --- see `close`, which claims under it and then releases.
+        self._lock = threading.Lock()
         self._closed = False
+        # Set by whichever caller claimed teardown, once the bridge is
+        # actually down. The same shape as `SyncLoopBridge._closed_event` and
+        # for the same reason: a second closer must wait for teardown to
+        # finish rather than return while it is still in flight.
+        self._teardown_done = threading.Event()
 
     def _ensure_bridge(self) -> SyncLoopBridge:
         """This object's bridge, built on first use.
@@ -416,14 +475,28 @@ class SyncBridgeAdapter:
         the subclass forwards *without* awaiting --- a model id, a capability
         set, a provider name --- and a daemon thread per discovery-only
         construction is a cost those callers never asked for.
+
+        Refuses once closed, and the refusal is *inside* the lock, which is
+        what makes "no bridge is constructed after teardown" an invariant
+        rather than a check with a window. :meth:`_run`'s own guard cannot
+        carry that alone: it reads the flag and asks for the bridge in two
+        steps, and a ``close()`` landing between them finds the slot still
+        empty, ends nothing, and leaves the call it raced free to allocate a
+        thread nothing will ever join.
         """
         bridge = self._bridge
         if bridge is not None:
             return bridge
-        with self._bridge_lock:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError(self._closed_message())
             if self._bridge is None:
                 self._bridge = SyncLoopBridge(thread_name=self.BRIDGE_THREAD_NAME)
             return self._bridge
+
+    def _closed_message(self) -> str:
+        """The one wording for a refusal, so the two guards cannot disagree."""
+        return f"{type(self).__name__} is closed; build another rather than reusing this one"
 
     def _run(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run ``coro`` on this object's bridge and return its result.
@@ -435,15 +508,12 @@ class SyncBridgeAdapter:
         one-method one.
         """
         if self._closed:
-            # Without this, an object closed before it was ever used would
-            # build a *second* bridge here and quietly work --- because the
-            # first was never built, so there is no closed bridge left to
-            # refuse. The thread that one allocates is then leaked by
-            # construction: `close()` has already run.
+            # A fast refusal for the common case --- an object closed before
+            # it was ever used --- so a caller does not pay for the lock to be
+            # told no. It is not the guarantee: `_ensure_bridge` re-checks
+            # under the lock, which is what closes the interleaved case.
             coro.close()
-            raise RuntimeError(
-                f"{type(self).__name__} is closed; build another rather than reusing this one"
-            )
+            raise RuntimeError(self._closed_message())
         try:
             bridge = self._ensure_bridge()
         except BaseException:
@@ -454,6 +524,29 @@ class SyncBridgeAdapter:
             raise
         return bridge.run(coro, timeout=self._timeout)
 
+    def _run_teardown(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run a *teardown* coroutine on this object's bridge.
+
+        The one call allowed after the object is marked closed, and the reason
+        it exists rather than being a rule about :meth:`_ensure_bridge`: an
+        owning subclass has to reach its wrapped object from inside
+        :meth:`_close_inner`, which runs with ``_closed`` already set, and
+        :meth:`_run` refuses there by design. A subclass reaching for the
+        obvious ``self._run(...)`` in its own teardown would raise from inside
+        it; this is the method that means it does not have to know that.
+
+        Builds the bridge if there is not one, because a wrapper closed
+        without ever being used still owns an object that has to be closed
+        *somewhere*, and the bridge is the only loop this object has. Whatever
+        it builds, :meth:`_end_bridge` then ends --- the two share the lock and
+        the slot, so the teardown cannot outlive itself.
+        """
+        with self._lock:
+            bridge = self._bridge
+            if bridge is None:
+                bridge = self._bridge = SyncLoopBridge(thread_name=self.BRIDGE_THREAD_NAME)
+        return bridge.run(coro, timeout=self._timeout)
+
     def _close_inner(self) -> None:
         """Close the wrapped object, synchronously. Default: it is not ours.
 
@@ -462,57 +555,105 @@ class SyncBridgeAdapter:
         it wraps. That is ownership, not drift, which is why it is a hook
         rather than a shared body.
 
-        Called with ``_closed`` already set, so an override must reach the
-        bridge through :meth:`_ensure_bridge` directly --- :meth:`_run`
-        refuses once closed, and this is the one call allowed after the mark.
+        An override reaches the wrapped object through :meth:`_run_teardown`,
+        not :meth:`_run`: this runs with ``_closed`` already set, and ``_run``
+        refuses there.
         """
         return None
 
     async def _aclose_inner(self) -> None:
         """Close the wrapped object from async code. Default: it is not ours.
 
-        The async twin of :meth:`_close_inner`, awaited rather than bridged,
-        so an async holder's teardown does not block its own loop for what is
-        usually an HTTP round trip.
+        The async twin of :meth:`_close_inner`. What "async" buys here is that
+        the holder's **loop** is not blocked for the teardown; it does not
+        follow that the teardown belongs on that loop. A subclass whose
+        wrapped object holds loop-bound state --- an HTTP session opened by an
+        ``initialize()`` that went through :meth:`_run`, and therefore bound to
+        the *bridge's* loop --- must still close it there, and reaches it with
+        ``await asyncio.to_thread(self._close_inner)``. Awaiting the object
+        directly is right only when nothing it holds is bound to a loop.
         """
         return None
+
+    def _claim_teardown(self) -> bool:
+        """Claim the right to tear this object down. ``False`` if another has.
+
+        Atomic, because the alternative --- reading a bare flag, then setting
+        it --- lets a second closer conclude the wrapped object is somebody
+        else's problem and go straight on to end the bridge, under a teardown
+        that is still running on it.
+        """
+        with self._lock:
+            if self._closed:
+                return False
+            self._closed = True
+            return True
 
     def close(self) -> None:
         """Close the wrapped object if it is ours, then this object's bridge.
 
-        Idempotent. The wrapped object is closed once --- ``_closed`` records
-        that, and only that. The bridge is asked on **every** call, because
-        the bridge is already idempotent, concurrency-safe, and the thing that
-        actually holds the thread: an early return on a flag beside it is how
-        a teardown that raises part way leaves the flag true, the loop thread
-        running, and every later ``close()`` returning without ever reaching
-        it --- unrecoverable, since nothing else holds a reference to the
-        thread.
+        Idempotent, and safe to call from several threads at once. Exactly one
+        caller closes the wrapped object; the others wait for it to finish
+        rather than racing past it --- a second closer that merely *arrives*
+        while the first is inside the hook used to go straight on to end the
+        bridge, stopping the loop under a teardown still running on it and
+        leaving the first blocked on a future nothing would ever set.
+
+        The bridge is then asked on **every** call, waiters included, because
+        the bridge is already idempotent and concurrency-safe and it is the
+        thing that actually holds the thread. Ending it only on the claiming
+        call is how a teardown that raises part way --- reachable through the
+        re-entrancy :meth:`SyncLoopBridge.run` documents by name --- leaves the
+        flag set, the loop thread running, and every later ``close()``
+        returning at the flag without ever reaching it. Unrecoverable, since
+        nothing else holds a reference to that thread.
         """
         try:
-            if not self._closed:
-                self._closed = True
-                self._close_inner()
+            if self._claim_teardown():
+                try:
+                    self._close_inner()
+                finally:
+                    # Set on *every* exit, not just the happy one: once a
+                    # caller has claimed teardown every other close is
+                    # committed to waiting here, so an exception that skipped
+                    # this would strand them permanently --- presenting as a
+                    # hang in an unrelated caller, with the real cause
+                    # propagated somewhere else entirely.
+                    self._teardown_done.set()
+            else:
+                self._teardown_done.wait()
         finally:
             self._end_bridge()
 
     async def aclose(self) -> None:
-        """Close from async code: the wrapped object awaited, then the bridge.
+        """Close from async code: the wrapped object first, then the bridge.
 
         The async twin of :meth:`close`, and the reason it exists is that
-        :meth:`close` reaches the wrapped object *through* the bridge --- so
-        an async holder calling it blocks its own event loop for that object's
-        entire teardown. Here it is awaited directly, and the only synchronous
-        part left is the bridge's own shutdown: a ``stop`` on an idle loop and
-        a thread join, no I/O.
+        :meth:`close` reaches the wrapped object *through* the bridge --- so an
+        async holder calling it blocks its own event loop for that object's
+        entire teardown, which on a real provider is an HTTP round trip. Here
+        the subclass decides how to reach it (:meth:`_aclose_inner`) and the
+        holder's loop stays free either way.
 
-        Shares :meth:`_end_bridge` with :meth:`close` rather than repeating
-        it, so the two cannot come to disagree about whose bridge it is.
+        What is left on the loop is :meth:`_end_bridge`: a ``stop`` and a
+        thread join. Usually microseconds, but *not* guaranteed free of I/O ---
+        the bridge drains its async generators on the way down, so an
+        abandoned stream's ``finally`` runs inside that join. A holder that
+        cannot afford it wraps this call in :func:`asyncio.to_thread`.
+
+        Shares :meth:`_claim_teardown` and :meth:`_end_bridge` with
+        :meth:`close`, so the two cannot come to disagree about whose bridge it
+        is or who is tearing down. A caller that loses the claim waits off the
+        loop, for the same reason the teardown itself does.
         """
         try:
-            if not self._closed:
-                self._closed = True
-                await self._aclose_inner()
+            if self._claim_teardown():
+                try:
+                    await self._aclose_inner()
+                finally:
+                    self._teardown_done.set()
+            else:
+                await asyncio.to_thread(self._teardown_done.wait)
         finally:
             self._end_bridge()
 
@@ -521,9 +662,17 @@ class SyncBridgeAdapter:
 
         A bridge handed to the constructor is shared --- ending it here would
         close it under whatever else is using it.
+
+        Reads the slot under the lock so it cannot miss a bridge
+        :meth:`_run_teardown` built a moment earlier, and releases it before
+        closing: ``SyncLoopBridge.close`` joins a thread, and holding this
+        object's lock across that join would stall every caller for its
+        duration to tell them all the same thing.
         """
-        if self._owns_bridge and self._bridge is not None:
-            self._bridge.close()
+        with self._lock:
+            bridge = self._bridge if self._owns_bridge else None
+        if bridge is not None:
+            bridge.close()
 
     def __enter__(self) -> Self:
         return self

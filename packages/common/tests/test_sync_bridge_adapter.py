@@ -62,7 +62,7 @@ class _Owner(_Borrower):
     """Wraps an object it *does* own — the provider-adapter shape."""
 
     def _close_inner(self) -> None:
-        self._ensure_bridge().run(self._inner.close())
+        self._run_teardown(self._inner.close())
 
     async def _aclose_inner(self) -> None:
         await self._inner.close()
@@ -308,3 +308,197 @@ def test_timeout_bounds_a_blocking_wait() -> None:
     with _Borrower(_Slow(), timeout=0.05) as sync:
         with pytest.raises(TimeoutError):
             sync.echo(1)
+
+
+# --------------------------------------------------------------------------
+# Teardown under concurrency
+#
+# The bridge underneath went to some trouble to be concurrency-safe --- a
+# lock around the claim, an event the losers wait on, so every `close` returns
+# only once the thread is actually gone. An adapter that guards the same
+# teardown with a bare bool in front of it does not inherit any of that; it
+# hides it.
+# --------------------------------------------------------------------------
+
+
+class _SlowClosingInner(_Inner):
+    """An inner whose teardown lasts long enough for a second closer to arrive."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: Set once ``close`` is actually running on the bridge loop, so a
+        #: test rendezvouses with the teardown rather than sleeping and hoping.
+        self.entered_close = threading.Event()
+
+    async def close(self) -> None:
+        self.entered_close.set()
+        await asyncio.sleep(0.3)
+        await super().close()
+
+
+def test_a_second_close_waits_rather_than_stopping_the_loop_under_the_first() -> None:
+    """Two holders closing at once must not tear the bridge out mid-teardown.
+
+    The second closer does not have to win any flag race to do damage --- it
+    only has to *arrive* while the first is still inside the hook. Reading a
+    bare ``_closed``, it concludes the wrapped object is somebody else's
+    problem and goes straight on to end the bridge: ``loop.stop()`` and a
+    thread join, under a teardown coroutine that is still awaiting on that
+    loop. The first closer is then blocked on a future that will never be
+    set, the wrapped object is left half-closed, and the process keeps both.
+    """
+    inner = _SlowClosingInner()
+    sync = _Owner(inner)
+    sync.echo(1)
+
+    returned = threading.Event()
+
+    def first_closer() -> None:
+        sync.close()
+        returned.set()
+
+    # Daemon, so a *failing* run reports the failure rather than hanging at
+    # exit joining a closer that is blocked on the future this test is about.
+    thread = threading.Thread(target=first_closer, name="first-closer", daemon=True)
+    thread.start()
+    assert inner.entered_close.wait(timeout=5), "the first closer never reached the hook"
+
+    sync.close()
+    thread.join(timeout=5)
+
+    assert returned.is_set(), "the first close never returned; its teardown was abandoned"
+    assert inner.closed == 1, "the wrapped object is closed once, by whoever claimed teardown"
+    assert not live_dk_daemon_threads({_THREAD})
+
+
+def test_a_call_that_races_close_does_not_leave_a_bridge_behind() -> None:
+    """Lazy construction is what opened this, and only the two laggards gained it.
+
+    ``_run``'s closed check and the bridge it then asks for are two steps, and
+    a ``close()`` that lands between them finds ``self._bridge`` still
+    ``None`` --- so it ends nothing, and the call it raced goes on to build a
+    daemon thread and an event loop *after* teardown has completed. Nothing
+    will ever close them: ``close()`` has already run and returned.
+
+    Before the shape moved to a base, both of the wrappers that could reach
+    this built their bridge in ``__init__``, so ``close()`` could not find it
+    absent. The guard in ``_run`` closes the strictly-after case; this is the
+    interleaved one.
+    """
+    at_the_bridge = threading.Event()
+    close_returned = threading.Event()
+
+    class _Racing(_Borrower):
+        def _ensure_bridge(self) -> SyncLoopBridge:
+            # Exactly where a racing caller stands: past `_run`'s closed
+            # check, not yet holding a bridge.
+            at_the_bridge.set()
+            close_returned.wait(timeout=5)
+            return super()._ensure_bridge()
+
+    sync = _Racing(_Inner())
+    outcome: list[object] = []
+
+    def caller() -> None:
+        try:
+            outcome.append(sync.echo(1))
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=caller, name="racing-caller", daemon=True)
+    thread.start()
+    assert at_the_bridge.wait(timeout=5), "the caller never reached the bridge"
+
+    sync.close()
+    close_returned.set()
+    thread.join(timeout=5)
+
+    assert not live_dk_daemon_threads({_THREAD}), "a bridge was built after teardown returned"
+    assert isinstance(outcome[0], RuntimeError), (
+        f"a call that raced close was served rather than refused: {outcome[0]!r}"
+    )
+
+
+def test_a_subclass_must_name_its_loop_thread() -> None:
+    """The one thing that genuinely varies is the one thing not defaulted.
+
+    A default would be the shared ``dk-sync-loop-bridge`` that
+    :func:`run_coro_sync`'s throwaway bridges already use --- so a subclass
+    that forgot would report a real registered name belonging to something
+    else. It would pass the leak guard, and a stack dump would name the wrong
+    allocator: the diagnostic silently inverted rather than merely absent.
+    """
+    with pytest.raises(TypeError, match="BRIDGE_THREAD_NAME"):
+
+        class _Nameless(SyncBridgeAdapter):
+            pass
+
+
+def test_a_subclass_may_inherit_the_name_from_its_own_base() -> None:
+    """An intermediate subclass names the thread; specialisations share it.
+
+    They are the same wrapper as far as a stack dump is concerned, which is
+    all the name is for. ``_Owner`` is exactly this shape and is what most of
+    the file exercises.
+    """
+    assert _Owner.BRIDGE_THREAD_NAME == _THREAD
+
+
+# --------------------------------------------------------------------------
+# Teardown combinations the consolidation newly made reachable
+# --------------------------------------------------------------------------
+
+
+def test_an_owner_closed_before_it_was_ever_used_still_closes_what_it_owns() -> None:
+    """The one path where teardown has to *build* the bridge it then ends.
+
+    Every other owner test reaches the provider first, so a bridge is already
+    there to run the teardown on. Here there is none --- and the wrapped
+    object still has to be closed somewhere, because nothing else holds a
+    reference to it.
+    """
+    inner = _Inner()
+    sync = _Owner(inner)
+    assert not live_dk_daemon_threads({_THREAD})
+    sync.close()
+    assert inner.closed == 1, "an owner that was never used still owns its object"
+    assert not live_dk_daemon_threads({_THREAD}), "the teardown's own bridge outlived it"
+
+
+def test_an_async_teardown_that_raises_still_ends_the_bridge() -> None:
+    """The async twin of the raising-teardown guard, which only ``close`` had.
+
+    Same argument: the flag is set before the hook and the bridge ended after
+    it, so a teardown that blows up part way still releases the thread.
+    """
+
+    class _HostileAsync(_Owner):
+        async def _aclose_inner(self) -> None:
+            raise ValueError("async teardown blew up")
+
+    async def go() -> None:
+        sync = _HostileAsync(_Inner())
+        sync.echo(1)
+        assert live_dk_daemon_threads({_THREAD})
+        with pytest.raises(ValueError, match="async teardown blew up"):
+            await sync.aclose()
+
+    asyncio.run(go())
+    assert not live_dk_daemon_threads({_THREAD}), "the thread outlived a raising aclose"
+
+
+def test_an_owner_on_a_borrowed_bridge_closes_its_object_and_not_the_bridge() -> None:
+    """The combination the two halves of ownership meet in.
+
+    Owning the wrapped object and owning the bridge are separate questions,
+    and this is the case that proves it: the provider must be closed --- on
+    the shared bridge, since that is where its session lives --- while the
+    bridge itself belongs to whoever handed it in.
+    """
+    inner = _Inner()
+    with SyncLoopBridge(thread_name=_THREAD) as shared:
+        sync = _Owner(inner, bridge=shared)
+        assert sync.echo(1) == 1
+        sync.close()
+        assert inner.closed == 1, "an owner still closes its object on a borrowed bridge"
+        assert shared.run(asyncio.sleep(0, result=2)) == 2, "the borrowed bridge was ended"
