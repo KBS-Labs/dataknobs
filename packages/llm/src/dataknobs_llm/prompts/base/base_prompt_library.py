@@ -47,6 +47,10 @@ class BasePromptLibrary:
     synchronous interface could only be reused by making an async library
     answer ``True`` to both.
 
+    Being flavour-neutral is a property of every member here, not just of the
+    bases: the shared reloading is :meth:`_reload_caches`, and each library
+    spells the public ``reload`` in its own flavour over it.
+
     It also used to *stub* that interface: eight ``NotImplementedError``
     bodies, one per abstract method. To :class:`abc.ABC` a stub is an
     implementation, so those eight switched off the construct-time check for
@@ -84,10 +88,20 @@ class BasePromptLibrary:
         self._prompt_rag_cache.clear()
         logger.debug(f"Cleared cache for {self.__class__.__name__}")
 
-    def reload(self) -> None:
-        """Reload the library by clearing the cache.
+    def _reload_caches(self) -> None:
+        """Drop everything cached here, so the next read goes to the source.
 
-        Subclasses can override to perform additional reload logic.
+        The reloading a library of *either* flavour shares, and deliberately
+        not spelled ``reload``. A public ``def reload`` here would be a flavour
+        after all: it wins the MRO over :class:`AsyncPromptLibrary`'s
+        ``async def`` default, so an asynchronous library reusing this mixin
+        constructed fine, awaited every accessor correctly, and raised
+        ``TypeError: object NoneType can't be used in 'await' expression`` on
+        ``await library.reload()`` --- a mixin whose whole claim is that it
+        declares no flavour, declaring one.
+
+        Each library spells its own ``reload`` in its own flavour and calls
+        this; what differs between them is only the ``async``.
         """
         if self._enable_cache:
             self.clear_cache()

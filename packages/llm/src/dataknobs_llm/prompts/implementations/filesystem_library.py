@@ -348,6 +348,16 @@ class FileSystemPromptLibrary(BasePromptLibrary, AbstractPromptLibrary):
 
         return configs
 
+    def reload(self) -> None:
+        """Re-read every prompt file under :attr:`prompt_dir`.
+
+        Both halves matter. Dropping the caches alone would *empty* the
+        library rather than reload it: the listings answer from those caches,
+        so they are this library's content and not a copy of it.
+        """
+        self._reload_caches()
+        self.load_all()
+
     def list_system_prompts(self) -> List[str]:
         """List all available system prompt names.
 

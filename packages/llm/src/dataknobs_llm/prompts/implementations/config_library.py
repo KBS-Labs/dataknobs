@@ -296,6 +296,16 @@ class ConfigPromptLibrary(BasePromptLibrary, AbstractPromptLibrary):
         self._cache_rag_config(name, rag_config)
         logger.debug(f"Added/updated RAG config: {name}")
 
+    def reload(self) -> None:
+        """Re-read the configuration this library was built over.
+
+        Both halves matter. Dropping the caches alone would *empty* the
+        library rather than reload it: the listings answer from those caches,
+        so they are this library's content and not a copy of it.
+        """
+        self._reload_caches()
+        self._load_from_config()
+
     def list_system_prompts(self) -> List[str]:
         """List all available system prompt names.
 
