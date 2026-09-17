@@ -9,9 +9,14 @@ combining version management, A/B testing, and metrics tracking.
 
 from typing import Any, Dict, List
 
-from dataknobs_common import run_coro_sync
-
-from ..base import AbstractPromptLibrary, PromptTemplateDict, MessageIndex, RAGConfig
+from ..base import (
+    AbstractPromptLibrary,
+    AsyncPromptLibrary,
+    MessageIndex,
+    PromptTemplateDict,
+    RAGConfig,
+    as_async,
+)
 from ..versioning import (
     VersionManager,
     ABTestManager,
@@ -24,8 +29,14 @@ from ..versioning import (
 )
 
 
-class VersionedPromptLibrary(AbstractPromptLibrary):
+class VersionedPromptLibrary(AsyncPromptLibrary):
     """Prompt library with versioning, A/B testing, and metrics tracking.
+
+    An :class:`AsyncPromptLibrary`, because every answer it gives comes from
+    an asynchronous version manager. A synchronous consumer reaches it through
+    :func:`~dataknobs_llm.prompts.base.views.as_sync`, paying a bridge thread
+    and a blocked calling thread for the privilege; an async consumer awaits it
+    and pays neither.
 
     This library extends the base prompt library interface with:
     - Version management with semantic versioning
@@ -49,7 +60,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         )
 
         # Get latest version (returns PromptTemplateDict for compatibility)
-        template = library.get_system_prompt("greeting")
+        template = await library.get_system_prompt("greeting")
 
         # Create A/B test
         experiment = await library.create_experiment(
@@ -74,16 +85,26 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
     def __init__(
         self,
         storage: Any | None = None,
-        base_library: AbstractPromptLibrary | None = None,
+        base_library: AbstractPromptLibrary | AsyncPromptLibrary | None = None,
     ):
         """Initialize versioned prompt library.
 
         Args:
             storage: Backend storage for persistence (None for in-memory)
-            base_library: Optional base library to wrap (for migration)
+            base_library: Optional base library to wrap (for migration). Either
+                flavour: a synchronous one is reached through
+                :func:`~dataknobs_llm.prompts.base.views.as_async`, so a
+                fallback lookup cannot stall this library's caller on a
+                filesystem read. ``base_library`` keeps exactly the object that
+                was passed; the view is private.
         """
         self.storage = storage
         self.base_library = base_library
+        self._async_base: AsyncPromptLibrary | None = (
+            as_async(base_library)
+            if isinstance(base_library, AbstractPromptLibrary)
+            else base_library
+        )
 
         # Initialize managers
         self.version_manager = VersionManager(storage)
@@ -347,36 +368,12 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         """
         return await self.metrics_collector.compare_variants(version_ids)
 
-    # ===== AbstractPromptLibrary Implementation =====
+    # ===== AsyncPromptLibrary Implementation =====
 
-    def get_system_prompt(
+    async def get_system_prompt(
         self, name: str, version: str = "latest", **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Get a system prompt template.
-
-        Synchronous, because :class:`AbstractPromptLibrary` declares it so,
-        and it reaches an async version manager --- the shape that makes
-        ``loop.run_until_complete`` raise ``RuntimeError: This event loop is
-        already running`` for any caller already on a loop. Every writer on
-        this library is a coroutine, so that was every realistic caller,
-        including the example in this class's own docstring.
-
-        :func:`run_coro_sync` runs the lookup on a private loop instead. It
-        costs a short-lived daemon thread per call rather than one held for
-        the library's lifetime, which is the right trade here and only here:
-        :class:`AbstractPromptLibrary` declares no ``close()``, so a
-        long-lived bridge would owe a teardown no consumer of that protocol
-        knows to call.
-
-        **This makes the accessor reachable; it does not make it the right
-        way in.** The caller's loop is blocked for the lookup, which matters
-        once ``storage`` fronts something slower than a dict ---
-        ``AsyncPromptBuilder.render_system_prompt`` is ``async def`` and calls
-        this. That is a property of the protocol, which declares the accessor
-        synchronous, and the fix for it is the asynchronous prompt-library
-        protocol that is being split out separately. Until then: from async
-        code ``await get_version(...)`` directly and skip both the thread and
-        the stall.
 
         Args:
             name: Prompt name
@@ -386,17 +383,17 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplateDict if found, None otherwise
         """
-        prompt_version = run_coro_sync(self.version_manager.get_version(name, "system", version))
+        prompt_version = await self.version_manager.get_version(name, "system", version)
 
         if not prompt_version:
             # Fall back to base library if available
-            if self.base_library:
-                return self.base_library.get_system_prompt(name, **kwargs)
+            if self._async_base:
+                return await self._async_base.get_system_prompt(name, **kwargs)
             return None
 
         return self._version_to_template(prompt_version)
 
-    def get_user_prompt(
+    async def get_user_prompt(
         self, name: str, version: str = "latest", **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Get a user prompt template.
@@ -409,54 +406,43 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplateDict if found, None otherwise
         """
-        prompt_version = run_coro_sync(self.version_manager.get_version(name, "user", version))
+        prompt_version = await self.version_manager.get_version(name, "user", version)
 
         if not prompt_version:
-            if self.base_library:
-                return self.base_library.get_user_prompt(name, **kwargs)
+            if self._async_base:
+                return await self._async_base.get_user_prompt(name, **kwargs)
             return None
 
         return self._version_to_template(prompt_version)
 
-    def list_system_prompts(self) -> List[str]:
+    async def list_system_prompts(self) -> List[str]:
         """List all system prompt names.
 
         Returns:
             List of prompt names
         """
-        # No loop here: the index is a plain dict and reading it awaits
-        # nothing. `list_user_prompts` below is the same method without the
-        # ceremony, which is what makes this one's absence the correct shape.
-        names = set()
-        for key in self.version_manager._version_index.keys():
-            name, ptype = key.split(":", 1)
-            if ptype == "system":
-                names.add(name)
+        names = self._names_of_type("system")
 
         # Add from base library if available
-        if self.base_library:
-            names.update(self.base_library.list_system_prompts())
+        if self._async_base:
+            names.update(await self._async_base.list_system_prompts())
 
         return sorted(names)
 
-    def list_user_prompts(self) -> List[str]:
+    async def list_user_prompts(self) -> List[str]:
         """List all user prompt names.
 
         Returns:
             List of prompt names
         """
-        names = set()
-        for key in self.version_manager._version_index.keys():
-            name, ptype = key.split(":", 1)
-            if ptype == "user":
-                names.add(name)
+        names = self._names_of_type("user")
 
-        if self.base_library:
-            names.update(self.base_library.list_user_prompts())
+        if self._async_base:
+            names.update(await self._async_base.list_user_prompts())
 
         return sorted(names)
 
-    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
+    async def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
         """Get a message index.
 
         Note: Message indexes are not versioned in this implementation.
@@ -469,21 +455,21 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             MessageIndex if found, None otherwise
         """
-        if self.base_library:
-            return self.base_library.get_message_index(name, **kwargs)
+        if self._async_base:
+            return await self._async_base.get_message_index(name, **kwargs)
         return None
 
-    def list_message_indexes(self) -> List[str]:
+    async def list_message_indexes(self) -> List[str]:
         """List all message index names.
 
         Returns:
             List of message index names
         """
-        if self.base_library:
-            return self.base_library.list_message_indexes()
+        if self._async_base:
+            return await self._async_base.list_message_indexes()
         return []
 
-    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
+    async def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
         """Get a RAG configuration.
 
         Note: RAG configs are not versioned in this implementation.
@@ -496,11 +482,11 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             RAGConfig if found, None otherwise
         """
-        if self.base_library:
-            return self.base_library.get_rag_config(name, **kwargs)
+        if self._async_base:
+            return await self._async_base.get_rag_config(name, **kwargs)
         return None
 
-    def get_prompt_rag_configs(
+    async def get_prompt_rag_configs(
         self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
     ) -> List[RAGConfig]:
         """Get RAG configurations for a prompt.
@@ -513,12 +499,19 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             List of RAG configurations
         """
-        if self.base_library:
-            return self.base_library.get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
+        if self._async_base:
+            return await self._async_base.get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
         return []
 
     def get_metadata(self) -> Dict[str, Any]:
         """Get library metadata.
+
+        Synchronous, like its twin: every key here answers from this object's
+        own construction rather than from its content. It reported a
+        ``version_count`` and an ``experiment_count`` too, which did neither ---
+        they counted rows by reaching into two managers' private dictionaries,
+        and counting rows in a store is a query, not metadata about a library.
+        Nothing read either key.
 
         Returns:
             Metadata dictionary
@@ -527,11 +520,22 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
             "type": "VersionedPromptLibrary",
             "storage": str(type(self.storage).__name__) if self.storage else "in-memory",
             "has_base_library": self.base_library is not None,
-            "version_count": len(self.version_manager._versions),
-            "experiment_count": len(self.ab_test_manager._experiments),
         }
 
     # ===== Helper Methods =====
+
+    def _names_of_type(self, prompt_type: str) -> set[str]:
+        """Names carrying at least one version of ``prompt_type``.
+
+        The two listings differ only in the type they filter on, and the index
+        is a plain dict --- reading it awaits nothing, which is why both
+        listings suspend only when a base library is present to consult.
+        """
+        return {
+            key.split(":", 1)[0]
+            for key in self.version_manager._version_index
+            if key.split(":", 1)[1] == prompt_type
+        }
 
     def _version_to_template(self, version: PromptVersion) -> PromptTemplateDict:
         """Convert PromptVersion to PromptTemplateDict for compatibility."""

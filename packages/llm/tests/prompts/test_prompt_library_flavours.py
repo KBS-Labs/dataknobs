@@ -18,12 +18,15 @@ the synchronous accessors used to raise.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from typing import Any
 
 import pytest
-from dataknobs_common.testing import assert_twin_types_agree
+from dataknobs_common.sync_bridge import SyncLoopBridge
+from dataknobs_common.testing import assert_no_leaked_bridge_threads, assert_twin_types_agree
 
+from dataknobs_llm.prompts import VersionedPromptLibrary
 from dataknobs_llm.prompts.base import (
     AbstractPromptLibrary,
     AsyncPromptLibrary,
@@ -42,6 +45,19 @@ CONFIG = {
 def sync_library() -> ConfigPromptLibrary:
     """A real synchronous library --- no mock, no fake."""
     return ConfigPromptLibrary(CONFIG)
+
+
+@pytest.fixture
+async def async_library() -> VersionedPromptLibrary:
+    """A real asynchronous library, populated the only way it can be."""
+    library = VersionedPromptLibrary()
+    await library.create_version(
+        name="greet", prompt_type="system", template="Hello {{name}}!", version="1.0.0"
+    )
+    await library.create_version(
+        name="ask", prompt_type="user", template="Tell me about {{topic}}", version="1.0.0"
+    )
+    return library
 
 
 def test_the_two_protocols_declare_one_surface() -> None:
@@ -70,6 +86,18 @@ def test_the_two_protocols_declare_one_surface() -> None:
         ],
         unflavoured_members=["get_metadata"],
     )
+
+
+def test_the_versioned_library_is_the_async_flavour() -> None:
+    """It fronts a store, so it is the flavour that can await one.
+
+    Before this it satisfied the synchronous protocol and reached an
+    asynchronous version manager through a per-call bridge --- reachable, but
+    blocking whichever loop the caller was on for the whole lookup.
+    """
+    library = VersionedPromptLibrary()
+    assert isinstance(library, AsyncPromptLibrary)
+    assert not isinstance(library, AbstractPromptLibrary)
 
 
 @pytest.mark.asyncio
@@ -120,9 +148,95 @@ async def test_the_async_door_does_not_run_the_read_on_the_loop_thread(
     assert seen and threading.current_thread().name not in seen
 
 
+def test_an_async_library_answers_through_the_sync_door_off_a_loop() -> None:
+    """The ``def`` caller this door exists for."""
+    library = VersionedPromptLibrary()
+    asyncio.run(
+        library.create_version(
+            name="greet", prompt_type="system", template="Hello {{name}}!", version="1.0.0"
+        )
+    )
+
+    with as_sync(library) as view:
+        template = view.get_system_prompt("greet")
+        assert template is not None
+        assert template["template"] == "Hello {{name}}!"
+        assert view.list_system_prompts() == ["greet"]
+        assert view.get_metadata()["type"] == "VersionedPromptLibrary"
+
+
+@pytest.mark.asyncio
+async def test_the_sync_door_works_from_inside_a_running_loop(
+    async_library: VersionedPromptLibrary,
+) -> None:
+    """The property the accessors used to fail outright.
+
+    A synchronous call reaching an async library used to raise
+    ``RuntimeError: This event loop is already running`` --- and a running loop
+    is the only place such a library can be populated from, since every writer
+    on it is a coroutine. The bridge runs the coroutine on its own loop
+    instead, so the call returns rather than raising.
+
+    It still **blocks** this task's loop for the duration. That is what the
+    door costs and why the async library is the better answer where a consumer
+    can take one.
+    """
+    with as_sync(async_library) as view:
+        template = view.get_system_prompt("greet")
+
+    assert template is not None
+    assert template["template"] == "Hello {{name}}!"
+
+
+@pytest.mark.asyncio
+async def test_the_sync_door_leaves_no_thread_behind(
+    async_library: VersionedPromptLibrary,
+) -> None:
+    """A bridge is a daemon thread with a lifetime, and ``close`` ends it."""
+    with assert_no_leaked_bridge_threads():
+        with as_sync(async_library) as view:
+            assert view.get_system_prompt("greet") is not None
+
+
+@pytest.mark.asyncio
+async def test_several_doors_can_share_one_thread(
+    async_library: VersionedPromptLibrary,
+) -> None:
+    """A bridge passed in belongs to the caller and outlives the view."""
+    with assert_no_leaked_bridge_threads(), SyncLoopBridge() as bridge:
+        first = as_sync(async_library, bridge=bridge)
+        second = as_sync(async_library, bridge=bridge)
+        try:
+            assert first.get_system_prompt("greet") is not None
+            assert second.get_user_prompt("ask") is not None
+        finally:
+            first.close()
+            second.close()
+        # Closing both views left the caller's bridge running.
+        assert bridge.run(_one()) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_bounds_a_wait_the_caller_cannot_cancel() -> None:
+    """A blocked ``def`` caller has no cancellation of its own."""
+
+    class Stalls(VersionedPromptLibrary):
+        async def get_system_prompt(self, name: str, **kwargs: Any) -> Any:
+            await asyncio.sleep(30)
+            return None  # pragma: no cover - never reached
+
+    with as_sync(Stalls(), timeout=0.1) as view, pytest.raises(TimeoutError):
+        view.get_system_prompt("greet")
+
+
 def test_converting_both_ways_round_trips_a_read(sync_library: ConfigPromptLibrary) -> None:
     """Each door alone preserves what the library answers; together they compose."""
     with as_sync(as_async(sync_library)) as view:
         assert view.get_system_prompt("greet") == sync_library.get_system_prompt("greet")
         assert view.list_user_prompts() == sync_library.list_user_prompts()
         assert view.get_metadata() == sync_library.get_metadata()
+
+
+async def _one() -> int:
+    """A coroutine whose only job is to prove a bridge is still running."""
+    return 1
