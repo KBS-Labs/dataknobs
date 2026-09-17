@@ -13,7 +13,7 @@ wrong one accounts for most of the confusion:
 | Addressing | host and port directly | through a `RequestHelper` |
 | Documents | `index`, `get`, `update`, `delete`, `count`, `exists` | none -- searching only |
 | Searching | `search(body)` | `search(query, table=None)` |
-| Also | `create`, `refresh`, `delete_by_query` | `analyze`, `sql`, `purge`, `inspect_indices`, `get_cluster_health` |
+| Also | `create`, `refresh`, `delete_by_query` | `analyze`, `sql`, `delete_table`, `purge` (all indices), `inspect_indices`, `is_up`, `get_cluster_health` |
 
 Most examples below use `SimplifiedElasticsearchIndex`, because writing
 documents is what most integrations start with. Neither class wraps the whole
@@ -446,9 +446,15 @@ print(indices.is_up())
 print(indices.inspect_indices())
 print(indices.get_cluster_health())
 
-indices.purge("documents")          # empty it
-indices.delete_table("documents")   # drop it
+indices.delete_table("documents")   # drop one, by name
+indices.purge()                     # empty EVERY managed index
 ```
+
+`purge` takes no index name. Its only argument is `verbose`, so
+`purge("documents")` empties everything and prints while doing it -- the string
+binds to the flag. It deletes each managed index and recreates it from the
+settings and mappings it was given, so it is the whole-cluster-slice reset, not
+a per-index one.
 
 ### What Is Not Here
 
@@ -458,15 +464,21 @@ the cluster directly, with `RequestHelper` if you want the same connection
 handling:
 
 ```python
+import json
+
 from dataknobs_utils.requests_utils import RequestHelper
 
 helper = RequestHelper("localhost", 9200)
-response = helper.post("_aliases", payload={
+
+# Serialize the body yourself. `post` hands a mapping to requests as `data=`,
+# which form-encodes it -- under the default JSON content type, Elasticsearch
+# rejects that. A str or bytes payload is sent as the raw body.
+response = helper.post("_aliases", payload=json.dumps({
     "actions": [
         {"remove": {"index": "documents_v1", "alias": "documents_current"}},
         {"add": {"index": "documents_v2", "alias": "documents_current"}},
     ]
-})
+}))
 print(response.succeeded)
 ```
 
