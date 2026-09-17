@@ -365,6 +365,118 @@ class TestEnvironmentOverrides:
         assert "names no attribute" in caplog.text
 
 
+class TestInjectedOverridesSource:
+    """Test that the environment source `Config` reads is the caller's to supply."""
+
+    def test_an_injected_source_supplies_the_prefix(self, env_vars):
+        """Test that a custom prefix is reachable through `Config`.
+
+        `EnvironmentOverrides` has declared a `prefix` since it was written and
+        honours it when driven directly, but `Config` constructed its own with
+        the default and offered no way to pass one, so no `Config` caller could
+        reach the option at all.
+        """
+        env_vars(MYAPP_DATABASE__0__HOST="from.myapp")
+
+        config = Config(
+            {"database": [{"name": "db", "host": "original"}]},
+            env_overrides=EnvironmentOverrides(prefix="MYAPP_"),
+        )
+
+        assert config.get("database", 0)["host"] == "from.myapp"
+
+    def test_an_injected_source_is_applied_by_the_one_loop(self, env_vars):
+        """Test that injecting a source does not fork the assignment logic.
+
+        The guide used to answer "custom prefix" with a recipe that drove
+        `EnvironmentOverrides` itself and assigned `item[attr] = value`, which
+        is `_apply_environment_overrides` rewritten by hand -- and rewritten as
+        it behaved before the attribute path was walked. A caller who took that
+        recipe got a junk key beside the target and the target untouched, which
+        is what this asserts has no second implementation to drift from.
+        """
+        env_vars(MYAPP_DATABASE__0__CONNECTION__TIMEOUT="60")
+
+        config = Config(
+            {"database": [{"name": "db", "connection": {"timeout": 30, "retry": 3}}]},
+            env_overrides=EnvironmentOverrides(prefix="MYAPP_"),
+        )
+
+        db = config.get("database", 0)
+        assert db["connection"] == {"timeout": 60, "retry": 3}
+        assert "connection__timeout" not in db
+
+    def test_a_subclass_can_filter_what_reaches_configuration(self, env_vars):
+        """Test the other half of what the recipe was reached for.
+
+        Filtering is a property of the source, so it belongs to a subclass of
+        the source rather than to a reimplementation of the loop that reads it.
+        """
+        env_vars(
+            DATAKNOBS_DATABASE__0__HOST="applied",
+            DATAKNOBS_DATABASE__0__PASSWORD="should-not-land",
+        )
+
+        class SkipSecrets(EnvironmentOverrides):
+            """An overrides source that declines to hand over secrets."""
+
+            def get_overrides(self) -> dict:
+                return {
+                    ref: value
+                    for ref, value in super().get_overrides().items()
+                    if self.parse_env_reference(ref)[2] not in ("password",)
+                }
+
+        config = Config(
+            {"database": [{"name": "db", "host": "original", "password": "declared"}]},
+            env_overrides=SkipSecrets(),
+        )
+
+        db = config.get("database", 0)
+        assert db["host"] == "applied"
+        assert db["password"] == "declared"
+
+    def test_from_file_forwards_the_source(self, temp_dir, env_vars):
+        """Test that the classmethods reach the parameter too.
+
+        `use_env` was a constructor-only switch until it was declared, and the
+        classmethods could not decline the environment at all. A source the
+        classmethods cannot take is the same gap one parameter along.
+        """
+        env_vars(MYAPP_DATABASE__PRIMARY__HOST="from.myapp")
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("database:\n  - name: primary\n    host: file.host\n")
+
+        config = Config.from_file(config_file, env_overrides=EnvironmentOverrides(prefix="MYAPP_"))
+
+        assert config.get("database", "primary")["host"] == "from.myapp"
+
+    def test_from_dict_forwards_the_source(self, env_vars):
+        """Test the other classmethod, for the same reason."""
+        env_vars(MYAPP_DATABASE__0__HOST="from.myapp")
+
+        config = Config.from_dict(
+            {"database": [{"name": "db", "host": "original"}]},
+            env_overrides=EnvironmentOverrides(prefix="MYAPP_"),
+        )
+
+        assert config.get("database", 0)["host"] == "from.myapp"
+
+    def test_a_source_the_switch_would_discard_is_refused(self):
+        """Test that the two environment parameters cannot contradict silently.
+
+        `use_env=False` means no environment value reaches configuration, so a
+        source passed alongside it would be built, never read, and never
+        mentioned. Refusing says which of the two the caller has to change.
+        """
+        with pytest.raises(ValueError, match="use_env=False"):
+            Config(
+                {"database": [{"name": "db"}]},
+                use_env=False,
+                env_overrides=EnvironmentOverrides(prefix="MYAPP_"),
+            )
+
+
 class TestEnvironmentIntegration:
     """Test environment override integration with Config."""
 

@@ -22,7 +22,7 @@ Environment variables follow this pattern:
 DATAKNOBS_<TYPE>__<NAME_OR_INDEX>__<ATTRIBUTE>
 ```
 
-- **DATAKNOBS**: The prefix. Fixed for `Config`; see
+- **DATAKNOBS**: The prefix. The default, not a fixed one; see
   [Prefix and Selection](#prefix-and-selection)
 - **TYPE**: The configuration type, **spelled exactly as the config file's
   top-level key is**, upper-cased. A file declaring `databases:` is addressed
@@ -136,13 +136,25 @@ leaving the overrides silently on.
 
 ### Prefix and Selection
 
-The prefix is fixed at `DATAKNOBS_`, and every matching variable is applied.
-Selecting a subset, filtering by name, or using a custom prefix are not
-exposed through `Config`; a variable is either named so that it addresses an
-existing item or it is silently skipped.
+`DATAKNOBS_` is the default prefix, not a fixed one. The source `Config` reads
+is the `env_overrides` parameter, and it takes any `EnvironmentOverrides`:
 
-To narrow what can be applied, control the environment rather than the load --
-unset the variables you do not want, or run with a curated environment.
+```python
+from dataknobs_config import Config
+from dataknobs_config.environment import EnvironmentOverrides
+
+config = Config("config.yaml", env_overrides=EnvironmentOverrides(prefix="MYAPP_"))
+```
+
+`from_file` and `from_dict` take it as well. Whatever the source hands over is
+applied by the same loop as the default one, so changing where the values are
+read from does not change how they are assigned — see
+[Custom Override Logic](#custom-override-logic) for filtering.
+
+A variable the source hands over is either named so that it addresses an
+existing item or it is logged at WARNING and skipped. Passing `env_overrides`
+together with `use_env=False` raises `ValueError` rather than building a
+source nothing will read.
 
 ## Variable Substitution in Files
 
@@ -568,34 +580,38 @@ config = Config.from_file("config.yaml")
 
 ### Custom Override Logic
 
-Overrides are applied inside `Config.__init__`, so there is no post-load hook
-to override. Build with `use_env=False` and drive `EnvironmentOverrides`
-yourself when you need to preprocess or filter:
+Which variables reach configuration is a property of the source, so it belongs
+to a subclass of the source. Override `get_overrides` and hand back less than
+you were given:
 
 ```python
 from dataknobs_config import Config
 from dataknobs_config.environment import EnvironmentOverrides
 
 
-def load_with_filtered_overrides(path, *, prefix="DATAKNOBS_", skip=()):
-    """Apply every override except the ones named in `skip`."""
-    config = Config(path, use_env=False)
-    reader = EnvironmentOverrides(prefix=prefix)
+class SkipSecrets(EnvironmentOverrides):
+    """Apply every override except the ones naming a secret."""
 
-    for ref, value in reader.get_overrides().items():
-        type_name, name_or_index, attr = reader.parse_env_reference(ref)
-        if attr in skip:
-            continue
-        item = config.get(type_name, name_or_index)
-        item[attr] = value
-        config.set(type_name, name_or_index, item)
+    SECRETS = ("password", "api_key", "token")
 
-    return config
+    def get_overrides(self):
+        return {
+            ref: value
+            for ref, value in super().get_overrides().items()
+            if self.parse_env_reference(ref)[2] not in self.SECRETS
+        }
 
 
-# A custom prefix is reachable this way, and only this way.
-config = load_with_filtered_overrides("config.yaml", prefix="MYAPP_", skip=("password",))
+config = Config("config.yaml", env_overrides=SkipSecrets(prefix="MYAPP_"))
 ```
+
+The guide used to answer this with a function that drove `EnvironmentOverrides`
+itself and assigned each value with `item[attr] = value`. That is the override
+loop rewritten by hand, and it did not survive the loop learning to walk a
+`__`-joined attribute into the value it names: a recipe written that way
+applies `MYAPP_DB__0__CONNECTION__TIMEOUT` as a flat `connection__timeout` key
+beside the `connection` it was aimed at. Subclassing the source keeps one
+implementation of the assignment, which is the half that has the sharp edges.
 
 ### Dynamic Environment Variables
 

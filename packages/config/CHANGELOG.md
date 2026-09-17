@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`Config` takes the environment source it reads, as `env_overrides`.** It
+  constructed its own `EnvironmentOverrides()` and offered no way to pass one,
+  so the `prefix` that class has always declared was unreachable for every
+  `Config` caller. The guide said as much, and answered "custom prefix" with a
+  recipe that drove `EnvironmentOverrides` directly and assigned each value
+  with `item[attr] = value` — the override loop rewritten by hand, which did
+  not survive that loop learning to walk a `__`-joined attribute into the
+  value it names. A caller who took that recipe applies
+  `MYAPP_DB__0__CONNECTION__TIMEOUT` as a flat `connection__timeout` key
+  beside the `connection` it was aimed at, which is the defect fixed below
+  reintroduced one layer out. The parameter takes any `EnvironmentOverrides`
+  — one built with a different prefix, or a subclass whose `get_overrides`
+  hands back less than it was given — and `from_file` and `from_dict` forward
+  it. Whatever the source returns is applied by the same loop as the default
+  source, so choosing where values are read from no longer means
+  reimplementing how they are assigned. Passing it with `use_env=False` raises
+  `ValueError` rather than building a source nothing would read.
+
 ### Changed
 
 - **`use_env` is a declared parameter, and `from_file`/`from_dict` forward it.**

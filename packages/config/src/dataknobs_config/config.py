@@ -46,6 +46,7 @@ class Config:
         *sources: Union[str, Path, dict],
         allow_reference_outside_config_root: bool = False,
         use_env: bool = True,
+        env_overrides: EnvironmentOverrides | None = None,
     ) -> None:
         """Initialize a Config object from one or more sources.
 
@@ -63,12 +64,26 @@ class Config:
                 ``**kwargs`` so that a misspelling raises ``TypeError`` instead
                 of silently leaving the overrides on — this switch gates
                 environment values reaching configuration, so it fails closed.
+            env_overrides: The source of environment overrides, defaulting to
+                ``EnvironmentOverrides()``. Supply one to read a different
+                prefix (``EnvironmentOverrides(prefix="MYAPP_")``) or a
+                subclass to filter what is handed over; either way the values
+                are applied by the same loop as the default source, so a
+                caller does not reimplement the assignment to change where it
+                reads from. Passing one with ``use_env=False`` raises
+                ``ValueError`` rather than building a source nothing reads.
         """
+        if env_overrides is not None and not use_env:
+            raise ValueError(
+                "env_overrides was given with use_env=False, so nothing would read it; "
+                "drop one of the two"
+            )
+
         self._allow_reference_outside_config_root = allow_reference_outside_config_root
         self._data: Dict[str, List[Dict[str, Any]]] = {}
         self._settings_manager = SettingsManager()
         self._reference_resolver = ReferenceResolver(self)
-        self._environment_overrides = EnvironmentOverrides()
+        self._environment_overrides = env_overrides or EnvironmentOverrides()
         self._object_builder = ObjectBuilder(self)
         self._registered_factories = Registry[Any](name="factories", enable_metrics=True)
 
@@ -87,6 +102,7 @@ class Config:
         *,
         allow_reference_outside_config_root: bool = False,
         use_env: bool = True,
+        env_overrides: EnvironmentOverrides | None = None,
     ) -> "Config":
         """Create a Config object from a file.
 
@@ -94,6 +110,7 @@ class Config:
             path: Path to configuration file (YAML or JSON)
             allow_reference_outside_config_root: As :meth:`__init__` takes it.
             use_env: As :meth:`__init__` takes it.
+            env_overrides: As :meth:`__init__` takes it.
 
         Returns:
             Config object
@@ -102,6 +119,7 @@ class Config:
             path,
             allow_reference_outside_config_root=allow_reference_outside_config_root,
             use_env=use_env,
+            env_overrides=env_overrides,
         )
 
     @classmethod
@@ -111,6 +129,7 @@ class Config:
         *,
         allow_reference_outside_config_root: bool = False,
         use_env: bool = True,
+        env_overrides: EnvironmentOverrides | None = None,
     ) -> "Config":
         """Create a Config object from a dictionary.
 
@@ -118,6 +137,7 @@ class Config:
             data: Configuration dictionary
             allow_reference_outside_config_root: As :meth:`__init__` takes it.
             use_env: As :meth:`__init__` takes it.
+            env_overrides: As :meth:`__init__` takes it.
 
         Returns:
             Config object
@@ -126,6 +146,7 @@ class Config:
             data,
             allow_reference_outside_config_root=allow_reference_outside_config_root,
             use_env=use_env,
+            env_overrides=env_overrides,
         )
 
     def load(self, source: Union[str, Path, dict]) -> None:
