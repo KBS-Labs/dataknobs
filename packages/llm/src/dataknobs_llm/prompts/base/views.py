@@ -25,13 +25,27 @@ wrapping async-for-sync is a bridge, and a bridge has a lifetime, a thread and
 a failure mode. Where a consumer can take the async library directly, that is
 always the better answer than ``as_sync``.
 
-**Do not hand an** ``as_sync`` **result to** :class:`AsyncPromptBuilder`. That
-builder calls its library synchronously from inside its own ``async def``, so
-every template fetch would block the builder's event loop for the wrapped
-library's round trip --- which is exactly the harm ``as_sync`` looks like it is
-solving. Give it the async library directly once it accepts one; until then, a
-versioned library's own ``await get_version(...)`` is the route that costs
-nothing.
+"Nothing to close" is the honest headline for ``as_async`` and not the whole
+bill. Two costs come with :func:`asyncio.to_thread` and are worth knowing
+before wrapping a library that is genuinely slow to answer:
+
+* each in-flight call holds a worker in the loop's **shared default executor**,
+  so enough slow libraries will queue behind each other *and* behind every
+  unrelated offload on that loop;
+* :func:`asyncio.to_thread` is **not cancellable**. Cancelling the awaiting
+  task does not interrupt the thread; the ``CancelledError`` is delivered once
+  the synchronous call returns on its own. ``as_sync`` gives its caller a
+  ``timeout`` for the same reason, and ``as_async`` has no equivalent.
+
+``as_sync`` **into** :class:`AsyncPromptBuilder` **pays twice for one read.**
+That builder is still typed to the synchronous interface, so an asynchronous
+library reaches it only through ``as_sync`` --- and the builder puts that
+synchronous view straight back through ``as_async``. The builder's loop is not
+stalled, but each fetch crosses to a worker thread, blocks *it* on the bridge
+and crosses back, and the bridge ``as_sync`` opened is one the builder will
+never close: :class:`AbstractPromptLibrary` declares no ``close()`` for it to
+call. Where the consumer is asynchronous, a versioned library's own
+``await get_system_prompt(...)`` is the route that costs neither hop.
 """
 
 from __future__ import annotations
@@ -161,13 +175,16 @@ class SyncPromptLibraryView(SyncBridgeAdapter, AbstractPromptLibrary):
     ```
 
     The bridge is built on first use and ended by :meth:`close`, for which
-    ``with`` is the context-manager form; an async holder uses ``async with``
-    and :meth:`aclose` so its own loop is not blocked for the teardown. Hand
-    several views the same ``bridge`` and they share the one thread.
+    ``with`` is the context-manager form. Hand several views the same
+    ``bridge`` and they share the one thread.
 
-    The library handed in is **not** this view's to close. It was built
-    elsewhere, so ``close()`` ends only the bridge --- which is why no
-    ``_close_inner`` is overridden here.
+    :meth:`aclose` and ``async with`` exist so an asynchronous holder can spell
+    teardown in its own flavour, and for *this* subclass they do the same work
+    as :meth:`close` rather than less of it. The saving ``aclose`` offers on
+    the base class is in ``_aclose_inner``, the hook for teardown the adapter
+    itself owns; this view owns nothing --- the library was built elsewhere and
+    is not its to close --- so it overrides neither hook, and both paths end
+    with the same ``thread.join()`` on the caller's thread.
     """
 
     BRIDGE_THREAD_NAME = "dk-sync-prompt-library"
@@ -248,11 +265,18 @@ def as_async(library: AbstractPromptLibrary) -> AsyncPromptLibrary:
     consumer's loop is never stalled by a library that reads something to
     answer. Nothing is owned and there is nothing to close.
 
+    Cheap is not free. Each in-flight call holds a worker in the loop's shared
+    default executor, and :func:`asyncio.to_thread` cannot be cancelled --- a
+    cancelled caller still waits for the synchronous call to return. See this
+    module's docstring for when that matters.
+
     Args:
         library: The synchronous library. Its lifetime stays the caller's.
 
     Returns:
-        An :class:`AsyncPromptLibrary` over the same content.
+        An :class:`AsyncPromptLibrary` over the same content --- concretely an
+        :class:`AsyncPromptLibraryView`, importable from
+        ``dataknobs_llm.prompts.base`` for a caller that wants to name it.
     """
     return AsyncPromptLibraryView(library)
 
@@ -270,9 +294,17 @@ def as_sync(
     thread** for the library's whole round trip. Close it when done --- ``with``
     and ``async with`` are the context-manager forms.
 
-    **Not for** :class:`AsyncPromptBuilder`: it calls its library synchronously
-    from inside its own ``async def``, so this would block the builder's loop
-    on every template fetch. See this module's docstring.
+    **That obligation is invisible to the protocol it satisfies.** The result
+    is an :class:`AbstractPromptLibrary`, and that interface declares no
+    ``close()``, so the moment this view is passed on *as* a prompt library ---
+    into a composite, a resolver, a builder --- nothing downstream can end its
+    thread, and the only remaining backstop is a ``ResourceWarning`` Python's
+    default filters suppress. Close it where you built it.
+
+    **Handing the result to** :class:`AsyncPromptBuilder` **pays twice**: that
+    builder offloads its library through ``as_async``, so the read crosses to a
+    worker thread, blocks it on this bridge and crosses back. See this module's
+    docstring.
 
     Args:
         library: The asynchronous library to reach. Not the view's to close.
@@ -285,5 +317,8 @@ def as_sync(
     Returns:
         A :class:`SyncPromptLibraryView` --- an :class:`AbstractPromptLibrary`
         that also carries ``close()`` and both context-manager protocols.
+        Importable from ``dataknobs_llm.prompts.base`` for a caller that wants
+        to name the type; ``dataknobs_llm.prompts`` re-exports the two doors
+        but not the two views.
     """
     return SyncPromptLibraryView(library, timeout=timeout, bridge=bridge)

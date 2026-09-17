@@ -234,16 +234,16 @@ version manager that awaits:
 ```python
 from dataknobs_llm.prompts import VersionedPromptLibrary
 
-library = VersionedPromptLibrary()
+versioned = VersionedPromptLibrary()
 
-await library.create_version(
+await versioned.create_version(
     name="helpful_assistant",
     prompt_type="system",
     template="You are a helpful assistant specializing in {{domain}}.",
     version="1.0.0",
 )
 
-template = await library.get_system_prompt("helpful_assistant")
+template = await versioned.get_system_prompt("helpful_assistant")
 ```
 
 When the consumer holds one flavour and the library is the other, convert it at
@@ -256,12 +256,12 @@ from dataknobs_llm.prompts import as_async, as_sync
 # Cheap. A synchronous library, for an asynchronous consumer. Each call is
 # offloaded to a worker thread, so a library that reads a file to answer cannot
 # stall the consumer's loop. Nothing is owned and there is nothing to close.
-async_view = as_async(config_library)
+async_view = as_async(library)
 
 # Expensive. An asynchronous library, for a `def` consumer. Owns a private
 # event loop on a daemon thread until it is closed, and blocks the calling
 # thread for the whole of every call.
-with as_sync(library, timeout=30) as sync_view:
+with as_sync(versioned, timeout=30) as sync_view:
     template = sync_view.get_system_prompt("helpful_assistant")
 ```
 
@@ -271,14 +271,21 @@ already inside a running loop, where the old synchronous accessors raised
 the calling thread waits on the bridge for the whole call, so if that thread is
 running an event loop, every other task on it is stalled meanwhile.
 
-!!! warning "Do not hand an `as_sync` result to `AsyncPromptBuilder`"
+!!! warning "`as_sync` into `AsyncPromptBuilder` pays twice for one read"
 
-    That builder calls its library synchronously from inside its own
-    `async def`, so every template fetch would block the builder's event loop
-    for the wrapped library's entire round trip — which is the harm `as_sync`
-    looks like it is solving. Where the consumer is asynchronous, give it the
-    asynchronous library directly, or reach the versioned library's own
-    `await get_version(...)`, and skip both the thread and the stall.
+    `AsyncPromptBuilder` is still typed to the synchronous interface, so an
+    asynchronous library reaches it only through `as_sync` — and the builder
+    then puts that synchronous view straight back through `as_async`. Each
+    template fetch crosses to a worker thread, blocks *it* on the bridge, and
+    crosses back. The builder's own loop is not stalled, but the round trip
+    buys nothing, and the bridge `as_sync` opens is one the builder will never
+    close because `AbstractPromptLibrary` has no `close()` to call.
+
+    Where the consumer is asynchronous, reach the versioned library's own
+    `await get_system_prompt(...)` directly and skip both hops. Widening the
+    builder to accept either flavour is the open follow-up; it needs an
+    asynchronous twin of the shared `BasePromptBuilder.get_required_parameters`,
+    which fetches templates the same way and is inherited by both builders.
 <!-- --8<-- [end:library-flavours] -->
 
 ### Using Prompt Builder
