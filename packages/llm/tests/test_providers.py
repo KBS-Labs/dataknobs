@@ -229,13 +229,22 @@ class TestSyncProviderAdapter:
 
     @pytest.fixture
     def sync_adapter(self, async_echo_provider):
-        """Create a SyncProviderAdapter wrapping EchoProvider."""
-        return SyncProviderAdapter(async_echo_provider)
+        """A SyncProviderAdapter wrapping EchoProvider, closed at teardown.
 
-    def test_adapter_wraps_async_provider(self, async_echo_provider):
-        """Test adapter wraps async provider."""
+        The adapter owns a bridge loop on a daemon thread, so an adapter
+        nobody closes leaks one. Closing unconditionally here is safe because
+        ``close()`` is idempotent -- a test that closes its own adapter, as
+        several below do, is unaffected.
+        """
         adapter = SyncProviderAdapter(async_echo_provider)
-        assert adapter.async_provider is async_echo_provider
+        try:
+            yield adapter
+        finally:
+            adapter.close()
+
+    def test_adapter_wraps_async_provider(self, sync_adapter, async_echo_provider):
+        """Test adapter wraps async provider."""
+        assert sync_adapter.async_provider is async_echo_provider
 
     def test_adapter_initialize(self, sync_adapter):
         """Test adapter initialize method."""
@@ -310,17 +319,15 @@ class TestSyncProviderAdapter:
 
         sync_adapter.close()
 
-    def test_adapter_is_initialized_property(self, async_echo_provider):
+    def test_adapter_is_initialized_property(self, sync_adapter):
         """Test adapter is_initialized property."""
-        adapter = SyncProviderAdapter(async_echo_provider)
+        assert not sync_adapter.is_initialized
 
-        assert not adapter.is_initialized
+        sync_adapter.initialize()
+        assert sync_adapter.is_initialized
 
-        adapter.initialize()
-        assert adapter.is_initialized
-
-        adapter.close()
-        assert not adapter.is_initialized
+        sync_adapter.close()
+        assert not sync_adapter.is_initialized
 
     def test_adapter_get_capabilities(self, sync_adapter):
         """Test adapter get_capabilities method."""

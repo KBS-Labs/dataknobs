@@ -500,10 +500,13 @@ class TestSyncResourceEmbedDoesNotInvent:
         """
         resource = LLMResource("r", provider="anthropic", model="claude-3-5-sonnet", api_key="k")
 
-        with pytest.raises(ResourceError) as excinfo:
-            resource.embed(["hello world"])
+        try:
+            with pytest.raises(ResourceError) as excinfo:
+                resource.embed(["hello world"])
 
-        assert isinstance(excinfo.value.__cause__, NotImplementedError)
+            assert isinstance(excinfo.value.__cause__, NotImplementedError)
+        finally:
+            resource.close()
 
     def test_a_provider_the_enum_does_not_know_is_still_delegated_to(self):
         """``echo`` is a real provider that the FSM-side enum has no member for.
@@ -559,10 +562,13 @@ class TestSyncResourceEmbedDoesNotInvent:
             endpoint=CLOSED_ENDPOINT,
         )
 
-        with pytest.raises(ResourceError) as excinfo:
-            resource.embed(["hello world"])
+        try:
+            with pytest.raises(ResourceError) as excinfo:
+                resource.embed(["hello world"])
 
-        assert not isinstance(excinfo.value.__cause__, ModuleNotFoundError)
+            assert not isinstance(excinfo.value.__cause__, ModuleNotFoundError)
+        finally:
+            resource.close()
 
 
 class TestSyncResourceCompleteDoesNotInvent:
@@ -582,8 +588,11 @@ class TestSyncResourceCompleteDoesNotInvent:
             endpoint=CLOSED_ENDPOINT,
         )
 
-        with pytest.raises(ResourceError):
-            resource.complete("Say hello")
+        try:
+            with pytest.raises(ResourceError):
+                resource.complete("Say hello")
+        finally:
+            resource.close()
 
     def test_the_configured_credentials_are_the_ones_used(self):
         """The method read ``kwargs`` then the environment, never the config.
@@ -599,12 +608,15 @@ class TestSyncResourceCompleteDoesNotInvent:
             endpoint=CLOSED_ENDPOINT,
         )
 
-        with pytest.raises(ResourceError) as excinfo:
-            resource.complete("Say hello")
+        try:
+            with pytest.raises(ResourceError) as excinfo:
+                resource.complete("Say hello")
 
-        # Reaching the transport at all means the key was accepted upstream
-        # of it; failing on the key would mean it was never read.
-        assert "API key not provided" not in str(excinfo.value.__cause__)
+            # Reaching the transport at all means the key was accepted upstream
+            # of it; failing on the key would mean it was never read.
+            assert "API key not provided" not in str(excinfo.value.__cause__)
+        finally:
+            resource.close()
 
     def test_a_provider_the_enum_does_not_know_completes(self):
         """``_custom_complete`` refused every provider outside the enum."""

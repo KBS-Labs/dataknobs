@@ -26,8 +26,30 @@ directory holding nothing but scaffolding has no such children to leak.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
-from dataknobs_common.testing import declare_import_root
+import pytest
+from dataknobs_common.testing import assert_no_leaked_bridge_threads, declare_import_root
 
 declare_import_root(Path(__file__).parent / "_support")
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_bridge_threads() -> Iterator[None]:
+    """Fail the test that leaves a dataknobs daemon thread behind.
+
+    ``SyncProviderAdapter`` owns a :class:`SyncLoopBridge`, so every sync
+    provider this suite builds holds an event loop on a daemon thread until
+    its ``close()``. A daemon thread never delays exit and the object goes on
+    working, so a missing ``close()`` is silent here and surfaces somewhere
+    else --- ``data``, ``bots`` and ``fsm`` all carry this same guard, and the
+    reason they do is that an unrelated suite's leak once broke their
+    thread-teardown assertions depending on test order.
+
+    Per **test**, not per session, and for the same reason ``bots`` gives: a
+    session-scoped guard reports a count with no test identity. The guard
+    measures a delta, so one leak cannot cascade into every later test.
+    """
+    with assert_no_leaked_bridge_threads():
+        yield
