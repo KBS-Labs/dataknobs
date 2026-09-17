@@ -9,6 +9,8 @@ combining version management, A/B testing, and metrics tracking.
 
 from typing import Any, Dict, List
 
+from dataknobs_common import run_coro_sync
+
 from ..base import AbstractPromptLibrary, PromptTemplateDict, MessageIndex, RAGConfig
 from ..versioning import (
     VersionManager,
@@ -352,8 +354,29 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
     ) -> PromptTemplateDict | None:
         """Get a system prompt template.
 
-        This method is synchronous for compatibility with AbstractPromptLibrary.
-        For async version access, use get_version() directly.
+        Synchronous, because :class:`AbstractPromptLibrary` declares it so,
+        and it reaches an async version manager --- the shape that makes
+        ``loop.run_until_complete`` raise ``RuntimeError: This event loop is
+        already running`` for any caller already on a loop. Every writer on
+        this library is a coroutine, so that was every realistic caller,
+        including the example in this class's own docstring.
+
+        :func:`run_coro_sync` runs the lookup on a private loop instead. It
+        costs a short-lived daemon thread per call rather than one held for
+        the library's lifetime, which is the right trade here and only here:
+        :class:`AbstractPromptLibrary` declares no ``close()``, so a
+        long-lived bridge would owe a teardown no consumer of that protocol
+        knows to call.
+
+        **This makes the accessor reachable; it does not make it the right
+        way in.** The caller's loop is blocked for the lookup, which matters
+        once ``storage`` fronts something slower than a dict ---
+        ``AsyncPromptBuilder.render_system_prompt`` is ``async def`` and calls
+        this. That is a property of the protocol, which declares the accessor
+        synchronous, and the fix for it is the asynchronous prompt-library
+        protocol that is being split out separately. Until then: from async
+        code ``await get_version(...)`` directly and skip both the thread and
+        the stall.
 
         Args:
             name: Prompt name
@@ -363,18 +386,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplateDict if found, None otherwise
         """
-        import asyncio
-
-        # Run async version retrieval
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        prompt_version = loop.run_until_complete(
-            self.version_manager.get_version(name, "system", version)
-        )
+        prompt_version = run_coro_sync(self.version_manager.get_version(name, "system", version))
 
         if not prompt_version:
             # Fall back to base library if available
@@ -397,17 +409,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplateDict if found, None otherwise
         """
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        prompt_version = loop.run_until_complete(
-            self.version_manager.get_version(name, "user", version)
-        )
+        prompt_version = run_coro_sync(self.version_manager.get_version(name, "user", version))
 
         if not prompt_version:
             if self.base_library:
