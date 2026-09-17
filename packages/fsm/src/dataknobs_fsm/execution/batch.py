@@ -7,14 +7,25 @@ import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Union
 
-from dataknobs_common import SyncLoopBridge
+from dataknobs_common import (
+    BridgedOperation,
+    OperationTimeoutError,
+    SyncLoopBridge,
+    bridged_operation,
+)
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
-from dataknobs_fsm.execution.context import ExecutionContext
+from dataknobs_fsm.execution.context import ExecutionContext, ResourceStatus
+
+#: Loop-thread name for a batch operation's bridge. The bridge registers it, so
+#: ``assert_no_leaked_bridge_threads`` watches this name too --- it is a
+#: diagnostic label, not a way out of the leak guard.
+BRIDGE_THREAD_NAME = "dk-fsm-batch"
 
 
 @dataclass
@@ -87,6 +98,9 @@ class BatchExecutor:
         batch_size: int = 100,
         enable_resource_pooling: bool = True,
         progress_callback: Union[Callable, None] = None,
+        *,
+        bridge: SyncLoopBridge | None = None,
+        timeout: float | None = None,
     ):
         """Initialize batch executor.
 
@@ -96,22 +110,54 @@ class BatchExecutor:
             batch_size: Size of each batch.
             enable_resource_pooling: Enable resource pooling.
             progress_callback: Callback for progress updates.
+            bridge: A loop this executor's operations run on, owned by the
+                caller. Nothing here closes it. Required when the FSM's
+                resources are already bound to a loop --- an
+                ``AsyncDatabaseResourceAdapter`` keeps its ``AsyncDatabase``
+                open across acquisitions, so it belongs to whichever loop
+                first opened it, and a pooled backend is unusable from any
+                other. It is also how an executor shares a loop with
+                ``SimpleFSM`` or another executor over the same FSM: pass
+                ``fsm.get_sync_bridge()``. Omitted, each operation owns a
+                bridge for its duration and ends it, leaving no thread behind.
+            timeout: Seconds to allow one *operation* --- one ``execute_batch``
+                or one ``execute_batches``, however many items it runs ---
+                after which ``TimeoutError`` is raised. It is the only upper
+                bound a blocked synchronous caller has. ``None`` (the default)
+                waits for as long as the batch takes.
         """
         self.fsm = fsm
         self.parallelism = parallelism
         self.batch_size = batch_size
         self.enable_resource_pooling = enable_resource_pooling
         self.progress_callback = progress_callback
+        self._bridge = bridge
+        self._timeout = timeout
 
         # The single async execution engine; sync batch entry points drive it
-        # through a throwaway async→sync bridge scoped to each execute_batch
-        # operation (created and torn down per call), so a discarded executor
-        # never leaks a process-lifetime bridge thread.
+        # through an async→sync bridge scoped to the operation, so a discarded
+        # executor never leaks a process-lifetime bridge thread.
         self.engine = fsm.get_async_engine()
 
         # Resource pool
         self._resource_pool: Dict[str, List[Any]] = {}
         self._resource_locks: Dict[str, asyncio.Lock] = {}
+
+    def _operation(self) -> AbstractContextManager[BridgedOperation]:
+        """Open the loop and the time budget one public call runs within.
+
+        Scoped to the entry point rather than to the item: the workers take
+        the operation as an argument, so every item of a batch --- and every
+        batch of an ``execute_batches`` --- reaches the engine on one loop and
+        spends one budget between them. A per-item budget would be no bound at
+        all on the call the caller made.
+        """
+        return bridged_operation(
+            bridge=self._bridge,
+            timeout=self._timeout,
+            thread_name=BRIDGE_THREAD_NAME,
+            label="BatchExecutor",
+        )
 
     def execute_batch(
         self,
@@ -128,10 +174,30 @@ class BatchExecutor:
 
         Returns:
             List of batch results.
+
+        Raises:
+            TimeoutError: If this executor's ``timeout`` elapses before the
+                batch finishes.
         """
         if not items:
             return []
 
+        with self._operation() as op:
+            return self._execute_batch(op, items, context_template, max_transitions)
+
+    def _execute_batch(
+        self,
+        op: BridgedOperation,
+        items: List[Any],
+        context_template: ExecutionContext | None,
+        max_transitions: int,
+    ) -> List[BatchResult]:
+        """Run one batch on an already-open operation.
+
+        Split from :meth:`execute_batch` so :meth:`execute_batches` can drive
+        several batches within one operation instead of opening a loop --- and
+        restarting the budget --- for each.
+        """
         # Create progress tracker
         progress = BatchProgress(total=len(items))
 
@@ -141,19 +207,11 @@ class BatchExecutor:
                 data_mode=ProcessingMode.SINGLE, transaction_mode=TransactionMode.PER_RECORD
             )
 
-        # One throwaway bridge for the whole operation, shared across the
-        # sequential/parallel workers and torn down when the batch completes —
-        # leak-free without per-item thread churn.
-        with SyncLoopBridge() as bridge:
-            # Process based on parallelism setting
-            if self.parallelism <= 1:
-                return self._execute_sequential(
-                    items, context_template, max_transitions, progress, bridge
-                )
-            else:
-                return self._execute_parallel(
-                    items, context_template, max_transitions, progress, bridge
-                )
+        # Process based on parallelism setting
+        if self.parallelism <= 1:
+            return self._execute_sequential(items, context_template, max_transitions, progress, op)
+        else:
+            return self._execute_parallel(items, context_template, max_transitions, progress, op)
 
     def _execute_sequential(
         self,
@@ -161,7 +219,7 @@ class BatchExecutor:
         context_template: ExecutionContext,
         max_transitions: int,
         progress: BatchProgress,
-        bridge: SyncLoopBridge,
+        op: BridgedOperation,
     ) -> List[BatchResult]:
         """Execute items sequentially.
 
@@ -189,8 +247,9 @@ class BatchExecutor:
             else:
                 context.data = item
 
-            # Add batch tracking metadata
-            context.batch_id = i
+            # Add batch tracking metadata. ``batch_info`` is the channel:
+            # an attribute set on the shared ``ExecutionContext`` is not part
+            # of its type, so nothing could rely on it being there.
             context.metadata["batch_info"] = {
                 "batch_id": i,
                 "total_items": len(items),
@@ -205,7 +264,7 @@ class BatchExecutor:
 
             # Execute
             try:
-                success, result = bridge.run(
+                success, result = op.run(
                     self.engine.execute(
                         context,
                         None,  # Data is already in context
@@ -231,6 +290,11 @@ class BatchExecutor:
                 else:
                     progress.failed += 1
 
+            except OperationTimeoutError:
+                # The operation ran out of time. That is not one item failing
+                # --- it is the call the caller made ending --- so it goes past
+                # the per-item handler rather than being recorded as a result.
+                raise
             except Exception as e:
                 batch_result = BatchResult(
                     index=i,
@@ -256,7 +320,7 @@ class BatchExecutor:
         context_template: ExecutionContext,
         max_transitions: int,
         progress: BatchProgress,
-        bridge: SyncLoopBridge,
+        op: BridgedOperation,
     ) -> List[BatchResult]:
         """Execute items in parallel.
 
@@ -276,7 +340,7 @@ class BatchExecutor:
             futures = {}
             for i, item in enumerate(items):
                 future = executor.submit(
-                    self._process_single_item, i, item, context_template, max_transitions, bridge
+                    self._process_single_item, i, item, context_template, max_transitions, op
                 )
                 futures[future] = i
 
@@ -293,6 +357,14 @@ class BatchExecutor:
                     else:
                         progress.failed += 1
 
+                except OperationTimeoutError:
+                    # As in the sequential path: the operation's deadline ends
+                    # the call rather than marking one item failed. Leaving the
+                    # ``with`` waits for the pool, but the wait is bounded ---
+                    # a queued worker finds the budget spent and refuses
+                    # without reaching the loop, so only the items already
+                    # in flight are still running.
+                    raise
                 except Exception as e:
                     results[index] = BatchResult(  # type: ignore
                         index=index, success=False, result=None, error=e
@@ -313,7 +385,7 @@ class BatchExecutor:
         item: Any,
         context_template: ExecutionContext,
         max_transitions: int,
-        bridge: SyncLoopBridge,
+        op: BridgedOperation,
     ) -> BatchResult:
         """Process a single item.
 
@@ -338,8 +410,7 @@ class BatchExecutor:
         else:
             context.data = item
 
-        # Add batch tracking metadata
-        context.batch_id = index
+        # Add batch tracking metadata (see ``_execute_sequential``).
         context.metadata["batch_info"] = {
             "batch_id": index,
             "item_index": index,
@@ -358,7 +429,7 @@ class BatchExecutor:
                 context.set_state(initial_state)
 
             # Execute
-            success, result = bridge.run(
+            success, result = op.run(
                 self.engine.execute(
                     context,
                     None,  # Data is already in context
@@ -378,6 +449,11 @@ class BatchExecutor:
                 processing_time=time.time() - start_time,
                 metadata=metadata,
             )
+
+        except OperationTimeoutError:
+            # Surfaced through the future to ``_execute_parallel``, which lets
+            # it past its own per-item handler for the same reason.
+            raise
 
         except Exception as e:
             return BatchResult(
@@ -406,8 +482,9 @@ class BatchExecutor:
                 self._resource_locks[resource_type] = asyncio.Lock()
 
             # Track batch-specific resource allocation
-            if hasattr(context, "batch_id"):
-                context.metadata[f"batch_{context.batch_id}_resources"] = {
+            batch_id = context.metadata.get("batch_info", {}).get("batch_id")
+            if batch_id is not None:
+                context.metadata[f"batch_{batch_id}_resources"] = {
                     "resource_type": resource_type,
                     "limit": limit,
                     "acquired_at": context.metadata.get("start_time"),
@@ -417,19 +494,31 @@ class BatchExecutor:
     def _release_resources(self, context: ExecutionContext) -> None:
         """Release resources back to pool.
 
+        The status test compares ``ResourceStatus`` members. It used to compare
+        one against the string ``"allocated"`` --- the member's *value* --- so
+        it was never true and this whole body was unreachable: nothing ever
+        returned to the pool and every allocation stayed marked as held for the
+        life of the context. mypy reported both halves of that
+        (``comparison-overlap`` on the test, then ``unreachable`` on the body).
+        ``AVAILABLE`` is the released state, which is what
+        :meth:`ExecutionContext.release_resource` sets; there is no
+        ``RELEASED`` member and the string the old code assigned was not one.
+
         Args:
             context: Execution context.
         """
+        batch_id = context.metadata.get("batch_info", {}).get("batch_id")
+
         # Release allocated resources back to pool
         for allocation in context.resources.values():
-            if allocation.status == "allocated":
+            if allocation.status is ResourceStatus.ALLOCATED:
                 resource_type = allocation.resource_type
                 if resource_type in self._resource_pool:
                     self._resource_pool[resource_type].append(allocation.resource_id)
 
                     # Track batch-specific resource release
-                    if hasattr(context, "batch_id"):
-                        batch_key = f"batch_{context.batch_id}_resources"
+                    if batch_id is not None:
+                        batch_key = f"batch_{batch_id}_resources"
                         if batch_key in context.metadata:
                             context.metadata[batch_key]["released_at"] = context.metadata.get(
                                 "end_time"
@@ -439,19 +528,25 @@ class BatchExecutor:
                             )
 
                 # Mark as released
-                allocation.status = "released"
+                allocation.status = ResourceStatus.AVAILABLE
 
     def _find_initial_state(self) -> str | None:
-        """Find initial state in FSM.
+        """Find the initial state of the FSM's main network.
+
+        Asks the FSM, which resolves the main network through
+        ``main_network_name``. Looking it up by the *FSM's* name instead found
+        one only when the FSM happened to be named after its main network ---
+        harmless here, because this path calls the engine either way and the
+        engine resolves the start state for itself, but fatal in the stream
+        executor, which used the same lookup to decide whether to run at all.
 
         Returns:
-            Initial state name or None.
+            Initial state name, or ``None`` if the FSM has no main network or
+            that network declares no initial state.
         """
-        # Get main network
-        if self.fsm.name in self.fsm.networks:
-            network = self.fsm.networks[self.fsm.name]
-            if network.initial_states:
-                return next(iter(network.initial_states))
+        network = self.fsm.get_network()
+        if network is not None and network.initial_states:
+            return next(iter(network.initial_states))
         return None
 
     def execute_batches(
@@ -469,19 +564,30 @@ class BatchExecutor:
 
         Returns:
             Aggregated results.
+
+        Raises:
+            TimeoutError: If this executor's ``timeout`` elapses before every
+                batch has finished. The budget spans the whole call, not each
+                batch: restarting it per batch would multiply it by the batch
+                count and bound nothing the caller asked about.
         """
         all_results = []
         total_batches = (len(items) + self.batch_size - 1) // self.batch_size
 
-        for batch_num in range(total_batches):
-            start_idx = batch_num * self.batch_size
-            end_idx = min(start_idx + self.batch_size, len(items))
-            batch = items[start_idx:end_idx]
+        # One operation for the whole call. Opening one per batch put each
+        # batch on a loop of its own, so an FSM resource opened during the
+        # first was unusable from the second --- a pooled backend fails there
+        # with an error naming the connection rather than the loop.
+        with self._operation() as op:
+            for batch_num in range(total_batches):
+                start_idx = batch_num * self.batch_size
+                end_idx = min(start_idx + self.batch_size, len(items))
+                batch = items[start_idx:end_idx]
 
-            # Process batch
-            batch_results = self.execute_batch(batch, context_template, max_transitions)
+                # Process batch
+                batch_results = self._execute_batch(op, batch, context_template, max_transitions)
 
-            all_results.extend(batch_results)
+                all_results.extend(batch_results)
 
         # Aggregate results
         total = len(all_results)
@@ -491,7 +597,7 @@ class BatchExecutor:
         total_time = sum(r.processing_time for r in all_results)
         avg_time = total_time / total if total > 0 else 0
 
-        errors_by_type = {}
+        errors_by_type: Dict[str, int] = {}
         for result in all_results:
             if result.error:
                 error_type = type(result.error).__name__

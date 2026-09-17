@@ -5,10 +5,16 @@
 
 import logging
 import time
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Tuple, Union
 
-from dataknobs_common import SyncLoopBridge
+from dataknobs_common import (
+    BridgedOperation,
+    OperationTimeoutError,
+    SyncLoopBridge,
+    bridged_operation,
+)
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -23,6 +29,11 @@ from dataknobs_fsm.streaming.core import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Loop-thread name for a stream operation's bridge. The bridge registers it,
+#: so ``assert_no_leaked_bridge_threads`` watches this name too --- it is a
+#: diagnostic label, not a way out of the leak guard.
+BRIDGE_THREAD_NAME = "dk-fsm-stream"
 
 
 @dataclass
@@ -87,6 +98,9 @@ class StreamExecutor:
         stream_config: StreamConfig | None = None,
         enable_backpressure: bool = True,
         progress_callback: Union[Callable, None] = None,
+        *,
+        bridge: SyncLoopBridge | None = None,
+        timeout: float | None = None,
     ):
         """Initialize stream executor.
 
@@ -95,16 +109,32 @@ class StreamExecutor:
             stream_config: Stream configuration.
             enable_backpressure: Enable backpressure handling.
             progress_callback: Callback for progress updates.
+            bridge: A loop this executor's operations run on, owned by the
+                caller. Nothing here closes it. Required when the FSM's
+                resources are already bound to a loop --- an
+                ``AsyncDatabaseResourceAdapter`` keeps its ``AsyncDatabase``
+                open across acquisitions, so it belongs to whichever loop
+                first opened it, and a pooled backend is unusable from any
+                other. It is also how a stream shares a loop with a
+                ``BatchExecutor`` or ``SimpleFSM`` over the same FSM: pass
+                ``fsm.get_sync_bridge()``. Omitted, each operation owns a
+                bridge for its duration and ends it, leaving no thread behind.
+            timeout: Seconds to allow one *stream operation*, however many
+                chunks and records it carries, after which ``TimeoutError`` is
+                raised. It is the only upper bound a blocked synchronous
+                caller has. ``None`` (the default) waits for as long as the
+                stream takes.
         """
         self.fsm = fsm
         self.stream_config = stream_config or StreamConfig()
         self.enable_backpressure = enable_backpressure
         self.progress_callback = progress_callback
+        self._bridge = bridge
+        self._timeout = timeout
 
         # The single async execution engine; sync stream entry points drive it
-        # through a throwaway async→sync bridge scoped to each execute_stream
-        # operation (created and torn down per call), so a discarded executor
-        # never leaks a process-lifetime bridge thread.
+        # through an async→sync bridge scoped to the operation, so a discarded
+        # executor never leaks a process-lifetime bridge thread.
         self.engine = fsm.get_async_engine()
 
         # Memory management
@@ -130,6 +160,11 @@ class StreamExecutor:
 
         Returns:
             Stream processing statistics.
+
+        Raises:
+            TimeoutError: If this executor's ``timeout`` elapses before the
+                stream finishes. The source and sink are still closed on the
+                way out.
         """
         # Create progress tracker
         progress = StreamProgress()
@@ -147,10 +182,43 @@ class StreamExecutor:
         # Set stream context in execution context
         context_template.stream_context = stream_context
 
-        # One throwaway bridge for the whole stream operation, torn down in the
-        # finally below — leak-free without per-record thread churn.
-        bridge = SyncLoopBridge()
+        # One operation for the whole stream: one loop for every chunk and
+        # record, and one budget spent between them. The ``with`` closes after
+        # ``_run_stream``'s ``finally``, so the loop outlives the source and
+        # sink teardown that might still reach it --- which a ``bridge.close()``
+        # inside that ``finally`` did not.
+        with self._operation() as op:
+            return self._run_stream(op, pipeline, context_template, progress, max_transitions)
 
+    def _operation(self) -> AbstractContextManager[BridgedOperation]:
+        """Open the loop and the time budget one stream operation runs within.
+
+        Scoped to ``execute_stream`` rather than to the record: ``_process_chunk``
+        takes the operation as an argument, so every record of every chunk
+        reaches the engine on one loop and spends one budget between them.
+        """
+        return bridged_operation(
+            bridge=self._bridge,
+            timeout=self._timeout,
+            thread_name=BRIDGE_THREAD_NAME,
+            label="StreamExecutor",
+        )
+
+    def _run_stream(
+        self,
+        op: BridgedOperation,
+        pipeline: StreamPipeline,
+        context_template: ExecutionContext,
+        progress: StreamProgress,
+        max_transitions: int,
+    ) -> Dict[str, Any]:
+        """Read, process and write the pipeline until it is exhausted.
+
+        Split from :meth:`execute_stream` so the operation's scope is a
+        ``with`` there rather than a ``close()`` inside this ``finally``,
+        which is what puts the loop's teardown *after* the source's and the
+        sink's instead of before them.
+        """
         # Process stream
         try:
             while True:
@@ -180,7 +248,7 @@ class StreamExecutor:
                     pipeline.transformations,
                     max_transitions,
                     progress,
-                    bridge,
+                    op,
                 )
 
                 # Write results to sink if provided
@@ -207,9 +275,6 @@ class StreamExecutor:
                     break
 
         finally:
-            # Tear down the operation-scoped bridge (joins its loop thread).
-            bridge.close()
-
             # Clean up. Probe and call must name the same method: admitting
             # either name and then calling `close` unconditionally raises
             # `AttributeError` here for a source offering only `aclose` --- from
@@ -240,7 +305,7 @@ class StreamExecutor:
         transformations: List[Callable],
         max_transitions: int,
         progress: StreamProgress,
-        bridge: SyncLoopBridge,
+        op: BridgedOperation,
     ) -> List[Any]:
         """Process a single chunk.
 
@@ -281,7 +346,7 @@ class StreamExecutor:
 
                     # Execute FSM
                     try:
-                        success, result = bridge.run(
+                        success, result = op.run(
                             self.engine.execute(context, transformed, max_transitions)
                         )
 
@@ -293,6 +358,12 @@ class StreamExecutor:
                             progress.errors.append(
                                 (progress.records_processed + i, Exception(result))
                             )
+                    except OperationTimeoutError:
+                        # The operation ran out of time. That is not this
+                        # record failing --- it is the call the caller made
+                        # ending --- so it goes past the per-record handler
+                        # rather than being recorded as one more pass-through.
+                        raise
                     except Exception as e:
                         # On error, pass the data through
                         results.append(transformed)
@@ -326,16 +397,23 @@ class StreamExecutor:
         return False
 
     def _find_initial_state(self) -> str | None:
-        """Find initial state in FSM.
+        """Find the initial state of the FSM's main network.
+
+        Asks the FSM, which resolves the main network through
+        ``main_network_name``. Looking it up by the *FSM's* name instead found
+        one only when the FSM happened to be named after its main network ---
+        and here that decided whether the FSM ran at all. Every other FSM took
+        :meth:`_process_chunk`'s "no FSM configured" branch: each record passed
+        through untouched and was counted as successfully processed, with
+        nothing raised and nothing logged.
 
         Returns:
-            Initial state name or None.
+            Initial state name, or ``None`` if the FSM has no main network or
+            that network declares no initial state.
         """
-        # Get main network
-        if self.fsm.name in self.fsm.networks:
-            network = self.fsm.networks[self.fsm.name]
-            if network.initial_states:
-                return next(iter(network.initial_states))
+        network = self.fsm.get_network()
+        if network is not None and network.initial_states:
+            return next(iter(network.initial_states))
         return None
 
     def _generate_stats(self, progress: StreamProgress) -> Dict[str, Any]:
