@@ -123,6 +123,7 @@ from .versioning import (
     VersionStatus,
     VersionStore,
     MetricEvent,
+    require_store,
 )
 
 # Version info
@@ -197,4 +198,5 @@ __all__ = [
     "VersioningStore",
     "InMemoryVersionStore",
     "DatabaseVersionStore",
+    "require_store",
 ]

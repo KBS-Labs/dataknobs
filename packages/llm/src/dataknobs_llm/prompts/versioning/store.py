@@ -99,7 +99,15 @@ class VersionStore(Protocol):
         ...
 
     async def load_versions(self, name: str, prompt_type: str) -> list[PromptVersion]:
-        """Return every version of one prompt, in no particular order."""
+        """Return every version of one prompt, in no particular order.
+
+        Every one, with no bound to ask for fewer, unlike an event stream.
+        What reads this resolves ``latest`` and refuses a duplicate version
+        string, and both are questions about the whole set: answered over a
+        page they would name the latest of that page and admit a duplicate
+        that fell outside it. The set is bounded by how many versions of one
+        prompt a person writes.
+        """
         ...
 
     async def load_names(self, prompt_type: str) -> set[str]:
@@ -108,6 +116,9 @@ class VersionStore(Protocol):
         Derived from the versions themselves, so a name whose last version was
         deleted is absent and a listing built from this cannot name a prompt
         the getters then answer ``None`` for.
+
+        The set is the caller's to mutate --- a fresh one, like every other
+        value a load hands back, not a view of anything the store keeps.
         """
         ...
 
@@ -192,8 +203,41 @@ class MetricsStore(Protocol):
         """Add one event. Events are never replaced; two identical ones are two."""
         ...
 
-    async def load_events(self, version_id: str) -> list[MetricEvent]:
-        """Return every event for one version, in no particular order."""
+    async def record_event(self, event: MetricEvent) -> PromptMetrics:
+        """Append ``event`` **and** fold it into the aggregate, atomically.
+
+        One verb rather than two, because the two halves cannot be separated
+        by a caller without opening a window. Folding an event means reading
+        the aggregate, adding to it and writing it back; done in the caller
+        that is a read-modify-write with an ``await`` in the middle, and two
+        concurrent recordings both read the same aggregate and one increment
+        is lost. Where the fold can be made atomic is here, inside the
+        implementation that knows what its backend guarantees.
+
+        The fold itself is not each store's to invent ---
+        :meth:`~.types.PromptMetrics.fold` is the one definition of what an
+        event does to the totals.
+
+        Args:
+            event: The event to record.
+
+        Returns:
+            The aggregate as it stands after the fold.
+        """
+        ...
+
+    async def load_events(self, version_id: str, *, limit: int | None = None) -> list[MetricEvent]:
+        """Return a version's events, newest first.
+
+        Ordered rather than arbitrary because an append-only stream is
+        unbounded, and the only way to ask for the most recent few without an
+        order is to materialize all of them and sort in the caller.
+
+        Args:
+            version_id: The version whose events to read.
+            limit: At most this many, the most recent. ``None`` is every
+                event; ``0`` is none.
+        """
         ...
 
     async def delete_metrics(self, version_id: str) -> bool:
@@ -217,8 +261,8 @@ class VersioningStore(VersionStore, ExperimentStore, MetricsStore, Protocol):
     """
 
 
-def require_store(store: object, protocol: type, *, holder: str) -> None:
-    """Raise unless ``store`` satisfies ``protocol``, naming what is missing.
+def require_store(store: Any, protocol: type, *, holder: str) -> Any:
+    """Return ``store`` if it satisfies ``protocol``; raise naming what is missing.
 
     Called from each manager's constructor, so that a store which cannot
     answer fails where the caller is still looking. The object this most often
@@ -226,16 +270,27 @@ def require_store(store: object, protocol: type, *, holder: str) -> None:
     ``set``/``append``/``delete`` backend, whose failure mode was to write
     nothing at all and report success.
 
+    The verdict is ``missing``, not ``isinstance``. A ``runtime_checkable``
+    protocol decides with ``getattr_static``, which answers two questions
+    wrongly for a store: it cannot see a method reached through
+    ``__getattr__``, so the wrapper a consumer writes to log or trace a real
+    store was refused --- and refused with a message naming nothing, every
+    member being reachable after all; and it counts any member that is not
+    ``None`` as present, so an attribute of the wrong type was accepted here
+    and failed later as ``'int' object is not callable``. Asking whether each
+    member is callable answers both, and the answer *is* the message.
+
     Args:
         store: The candidate store.
-        protocol: The runtime-checkable protocol it must satisfy.
+        protocol: The protocol it must satisfy.
         holder: The class name to quote in the message.
 
+    Returns:
+        ``store``, so a constructor is one statement rather than three.
+
     Raises:
-        TypeError: If any of the protocol's members is missing.
+        TypeError: If any of the protocol's members is missing or not callable.
     """
-    if isinstance(store, protocol):
-        return
     # Walk the MRO rather than one class body, so a protocol composed of
     # others -- VersioningStore -- names every member it is missing rather
     # than none of them, its own body being empty.
@@ -243,6 +298,8 @@ def require_store(store: object, protocol: type, *, holder: str) -> None:
         {name for klass in protocol.__mro__ for name in vars(klass) if not name.startswith("_")}
     )
     missing = [name for name in required if not callable(getattr(store, name, None))]
+    if not missing:
+        return store
     raise TypeError(
         f"{holder} needs a {protocol.__name__}, and {type(store).__name__} is missing "
         f"{', '.join(missing)}. Pass InMemoryVersionStore() for in-memory behaviour, or "
@@ -363,9 +420,28 @@ class InMemoryVersionStore:
         """Add one event."""
         self._events.setdefault(event.version_id, []).append(copy.deepcopy(event))
 
-    async def load_events(self, version_id: str) -> list[MetricEvent]:
-        """Return every event for one version."""
-        return [copy.deepcopy(event) for event in self._events.get(version_id, [])]
+    async def record_event(self, event: MetricEvent) -> PromptMetrics:
+        """Append the event and fold it into the aggregate.
+
+        Atomic by construction rather than by effort: this body awaits
+        nothing, so no other task can run between the read and the write.
+        """
+        self._events.setdefault(event.version_id, []).append(copy.deepcopy(event))
+        metrics = self._metrics.get(event.version_id)
+        if metrics is None:
+            metrics = PromptMetrics(version_id=event.version_id)
+        metrics.fold(event)
+        self._metrics[event.version_id] = metrics
+        return copy.deepcopy(metrics)
+
+    async def load_events(self, version_id: str, *, limit: int | None = None) -> list[MetricEvent]:
+        """Return a version's events, newest first."""
+        events = sorted(
+            self._events.get(version_id, []), key=lambda event: event.timestamp, reverse=True
+        )
+        if limit is not None:
+            events = events[:limit]
+        return [copy.deepcopy(event) for event in events]
 
     async def delete_metrics(self, version_id: str) -> bool:
         """Delete a version's aggregate and its events."""
@@ -423,14 +499,20 @@ class DatabaseVersionStore:
         ```
     """
 
-    def __init__(self, database: AsyncDatabase) -> None:
+    def __init__(self, database: AsyncDatabase, *, max_retries: int = 8) -> None:
         """Initialize the store.
 
         Args:
             database: Any ``dataknobs_data`` ``AsyncDatabase``. Not owned: the
                 caller opened it and the caller closes it.
+            max_retries: How many times :meth:`record_event` re-reads and
+                re-folds after losing a compare-and-set. Each retry means a
+                concurrent recording won, so the bound is on contention, not
+                on failure; exhausting it re-raises the conflict rather than
+                dropping the fold.
         """
         self._db = database
+        self._max_retries = max_retries
 
     # ===== VersionStore =====
 
@@ -503,9 +585,14 @@ class DatabaseVersionStore:
         )
 
     async def load_assignment(self, experiment_id: str, user_id: str) -> str | None:
-        """Return one user's assigned version, or ``None``."""
-        record = await self._db.read(_assignment_key(experiment_id, user_id))
-        return None if record is None else str(_payload(record)["version"])
+        """Return one user's assigned version, or ``None``.
+
+        Found by its fields, like its plural sibling, rather than by composing
+        the key back: the two halves are the caller's strings and only the
+        fields carry them unambiguously.
+        """
+        records = await self._search(_ASSIGNMENT, experiment_id=experiment_id, user_id=user_id)
+        return str(records[0]["version"]) if records else None
 
     async def load_assignments(self, experiment_id: str) -> dict[str, str]:
         """Return every assignment for one experiment."""
@@ -527,18 +614,78 @@ class DatabaseVersionStore:
         """Add one event, under an id of its own."""
         await self._save(_EVENT, str(uuid.uuid4()), event.to_dict())
 
-    async def load_events(self, version_id: str) -> list[MetricEvent]:
-        """Return every event for one version, in no particular order."""
-        records = await self._search(_EVENT, version_id=version_id)
-        return [MetricEvent.from_dict(data) for data in records]
+    async def record_event(self, event: MetricEvent) -> PromptMetrics:
+        """Append the event and fold it into the aggregate, atomically.
+
+        The event is an insert of its own and never contends. The fold is a
+        read-modify-write, so it is done as a compare-and-set against the
+        token the backend hands out, and a lost race is re-read and re-folded
+        rather than overwritten. Both shapes of loss are the same exception:
+        ``DuplicateRecordError`` is a ``ConcurrencyError``, and it is what two
+        recordings creating the *first* aggregate together produce.
+        """
+        from dataknobs_data.exceptions import ConcurrencyError
+
+        await self._save(_EVENT, str(uuid.uuid4()), event.to_dict())
+
+        key = _key(_METRICS, event.version_id)
+        for _ in range(self._max_retries + 1):
+            # The token is read *before* the value it guards, never after. Read
+            # after, it could describe a state newer than the aggregate just
+            # folded, and the compare-and-set would then succeed over a stale
+            # read -- which is the lost update this loop exists to prevent.
+            # Read first it is at worst older, so anything that changed in
+            # between fails the write and is retried.
+            token = await self._db.get_version(key)
+            data = await self._read(_METRICS, event.version_id)
+            metrics = (
+                PromptMetrics.from_dict(data)
+                if data is not None
+                else PromptMetrics(version_id=event.version_id)
+            )
+            metrics.fold(event)
+            record = Record({**metrics.to_dict(), _KIND_FIELD: _METRICS})
+            try:
+                if token is None:
+                    # An unconditional write would overwrite an aggregate a
+                    # concurrent recording created after this read. ``create``
+                    # is the atomic insert, so losing that race raises.
+                    record.id = key
+                    await self._db.create(record)
+                else:
+                    await self._db.upsert(key, record, expected_version=token)
+            except ConcurrencyError:
+                continue
+            return metrics
+        raise ConcurrencyError(
+            f"Could not fold an event into the aggregate for {event.version_id} "
+            f"in {self._max_retries + 1} attempts; recordings for one version are "
+            f"contending faster than they can be folded"
+        )
+
+    async def load_events(self, version_id: str, *, limit: int | None = None) -> list[MetricEvent]:
+        """Return a version's events, newest first.
+
+        The order and the bound are both the query's, so an unbounded stream
+        is never fully materialized to answer for its most recent few. The
+        second sort is over one page and costs nothing: it keeps the promised
+        order a property of this method rather than of each backend's
+        collation.
+        """
+        query = self._query(_EVENT, version_id=version_id).sort_by("timestamp", "desc")
+        if limit is not None:
+            query = query.limit(limit)
+        records = await self._db.search(query)
+        events = [MetricEvent.from_dict(_payload(record)) for record in records]
+        events.sort(key=lambda event: event.timestamp, reverse=True)
+        return events
 
     async def delete_metrics(self, version_id: str) -> bool:
         """Delete a version's aggregate and its events."""
         deleted = await self._db.delete(_key(_METRICS, version_id))
         events = await self._db.search(self._query(_EVENT, version_id=version_id))
-        for record in events:
-            if record.id:
-                await self._db.delete(record.id)
+        if events:
+            await self._db.delete_batch([_event_record_id(record) for record in events])
         return deleted or bool(events)
 
     # ===== Helper Methods =====
@@ -560,9 +707,10 @@ class DatabaseVersionStore:
     def _query(self, kind: str, **fields: Any) -> Query:
         """Build an equality query over ``kind`` and the given fields.
 
-        The one deferred import, following this package's existing backend
-        adapter: ``dataknobs_data`` is a declared dependency, so this is a cost
-        deferred rather than a dependency avoided.
+        Deferred, as everywhere this module reaches into ``dataknobs_data``,
+        following this package's existing backend adapter: it is a declared
+        dependency, so this is a cost deferred rather than a dependency
+        avoided.
         """
         from dataknobs_data.query import Filter, Operator, Query
 
@@ -577,8 +725,33 @@ def _key(kind: str, entity_id: str) -> str:
 
 
 def _assignment_key(experiment_id: str, user_id: str) -> str:
-    """The record id for one user's assignment in one experiment."""
-    return f"{_ASSIGNMENT}:{experiment_id}:{user_id}"
+    """The record id for one user's assignment in one experiment.
+
+    The experiment id is length-prefixed rather than plainly joined, because a
+    plain join is ambiguous: experiment ``a:b`` with user ``c`` and experiment
+    ``a`` with user ``b:c`` compose the same string, and one assignment would
+    silently take the other's row. Both halves are strings the caller chose,
+    so neither can be assumed free of the separator.
+    """
+    return f"{_ASSIGNMENT}:{len(experiment_id)}:{experiment_id}:{user_id}"
+
+
+def _event_record_id(record: Record) -> str:
+    """The storage key a search result came back under.
+
+    Events are keyed by an id of their own that the payload does not carry, so
+    deleting one means using the key the backend echoed. Every shipped backend
+    populates it; a backend that did not would otherwise leave the events
+    behind while ``delete_metrics`` reported success.
+    """
+    record_id = record.id
+    if record_id is None:  # pragma: no cover - no shipped backend does this
+        raise RuntimeError(
+            "A search result carried no record id, so the event it holds cannot be "
+            "deleted. Every dataknobs_data backend populates Record.id on search "
+            "results; one that does not cannot back a DatabaseVersionStore."
+        )
+    return record_id
 
 
 def _payload(record: Record) -> dict[str, Any]:

@@ -74,10 +74,11 @@ class VersionManager:
                 ``delete``, so an object written for it is caught here rather
                 than at the first write it would have dropped.
         """
-        if store is None:
-            store = InMemoryVersionStore()
-        require_store(store, VersionStore, holder="VersionManager")
-        self.store = store
+        self.store: VersionStore = require_store(
+            store if store is not None else InMemoryVersionStore(),
+            VersionStore,
+            holder="VersionManager",
+        )
 
     async def create_version(
         self,

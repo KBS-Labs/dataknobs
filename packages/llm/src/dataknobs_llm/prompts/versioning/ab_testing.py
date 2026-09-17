@@ -77,10 +77,11 @@ class ABTestManager:
                 composed key, which is not a record and which no backend could
                 hold, so an object written for the old parameter is caught here.
         """
-        if store is None:
-            store = InMemoryVersionStore()
-        require_store(store, ExperimentStore, holder="ABTestManager")
-        self.store = store
+        self.store: ExperimentStore = require_store(
+            store if store is not None else InMemoryVersionStore(),
+            ExperimentStore,
+            holder="ABTestManager",
+        )
 
     async def create_experiment(
         self,

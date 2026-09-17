@@ -426,3 +426,30 @@ async def test_no_bridge_thread_exists_while_the_library_is_answering() -> None:
     assert observed == [[] for _ in observed], (
         f"a bridge thread was alive while the library answered: {observed}"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_template_reflects_a_tag_added_after_it_was_first_read() -> None:
+    """The library cached a converted template and never invalidated it.
+
+    That cache was invisible while a manager handed back the object it held:
+    the cached dictionary aliased the very list ``tag_version`` appended to, so
+    the staleness healed itself for exactly the fields that were mutable. Now
+    that a load returns a copy, the alias is gone and the cache is a snapshot
+    of whatever the version looked like the first time anybody asked --- while
+    the store, correctly, holds the tag.
+    """
+    library = VersionedPromptLibrary()
+    version = await library.create_version(
+        name="greeting", prompt_type="system", template="Hello {{name}}!", version="1.0.0"
+    )
+
+    first = await library.get_system_prompt("greeting")
+    assert first is not None
+    assert first["metadata"]["tags"] == []
+
+    await library.tag_version(version.version_id, "production")
+
+    again = await library.get_system_prompt("greeting")
+    assert again is not None
+    assert again["metadata"]["tags"] == ["production"]

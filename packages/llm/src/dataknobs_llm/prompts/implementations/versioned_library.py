@@ -155,20 +155,19 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
                 library has to name a flavour before anything can tell which
                 one it is.
         """
-        if store is None:
-            store = InMemoryVersionStore()
-        require_store(store, VersioningStore, holder="VersionedPromptLibrary")
-        self.store = store
+        self.store: VersioningStore = require_store(
+            store if store is not None else InMemoryVersionStore(),
+            VersioningStore,
+            holder="VersionedPromptLibrary",
+        )
         self.base_library = base_library
 
         # One store, three managers -- each declaring only the part of it that
-        # it uses.
-        self.version_manager = VersionManager(store)
-        self.ab_test_manager = ABTestManager(store)
-        self.metrics_collector = MetricsCollector(store)
-
-        # Cache for converting versions to templates
-        self._template_cache: Dict[str, PromptTemplateDict] = {}
+        # it uses. ``self.store`` rather than the argument, which is still
+        # ``None`` when the default was taken.
+        self.version_manager = VersionManager(self.store)
+        self.ab_test_manager = ABTestManager(self.store)
+        self.metrics_collector = MetricsCollector(self.store)
 
     @property
     def base_library(self) -> AbstractPromptLibrary | AsyncPromptLibrary | None:
@@ -604,29 +603,34 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
     # ===== Helper Methods =====
 
     def _version_to_template(self, version: PromptVersion) -> PromptTemplateDict:
-        """Convert PromptVersion to PromptTemplateDict for compatibility."""
-        # Check cache
-        cache_key = version.version_id
-        if cache_key in self._template_cache:
-            return self._template_cache[cache_key]
+        """Convert PromptVersion to PromptTemplateDict for compatibility.
 
+        Uncached. What stood here kept a dictionary keyed by version id that
+        nothing ever invalidated, so a tag added to a version already read was
+        invisible to every later read. It was invisible in a way that hid
+        itself: the cached ``tags`` was the *same list object* the manager
+        held, so mutating it in place showed through, and the staleness healed
+        itself for exactly the fields a test would have poked at. Now that a
+        load hands back a copy, the alias is gone and the cache would be a
+        snapshot of whatever the version looked like the first time anybody
+        asked.
+
+        It bought one dictionary construction from an object already in hand.
+        """
         template: PromptTemplateDict = {
             "template": version.template,
-            "defaults": version.defaults,
+            "defaults": dict(version.defaults),
             "metadata": {
                 **version.metadata,
                 "version_id": version.version_id,
                 "version": version.version,
                 "created_at": version.created_at.isoformat(),
-                "tags": version.tags,
+                "tags": list(version.tags),
                 "status": version.status.value,
             },
         }
 
         if version.validation:
             template["validation"] = version.validation  # type: ignore[typeddict-item]
-
-        # Cache it
-        self._template_cache[cache_key] = template
 
         return template

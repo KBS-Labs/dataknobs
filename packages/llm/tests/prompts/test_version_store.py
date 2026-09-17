@@ -408,3 +408,234 @@ async def test_events_without_an_aggregate_are_still_something_to_delete(
 
     assert await store.delete_metrics("v1") is True
     assert await store.delete_metrics("v1") is False
+
+
+# ===== What the protocol check accepts and refuses =====
+
+
+def test_a_store_that_forwards_its_methods_is_accepted() -> None:
+    """A wrapper that delegates through ``__getattr__`` is a store.
+
+    ``runtime_checkable`` decides with ``getattr_static``, which cannot see a
+    forwarder, so the object every consumer eventually writes --- a logging,
+    tracing or metrics wrapper around a real store --- was refused. It was
+    refused with a message naming *nothing*, because the members it is asked
+    about are all reachable: ``isinstance`` said no and ``missing`` came back
+    empty.
+    """
+
+    class ForwardingStore:
+        """Everything this does not define, the wrapped store answers."""
+
+        def __init__(self, inner: VersioningStore) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+    require_store(
+        ForwardingStore(InMemoryVersionStore()),
+        VersioningStore,
+        holder="VersionedPromptLibrary",
+    )
+
+
+def test_a_member_that_is_not_callable_is_refused() -> None:
+    """A store is its methods, and an attribute that cannot be called is not one.
+
+    ``runtime_checkable`` treats only a ``None``-valued member as absent, so an
+    attribute of any other type satisfied it and the failure arrived later, at
+    the first call, as ``'int' object is not callable``.
+    """
+
+    class NotQuiteAStore(InMemoryVersionStore):
+        save_version = 3  # type: ignore[assignment]
+
+    with pytest.raises(TypeError) as caught:
+        require_store(NotQuiteAStore(), VersioningStore, holder="VersionedPromptLibrary")
+
+    assert "missing save_version" in str(caught.value)
+
+
+def test_the_check_hands_back_the_store_it_accepted() -> None:
+    """So a constructor is one statement rather than three."""
+    store = InMemoryVersionStore()
+
+    assert require_store(store, VersioningStore, holder="VersionedPromptLibrary") is store
+
+
+# ===== A save copies too =====
+
+
+@pytest.mark.asyncio
+async def test_a_save_copies_what_it_was_given(store: VersioningStore) -> None:
+    """The other half of the value/handle promise, and the untested half.
+
+    ``test_a_load_hands_back_a_value_not_a_handle`` mutates what a load
+    returned. Nothing mutated what a *save* was handed, so an implementation
+    that stored the caller's object would keep the whole suite green while
+    reintroducing exactly the divergence the copying exists to prevent:
+    ``v = await create_version(...)`` followed by ``v.tags.append(...)`` would
+    change an in-memory store and not a database one.
+    """
+    version = a_version()
+    await store.save_version(version)
+
+    version.tags.append("mutated")
+    version.template = "changed"
+    version.defaults["name"] = "changed"
+
+    again = await store.load_version("v1")
+    assert again is not None
+    assert again.tags == ["production"]
+    assert again.template == "Hello {{name}}!"
+    assert again.defaults == {"name": "World"}
+
+
+@pytest.mark.asyncio
+async def test_saving_an_experiment_copies_what_it_was_given(store: VersioningStore) -> None:
+    """The same promise, over the nested structure that carries the most."""
+    experiment = an_experiment()
+    await store.save_experiment(experiment)
+
+    experiment.traffic_split["1.0.0"] = 0.9
+    experiment.variants.clear()
+
+    again = await store.load_experiment("e1")
+    assert again is not None
+    assert again.traffic_split == {"1.0.0": 0.5, "1.0.1": 0.5}
+    assert len(again.variants) == 2
+
+
+# ===== Assignments are found, not parsed =====
+
+
+@pytest.mark.asyncio
+async def test_two_assignments_cannot_collide_through_their_key(store: VersioningStore) -> None:
+    """``(a:b, c)`` and ``(a, b:c)`` are two assignments, not one.
+
+    The record id composes both halves with a colon between them, so these two
+    pairs spell the same string. ``load_assignments`` and ``delete_experiment``
+    were already immune --- they search by field --- but ``load_assignment``
+    composed the key and read it straight back, which made one of these two
+    overwrite the other and answer for it.
+
+    The in-memory store nests one dictionary inside another and could never
+    collide, so this is a divergence between the two halves of one protocol as
+    much as it is a bug in either.
+    """
+    await store.save_assignment("a:b", "c", "1.0.0")
+    await store.save_assignment("a", "b:c", "2.0.0")
+
+    assert await store.load_assignment("a:b", "c") == "1.0.0"
+    assert await store.load_assignment("a", "b:c") == "2.0.0"
+    assert await store.load_assignments("a:b") == {"c": "1.0.0"}
+    assert await store.load_assignments("a") == {"b:c": "2.0.0"}
+
+
+# ===== Events are a stream, so reading one is bounded =====
+
+
+@pytest.mark.asyncio
+async def test_events_come_back_newest_first(store: VersioningStore) -> None:
+    """An append-only stream has an order, and it is the one a reader wants.
+
+    The protocol used to promise no order at all, which made a limit
+    meaningless: the only way to get the most recent five was to materialize
+    every event ever recorded and sort them in the caller.
+    """
+    for minute in range(5):
+        await store.append_event(
+            MetricEvent(
+                version_id="v1",
+                timestamp=datetime(2026, 1, 1, 0, minute, tzinfo=UTC),
+                success=True,
+                tokens=minute,
+            )
+        )
+
+    events = await store.load_events("v1")
+
+    assert [event.tokens for event in events] == [4, 3, 2, 1, 0]
+
+
+@pytest.mark.asyncio
+async def test_a_limit_takes_the_most_recent(store: VersioningStore) -> None:
+    """And it is the store that applies it, so the rest is never loaded."""
+    for minute in range(10):
+        await store.append_event(
+            MetricEvent(
+                version_id="v1",
+                timestamp=datetime(2026, 1, 1, 0, minute, tzinfo=UTC),
+                success=True,
+                tokens=minute,
+            )
+        )
+
+    assert [event.tokens for event in await store.load_events("v1", limit=3)] == [9, 8, 7]
+    assert await store.load_events("v1", limit=0) == []
+    assert len(await store.load_events("v1", limit=99)) == 10
+
+
+@pytest.mark.asyncio
+async def test_deleting_metrics_takes_every_event_not_a_page_of_them(
+    store: VersioningStore,
+) -> None:
+    """Enough events that a batched delete is not one call, and none survive."""
+    for minute in range(25):
+        await store.append_event(
+            MetricEvent(
+                version_id="v1",
+                timestamp=datetime(2026, 1, 1, 0, minute, tzinfo=UTC),
+                success=True,
+            )
+        )
+
+    assert await store.delete_metrics("v1") is True
+
+    assert await store.load_events("v1") == []
+
+
+# ===== An event is folded into its aggregate atomically =====
+
+
+@pytest.mark.asyncio
+async def test_recording_an_event_appends_it_and_folds_it(store: VersioningStore) -> None:
+    """One verb, because the two halves have to happen together.
+
+    A caller that appends and then separately reads, folds and writes the
+    aggregate has a suspension point in the middle of a read-modify-write.
+    Against a real transport that is where a concurrent increment is lost.
+    """
+    first = await store.record_event(
+        MetricEvent(version_id="v1", success=True, response_time=0.5, tokens=10, user_rating=4.0)
+    )
+
+    assert first.total_uses == 1
+    assert first.success_count == 1
+    assert first.user_ratings == [4.0]
+
+    second = await store.record_event(MetricEvent(version_id="v1", success=False, tokens=5))
+
+    assert second.total_uses == 2
+    assert second.success_count == 1
+    assert second.error_count == 1
+    assert second.total_tokens == 15
+    assert len(await store.load_events("v1")) == 2
+    assert await store.load_metrics("v1") == second
+
+
+@pytest.mark.asyncio
+async def test_load_names_hands_back_a_set_the_caller_may_mutate(store: VersioningStore) -> None:
+    """``VersionedPromptLibrary.list_system_prompts`` calls ``.update()`` on it.
+
+    It merges the base library's names into whatever the manager returned, so a
+    store handing back a set it keeps would have that set grow every listing.
+    Both shipped stores build a fresh one; this is the protocol's half of that.
+    """
+    await store.save_version(a_version())
+
+    names = await store.load_names("system")
+    names.add("mutated")
+
+    assert await store.load_names("system") == {"greeting"}

@@ -23,6 +23,7 @@ after this change. Only a real transport separates them.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,10 @@ from dataknobs_llm.prompts.versioning import (
     ABTestManager,
     DatabaseVersionStore,
     InMemoryVersionStore,
+    MetricEvent,
     MetricsCollector,
+    PromptExperiment,
+    PromptMetrics,
     PromptVariant,
     PromptVersion,
     VersionManager,
@@ -363,4 +367,137 @@ async def test_the_coroutines_suspend_against_a_real_transport(tmp_path: Path) -
         )
     finally:
         await db.close()
+        await asyncio.sleep(0)
+
+
+@requires_package("aiosqlite")
+@pytest.mark.asyncio
+async def test_concurrent_events_do_not_lose_an_increment(tmp_path: Path) -> None:
+    """The aggregate is folded where the fold can be made atomic.
+
+    ``record_event`` used to append the event and then, in the collector, read
+    the aggregate, add one to it and write it back --- with an ``await``
+    between the read and the write. On the memory backend that never
+    interleaves, because a pure-Python ``async def`` awaiting only other
+    pure-Python ``async def``s does not suspend, so the whole suite was green
+    over it. Against a real transport the two coroutines interleave, both read
+    the same aggregate, and one of the two increments is lost.
+
+    The events themselves were never at risk: they are independent inserts and
+    both always landed. That is what made the loss silent --- the stream and
+    the aggregate disagreed, and only the aggregate was ever read.
+    """
+    from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+    db = AsyncSQLiteDatabase({"path": str(tmp_path / "prompts.db")})
+    await db.connect()
+    try:
+        collector = MetricsCollector(DatabaseVersionStore(db))
+
+        await asyncio.gather(*(collector.record_event("v1", tokens=1) for _ in range(8)))
+
+        metrics = await collector.get_metrics("v1")
+        events = await collector.get_events("v1")
+
+        assert len(events) == 8, "the events were never the part at risk"
+        assert metrics.total_uses == 8
+        assert metrics.success_count == 8
+        assert metrics.total_tokens == 8
+    finally:
+        await db.close()
+        await asyncio.sleep(0)
+
+
+@requires_package("aiosqlite")
+@pytest.mark.asyncio
+async def test_every_nested_structure_survives_a_real_backend(tmp_path: Path) -> None:
+    """Not just the scalar fields, and not just through a dictionary.
+
+    The memory backend deep-copies Python objects, so a list of dataclasses and
+    a dictionary of floats survive it whatever the serialization does. A real
+    backend puts them through JSON and back, which is where a variant that is
+    an object rather than a dict, or a float key, or an empty collection, would
+    come back as something else. "All seven backends" is a claim about this,
+    and it was resting on one string field.
+    """
+    from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+    path = str(tmp_path / "prompts.db")
+    db = AsyncSQLiteDatabase({"path": path})
+    await db.connect()
+
+    version = PromptVersion(
+        version_id="v1",
+        name="greeting",
+        prompt_type="system",
+        version="1.0.0",
+        template="Hello {{name}}!",
+        defaults={"name": "World", "retries": 3},
+        validation={"level": "strict", "rules": ["nonempty"]},
+        metadata={"author": "alice", "nested": {"team": "platform"}},
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        created_by="alice",
+        parent_version=None,
+        tags=["production", "reviewed"],
+        status=VersionStatus.PRODUCTION,
+    )
+    experiment = PromptExperiment(
+        experiment_id="e1",
+        name="greeting",
+        prompt_type="system",
+        variants=[PromptVariant("1.0.0", 0.25, "Control"), PromptVariant("1.0.1", 0.75, "Treat")],
+        traffic_split={"1.0.0": 0.25, "1.0.1": 0.75},
+        metrics={"impressions": 0},
+        metadata={"owner": "alice"},
+    )
+    metrics = PromptMetrics(
+        version_id="v1",
+        total_uses=3,
+        success_count=2,
+        error_count=1,
+        total_response_time=1.5,
+        total_tokens=300,
+        user_ratings=[4.0, 5.0],
+        last_used=datetime(2026, 1, 2, tzinfo=UTC),
+        metadata={"source": "batch"},
+    )
+
+    store = DatabaseVersionStore(db)
+    await store.save_version(version)
+    await store.save_experiment(experiment)
+    await store.save_metrics(metrics)
+    await store.append_event(
+        MetricEvent(
+            version_id="v1",
+            timestamp=datetime(2026, 1, 2, tzinfo=UTC),
+            success=True,
+            response_time=0.5,
+            tokens=100,
+            user_rating=4.0,
+            metadata={"caller": "batch"},
+        )
+    )
+    await db.close()
+
+    reopened = AsyncSQLiteDatabase({"path": path})
+    await reopened.connect()
+    try:
+        later = DatabaseVersionStore(reopened)
+
+        assert await later.load_version("v1") == version
+        assert await later.load_experiment("e1") == experiment
+        assert await later.load_metrics("v1") == metrics
+        assert await later.load_events("v1") == [
+            MetricEvent(
+                version_id="v1",
+                timestamp=datetime(2026, 1, 2, tzinfo=UTC),
+                success=True,
+                response_time=0.5,
+                tokens=100,
+                user_rating=4.0,
+                metadata={"caller": "batch"},
+            )
+        ]
+    finally:
+        await reopened.close()
         await asyncio.sleep(0)
