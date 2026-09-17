@@ -122,6 +122,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`known_backend_classes`**, on `dataknobs_data.backend_selection` with
+  `KnownBackend`, for a caller that wants to read something off every backend
+  class rather than build one. `available_backends` answers "what can I build
+  here?" and is the wrong list for that: a backend behind a missing driver is
+  declared unavailable and drops out of it, so a structural check written over
+  it covers fewer classes on a lean machine and reports the same green. This
+  reports every backend the registry knows of, one entry per backend with
+  aliases collapsed, carrying the class where its module imports and the
+  reason where it does not — so a caller can skip one by name, but cannot
+  fail to notice it.
+
+  Most classes stay reachable even without their driver, because a backend
+  importing it lazily imports fine without it. Which ones is a property of
+  each backend rather than something a caller should have to model, and is
+  discovered here.
+
 - **`TopicNodeHierarchy`**, a `Hierarchy` over a `TopicNode` subtree, on the
   `dataknobs_data.sources` door with `TopicKey`. It keys nodes by position —
   `()` is the anchor, `(0, 1)` the second child of the first — because

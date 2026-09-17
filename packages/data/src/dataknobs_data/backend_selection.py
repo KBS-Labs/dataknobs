@@ -38,7 +38,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 from dataknobs_common.registry import PluginRegistry
 
@@ -48,11 +48,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_BACKEND",
+    "KnownBackend",
     "available_backends",
     "backend_available",
     "backend_info",
     "build_backend",
     "is_default_backend",
+    "known_backend_classes",
     "module_installed",
     "normalize_backend",
     "register_backend",
@@ -332,6 +334,95 @@ def backend_info(registry: PluginRegistry[Any], backend_type: str) -> dict[str, 
         "description": "Unknown backend",
         "error": f"Backend '{backend_type}' not recognized",
     }
+
+
+class KnownBackend(NamedTuple):
+    """One backend a registry knows of, and what can be done with it here.
+
+    The three fields are three independent facts, because a backend behind
+    an optional dependency has three states rather than two and the middle
+    one is the interesting one: ``cls`` and ``unavailable_reason`` are both
+    set for a backend whose module imports cleanly without its driver, which
+    is readable but not creatable here.
+    """
+
+    key: str
+    """The canonical name, with aliases collapsed onto it."""
+
+    cls: type | None
+    """The backend class, or ``None`` when its module cannot be imported."""
+
+    unavailable_reason: str | None
+    """Why it cannot be built here, or ``None`` when it can."""
+
+
+def known_backend_classes(registry: PluginRegistry[Any]) -> list[KnownBackend]:
+    """Every backend a registry knows of, with its class where reachable.
+
+    :func:`available_backends` answers "what can I build?", which is right
+    for a caller choosing a backend and wrong for one auditing the backend
+    classes: a backend whose driver is missing is declared unavailable and
+    drops out of that list. A structural check built over it therefore goes
+    on passing while covering a smaller population than it names --- green
+    because it stopped looking, which is the one failure mode a check must
+    not have.
+
+    So the population here is every backend the registry has heard of, and
+    a class that cannot be reached is reported alongside the reason rather
+    than dropped. A caller can skip such an entry and say which one it
+    skipped; what it cannot do is fail to notice.
+
+    Most classes stay reachable even so. Which ones is a property of where
+    a backend imports its driver --- at module top level, so the import
+    fails with it, or lazily behind a flag, so the module imports without it
+    --- and that is discovered here rather than modelled by the caller.
+
+    Aliases collapse, because what a caller checks is a property of the
+    class and ``pg`` / ``postgres`` / ``postgresql`` are one class. They
+    collapse by the convention :meth:`PluginRegistry.list_canonical_keys`
+    uses --- the canonical key carries the metadata, its aliases carry
+    none --- which that method cannot simply be reused for, since it reports
+    registered plugins only and the unavailable ones are half the point.
+
+    Args:
+        registry: The registry to enumerate.
+
+    Returns:
+        One entry per backend, sorted by canonical key.
+    """
+    entries = []
+    for key in sorted(registry.list_known_keys()):
+        if _describes_another_key(registry, key):
+            continue
+        # Registered and declared-unavailable are disjoint states with one
+        # accessor each, and only the first returns anything for a backend
+        # this installation can build.
+        loaded = registry.get_factory(key)
+        if loaded is None:
+            loaded = registry.load_declared_type(key)
+        entries.append(
+            KnownBackend(
+                key=key,
+                # A registry accepts a bare callable as a factory, which is
+                # not something a caller reading a class can introspect.
+                cls=loaded if isinstance(loaded, type) else None,
+                unavailable_reason=registry.unavailable_reason(key),
+            )
+        )
+    return entries
+
+
+def _describes_another_key(registry: PluginRegistry[Any], key: str) -> bool:
+    """Whether ``key`` is a second spelling of a backend described elsewhere.
+
+    Asked through the metadata convention rather than through the registry's
+    internals, and asked identically of both states a known key can be in:
+    an alias carries no metadata of its own while ``follow_alias`` finds
+    some under the key it describes. A canonical key registered without any
+    metadata answers False from both halves, so it is kept rather than
+    collapsed into nothing.
+    """
+    return not registry.get_metadata(key) and bool(registry.get_metadata(key, follow_alias=True))
 
 
 def build_backend(
