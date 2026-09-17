@@ -85,7 +85,7 @@ consumer can take the async library directly.
       members:
         - render_system_prompt
         - render_user_prompt
-        - render_prompt
+        - get_required_parameters
 
 ### AsyncPromptBuilder
 
@@ -96,7 +96,7 @@ consumer can take the async library directly.
       members:
         - render_system_prompt
         - render_user_prompt
-        - render_prompt
+        - get_required_parameters
 
 ## Resource Adapters
 

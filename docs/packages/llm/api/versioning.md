@@ -22,10 +22,11 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
         - create_version
         - get_version
         - list_versions
+        - list_names
         - update_status
         - tag_version
         - untag_version
-        - get_version_by_tag
+        - get_version_history
 
 ### PromptVersion
 
@@ -56,7 +57,7 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
         - get_variant_for_user
         - get_random_variant
         - update_experiment_status
-        - get_active_experiments
+        - get_variant_distribution
 
 ### PromptExperiment
 
