@@ -50,6 +50,8 @@ print(template['template'])
 print(template['defaults'])
 ```
 
+--8<-- "packages/llm/docs/user-guide.md:library-flavours"
+
 ### RAG Integration
 
 ```python

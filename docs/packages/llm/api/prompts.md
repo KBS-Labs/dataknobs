@@ -8,7 +8,15 @@ The prompts API provides a flexible system for managing, rendering, and versioni
 
 ## Prompt Library
 
-### Abstract Interface
+A library comes in one of two flavours. One that answers from memory — a
+config dictionary, a directory read at construction — implements
+`AbstractPromptLibrary`, whose accessors are `def`. One that has to reach a
+store to answer implements `AsyncPromptLibrary`, whose accessors are
+coroutines. The surfaces are otherwise identical member for member, with one
+stated difference: `get_metadata` is synchronous on both, because it answers
+from the library's own configuration rather than from its content.
+
+### Synchronous Interface
 
 ::: dataknobs_llm.prompts.AbstractPromptLibrary
     options:
@@ -17,7 +25,38 @@ The prompts API provides a flexible system for managing, rendering, and versioni
       members:
         - get_system_prompt
         - get_user_prompt
-        - list_prompts
+        - list_system_prompts
+        - list_user_prompts
+
+### Asynchronous Interface
+
+::: dataknobs_llm.prompts.AsyncPromptLibrary
+    options:
+      show_source: true
+      heading_level: 3
+      members:
+        - get_system_prompt
+        - get_user_prompt
+        - list_system_prompts
+        - list_user_prompts
+
+### Converting Between Flavours
+
+The two directions do not cost the same. `as_async` offloads each call to a
+worker thread, owns nothing and leaves nothing to close; `as_sync` owns a
+private event loop on a daemon thread and blocks the calling thread for the
+whole of every call, so it needs closing and is worth avoiding where the
+consumer can take the async library directly.
+
+::: dataknobs_llm.prompts.as_async
+    options:
+      show_source: true
+      heading_level: 4
+
+::: dataknobs_llm.prompts.as_sync
+    options:
+      show_source: true
+      heading_level: 4
 
 ### Implementations
 

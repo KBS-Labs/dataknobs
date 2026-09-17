@@ -193,7 +193,10 @@ composite = CompositePromptLibrary(
     names=["config", "filesystem"]
 )
 
-# Versioned library - supports prompt versioning
+# Versioned library - supports prompt versioning. Unlike the three above it is
+# an `AsyncPromptLibrary`: it answers from a version manager that awaits, so
+# `await versioned.get_system_prompt(...)`, and a `def` caller wraps it in
+# `as_sync(...)`. `base_library` takes either flavour.
 versioned = VersionedPromptLibrary(base_library=fs_library)
 ```
 

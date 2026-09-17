@@ -40,13 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one daemon thread and two descriptors per attempt. `AsyncLLMResource.aclose()`
   closed the async provider and the rate limiter but never the adapters that
   the inherited synchronous `complete()` builds, leaking one per model key.
-- **The versioned prompt library's synchronous accessors work from async
-  code.** `VersionedPromptLibrary.get_system_prompt` and `get_user_prompt`
-  each carried the same `run_until_complete` preamble, so both raised
-  `RuntimeError: This event loop is already running` for any caller already on
-  a loop — which is every realistic caller, since every writer on the library
-  is a coroutine, and the sequence in the class's own usage example. Both now
-  run their lookup on a private loop via `run_coro_sync`.
 - **`VersionedPromptLibrary` can be constructed.** `AbstractPromptLibrary.reload`
   carried an `@abstractmethod` that its own docstring contradicted — *"This is
   optional… Default implementation does nothing."* The method shipped
@@ -62,6 +55,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its sibling `list_user_prompts` does the same dict read with none of that.
 
 ### Changed
+
+- **Prompt libraries come in two flavours, and there are two named doors
+  between them (breaking).** `AsyncPromptLibrary` joins `AbstractPromptLibrary`
+  as the interface for a library that has to reach a store to answer, and
+  `VersionedPromptLibrary` is the first implementation of it — its accessors
+  are coroutines now, like the writers that populate it. The two protocols
+  declare one surface member for member, with one stated difference:
+  `get_metadata` is synchronous on both, because it answers from the library's
+  own configuration rather than from its content. `as_async(library)` presents
+  a synchronous library to an async consumer, offloading each call to a worker
+  thread so a library that reads a file cannot stall the consumer's loop;
+  `as_sync(library)` presents an async library to a `def` consumer, at the cost
+  of a private event loop on a daemon thread and a calling thread blocked for
+  the whole of every call. The asymmetry is the point: where a consumer can
+  take the async library directly, that is always cheaper than `as_sync`, and
+  an `as_sync` result must not be handed to `AsyncPromptBuilder`, which calls
+  its library synchronously from inside its own `async def`.
+
+  Breaking on paper, vacuous in fact: `VersionedPromptLibrary` was abstract in
+  every published version, so nothing has ever held one. `get_metadata` no
+  longer reports `version_count` / `experiment_count` — they counted rows by
+  reaching into two managers' private dictionaries, and counting rows in a
+  store is a query, not metadata about a library. `base_library` now accepts
+  either flavour.
+
+- **`BasePromptLibrary` no longer stubs the interface it extends, and no
+  longer declares it (breaking).** Eight `NotImplementedError` overrides stood
+  in for the ABC's abstract methods — and to `abc` a stub is an
+  implementation, so those eight switched off the construct-time check for
+  every subclass: a library missing a method built fine and raised at the
+  first call instead, which is the one moment its author is no longer
+  watching. They are gone; `get_metadata`, the ninth and the only real one,
+  stays. With them gone the class carries no interface at all, so it stops
+  declaring one: it is a mixin holding caching, parsing and metadata, which is
+  what lets a library of *either* flavour reuse it. `FileSystemPromptLibrary`
+  and `ConfigPromptLibrary` name `AbstractPromptLibrary` themselves, so every
+  `isinstance` check against them answers as before. A consumer subclassing
+  `BasePromptLibrary` directly now names the flavour too, and a subclass
+  missing a method is refused at construction, naming what it is missing.
 
 - **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
   `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly

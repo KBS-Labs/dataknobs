@@ -217,6 +217,70 @@ composite = CompositePromptLibrary(
 prompt = composite.get_system_prompt("helpful_assistant")
 ```
 
+<!-- --8<-- [start:library-flavours] -->
+### Two Flavours of Library
+
+A library that answers from memory — a config dictionary, a directory read at
+construction — implements `AbstractPromptLibrary`, whose accessors are `def`.
+A library that has to reach a store to answer implements `AsyncPromptLibrary`
+instead, whose accessors are coroutines. The two surfaces are otherwise
+identical member for member, with one stated exception: `get_metadata` is
+synchronous on both, because it answers from the library's own configuration
+rather than from its content.
+
+`VersionedPromptLibrary` is the async one — every answer it gives comes from a
+version manager that awaits:
+
+```python
+from dataknobs_llm.prompts import VersionedPromptLibrary
+
+library = VersionedPromptLibrary()
+
+await library.create_version(
+    name="helpful_assistant",
+    prompt_type="system",
+    template="You are a helpful assistant specializing in {{domain}}.",
+    version="1.0.0",
+)
+
+template = await library.get_system_prompt("helpful_assistant")
+```
+
+When the consumer holds one flavour and the library is the other, convert it at
+the door. The two directions do **not** cost the same, and that asymmetry is
+the thing to design around:
+
+```python
+from dataknobs_llm.prompts import as_async, as_sync
+
+# Cheap. A synchronous library, for an asynchronous consumer. Each call is
+# offloaded to a worker thread, so a library that reads a file to answer cannot
+# stall the consumer's loop. Nothing is owned and there is nothing to close.
+async_view = as_async(config_library)
+
+# Expensive. An asynchronous library, for a `def` consumer. Owns a private
+# event loop on a daemon thread until it is closed, and blocks the calling
+# thread for the whole of every call.
+with as_sync(library, timeout=30) as sync_view:
+    template = sync_view.get_system_prompt("helpful_assistant")
+```
+
+`as_sync` makes an async library *reachable* from a `def` site — including one
+already inside a running loop, where the old synchronous accessors raised
+`RuntimeError: This event loop is already running`. It does not make it cheap:
+the calling thread waits on the bridge for the whole call, so if that thread is
+running an event loop, every other task on it is stalled meanwhile.
+
+!!! warning "Do not hand an `as_sync` result to `AsyncPromptBuilder`"
+
+    That builder calls its library synchronously from inside its own
+    `async def`, so every template fetch would block the builder's event loop
+    for the wrapped library's entire round trip — which is the harm `as_sync`
+    looks like it is solving. Where the consumer is asynchronous, give it the
+    asynchronous library directly, or reach the versioned library's own
+    `await get_version(...)`, and skip both the thread and the stall.
+<!-- --8<-- [end:library-flavours] -->
+
 ### Using Prompt Builder
 
 ```python
