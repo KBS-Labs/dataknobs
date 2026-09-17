@@ -138,8 +138,7 @@ class AbstractPromptLibrary(ABC):
         """
         pass
 
-    @abstractmethod
-    def reload(self) -> None:
+    def reload(self) -> None:  # noqa: B027 - optional hook; no-op default is the contract
         """Reload the prompt library from its source.
 
         This is optional - implementations that support reloading should override.
