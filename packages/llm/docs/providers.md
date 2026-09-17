@@ -105,9 +105,9 @@ with create_llm_provider(config, is_async=False) as provider:
 ```
 
 From async code — a service that builds one of these to hand to a `def` site in
-a worker thread — `async with` is that form, and it awaits the provider's
-teardown directly rather than blocking the caller's loop on the bridge
-(`await provider.aclose()` is the same teardown without the block form):
+a worker thread — `async with` is that form, and it frees the caller's loop for
+the teardown instead of blocking it on the bridge (`await provider.aclose()` is
+the same teardown without the block form):
 
 ```python
 async with create_llm_provider(config, is_async=False) as provider:
@@ -119,6 +119,21 @@ Entry initializes nothing, unlike an async provider's `async with`: every
 method on the adapter blocks the calling thread, `initialize()` included, so an
 async holder runs those in a worker too and takes the async form only for the
 teardown.
+
+The provider itself is still closed **on the bridge**, in both forms. Its
+`aiohttp` session was opened by an `initialize()` that went through the bridge,
+so it and every transport and in-flight task under it belong to the bridge's
+loop; closing them from the holder's loop is what makes
+`AsyncLLMProvider.close`'s `gather` raise `got Future ... attached to a
+different loop`. What `aclose()` moves off the caller's loop is the *wait*, not
+the teardown.
+
+> **Quiesce the workers before the block ends.** `asyncio.to_thread` cannot
+> cancel the thread it started. If the holding task is cancelled — a client
+> disconnects, a `TaskGroup` sibling fails, a shutdown timeout fires — the
+> `async with` body unwinds while a worker is still inside `provider.complete`,
+> and the teardown stops the bridge loop out from under it. Pass `timeout=`; it
+> is the only upper bound a blocked worker has.
 
 An adapter nobody closes emits a `ResourceWarning` naming its thread when it is
 collected. Python ignores `ResourceWarning` by default, so run under

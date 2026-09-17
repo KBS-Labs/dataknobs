@@ -336,11 +336,18 @@ the embedder directly; this class is for the five `def` sites that cannot.
 `close()` is for deterministic teardown, and it closes only the bridge — the
 wrapped embedder was handed in already built and is not its to close. `with`
 is its reliable form; an async holder writes `async with` (or
-`await sync.aclose()`), which awaits the teardown rather than putting it
-through the bridge. Dropping
-one without closing it emits a `ResourceWarning` naming the loop thread, and
-the bridge tears itself down; before that it could not, because the live loop
-thread held a reference back to the bridge that kept it permanently alive.
+`await sync.aclose()`). Because there is no wrapped teardown to reach, the two
+differ only in which thread waits for the bridge to stop; on a wrapper that
+*does* own what it wraps, `aclose()` is what keeps the holder's loop free.
+Closing one that was never used costs nothing either way — the bridge is built
+on first use, so there may be no thread to join.
+
+Dropping one without closing it emits a `ResourceWarning` naming the loop
+thread, and the bridge tears itself down; before that it could not, because the
+live loop thread held a reference back to the bridge that kept it permanently
+alive. An embedder that never embedded anything built no bridge and so warns
+about nothing — which is the same fact as construction being free, seen from
+the other end.
 
 It is **not** a `TextEmbedder`, and this is the one place the protocol's
 runtime check will tell you otherwise. `isinstance(sync, TextEmbedder)` answers

@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adapter on that base — the same bridge and they share one thread; a bridge
   passed in belongs to the caller, so `close()` leaves it running. `aclose()`
   and `async with` are the teardown forms for a holder that is itself on a
-  loop, and they await the teardown rather than putting it through the
-  bridge. Constructing one
+  loop; since this class does not close the embedder it was handed, what they
+  change is only which thread waits for the bridge to stop. Constructing one
   no longer allocates a thread, so reading `model_id` or `dimensions` off one
   is free; the thread is allocated on the first `embed`. `embed`, `embed_one`,
   their signatures, and the fact that it does not close the embedder handed to

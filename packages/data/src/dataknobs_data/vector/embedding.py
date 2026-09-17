@@ -498,10 +498,20 @@ class SyncTextEmbedder(SyncBridgeAdapter):
     teardown is awaited rather than put through the bridge:
 
     ```python
-    async with SyncTextEmbedder(await create_text_embedder(config)) as sync:
-        await asyncio.to_thread(store.bulk_embed_and_store, records, "body",
-                                embedding_fn=sync.embed)
+    embedder = await create_text_embedder(config)
+    try:
+        async with SyncTextEmbedder(embedder) as sync:
+            await asyncio.to_thread(store.bulk_embed_and_store, records, "body",
+                                    embedding_fn=sync.embed)
+    finally:
+        await embedder.provider.close()
     ```
+
+    The embedder is bound rather than built inline, because this class does
+    not close what it is handed --- so an embedder constructed in the ``with``
+    header is one the caller keeps no reference to and nothing can ever close,
+    with a live HTTP session inside it. ``LLMProviderEmbedder.provider`` is
+    published for exactly this.
 
     :meth:`embed_one` and :meth:`embed` are separate methods rather than one
     arity-polymorphic call, because that polymorphism is what every consumer
