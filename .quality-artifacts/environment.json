@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-17T03:23:46Z",
+  "timestamp": "2026-09-17T13:21:29Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-guides-teach-the-tree-that-exists",
-  "git_commit": "08063a3b83b495d7e3d2b2c5ba9ab2855f98eddd",
+  "git_branch": "sbk/the-sync-adapter-stops-raising-on-the-loop-it-is-called-from",
+  "git_commit": "87c9779b269c313264503329c663d8ce09a45310",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
