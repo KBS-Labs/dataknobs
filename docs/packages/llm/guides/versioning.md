@@ -243,11 +243,24 @@ Wiring the managers yourself, give all three the same store, as
 `VersionedPromptLibrary` does:
 
 ```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
 store = DatabaseVersionStore(db)
 
 vm = VersionManager(store)
 ab = ABTestManager(store)
 mc = MetricsCollector(store)
+
+await db.close()
 ```
 
 Each manager declares only what it uses -- `VersionStore`, `ExperimentStore`
@@ -259,6 +272,18 @@ cannot find.
 A load returns a value rather than a handle: mutate what you loaded and
 nothing is stored until you save it. That is true of the in-memory store too,
 so code developed against it behaves the same against a database.
+
+Backends past memory and file need their driver -- `dataknobs-data[sqlite]`
+for the example above, `dataknobs-data[postgres]` for PostgreSQL.
+
+Two things the store does rather than its callers. `record_event` appends an
+event **and** folds it into the version's aggregate in one operation, because
+folding is a read-modify-write and doing it in the caller loses an increment
+when two recordings race; `DatabaseVersionStore` writes the aggregate as a
+compare-and-set and re-folds when it loses, up to
+`DatabaseVersionStore(db, max_retries=8)` times. And `load_events` returns
+events newest first and takes a `limit` that reaches the query, so an
+unbounded stream is never fully loaded to answer for its most recent few.
 
 See `packages/llm/docs/versioning.md` for the full treatment.
 

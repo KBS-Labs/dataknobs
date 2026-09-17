@@ -341,6 +341,10 @@ await db.close()
 The store does **not** own the database. You opened it, so you close it;
 nothing on this layer has a `close()` of its own to forget.
 
+Backends other than memory and file need their driver: SQLite is
+`dataknobs-data[sqlite]` (aiosqlite), PostgreSQL `dataknobs-data[postgres]`,
+and so on. The factory raises naming the extra if one is missing.
+
 ### One store, three managers
 
 `VersionedPromptLibrary` builds one store and hands the same object to all
@@ -348,11 +352,24 @@ three of its managers. Do the same when wiring the managers yourself, or each
 one gets a store of its own:
 
 ```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
 store = DatabaseVersionStore(db)
 
 vm = VersionManager(store)
 ab = ABTestManager(store)
 mc = MetricsCollector(store)
+
+await db.close()
 ```
 
 Separate stores are not an error -- the three hold different things and never
@@ -389,6 +406,51 @@ await store.save_version(version)     # now it is stored
 This holds for `InMemoryVersionStore` too, deliberately: a store that handed
 out live references would make the line above work in development and lose the
 tag in production.
+
+### Recording an event is one operation
+
+Appending an event and folding it into the version's aggregate happen
+together, inside the store:
+
+```python
+from dataknobs_llm.prompts import InMemoryVersionStore, MetricEvent
+
+store = InMemoryVersionStore()
+
+metrics = await store.record_event(
+    MetricEvent(version_id="v1", success=True, tokens=120)
+)
+print(metrics.total_uses)      # 1
+```
+
+Separately -- append, then read the aggregate, add to it, write it back --
+there is a suspension point in the middle of a read-modify-write, and two
+recordings for one version racing each other lose an increment. The store is
+where that can be made atomic: `InMemoryVersionStore` awaits nothing in
+between, and `DatabaseVersionStore` writes the aggregate as a compare-and-set,
+re-reading and re-folding when it loses. How many times it will do that is
+`DatabaseVersionStore(db, max_retries=8)`; exhausting it raises rather than
+dropping the fold.
+
+`MetricsCollector.record_event` is the ordinary way in and does this for you.
+
+### Reading an event stream is bounded
+
+Events accumulate without limit, so `load_events` returns them newest first
+and takes a bound:
+
+```python
+recent = await store.load_events("v1", limit=50)
+```
+
+The limit reaches the query, so the rest is never loaded.
+`MetricsCollector.get_events` passes yours down when nothing is filtered out
+afterwards -- a page taken before a time filter is not the page you would get
+after one.
+
+Versions have no such bound, deliberately: resolving `latest` and refusing a
+duplicate version string are questions about the whole set, and answered over
+a page they would name the latest of that page.
 
 ## API Reference
 

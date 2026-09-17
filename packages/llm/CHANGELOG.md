@@ -68,6 +68,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `:` was dropped from its own listing: the index key is `f"{name}:{type}"`
   and the walk split on the *first* colon, putting the tail of the name into
   the type slot — such a prompt could be created and fetched but never listed.
+- **A prompt template reflects a tag added after it was first read.**
+  `VersionedPromptLibrary` converted each version to a template dictionary
+  once and kept it in a cache nothing ever invalidated, so `tag_version`
+  changed the store and not what `get_system_prompt` returned. The staleness
+  hid itself while a manager handed back the object it held — the cached
+  `tags` was the same list the tag was appended to, so it showed through for
+  exactly the fields that were mutable. There is no cache; the conversion
+  builds a dictionary from an object already in hand.
+- **`get_events(limit=0)` returns no events.** It returned every one of them:
+  the bound was applied under `if limit:`, where `0` is indistinguishable from
+  "no limit given".
+- **A store's protocol check accepts a wrapper and refuses a non-method.**
+  It decided with `isinstance` against a `runtime_checkable` protocol, which
+  answers two questions wrongly for a store: it cannot see a method reached
+  through `__getattr__`, so the wrapper a consumer writes to log or trace a
+  real store was refused — and refused naming *nothing*, every member being
+  reachable after all; and it counts any member that is not `None` as present,
+  so an attribute of the wrong type was accepted and failed later as
+  `'int' object is not callable`. The verdict is now whether each member is
+  callable, which is also what the message says.
+- **Two assignments can no longer take each other's row.**
+  `DatabaseVersionStore` keyed an assignment by joining the experiment and
+  user ids with a colon, so experiment `a:b` with user `c` and experiment `a`
+  with user `b:c` composed the same key and one silently overwrote the other.
+  The experiment id is length-prefixed, and `load_assignment` finds the record
+  by its fields as its plural sibling already did.
+- **`delete_metrics` deletes every event or says why it could not.** It
+  skipped any search result whose record id was absent and still reported
+  success, which would have left the events behind for a backend that does not
+  populate one. The deletes are also one batch rather than one call each.
 - **The versioning module's quick start runs.** Both of its load-bearing
   lines failed: it imported `VersionedPromptLibrary` from
   `dataknobs_llm.prompts.versioning`, which does not export it, and then
@@ -179,6 +209,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     to drift.
   - Nothing on this layer owns a database. `DatabaseVersionStore` is handed
     one, so the caller closes it, and no class here grows a `close()`.
+  - Recording an event is one store operation, not two. `MetricsStore` has a
+    `record_event` that appends the event **and** folds it into the version's
+    aggregate, because folding is a read-modify-write and doing it in the
+    caller puts a suspension point between the read and the write: two
+    recordings for one version racing each other lose an increment, or
+    collide outright creating the first aggregate.
+    `InMemoryVersionStore` awaits nothing in between;
+    `DatabaseVersionStore` writes the aggregate as a compare-and-set and
+    re-reads and re-folds when it loses, up to
+    `DatabaseVersionStore(db, max_retries=8)` times. The fold itself is
+    `PromptMetrics.fold`, so the two stores cannot come to disagree about
+    what an event does to the totals.
+  - `load_events(version_id, *, limit=None)` returns events **newest first**,
+    and the limit reaches the query, so an unbounded stream is never fully
+    materialized to answer for its most recent few. The protocol used to
+    promise no order at all, which made a bound meaningless. Versions
+    deliberately have no such bound: resolving `latest` and refusing a
+    duplicate version string are questions about the whole set.
+  - `require_store` returns the store it accepted and is exported from
+    `dataknobs_llm.prompts`, so a consumer writing their own store can run
+    the same check before wiring it in.
+  - An aware `MetricEvent.timestamp` is stored as UTC, so the stored strings
+    sort chronologically — a store asks its backend to order an event stream
+    by that field, which is a comparison of the text.
 
 - **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
   `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly

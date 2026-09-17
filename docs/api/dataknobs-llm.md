@@ -335,6 +335,14 @@ await db.close()            # the store does not own it; you do
 A load returns a value rather than a handle, so an in-place change is stored
 only when it is saved -- `InMemoryVersionStore`, the default, included.
 
+Two operations are the store's rather than its caller's. `record_event`
+appends an event *and* folds it into the version's aggregate together, because
+folding is a read-modify-write and a caller doing it in two steps loses an
+increment when two recordings race; `DatabaseVersionStore` writes the
+aggregate as a compare-and-set and re-folds when it loses. And `load_events`
+returns events newest first under a `limit` that reaches the query, so an
+unbounded stream is never fully loaded to answer for its most recent few.
+
 ## Conversation Management
 
 The conversation system uses a tree-based structure for supporting branching and message history.
