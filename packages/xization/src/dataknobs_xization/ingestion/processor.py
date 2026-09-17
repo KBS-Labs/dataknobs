@@ -185,7 +185,7 @@ class DirectoryProcessor:
         """
         return json.dumps(config, sort_keys=True, default=str)
 
-    def process(self) -> Iterator[ProcessedDocument]:
+    def process(self, *, timeout: float | None = None) -> Iterator[ProcessedDocument]:
         """Process all documents in the directory (sync wrapper).
 
         Collects the async iterator from :meth:`process_async` and returns
@@ -205,14 +205,26 @@ class DirectoryProcessor:
         as the call returns. It is also why the streaming
         :meth:`process_async` provides does not survive the wrapper.
 
+        Args:
+            timeout: Seconds to allow the whole walk. The caller is inside a
+                ``def`` and has no cancellation of its own, so without this a
+                source that stops answering --- a network file system, a
+                backend behind a hung connection --- is an unbounded block
+                with nothing to interrupt it. ``None`` (the default) waits for
+                as long as the walk takes. On expiry the walk is asked to
+                cancel and :class:`TimeoutError` is raised.
+
         Yields:
             ProcessedDocument for each processed file.
+
+        Raises:
+            TimeoutError: If ``timeout`` elapses before the walk completes.
         """
 
         async def _collect() -> list[ProcessedDocument]:
             return [doc async for doc in self.process_async()]
 
-        return iter(run_coro_sync(_collect()))
+        return iter(run_coro_sync(_collect(), timeout=timeout))
 
     async def process_async(self) -> AsyncIterator[ProcessedDocument]:
         """Process all documents in the directory (async primary).
@@ -696,6 +708,8 @@ def process_directory(
     directory: str | Path,
     config: KnowledgeBaseConfig | None = None,
     chunker: Chunker | None = None,
+    *,
+    timeout: float | None = None,
 ) -> Iterator[ProcessedDocument]:
     """Convenience function to process a directory.
 
@@ -703,9 +717,17 @@ def process_directory(
         directory: Directory to process
         config: Optional configuration (loads from directory if not provided)
         chunker: Optional pre-built chunker for markdown files
+        timeout: Seconds to allow the whole walk, forwarded to
+            :meth:`DirectoryProcessor.process`. Keyword-only, so it cannot be
+            mistaken for a third positional argument. This function is what a
+            first-time caller reaches for, so it offers the same bound rather
+            than being the one entry point without one.
 
     Yields:
         ProcessedDocument for each file
+
+    Raises:
+        TimeoutError: If ``timeout`` elapses before the walk completes.
     """
     directory = Path(directory)
 
@@ -713,4 +735,4 @@ def process_directory(
         config = KnowledgeBaseConfig.load(directory)
 
     processor = DirectoryProcessor(config, directory, chunker=chunker)
-    yield from processor.process()
+    yield from processor.process(timeout=timeout)

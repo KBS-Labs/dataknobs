@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the right call from async code — and it still collects before returning, so
   `files_skipped` is final when it returns.
 
+- **`DirectoryProcessor.process()` and `process_directory()` take a
+  keyword-only `timeout=`.** Both block the calling thread for a walk whose
+  size they do not know in advance, and a caller inside a `def` has no
+  cancellation of its own — so a source that stops answering was an unbounded
+  block with nothing to interrupt it. `timeout=` bounds the whole walk and
+  raises `TimeoutError` on expiry. It is keyword-only on `process_directory()`
+  so it cannot be mistaken for a third positional argument. The default,
+  `None`, waits for as long as the walk takes, so nothing changes for existing
+  callers.
+
 ### Fixed
 
 - **`BackendDocumentSource` yields `-1` for a size a backend reports as

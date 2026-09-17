@@ -109,8 +109,52 @@ def test_the_bridge_thread_does_not_outlive_the_call(corpus: Path) -> None:
     """One call, one throwaway loop --- and no teardown obligation acquired."""
     processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), corpus)
 
+    # The guard *is* the assertion: a bridge held past the call would still
+    # have its thread alive here. Asserting the absence of a `close` method
+    # instead would fail the day the class grows an unrelated one.
     with assert_no_leaked_bridge_threads():
         list(processor.process())
         list(processor.process())
 
-    assert not hasattr(processor, "close")
+
+def test_a_timeout_bounds_a_walk_the_caller_cannot_otherwise_cancel(corpus: Path) -> None:
+    """The bound a blocked synchronous caller has no other way to get.
+
+    ``process()`` blocks its calling thread for the whole walk --- and from
+    async code stalls every other task on the caller's loop for the duration
+    --- over a directory whose size it does not know in advance. A network
+    file system that stops answering turns that into an unbounded hang with
+    nothing to interrupt it: the caller is inside a ``def``, so it has no
+    cancellation of its own, which is the same argument that put ``timeout=``
+    on the ``dataknobs-data`` sibling in this change.
+
+    ``run_coro_sync`` has taken a ``timeout`` all along; the wrapper simply
+    never offered one.
+    """
+
+    class Stalls(DirectoryProcessor):
+        async def process_async(self):  # type: ignore[override,no-untyped-def]
+            await asyncio.sleep(30)
+            yield  # pragma: no cover - never reached
+
+    processor = Stalls(KnowledgeBaseConfig(name="t"), corpus)
+
+    with pytest.raises(TimeoutError):
+        list(processor.process(timeout=0.1))
+
+
+def test_the_convenience_function_takes_the_same_bound(corpus: Path) -> None:
+    """``process_directory`` delegates to ``process``, including its bound.
+
+    It carried the "cannot be called from a running loop" limitation by
+    delegation without restating it, and it inherits this the same way --- so
+    a caller that reaches for the module-level function first is not the one
+    caller left without a bound.
+    """
+    with pytest.raises(TypeError):
+        # Positional-only would silently bind to `chunker`; keyword-only is
+        # what makes this a bound rather than a mis-delivered third argument.
+        process_directory(corpus, None, None, 0.1)  # type: ignore[misc]
+
+    docs = list(process_directory(corpus, KnowledgeBaseConfig(name="t"), timeout=30))
+    assert [d.document_type for d in docs] == ["markdown", "json"]
