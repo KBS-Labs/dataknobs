@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-17T15:52:43Z",
+  "timestamp": "2026-09-17T16:30:59Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/one-shape-for-the-sync-bridge-wrappers",
-  "git_commit": "c57a64c32521527d2c3069750ed835200ef0ca65",
+  "git_branch": "sbk/two-more-sync-wrappers-stop-raising-on-the-loop-they-are-called-from",
+  "git_commit": "f523c63c0e1325408cbad869aca62cee3ebbeb53",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
