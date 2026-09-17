@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 from dataknobs_llm.exceptions import VersioningError
 
+from .store import InMemoryVersionStore, VersionStore, require_store
 from .types import (
     PromptVersion,
     VersionStatus,
@@ -31,7 +32,9 @@ class VersionManager:
 
     Example:
         ```python
-        manager = VersionManager(storage_backend)
+        # In memory when nothing is passed; DatabaseVersionStore(db)
+        # keeps versions in any of the seven dataknobs backends.
+        manager = VersionManager()
 
         # Create a version
         v1 = await manager.create_version(
@@ -55,16 +58,26 @@ class VersionManager:
     # Semantic version pattern: major.minor.patch
     VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
-    def __init__(self, storage: Any | None = None):
+    def __init__(self, store: VersionStore | None = None):
         """Initialize version manager.
 
         Args:
-            storage: Backend storage (dict for in-memory, database for persistence)
-                    If None, uses in-memory dictionary
+            store: Where versions live. Defaults to
+                :class:`~.store.InMemoryVersionStore`, which is what this
+                manager used to hold in an instance dictionary. Pass
+                :class:`~.store.DatabaseVersionStore` for any of the seven
+                ``dataknobs_data`` backends.
+
+        Raises:
+            TypeError: If ``store`` is not a :class:`~.store.VersionStore`.
+                The parameter this replaces was duck-typed for ``set`` and
+                ``delete``, so an object written for it is caught here rather
+                than at the first write it would have dropped.
         """
-        self.storage = storage if storage is not None else {}
-        self._versions: Dict[str, PromptVersion] = {}  # version_id -> PromptVersion
-        self._version_index: Dict[str, List[str]] = {}  # "{name}:{type}" -> [version_ids]
+        if store is None:
+            store = InMemoryVersionStore()
+        require_store(store, VersionStore, holder="VersionManager")
+        self.store = store
 
     async def create_version(
         self,
@@ -117,8 +130,7 @@ class VersionManager:
                 )
 
         # Check if version already exists
-        key = self._make_key(name, prompt_type)
-        existing_versions = await self.list_versions(name, prompt_type)
+        existing_versions = await self.store.load_versions(name, prompt_type)
         if any(v.version == version for v in existing_versions):
             raise VersioningError(f"Version {version} already exists for {name} ({prompt_type})")
 
@@ -142,17 +154,7 @@ class VersionManager:
             status=status,
         )
 
-        # Store version
-        self._versions[version_id] = prompt_version
-
-        # Update index
-        if key not in self._version_index:
-            self._version_index[key] = []
-        self._version_index[key].append(version_id)
-
-        # Persist to backend if available
-        if hasattr(self.storage, "set"):
-            await self._persist_version(prompt_version)
+        await self.store.save_version(prompt_version)
 
         return prompt_version
 
@@ -176,7 +178,7 @@ class VersionManager:
         """
         # Direct lookup by version_id
         if version_id:
-            return self._versions.get(version_id)
+            return await self.store.load_version(version_id)
 
         # Get all versions for this prompt
         versions = await self.list_versions(name, prompt_type)
@@ -212,10 +214,7 @@ class VersionManager:
         Returns:
             List of PromptVersion objects, sorted by version (newest first)
         """
-        key = self._make_key(name, prompt_type)
-        version_ids = self._version_index.get(key, [])
-
-        versions = [self._versions[vid] for vid in version_ids]
+        versions = await self.store.load_versions(name, prompt_type)
 
         # Apply filters
         if tags:
@@ -232,10 +231,11 @@ class VersionManager:
 
         The listing counterpart to :meth:`list_versions`, which can only answer
         for a name the caller already has. Without it a caller wanting "every
-        system prompt" had to walk ``_version_index`` itself and parse the keys
-        back --- which is how two consumers came to split on the *first* colon,
-        putting the tail of any name containing one into the type slot and
-        dropping that prompt from its own listing.
+        system prompt" had to walk this manager's private index itself and
+        parse the keys back --- which is how two consumers came to split on the
+        *first* colon, putting the tail of any name containing one into the
+        type slot and dropping that prompt from its own listing. The store
+        derives the names from the versions, so no key is parsed anywhere.
 
         Args:
             prompt_type: Prompt type to filter on ("system", "user", "message").
@@ -245,12 +245,7 @@ class VersionManager:
             whose last version was deleted is absent, so a listing built from
             this cannot name a prompt the getters then answer ``None`` for.
         """
-        suffix = f":{prompt_type}"
-        return {
-            key[: -len(suffix)]
-            for key, version_ids in self._version_index.items()
-            if key.endswith(suffix) and version_ids
-        }
+        return await self.store.load_names(prompt_type)
 
     async def tag_version(
         self,
@@ -269,16 +264,13 @@ class VersionManager:
         Raises:
             VersioningError: If version not found
         """
-        version = self._versions.get(version_id)
+        version = await self.store.load_version(version_id)
         if not version:
             raise VersioningError(f"Version not found: {version_id}")
 
         if tag not in version.tags:
             version.tags.append(tag)
-
-            # Persist if backend available
-            if hasattr(self.storage, "set"):
-                await self._persist_version(version)
+            await self.store.save_version(version)
 
         return version
 
@@ -299,16 +291,13 @@ class VersionManager:
         Raises:
             VersioningError: If version not found
         """
-        version = self._versions.get(version_id)
+        version = await self.store.load_version(version_id)
         if not version:
             raise VersioningError(f"Version not found: {version_id}")
 
         if tag in version.tags:
             version.tags.remove(tag)
-
-            # Persist if backend available
-            if hasattr(self.storage, "set"):
-                await self._persist_version(version)
+            await self.store.save_version(version)
 
         return version
 
@@ -329,15 +318,12 @@ class VersionManager:
         Raises:
             VersioningError: If version not found
         """
-        version = self._versions.get(version_id)
+        version = await self.store.load_version(version_id)
         if not version:
             raise VersioningError(f"Version not found: {version_id}")
 
         version.status = status
-
-        # Persist if backend available
-        if hasattr(self.storage, "set"):
-            await self._persist_version(version)
+        await self.store.save_version(version)
 
         return version
 
@@ -354,38 +340,15 @@ class VersionManager:
             version_id: Version ID to delete
 
         Returns:
-            True if deleted, False if not found
+            True if deleted, False if not found. The store answers this, so a
+            delete for an id that was never written reports ``False`` instead
+            of reporting success and issuing the delete anyway --- which is
+            what the duck-typed ``storage`` did, because ``delete`` was the one
+            verb of its three that a real backend happened to have.
         """
-        version = self._versions.get(version_id)
-        if not version:
-            return False
-
-        # Remove from index
-        key = self._make_key(version.name, version.prompt_type)
-        if key in self._version_index:
-            remaining = [vid for vid in self._version_index[key] if vid != version_id]
-            if remaining:
-                self._version_index[key] = remaining
-            else:
-                # Drop the key rather than leaving it mapped to an empty list.
-                # A key outliving its last version is a name with no versions,
-                # and the index is the only record of which names exist.
-                del self._version_index[key]
-
-        # Remove from storage
-        del self._versions[version_id]
-
-        # Persist deletion if backend available
-        if hasattr(self.storage, "delete"):
-            await self.storage.delete(f"version:{version_id}")
-
-        return True
+        return await self.store.delete_version(version_id)
 
     # ===== Helper Methods =====
-
-    def _make_key(self, name: str, prompt_type: str) -> str:
-        """Create index key for prompt name and type."""
-        return f"{name}:{prompt_type}"
 
     def _parse_version(self, version: str) -> tuple:
         """Parse semantic version into (major, minor, patch) tuple."""
@@ -432,12 +395,6 @@ class VersionManager:
 
         major, minor, patch = self._parse_version(latest.version)
         return f"{major}.{minor}.{patch + 1}"
-
-    async def _persist_version(self, version: PromptVersion) -> None:
-        """Persist version to backend storage."""
-        if hasattr(self.storage, "set"):
-            key = f"version:{version.version_id}"
-            await self.storage.set(key, version.to_dict())
 
     async def get_version_history(
         self,

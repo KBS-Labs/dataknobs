@@ -21,11 +21,14 @@ from ..versioning import (
     VersionManager,
     ABTestManager,
     MetricsCollector,
+    InMemoryVersionStore,
     PromptVersion,
     PromptExperiment,
     PromptVariant,
     PromptMetrics,
+    VersioningStore,
     VersionStatus,
+    require_store,
 )
 
 
@@ -86,8 +89,9 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
         ```python
         from dataknobs_llm.prompts import VersionedPromptLibrary
 
-        # Create library (with optional backend storage)
-        library = VersionedPromptLibrary(storage=backend)
+        # In memory by default; DatabaseVersionStore(db) for any of the
+        # seven dataknobs backends.
+        library = VersionedPromptLibrary()
 
         # Create a version
         v1 = await library.create_version(
@@ -122,13 +126,19 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
 
     def __init__(
         self,
-        storage: Any | None = None,
+        store: VersioningStore | None = None,
         base_library: AbstractPromptLibrary | AsyncPromptLibrary | None = None,
     ):
         """Initialize versioned prompt library.
 
         Args:
-            storage: Backend storage for persistence (None for in-memory)
+            store: Where versions, experiments and metrics live. Defaults to
+                :class:`~dataknobs_llm.prompts.versioning.InMemoryVersionStore`;
+                pass
+                :class:`~dataknobs_llm.prompts.versioning.DatabaseVersionStore`
+                for persistence across processes. One object serves all three
+                managers, which is why the parameter is singular and why the
+                protocol it names is the three of theirs together.
             base_library: Optional base library to wrap (for migration). Either
                 flavour: a synchronous one is reached through
                 :func:`~dataknobs_llm.prompts.base.views.as_async`, so a
@@ -137,18 +147,25 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
                 was passed; the view is private.
 
         Raises:
-            TypeError: If ``base_library`` answers to neither protocol. A class
-                extending :class:`BasePromptLibrary` alone is the likely case:
-                that mixin declares no interface, so such a library has to name
-                a flavour before anything can tell which one it is.
+            TypeError: If ``store`` is not a
+                :class:`~dataknobs_llm.prompts.versioning.VersioningStore`, or
+                if ``base_library`` answers to neither library protocol. For
+                the latter a class extending :class:`BasePromptLibrary` alone
+                is the likely case: that mixin declares no interface, so such a
+                library has to name a flavour before anything can tell which
+                one it is.
         """
-        self.storage = storage
+        if store is None:
+            store = InMemoryVersionStore()
+        require_store(store, VersioningStore, holder="VersionedPromptLibrary")
+        self.store = store
         self.base_library = base_library
 
-        # Initialize managers
-        self.version_manager = VersionManager(storage)
-        self.ab_test_manager = ABTestManager(storage)
-        self.metrics_collector = MetricsCollector(storage)
+        # One store, three managers -- each declaring only the part of it that
+        # it uses.
+        self.version_manager = VersionManager(store)
+        self.ab_test_manager = ABTestManager(store)
+        self.metrics_collector = MetricsCollector(store)
 
         # Cache for converting versions to templates
         self._template_cache: Dict[str, PromptTemplateDict] = {}
@@ -580,7 +597,7 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
         """
         return {
             "type": "VersionedPromptLibrary",
-            "storage": str(type(self.storage).__name__) if self.storage else "in-memory",
+            "store": type(self.store).__name__,
             "has_base_library": self.base_library is not None,
         }
 

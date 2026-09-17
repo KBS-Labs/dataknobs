@@ -11,14 +11,16 @@ This module provides:
 
 Quick Start:
 
-    from dataknobs_llm.prompts.versioning import (
-        VersionedPromptLibrary,
-        PromptVersion,
-        PromptExperiment,
-    )
+    from dataknobs_data import async_database_factory
+    from dataknobs_llm.prompts import VersionedPromptLibrary
+    from dataknobs_llm.prompts.versioning import DatabaseVersionStore, PromptVariant
 
-    # Create versioned library with backend storage
-    library = VersionedPromptLibrary(backend=db)
+    # Create a versioned library over any of the seven dataknobs backends.
+    # Omit ``store`` for the in-memory default. The factory does not connect,
+    # so a backend that needs a connection wants one before the first call.
+    db = async_database_factory.create(backend="memory")
+    await db.connect()
+    library = VersionedPromptLibrary(store=DatabaseVersionStore(db))
 
     # Create a version
     v1 = await library.create_version(

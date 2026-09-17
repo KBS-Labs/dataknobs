@@ -13,6 +13,7 @@ This module provides:
 from typing import Any, Dict, List
 from datetime import UTC, datetime
 
+from .store import InMemoryVersionStore, MetricsStore, require_store
 from .types import (
     PromptMetrics,
     MetricEvent,
@@ -27,7 +28,9 @@ class MetricsCollector:
 
     Example:
         ```python
-        collector = MetricsCollector(storage_backend)
+        # In memory when nothing is passed; DatabaseVersionStore(db)
+        # keeps metrics in any of the seven dataknobs backends.
+        collector = MetricsCollector()
 
         # Record a usage event
         await collector.record_event(
@@ -50,16 +53,27 @@ class MetricsCollector:
         ```
     """
 
-    def __init__(self, storage: Any | None = None):
+    def __init__(self, store: MetricsStore | None = None):
         """Initialize metrics collector.
 
         Args:
-            storage: Backend storage (dict for in-memory, database for persistence)
-                    If None, uses in-memory dictionary
+            store: Where aggregates and events live. Defaults to
+                :class:`~.store.InMemoryVersionStore`, which is what this
+                collector used to hold in two instance dictionaries. Pass
+                :class:`~.store.DatabaseVersionStore` for any of the seven
+                ``dataknobs_data`` backends.
+
+        Raises:
+            TypeError: If ``store`` is not a :class:`~.store.MetricsStore`.
+                Events used to be persisted by ``append``-ing to a list under
+                one key, which no backend offers, so an object written for the
+                old parameter is caught here rather than at the first event it
+                would have dropped.
         """
-        self.storage = storage if storage is not None else {}
-        self._metrics: Dict[str, PromptMetrics] = {}  # version_id -> PromptMetrics
-        self._events: Dict[str, List[MetricEvent]] = {}  # version_id -> [events]
+        if store is None:
+            store = InMemoryVersionStore()
+        require_store(store, MetricsStore, holder="MetricsCollector")
+        self.store = store
 
     async def record_event(
         self,
@@ -100,17 +114,10 @@ class MetricsCollector:
             metadata=metadata or {},
         )
 
-        # Store event
-        if version_id not in self._events:
-            self._events[version_id] = []
-        self._events[version_id].append(event)
+        await self.store.append_event(event)
 
         # Update aggregated metrics
         await self._update_metrics(version_id, event)
-
-        # Persist event if backend available
-        if hasattr(self.storage, "append"):
-            await self._persist_event(event)
 
         return event
 
@@ -128,11 +135,12 @@ class MetricsCollector:
         Returns:
             PromptMetrics with aggregated statistics
         """
-        if version_id not in self._metrics:
-            # Return empty metrics
+        metrics = await self.store.load_metrics(version_id)
+        if metrics is None:
+            # A version nobody has used yet has metrics; they are all zero.
             return PromptMetrics(version_id=version_id)
 
-        return self._metrics[version_id]
+        return metrics
 
     async def get_events(
         self,
@@ -152,7 +160,7 @@ class MetricsCollector:
         Returns:
             List of MetricEvent objects
         """
-        events = self._events.get(version_id, [])
+        events = await self.store.load_events(version_id)
 
         # Apply time filters
         if start_time:
@@ -216,22 +224,11 @@ class MetricsCollector:
             version_id: Version ID
 
         Returns:
-            True if reset, False if version not found
+            True if reset, False if the version had neither metrics nor events.
+            The store removes both, so an aggregate cannot outlive the events
+            it was computed from.
         """
-        if version_id not in self._metrics and version_id not in self._events:
-            return False
-
-        # Clear metrics and events
-        if version_id in self._metrics:
-            del self._metrics[version_id]
-        if version_id in self._events:
-            del self._events[version_id]
-
-        # Persist deletion if backend available
-        if hasattr(self.storage, "delete"):
-            await self.storage.delete(f"metrics:{version_id}")
-
-        return True
+        return await self.store.delete_metrics(version_id)
 
     async def get_summary(
         self,
@@ -275,13 +272,19 @@ class MetricsCollector:
         self,
         version_id: str,
         event: MetricEvent,
-    ):
-        """Update aggregated metrics with new event."""
-        # Get or create metrics
-        if version_id not in self._metrics:
-            self._metrics[version_id] = PromptMetrics(version_id=version_id)
+    ) -> None:
+        """Fold one event into the aggregate for its version.
 
-        metrics = self._metrics[version_id]
+        Read, fold, write --- the aggregate is a value the store hands back,
+        so the write is what makes the change, not the mutation.
+
+        Args:
+            version_id: Version the event belongs to
+            event: The event to fold in
+        """
+        metrics = await self.store.load_metrics(version_id)
+        if metrics is None:
+            metrics = PromptMetrics(version_id=version_id)
 
         # Update counters
         metrics.total_uses += 1
@@ -305,21 +308,7 @@ class MetricsCollector:
         # Update last used timestamp
         metrics.last_used = event.timestamp
 
-        # Persist if backend available
-        if hasattr(self.storage, "set"):
-            await self._persist_metrics(metrics)
-
-    async def _persist_event(self, event: MetricEvent):
-        """Persist event to backend storage."""
-        if hasattr(self.storage, "append"):
-            key = f"events:{event.version_id}"
-            await self.storage.append(key, event.to_dict())
-
-    async def _persist_metrics(self, metrics: PromptMetrics):
-        """Persist metrics to backend storage."""
-        if hasattr(self.storage, "set"):
-            key = f"metrics:{metrics.version_id}"
-            await self.storage.set(key, metrics.to_dict())
+        await self.store.save_metrics(metrics)
 
     async def get_top_versions(
         self,
