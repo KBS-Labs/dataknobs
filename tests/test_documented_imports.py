@@ -28,13 +28,25 @@ naming because the next hundred will be one of them again:
   ``ModuleNotFoundError``. There the docs were right and the package was wrong,
   which is the case a guard scoped to "fix the docs" would have mis-diagnosed.
 
-**The check is import resolution, not execution.** It proves the name exists at
-the path shown; it cannot prove the call beneath it passes the right arguments.
-That boundary is real and was paid for: repointing an import while leaving the
-body calling the old name produces a sample that looks corrected and fails on
-its second line, which is worse than one that fails on its first. Renaming a
-symbol at its uses is therefore part of fixing an import here, and is the
-reviewer's job rather than this guard's.
+**The checks are static resolution, not execution.** Three readers now ask
+three questions of the same fence, and each was added because the one before it
+reported green over a whole population:
+
+- **the name exists at the path shown** -- import resolution, 218 findings;
+- **the name beneath the import exists on it** -- attribute resolution, 44,
+  because repointing an import while leaving the body calling the old name
+  produces a sample that looks corrected and fails on its second line;
+- **the call beneath the name could bind** -- signature binding, 91, because a
+  class that is really there still fails on the line that constructs it if the
+  sample omits an argument it requires.
+
+That progression is the shape to expect of the next one. Each boundary was
+handed to the reviewer in this docstring, in these words, and each was found by
+measurement rather than by review -- so a boundary named below is a backlog
+with a number on it, not a division of labour. What remains outside all three
+is a receiver the fence does not import: ``response.content`` on an instance,
+``registry.register(tool)`` on a local. Binding also answers only whether the
+arguments could be *accepted*, never whether they are the right values.
 
 **A star import is the one form that satisfies the check while defeating it**,
 which is why it is now refused outright below. The module it names really does
@@ -136,9 +148,13 @@ is the absence.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import importlib
 import inspect
 import re
+import textwrap
+from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 from types import ModuleType
 
@@ -1550,3 +1566,1074 @@ def test_historical_documents_are_excluded_and_say_so() -> None:
         for path in excluded
         if "**Historical record.**" not in path.read_text(encoding="utf-8")
     ], "excluded from the import guard but carrying no notice to the reader"
+
+
+# --- The name beneath the import -------------------------------------------
+#
+# Every reader above asks whether a documented name exists at the path shown.
+# None of them reads the line *under* the import. This file's docstring used to
+# name that boundary and hand it to the reviewer: "repointing an import while
+# leaving the body calling the old name produces a sample that looks corrected
+# and fails on its second line, which is worse than one that fails on its
+# first."
+#
+# The reviewer did not catch it. When this was written, 44 attribute accesses
+# in the corpus named something their own module does not have -- 15 on one
+# page of the utils API reference, ten spelling ``dk_doc.Document`` for a class
+# called ``Text``, six calling a ``normalize_whitespace_fn`` that is a flag on
+# another function rather than a function. Every one of them sat under an
+# import that resolves, so every one reported green through all four readers.
+#
+# **The scope is an attribute on a name the fence itself imported**, which is
+# the only receiver whose type a reader can know without executing anything.
+# ``response.content`` on an instance is out of reach and stays out: the
+# fence's own ``LLMResponse`` is a dataclass whose fields are invisible to
+# ``hasattr`` on the class, so a reader that guessed at instances would report
+# a correct sample as broken -- the false positive this file's prose calls
+# "indistinguishable from a true one, which is the shape that gets a guard
+# suppressed wholesale".
+#
+# For the same reason a CLASS receiver is asked more than ``hasattr``: a
+# dataclass field, a bare annotation and a ``__slots__`` entry are all members
+# that ``hasattr`` on the class denies, and a class defining ``__getattr__``
+# answers for names nobody declared. Each is checked before a finding is
+# raised. A name the fence REBINDS is dropped, because after ``json_utils = ...``
+# the import no longer says what the name holds.
+
+
+def _bound(tree: ast.Module) -> tuple[dict[str, object], set[str]]:
+    """``(name -> live object, modules that would not load)`` for this fence.
+
+    The second half is the point of the tuple. A module that fails to import
+    binds no names, so every attribute access and every call beneath it leaves
+    both readers below with nothing to say -- silently, and in exactly the case
+    the *import* reader is designed to stay green on: a missing optional
+    driver is a property of the environment, not a defect in the document, so
+    ``_why`` returns nothing for it and no finding is raised.
+
+    That tolerance is right for the question the import reader asks and wrong
+    as a coverage story, because the fence then goes unread by the two readers
+    that would have checked the lines under the import. Returning the failures
+    rather than swallowing them lets ``test_the_readers_are_not_quietly_losing_fences``
+    put a number and a name on whatever was skipped, which is the same bargain
+    ``call_sites`` already strikes with its unanalysable count.
+    """
+    env: dict[str, object] = {}
+    unloadable: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if not (node.module and node.module.startswith(NAMESPACE)):
+                continue
+            loaded, exc = _imported(node.module)
+            if exc is not None:
+                unloadable.add(node.module)
+                continue
+            for alias in node.names:
+                if alias.name != "*" and hasattr(loaded, alias.name):
+                    env[alias.asname or alias.name] = getattr(loaded, alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if not alias.name.startswith(NAMESPACE):
+                    continue
+                # `import a.b.c` binds `a`, but the submodule has to be
+                # imported for `a.b` to resolve as an attribute of it. Import
+                # the dotted name either way and bind whichever name the
+                # statement actually introduces -- otherwise `a.b` resolves
+                # only when some earlier test in the same process happened to
+                # import it, which makes a finding depend on collection order.
+                loaded, exc = _imported(alias.name)
+                if exc is not None:
+                    unloadable.add(alias.name)
+                    continue
+                if alias.asname:
+                    env[alias.asname] = loaded
+                else:
+                    top = alias.name.split(".")[0]
+                    package, package_exc = _imported(top)
+                    if package_exc is None:
+                        env[top] = package
+                    else:
+                        unloadable.add(top)
+    return env, unloadable
+
+
+def _rebound(tree: ast.Module) -> set[str]:
+    """Every name the fence binds itself, whatever an import said about it.
+
+    Deliberately over-broad, and flat: a name bound anywhere in the fence is
+    dropped everywhere in it, including by a function parameter, a subscript
+    target (``d[Config] = 2``) or an attribute-assignment receiver. This is not
+    scoping and should not be mistaken for it -- it trades false negatives for
+    the certainty of no false positives, which is the trade a guard people can
+    switch off has to make. Measured across the corpus, the cost is currently
+    zero accesses and zero calls lost.
+    """
+    shadowed: set[str] = set()
+
+    def bind(target: ast.AST) -> None:
+        for node in ast.walk(target):
+            if isinstance(node, ast.Name):
+                shadowed.add(node.id)
+
+    def arguments(args: ast.arguments) -> None:
+        for argument in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            shadowed.add(argument.arg)
+        for optional in (args.vararg, args.kwarg):
+            if optional is not None:
+                shadowed.add(optional.arg)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                bind(target)
+        elif isinstance(
+            node, (ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.comprehension)
+        ):
+            bind(node.target)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            shadowed.add(node.name)
+            arguments(node.args)
+        elif isinstance(node, ast.ClassDef):
+            shadowed.add(node.name)
+        elif isinstance(node, ast.Lambda):
+            arguments(node.args)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    bind(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            shadowed.add(node.name)
+    return shadowed
+
+
+def _slots(base: type) -> tuple[str, ...]:
+    """``__slots__`` as a tuple of names, however the class spelled it.
+
+    A single slot may be declared as a bare string, and ``in`` against a string
+    is a substring test: ``"alp" in "alpha"`` is true, so a class with
+    ``__slots__ = "alpha"`` would answer for an attribute it does not have.
+    """
+    declared = getattr(base, "__slots__", ())
+    return (declared,) if isinstance(declared, str) else tuple(declared)
+
+
+def declares(obj: object, attribute: str) -> bool:
+    """Whether ``obj`` has ``attribute``, including the ways ``hasattr`` misses."""
+    if hasattr(obj, attribute):
+        return True
+    if not isinstance(obj, type):
+        return False
+    for base in obj.__mro__:
+        if attribute in getattr(base, "__annotations__", {}):
+            return True
+        if attribute in _slots(base):
+            return True
+        if dataclasses.is_dataclass(base) and any(
+            field.name == attribute for field in dataclasses.fields(base)
+        ):
+            return True
+    # A class answering for undeclared names cannot be asked this question --
+    # and for a CLASS receiver, which is all this reader ever holds, the name
+    # that answers is the metaclass's. A ``__getattr__`` defined on the class
+    # itself serves its *instances*; consulting it here was asking the object
+    # below the receiver about the receiver, which suppressed real findings on
+    # every class that defines one.
+    metaclass: type = type(obj)
+    return any("__getattr__" in vars(base) for base in metaclass.__mro__[:-1])
+
+
+@cache
+def attribute_sites(path: Path) -> list[tuple[int, str, object, str]]:
+    """``(line, receiver, object, attribute)`` for each resolvable access in ``path``.
+
+    Cached: a pure reading of one file, asked for by both the findings list and
+    the corpus floor, and the corpus is read four times over across this
+    file's whole-tree tests.
+    """
+    found: list[tuple[int, str, object, str]] = []
+    for fence in code_fences(path):
+        if fence.lang not in PYTHON_FENCE or ILLUSTRATIVE.match(fence.marker or ""):
+            continue
+        tree = parsed(fence.body)
+        if tree is None:
+            continue
+        env, _ = _bound(tree)
+        if not env:
+            continue
+        for name in _rebound(tree):
+            env.pop(name, None)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
+                continue
+            obj = env.get(node.value.id)
+            if obj is not None:
+                found.append((fence.line + node.lineno - 1, node.value.id, obj, node.attr))
+    return found
+
+
+def attribute_findings() -> list[str]:
+    """Every documented attribute access whose receiver does not have it."""
+    return [
+        f"{rel(path)}:{line}: {receiver}.{attribute}"
+        for path in documentation_files()
+        for line, receiver, obj, attribute in attribute_sites(path)
+        if not declares(obj, attribute)
+    ]
+
+
+def test_every_documented_attribute_resolves() -> None:
+    """The line under the import is a claim too, and must hold."""
+    broken = attribute_findings()
+    assert not broken, (
+        f"{len(broken)} documented attribute access(es) name something their "
+        "own module or class does not have, so the sample fails below its "
+        "import rather than on it:\n  "
+        + "\n  ".join(broken)
+        + "\n\nRepoint the call at the name that exists. If the access is not "
+        "meant to resolve, mark the fence with "
+        "<!-- dk-imports: illustrative -- why --> as an import would be."
+    )
+
+
+def test_the_attribute_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, and this reader needs its own floor more than most.
+
+    It is the only one whose corpus is filtered twice -- a fence must import
+    from the namespace *and* then use what it imported by attribute -- so it is
+    the one most able to go quiet without any of the counts above moving. Both
+    the import floor and the loadable floor would sit at their full values
+    while this returned an empty list, which is a clean sweep of nothing.
+
+    The number is placed below what the tree holds (983 across 383 documents
+    when this was last measured) and well above what a single page contributes,
+    so losing one document is survivable and losing an arm of ``_bound`` is
+    not. Re-measure rather than trusting the figure: it is a reading of the
+    tree on a given day, and the floor below it is what is load-bearing.
+    """
+    found = sum(len(attribute_sites(path)) for path in documentation_files())
+    assert found > 700, (
+        f"only {found} resolvable attribute accesses found; the documents using "
+        "an imported module by attribute have not gone away, so the likelier "
+        "reading is that ``_bound`` has stopped binding one of the import forms"
+    )
+
+
+def unreadable_fences() -> list[str]:
+    """``file:line -- module`` for each fence a reader could not bind names in."""
+    found: list[str] = []
+    for path in documentation_files():
+        for fence in code_fences(path):
+            if fence.lang not in PYTHON_FENCE or ILLUSTRATIVE.match(fence.marker or ""):
+                continue
+            tree = parsed(fence.body)
+            if tree is None:
+                continue
+            _, unloadable = _bound(tree)
+            for module in sorted(unloadable):
+                exc = _imported(module)[1]
+                reason = _why(module, exc) if exc is not None else None
+                found.append(
+                    f"{rel(path)}:{fence.line}: {module} -- {reason or 'optional driver absent'}"
+                )
+    return found
+
+
+def test_the_readers_are_not_quietly_losing_fences() -> None:
+    """A fence whose module will not load is read by neither reader below.
+
+    ``_bound`` binds no names for such a fence, so every attribute access and
+    every call in it is skipped -- and skipped in the one case the import
+    reader deliberately stays green on, a missing optional third-party driver.
+    Nothing else in this file would notice: the floors are absolute numbers and
+    a handful of fences does not move them, so the loss is invisible at exactly
+    the size it is most likely to occur.
+
+    This does not forbid the skip -- the drivers really are optional, and a
+    lean environment is a legitimate place to run the suite. It forbids the
+    skip being silent, and bounds it: the message names every module that would
+    not load, so a reader can see which pages went unchecked rather than
+    inferring it from a count that did not move.
+    """
+    lost = unreadable_fences()
+    modules = {finding.split(": ", 1)[1].split(" -- ")[0] for finding in lost}
+    assert len(modules) < 10, (
+        f"{len(lost)} fence(s) across {len(modules)} module(s) bind no names, so "
+        "neither the attribute reader nor the binding reader read them:\n  "
+        + "\n  ".join(lost)
+        + "\n\nInstall the drivers these modules need, or accept the gap "
+        "knowing which documents it covers."
+    )
+
+
+def test_a_fence_whose_module_will_not_load_is_reported_not_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity: the skip must be visible when there is one to see."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\nfrom dataknobs_utils import json_utils\njson_utils.get_value({}, 'a')\n```\n"
+    )
+    real = _imported
+
+    def refuse(module: str) -> tuple[ModuleType | None, BaseException | None]:
+        if module == "dataknobs_utils":
+            return None, ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return real(module)
+
+    monkeypatch.setitem(globals(), "_imported", refuse)
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    # The import reader tolerates this by design -- the missing name is a
+    # driver, not the module -- which is precisely why the readers below it
+    # must not also fall silent without saying so.
+    refused = refuse("dataknobs_utils")[1]
+    assert refused is not None, "the stub must report a failure to be a stub"
+    assert _why("dataknobs_utils", refused) is None
+    assert attribute_sites(doc) == [], "no names bind, so nothing is read"
+
+    lost = unreadable_fences()
+    assert len(lost) == 1, f"the skipped fence must be reported, got {lost}"
+    assert "dataknobs_utils" in lost[0]
+
+
+def test_a_slotted_class_does_not_answer_for_a_substring_of_a_slot() -> None:
+    """``__slots__`` may be a bare string, and ``in`` on a string is a substring."""
+
+    class Slotted:
+        # A bare string is the subject: `in` against one is a substring test,
+        # so this is the shape `_slots` exists to normalize. PLC0205 is right
+        # about production code and wrong about the fixture that proves it.
+        __slots__ = "alpha"  # noqa: PLC0205
+
+    assert declares(Slotted, "alpha"), "the declared slot is a member"
+    assert not declares(Slotted, "alp"), "a substring of it is not"
+
+
+def test_a_class_defining_getattr_for_its_instances_is_still_asked() -> None:
+    """``__getattr__`` on the class answers for instances, not for the class.
+
+    The reader only ever holds a class or a module as receiver, so the name
+    that could answer for an undeclared attribute is the *metaclass*'s. Reading
+    the class's own MRO instead let every class defining ``__getattr__`` -- a
+    common shape -- suppress real findings about the class object itself.
+    """
+
+    class ForInstances:
+        def __getattr__(self, name: str) -> object:  # pragma: no cover - never called
+            raise AttributeError(name)
+
+    with pytest.raises(AttributeError):
+        ForInstances.absent  # type: ignore[attr-defined]  # noqa: B018 - the access IS the assertion
+    assert not declares(ForInstances, "absent")
+
+    class Answering(type):
+        def __getattr__(cls, name: str) -> object:
+            return object()
+
+    class ViaMetaclass(metaclass=Answering):
+        pass
+
+    assert declares(ViaMetaclass, "anything_at_all")
+
+
+def test_a_broken_attribute_is_detected(tmp_path: Path) -> None:
+    """The detector fires on the shape of the defect this was written for."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_utils import json_utils\n"
+        "data = json_utils.load_json_file('x.json')\n"
+        "```\n"
+    )
+    found = attribute_sites(doc)
+    assert [(name, attr) for _, name, _, attr in found] == [("json_utils", "load_json_file")]
+    assert not declares(found[0][2], "load_json_file")
+
+
+def test_a_working_attribute_is_not_flagged(tmp_path: Path) -> None:
+    """And does not fire on the corrected form."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_utils import json_utils\n"
+        "value = json_utils.get_value(data, 'a.b')\n"
+        "```\n"
+    )
+    assert [
+        (name, attr) for _, name, obj, attr in attribute_sites(doc) if not declares(obj, attr)
+    ] == []
+
+
+def test_a_rebound_name_is_not_read_as_the_import(tmp_path: Path) -> None:
+    """After the fence assigns the name, the import no longer says what it holds.
+
+    Without this the reader reports every attribute of a local object that
+    happens to share a name with an imported module -- a false positive
+    indistinguishable from a true one, which is what gets a guard switched off.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_utils import json_utils\n"
+        "json_utils = MyOwnWrapper()\n"
+        "json_utils.anything_at_all()\n"
+        "```\n"
+    )
+    assert attribute_sites(doc) == [], "a rebound name must not be read as the import"
+
+
+def test_a_dataclass_field_is_not_read_as_absent() -> None:
+    """``hasattr`` on the class denies a dataclass field, and the class is right.
+
+    ``LLMResponse.content`` is the live case: a field every consumer uses, which
+    a reader asking ``hasattr`` alone reports as fiction.
+    """
+    from dataknobs_llm.llm.base import LLMResponse
+
+    assert not hasattr(LLMResponse, "content"), "the premise of this test has moved"
+    assert declares(LLMResponse, "content"), "a dataclass field is a member"
+    assert not declares(LLMResponse, "not_a_field_at_all")
+
+
+def test_an_illustrative_fence_is_not_read_for_attributes(tmp_path: Path) -> None:
+    """The marker covers this reader too, or it covers half a fence."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "<!-- dk-imports: illustrative -- the old spelling is the subject -->\n"
+        "```python\n"
+        "from dataknobs_utils import json_utils\n"
+        "json_utils.load_json_file('x.json')\n"
+        "```\n"
+    )
+    assert attribute_sites(doc) == []
+
+
+def test_attribute_findings_report_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the finding path, the way the other checks get one.
+
+    ``test_every_documented_attribute_resolves`` runs over a tree where nothing
+    is broken, so it passes whether the body still detects anything or not.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_utils import json_utils\n"
+        "json_utils.load_json_file('x.json')\n"
+        "json_utils.get_value({}, 'a')\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = attribute_findings()
+
+    assert len(found) == 1, f"expected the one broken access, got {found}"
+    assert "sample.md:3" in found[0], f"wrong line reported: {found[0]}"
+
+
+# --- The arguments beneath the name ----------------------------------------
+#
+# The reader above asks whether a documented attribute exists. It cannot ask
+# whether a documented CALL could bind: ``TextMetaData()`` names a class that
+# is really there, and fails on the line that constructs it because the class
+# requires an argument the sample never passes. That miss is not theoretical.
+# One of those sat on a page this file's own attribute scan had just cleared,
+# in a commit that reported the page fixed.
+#
+# When this was written, 91 documented calls could not bind, against the 3,290
+# then readable. As with the class above, the population was a handful of shapes
+# rather than ninety-one mistakes:
+#
+# - **A required argument the docs treat as optional.** ``LLMConfig`` needs a
+#   ``model``; twelve samples passed only a provider. Every provider takes one
+#   config object and four pages passed it the config's fields instead.
+# - **A keyword that was never there.** ``Config.from_file(apply_env_overrides=True)``
+#   across six pages, for behaviour that is unconditional -- a whole page was
+#   built on a method that does not exist.
+# - **An abstract class instantiated.** ``Tool(name=..., func=...)`` in six
+#   places; ``Tool`` is an ABC and the function-wrapping constructor is
+#   imagined. Here the finding is the *keyword*, and the abstractness is what
+#   the reader finds when they follow it.
+# - **A parameter renamed and not followed.** ``file_extension`` for
+#   ``file_extensions``, ``polling_interval`` for ``poll_interval``,
+#   ``metadata_fields`` for ``metadata_field``.
+#
+# **The scope is the same receiver the attribute reader uses** -- a name the
+# fence imported, or an attribute of one -- for the same reason: it is the only
+# callable whose identity is knowable without executing the fence. A call on an
+# instance (``registry.register(tool)``) is out of reach and stays out.
+#
+# **Binding is not calling.** ``signature().bind()`` answers whether the
+# arguments could be *accepted*, never whether they are the right values, so a
+# sample passing ``model=3`` binds cleanly. That is deliberate: the check has
+# no false positives to trade away, which is what lets it run over the whole
+# corpus. Calls carrying ``*args``/``**kwargs``, and callables whose signature
+# cannot be read at all, are counted separately and skipped rather than
+# guessed at.
+
+
+def _call_target(node: ast.Call, env: dict[str, object]) -> Callable[..., object] | None:
+    """The live callable a ``Call`` node names, or ``None`` if unknowable."""
+    func = node.func
+    found: object = None
+    if isinstance(func, ast.Name):
+        found = env.get(func.id)
+    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        owner = env.get(func.value.id)
+        found = None if owner is None else getattr(owner, func.attr, None)
+    return found if callable(found) else None
+
+
+def _unpacks(node: ast.Call) -> bool:
+    """Whether the call spreads a sequence or mapping, hiding its real arity."""
+    return any(isinstance(arg, ast.Starred) for arg in node.args) or any(
+        keyword.arg is None for keyword in node.keywords
+    )
+
+
+def _arity(node: ast.Call) -> tuple[list[object], dict[str, object]]:
+    """Placeholder arguments matching the call's shape, standing in for values.
+
+    ``_unpacks`` has already rejected the unnamed-keyword form, so every
+    ``keyword.arg`` reaching here is a real name; the filter restates that for
+    the type checker rather than asserting it.
+    """
+    return (
+        [object()] * len(node.args),
+        {kw.arg: object() for kw in node.keywords if kw.arg is not None},
+    )
+
+
+@cache
+def call_sites(
+    path: Path,
+) -> tuple[list[tuple[int, str, Callable[..., object], ast.Call]], int]:
+    """``(sites, unanalysable)`` for the calls in ``path`` on imported names.
+
+    Cached for the same reason as ``attribute_sites``: three whole-corpus tests
+    ask for it, and one of them asks twice in a single assertion.
+    """
+    sites: list[tuple[int, str, Callable[..., object], ast.Call]] = []
+    unanalysable = 0
+    for fence in code_fences(path):
+        if fence.lang not in PYTHON_FENCE or ILLUSTRATIVE.match(fence.marker or ""):
+            continue
+        tree = parsed(fence.body)
+        if tree is None:
+            continue
+        env, _ = _bound(tree)
+        if not env:
+            continue
+        for name in _rebound(tree):
+            env.pop(name, None)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            target = _call_target(node, env)
+            if target is None:
+                continue
+            if _unpacks(node):
+                unanalysable += 1
+                continue
+            try:
+                inspect.signature(target)
+            except (ValueError, TypeError):
+                # A C-level or otherwise unreadable signature. Counted, not guessed.
+                unanalysable += 1
+                continue
+            sites.append((fence.line + node.lineno - 1, ast.unparse(node.func), target, node))
+    return sites, unanalysable
+
+
+def binding_findings() -> list[str]:
+    """Every documented call whose arguments cannot bind to the real signature."""
+    broken: list[str] = []
+    for path in documentation_files():
+        sites, _ = call_sites(path)
+        for line, shown, target, node in sites:
+            positional, keywords = _arity(node)
+            try:
+                inspect.signature(target).bind(*positional, **keywords)
+            except TypeError as exc:
+                broken.append(f"{rel(path)}:{line}: {shown}(...) -- {exc}")
+    return broken
+
+
+def test_every_documented_call_can_bind() -> None:
+    """A documented call must be one the reader could actually make."""
+    broken = binding_findings()
+    assert not broken, (
+        f"{len(broken)} documented call(s) cannot bind to the signature of the "
+        "name they invoke, so the sample fails on the line that calls rather "
+        "than the line that imports:\n  "
+        + "\n  ".join(broken)
+        + "\n\nRepoint the call at the real signature. If the call is not meant "
+        "to resolve, mark the fence with "
+        "<!-- dk-imports: illustrative -- why --> as an import would be."
+    )
+
+
+def test_the_binding_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, with the same hazard as the attribute floor above.
+
+    This reader filters the corpus three times -- a fence must import from the
+    namespace, call what it imported, and expose a readable signature -- so it
+    can fall silent while every count above holds. The floor is placed below
+    what the tree holds (3,421 when this was last measured) and far above any
+    one page, so losing a document is survivable and losing an arm of
+    ``_bound`` or ``_call_target`` is not.
+    """
+    bindable = sum(len(call_sites(path)[0]) for path in documentation_files())
+    assert bindable > 2500, (
+        f"only {bindable} analysable calls found; the documents calling an "
+        "imported name have not gone away, so the likelier reading is that "
+        "``_call_target`` has stopped resolving one of the receiver forms"
+    )
+
+
+def test_the_unanalysable_calls_stay_a_small_minority() -> None:
+    """The skip path is an escape hatch, and an escape hatch can swallow a corpus.
+
+    ``*args``/``**kwargs`` and unreadable signatures are skipped rather than
+    guessed at, which is correct and also the one way this check could report
+    green over everything. Fourteen were skipped when this was last measured,
+    against 3,421 read. The bound is loose because the number is small; what it
+    forbids is the skip path quietly becoming the common path.
+    """
+    unanalysable = sum(call_sites(path)[1] for path in documentation_files())
+    bindable = sum(len(call_sites(path)[0]) for path in documentation_files())
+    assert unanalysable < bindable // 10, (
+        f"{unanalysable} calls were skipped as unanalysable against {bindable} "
+        "read, which is too large a share for an escape hatch -- check whether "
+        "``inspect.signature`` has started failing on a whole family"
+    )
+
+
+def test_a_call_missing_a_required_argument_is_detected(tmp_path: Path) -> None:
+    """The shape that shipped: a real class, constructed without what it needs."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\nfrom dataknobs_structures import TextMetaData\nmeta = TextMetaData()\n```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert len(sites) == 1, f"expected the one call, got {sites}"
+    _, _, target, node = sites[0]
+    positional, keywords = _arity(node)
+    with pytest.raises(TypeError):
+        inspect.signature(target).bind(*positional, **keywords)
+
+
+def test_a_call_passing_an_unknown_keyword_is_detected(tmp_path: Path) -> None:
+    """The other half of the population: a keyword that was never there."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_config import Config\n"
+        "config = Config.from_file('c.yaml', apply_env_overrides=True)\n"
+        "```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert len(sites) == 1, f"expected the one call, got {sites}"
+    _, _, target, node = sites[0]
+    positional, keywords = _arity(node)
+    with pytest.raises(TypeError):
+        inspect.signature(target).bind(*positional, **keywords)
+
+
+def test_a_correct_call_is_not_flagged(tmp_path: Path) -> None:
+    """The floor under the two above: a good call must stay quiet."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "meta = TextMetaData('doc-1', source='input.txt')\n"
+        "```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert len(sites) == 1, f"expected the one call, got {sites}"
+    _, _, target, node = sites[0]
+    positional, keywords = _arity(node)
+    inspect.signature(target).bind(*positional, **keywords)
+
+
+def test_an_unpacked_call_is_skipped_rather_than_guessed(tmp_path: Path) -> None:
+    """``**kwargs`` at a call site hides its arity; the reader must not invent one."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "meta = TextMetaData(**settings)\n"
+        "```\n"
+    )
+    sites, unanalysable = call_sites(doc)
+    assert sites == [], f"an unpacked call must not be analysed, got {sites}"
+    assert unanalysable == 1, f"it must still be counted, got {unanalysable}"
+
+
+def test_an_illustrative_fence_is_not_read_for_calls(tmp_path: Path) -> None:
+    """The marker that exempts an import exempts the calls beneath it too."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "<!-- dk-imports: illustrative -- the API before the migration -->\n"
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "meta = TextMetaData()\n"
+        "```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert sites == [], f"an illustrative fence must not be read, got {sites}"
+
+
+def test_binding_findings_report_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the finding path, as the checks above each have one."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "good = TextMetaData('doc-1')\n"
+        "bad = TextMetaData()\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = binding_findings()
+
+    assert len(found) == 1, f"expected the one unbindable call, got {found}"
+    assert "sample.md:4" in found[0], f"wrong line reported: {found[0]}"
+
+
+# --- The receiver the other three readers cannot hold ----------------------
+#
+# Every reader above stops at the same boundary, and says so: the receiver must
+# be a name the fence imported. ``hot_reload.shutdown()`` on a local is out of
+# reach, so a fence can pass all three while being unrunnable on its third
+# line -- which is the failure this file exists to refuse, one step further out.
+#
+# The step that is cheap to take is the one where the local's type is written
+# in the fence itself: ``manager = HotReloadManager(...)`` names its own class,
+# and from there ``manager.shutdown()`` is the same question ``declares``
+# already answers. Twenty-five such calls named a method that does not exist
+# when this was written, across eleven documents -- two of them inside fences a
+# commit had just corrected by keyword while leaving the method below fictional.
+#
+# It stays conservative in three ways, because a false positive here is what
+# would get the whole family switched off:
+#
+# - **Only a name assigned exactly once**, and assigned directly from a call on
+#   an imported class. A name the fence binds twice says nothing reliable.
+# - **Only method calls.** ``obj.attribute`` may be set in ``__init__`` and is
+#   invisible from the class; ``obj.method()`` is a class attribute or it does
+#   not exist. The narrower question is the answerable one.
+# - **Never against an attribute the class assigns to ``self``.** A callable
+#   stored on the instance is a real method call whose name the class object
+#   does not carry, so the class's own source is read before a finding stands.
+
+
+@cache
+def _assigned_on_self(cls: type) -> frozenset[str]:
+    """Attribute names ``cls`` or its bases assign to ``self``.
+
+    An instance attribute is invisible on the class, so a call through one
+    (``self._client = build(); obj._client.get()``) would read as a method that
+    does not exist. Reading the class's own source is what keeps that out of
+    the findings, and it is paid for only on the handful that would otherwise
+    be reported.
+    """
+    names: set[str] = set()
+    for base in cls.__mro__[:-1]:
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(base)))
+        except (OSError, TypeError, SyntaxError, IndentationError):
+            continue  # a class with no readable source cannot be asked
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+                and isinstance(node.ctx, ast.Store)
+            ):
+                names.add(node.attr)
+    return frozenset(names)
+
+
+def _bind_counts(tree: ast.Module) -> dict[str, int]:
+    """How many times the fence binds each name.
+
+    ``_rebound`` answers *whether* a name is bound, which cannot distinguish
+    the single assignment that gives a local a knowable type from the second
+    one that takes it away again.
+    """
+    counts: dict[str, int] = {}
+
+    def bind(target: ast.AST) -> None:
+        for node in ast.walk(target):
+            if isinstance(node, ast.Name):
+                counts[node.id] = counts.get(node.id, 0) + 1
+
+    def arguments(args: ast.arguments) -> None:
+        for argument in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            counts[argument.arg] = counts.get(argument.arg, 0) + 1
+        for optional in (args.vararg, args.kwarg):
+            if optional is not None:
+                counts[optional.arg] = counts.get(optional.arg, 0) + 1
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                bind(target)
+        elif isinstance(
+            node, (ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.comprehension)
+        ):
+            bind(node.target)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            counts[node.name] = counts.get(node.name, 0) + 1
+            arguments(node.args)
+        elif isinstance(node, ast.ClassDef):
+            counts[node.name] = counts.get(node.name, 0) + 1
+        elif isinstance(node, ast.Lambda):
+            arguments(node.args)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    bind(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            counts[node.name] = counts.get(node.name, 0) + 1
+    return counts
+
+
+def _constructed(tree: ast.Module, env: dict[str, object]) -> dict[str, type]:
+    """Local name -> the imported class the fence constructs it from."""
+    counts = _bind_counts(tree)
+    made: dict[str, type] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+            continue
+        target = node.targets[0]
+        if not (isinstance(target, ast.Name) and isinstance(node.value, ast.Call)):
+            continue
+        if counts.get(target.id, 0) != 1:
+            continue  # bound more than once: the fence has taken the type back
+        built = _call_target(node.value, env)
+        if isinstance(built, type):
+            made[target.id] = built
+    return made
+
+
+@cache
+def receiver_sites(path: Path) -> list[tuple[int, str, type, str, ast.Call]]:
+    """``(line, receiver, class, method, call)`` for each call on a constructed local.
+
+    Cached as the two readers above are.
+    """
+    found: list[tuple[int, str, type, str, ast.Call]] = []
+    for fence in code_fences(path):
+        if fence.lang not in PYTHON_FENCE or ILLUSTRATIVE.match(fence.marker or ""):
+            continue
+        tree = parsed(fence.body)
+        if tree is None:
+            continue
+        env, _ = _bound(tree)
+        if not env:
+            continue
+        for name in _rebound(tree):
+            env.pop(name, None)
+        made = _constructed(tree, env)
+        if not made:
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            receiver = node.func.value
+            if not isinstance(receiver, ast.Name) or receiver.id not in made:
+                continue
+            found.append(
+                (
+                    fence.line + node.lineno - 1,
+                    receiver.id,
+                    made[receiver.id],
+                    node.func.attr,
+                    node,
+                )
+            )
+    return found
+
+
+def _receiver_fault(cls: type, method: str, node: ast.Call) -> str | None:
+    """Why this call on an instance of ``cls`` would fail, or ``None``.
+
+    Two questions, asked in order, because the second is only meaningful once
+    the first is answered: a method that is not there has no signature to bind
+    against, and a method that is there can still be called wrongly. Splitting
+    them into two readers would have walked the corpus twice to ask about the
+    same resolved receiver.
+    """
+    if not declares(cls, method) and method not in _assigned_on_self(cls):
+        return f"no such method on {cls.__module__}.{cls.__qualname__}"
+    target = getattr(cls, method, None)
+    if not callable(target) or _unpacks(node):
+        return None
+    try:
+        signature = inspect.signature(target)
+    except (ValueError, TypeError):
+        return None  # unreadable signature: counted nowhere, guessed at never
+    positional, keywords = _arity(node)
+    try:
+        # `self` is bound at the instance, so the recorded call supplies one
+        # fewer positional argument than the unbound function expects.
+        signature.bind(object(), *positional, **keywords)
+    except TypeError as exc:
+        return str(exc)
+    return None
+
+
+def receiver_findings() -> list[str]:
+    """Every documented call on a constructed local that could not be made."""
+    found: list[str] = []
+    for path in documentation_files():
+        for line, receiver, cls, method, node in receiver_sites(path):
+            fault = _receiver_fault(cls, method, node)
+            if fault is not None:
+                found.append(f"{rel(path)}:{line}: {receiver}.{method}() -- {fault}")
+    return found
+
+
+def test_every_documented_method_call_reaches_a_real_method() -> None:
+    """A local whose class the fence names is a receiver we can still check."""
+    broken = receiver_findings()
+    assert not broken, (
+        f"{len(broken)} documented call(s) invoke a method the constructed "
+        "object's class does not have, or pass it arguments that cannot bind, "
+        "so the sample fails partway down a fence whose imports and top-level "
+        "signatures are all correct:\n  "
+        + "\n  ".join(broken)
+        + "\n\nRepoint the call at the method that exists. If the call is not "
+        "meant to resolve, mark the fence with "
+        "<!-- dk-imports: illustrative -- why --> as an import would be."
+    )
+
+
+def test_the_receiver_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity: this reader filters the corpus harder than any above it.
+
+    A fence must import a class from the namespace, construct it into a local
+    bound exactly once, and then call a method on that local. Every count above
+    can sit at its full value while this returns nothing, so it needs a floor
+    of its own. The number is placed below what the tree holds (1,082 when this
+    was last measured) and well above any one document's contribution.
+    """
+    found = sum(len(receiver_sites(path)) for path in documentation_files())
+    assert found > 700, (
+        f"only {found} calls on constructed locals found; the documents that "
+        "build an object and then use it have not gone away, so the likelier "
+        "reading is that ``_constructed`` has stopped binding one of the forms"
+    )
+
+
+def test_a_call_on_a_constructed_local_is_checked(tmp_path: Path) -> None:
+    """The shape this reader was written for, and the corrected form beside it."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_common import Registry\n"
+        "registry = Registry(name='tools')\n"
+        "registry.register('a', 1)\n"
+        "registry.deregister('a')\n"
+        "```\n"
+    )
+    sites = receiver_sites(doc)
+    assert [method for _, _, _, method, _ in sites] == ["register", "deregister"]
+    broken = [method for _, _, cls, method, node in sites if _receiver_fault(cls, method, node)]
+    assert broken == ["deregister"], f"expected the one phantom method, got {broken}"
+
+
+def test_a_local_the_fence_rebinds_is_not_read(tmp_path: Path) -> None:
+    """Assigned twice, the name no longer says what it holds."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_common import Registry\n"
+        "registry = Registry(name='tools')\n"
+        "registry = something_else()\n"
+        "registry.anything_at_all()\n"
+        "```\n"
+    )
+    assert receiver_sites(doc) == [], "a twice-bound local must not be read"
+
+
+def test_an_attribute_the_class_sets_on_self_is_not_read_as_absent() -> None:
+    """A callable stored on the instance is invisible on the class, and real."""
+
+    class Holder:
+        def __init__(self) -> None:
+            self.handler = print
+
+    assert not declares(Holder, "handler"), "the premise of this test has moved"
+    assert "handler" in _assigned_on_self(Holder)
+
+
+def test_an_illustrative_fence_is_not_read_for_receivers(tmp_path: Path) -> None:
+    """The marker covers this reader too, or it covers three quarters of a fence."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "<!-- dk-imports: illustrative -- the API before the rename -->\n"
+        "```python\n"
+        "from dataknobs_common import Registry\n"
+        "registry = Registry(name='tools')\n"
+        "registry.deregister('a')\n"
+        "```\n"
+    )
+    assert receiver_sites(doc) == []
+
+
+def test_receiver_findings_report_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the finding path, as every reader here has one."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_common import Registry\n"
+        "registry = Registry(name='tools')\n"
+        "registry.register('a', 1)\n"
+        "registry.deregister('a')\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = receiver_findings()
+
+    assert len(found) == 1, f"expected the one phantom method, got {found}"
+    assert "sample.md:5" in found[0], f"wrong line reported: {found[0]}"
+
+
+def test_a_method_call_with_a_bad_argument_is_detected(tmp_path: Path) -> None:
+    """The method is real and the call still cannot be made.
+
+    This is the half the existing binding reader structurally cannot reach: it
+    resolves a callable only through an imported name, and ``batch_ops`` is a
+    local. Checking arity here costs one more question of a receiver already
+    resolved.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_common import Registry\n"
+        "registry = Registry(name='tools')\n"
+        "registry.register('a', 1)\n"
+        "registry.register('b', 2, nonexistent_keyword=True)\n"
+        "```\n"
+    )
+    faults = [
+        (method, _receiver_fault(cls, method, node))
+        for _, _, cls, method, node in receiver_sites(doc)
+    ]
+    assert [f for _, f in faults].count(None) == 1, f"the good call must stay quiet: {faults}"
+    bad = [f for _, f in faults if f is not None]
+    assert len(bad) == 1 and "nonexistent_keyword" in bad[0], bad

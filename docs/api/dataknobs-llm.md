@@ -18,14 +18,15 @@ The `dataknobs-llm` package provides a unified interface for working with differ
 ```python
 from dataknobs_llm import create_llm_provider
 
-# Using factory function
-llm = create_llm_provider(
-    provider="openai",
-    model="gpt-4",
-    api_key="your-api-key"
-)
+# The factory takes ONE config argument -- an LLMConfig, a Config, or a plain
+# dict -- and does not accept the config's fields as keywords of its own.
+llm = create_llm_provider({
+    "provider": "openai",
+    "model": "gpt-4",
+    "api_key": "your-api-key",
+})
 
-# Or with config dict
+# Named, if you prefer
 llm = create_llm_provider(config={
     "provider": "anthropic",
     "model": "claude-3-5-sonnet-20241022",
@@ -54,7 +55,7 @@ The primary method is `complete()`, which accepts either a string or a list of `
 from dataknobs_llm import create_llm_provider
 from dataknobs_llm.llm import LLMMessage
 
-llm = create_llm_provider(provider="openai", model="gpt-4")
+llm = create_llm_provider({"provider": "openai", "model": "gpt-4"})
 
 # Simple string completion
 response = await llm.complete("What is the capital of France?")
@@ -167,26 +168,29 @@ from dataknobs_llm.prompts import (
 )
 from pathlib import Path
 
-# Filesystem library - loads prompts from files
+# Filesystem library - loads prompts from files. The parameter is plural and
+# takes a list, because a directory may hold more than one extension.
 fs_library = FileSystemPromptLibrary(
     prompt_dir=Path("prompts/"),
-    file_extension=".txt"
+    file_extensions=[".txt"]
 )
 
-# Config library - loads from config dict
-config_library = ConfigPromptLibrary(config={
-    "prompts": {
-        "greeting": {
-            "system": "You are {{assistant_name}}",
-            "user": "Hello, {{user_name}}!"
-        }
+# Config library - the dict is keyed by prompt TYPE at the top level
+# ("system", "user", "messages", "rag"), then by prompt name.
+config_library = ConfigPromptLibrary({
+    "system": {
+        "greeting": {"template": "You are {{assistant_name}}"}
+    },
+    "user": {
+        "greeting": {"template": "Hello, {{user_name}}!"}
     }
 })
 
-# Composite library - combines multiple libraries
+# Composite library - the LIST ORDER is the priority: the first library
+# holding a prompt wins. `names` only labels them for logging.
 composite = CompositePromptLibrary(
-    libraries=[fs_library, config_library],
-    priority_order=["filesystem", "config"]
+    libraries=[config_library, fs_library],
+    names=["config", "filesystem"]
 )
 
 # Versioned library - supports prompt versioning
@@ -231,47 +235,66 @@ result = builder.render_user_prompt(
 
 **Source:** [`prompts/versioning/`](https://github.com/kbs-labs/dataknobs/blob/main/packages/llm/src/dataknobs_llm/prompts/versioning/)
 
+Both managers are async, and both persist as they go -- so a version is
+created through the manager rather than constructed and then registered.
+`PromptVersion` itself requires a `version_id`, which is exactly what
+`create_version` mints for you.
+
 ```python
 from dataknobs_llm.prompts import (
     VersionManager,
     ABTestManager,
-    PromptVersion,
-    VersionStatus
+    VersionStatus,
 )
+from dataknobs_llm.prompts.versioning.types import PromptVariant
 
 # Version management
 version_manager = VersionManager()
 
-# Create versions
-v1 = PromptVersion(
+# Create versions. `prompt_type` is required alongside the name, because a
+# name is only unique within a type. It is a free-form label, not a checked
+# vocabulary; the library's own accessors look for "system" and "user"
+# (`list_system_prompts` / `list_user_prompts`), and `ConfigPromptLibrary`
+# spells its message section "messages".
+v1 = await version_manager.create_version(
     name="summarize",
+    prompt_type="user",
     version="1.0.0",
     template="Summarize: {{text}}",
-    status=VersionStatus.ACTIVE
+    status=VersionStatus.ACTIVE,
 )
 
-v2 = PromptVersion(
+v2 = await version_manager.create_version(
     name="summarize",
+    prompt_type="user",
     version="2.0.0",
     template="Provide a concise summary:\n\n{{text}}",
-    status=VersionStatus.TESTING
+    # DRAFT | ACTIVE | PRODUCTION | DEPRECATED | ARCHIVED -- a version still
+    # being trialled is a DRAFT; there is no TESTING.
+    status=VersionStatus.DRAFT,
 )
 
-version_manager.register_version(v1)
-version_manager.register_version(v2)
+print(v1.version_id)    # a generated uuid4, not the semantic version
 
 # A/B testing
 ab_manager = ABTestManager()
 
-experiment = ab_manager.create_experiment(
-    name="summary_test",
-    prompt_name="summarize",
-    variants=["1.0.0", "2.0.0"],
-    traffic_split=[0.5, 0.5]  # 50/50 split
+# Variants are PromptVariant objects carrying their own weight, and the
+# experiment is keyed by the prompt's name and type rather than a separate
+# test name. traffic_split is derived from the weights when omitted.
+experiment = await ab_manager.create_experiment(
+    name="summarize",
+    prompt_type="user",
+    variants=[
+        PromptVariant(version="1.0.0", weight=0.5),
+        PromptVariant(version="2.0.0", weight=0.5),
+    ],
 )
+print(experiment.traffic_split)   # {'1.0.0': 0.5, '2.0.0': 0.5}
 
-# Get variant for user
-variant = ab_manager.get_variant("summary_test", user_id="user-123")
+# Get variant for user -- addressed by the minted experiment_id, and sticky:
+# the same user keeps the same variant.
+variant = await ab_manager.get_variant_for_user(experiment.experiment_id, "user-123")
 ```
 
 ## Conversation Management
@@ -363,75 +386,99 @@ pg_storage = DataknobsConversationStorage(pg_backend)
 ```python
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm import create_llm_provider
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 
 # Create LLM provider
-llm = create_llm_provider(provider="openai", model="gpt-4")
+llm = create_llm_provider({"provider": "openai", "model": "gpt-4"})
 
-# Create conversation manager
-manager = ConversationManager(
+# Prompt builder -- `storage` is the one built in the section above
+library = ConfigPromptLibrary({
+    "system": {"assistant": {"template": "You are a helpful {{topic}} assistant."}},
+})
+builder = AsyncPromptBuilder(library=library)
+
+# Create conversation manager. `create()` is async because it loads the
+# conversation if `conversation_id` names one that already exists; the three
+# collaborators -- llm, prompt_builder, storage -- are all required.
+#
+# The system message comes from the prompt library by name rather than as a
+# literal: that is what makes it versionable and parameterised.
+manager = await ConversationManager.create(
     llm=llm,
+    prompt_builder=builder,
     storage=storage,
-    system_message="You are a helpful coding assistant"
+    system_prompt_name="assistant",
+    system_params={"topic": "coding"},
+    conversation_id="conv-123",
 )
 
-# Start or continue conversation
-response = await manager.send_message(
-    conversation_id="conv-123",
-    user_message="How do I use async/await in Python?"
+# A turn is two steps: append the user's message, then complete.
+await manager.add_message(
+    role="user",
+    content="How do I use async/await in Python?",
 )
+response = await manager.complete()
 print(response.content)
 
-# Get conversation history
-messages = await manager.get_history("conv-123")
+# Get conversation history -- the manager holds one conversation, so this
+# takes no id. It answers LLMMessage objects along the current branch.
+messages = await manager.get_history()
+print([m.role for m in messages])   # ['system', 'user', 'assistant']
 ```
 
 ## Tools and Function Calling
 
 **Source:** [`tools/base.py`](https://github.com/kbs-labs/dataknobs/blob/main/packages/llm/src/dataknobs_llm/tools/base.py)
 
+`Tool` is abstract: a tool is a subclass supplying a `schema` property and an
+async `execute`, with the name and description passed up to `super().__init__`.
+There is no function-wrapping constructor -- the callable IS `execute`.
+
 ```python
-from dataknobs_llm.tools import Tool, ToolRegistry
+from typing import Any, Dict
 
-# Define a tool function
-def get_weather(location: str, unit: str = "celsius") -> dict:
-    """Get the current weather for a location.
+from dataknobs_llm.tools import Tool
 
-    Args:
-        location: City name
-        unit: Temperature unit (celsius or fahrenheit)
 
-    Returns:
-        Weather information dictionary
-    """
-    # Implementation would call weather API
-    return {
-        "location": location,
-        "temperature": 22,
-        "unit": unit,
-        "conditions": "Sunny"
-    }
+class WeatherTool(Tool):
+    """Get the current weather for a location."""
 
-# Create tool
-weather_tool = Tool(
-    name="get_weather",
-    description="Get current weather for a location",
-    func=get_weather,
-    parameters={
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "City name"
+    def __init__(self) -> None:
+        super().__init__(
+            name="get_weather",
+            description="Get current weather for a location",
+        )
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        """JSON Schema for the parameters -- what `parameters` would have been."""
+        return {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "City name"},
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "Temperature unit",
+                },
             },
-            "unit": {
-                "type": "string",
-                "enum": ["celsius", "fahrenheit"],
-                "description": "Temperature unit"
-            }
-        },
-        "required": ["location"]
-    }
-)
+            "required": ["location"],
+        }
+
+    async def execute(self, location: str, unit: str = "celsius") -> dict:
+        # Implementation would call a weather API
+        return {
+            "location": location,
+            "temperature": 22,
+            "unit": unit,
+            "conditions": "Sunny",
+        }
+
+
+weather_tool = WeatherTool()
+
+# The provider wire format is derived from the schema, not hand-written.
+print(weather_tool.to_function_definition()["name"])   # get_weather
 
 # Use with LLM (provider-specific implementation)
 # Note: Tool calling syntax varies by provider
@@ -444,34 +491,54 @@ response = await llm.complete(
 ### ToolRegistry
 
 ```python
-from dataknobs_llm.tools import ToolRegistry
+from typing import Any, Dict
+
+from dataknobs_llm.tools import Tool, ToolRegistry
+
+
+class CalculateTool(Tool):
+    def __init__(self) -> None:
+        super().__init__(
+            name="calculate",
+            description="Evaluate mathematical expressions",
+        )
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Math expression to evaluate",
+                }
+            },
+            "required": ["expression"],
+        }
+
+    async def execute(self, expression: str) -> float:
+        # A real implementation parses rather than eval()s.
+        return float(expression)
+
 
 # Create registry
 registry = ToolRegistry()
 
-# Register tools
-registry.register(weather_tool)
-registry.register(Tool(
-    name="calculate",
-    description="Evaluate mathematical expressions",
-    func=lambda expr: eval(expr),
-    parameters={
-        "type": "object",
-        "properties": {
-            "expression": {
-                "type": "string",
-                "description": "Math expression to evaluate"
-            }
-        },
-        "required": ["expression"]
-    }
-))
+# Register tools. `register_tool` takes the tool alone and reads its name;
+# the generic `register(key, item)` inherited from Registry wants both.
+registry.register_tool(weather_tool)
+registry.register_tool(CalculateTool())
 
-# Get tool by name
-tool = registry.get("get_weather")
+# Get tool by name -- `get_tool`, again the tool-aware form of `get(key)`.
+tool = registry.get_tool("get_weather")
 
 # List all tools
 all_tools = registry.list_tools()
+print(registry.get_tool_names())        # ['get_weather', 'calculate']
+
+# The registry also runs them, which is what the provider loop calls.
+result = await registry.execute_tool("get_weather", location="Paris")
+print(result["conditions"])             # Sunny
 ```
 
 ## Full Example
@@ -484,7 +551,7 @@ from pathlib import Path
 from dataknobs_llm import create_llm_provider
 from dataknobs_llm.llm import LLMMessage
 from dataknobs_llm.prompts import (
-    PromptBuilder,
+    AsyncPromptBuilder,
     FileSystemPromptLibrary,
     DictResourceAdapter
 )
@@ -501,11 +568,11 @@ from dataknobs_data.backends import AsyncMemoryDatabase
 
 async def main():
     # Setup LLM provider
-    llm = create_llm_provider(
-        provider="openai",
-        model="gpt-4",
-        temperature=0.7
-    )
+    llm = create_llm_provider({
+        "provider": "openai",
+        "model": "gpt-4",
+        "temperature": 0.7,
+    })
 
     # Setup prompt system
     prompt_library = FileSystemPromptLibrary(
@@ -517,7 +584,9 @@ async def main():
         "version": "1.0"
     })
 
-    prompt_builder = PromptBuilder(
+    # ConversationManager takes the ASYNC builder; PromptBuilder is its
+    # synchronous twin, for code that is not on an event loop.
+    prompt_builder = AsyncPromptBuilder(
         library=prompt_library,
         adapters={'config': config_adapter}
     )
@@ -526,52 +595,57 @@ async def main():
     backend = AsyncMemoryDatabase()
     storage = DataknobsConversationStorage(backend)
 
-    # Define tools
-    def search_docs(query: str) -> str:
-        """Search documentation."""
-        return f"Documentation results for: {query}"
+    # Define tools -- each is a Tool subclass; the schema is a property and
+    # the body goes in the async execute().
+    class SearchDocsTool(Tool):
+        def __init__(self) -> None:
+            super().__init__(name="search_docs", description="Search documentation")
 
-    def run_code(code: str, language: str = "python") -> dict:
-        """Execute code safely."""
-        return {"output": "Code executed successfully", "language": language}
-
-    tools = [
-        Tool(
-            name="search_docs",
-            description="Search documentation",
-            func=search_docs,
-            parameters={
+        @property
+        def schema(self) -> dict:
+            return {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query"}
                 },
-                "required": ["query"]
+                "required": ["query"],
             }
-        ),
-        Tool(
-            name="run_code",
-            description="Execute code",
-            func=run_code,
-            parameters={
+
+        async def execute(self, query: str) -> str:
+            return f"Documentation results for: {query}"
+
+    class RunCodeTool(Tool):
+        def __init__(self) -> None:
+            super().__init__(name="run_code", description="Execute code")
+
+        @property
+        def schema(self) -> dict:
+            return {
                 "type": "object",
                 "properties": {
                     "code": {"type": "string", "description": "Code to execute"},
-                    "language": {"type": "string", "description": "Programming language"}
+                    "language": {
+                        "type": "string",
+                        "description": "Programming language",
+                    },
                 },
-                "required": ["code"]
+                "required": ["code"],
             }
-        )
-    ]
 
-    # Create conversation manager
-    manager = ConversationManager(
+        async def execute(self, code: str, language: str = "python") -> dict:
+            return {"output": "Code executed successfully", "language": language}
+
+    tools = [SearchDocsTool(), RunCodeTool()]
+
+    # Create conversation manager. The system message is a named prompt from
+    # the library, not a literal keyword.
+    manager = await ConversationManager.create(
         llm=llm,
+        prompt_builder=prompt_builder,
         storage=storage,
-        system_message="You are a helpful coding assistant with access to documentation and code execution."
+        system_prompt_name="coding_assistant",
+        conversation_id="coding-session-001",
     )
-
-    # Interactive conversation
-    conversation_id = "coding-session-001"
 
     print("Coding Assistant (type 'quit' to exit)")
     print("-" * 50)
@@ -581,11 +655,9 @@ async def main():
         if user_input.lower() == "quit":
             break
 
-        # Send message with tools
-        response = await manager.send_message(
-            conversation_id=conversation_id,
-            user_message=user_input
-        )
+        # A turn is append-then-complete; tools are passed to complete()
+        await manager.add_message(role="user", content=user_input)
+        response = await manager.complete(tools=tools)
 
         print(f"\nAssistant: {response.content}")
 
@@ -595,9 +667,10 @@ async def main():
 
     # Save final conversation state
     print("\nSaving conversation...")
-    conversation_state = await storage.load_conversation(conversation_id)
+    conversation_state = await storage.load_conversation(manager.conversation_id)
     if conversation_state:
-        print(f"Conversation saved with {len(conversation_state.message_tree)} messages")
+        # The state holds a tree; get_all_nodes() flattens it.
+        print(f"Conversation saved with {len(conversation_state.get_all_nodes())} messages")
 
 
 if __name__ == "__main__":
@@ -613,7 +686,7 @@ Resource adapters provide data for prompt variable substitution:
 ```python
 from dataknobs_llm.prompts import (
     DictResourceAdapter,
-    DataknobsBackendAdapter,
+    AsyncDataknobsBackendAdapter,
     InMemoryAdapter
 )
 from dataknobs_data.backends import AsyncMemoryDatabase
@@ -624,17 +697,23 @@ dict_adapter = DictResourceAdapter({
     "key2": "value2"
 })
 
-# Dataknobs backend adapter (async)
+# Dataknobs backend adapter. The parameter is `database`, and there are two
+# classes rather than one flag: the async adapter takes an AsyncDatabase, the
+# sync DataknobsBackendAdapter takes a SyncDatabase.
 backend = AsyncMemoryDatabase()
-backend_adapter = DataknobsBackendAdapter(
-    backend=backend,
-    collection="config"
+backend_adapter = AsyncDataknobsBackendAdapter(
+    database=backend,
+    text_field="content",
 )
 
-# In-memory adapter with search
-memory_adapter = InMemoryAdapter()
-await memory_adapter.set("setting1", "value1")
-value = await memory_adapter.get("setting1")
+# In-memory adapter -- its contents are fixed at construction; it is a source
+# for templates to read, not a store to write into.
+memory_adapter = InMemoryAdapter(
+    data={"setting1": "value1"},
+    search_results=[{"content": "a document the template can cite"}],
+)
+value = memory_adapter.get_value("setting1")   # 'value1'
+hits = memory_adapter.search("anything", k=1)
 ```
 
 ### Conversation Middleware

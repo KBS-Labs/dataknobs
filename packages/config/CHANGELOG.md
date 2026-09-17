@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`use_env` is a declared parameter, and `from_file`/`from_dict` forward it.**
+  The switch that decides whether `DATAKNOBS_`-prefixed environment values
+  reach configuration was read as `kwargs.get("use_env", True)`, so it existed
+  only on `__init__` — the documented classmethods could not decline the
+  environment at all — and every misspelling was absorbed by `**kwargs`,
+  leaving the overrides silently on. It is now a keyword parameter on the
+  constructor and both classmethods, so opting out works through the
+  documented door and a typo raises `TypeError` rather than failing open.
+  `**kwargs` is gone from `Config.__init__`; nothing else was ever read from
+  it, so a call passing anything else was already a no-op and is now an error.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

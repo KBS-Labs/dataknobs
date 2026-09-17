@@ -170,12 +170,14 @@ Write processed data to files:
 ```python
 from dataknobs_fsm.streaming.file_stream import FileStreamSink
 
-# Create file sink
+# Create file sink. Overwrite vs append is a bool, not a mode string, and
+# both format and compression are detected from the suffix when omitted.
 sink = FileStreamSink(
     file_path="output.jsonl",
-    format=FileFormat.JSONL,
-    mode="w",  # Write mode (w, a)
-    encoding="utf-8"
+    format=FileFormat.JSONL,   # optional -- ".jsonl" would have said so
+    append=False,              # True to add to an existing file
+    encoding="utf-8",
+    atomic=True,               # write to a .tmp and rename (ignored if append)
 )
 
 # Write chunks
@@ -443,17 +445,21 @@ processor = FileProcessor(config)
 Stream database records:
 
 ```python
+import asyncio
+
 from dataknobs_fsm.patterns.etl import DatabaseETL
 
-# ETL with streaming
+# ETL with streaming. The batch size is `batch_size` -- an unknown keyword is
+# absorbed by the pattern's **kwargs and silently dropped, so a misspelling
+# runs at the default rather than failing.
 etl = DatabaseETL(
     source_db=source_connection,
     target_db=target_connection,
-    chunk_size=10000
+    batch_size=10000,
 )
 
-# Streams from source to target
-etl.process()
+# Streams from source to target. `run` is a coroutine.
+result = asyncio.run(etl.run())
 ```
 
 ## Complete Examples

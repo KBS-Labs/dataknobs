@@ -137,13 +137,18 @@ from dataknobs_xization.masking_tokenizer import TextFeatures
 # Text normalization
 normalized = normalize.basic_normalization_fn("Hello, World!")
 
-# Character/token features, with camel-case splitting
+# Character/token features, with camel-case splitting. Tokenizing goes
+# through TextFeatures itself -- there is no separate tokenizer object.
 features = TextFeatures("getUserName")
-tokens = tokenizer.tokenize("This is a sample text.")
+tokens = [token.token_text for token in features.get_tokens()]
+# ['get', 'User', 'Name']
 
-# Working with annotations
-from dataknobs_xization import annotations
-doc = annotations.create_document("Sample text", {"metadata": "value"})
+# Working with annotations. The document type is AnnotatedText, and its
+# metadata is a TextMetaData whose first argument is the id.
+from dataknobs_structures import TextMetaData
+from dataknobs_xization.annotations import AnnotatedText
+
+doc = AnnotatedText("Sample text", TextMetaData("doc1", source="value"))
 ```
 
 ## Dependencies

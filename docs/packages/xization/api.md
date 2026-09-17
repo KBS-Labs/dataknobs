@@ -498,7 +498,7 @@ class TextProcessingPipeline:
             'digit_ratio': cdf['is_digit'].mean()
         }
     
-    def process_documents(self, documents: List[dk_doc.Document]) -> List[dict]:
+    def process_documents(self, documents: List[dk_doc.Text]) -> List[dict]:
         """Process multiple documents."""
         results = []
         for doc in documents:
@@ -534,9 +534,11 @@ print(f"Variations: {len(result['variations'])}")
 print(f"Character analysis: {result['character_analysis']}")
 
 # Process documents
+# The class is Text, and the id belongs to its metadata rather than to a
+# keyword on the constructor.
 documents = [
-    dk_doc.Document("JavaScript & Node.js development", text_id="doc1"),
-    dk_doc.Document("Python (programming language) tutorial", text_id="doc2")
+    dk_doc.Text("JavaScript & Node.js development", dk_doc.TextMetaData("doc1")),
+    dk_doc.Text("Python (programming language) tutorial", dk_doc.TextMetaData("doc2")),
 ]
 
 doc_results = pipeline.process_documents(documents)
@@ -679,7 +681,7 @@ from dataknobs_structures import Tree, document as dk_doc
 from dataknobs_utils import elasticsearch_utils, file_utils
 
 def build_normalized_search_index(
-    documents: List[dk_doc.Document],
+    documents: List[dk_doc.Text],
     index_name: str
 ) -> elasticsearch_utils.ElasticsearchIndex:
     """Build search index with normalized and varied text."""
@@ -751,9 +753,9 @@ def build_normalized_search_index(
 
 # Usage
 documents = [
-    dk_doc.Document("JavaScript & Node.js Development", text_id="tech1"),
-    dk_doc.Document("Machine Learning (ML) Algorithms", text_id="ai1"),
-    dk_doc.Document("Data Science with Python/R", text_id="data1")
+    dk_doc.Text("JavaScript & Node.js Development", dk_doc.TextMetaData("tech1")),
+    dk_doc.Text("Machine Learning (ML) Algorithms", dk_doc.TextMetaData("ai1")),
+    dk_doc.Text("Data Science with Python/R", dk_doc.TextMetaData("data1")),
 ]
 
 search_index = build_normalized_search_index(documents, "normalized_docs")

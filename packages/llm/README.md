@@ -59,15 +59,46 @@ print(result.content)
 
 ### Conversation Management
 
+A manager needs three collaborators -- a provider, a prompt builder and a
+storage backend -- and is built through the async `create()` rather than the
+constructor, so that it can load an existing conversation by id:
+
 ```python
-from dataknobs_llm.conversations import ConversationManager
+import asyncio
 
-manager = ConversationManager(conversation_id="demo")
-manager.add_message(role="user", content="Hello!")
-manager.add_message(role="assistant", content="Hi there!")
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_llm import EchoProvider, LLMConfig
+from dataknobs_llm.conversations import (
+    ConversationManager,
+    DataknobsConversationStorage,
+)
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
 
-# Get conversation history
-history = manager.get_conversation_history()
+
+async def main():
+    # EchoProvider stands in for a real provider here; swap in any other.
+    llm = EchoProvider(LLMConfig(provider="echo", model="echo-model"))
+    builder = AsyncPromptBuilder(library=ConfigPromptLibrary())
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        conversation_id="demo",
+    )
+
+    # add_message is async, and answers the node it appended.
+    await manager.add_message(role="user", content="Hello!")
+    await manager.add_message(role="assistant", content="Hi there!")
+
+    # get_history() answers LLMMessage objects along the current branch.
+    history = await manager.get_history()
+    print([(m.role, m.content) for m in history])
+    # [('user', 'Hello!'), ('assistant', 'Hi there!')]
+
+
+asyncio.run(main())
 ```
 
 ## FSM Integration

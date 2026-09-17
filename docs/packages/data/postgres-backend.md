@@ -94,17 +94,34 @@ own both the records table and the embeddings table.
 
 ### Connection Pooling
 
+Pooling is not something you assemble and hand in. The async backend keeps a
+pool per event loop, created on demand and shared by config, and the sync
+backend holds a single connection -- so both take only the config, and the
+pool bounds are fields of it:
+
 ```python
-from dataknobs_data.backends.postgres import SyncPostgresDatabase
-from dataknobs_data.pooling import ConnectionPoolManager
+from dataknobs_data.backends.postgres import (
+    AsyncPostgresDatabase,
+    PostgresDatabaseConfig,
+    SyncPostgresDatabase,
+)
 
-# With connection pooling
-pool = ConnectionPoolManager(config)
-db = SyncPostgresDatabase(config, pool=pool)
+config = PostgresDatabaseConfig(
+    host="localhost",
+    database="mydb",
+    min_pool_size=2,      # async only -- inert on the sync backend
+    max_pool_size=10,
+)
 
-# Automatic connection management
+# Async: pooled per event loop, automatically
+db = AsyncPostgresDatabase(config)
+
+# Sync: one connection, managed by the backend
+db = SyncPostgresDatabase(config)
+
+# Automatic connection management either way
 record = Record({"name": "Alice"})
-db.create(record)  # Gets connection from pool
+db.create(record)
 ```
 
 ### Advanced Queries

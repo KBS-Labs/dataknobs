@@ -145,9 +145,10 @@ birds.add_child("sparrows")
 leaf_categories = taxonomy.collect_terminal_nodes()
 # Returns: [dogs, cats, eagles, sparrows]
 
-# Get path to a category
+# Get path to a category. `get_path` walks up from the node it is called on,
+# so it is asked of the node, not of the tree.
 dogs = taxonomy.find_nodes(lambda n: n.data == "dogs", only_first=True)[0]
-path = taxonomy.get_path(dogs)
+path = dogs.get_path()
 # Returns: [living_things, animals, mammals, dogs]
 ```
 

@@ -21,16 +21,25 @@ pip install dataknobs-structures
 from dataknobs_structures import Tree
 from dataknobs_structures import Text, TextMetaData
 
-# Create a tree structure
-tree = Tree()
-tree.add_node("root", "Root Node")
-tree.add_node("child1", "Child 1", parent="root")
+# A node IS the tree: there is no container to create, and the root is simply
+# the node with no parent. `add_child` takes the data and returns the new node.
+tree = Tree("Root Node")
+child = tree.add_child("Child 1")
 
-# Create a document
+print(tree.as_string())      # (Root Node Child 1)
+print(child.parent.data)     # Root Node
+print(tree.num_children)     # 1
+
+# Create a document. text_id is required and comes first; anything else is
+# kept as free-form metadata and read back through get_value.
 doc = Text(
     "Sample document content",
-    TextMetaData(text_id="doc_001", author="John Doe", date="2024-01-01"),
+    TextMetaData("doc_001", author="John Doe", date="2024-01-01"),
 )
+
+print(doc.text)                              # Sample document content
+print(doc.text_id)                           # doc_001
+print(doc.metadata.get_value("author"))      # John Doe
 ```
 
 ## License

@@ -286,33 +286,34 @@ class EnvironmentConfig:
         
         env = environment or self.environment
         logger.info(f"Loading configuration for environment: {env}")
-        
-        # Start with base configuration
-        config = Config.from_file(self.config_dir / "base.yaml")
-        
-        # Merge environment-specific configuration
+
+        # Collect every source in precedence order. `Config` takes them all at
+        # once, which matters: environment overrides are applied after the last
+        # source is loaded, so building from one file and adding the rest later
+        # would apply them against a half-built config.
+        sources = [self.config_dir / "base.yaml"]
+
         env_file = self.config_dir / f"{env}.yaml"
         if env_file.exists():
-            config.merge_file(str(env_file))
-            logger.info(f"Merged environment config: {env_file}")
-        
-        # Merge secrets if they exist
+            sources.append(env_file)
+            logger.info(f"Including environment config: {env_file}")
+
         if include_secrets:
             secrets_file = self.config_dir / "secrets" / f"{env}.yaml"
             if secrets_file.exists():
-                config.merge_file(str(secrets_file))
-                logger.info(f"Merged secrets: {secrets_file}")
-        
-        # Merge local overrides (for development)
+                sources.append(secrets_file)
+                logger.info(f"Including secrets: {secrets_file}")
+
         if include_local and env == "development":
             local_file = self.config_dir / "local.yaml"
             if local_file.exists():
-                config.merge_file(str(local_file))
-                logger.info(f"Merged local overrides: {local_file}")
-        
-        # Apply environment variable overrides
-        config.apply_env_overrides()
-        
+                sources.append(local_file)
+                logger.info(f"Including local overrides: {local_file}")
+
+        # Environment variable overrides are applied here, automatically --
+        # there is no apply_env_overrides() to call afterwards.
+        config = Config(*sources)
+
         # Validate configuration
         self._validate_config(config, env)
         

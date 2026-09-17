@@ -19,12 +19,19 @@ The `AdvancedFSM` class provides advanced execution control features for FSM wor
 ```python
 from dataknobs_fsm import AdvancedFSM, ExecutionMode, FSM
 
-# Create from FSM instance
+# The first parameter is `config`, and it takes any of the four: an FSM
+# instance, a path, or a config dict.
 fsm_instance = FSM(...)
 advanced_fsm = AdvancedFSM(
-    fsm=fsm_instance,
+    fsm_instance,
     execution_mode=ExecutionMode.STEP_BY_STEP,
     custom_functions={'my_func': my_function}
+)
+
+# Equivalently, straight from a file
+advanced_fsm = AdvancedFSM(
+    "path/to/config.yaml",
+    execution_mode=ExecutionMode.STEP_BY_STEP,
 )
 
 # Or use factory function

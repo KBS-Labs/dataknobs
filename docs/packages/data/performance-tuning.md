@@ -549,10 +549,11 @@ DuckDB performs best with larger batch sizes:
 ```python
 from dataknobs_data.streaming import StreamConfig
 
-# Optimal for DuckDB - larger batches
+# Optimal for DuckDB - larger batches. There is no `parallel` switch;
+# `prefetch` is the concurrency knob, and it counts batches read ahead.
 duckdb_config = StreamConfig(
     batch_size=10000,  # Larger batches for columnar storage
-    parallel=True
+    prefetch=4,
 )
 
 # Stream write with optimized batching

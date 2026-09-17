@@ -423,12 +423,13 @@ def safe_stream_processor(json_file):
 ```python
 from dataknobs_utils.json_utils import JsonSchemaBuilder
 
-# Configure processing limits
+# Configure processing. `keep_unique_values` is a switch, not a cap -- there
+# is no per-path limit on how many uniques are retained.
 builder = JsonSchemaBuilder(
     json_data="data.json",
-    keep_unique_values=1000,    # Limit unique value tracking
+    keep_unique_values=True,    # track the values seen at each path
+    invert_uniques=False,       # ...and, optionally, index value -> paths
     timeout=60,                 # 60 second timeout for URLs
-    values_limit=500           # Stop after 500 unique values per path
 )
 ```
 

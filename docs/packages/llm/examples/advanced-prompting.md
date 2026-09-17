@@ -473,6 +473,7 @@ from dataknobs_llm.conversations import ConversationManager
 manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
+    storage=storage,
     cache_rag_results=True,      # Cache RAG metadata
     reuse_rag_on_branch=True     # Reuse when branching
 )

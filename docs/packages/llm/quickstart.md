@@ -39,20 +39,27 @@ included.
 ```python
 from dataknobs_llm import create_llm_provider, LLMConfig
 
+# `provider` and `model` are both required and both positional-capable; every
+# other field has a default.
+
+# Ollama, running locally -- no API key
+config = LLMConfig(provider="ollama", model="llama3.2")
+llm = create_llm_provider(config)
+
 # OpenAI
-config = LLMConfig(provider="openai", api_key="your-api-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-api-key")
 llm = create_llm_provider(config)
 
 # Anthropic
-config = LLMConfig(provider="anthropic", api_key="your-api-key")
+config = LLMConfig(provider="anthropic", model="claude-sonnet-5", api_key="your-api-key")
 llm = create_llm_provider(config)
 
-# With custom configuration
+# Tuning is optional on top of those two
 config = LLMConfig(
     provider="openai",
-    api_key="your-api-key",
     model="gpt-4",
-    temperature=0.7
+    api_key="your-api-key",
+    temperature=0.7,
 )
 llm = create_llm_provider(config)
 ```
@@ -157,10 +164,12 @@ Then use resource adapters to provide the data:
 from dataknobs_llm.prompts import InMemoryAdapter
 
 # Create resource adapter with documents
+# search() answers these back whatever the query is; `content` is the field the
+# prompt template receives, and anything else belongs under `metadata`.
 adapter = InMemoryAdapter(
-    documents=[
-        {"id": "1", "content": "Python is a programming language"},
-        {"id": "2", "content": "Python supports decorators"}
+    search_results=[
+        {"content": "Python is a programming language", "metadata": {"id": "1"}},
+        {"content": "Python supports decorators", "metadata": {"id": "2"}},
     ]
 )
 
@@ -297,7 +306,7 @@ pip install dataknobs-llm[openai]
 ```python
 from dataknobs_llm import create_llm_provider, LLMConfig
 
-config = LLMConfig(provider="openai", api_key="your-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
 llm = create_llm_provider(config)
 ```
 

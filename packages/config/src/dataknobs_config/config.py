@@ -45,7 +45,7 @@ class Config:
         self,
         *sources: Union[str, Path, dict],
         allow_reference_outside_config_root: bool = False,
-        **kwargs: Any,
+        use_env: bool = True,
     ) -> None:
         """Initialize a Config object from one or more sources.
 
@@ -57,7 +57,12 @@ class Config:
                 default. A caller argument rather than a ``settings:`` key
                 because config content is the plane the guard bounds — see
                 :meth:`_load_referenced_file`.
-            **kwargs: Additional keyword arguments
+            use_env: Apply ``DATAKNOBS_``-prefixed environment overrides once
+                every source is loaded. On by default; pass ``False`` to build
+                from the files alone. Declared rather than read out of
+                ``**kwargs`` so that a misspelling raises ``TypeError`` instead
+                of silently leaving the overrides on — this switch gates
+                environment values reaching configuration, so it fails closed.
         """
         self._allow_reference_outside_config_root = allow_reference_outside_config_root
         self._data: Dict[str, List[Dict[str, Any]]] = {}
@@ -72,18 +77,23 @@ class Config:
             self.load(source)
 
         # Apply environment overrides if enabled
-        if kwargs.get("use_env", True):
+        if use_env:
             self._apply_environment_overrides()
 
     @classmethod
     def from_file(
-        cls, path: Union[str, Path], *, allow_reference_outside_config_root: bool = False
+        cls,
+        path: Union[str, Path],
+        *,
+        allow_reference_outside_config_root: bool = False,
+        use_env: bool = True,
     ) -> "Config":
         """Create a Config object from a file.
 
         Args:
             path: Path to configuration file (YAML or JSON)
             allow_reference_outside_config_root: As :meth:`__init__` takes it.
+            use_env: As :meth:`__init__` takes it.
 
         Returns:
             Config object
@@ -91,17 +101,23 @@ class Config:
         return cls(
             path,
             allow_reference_outside_config_root=allow_reference_outside_config_root,
+            use_env=use_env,
         )
 
     @classmethod
     def from_dict(
-        cls, data: dict, *, allow_reference_outside_config_root: bool = False
+        cls,
+        data: dict,
+        *,
+        allow_reference_outside_config_root: bool = False,
+        use_env: bool = True,
     ) -> "Config":
         """Create a Config object from a dictionary.
 
         Args:
             data: Configuration dictionary
             allow_reference_outside_config_root: As :meth:`__init__` takes it.
+            use_env: As :meth:`__init__` takes it.
 
         Returns:
             Config object
@@ -109,6 +125,7 @@ class Config:
         return cls(
             data,
             allow_reference_outside_config_root=allow_reference_outside_config_root,
+            use_env=use_env,
         )
 
     def load(self, source: Union[str, Path, dict]) -> None:

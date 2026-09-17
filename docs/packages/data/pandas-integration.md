@@ -43,10 +43,10 @@ from dataknobs_data.pandas import ConversionOptions, MetadataStrategy
 
 options = ConversionOptions(
     preserve_types=True,           # Maintain field types
-    include_metadata=True,          # Include metadata columns
-    metadata_strategy=MetadataStrategy.SEPARATE,  # How to handle metadata
+    include_metadata=True,         # Carry record metadata into the frame
+    metadata_strategy=MetadataStrategy.ATTRS,  # ATTRS | COLUMNS | MULTI_INDEX | NONE
     flatten_nested=True,           # Flatten nested structures
-    parse_json=True,               # Parse JSON fields
+    flatten_json=True,             # Flatten JSON fields
     datetime_format="%Y-%m-%d",    # Date format
     null_handling="preserve"       # How to handle nulls
 )
@@ -134,32 +134,52 @@ converter = DataFrameConverter(type_converter=CustomTypeConverter())
 
 ### Metadata Strategies
 
-Different strategies for handling record metadata:
+`include_metadata` is what decides whether metadata travels with the frame.
+The converter carries it in a single `_metadata` column of dicts, and uses the
+record ids as the frame's index:
 
 ```python
-from dataknobs_data.pandas import MetadataStrategy
+from dataknobs_data import Record
+from dataknobs_data.pandas import ConversionOptions, DataFrameConverter
 
-# Strategy 1: Include metadata as columns
-options = ConversionOptions(
-    metadata_strategy=MetadataStrategy.COLUMNS
-)
-df = converter.records_to_dataframe(records, options=options)
-# DataFrame includes: _id, _metadata_created, _metadata_updated, etc.
+converter = DataFrameConverter()
+records = [
+    Record({"name": "alice", "score": 100}, metadata={"source": "a"}, id="r1"),
+    Record({"name": "bob", "score": 95}, metadata={"source": "b"}, id="r2"),
+]
 
-# Strategy 2: Separate metadata DataFrame
-options = ConversionOptions(
-    metadata_strategy=MetadataStrategy.SEPARATE
+df = converter.records_to_dataframe(
+    records, options=ConversionOptions(include_metadata=True)
 )
-df, metadata_df = converter.records_to_dataframe(records, options=options)
-# df: Contains only field data
-# metadata_df: Contains record IDs and metadata
+print(list(df.columns))            # ['name', 'score', '_metadata']
+print(list(df.index))              # ['r1', 'r2']
+print(df["_metadata"].iloc[0])     # {'source': 'a'}
 
-# Strategy 3: Ignore metadata
-options = ConversionOptions(
-    metadata_strategy=MetadataStrategy.IGNORE
-)
-df = converter.records_to_dataframe(records, options=options)
-# DataFrame contains only field values
+# Left off, the frame carries the fields alone.
+plain = converter.records_to_dataframe(records)
+print(list(plain.columns))         # ['name', 'score']
+```
+
+!!! warning "`metadata_strategy` is not honoured by this converter"
+
+    `ConversionOptions.metadata_strategy` names four placements — `ATTRS`,
+    `COLUMNS`, `MULTI_INDEX` and `NONE` — but `records_to_dataframe` writes the
+    `_metadata` column regardless of which one is set. The four are implemented
+    in `MetadataHandler`, which the converter does not call. Until that is
+    reconciled, treat the option as inert here and reach for `MetadataHandler`
+    directly if you need a particular placement.
+
+```python
+from dataknobs_data.pandas import MetadataHandler
+from dataknobs_data.pandas.metadata import MetadataConfig, MetadataStrategy
+
+handler = MetadataHandler(MetadataConfig(strategy=MetadataStrategy.ATTRS))
+frame = converter.records_to_dataframe(records)
+extracted = handler.extract_metadata_from_records(records)
+frame = handler.apply_metadata_to_dataframe(frame, extracted)
+
+print(list(frame.columns))              # ['name', 'score']
+print("record_metadata" in frame.attrs)  # True
 ```
 
 ### ID Preservation
@@ -184,24 +204,24 @@ for record in records:
 Efficiently insert DataFrame data into database:
 
 ```python
-from dataknobs_data.pandas import BatchOperations
+from dataknobs_data.pandas import BatchConfig, BatchOperations
 
 # Create batch operations handler
 batch_ops = BatchOperations(database)
 
-# Bulk insert from DataFrame
+# Bulk insert from DataFrame. Every batch knob lives on BatchConfig; there is
+# no schema-validation flag here.
 df = pd.read_csv("large_dataset.csv")
 result = batch_ops.bulk_insert_dataframe(
     df,
-    batch_size=1000,
-    parallel=True,
-    validate=True  # Validate against schema
+    config=BatchConfig(chunk_size=1000, parallel=True),
 )
 
-print(f"Inserted: {result.successful}")
-print(f"Failed: {result.failed}")
-if result.errors:
-    print("Errors:", result.errors)
+# Statistics come back as a dict, not an object
+print(f"Inserted: {result['inserted']}")
+print(f"Failed: {result['failed']}")
+if result["errors"]:
+    print("Errors:", result["errors"])
 ```
 
 ### Bulk Update
