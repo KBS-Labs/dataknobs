@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-17T13:50:35Z",
+  "timestamp": "2026-09-17T15:23:36Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-sync-adapter-stops-raising-on-the-loop-it-is-called-from",
-  "git_commit": "ce0a6223feda07ab338e182258197dea4f8ad525",
+  "git_branch": "sbk/one-shape-for-the-sync-bridge-wrappers",
+  "git_commit": "893215d1c41f461b81328476012c82c2cdeed4e6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
