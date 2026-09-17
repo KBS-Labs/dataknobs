@@ -7,8 +7,8 @@ import pytest
 
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline, StreamProgress
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import State
+from dataknobs_fsm.config.builder import FSMBuilder
+from dataknobs_fsm.config.schema import ArcConfig, FSMConfig, NetworkConfig, StateConfig
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig, IStreamSource, IStreamSink
@@ -131,28 +131,38 @@ class TestStreamExecutorReal:
     """Test suite for StreamExecutor with real FSM."""
 
     def create_test_fsm(self, with_functions: bool = True) -> FSM:
-        """Create a real FSM for testing."""
-        fsm = FSM(name="test_stream_fsm")
+        """Create a real FSM for testing.
 
-        # Create network
-        network = StateNetwork(name="main")
+        Built through ``FSMBuilder`` rather than by hand from ``State`` +
+        ``StateNetwork.add_arc``. The hand-built form produces an FSM the
+        async engine cannot execute: it reads a state's transitions from
+        ``state.outgoing_arcs``, which ``StateNetwork.add_arc`` does not
+        populate (it indexes arcs on the network) and which ``State`` does not
+        define at all --- only ``StateDefinition`` does. Executing one fails
+        with ``'State' object has no attribute 'outgoing_arcs'``, identically
+        from ``FSM.execute``, ``BatchExecutor`` and here.
 
-        # Create states
-        start_state = State(name="start", type="start")
-        process_state = State(name="process", type="normal")
-        end_state = State(name="end", type="end")
-
-        # Add states to network
-        network.add_state(start_state, initial=True)
-        network.add_state(process_state)
-        network.add_state(end_state, final=True)
-
-        # Add arcs
-        network.add_arc("start", "process")
-        network.add_arc("process", "end")
-
-        # Add network to FSM
-        fsm.add_network(network)
+        That was invisible while ``StreamExecutor`` resolved its main network
+        by the *FSM's* name, found none, and passed every record through
+        without running the FSM at all.
+        """
+        config = FSMConfig(
+            name="test_stream_fsm",
+            main_network="main",
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[
+                        StateConfig(
+                            name="start", is_start=True, arcs=[ArcConfig(target="process")]
+                        ),
+                        StateConfig(name="process", arcs=[ArcConfig(target="end")]),
+                        StateConfig(name="end", is_end=True),
+                    ],
+                )
+            ],
+        )
+        fsm = FSMBuilder().build(config)
 
         # Add function manager with functions if requested
         if with_functions:
