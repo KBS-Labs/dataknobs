@@ -50,6 +50,16 @@ def _no_leaked_bridge_threads() -> Iterator[None]:
     Per **test**, not per session, and for the same reason ``bots`` gives: a
     session-scoped guard reports a count with no test identity. The guard
     measures a delta, so one leak cannot cascade into every later test.
+
+    **It under-reports, and knowing how is the point.** ``SyncLoopBridge``
+    closes itself from ``__del__``, so an adapter whose last reference dies
+    with the test's frame is already torn down before this check runs. What
+    the guard actually names is a leak the test is still *holding* --- under
+    ``pytest.raises(...) as excinfo``, whose captured traceback keeps the
+    frame alive, or in a fixture. The rest emit a ``ResourceWarning`` that
+    Python's default filters drop, and pass here. ``-W always::ResourceWarning``
+    is what surfaces those; it found five in ``test_resources.py`` that this
+    guard reported clean.
     """
     with assert_no_leaked_bridge_threads():
         yield
