@@ -318,8 +318,8 @@ class PromptBuilder(BasePromptBuilder):
         if not rag_configs:
             return {}, None
 
-        rag_content = {}
-        rag_metadata = {} if capture_metadata else None
+        rag_content: Dict[str, str] = {}
+        rag_metadata: Dict[str, Any] | None = {} if capture_metadata else None
 
         for rag_config in rag_configs:
             placeholder = rag_config.get("placeholder", "RAG_CONTENT")
