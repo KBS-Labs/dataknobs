@@ -174,6 +174,7 @@ from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 if TYPE_CHECKING:
     from dataknobs_common import SyncLoopBridge
     from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
+    from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
 from dataknobs_fsm.functions.base import FunctionRegistry
@@ -805,11 +806,22 @@ class FSM:
         thread) per FSM, reused across calls so repeated sync steps do not each
         spawn a thread. It is released by :meth:`close`.
 
-        The *stateless* one-shot surfaces (:meth:`execute`, the sync batch /
-        stream executors) deliberately do NOT use this shared bridge — they
-        scope a throwaway bridge to the operation (via
-        :func:`~dataknobs_common.run_coro_sync` or a local bridge) so they need
-        no ``close()`` and never leak a process-lifetime thread.
+        The *stateless* one-shot surfaces do not reach for this bridge on their
+        own: :meth:`execute` and the sync batch / stream executors scope a
+        throwaway bridge to the operation (via
+        :func:`~dataknobs_common.run_coro_sync` or a local bridge) so that an
+        FSM never used through a lifecycle-bearing surface needs no ``close()``
+        and never leaks a process-lifetime thread.
+
+        That default is a floor, not a prohibition. ``BatchExecutor`` and
+        ``StreamExecutor`` take a ``bridge=`` argument, and passing this one is
+        the supported answer when a resource the FSM opens binds itself to the
+        loop that opened it — a pooled ``AsyncDatabase`` reached through
+        ``AsyncDatabaseResourceAdapter`` is the case that matters, since it
+        stays open across acquisitions and so belongs to whichever loop opened
+        it. Handing the executors this bridge puts their work on the same loop
+        as ``SimpleFSM``'s; the caller then owns the thread and ends it with
+        :meth:`close`, which is why the executors ask rather than assume.
 
         The bridge is safe to call from within a running event loop (it runs the
         coroutine on its own thread).
@@ -833,7 +845,9 @@ class FSM:
             self._sync_bridge.close()
             self._sync_bridge = None
 
-    def _prepare_execution_context(self, initial_data: Dict[str, Any] | None = None):
+    def _prepare_execution_context(
+        self, initial_data: Dict[str, Any] | None = None
+    ) -> "ExecutionContext":
         """Prepare execution context for FSM execution.
 
         Args:

@@ -122,8 +122,12 @@ class StreamExecutor:
             timeout: Seconds to allow one *stream operation*, however many
                 chunks and records it carries, after which ``TimeoutError`` is
                 raised. It is the only upper bound a blocked synchronous
-                caller has. ``None`` (the default) waits for as long as the
-                stream takes.
+                caller has, and it bounds the *work*: when this executor owns
+                its loop, tearing that loop down afterwards can add up to five
+                seconds more, letting a cancelled record's cleanup unwind
+                rather than destroying it mid-flight. See
+                :func:`~dataknobs_common.bridged_operation`. ``None`` (the
+                default) waits for as long as the stream takes.
         """
         self.fsm = fsm
         self.stream_config = stream_config or StreamConfig()
@@ -397,24 +401,22 @@ class StreamExecutor:
         return False
 
     def _find_initial_state(self) -> str | None:
-        """Find the initial state of the FSM's main network.
+        """Ask the engine where this FSM starts.
 
-        Asks the FSM, which resolves the main network through
-        ``main_network_name``. Looking it up by the *FSM's* name instead found
-        one only when the FSM happened to be named after its main network ---
-        and here that decided whether the FSM ran at all. Every other FSM took
-        :meth:`_process_chunk`'s "no FSM configured" branch: each record passed
-        through untouched and was counted as successfully processed, with
-        nothing raised and nothing logged.
+        Delegated rather than reimplemented, because this answer decides
+        whether the FSM runs at all: :meth:`_process_chunk` gates on it, so an
+        executor that resolves fewer FSMs than the engine it drives silently
+        declines to run the difference. It was reimplemented, and wrongly ---
+        the lookup was by the *FSM's* name, which finds a network only when the
+        FSM happens to be named after its main network. Every other FSM took
+        the "no FSM configured" branch: each record passed through untouched
+        and was counted as successfully processed, with nothing raised and
+        nothing logged.
 
         Returns:
-            Initial state name, or ``None`` if the FSM has no main network or
-            that network declares no initial state.
+            Initial state name, or ``None`` if no network declares one.
         """
-        network = self.fsm.get_network()
-        if network is not None and network.initial_states:
-            return next(iter(network.initial_states))
-        return None
+        return self.engine.find_initial_state_common()
 
     def _generate_stats(self, progress: StreamProgress) -> Dict[str, Any]:
         """Generate stream processing statistics.

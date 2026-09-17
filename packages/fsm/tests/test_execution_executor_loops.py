@@ -54,18 +54,24 @@ whose size it does not know, and a caller inside a ``def`` has no cancellation
 of its own. It bounds the **operation**, not each item --- a per-item bound
 would be no bound at all on the call the caller actually made.
 
-Two pre-existing defects are pinned here too, because both are in the code
-these changes open and neither could be left in place:
+Three pre-existing defects are pinned here too, because all three are in the
+code these changes open and none could be left in place:
 
 * ``StreamExecutor`` gated execution on ``fsm.name in fsm.networks``, which is
   false whenever an FSM is named anything other than its main network --- the
   ordinary case. Every record then took the "no FSM configured" path, passed
   through untouched, and was counted as successful.
+* Both executors then resolved the start state themselves rather than asking
+  the engine they drive, and resolved fewer FSMs than it does. They now call
+  ``BaseExecutionEngine.find_initial_state_common``, so the gate and the run
+  cannot disagree.
 * ``BatchExecutor._release_resources`` compared a ``ResourceStatus`` member to
-  the string ``"allocated"``, so its body never ran and nothing ever returned
-  to the pool. mypy had been reporting both halves of that
+  the string ``"allocated"``, so its body never ran and every allocation stayed
+  marked as held. mypy had been reporting both halves of that
   (``comparison-overlap``, then ``unreachable``) for as long as the cell has
-  been measured.
+  been measured. Restoring it exposed what it would have done: append to a
+  per-type list nothing read back or drained. That list is gone; the status
+  transition is what release means here.
 """
 
 from __future__ import annotations
@@ -86,6 +92,7 @@ from dataknobs_fsm.config.schema import (
     NetworkConfig,
     StateConfig,
 )
+from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.execution.batch import BatchExecutor
 from dataknobs_fsm.execution.context import ExecutionContext, ResourceStatus
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline
@@ -512,19 +519,51 @@ def test_the_batch_and_stream_executors_agree_on_the_initial_state() -> None:
     assert stream._find_initial_state() == "start"
 
 
+def test_the_executors_agree_with_the_engine_on_the_initial_state() -> None:
+    """The executors drive the engine, so they must start it where it starts.
+
+    ``BaseExecutionEngine.find_initial_state_common`` is the shared answer, and
+    it does not stop at the main network: after the main network and the
+    FSM's own name it takes any network that declares an initial state. Both
+    executors resolved only the main network, so the two disagreed about the
+    same FSM --- the engine would have run it, and ``StreamExecutor``, which
+    gates on the lookup rather than deferring to the engine, passed every
+    record through untouched instead.
+
+    The shape that separates them is a main network carrying no initial state
+    of its own. ``NetworkConfig`` refuses to build one ("Network must have at
+    least one start state"), so it arrives the other way an FSM is assembled
+    --- through :meth:`FSM.add_network`, which imposes no such rule.
+    """
+    recorder = LoopRecorder()
+    fsm = witnessed_fsm(recorder, name="alpha")
+    fsm.add_network(StateNetwork(name="dispatch"), is_main=True)
+
+    engine_answer = fsm.get_async_engine().find_initial_state_common()
+    assert engine_answer == "start", "the engine's own fallback stopped working"
+
+    assert BatchExecutor(fsm=fsm, parallelism=1)._find_initial_state() == engine_answer
+    assert StreamExecutor(fsm=fsm)._find_initial_state() == engine_answer
+
+
 # --------------------------------------------------------------------------- #
 # 5. Pre-existing: released resources never returned to the pool
 # --------------------------------------------------------------------------- #
 
 
-def test_a_released_resource_returns_to_the_pool() -> None:
+def test_a_released_resource_is_marked_released() -> None:
     """``_release_resources`` must actually release.
 
     It compared ``allocation.status`` --- a ``ResourceStatus`` member --- to
     the string ``"allocated"``, which is never equal, so its whole body was
-    unreachable: nothing went back to the pool, and the allocation stayed
-    marked as held for the lifetime of the context. mypy reported both halves
-    of this (``comparison-overlap`` on the test, ``unreachable`` on the body).
+    unreachable and the allocation stayed marked as held for the lifetime of
+    the context. mypy reported both halves of this (``comparison-overlap`` on
+    the test, ``unreachable`` on the body).
+
+    The status is the whole of what release means here. The body also appended
+    to a per-type list nothing read back or drained, which a working release
+    would have grown once per allocation for the life of the executor; that
+    list is gone, so there is no pool to assert against.
     """
     recorder = LoopRecorder()
     executor = BatchExecutor(fsm=witnessed_fsm(recorder), parallelism=1)
@@ -540,6 +579,6 @@ def test_a_released_resource_returns_to_the_pool() -> None:
     assert allocation.status is ResourceStatus.AVAILABLE, (
         "the allocation is still marked held — _release_resources did not run"
     )
-    assert executor._resource_pool.get("db") == ["conn-1"], (
-        "the resource did not return to the pool"
+    assert "released_at" in context.metadata["batch_0_resources"], (
+        "the release was not recorded against the batch"
     )

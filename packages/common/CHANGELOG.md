@@ -31,6 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
           return [op.run(self._obj.do(item)) for item in items]
   ```
 
+  A `TimeoutError` reaching `run` from the coroutine is distinguished from an
+  expired wait by the deadline — except when it is already an
+  `OperationTimeoutError`, which is passed through by type. A bridge reports an
+  expired wait as the *builtin*, and this type is only ever constructed by
+  `run` itself, so one arriving from the work belongs to an operation nested
+  inside this one; relabelling it would name the wrong deadline and erase the
+  one that expired.
+
+  `timeout=` bounds the **work**, not the call. Ending an owned bridge happens
+  after the budget is spent and waits up to `_TEARDOWN_DRAIN_SECONDS` for a
+  cancelled coroutine to unwind, so `timeout + 5s` is the worst case a caller
+  can observe. Only cleanup that awaits something slow — or ignores
+  cancellation — spends it; the alternative is destroying that cleanup
+  mid-flight, which is the defect the drain exists to fix. The same is true of
+  `run_coro_sync(coro, timeout=...)`, which opens a throwaway bridge. Both
+  docstrings and the guide now say so.
+
   A supplied `bridge` is used as-is and **left running**, because it belongs to
   whoever passed it; otherwise the operation owns one and leaving the block
   ends it, on the error paths too. `needs_loop=False` is for a call whose work

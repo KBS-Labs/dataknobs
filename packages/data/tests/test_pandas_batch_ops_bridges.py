@@ -56,7 +56,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
-from dataknobs_common import SyncLoopBridge
+from dataknobs_common import OperationTimeoutError, SyncLoopBridge
 from dataknobs_common.testing import assert_no_leaked_bridge_threads, requires_postgres
 
 from dataknobs_data import Record
@@ -380,6 +380,16 @@ class StallingWitness(LoopWitness):
         await asyncio.sleep(self.delay)
         return await AsyncMemoryDatabase.create_batch(self, records, **kwargs)
 
+    async def update(self, record_id: str, record: Record, **kwargs: Any) -> bool:
+        self._witness()
+        await asyncio.sleep(self.delay)
+        return await AsyncMemoryDatabase.update(self, record_id, record, **kwargs)
+
+    async def update_batch(self, updates: list[tuple[str, Record]], **kwargs: Any) -> list[bool]:
+        self._witness()
+        await asyncio.sleep(self.delay)
+        return await AsyncMemoryDatabase.update_batch(self, updates, **kwargs)
+
 
 def test_the_per_record_fallback_runs_on_the_operations_loop():
     """``_insert_chunk``'s fallback reaches the database once per row.
@@ -437,15 +447,18 @@ def test_the_timeout_bounds_the_operation_not_each_database_call():
     on a wait a synchronous caller has no other way to cancel" was false by
     that factor.
 
-    ``error_handling="log"`` is the shape that shows it: ``"raise"`` now
-    propagates the first timeout, so the multiplication needs a mode that
-    keeps going after one.
+    The measurement is the count of database reaches, not the mode: every
+    ``error_handling`` now propagates the deadline (the test below pins that),
+    so the operation ends at the first expiry whichever mode asked. What the
+    reach count shows is that nothing downstream of it was given the bound
+    afresh.
     """
     db = StallingWitness()
     ops = BatchOperations(db, timeout=0.1)
 
     started = time.monotonic()
-    ops.bulk_insert_dataframe(frame(8), config=BatchConfig(chunk_size=1, error_handling="log"))
+    with pytest.raises(OperationTimeoutError):
+        ops.bulk_insert_dataframe(frame(8), config=BatchConfig(chunk_size=1, error_handling="log"))
     elapsed = time.monotonic() - started
 
     assert len(db.loops) == 1, (
@@ -453,6 +466,44 @@ def test_the_timeout_bounds_the_operation_not_each_database_call():
         "each reach was given the full timeout again"
     )
     assert elapsed < 1.0, f"the operation ran {elapsed:.2f}s under a 0.1s bound"
+
+
+def test_a_timeout_reaches_the_caller_through_per_row_error_handling():
+    """The operation's deadline is not one of the row failures to absorb.
+
+    ``OperationTimeoutError`` exists to be let through exactly here: a
+    per-item handler whose job is to absorb an item's failure must not absorb
+    the end of the whole operation. Under ``error_handling="log"`` every row
+    past the deadline is refused pre-flight, each refusal is caught as though
+    the row were bad, and the call returns ``{"inserted": 0, "failed": n}`` ---
+    a timed-out operation reported as a dataframe of unwritable rows, with the
+    caller given no way to tell which it was.
+
+    The wall clock is bounded either way, which is why this survived the test
+    above it: what was lost is the report, not the bound.
+    """
+    ops = BatchOperations(StallingWitness(), timeout=0.1)
+
+    with pytest.raises(OperationTimeoutError):
+        ops.bulk_insert_dataframe(frame(8), config=BatchConfig(chunk_size=1, error_handling="log"))
+
+
+def test_a_timeout_reaches_the_caller_through_a_skipping_update():
+    """The same for the update path, which absorbs on ``"skip"`` as well.
+
+    ``_update_from_dataframe`` has the same two-layer shape --- a batch
+    attempt, then a per-row retry --- and ``"skip"`` is the mode that keeps
+    going after a row raises without even logging it.
+    """
+    db = StallingWitness()
+    ops = BatchOperations(db, timeout=0.1)
+
+    with pytest.raises(OperationTimeoutError):
+        ops.update_from_dataframe(
+            frame(8).assign(id=[f"r{i}" for i in range(8)]),
+            id_column="id",
+            config=BatchConfig(chunk_size=1, error_handling="skip"),
+        )
 
 
 # --------------------------------------------------------------------------

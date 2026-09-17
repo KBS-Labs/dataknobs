@@ -325,6 +325,15 @@ carries, and raises `TimeoutError` on expiry. It is the only upper bound a
 caller blocked inside a `def` has; the default, `None`, waits for as long as
 the work takes.
 
+The bound is on the **work**. When the executor opens its own loop, closing
+that loop afterwards cancels whatever the expired call left running and waits
+up to five seconds for it to unwind, so the worst case a caller can observe is
+`timeout` plus that. Prompt cancellation costs a single loop iteration and the
+difference is unmeasurable; the budget is only spent by cleanup that awaits
+something slow or ignores cancellation, and the alternative is destroying that
+cleanup mid-flight. A `bridge=` you supply is not closed by the executor and
+adds nothing.
+
 #### Data Handling
 - `DataModeHandler`: Abstract interface for data operations
 - `CopyModeHandler`: Safe concurrent processing

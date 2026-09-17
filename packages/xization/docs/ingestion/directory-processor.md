@@ -8,7 +8,7 @@ and streams large JSON automatically.
 The processor is **async-primary**: `process_async()` is the primary
 API. `process()` is a thin sync wrapper that collects the async
 iterator through
-[`run_coro_sync`](https://kbs-labs.github.io/dataknobs/packages/common/guides/sync-bridge/),
+[`run_coro_sync`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/),
 so it is callable from plain synchronous code and from inside a running
 event loop alike.
 
@@ -79,6 +79,27 @@ The collection is unchanged: the returned iterator is over a list that
 is already complete, so `files_skipped` is final as soon as the call
 returns, and the streaming `process_async()` offers does not survive the
 wrapper.
+
+### Bounding the block — `timeout=`
+
+```python
+for doc in processor.process(timeout=30.0):
+    print(doc.source_file)
+```
+
+A caller inside a `def` has no cancellation of its own, so without a
+bound a source that stops answering — a network file system, a backend
+behind a hung connection — blocks it with nothing to interrupt. On expiry
+the walk is asked to cancel and `TimeoutError` is raised; `None`, the
+default, waits for as long as the walk takes.
+
+The bound is on the **walk**, not on the call. The throwaway loop is torn
+down afterwards, and that waits up to five seconds for the cancelled walk
+to unwind rather than destroying its cleanup mid-flight, so the worst case
+you can observe is `timeout` plus that. Prompt cancellation costs a single
+loop iteration.
+
+`process_directory()` forwards the same keyword.
 
 ## ProcessedDocument
 

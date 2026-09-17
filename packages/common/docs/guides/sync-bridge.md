@@ -68,8 +68,8 @@ result = run_coro_sync(some_async_function(arg))
   time. The timed-out coroutine is asked to cancel (best-effort) and the
   bridge stays usable. With no `timeout` the wait is unbounded.
 - **Clean teardown** — `close()` cancels whatever is still running on the
-  loop, waits (bounded) for it to unwind, then stops the loop and joins the
-  thread; it is idempotent and supported via the context-manager protocol.
+  loop, waits up to five seconds (`_TEARDOWN_DRAIN_SECONDS`) for it to unwind,
+  then stops the loop and joins the thread; it is idempotent and supported via the context-manager protocol.
   Concurrent closers all block until teardown completes. The loop thread is a
   `daemon`, so it can never block process exit.
 - **Reusable, and concurrency-safe for submission** — a single bridge serves
@@ -180,6 +180,14 @@ row; a bridge per reach is a different loop per row.
 Leaving the block ends an **owned** bridge, on the error paths too; a
 **supplied** one is never closed, because whoever passed it may be running
 other things on it.
+
+> **`timeout=` bounds the work, not the call.** Ending an owned bridge happens
+> after the budget is spent, and it waits up to five seconds for a cancelled
+> coroutine to unwind, so `timeout + 5s` is the worst case a caller can
+> observe. Only cleanup that awaits something slow — or ignores cancellation —
+> spends it; prompt cancellation costs one loop iteration. The alternative is
+> destroying that cleanup mid-flight, which is the defect the drain exists to
+> fix, so the bound sits where it does deliberately.
 
 > **`OperationTimeoutError` is a `TimeoutError`,** so `except TimeoutError`
 > keeps working. The distinct type exists because a per-item error handler has

@@ -52,17 +52,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each record through untouched while counting it as successfully processed
   --- no error, no log, and statistics reporting a clean run. `BatchExecutor`
   had the same lookup but was unaffected, because it calls the engine either
-  way and the engine resolves the start state for itself. Both now ask the FSM.
+  way and the engine resolves the start state for itself.
 
-- **Released resources return to the pool.** `BatchExecutor._release_resources`
+  Both now ask the engine they drive, through
+  `BaseExecutionEngine.find_initial_state_common` --- the answer the async
+  engine already used, rather than a third and fourth copy of it. That also
+  restores the fallbacks the copies had dropped: after the main network it
+  tries the FSM's own name, then any network declaring an initial state. An
+  FSM whose main network declares none (which `NetworkConfig` refuses to build
+  but `FSM.add_network` allows) is resolved by the engine and was not by the
+  executors, so the two disagreed about the same FSM.
+
+- **Released resources are marked released.** `BatchExecutor._release_resources`
   tested `allocation.status` against the string `"allocated"` rather than the
   `ResourceStatus` member, so the test was never true and the whole body was
-  unreachable: nothing was returned to the pool and every allocation stayed
-  marked as held for the life of the context. It now compares members and marks
-  a released allocation `AVAILABLE`, which is what
-  `ExecutionContext.release_resource` does.
+  unreachable: every allocation stayed marked as held for the life of the
+  context. It now compares members and marks a released allocation
+  `AVAILABLE`, which is what `ExecutionContext.release_resource` does.
 
 ### Changed
+
+- **`BatchExecutor` no longer keeps a per-type list of released resource
+  ids.** The unreachable body above also appended each released id to a list
+  nothing read back or drained --- `_acquire_resources` took its length for a
+  `pool_size` metadata field and nothing else --- so restoring the release
+  would have grown that list once per allocation for the life of the executor.
+  A pool nothing draws from is an accumulator, and the id it accumulated was
+  already the caller's to reuse, so it is gone, along with the per-type
+  `asyncio.Lock` created beside it and never acquired. The `pool_size` and
+  `final_pool_size` keys of `context.metadata["batch_<id>_resources"]` go with
+  it; `resource_type`, `limit`, `acquired_at` and `released_at` remain.
+
+  `enable_resource_pooling` does not pool and never did: nothing in this class
+  hands out a resource or enforces the `limit` in `context.resource_limits`.
+  The flag gates the bookkeeping above and the released-status transition, and
+  its docstring now says so. Whether to implement pooling or drop the
+  parameter is open.
 
 - **Batch bookkeeping is carried in `context.metadata["batch_info"]` alone.**
   `BatchExecutor` also set a `batch_id` attribute directly on the

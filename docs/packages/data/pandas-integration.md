@@ -203,7 +203,7 @@ for record in records:
 
 `BatchOperations` fronts either flavour of database. A `SyncDatabase` is
 called directly. An `AsyncDatabase` is reached through a
-[`SyncLoopBridge`](https://kbs-labs.github.io/dataknobs/packages/common/guides/sync-bridge/)
+[`SyncLoopBridge`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/)
 — a private event loop on a daemon thread — so **every method is callable
 from plain synchronous code and from inside a running event loop alike**.
 
@@ -211,7 +211,10 @@ It still *blocks*: the calling thread waits for the whole operation, so
 from async code you stall every other task on your loop for its duration.
 `await` the database directly where you can; this class is for the `def`
 sites that cannot. `timeout=` is the only upper bound a synchronous caller
-has on that wait.
+has on that wait, and it bounds the **work**: when the operation opens its own
+loop, closing it afterwards can add up to five seconds letting a cancelled
+round trip's cleanup unwind rather than destroying it mid-flight. A `bridge=`
+you supply is not closed here and adds nothing.
 
 The loop is **operation-scoped** — one public call gets one loop, shared by
 every chunk and every row that call touches, and the thread ends with the

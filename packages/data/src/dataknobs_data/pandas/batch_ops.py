@@ -11,7 +11,12 @@ from typing import Any, cast, TYPE_CHECKING
 
 import pandas as pd
 
-from dataknobs_common import BridgedOperation, SyncLoopBridge, bridged_operation
+from dataknobs_common import (
+    BridgedOperation,
+    OperationTimeoutError,
+    SyncLoopBridge,
+    bridged_operation,
+)
 from dataknobs_common.callbacks import is_async_callable
 
 from .converter import ConversionOptions, DataFrameConverter
@@ -198,6 +203,12 @@ class BatchOperations:
                 synchronous caller an upper bound on a blocking wait it cannot
                 otherwise cancel. A call that finds the deadline already past
                 raises :class:`TimeoutError` without reaching the database.
+                It bounds the *work*: when an operation owns its loop, tearing
+                that loop down afterwards can add up to five seconds more,
+                letting a cancelled round trip's cleanup unwind rather than
+                destroying it mid-flight --- see
+                :func:`~dataknobs_common.bridged_operation`. A ``bridge`` you
+                supply is not closed here and adds nothing.
                 ``None`` (the default) waits as long as the database takes.
                 Ignored for a synchronous database.
         """
@@ -429,6 +440,13 @@ class BatchOperations:
                     else:
                         stats["not_found"] += 1
 
+            except OperationTimeoutError:
+                # The operation's deadline is not one of this chunk's failures
+                # to absorb: retrying row by row past it reaches a database
+                # that refuses every row, and `error_handling` would then
+                # report a timed-out operation as a chunk of unwritable rows.
+                raise
+
             except Exception:
                 # If batch fails, try individual updates
                 if config.error_handling == "raise":
@@ -442,6 +460,9 @@ class BatchOperations:
                             stats["updated"] += 1
                         else:
                             stats["not_found"] += 1
+
+                    except OperationTimeoutError:
+                        raise
 
                     except Exception as e:
                         stats["failed"] += 1
@@ -575,6 +596,13 @@ class BatchOperations:
                 if config.progress_callback:
                     config.progress_callback(len(records), len(records))
 
+            except OperationTimeoutError:
+                # Not a batch failure to diagnose row by row: past the
+                # deadline every row is refused pre-flight, so the retry below
+                # would turn one timeout into `len(records)` of them and
+                # report the operation as a dataframe of bad rows.
+                raise
+
             except Exception as batch_error:
                 # Retrying row by row is what identifies *which* rows are bad,
                 # which is why this path exists and why it runs whatever
@@ -589,6 +617,9 @@ class BatchOperations:
                     try:
                         self._create(op, record)
                         stats["inserted"] += 1
+
+                    except OperationTimeoutError:
+                        raise
 
                     except Exception as record_error:
                         # A row failed too, so the row's error is the specific
@@ -627,6 +658,9 @@ class BatchOperations:
                 try:
                     self._create(op, record)
                     stats["inserted"] += 1
+
+                except OperationTimeoutError:
+                    raise
 
                 except Exception as e:
                     stats["failed"] += 1

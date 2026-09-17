@@ -29,7 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises `TimeoutError` on expiry. It is keyword-only on `process_directory()`
   so it cannot be mistaken for a third positional argument. The default,
   `None`, waits for as long as the walk takes, so nothing changes for existing
-  callers.
+  callers. The bound is on the **walk**: the throwaway loop is torn down
+  afterwards and waits up to five seconds for a cancelled walk to unwind
+  rather than destroying its cleanup mid-flight, so the worst case is
+  `timeout` plus that. Documented in the directory-processor guide.
 
 ### Fixed
 

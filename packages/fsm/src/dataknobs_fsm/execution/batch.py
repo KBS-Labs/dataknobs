@@ -3,7 +3,6 @@
 
 """Batch executor for parallel record processing."""
 
-import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -85,10 +84,15 @@ class BatchExecutor:
 
     This executor handles:
     - Parallel record processing
-    - Resource pooling and management
     - Progress tracking and reporting
     - Error aggregation and handling
-    - Performance optimization
+
+    It does **not** pool resources, despite ``enable_resource_pooling``: that
+    flag gates per-item bookkeeping and a released-status transition, and
+    nothing here hands out a resource or enforces a limit. The flag and its
+    name predate this class's current behaviour; whether to implement pooling
+    or drop the parameter is an open question, and the same one
+    ``BatchConfig.parallel`` poses.
     """
 
     def __init__(
@@ -108,7 +112,12 @@ class BatchExecutor:
             fsm: FSM to execute.
             parallelism: Number of parallel workers.
             batch_size: Size of each batch.
-            enable_resource_pooling: Enable resource pooling.
+            enable_resource_pooling: Gate the per-item resource bookkeeping ---
+                the batch metadata written by :meth:`_acquire_resources` and
+                the released-status transition in :meth:`_release_resources`.
+                It does **not** pool: nothing here hands out a resource or
+                enforces the ``limit`` in ``context.resource_limits``. The name
+                overpromises and is kept for compatibility.
             progress_callback: Callback for progress updates.
             bridge: A loop this executor's operations run on, owned by the
                 caller. Nothing here closes it. Required when the FSM's
@@ -123,8 +132,12 @@ class BatchExecutor:
             timeout: Seconds to allow one *operation* --- one ``execute_batch``
                 or one ``execute_batches``, however many items it runs ---
                 after which ``TimeoutError`` is raised. It is the only upper
-                bound a blocked synchronous caller has. ``None`` (the default)
-                waits for as long as the batch takes.
+                bound a blocked synchronous caller has, and it bounds the
+                *work*: when this executor owns its loop, tearing that loop
+                down afterwards can add up to five seconds more, letting a
+                cancelled item's cleanup unwind rather than destroying it
+                mid-flight. See :func:`~dataknobs_common.bridged_operation`.
+                ``None`` (the default) waits for as long as the batch takes.
         """
         self.fsm = fsm
         self.parallelism = parallelism
@@ -138,10 +151,6 @@ class BatchExecutor:
         # through an async→sync bridge scoped to the operation, so a discarded
         # executor never leaks a process-lifetime bridge thread.
         self.engine = fsm.get_async_engine()
-
-        # Resource pool
-        self._resource_pool: Dict[str, List[Any]] = {}
-        self._resource_locks: Dict[str, asyncio.Lock] = {}
 
     def _operation(self) -> AbstractContextManager[BridgedOperation]:
         """Open the loop and the time budget one public call runs within.
@@ -470,84 +479,81 @@ class BatchExecutor:
                 self._release_resources(context)
 
     def _acquire_resources(self, context: ExecutionContext) -> None:
-        """Acquire resources from pool for context.
+        """Record what this context was allowed, for the batch's metadata.
 
-        Args:
-            context: Execution context.
-        """
-        # Initialize resource pools if needed
-        for resource_type, limit in context.resource_limits.items():
-            if resource_type not in self._resource_pool:
-                self._resource_pool[resource_type] = []
-                self._resource_locks[resource_type] = asyncio.Lock()
-
-            # Track batch-specific resource allocation
-            batch_id = context.metadata.get("batch_info", {}).get("batch_id")
-            if batch_id is not None:
-                context.metadata[f"batch_{batch_id}_resources"] = {
-                    "resource_type": resource_type,
-                    "limit": limit,
-                    "acquired_at": context.metadata.get("start_time"),
-                    "pool_size": len(self._resource_pool[resource_type]),
-                }
-
-    def _release_resources(self, context: ExecutionContext) -> None:
-        """Release resources back to pool.
-
-        The status test compares ``ResourceStatus`` members. It used to compare
-        one against the string ``"allocated"`` --- the member's *value* --- so
-        it was never true and this whole body was unreachable: nothing ever
-        returned to the pool and every allocation stayed marked as held for the
-        life of the context. mypy reported both halves of that
-        (``comparison-overlap`` on the test, then ``unreachable`` on the body).
-        ``AVAILABLE`` is the released state, which is what
-        :meth:`ExecutionContext.release_resource` sets; there is no
-        ``RELEASED`` member and the string the old code assigned was not one.
+        ``enable_resource_pooling`` names something this class does not do:
+        nothing here hands out a resource, and nothing enforces ``limit``. What
+        the flag actually gates is this bookkeeping and the status transition
+        in :meth:`_release_resources`. It is written down rather than implied
+        because the name promises otherwise --- see the class docstring.
 
         Args:
             context: Execution context.
         """
         batch_id = context.metadata.get("batch_info", {}).get("batch_id")
+        if batch_id is None:
+            return
 
-        # Release allocated resources back to pool
+        for resource_type, limit in context.resource_limits.items():
+            context.metadata[f"batch_{batch_id}_resources"] = {
+                "resource_type": resource_type,
+                "limit": limit,
+                "acquired_at": context.metadata.get("start_time"),
+            }
+
+    def _release_resources(self, context: ExecutionContext) -> None:
+        """Mark this context's allocations released.
+
+        The status test compares ``ResourceStatus`` members. It used to compare
+        one against the string ``"allocated"`` --- the member's *value* --- so
+        it was never true and this whole body was unreachable: every allocation
+        stayed marked as held for the life of the context. mypy reported both
+        halves of that (``comparison-overlap`` on the test, then ``unreachable``
+        on the body). ``AVAILABLE`` is the released state, which is what
+        :meth:`ExecutionContext.release_resource` sets; there is no
+        ``RELEASED`` member and the string the old code assigned was not one.
+
+        Restoring the transition also exposed what the body around it did. It
+        appended each released id to a per-type list that nothing ever read
+        back or drained --- ``_acquire_resources`` took its length for a
+        ``pool_size`` field and nothing else --- so a working release would
+        have grown that list once per allocation per item for the life of the
+        executor. A pool nothing draws from is an accumulator, and the id it
+        accumulated was already the caller's to reuse. It is gone, along with
+        the ``asyncio.Lock`` per type that was created beside it and never
+        acquired.
+
+        Args:
+            context: Execution context.
+        """
+        batch_id = context.metadata.get("batch_info", {}).get("batch_id")
+        batch_key = None if batch_id is None else f"batch_{batch_id}_resources"
+
         for allocation in context.resources.values():
-            if allocation.status is ResourceStatus.ALLOCATED:
-                resource_type = allocation.resource_type
-                if resource_type in self._resource_pool:
-                    self._resource_pool[resource_type].append(allocation.resource_id)
+            if allocation.status is not ResourceStatus.ALLOCATED:
+                continue
 
-                    # Track batch-specific resource release
-                    if batch_id is not None:
-                        batch_key = f"batch_{batch_id}_resources"
-                        if batch_key in context.metadata:
-                            context.metadata[batch_key]["released_at"] = context.metadata.get(
-                                "end_time"
-                            )
-                            context.metadata[batch_key]["final_pool_size"] = len(
-                                self._resource_pool[resource_type]
-                            )
+            if batch_key is not None and batch_key in context.metadata:
+                context.metadata[batch_key]["released_at"] = context.metadata.get("end_time")
 
-                # Mark as released
-                allocation.status = ResourceStatus.AVAILABLE
+            allocation.status = ResourceStatus.AVAILABLE
 
     def _find_initial_state(self) -> str | None:
-        """Find the initial state of the FSM's main network.
+        """Ask the engine where this FSM starts.
 
-        Asks the FSM, which resolves the main network through
-        ``main_network_name``. Looking it up by the *FSM's* name instead found
-        one only when the FSM happened to be named after its main network ---
-        harmless here, because this path calls the engine either way and the
-        engine resolves the start state for itself, but fatal in the stream
+        Delegated rather than reimplemented, because this executor *drives*
+        that engine: an executor that disagreed with it about the start state
+        would gate on one answer and run on another. It was reimplemented, and
+        wrongly --- the lookup was by the *FSM's* name, which finds a network
+        only when the FSM happens to be named after its main network. That was
+        harmless here, since this path calls the engine either way and the
+        engine resolves the start state for itself, and fatal in the stream
         executor, which used the same lookup to decide whether to run at all.
 
         Returns:
-            Initial state name, or ``None`` if the FSM has no main network or
-            that network declares no initial state.
+            Initial state name, or ``None`` if no network declares one.
         """
-        network = self.fsm.get_network()
-        if network is not None and network.initial_states:
-            return next(iter(network.initial_states))
-        return None
+        return self.engine.find_initial_state_common()
 
     def execute_batches(
         self,

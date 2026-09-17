@@ -258,3 +258,36 @@ def test_a_supplied_bridge_is_ignored_when_the_work_is_synchronous() -> None:
     with SyncLoopBridge(thread_name="dk-test-owner") as bridge:
         with bridged_operation(bridge=bridge, needs_loop=False) as op:
             assert op.bridge is None
+
+
+def test_a_nested_operations_timeout_keeps_its_own_name() -> None:
+    """An inner operation's deadline is not relabelled as the outer one's.
+
+    ``OperationTimeoutError`` is only ever constructed by
+    :meth:`BridgedOperation.run`; a bridge reports an expired wait as the
+    builtin. So one arriving *from the coroutine* belongs to an operation
+    nested inside this one --- a wrapper with its own budget, called from
+    within the outer call's work --- and the outer operation must pass it
+    through rather than name itself in it.
+
+    **What this cannot cover.** The outer deadline governs the wait, so a
+    coroutine that raises before that deadline is normally read as having
+    raised before it, and the misattribution needed the two to disagree: the
+    exception raised at ``deadline - epsilon`` while ``time.monotonic()``, read
+    afterwards in the handler, had passed it. That window is scheduling
+    latency, and it is not reproducible on demand --- which is the argument for
+    deciding by *type* rather than by clock, since the type is exact where the
+    clock is a race. This test pins the decision; it cannot pin the window.
+    """
+    inner = OperationTimeoutError("Inner exceeded its timeout while waiting for this call")
+
+    async def raises_an_inner_operations_timeout() -> None:
+        raise inner
+
+    with bridged_operation(thread_name="dk-test-op", timeout=30.0, label="Outer") as op:
+        with pytest.raises(OperationTimeoutError) as caught:
+            op.run(raises_an_inner_operations_timeout())
+
+    assert caught.value is inner, "the inner operation's error was replaced, not propagated"
+    assert "Inner" in str(caught.value)
+    assert "Outer" not in str(caught.value)

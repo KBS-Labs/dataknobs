@@ -797,8 +797,14 @@ def run_coro_sync(coro: Coroutine[Any, Any, T], *, timeout: float | None = None)
 
     Args:
         coro: The coroutine to run.
-        timeout: Maximum seconds to wait, forwarded to
+        timeout: Maximum seconds to wait for ``coro``, forwarded to
             :meth:`SyncLoopBridge.run`. ``None`` (the default) waits forever.
+            It bounds the coroutine, not this call: the throwaway bridge is
+            torn down afterwards, and that waits up to
+            :data:`_TEARDOWN_DRAIN_SECONDS` for a cancelled ``coro`` to unwind
+            rather than destroying its cleanup mid-flight. Prompt cancellation
+            costs one loop iteration; the worst case is ``timeout`` plus the
+            drain.
 
     Returns:
         Whatever ``coro`` returns.
@@ -912,6 +918,14 @@ class BridgedOperation:
             raise OperationTimeoutError(f"{self.label} exceeded its timeout before this call ran")
         try:
             return self.bridge.run(coro, timeout=remaining)
+        except OperationTimeoutError:
+            # Someone else's deadline, always. A bridge reports an expired wait
+            # as the *builtin* ``TimeoutError``; this type is only ever
+            # constructed here, with the label of the operation that ran out.
+            # So one arriving from the coroutine belongs to an operation nested
+            # inside this one, and relabelling it would erase the deadline that
+            # actually expired and name the wrong one.
+            raise
         except TimeoutError:
             # The bridge raises the builtin for a wait that expired, and
             # re-raises a ``TimeoutError`` the coroutine itself raised through
@@ -951,8 +965,22 @@ def bridged_operation(
             state to the loop that connected it, since a wrapper handed such
             an object has no way to reach that loop for itself. ``None`` (the
             default) gives the operation a bridge of its own.
-        timeout: Seconds to allow the whole operation. ``None`` (the default)
-            waits for as long as the work takes.
+        timeout: Seconds to allow the whole operation --- a bound on the
+            *work*, spent across every reach the call makes. ``None`` (the
+            default) waits for as long as the work takes.
+
+            It does not cover teardown of an **owned** bridge, which happens
+            after the budget is already spent: leaving this block cancels
+            whatever the expired call left running and waits up to
+            :data:`_TEARDOWN_DRAIN_SECONDS` for it to unwind, so the worst
+            case a caller can observe is ``timeout`` plus that. A coroutine
+            that cancels promptly costs one loop iteration and the difference
+            is unmeasurable; one whose cleanup awaits something slow, or
+            ignores cancellation, costs the whole drain. The alternative is
+            destroying that cleanup mid-flight, which is the defect the drain
+            exists to fix --- so the bound is deliberately on the work rather
+            than on the call. A supplied bridge is not closed here and adds
+            nothing.
         thread_name: Name for an owned bridge's loop thread. A diagnostic
             label, not a way out of the leak guard --- the bridge registers
             every name it runs under, so

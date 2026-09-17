@@ -63,6 +63,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a caller that wants to tell the operation's deadline apart from a timeout the
   database itself raised now can.
 
+  **The deadline reaches the caller under every `error_handling` mode.** The
+  per-row handlers in `bulk_insert_dataframe` and `update_from_dataframe`
+  exist to absorb one row's failure and keep going; past the deadline every
+  remaining row is refused pre-flight, so on `"log"` and `"skip"` they absorbed
+  one refusal per row and returned `{"inserted": 0, "failed": n}` — a timed-out
+  operation reported as a dataframe of unwritable rows. `OperationTimeoutError`
+  now passes through all five of them. The wall-clock bound held either way;
+  what was lost was the report.
+
+  `timeout=` bounds the **work**, not the call: when an operation opens its own
+  loop, closing it afterwards waits up to five seconds for a cancelled round
+  trip to unwind rather than destroying its cleanup mid-flight, so the worst
+  case is `timeout` plus that. A `bridge=` you supply is not closed and adds
+  nothing.
+
 - **`SyncTextEmbedder` takes `bridge=` and answers `aclose()`, and builds its
   loop thread on first use.** It is now a `SyncBridgeAdapter` from
   `dataknobs-common`. Hand several embedders — or an embedder and any other

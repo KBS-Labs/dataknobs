@@ -212,7 +212,12 @@ class DirectoryProcessor:
                 backend behind a hung connection --- is an unbounded block
                 with nothing to interrupt it. ``None`` (the default) waits for
                 as long as the walk takes. On expiry the walk is asked to
-                cancel and :class:`TimeoutError` is raised.
+                cancel and :class:`TimeoutError` is raised. It bounds the walk
+                rather than this call: the throwaway loop is torn down
+                afterwards and waits up to five seconds for the cancelled walk
+                to unwind rather than destroying its cleanup mid-flight, so the
+                worst case is ``timeout`` plus that. See
+                :func:`~dataknobs_common.run_coro_sync`.
 
         Yields:
             ProcessedDocument for each processed file.
