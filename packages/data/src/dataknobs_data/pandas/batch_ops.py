@@ -5,24 +5,33 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, cast, TYPE_CHECKING
+from typing import Any, cast, TypeVar, TYPE_CHECKING
 
 import pandas as pd
 
+from dataknobs_common import SyncLoopBridge
 from dataknobs_common.callbacks import is_async_callable
 
 from .converter import ConversionOptions, DataFrameConverter
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Coroutine, Generator, Iterator
     from dataknobs_data.database import AsyncDatabase, SyncDatabase
     from dataknobs_data.query import Query
+    from dataknobs_data.records import Record
 
 
 logger = logging.getLogger(__name__)
+
+#: Loop-thread name for an operation's bridge. The bridge registers it, so
+#: ``assert_no_leaked_bridge_threads`` watches this name too --- it is a
+#: diagnostic label, not a way out of the leak guard.
+BRIDGE_THREAD_NAME = "dk-sync-batch-ops"
+
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -118,20 +127,156 @@ class ChunkedProcessor:
 
 
 class BatchOperations:
-    """Batch operations for DataKnobs databases using DataFrames."""
+    """Batch operations for DataKnobs databases using DataFrames.
+
+    Fronts either flavour of database. A :class:`SyncDatabase` is called
+    directly. An :class:`AsyncDatabase` is reached through a
+    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge` --- a private event
+    loop on a daemon thread --- so every method here is callable from plain
+    synchronous code *and* from inside a running event loop. Driving the
+    coroutine on the caller's own loop instead raises ``RuntimeError`` in the
+    second case, which is the case a synchronous helper over an async store
+    exists to serve.
+
+    "Callable from inside a running loop" means it does not deadlock. It still
+    **blocks**: the calling thread waits for the whole operation, so every
+    other task on the caller's loop is stalled for as long as the database
+    takes. From async code, ``await`` the database directly --- this class is
+    for the ``def`` sites that cannot. Pass ``timeout`` for an upper bound on
+    a wait a synchronous caller has no other way to cancel.
+
+    The loop is **operation-scoped**: one public call gets one loop, shared by
+    every coroutine that call drives --- every chunk of a
+    :meth:`bulk_insert_dataframe`, every row of its per-record fallback, and
+    both halves of a :meth:`transform_and_save` --- and the thread ends with
+    the call. So this class acquires no teardown obligation: there is nothing
+    to ``close``, and a synchronous database never allocates a thread at all.
+
+    .. important::
+
+       **A backend that binds loop state to its connection needs a bridge you
+       supply.** ``AsyncPostgresDatabase`` acquires an ``asyncpg`` pool in
+       ``connect()``, and that pool belongs to the loop that acquired it. This
+       class does not own the database, so it cannot own that loop: whichever
+       loop *you* connected on is the one every later operation must use.
+       Pass it as ``bridge``::
+
+           with SyncLoopBridge() as bridge:
+               bridge.run(db.connect())
+               ops = BatchOperations(db, bridge=bridge)
+               ops.bulk_insert_dataframe(df)
+
+       A bridge given here belongs to the caller: it is shared with whatever
+       else uses it, and nothing in this class closes it. Without one, each
+       operation runs on a loop of its own and a pooled backend raises
+       ``InterfaceError: cannot perform operation: another operation is in
+       progress`` --- from synchronous code, with no running loop anywhere,
+       because ``connect()``'s loop is already gone. Backends holding no
+       loop-bound state (memory, file) are unaffected either way.
+    """
 
     def __init__(
-        self, database: AsyncDatabase | SyncDatabase, converter: DataFrameConverter | None = None
+        self,
+        database: AsyncDatabase | SyncDatabase,
+        converter: DataFrameConverter | None = None,
+        *,
+        bridge: SyncLoopBridge | None = None,
+        timeout: float | None = None,
     ):
         """Initialize batch operations.
 
         Args:
-            database: Target database
-            converter: DataFrame converter
+            database: Target database, of either flavour.
+            converter: DataFrame converter.
+            bridge: A bridge to run this object's coroutines on, for the whole
+                of its life rather than one operation at a time. Required when
+                the database holds state bound to the loop that connected it
+                --- see the class docstring. It belongs to the caller: nothing
+                here closes it. The default gives each operation a private
+                bridge and ends it with the operation.
+            timeout: Seconds to allow each database call, giving a synchronous
+                caller an upper bound on a blocking wait it cannot otherwise
+                cancel. ``None`` (the default) waits as long as the database
+                takes. Ignored for a synchronous database.
         """
         self.database = database
         self.converter = converter or DataFrameConverter()
         self.is_async = hasattr(database, "create") and is_async_callable(database.create)
+        self._bridge = bridge
+        self._timeout = timeout
+
+    # -- reaching the database -------------------------------------------
+
+    @contextmanager
+    def _operation_loop(self) -> Iterator[SyncLoopBridge | None]:
+        """Yield the loop this operation's coroutines run on.
+
+        ``None`` for a synchronous database, which reaches no loop and must
+        not be charged a thread for one. A caller-supplied bridge is yielded
+        as-is and left running; otherwise the operation owns a bridge for its
+        duration and the ``with`` ends it --- including on the error paths,
+        which is why this is a context manager rather than a pair of calls.
+
+        The scope is the *public entry point*, not the database call: the
+        private workers take the bridge as an argument, so a composite method
+        drives both of its halves on one loop instead of stranding the first
+        half's.
+        """
+        if not self.is_async or self._bridge is not None:
+            yield self._bridge
+            return
+        with SyncLoopBridge(thread_name=BRIDGE_THREAD_NAME) as bridge:
+            yield bridge
+
+    def _await(self, bridge: SyncLoopBridge | None, coro: Coroutine[Any, Any, _T]) -> _T:
+        """Drive one coroutine on this operation's loop.
+
+        ``bridge`` is ``None`` only for a synchronous database, whose branches
+        never reach here. Saying so costs one check and turns a broken
+        invariant into a sentence; the alternative symptom is a
+        ``coroutine was never awaited`` warning several frames away.
+        """
+        if bridge is None:
+            coro.close()
+            raise RuntimeError(
+                "BatchOperations reached its async path with no operation loop "
+                "--- the database was detected as synchronous at construction."
+            )
+        return bridge.run(coro, timeout=self._timeout)
+
+    def _search(self, bridge: SyncLoopBridge | None, query: Query) -> list[Record]:
+        """``search``, on whichever flavour of database this object fronts."""
+        if self.is_async:
+            return self._await(bridge, cast("AsyncDatabase", self.database).search(query))
+        return cast("SyncDatabase", self.database).search(query)
+
+    def _create(self, bridge: SyncLoopBridge | None, record: Record) -> str:
+        """``create``, on whichever flavour of database this object fronts."""
+        if self.is_async:
+            return self._await(bridge, cast("AsyncDatabase", self.database).create(record))
+        return cast("SyncDatabase", self.database).create(record)
+
+    def _create_batch(self, bridge: SyncLoopBridge | None, records: list[Record]) -> list[str]:
+        """``create_batch``, on whichever flavour of database this object fronts."""
+        if self.is_async:
+            return self._await(bridge, cast("AsyncDatabase", self.database).create_batch(records))
+        return cast("SyncDatabase", self.database).create_batch(records)
+
+    def _update(self, bridge: SyncLoopBridge | None, record_id: str, record: Record) -> bool:
+        """``update``, on whichever flavour of database this object fronts."""
+        if self.is_async:
+            return self._await(
+                bridge, cast("AsyncDatabase", self.database).update(record_id, record)
+            )
+        return cast("SyncDatabase", self.database).update(record_id, record)
+
+    def _update_batch(
+        self, bridge: SyncLoopBridge | None, updates: list[tuple[str, Record]]
+    ) -> list[bool]:
+        """``update_batch``, on whichever flavour of database this object fronts."""
+        if self.is_async:
+            return self._await(bridge, cast("AsyncDatabase", self.database).update_batch(updates))
+        return cast("SyncDatabase", self.database).update_batch(updates)
 
     def bulk_insert_dataframe(
         self,
@@ -141,6 +286,9 @@ class BatchOperations:
     ) -> dict[str, Any]:
         """Bulk insert DataFrame rows into database.
 
+        Every chunk --- and, on the per-record fallback path, every row ---
+        runs on the one loop this operation holds.
+
         Args:
             df: DataFrame to insert
             config: Batch configuration
@@ -149,6 +297,17 @@ class BatchOperations:
         Returns:
             Insert statistics
         """
+        with self._operation_loop() as bridge:
+            return self._bulk_insert_dataframe(bridge, df, config, conversion_options)
+
+    def _bulk_insert_dataframe(
+        self,
+        bridge: SyncLoopBridge | None,
+        df: pd.DataFrame,
+        config: BatchConfig | None = None,
+        conversion_options: ConversionOptions | None = None,
+    ) -> dict[str, Any]:
+        """:meth:`bulk_insert_dataframe`, on a loop the caller already holds."""
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
         # These are now guaranteed to be non-None
@@ -165,7 +324,7 @@ class BatchOperations:
             final_conversion_options = conversion_options
 
             def process_chunk(chunk_df: pd.DataFrame) -> dict[str, int]:
-                return self._insert_chunk(chunk_df, final_config, final_conversion_options)
+                return self._insert_chunk(bridge, chunk_df, final_config, final_conversion_options)
 
             chunk_results = processor.process_dataframe(df, process_chunk)
 
@@ -177,7 +336,7 @@ class BatchOperations:
                     stats["errors"].extend(result["errors"])
         else:
             # Process entire DataFrame at once
-            stats = self._insert_chunk(df, config, conversion_options)
+            stats = self._insert_chunk(bridge, df, config, conversion_options)
 
         return stats
 
@@ -193,13 +352,19 @@ class BatchOperations:
         Returns:
             Query results as DataFrame
         """
+        with self._operation_loop() as bridge:
+            return self._query_as_dataframe(bridge, query, conversion_options)
+
+    def _query_as_dataframe(
+        self,
+        bridge: SyncLoopBridge | None,
+        query: Query,
+        conversion_options: ConversionOptions | None = None,
+    ) -> pd.DataFrame:
+        """:meth:`query_as_dataframe`, on a loop the caller already holds."""
         conversion_options = conversion_options or ConversionOptions()
 
-        # Execute query
-        if self.is_async:
-            records = asyncio.run(cast("AsyncDatabase", self.database).search(query))
-        else:
-            records = cast("SyncDatabase", self.database).search(query)
+        records = self._search(bridge, query)
 
         # Convert to DataFrame
         return self.converter.records_to_dataframe(records, conversion_options)
@@ -213,6 +378,9 @@ class BatchOperations:
     ) -> dict[str, Any]:
         """Update records from DataFrame using ID column.
 
+        Every chunk --- and, on the per-record fallback path, every row ---
+        runs on the one loop this operation holds.
+
         Args:
             df: DataFrame with updates
             id_column: Column containing record IDs
@@ -222,6 +390,18 @@ class BatchOperations:
         Returns:
             Update statistics
         """
+        with self._operation_loop() as bridge:
+            return self._update_from_dataframe(bridge, df, id_column, config, conversion_options)
+
+    def _update_from_dataframe(
+        self,
+        bridge: SyncLoopBridge | None,
+        df: pd.DataFrame,
+        id_column: str | None,
+        config: BatchConfig | None = None,
+        conversion_options: ConversionOptions | None = None,
+    ) -> dict[str, Any]:
+        """:meth:`update_from_dataframe`, on a loop the caller already holds."""
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
 
@@ -258,10 +438,7 @@ class BatchOperations:
 
             try:
                 # Use batch update for better performance
-                if self.is_async:
-                    results = asyncio.run(cast("AsyncDatabase", self.database).update_batch(chunk))
-                else:
-                    results = cast("SyncDatabase", self.database).update_batch(chunk)
+                results = self._update_batch(bridge, chunk)
 
                 # Count successes and failures
                 for success in results:
@@ -277,12 +454,7 @@ class BatchOperations:
 
                 for record_id, record in chunk:
                     try:
-                        if self.is_async:
-                            success = asyncio.run(
-                                cast("AsyncDatabase", self.database).update(record_id, record)
-                            )
-                        else:
-                            success = cast("SyncDatabase", self.database).update(record_id, record)
+                        success = self._update(bridge, record_id, record)
 
                         if success:
                             stats["updated"] += 1
@@ -320,7 +492,8 @@ class BatchOperations:
             Aggregated DataFrame
         """
         # Get data as DataFrame
-        df = self.query_as_dataframe(query)
+        with self._operation_loop() as bridge:
+            df = self._query_as_dataframe(bridge, query)
 
         if df.empty:
             return pd.DataFrame()
@@ -358,32 +531,45 @@ class BatchOperations:
         """
         config = config or BatchConfig()
 
-        # Get data
-        df = self.query_as_dataframe(query)
+        # One loop for the read and the write back: the halves are one
+        # operation against one database, and giving the second half a loop of
+        # its own is what strands a connection the first half bound.
+        with self._operation_loop() as bridge:
+            df = self._query_as_dataframe(bridge, query)
 
-        if df.empty:
-            return {"total_rows": 0, "transformed": 0}
+            if df.empty:
+                return {"total_rows": 0, "transformed": 0}
 
-        # Apply transformation
-        transformed_df = transformer(df)
+            # Apply transformation
+            transformed_df = transformer(df)
 
-        # Save back if index preserved (has record IDs)
-        if df.index.name == "record_id" and transformed_df.index.name == "record_id":
-            return self.update_from_dataframe(
-                transformed_df,
-                id_column=None,  # Use index
-                config=config,
-            )
-        else:
+            # Save back if index preserved (has record IDs)
+            if df.index.name == "record_id" and transformed_df.index.name == "record_id":
+                return self._update_from_dataframe(
+                    bridge,
+                    transformed_df,
+                    id_column=None,  # Use index
+                    config=config,
+                )
             # Insert as new records
-            return self.bulk_insert_dataframe(transformed_df, config)
+            return self._bulk_insert_dataframe(bridge, transformed_df, config)
 
     def _insert_chunk(
-        self, df: pd.DataFrame, config: BatchConfig, conversion_options: ConversionOptions
+        self,
+        bridge: SyncLoopBridge | None,
+        df: pd.DataFrame,
+        config: BatchConfig,
+        conversion_options: ConversionOptions,
     ) -> dict[str, Any]:
-        """Insert a chunk of DataFrame rows.
+        """Insert a chunk of DataFrame rows, on the operation's loop.
+
+        Both fallback paths below call the database once per row, which is why
+        the loop is the *operation's* rather than each call's: a bridge per
+        row would be a daemon thread per row.
 
         Args:
+            bridge: The loop this operation's coroutines run on; ``None`` for
+                a synchronous database, which reaches no loop.
             df: DataFrame chunk
             config: Batch configuration
             conversion_options: Conversion options
@@ -399,10 +585,7 @@ class BatchOperations:
         # Use batch creation for better performance with graceful fallback
         if hasattr(self.database, "create_batch"):
             try:
-                if self.is_async:
-                    ids = asyncio.run(cast("AsyncDatabase", self.database).create_batch(records))
-                else:
-                    ids = cast("SyncDatabase", self.database).create_batch(records)
+                ids = self._create_batch(bridge, records)
                 stats["inserted"] = len(ids)
 
                 # Progress callback for successful batch
@@ -413,10 +596,7 @@ class BatchOperations:
                 # Batch failed, try individual records to identify failures
                 for i, record in enumerate(records):
                     try:
-                        if self.is_async:
-                            asyncio.run(cast("AsyncDatabase", self.database).create(record))
-                        else:
-                            cast("SyncDatabase", self.database).create(record)
+                        self._create(bridge, record)
                         stats["inserted"] += 1
 
                     except Exception as record_error:
@@ -437,10 +617,7 @@ class BatchOperations:
             # Fallback to individual inserts if create_batch not available
             for i, record in enumerate(records):
                 try:
-                    if self.is_async:
-                        asyncio.run(cast("AsyncDatabase", self.database).create(record))
-                    else:
-                        cast("SyncDatabase", self.database).create(record)
+                    self._create(bridge, record)
                     stats["inserted"] += 1
 
                 except Exception as e:
@@ -473,7 +650,8 @@ class BatchOperations:
             conversion_options: Conversion options
             **to_csv_kwargs: Additional arguments for DataFrame.to_csv
         """
-        df = self.query_as_dataframe(query, conversion_options)
+        with self._operation_loop() as bridge:
+            df = self._query_as_dataframe(bridge, query, conversion_options)
         df.to_csv(filepath, **to_csv_kwargs)
 
     def export_to_parquet(
@@ -491,12 +669,6 @@ class BatchOperations:
             conversion_options: Conversion options
             **to_parquet_kwargs: Additional arguments for DataFrame.to_parquet
         """
-        df = self.query_as_dataframe(query, conversion_options)
+        with self._operation_loop() as bridge:
+            df = self._query_as_dataframe(bridge, query, conversion_options)
         df.to_parquet(filepath, **to_parquet_kwargs)
-
-
-# Import asyncio only if needed
-try:
-    import asyncio
-except ImportError:
-    asyncio = None

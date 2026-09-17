@@ -310,6 +310,26 @@ print(chunk_results.describe())
 
 ### Streaming from Database
 
+`BatchOperations` has no streaming reader. `stream_read` is the
+database's, and it yields `Record` objects one at a time — batch them and
+convert:
+
+```python
+from itertools import batched
+
+from dataknobs_data.pandas import DataFrameConverter
+from dataknobs_data.streaming import StreamConfig
+
+converter = DataFrameConverter()
+
+
+def stream_as_dataframes(db, query, chunk_size=200):
+    """Yield the query result as DataFrames of at most chunk_size rows."""
+    stream = db.stream_read(query, StreamConfig(batch_size=chunk_size))
+    for batch in batched(stream, chunk_size):
+        yield converter.records_to_dataframe(list(batch))
+```
+
 Stream and process records in batches:
 
 ```python
@@ -335,7 +355,7 @@ def calculate_daily_metrics(chunk_df):
 # Stream data from database and process
 all_daily_stats = []
 
-for chunk_df in batch_ops.stream_as_dataframe(Query(), chunk_size=200):
+for chunk_df in stream_as_dataframes(db, Query(), chunk_size=200):
     daily_stats = calculate_daily_metrics(chunk_df)
     all_daily_stats.append(daily_stats)
 
@@ -701,7 +721,7 @@ def memory_efficient_aggregation(db, batch_ops):
     # Use iterator pattern
     aggregator = {}
     
-    for chunk_df in batch_ops.stream_as_dataframe(Query(), chunk_size=100):
+    for chunk_df in stream_as_dataframes(db, Query(), chunk_size=100):
         # Process each chunk
         chunk_agg = chunk_df.groupby("product")["revenue"].sum()
         

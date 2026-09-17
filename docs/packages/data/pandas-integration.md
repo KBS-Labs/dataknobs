@@ -199,6 +199,49 @@ for record in records:
 
 ## Batch Operations
 
+### Async databases and the event loop
+
+`BatchOperations` fronts either flavour of database. A `SyncDatabase` is
+called directly. An `AsyncDatabase` is reached through a
+[`SyncLoopBridge`](https://kbs-labs.github.io/dataknobs/packages/common/guides/sync-bridge/)
+— a private event loop on a daemon thread — so **every method is callable
+from plain synchronous code and from inside a running event loop alike**.
+
+It still *blocks*: the calling thread waits for the whole operation, so
+from async code you stall every other task on your loop for its duration.
+`await` the database directly where you can; this class is for the `def`
+sites that cannot. `timeout=` is the only upper bound a synchronous caller
+has on that wait.
+
+The loop is **operation-scoped** — one public call gets one loop, shared by
+every chunk and every row that call touches, and the thread ends with the
+call. There is nothing to `close()`, and a synchronous database never
+allocates a thread at all.
+
+#### Pooled backends need a bridge you supply
+
+`AsyncPostgresDatabase` acquires its `asyncpg` pool in `connect()`, and
+that pool belongs to the loop that acquired it. `BatchOperations` does not
+own the database, so it cannot own that loop: whichever loop **you**
+connected on is the one every later operation must use. Pass it in:
+
+```python
+from dataknobs_common import SyncLoopBridge
+
+with SyncLoopBridge() as bridge:
+    bridge.run(database.connect())
+    batch_ops = BatchOperations(database, bridge=bridge)
+    batch_ops.bulk_insert_dataframe(df)
+```
+
+A bridge given this way belongs to the caller: it is shared with whatever
+else uses it, and nothing in `BatchOperations` closes it. Without one,
+each operation runs on a loop of its own and a pooled backend raises
+`InterfaceError: cannot perform operation: another operation is in
+progress` — from synchronous code, with no running loop anywhere, because
+`connect()`'s loop is already gone. Backends that hold no loop-bound state
+(memory, file) are unaffected either way.
+
 ### Bulk Insert from DataFrame
 
 Efficiently insert DataFrame data into database:
@@ -210,11 +253,12 @@ from dataknobs_data.pandas import BatchConfig, BatchOperations
 batch_ops = BatchOperations(database)
 
 # Bulk insert from DataFrame. Every batch knob lives on BatchConfig; there is
-# no schema-validation flag here.
+# no schema-validation flag here, and `parallel` / `max_workers` are stored
+# but read nowhere -- the insert is sequential whatever they say.
 df = pd.read_csv("large_dataset.csv")
 result = batch_ops.bulk_insert_dataframe(
     df,
-    config=BatchConfig(chunk_size=1000, parallel=True),
+    config=BatchConfig(chunk_size=1000, error_handling="log"),
 )
 
 # Statistics come back as a dict, not an object
@@ -226,7 +270,9 @@ if result["errors"]:
 
 ### Bulk Update
 
-Update existing records from DataFrame:
+Update existing records from DataFrame. The method is
+`update_from_dataframe`, and IDs come either from the index or from a
+named column — there is no merge-strategy knob:
 
 ```python
 # Update records matching DataFrame index
@@ -235,28 +281,38 @@ df_updates = pd.DataFrame({
     "last_login": [datetime.now()] * 3
 }, index=["id1", "id2", "id3"])  # Record IDs as index
 
-result = batch_ops.bulk_update_dataframe(
+result = batch_ops.update_from_dataframe(
     df_updates,
-    id_column=None,  # Use index as ID
-    merge_strategy="update"  # or "replace"
+    id_column=None,             # None = use the index as the ID
+    config=BatchConfig(chunk_size=500, error_handling="log"),
 )
+
+print(f"Updated: {result['updated']}")
+print(f"Not found: {result['not_found']}")
+print(f"Failed: {result['failed']}")
 ```
+
+Rows whose ID is not in the database count as `not_found` rather than
+being inserted: `update_from_dataframe` updates, it does not upsert.
 
 ### Upsert Operations
 
-Insert or update based on existence:
+`BatchOperations` has no upsert method. Insert-or-update goes through the
+database's own `upsert_batch`, with the converter supplying the records:
 
 ```python
-# Upsert: Update if exists, insert if new
-result = batch_ops.bulk_upsert_dataframe(
-    df,
-    id_column="user_id",  # Column to use as record ID
-    batch_size=500
-)
+from dataknobs_data.pandas import DataFrameConverter
 
-print(f"Inserted: {result.inserted}")
-print(f"Updated: {result.updated}")
+converter = DataFrameConverter()
+records = converter.dataframe_to_records(df)
+
+ids = database.upsert_batch(records)     # sync database
+print(f"Upserted: {len(ids)}")
 ```
+
+Each record's ID is taken from the record itself, so set it in the
+DataFrame — as the index, or through the converter's ID options — before
+converting.
 
 ## Query Integration
 
@@ -373,8 +429,8 @@ def clean_dataset(database):
     })
     
     # Save cleaned data
-    batch_ops = BatchOperations(database)
-    batch_ops.bulk_upsert_dataframe(df, id_column="id")
+    converter = DataFrameConverter()
+    database.upsert_batch(converter.dataframe_to_records(df))
     
     return df
 ```
@@ -454,7 +510,7 @@ def process_large_dataset(database, chunk_size=10000):
         df = process_chunk(df)
         
         # Save results
-        batch_ops.bulk_upsert_dataframe(df)
+        database.upsert_batch(converter.dataframe_to_records(df))
         
         processed += len(records)
         print(f"Processed {processed}/{total} records")

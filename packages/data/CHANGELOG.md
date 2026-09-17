@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`BatchOperations` reaches an async database through one loop per operation,
+  and takes a `bridge=` for a database that needs one loop for its life.** It
+  drove the async half with `asyncio.run` at six sites, so every public method
+  — `bulk_insert_dataframe`, `query_as_dataframe`, `update_from_dataframe`,
+  and `aggregate`, `transform_and_save`, `export_to_csv` and
+  `export_to_parquet` behind them — raised `RuntimeError: asyncio.run() cannot
+  be called from a running event loop` for a caller already on a loop. They no
+  longer do. Each public call now holds one `SyncLoopBridge` for its duration,
+  so a chunked insert runs every chunk and every row of its per-record
+  fallback on the same loop, and `transform_and_save` runs its read and its
+  write-back on one. The bridge ends with the call: there is no `close()` to
+  add to your code, and a `SyncDatabase` still allocates no thread at all.
+
+  A backend that binds loop state to its connection needs more than that, and
+  gets it from the new keyword-only `bridge=`. `AsyncPostgresDatabase`
+  acquires its `asyncpg` pool in `connect()`, and the pool belongs to the loop
+  that acquired it — so against a pooled backend this class never worked, in
+  either direction: the *first* operation after `connect()` raised
+  `InterfaceError: cannot perform operation: another operation is in
+  progress`, from synchronous code with no running loop anywhere. Connect on
+  a bridge you own and pass it in, and every operation lands on that loop:
+
+  ```python
+  with SyncLoopBridge() as bridge:
+      bridge.run(database.connect())
+      BatchOperations(database, bridge=bridge).bulk_insert_dataframe(df)
+  ```
+
+  A bridge passed this way belongs to the caller; nothing here closes it. The
+  new `timeout=` bounds each database call, which is the only upper bound a
+  blocked synchronous caller has. Signatures are otherwise unchanged, and
+  `converter` remains the second positional parameter.
+
 - **`SyncTextEmbedder` takes `bridge=` and answers `aclose()`, and builds its
   loop thread on first use.** It is now a `SyncBridgeAdapter` from
   `dataknobs-common`. Hand several embedders — or an embedder and any other
