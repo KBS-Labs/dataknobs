@@ -67,9 +67,10 @@ result = run_coro_sync(some_async_function(arg))
   timeout=...)`) raise `TimeoutError` if the coroutine does not finish in
   time. The timed-out coroutine is asked to cancel (best-effort) and the
   bridge stays usable. With no `timeout` the wait is unbounded.
-- **Clean teardown** — `close()` stops the loop and joins the thread; it is
-  idempotent and supported via the context-manager protocol. Concurrent
-  closers all block until teardown completes. The loop thread is a
+- **Clean teardown** — `close()` cancels whatever is still running on the
+  loop, waits (bounded) for it to unwind, then stops the loop and joins the
+  thread; it is idempotent and supported via the context-manager protocol.
+  Concurrent closers all block until teardown completes. The loop thread is a
   `daemon`, so it can never block process exit.
 - **Reusable, and concurrency-safe for submission** — a single bridge serves
   many `run()` calls, including concurrent calls from multiple threads.
@@ -214,10 +215,18 @@ bug — unlike `AsyncLLMProvider`, where sync entry is *always* wrong and
 > before leaving the block.
 
 Teardown itself is not guaranteed to be free of I/O, in either form. Ending the
-bridge joins its thread, and the loop drains its async generators on the way
-down — so an abandoned stream's `finally` runs inside that join. Usually
-microseconds; a holder that cannot afford even that wraps `aclose()` in
-`asyncio.to_thread` as well.
+bridge joins its thread, and on the way down the loop cancels whatever is still
+running on it and drains its async generators — so an abandoned stream's
+`finally`, and the cleanup of a task the wrapper never awaited, both run inside
+that join. Usually microseconds, because a task that honours cancellation is
+done in one loop iteration; a holder that cannot afford even that wraps
+`aclose()` in `asyncio.to_thread` as well.
+
+The wait is bounded rather than unbounded: `close()` joins the loop thread, so
+a task that ignores cancellation would otherwise hang the closing caller
+forever — a worse failure than the abandonment the drain exists to prevent.
+One that outlasts the window is logged by name and then abandoned, which is
+the original behaviour surviving in the one case nothing can fix.
 
 `BRIDGE_THREAD_NAME` is **required** — a subclass that omits it raises
 `TypeError` at class-creation time. It is also a diagnostic label rather than a

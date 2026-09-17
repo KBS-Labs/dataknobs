@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A closing `SyncLoopBridge` no longer destroys work that is still running
+  on its loop.** Teardown drained the loop's async generators and nothing
+  else, so any task still pending when the loop stopped was destroyed by
+  `loop.close()` with its `finally` unrun — the only report being
+  `Task was destroyed but it is pending!` on stderr, while whatever that
+  `finally` would have released (a pooled connection, an open transaction, a
+  lock) stayed held. Two ordinary shapes reached it: a coroutine that spawned
+  a task and returned without awaiting it, which leaks one from a wholly
+  *successful* `run()`; and a coroutine cancelled by `run(..., timeout=)`
+  whose cleanup awaits more than once, which is what realistic cleanup does.
+  `close()` now cancels what is still running and waits for it to unwind
+  before closing the loop, so `run()`'s documented "not abandoned mid-flight"
+  holds on the close path as well as the timeout path. The wait is bounded at
+  five seconds — `close()` joins the loop thread, so an uncancellable task
+  would otherwise hang the closing caller indefinitely — and a task that
+  outlasts it is logged by name. Teardown therefore costs a loop iteration
+  rather than nothing; a holder that cannot afford that already had the
+  remedy of wrapping `aclose()` in `asyncio.to_thread`.
+
 ### Documentation
 
 - **The sync-bridge guide says how long a bridge has to live, not just what it

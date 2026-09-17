@@ -48,6 +48,7 @@ long-lived bridge over spawning one per call (or per
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import threading
 import warnings
@@ -71,6 +72,15 @@ _THREAD_NAME = "dk-sync-loop-bridge"
 # rather than a way out of the guard.
 _thread_names: set[str] = {_THREAD_NAME}
 
+logger = logging.getLogger(__name__)
+
+#: Seconds teardown spends letting cancelled tasks unwind before the loop is
+#: closed anyway. Bounded rather than unbounded --- ``close`` joins the loop
+#: thread, so a task that refuses to cancel would otherwise hang the closing
+#: caller forever, which is a worse failure than the one this drain fixes. A
+#: task that cancels promptly costs a single loop iteration, not this budget.
+_TEARDOWN_DRAIN_SECONDS = 5.0
+
 
 def _run_loop(loop: asyncio.AbstractEventLoop, ready: threading.Event) -> None:
     """Body of a bridge's loop thread.
@@ -88,13 +98,61 @@ def _run_loop(loop: asyncio.AbstractEventLoop, ready: threading.Event) -> None:
     asyncio.set_event_loop(loop)
     loop.call_soon(ready.set)
     loop.run_forever()
-    # ``run_forever`` returned -> ``close`` stopped the loop. Drain any
-    # leftover async generators and close the loop here, on the loop's own
-    # thread (the only thread allowed to close it cleanly).
+    # ``run_forever`` returned -> ``close`` stopped the loop. Unwind what is
+    # still on it and close it here, on the loop's own thread (the only thread
+    # allowed to close it cleanly). Tasks first, then async generators: a
+    # cancelled task's ``finally`` can be what closes a generator, and draining
+    # the generators first would close it out from under the task.
     try:
+        _cancel_pending_tasks(loop)
         loop.run_until_complete(loop.shutdown_asyncgens())
     finally:
         loop.close()
+
+
+def _cancel_pending_tasks(loop: asyncio.AbstractEventLoop) -> None:
+    """Cancel whatever is still running on ``loop`` and let it unwind.
+
+    ``loop.close()`` destroys a pending task outright: its ``finally`` never
+    runs and the only report is ``Task was destroyed but it is pending!`` on
+    stderr. That ``finally`` is where a connection goes back to its pool, a
+    transaction is rolled back, a lock is released --- so without this the
+    bridge leaks exactly the resources a teardown exists to reclaim.
+
+    Two shapes reach here, and neither is exotic. A coroutine that spawned a
+    task and returned without awaiting it leaves one behind on a wholly
+    *successful* ``run`` --- a pool's background maintenance is this shape. And
+    a coroutine cancelled by :meth:`SyncLoopBridge.run`'s timeout needs more
+    than the single loop iteration it used to get if its cleanup awaits more
+    than once, which realistic cleanup does.
+
+    This is what makes ``run``'s "not abandoned mid-flight" true on the close
+    path as well as the timeout path. It mirrors what :func:`asyncio.run` does
+    through :class:`asyncio.Runner`, with the wait bounded --- see
+    :data:`_TEARDOWN_DRAIN_SECONDS`.
+    """
+    pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    # ``wait`` returns the two sets rather than raising, so a task that ignores
+    # cancellation costs the budget and nothing else.
+    _, still_pending = loop.run_until_complete(
+        asyncio.wait(pending, timeout=_TEARDOWN_DRAIN_SECONDS)
+    )
+    if still_pending:
+        # Reported rather than swallowed: these are about to be destroyed by
+        # `loop.close()` with their cleanup unrun, which is the original defect
+        # surviving in the one case this cannot fix. Naming them is the
+        # difference between a diagnosable leak and a silent one.
+        logger.warning(
+            "SyncLoopBridge teardown: %d task(s) did not finish cancelling "
+            "within %.1fs and were abandoned: %s",
+            len(still_pending),
+            _TEARDOWN_DRAIN_SECONDS,
+            ", ".join(sorted(task.get_name() for task in still_pending)),
+        )
 
 
 def bridge_thread_names() -> frozenset[str]:
@@ -257,6 +315,16 @@ class SyncLoopBridge:
 
     def close(self) -> None:
         """Stop the background loop and join its thread. Idempotent.
+
+        Whatever is still running on the loop is cancelled and given a bounded
+        window to unwind before the loop is closed --- see
+        :func:`_cancel_pending_tasks`. That is what makes :meth:`run`'s "not
+        abandoned mid-flight" hold on this path too: without it a task whose
+        cancellation had been requested but not yet delivered, or one a
+        coroutine spawned and never awaited, was destroyed by ``loop.close()``
+        with its ``finally`` unrun. Teardown therefore costs a loop iteration
+        rather than nothing, and in the pathological case up to
+        :data:`_TEARDOWN_DRAIN_SECONDS`.
 
         Safe to call from any thread except the bridge's own loop thread:
         calling ``close`` from inside a coroutine running on the bridge would

@@ -392,3 +392,92 @@ def test_a_running_bridge_is_reclaimable_when_its_owner_drops_it() -> None:
 
 async def _answer_42() -> int:
     return 42
+
+
+def test_close_drains_a_task_the_coroutine_left_running() -> None:
+    """``close`` must not destroy a task that is still pending.
+
+    ``_run_loop`` drained async generators on the way down and nothing else,
+    so any task still pending when the loop stopped was destroyed by
+    ``loop.close()`` --- reported only as ``Task was destroyed but it is
+    pending!`` on stderr, with its ``finally`` never run. That ``finally`` is
+    where a connection goes back to its pool, a transaction is rolled back, a
+    lock is released.
+
+    A coroutine that spawns a task and returns without awaiting it is not an
+    exotic shape: it is what a pool's background maintenance looks like, and
+    what ``AsyncLLMProvider`` holds while requests are in flight. Note that no
+    timeout is involved --- ``run`` here *succeeds*, and the abandonment
+    happens at ``close`` regardless.
+    """
+    started = threading.Event()
+    cleaned = threading.Event()
+
+    async def background() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        finally:
+            cleaned.set()
+
+    # Held by the test, not by `spawn`: a task referenced only from inside the
+    # coroutine that spawned it is GC-eligible the moment that coroutine
+    # returns, and a test that raced the collector would pass for the wrong
+    # reason. The point is a task the loop still holds at teardown.
+    spawned: list[asyncio.Task[None]] = []
+
+    async def spawn() -> str:
+        spawned.append(asyncio.create_task(background()))
+        await asyncio.sleep(0)
+        return "done"
+
+    bridge = SyncLoopBridge(thread_name="dk-drain-probe")
+    assert bridge.run(spawn()) == "done"
+    assert started.wait(timeout=5.0), "the background task never started"
+
+    bridge.close()
+
+    assert cleaned.is_set(), (
+        "a pending task was destroyed by loop.close(): its finally never ran, "
+        "so whatever it was holding was never released"
+    )
+
+
+def test_close_lets_a_cancelled_coroutine_finish_unwinding() -> None:
+    """A timed-out coroutine gets to *finish* unwinding, not merely to start.
+
+    :meth:`SyncLoopBridge.run` documents that a timed-out coroutine "keeps
+    running on the bridge loop until it completes or its best-effort
+    cancellation takes effect --- it is not abandoned mid-flight". ``close``
+    stopped the loop one iteration after requesting the cancel, so cleanup
+    that needs more than a single step never finished.
+
+    The cleanup here awaits three times because realistic cleanup does: a
+    rollback, a release, a close. A ``finally`` with exactly one await point
+    happens to win the race, which is why this pins the multi-step shape ---
+    the single-step version passes against the unfixed code and proves
+    nothing.
+    """
+    started = threading.Event()
+    cleaned = threading.Event()
+
+    async def slow() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        finally:
+            for _ in range(3):
+                await asyncio.sleep(0)
+            cleaned.set()
+
+    bridge = SyncLoopBridge(thread_name="dk-drain-probe")
+    with pytest.raises(TimeoutError):
+        bridge.run(slow(), timeout=0.05)
+    assert started.wait(timeout=5.0), "the coroutine never started"
+
+    bridge.close()
+
+    assert cleaned.is_set(), (
+        "the coroutine was abandoned part way through its finally: close() "
+        "stopped the loop before the cancellation had finished unwinding"
+    )
