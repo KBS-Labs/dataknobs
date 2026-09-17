@@ -445,17 +445,21 @@ processor = FileProcessor(config)
 Stream database records:
 
 ```python
+import asyncio
+
 from dataknobs_fsm.patterns.etl import DatabaseETL
 
-# ETL with streaming
+# ETL with streaming. The batch size is `batch_size` -- an unknown keyword is
+# absorbed by the pattern's **kwargs and silently dropped, so a misspelling
+# runs at the default rather than failing.
 etl = DatabaseETL(
     source_db=source_connection,
     target_db=target_connection,
-    chunk_size=10000
+    batch_size=10000,
 )
 
-# Streams from source to target
-etl.process()
+# Streams from source to target. `run` is a coroutine.
+result = asyncio.run(etl.run())
 ```
 
 ## Complete Examples

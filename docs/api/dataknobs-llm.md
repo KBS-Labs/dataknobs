@@ -251,8 +251,11 @@ from dataknobs_llm.prompts.versioning.types import PromptVariant
 # Version management
 version_manager = VersionManager()
 
-# Create versions. `prompt_type` is required alongside the name -- "system",
-# "user" or "message" -- because a name is only unique within a type.
+# Create versions. `prompt_type` is required alongside the name, because a
+# name is only unique within a type. It is a free-form label, not a checked
+# vocabulary; the library's own accessors look for "system" and "user"
+# (`list_system_prompts` / `list_user_prompts`), and `ConfigPromptLibrary`
+# spells its message section "messages".
 v1 = await version_manager.create_version(
     name="summarize",
     prompt_type="user",

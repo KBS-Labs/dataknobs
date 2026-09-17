@@ -487,9 +487,9 @@ manager = ConfigCachingManager(
 await manager.initialize()
 
 # Get resolved config
-resolved: ResolvedConfig = await manager.get("my-bot")
-print(f"Config: {resolved.config}")
-print(f"Version: {resolved.version}")
+resolved: ResolvedConfig = await manager.get_or_create("my-bot")
+print(f"Config: {resolved.resolved_config}")
+print(f"Environment: {resolved.environment_name}")
 ```
 
 ## Hot Reload
@@ -560,7 +560,7 @@ await hot_reload.initialize()
 # Starts poller if mode includes polling
 # Invalidates cache on changes
 
-await hot_reload.shutdown()
+await hot_reload.close()
 ```
 
 ### Reload Modes
@@ -879,8 +879,9 @@ async def main():
     response = await bot.chat("Hello!")
     print(response)
 
-    # Update config - hot reload will invalidate cache
-    await backend.update("support-bot", {
+    # Update config - hot reload will invalidate cache. `register` both
+    # registers and updates; there is no separate update.
+    await backend.register("support-bot", {
         "llm": {"provider": "anthropic", "model": "claude-3-opus"},
         "system_prompt": "You are a helpful support agent."
     })
@@ -899,7 +900,7 @@ async def main():
     bot = await manager.get_or_create("support-bot")
 
     # Cleanup
-    await hot_reload.shutdown()
+    await hot_reload.close()
     await event_bus.close()
 
 

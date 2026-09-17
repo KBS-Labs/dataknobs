@@ -87,9 +87,9 @@ from dataknobs_llm import ToolRegistry
 registry = ToolRegistry()
 
 # Register tools
-registry.register(CalculatorTool())
-registry.register(WebSearchTool())
-registry.register(FileReadTool())
+registry.register_tool(CalculatorTool())
+registry.register_tool(WebSearchTool())
+registry.register_tool(FileReadTool())
 
 # List available tools
 print(f"Available tools: {registry.get_tool_names()}")
@@ -460,8 +460,8 @@ from dataknobs_llm.conversations import (
 
 # Set up tools
 registry = ToolRegistry()
-registry.register(CalculatorTool())
-registry.register(SearchTool())
+registry.register_tool(CalculatorTool())
+registry.register_tool(SearchTool())
 
 # Configure LLM with tools
 config = LLMConfig(

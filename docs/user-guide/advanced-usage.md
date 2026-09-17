@@ -210,14 +210,15 @@ summarize_template_v2 = MessageTemplate(
 # Use LLM with templates
 llm = create_llm_provider({"provider": "openai", "model": "gpt-4"})
 
-# Build messages from template
+# Build messages from template. MessageBuilder is fluent: each role method
+# returns the builder, and `build()` produces the message list.
 builder = MessageBuilder()
-builder.add_user_message(summarize_template_v2.format(
+builder.user(summarize_template_v2.format(
     text="Long article content...",
     max_words=50
 ))
 
-response = await llm.generate(builder.messages)
+response = await llm.generate(builder.build())
 ```
 
 ### Tool Calling with LLMs
@@ -271,8 +272,8 @@ class CalculatorTool(Tool):
 
 # Register tools
 registry = ToolRegistry()
-registry.register(DatabaseSearchTool())
-registry.register(CalculatorTool())
+registry.register_tool(DatabaseSearchTool())
+registry.register_tool(CalculatorTool())
 
 # Use LLM with tools
 llm = create_llm_provider({
@@ -284,7 +285,7 @@ messages = [LLMMessage(
     role="user",
     content="What's 15% of the revenue from last quarter?"
 )]
-response = await llm.generate(messages, tools=registry.get_all())
+response = await llm.generate(messages, tools=registry.to_function_definitions())
 ```
 
 [Learn more →](../packages/llm/index.md)

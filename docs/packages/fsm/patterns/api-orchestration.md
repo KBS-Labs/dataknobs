@@ -125,7 +125,7 @@ config = APIOrchestrationConfig(
 orchestrator = APIOrchestrator(config)
 
 # Execute orchestration
-result = asyncio.run(orchestrator.execute({"user_id": 123}))
+result = asyncio.run(orchestrator.orchestrate({"user_id": 123}))
 ```
 
 ## Orchestration Modes
@@ -413,15 +413,24 @@ print(f"Average latency: {metrics.avg_latency}ms")
 
 ### Custom Metrics
 
+`IOMetrics` counts I/O volume and failures. The recorders take byte counts,
+not endpoint names, and an error is counted rather than classified:
+
 ```python
 from dataknobs_fsm.io.utils import IOMetrics
 
 metrics = IOMetrics()
 
-# Track custom metrics
-metrics.record_request("custom_api", latency=150)
-metrics.record_error("custom_api", error_type="timeout")
+metrics.record_read(bytes_read=2048)
+metrics.record_write(bytes_written=512)
+metrics.record_retry()
+metrics.record_error()
+
+print(metrics.get_metrics())
 ```
+
+Per-endpoint latency and error classification are not part of this object;
+record those alongside it if you need them.
 
 
 ## Complete Examples
@@ -476,7 +485,7 @@ async def enrich_user_data(user_id):
 
     # Execute orchestration
     orchestrator = APIOrchestrator(config)
-    enriched_data = await orchestrator.execute({"user_id": user_id})
+    enriched_data = await orchestrator.orchestrate({"user_id": user_id})
 
     return enriched_data
 

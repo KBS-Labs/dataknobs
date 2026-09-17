@@ -86,14 +86,18 @@ Full control with debugging, step-by-step execution, and profiling.
 from dataknobs_fsm import AdvancedFSM, FSMDebugger
 
 fsm = AdvancedFSM(config)
+
+# Breakpoints belong to the FSM, not the debugger
+fsm.add_breakpoint('transform')
+
 debugger = FSMDebugger(fsm)
+debugger.start({'value': 21})
 
-# Set breakpoint
-debugger.add_breakpoint('transform')
-
-# Step through execution
-for step in debugger.step_through({'value': 21}):
-    print(f"State: {step.state_name}, Data: {step.data}")
+# Step one transition at a time
+step = debugger.step()
+while not step.is_complete:
+    print(f"{step.from_state} -> {step.to_state}, data: {step.data_after}")
+    step = debugger.step()
 ```
 
 **Use AdvancedFSM for:**
@@ -590,13 +594,18 @@ def load_data(state):
         'status': 'complete'
     }
 
-# Create FSM and register functions
-fsm = SimpleFSM(config)
-fsm.register_function('extract_data', extract_data)
-fsm.register_function('transform_data', transform_data)
-fsm.register_function('check_valid', check_valid)
-fsm.register_function('validate_data', validate_data)
-fsm.register_function('load_data', load_data)
+# Create FSM with the functions the config names. There is no
+# register_function: the mapping is a constructor argument.
+fsm = SimpleFSM(
+    config,
+    custom_functions={
+        'extract_data': extract_data,
+        'transform_data': transform_data,
+        'check_valid': check_valid,
+        'validate_data': validate_data,
+        'load_data': load_data,
+    },
+)
 
 # Process single record
 result = fsm.process({})
@@ -724,22 +733,27 @@ Use AdvancedFSM for debugging:
 from dataknobs_fsm import AdvancedFSM, FSMDebugger
 
 fsm = AdvancedFSM(config)
-debugger = FSMDebugger(fsm)
 
-# Set breakpoints
-debugger.add_breakpoint('transform')
-debugger.add_breakpoint('validate')
+# Set breakpoints on the FSM
+fsm.add_breakpoint('transform')
+fsm.add_breakpoint('validate')
+
+debugger = FSMDebugger(fsm)
+debugger.start({'value': 42})
 
 # Step through execution
-for step in debugger.step_through({'value': 42}):
-    print(f"State: {step.state_name}")
-    print(f"Data: {step.data}")
+step = debugger.step()
+while not step.is_complete:
+    print(f"State: {step.from_state} -> {step.to_state}")
+    print(f"Data: {step.data_after}")
     print(f"Timing: {step.duration}ms")
 
     # Inspect state
-    if step.state_name == 'transform':
-        print(f"Before: {step.before_data}")
-        print(f"After: {step.after_data}")
+    if step.to_state == 'transform':
+        print(f"Before: {step.data_before}")
+        print(f"After: {step.data_after}")
+
+    step = debugger.step()
 ```
 
 ## Error Handling

@@ -303,10 +303,12 @@ from dataknobs_data.backends import SyncMemoryDatabase
 registry = BotRegistry()
 db = SyncMemoryDatabase()  # For conversation history
 
-bot = registry.create_bot("assistant", {
+# Register the config, then ask for the bot it builds
+registry.register("assistant", {
     "llm": {"provider": "openai"},
     "memory": {"type": "buffer"}
 })
+bot = registry.get_bot("assistant")
 ```
 
 ### Environment-Based Configuration

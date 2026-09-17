@@ -204,24 +204,24 @@ for record in records:
 Efficiently insert DataFrame data into database:
 
 ```python
-from dataknobs_data.pandas import BatchOperations
+from dataknobs_data.pandas import BatchConfig, BatchOperations
 
 # Create batch operations handler
 batch_ops = BatchOperations(database)
 
-# Bulk insert from DataFrame
+# Bulk insert from DataFrame. Every batch knob lives on BatchConfig; there is
+# no schema-validation flag here.
 df = pd.read_csv("large_dataset.csv")
 result = batch_ops.bulk_insert_dataframe(
     df,
-    batch_size=1000,
-    parallel=True,
-    validate=True  # Validate against schema
+    config=BatchConfig(chunk_size=1000, parallel=True),
 )
 
-print(f"Inserted: {result.successful}")
-print(f"Failed: {result.failed}")
-if result.errors:
-    print("Errors:", result.errors)
+# Statistics come back as a dict, not an object
+print(f"Inserted: {result['inserted']}")
+print(f"Failed: {result['failed']}")
+if result["errors"]:
+    print("Errors:", result["errors"])
 ```
 
 ### Bulk Update
