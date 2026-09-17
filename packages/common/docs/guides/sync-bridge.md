@@ -95,6 +95,36 @@ thread for its lifetime. When a synchronous component makes repeated calls,
 **own a long-lived bridge and reuse it** rather than calling
 `run_coro_sync` per call or spawning a bridge per call.
 
+### Whoever owns the object owns its loop
+
+Thread cost is the *cheap* half of choosing a scope. The other half is that
+**an object can bind itself to the first loop it runs on, and then only that
+loop will do.** An `asyncpg` pool acquired by `connect()` belongs to the loop
+that acquired it; a second loop finds it unusable, with an error that names
+the connection rather than the loop —
+`InterfaceError: cannot perform operation: another operation is in progress`.
+
+So a wrapper's bridge scope is bounded above by its object's lifetime, and
+the object's lifetime belongs to whoever *owns* it:
+
+| Who connects the object | Where the loop has to come from |
+|---|---|
+| the wrapper, on first use | the wrapper's own bridge — held for as long as it holds the object |
+| the caller, before handing it in | the **caller's** bridge, passed as `bridge=` |
+
+The second row is the one a wrapper cannot fix for itself. A wrapper handed
+an already-connected object has no way to reach the loop that connected it,
+so `bridge=` is not only a way to save a thread — for such an object it is
+the only way the wrapper can work at all. `BatchOperations`
+(`dataknobs-data`) is the worked example: it takes a database it does not
+own, so it scopes its own bridge to one operation and documents `bridge=` as
+required for any backend that binds.
+
+Uncontended `asyncio` primitives do **not** bind, which is why this is easy
+to miss: `asyncio.Lock.acquire` reaches `_get_loop` only when it has to wait,
+so an in-memory store guarded by one survives any amount of loop churn and a
+test suite built on it reports green.
+
 ### `SyncBridgeAdapter` — the wrapper shape, declared once
 
 A synchronous wrapper over an asynchronous object is the common case for a

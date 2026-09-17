@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation
+
+- **The sync-bridge guide says how long a bridge has to live, not just what it
+  costs.** Thread cost is the cheap half of choosing a scope; the other half
+  is that an object can bind itself to the first loop it runs on — an
+  `asyncpg` pool acquired by `connect()` belongs to that loop and no other —
+  so a wrapper's bridge scope is bounded by its object's lifetime, and a
+  wrapper handed an already-connected object cannot reach the loop that
+  connected it. That is what `bridge=` is for there, and the guide now says
+  so, with the reason the failure is easy to miss: an uncontended
+  `asyncio.Lock` never reaches `_get_loop`, so an in-memory store survives any
+  amount of loop churn and a test suite built on one reports green.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version
