@@ -187,40 +187,48 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
     assert async_result() == ()
 
 
+#: The twin pairs this family declares one surface for. Named rather than
+#: written inline at the ``parametrize`` because
+#: ``test_the_bridge_is_not_one_of_the_twins`` has to read it: the claim it
+#: makes is about what is *absent* here, and a list only ``parametrize`` can
+#: see is one no test can make that claim about.
+_TWIN_PAIRS = [
+    (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], (), ()),
+    (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], (), ()),
+    (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], (), ()),
+    (
+        ExactNormalizedSignal,
+        AsyncExactNormalizedSignal,
+        ["candidates", "candidates_many", "_hits"],
+        (),
+        (),
+    ),
+    (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], (), ()),
+    (
+        ScanningSignal,
+        AsyncScanningSignal,
+        # ``__init__`` is checked by
+        # ``test_the_scanning_twins_constructors_agree`` rather than here:
+        # ``flavour_typed`` is declared once for the whole pair and
+        # compared against *every* member, so a parameter flavoured on one
+        # member only cannot be expressed in this table.
+        ["candidates", "candidates_many", "_located"],
+        (),
+        (),
+    ),
+    (
+        DeclaredSignal,
+        AsyncDeclaredSignal,
+        ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
+        ("_fold", "_order"),
+        (),
+    ),
+]
+
+
 @pytest.mark.parametrize(
     ("sync_type", "async_type", "members", "unflavoured", "flavour_typed"),
-    [
-        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], (), ()),
-        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], (), ()),
-        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], (), ()),
-        (
-            ExactNormalizedSignal,
-            AsyncExactNormalizedSignal,
-            ["candidates", "candidates_many", "_hits"],
-            (),
-            (),
-        ),
-        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], (), ()),
-        (
-            ScanningSignal,
-            AsyncScanningSignal,
-            # ``__init__`` is checked by
-            # ``test_the_scanning_twins_constructors_agree`` rather than here:
-            # ``flavour_typed`` is declared once for the whole pair and
-            # compared against *every* member, so a parameter flavoured on one
-            # member only cannot be expressed in this table.
-            ["candidates", "candidates_many", "_located"],
-            (),
-            (),
-        ),
-        (
-            DeclaredSignal,
-            AsyncDeclaredSignal,
-            ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
-            ("_fold", "_order"),
-            (),
-        ),
-    ],
+    _TWIN_PAIRS,
 )
 def test_the_twins_expose_one_surface(
     sync_type: type,
@@ -292,14 +300,24 @@ def test_the_bridge_is_not_one_of_the_twins() -> None:
     flavours' members. This one does not have a twin to compare against: the
     thing it would be twinned with is the resolver it holds.
 
-    What settles that is the flavour of the *resolution* members, checked
-    against the async cascade as a control. This asserted ``__aenter__``'s
+    Two halves, because the docstring makes two claims. That the bridge is
+    **not in the table** is the maintenance move this test is named for, and
+    only a reading of the table itself can catch it --- which is why
+    ``_TWIN_PAIRS`` is a name rather than a literal inside the
+    ``parametrize``. That it *should* not be is settled by the flavour of the
+    resolution members, checked against the async cascade as a control. This asserted ``__aenter__``'s
     absence when it was written, which was the same claim only for as long as
     the class had no async anything: it has since gained ``aclose()`` and the
     ``async with`` that pairs with it, and a second way to *tear down* is not
     a second flavour of resolving. Both context-manager protocols on one
     object is the shape ``SimpleFSM`` already ships.
     """
+    declared = {pair[0] for pair in _TWIN_PAIRS} | {pair[1] for pair in _TWIN_PAIRS}
+    assert BridgedEntityResolver not in declared, (
+        "the bridge was added to the twin table; it forwards to a resolver rather "
+        "than twinning one, so there is no second half to hold it to"
+    )
+
     assert hasattr(BridgedEntityResolver, "__enter__")
     assert hasattr(BridgedEntityResolver, "__exit__")
     assert not inspect.iscoroutinefunction(BridgedEntityResolver.resolve)

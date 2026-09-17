@@ -194,7 +194,14 @@ UNPAIRED: dict[pathlib.Path, str] = {
 
 
 @pytest.mark.parametrize(
-    ("guide", "declared", "constant"), PAIRS, ids=["ontology", "entity-resolution"]
+    ("guide", "declared", "constant"),
+    PAIRS,
+    # Derived, not listed. A hand-written ``ids`` has to be the same length as
+    # ``PAIRS``, so a third row would raise at *collection* --- turning "adding
+    # a pair is one row here and one in the declaration" into a third edit the
+    # docstring does not mention and pytest reports as a collection error
+    # rather than a missing id.
+    ids=[guide.stem for guide, _, _ in PAIRS],
 )
 def test_the_published_input_is_this_suites_own_vocabulary(
     guide: pathlib.Path, declared: str, constant: str
