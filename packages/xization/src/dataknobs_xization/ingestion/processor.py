@@ -9,9 +9,10 @@ documents from a directory into chunks ready for embedding.
 The implementation is async-primary: :meth:`DirectoryProcessor.process_async`
 yields :class:`ProcessedDocument` values as files are read from the
 underlying :class:`DocumentSource`. The sync :meth:`DirectoryProcessor.process`
-is a thin wrapper that collects the async iterator via
-:func:`asyncio.run`; it cannot be called from inside a running event
-loop.
+is a thin wrapper that collects the async iterator through
+:func:`~dataknobs_common.sync_bridge.run_coro_sync`, so it is callable from
+plain synchronous code and from inside a running event loop alike — it
+blocks the calling thread either way.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
-from dataknobs_common import aiter_sync_in_thread
+from dataknobs_common import aiter_sync_in_thread, run_coro_sync
 from dataknobs_xization.chunking import create_chunker
 from dataknobs_xization.chunking.base import Chunker, DocumentInfo
 from dataknobs_xization.content_transformer import ContentTransformer
@@ -187,10 +188,22 @@ class DirectoryProcessor:
     def process(self) -> Iterator[ProcessedDocument]:
         """Process all documents in the directory (sync wrapper).
 
-        Collects the async iterator from :meth:`process_async` via
-        :func:`asyncio.run` and yields the collected list. Cannot be
-        called from inside a running event loop — async callers should
-        use :meth:`process_async` directly.
+        Collects the async iterator from :meth:`process_async` and returns
+        an iterator over the collected list. The walk runs on a private loop
+        supplied by :func:`~dataknobs_common.sync_bridge.run_coro_sync`, never
+        on the caller's, so this is callable from inside a running event loop
+        as well as from plain synchronous code.
+
+        It **blocks** the calling thread for the whole walk either way, so an
+        async caller stalls every other task on its loop for the duration:
+        prefer :meth:`process_async`, and reach for this only from a ``def``
+        site that cannot await. One coroutine is driven, so the loop is a
+        throwaway — this method holds nothing to close.
+
+        Collecting is deliberate and unchanged: the returned iterator is over
+        a list that is already complete, so ``files_skipped`` is final as soon
+        as the call returns. It is also why the streaming
+        :meth:`process_async` provides does not survive the wrapper.
 
         Yields:
             ProcessedDocument for each processed file.
@@ -199,7 +212,7 @@ class DirectoryProcessor:
         async def _collect() -> list[ProcessedDocument]:
             return [doc async for doc in self.process_async()]
 
-        return iter(asyncio.run(_collect()))
+        return iter(run_coro_sync(_collect()))
 
     async def process_async(self) -> AsyncIterator[ProcessedDocument]:
         """Process all documents in the directory (async primary).

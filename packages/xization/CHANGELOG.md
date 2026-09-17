@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`DirectoryProcessor.process()` no longer refuses a caller already on an
+  event loop.** The sync wrapper collected `process_async()` through
+  `asyncio.run`, which raises `RuntimeError: asyncio.run() cannot be called
+  from a running event loop`; it now goes through `run_coro_sync`, so the walk
+  runs on a private loop and never on the caller's. The limitation is gone
+  from the module docstring, the method docstring and the ingestion guides
+  along with it. `process_directory()` carried the same limitation by
+  delegation and loses it the same way. What is unchanged: the call still
+  blocks the calling thread for the whole walk — `process_async()` is still
+  the right call from async code — and it still collects before returning, so
+  `files_skipped` is final when it returns.
+
+### Fixed
+
+- **`BackendDocumentSource` yields `-1` for a size a backend reports as
+  `None`.** `DocumentFileRef` documents `-1` as the size "when the source
+  cannot report size cheaply"; a file record with no size attribute already
+  landed there, but one carrying the attribute as `None` — a remote backend
+  that lists without stat-ing — reached `int(None)` and raised `TypeError`
+  mid-enumeration. Both mean the same thing and both now answer `-1`.
+
+- **`DocumentSource` declares its two streaming members as async generators.**
+  `iter_files` and `read_streaming` were spelled `async def` returning an
+  `AsyncIterator`, which describes a coroutine that *resolves* to an iterator
+  — a shape every caller would have to `await` before iterating, and one
+  neither shipped implementation has. Declared `def` returning an
+  `AsyncIterator`, the protocol now matches `LocalDocumentSource` and
+  `BackendDocumentSource`, which structurally conformed to it in neither
+  direction before. No runtime behaviour changes; what changes is that a third
+  implementation written to the declaration can no longer be one that breaks
+  `async for` at every call site.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

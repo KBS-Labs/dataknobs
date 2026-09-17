@@ -237,26 +237,12 @@ def test_local_document_source_is_runtime_checkable(tmp_path: Path) -> None:
     assert isinstance(source, DocumentSource)
 
 
-@pytest.mark.filterwarnings("ignore::RuntimeWarning")
-def test_process_sync_wrapper_inside_running_loop_raises(
-    corpus: Path,
-) -> None:
-    """Sync ``process()`` cannot be called from inside a running loop.
-
-    ``asyncio.run()`` raises RuntimeError; the wrapper does not
-    attempt any loop-nesting workaround.
-    """
-    from dataknobs_xization.ingestion import (
-        DirectoryProcessor,
-        KnowledgeBaseConfig,
-    )
-
-    async def _call() -> None:
-        processor = DirectoryProcessor(KnowledgeBaseConfig(name="t"), corpus)
-        with pytest.raises(RuntimeError):
-            list(processor.process())
-
-    asyncio.run(_call())
+# ``test_process_sync_wrapper_inside_running_loop_raises`` used to sit here,
+# pinning the limitation that ``process()`` "cannot be called from inside a
+# running event loop" --- the ``asyncio.run`` the wrapper used to spell. The
+# limitation is gone, so the assertion is inverted rather than deleted, and it
+# lives with the rest of that claim in
+# ``test_processor_sync_from_loop.py::test_process_works_from_inside_a_running_loop``.
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +282,22 @@ class _BareKF:
     """``KnowledgeFile``-like record with no size attribute at all."""
 
     path: str
+
+
+@dataclass
+class _UnknownSizeKF:
+    """``KnowledgeFile``-like record that *has* a size and does not know it.
+
+    Distinct from :class:`_BareKF`, where the attribute is absent and the
+    ``getattr`` default supplies the sentinel. Here the last tier of the
+    chain finds the attribute and it is ``None``, so the default never
+    applies. A remote backend that lists without stat-ing is the shape, and
+    ``DocumentFileRef`` already documents ``-1`` for exactly "the source
+    cannot report size cheaply".
+    """
+
+    path: str
+    size: int | None = None
 
 
 class _StaticBackend:
@@ -539,6 +541,27 @@ async def test_backend_iter_files_size_defaults_to_minus_one() -> None:
     backend = _StaticBackend(
         {"a.md": b"hello"},
         file_records=[_BareKF(path="a.md")],
+    )
+    source = BackendDocumentSource(backend, "d")
+
+    refs = await _collect_backend_refs(source, ["*.md"])
+    assert len(refs) == 1
+    assert refs[0].size_bytes == -1
+
+
+@pytest.mark.asyncio
+async def test_backend_iter_files_size_of_none_is_the_unknown_sentinel() -> None:
+    """A size the backend has but does not know is ``-1``, not a ``TypeError``.
+
+    The third tier of the same fallback, and the one the other two hid: a
+    record carrying ``size_bytes=None`` satisfies every ``getattr`` in the
+    chain and reached ``int(None)``. The type checker named it --- ``Argument
+    1 to "int" has incompatible type "Any | None"`` --- while the two tests
+    above reported green, because neither record can produce a ``None``.
+    """
+    backend = _StaticBackend(
+        {"a.md": b"hello"},
+        file_records=[_UnknownSizeKF(path="a.md")],
     )
     source = BackendDocumentSource(backend, "d")
 

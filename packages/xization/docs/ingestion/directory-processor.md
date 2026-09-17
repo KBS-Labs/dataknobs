@@ -7,8 +7,10 @@ and streams large JSON automatically.
 
 The processor is **async-primary**: `process_async()` is the primary
 API. `process()` is a thin sync wrapper that collects the async
-iterator via `asyncio.run()` — it cannot be called from inside a
-running event loop.
+iterator through
+[`run_coro_sync`](https://kbs-labs.github.io/dataknobs/packages/common/guides/sync-bridge/),
+so it is callable from plain synchronous code and from inside a running
+event loop alike.
 
 ## Constructor
 
@@ -61,10 +63,22 @@ for doc in processor.process():
     print(doc.source_file)
 ```
 
-`process()` calls `asyncio.run()` internally. If a running event loop
-is detected, the call raises `RuntimeError: asyncio.run() cannot be
-called from a running event loop`. Async callers should use
-`process_async()` directly.
+`process()` drives `process_async()` on a private loop supplied by
+`run_coro_sync`, never on the caller's, so a caller already inside a
+running event loop gets the documents rather than `RuntimeError:
+asyncio.run() cannot be called from a running event loop`.
+
+It **blocks** the calling thread for the whole walk either way. An async
+caller therefore stalls every other task on its loop for the duration —
+`process_async()` is still the right call from async code, and this
+wrapper is for the `def` sites that cannot await. One coroutine is
+driven, so the loop is a throwaway: `process()` holds nothing you have
+to close.
+
+The collection is unchanged: the returned iterator is over a list that
+is already complete, so `files_skipped` is final as soon as the call
+returns, and the streaming `process_async()` offers does not survive the
+wrapper.
 
 ## ProcessedDocument
 
