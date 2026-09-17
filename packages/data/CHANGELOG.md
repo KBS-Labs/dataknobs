@@ -58,7 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synchronous caller has; a round trip that finds the deadline already past
   raises `TimeoutError` without reaching the database at all. Signatures are
   otherwise unchanged, and `converter` remains the second positional
-  parameter.
+  parameter. The `TimeoutError` it raises is now `OperationTimeoutError`
+  (`dataknobs-common`), a subclass, so `except TimeoutError` is unaffected and
+  a caller that wants to tell the operation's deadline apart from a timeout the
+  database itself raised now can.
 
 - **`SyncTextEmbedder` takes `bridge=` and answers `aclose()`, and builds its
   loop thread on first use.** It is now a `SyncBridgeAdapter` from

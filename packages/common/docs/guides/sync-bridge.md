@@ -126,6 +126,73 @@ to miss: `asyncio.Lock.acquire` reaches `_get_loop` only when it has to wait,
 so an in-memory store guarded by one survives any amount of loop churn and a
 test suite built on it reports green.
 
+### `BridgedOperation` — one loop and one budget, per call
+
+`SyncBridgeAdapter` is for a wrapper that **holds** a bridge across its own
+lifetime. The other shape is a wrapper that holds nothing and scopes a bridge
+to a single public call — and three of them wrote it by hand before it had a
+name: `BatchOperations` (`dataknobs-data`) and the FSM's `BatchExecutor` and
+`StreamExecutor`.
+
+What those calls share is not just the bridge. A synchronous wrapper reaches
+its async object **more than once per public call** — a chunked write per
+chunk, a batch per item, a stream per record — and both of the things
+governing those reaches belong to the *operation*:
+
+| | Why it is per-operation |
+|---|---|
+| **the loop** | an object that bound state to one loop is unusable from the next, so every reach of one call must land on the same one |
+| **the budget** | a timeout spent afresh on each reach is no bound on the call the caller made — 30 seconds over twenty chunks is ten minutes |
+
+```python
+from dataknobs_common import bridged_operation
+
+class Wrapper:
+    def __init__(self, obj, *, bridge=None, timeout=None):
+        self._obj, self._bridge, self._timeout = obj, bridge, timeout
+
+    def _operation(self):
+        return bridged_operation(
+            bridge=self._bridge, timeout=self._timeout,
+            thread_name="dk-wrapper", label="Wrapper",
+        )
+
+    def do_many(self, items):                 # the public call
+        with self._operation() as op:
+            return [self._one(op, item) for item in items]
+
+    def _one(self, op, item):                 # a private worker
+        return op.run(self._obj.do(item))     # one loop, one shared budget
+```
+
+Scope it to the **public entry point** and pass the operation down, rather
+than opening one per reach. A `run_coro_sync` per reach is a daemon thread per
+row; a bridge per reach is a different loop per row.
+
+| Member | What it is for |
+|---|---|
+| `bridge=` | the caller's loop, used as-is and **left running** — required for an object the caller connected, since the wrapper cannot reach that loop for itself |
+| `timeout=` | seconds for the whole operation; a reach that finds the deadline past raises without reaching the object at all |
+| `op.run(coro)` | the one place the loop and the budget are applied together |
+| `needs_loop=False` | for a call whose work turns out to be synchronous: it carries the deadline and allocates no thread |
+| `op.remaining` | what is left of the budget, or `None` when unbounded |
+
+Leaving the block ends an **owned** bridge, on the error paths too; a
+**supplied** one is never closed, because whoever passed it may be running
+other things on it.
+
+> **`OperationTimeoutError` is a `TimeoutError`,** so `except TimeoutError`
+> keeps working. The distinct type exists because a per-item error handler has
+> to let the *operation's* deadline through it while still absorbing an item's
+> own failure, and a bare `TimeoutError` cannot say which it is holding. Note
+> that it widens the **builtin**, not `dataknobs_common.exceptions.TimeoutError`
+> — the bridge raises the builtin for an expired wait, so that is the one a
+> caller will be catching.
+
+Both shapes are legitimate and the choice is about ownership, not taste: a
+wrapper that owns its object can own a bridge for the object's lifetime, and a
+wrapper handed an object it does not own cannot own a loop past the call.
+
 ### `SyncBridgeAdapter` — the wrapper shape, declared once
 
 A synchronous wrapper over an asynchronous object is the common case for a

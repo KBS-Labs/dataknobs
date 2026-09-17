@@ -80,8 +80,11 @@ from dataknobs_common.aws import (
     create_aioboto3_session,
 )
 from dataknobs_common.sync_bridge import (
+    BridgedOperation,
+    OperationTimeoutError,
     SyncBridgeAdapter,
     SyncLoopBridge,
+    bridged_operation,
     run_coro_sync,
 )
 from dataknobs_common.lifecycle import (
@@ -514,8 +517,11 @@ __all__ = [
     # Async iteration
     "aiter_sync_in_thread",
     # Async->sync bridge
+    "BridgedOperation",
+    "OperationTimeoutError",
     "SyncBridgeAdapter",
     "SyncLoopBridge",
+    "bridged_operation",
     "run_coro_sync",
     # Lifecycle
     "aclose_if_owned",

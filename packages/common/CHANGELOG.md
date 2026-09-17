@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`BridgedOperation` and `bridged_operation()` --- one loop and one budget,
+  for the span of one synchronous call.** A synchronous wrapper over an
+  asynchronous object reaches that object more than once per public call (a
+  chunked write per chunk, a batch per item, a stream per record), and both of
+  the things governing those reaches belong to the *operation* rather than to
+  the wrapper: the **loop**, because an object that bound state to one loop is
+  unusable from the next, and the **budget**, because a timeout spent afresh on
+  each reach is no bound on the call the caller made --- thirty seconds over
+  twenty chunks is ten minutes.
+
+  ```python
+  def _operation(self):
+      return bridged_operation(
+          bridge=self._bridge, timeout=self._timeout,
+          thread_name="dk-wrapper", label="Wrapper",
+      )
+
+  def do_many(self, items):                  # the public call
+      with self._operation() as op:
+          return [op.run(self._obj.do(item)) for item in items]
+  ```
+
+  A supplied `bridge` is used as-is and **left running**, because it belongs to
+  whoever passed it; otherwise the operation owns one and leaving the block
+  ends it, on the error paths too. `needs_loop=False` is for a call whose work
+  turns out to be synchronous: it carries the deadline and allocates no thread.
+
+  This is the counterpart to `SyncBridgeAdapter`, which is for a wrapper that
+  *holds* a bridge across its own lifetime. A wrapper handed an object it does
+  not own cannot own a loop past the call, and that is the shape three wrappers
+  in this workspace had written by hand.
+
+- **`OperationTimeoutError`**, raised when a `BridgedOperation`'s deadline
+  expires --- either before a reach starts, in which case the coroutine is
+  closed rather than started, or while waiting for one. It subclasses the
+  **builtin** `TimeoutError` (not `dataknobs_common.exceptions.TimeoutError`,
+  which shadows that name), so `except TimeoutError` keeps working. The
+  distinct type is for the caller that must let the *operation's* deadline
+  through a per-item error handler while still absorbing an item's own failure.
+
 ### Fixed
 
 - **A closing `SyncLoopBridge` no longer destroys work that is still running
