@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-17T01:35:39Z",
+  "timestamp": "2026-09-17T02:49:59Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/the-tree-keeps-the-invariant-its-readers-assume",
-  "git_commit": "7b650ecf31bb752df3fd51a0ac374d7aa952dde1",
+  "git_branch": "sbk/the-guides-teach-the-tree-that-exists",
+  "git_commit": "19b512e0e98fe1a1a288e6a520730246c146f3ef",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
