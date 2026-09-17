@@ -222,7 +222,7 @@
         {
           "path": "packages/llm/src",
           "tier": "transitional",
-          "ceiling": 58,
+          "ceiling": 52,
           "reason": "ratchet group"
         },
         {

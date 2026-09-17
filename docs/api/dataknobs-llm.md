@@ -196,7 +196,8 @@ composite = CompositePromptLibrary(
 # Versioned library - supports prompt versioning. Unlike the three above it is
 # an `AsyncPromptLibrary`: it answers from a version manager that awaits, so
 # `await versioned.get_system_prompt(...)`, and a `def` caller wraps it in
-# `as_sync(...)`. `base_library` takes either flavour.
+# `as_sync(...)`. `base_library` takes either flavour, and `store=` decides
+# where its versions live (in memory when omitted).
 versioned = VersionedPromptLibrary(base_library=fs_library)
 ```
 
@@ -251,7 +252,8 @@ from dataknobs_llm.prompts import (
 )
 from dataknobs_llm.prompts.versioning.types import PromptVariant
 
-# Version management
+# Version management. With no argument the manager keeps everything in
+# memory; see "Persisting versions" below for a database.
 version_manager = VersionManager()
 
 # Create versions. `prompt_type` is required alongside the name, because a
@@ -299,6 +301,47 @@ print(experiment.traffic_split)   # {'1.0.0': 0.5, '2.0.0': 0.5}
 # the same user keeps the same variant.
 variant = await ab_manager.get_variant_for_user(experiment.experiment_id, "user-123")
 ```
+
+### Persisting versions
+
+**Source:** [`prompts/versioning/store.py`](https://github.com/kbs-labs/dataknobs/blob/main/packages/llm/src/dataknobs_llm/prompts/versioning/store.py)
+
+The managers hold nothing themselves. Versions, experiments, user assignments,
+aggregates and events live in a store, and `DatabaseVersionStore` puts them in
+any dataknobs `AsyncDatabase`:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()          # the factory builds; it does not connect
+
+# One store for all three, so they share a database rather than three
+# configurations of one.
+store = DatabaseVersionStore(db)
+version_manager = VersionManager(store)
+ab_manager = ABTestManager(store)
+metrics = MetricsCollector(store)
+
+await db.close()            # the store does not own it; you do
+```
+
+A load returns a value rather than a handle, so an in-place change is stored
+only when it is saved -- `InMemoryVersionStore`, the default, included.
+
+Two operations are the store's rather than its caller's. `record_event`
+appends an event *and* folds it into the version's aggregate together, because
+folding is a read-modify-write and a caller doing it in two steps loses an
+increment when two recordings race; `DatabaseVersionStore` writes the
+aggregate as a compare-and-set and re-folds when it loses. And `load_events`
+returns events newest first under a `limit` that reaches the query, so an
+unbounded stream is never fully loaded to answer for its most recent few.
 
 ## Conversation Management
 
