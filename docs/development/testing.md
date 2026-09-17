@@ -680,30 +680,46 @@ pytest -n 4             # Use 4 processes
 Test order is randomized on every run by
 [`pytest-randomly`](https://pypi.org/project/pytest-randomly/) (a dev
 dependency). This surfaces order-dependent flakes that a fixed order
-would hide. pytest prints the seed in its header:
+would hide. Replaying one means knowing the seed it ran with.
+
+**`bin/test.sh` picks the seed and prints it in its own header**, before
+pytest starts:
 
 ```
-Using --randomly-seed=123456789
+Test order is randomized (pytest-randomly). Seed: 123456789 --- replay
+this exact order with -- --randomly-seed=123456789, ...
 ```
 
-Pass that seed back to reproduce a failure from the log:
+It is printed at every verbosity, and that is the point. pytest prints
+the seed too, in the header `-q` suppresses — and `-q` is what the
+quality gate passes, so the one caller whose failures most need
+replaying was the one caller whose seed was never recorded.
 
 ```bash
-# Replay the exact order from a logged seed
-pytest --randomly-seed=123456789
-
-# Replay the previous run's order
-pytest --randomly-seed=last
+# Replay the exact order from a seed in a run's log
+./bin/test.sh data -- --randomly-seed=123456789
 
 # Disable randomization entirely
-pytest -p no:randomly
+./bin/test.sh data -- -p no:randomly
+
+# Fix the seed for every package in one invocation
+PYTEST_RANDOMLY_SEED=42 ./bin/test.sh data
 ```
 
-Via `bin/test.sh`, pass these after `--`
-(e.g. `./bin/test.sh data -- --randomly-seed=last`). UUID-based table
-names use `os.urandom` and are unaffected by the seed — randomized
-order is the general reproducibility lever, not a guarantee for
-fixtures that draw their own entropy.
+A seed passed after `--` wins over the one the runner picked, and the
+header then says it is deferring rather than advertising a seed the run
+did not use.
+
+**Prefer an explicit seed to `--randomly-seed=last`.** The plugin caches
+the last seed per rootdir (`.pytest_cache/v/randomly_seed`), so any run
+since overwrites it — and a gate run of one package executes its unit
+suite and then its integration suite against the same rootdir, leaving
+`last` pointing at the integration run. The seed of the unit run that
+failed is not recoverable that way. It is in the log.
+
+UUID-based table names use `os.urandom` and are unaffected by the seed —
+randomized order is the general reproducibility lever, not a guarantee
+for fixtures that draw their own entropy.
 
 ### Verbose Output
 
