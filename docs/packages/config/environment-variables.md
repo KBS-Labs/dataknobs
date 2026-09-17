@@ -22,7 +22,7 @@ Environment variables follow this pattern:
 DATAKNOBS_<TYPE>__<NAME_OR_INDEX>__<ATTRIBUTE>
 ```
 
-- **DATAKNOBS**: The prefix. Fixed for `Config`; see
+- **DATAKNOBS**: The prefix. The default, not a fixed one; see
   [Prefix and Selection](#prefix-and-selection)
 - **TYPE**: The configuration type, **spelled exactly as the config file's
   top-level key is**, upper-cased. A file declaring `databases:` is addressed
@@ -50,10 +50,10 @@ DATAKNOBS_CACHES__REDIS__TTL=7200
 
 ### Nesting
 
-There is none. Everything after the second separator is folded back into a
-single attribute name, so `DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT`
-does not reach `connection.timeout` -- it adds a top-level key literally named
-`connection__timeout` beside the untouched `connection` mapping:
+Everything after the second separator is folded back into a single attribute
+name, and that name is then walked one segment at a time. So
+`DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT` reaches
+`connection.timeout`:
 
 ```python
 # config.yaml has databases[primary].connection.timeout: 30
@@ -61,13 +61,30 @@ os.environ["DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT"] = "60"
 
 config = Config.from_file("config.yaml")
 print(config.get("databases", "primary"))
-# {'name': 'primary', 'connection': {'timeout': 30}, 'type': 'databases',
-#  'connection__timeout': 60}
+# {'name': 'primary', 'connection': {'timeout': 60}, 'type': 'databases'}
 ```
 
-Nothing warns, and the nested value the variable was aimed at is unchanged.
-Override a top-level attribute, or restructure the config so the value you
-need to vary is one.
+Every segment but the last has to name something that is already there -- a
+key of a mapping, or an in-range index of a list. The last segment is written,
+and a mapping gains it if it is absent, which is the rule a single-segment
+attribute has always followed.
+
+A path that does not resolve is logged and dropped. Nothing is written
+anywhere, which is the part worth relying on: an override that misses leaves
+no trace in the configuration rather than a key beside the value you meant to
+change.
+
+```python
+os.environ["DATAKNOBS_DATABASES__PRIMARY__NOPE__TIMEOUT"] = "60"
+
+config = Config.from_file("config.yaml")
+# WARNING  Failed to apply environment override
+#          xref:databases[primary].nope__timeout: 'nope__timeout' does not
+#          resolve in databases[primary], so nothing was written
+
+print(config.get("databases", "primary"))
+# {'name': 'primary', 'connection': {'timeout': 30}, 'type': 'databases'}
+```
 
 ## Type Conversion
 
@@ -119,13 +136,25 @@ leaving the overrides silently on.
 
 ### Prefix and Selection
 
-The prefix is fixed at `DATAKNOBS_`, and every matching variable is applied.
-Selecting a subset, filtering by name, or using a custom prefix are not
-exposed through `Config`; a variable is either named so that it addresses an
-existing item or it is silently skipped.
+`DATAKNOBS_` is the default prefix, not a fixed one. The source `Config` reads
+is the `env_overrides` parameter, and it takes any `EnvironmentOverrides`:
 
-To narrow what can be applied, control the environment rather than the load --
-unset the variables you do not want, or run with a curated environment.
+```python
+from dataknobs_config import Config
+from dataknobs_config.environment import EnvironmentOverrides
+
+config = Config("config.yaml", env_overrides=EnvironmentOverrides(prefix="MYAPP_"))
+```
+
+`from_file` and `from_dict` take it as well. Whatever the source hands over is
+applied by the same loop as the default one, so changing where the values are
+read from does not change how they are assigned — see
+[Custom Override Logic](#custom-override-logic) for filtering.
+
+A variable the source hands over is either named so that it addresses an
+existing item or it is logged at WARNING and skipped. Passing `env_overrides`
+together with `use_env=False` raises `ValueError` rather than building a
+source nothing will read.
 
 ## Variable Substitution in Files
 
@@ -250,9 +279,8 @@ DATAKNOBS_DATABASES__-1__HOST=backup.example.com
 
 ## Nested Attributes and List Elements
 
-Neither is addressable, and both fail the same way -- quietly, by creating a
-flat key beside the value you meant to change. This is the [Nesting](#nesting)
-rule seen from the two directions people most often try.
+Both are addressable, and by the same walk -- this is the
+[Nesting](#nesting) rule seen from the two directions people most often try.
 
 A nested mapping:
 
@@ -263,12 +291,11 @@ A nested mapping:
 #     settings:
 #       number_of_shards: 3
 
-# Adds `settings__number_of_shards: 5` to the item.
-# `settings.number_of_shards` stays 3.
+# settings.number_of_shards becomes 5.
 DATAKNOBS_DATABASES__SEARCH__SETTINGS__NUMBER_OF_SHARDS=5
 ```
 
-A list element:
+A list element, addressed by index:
 
 ```bash
 # config.yaml:
@@ -277,15 +304,21 @@ A list element:
 #     allowed_origins:
 #       - http://localhost:3000
 
-# Adds `allowed_origins__0: 'https://app.example.com'` to the item.
-# `allowed_origins` is still the one-element list from the file.
+# allowed_origins becomes ['https://app.example.com'].
 DATAKNOBS_SERVICES__API__ALLOWED_ORIGINS__0=https://app.example.com
 ```
 
-To vary either from the environment, put the value at the top level of the
-item, or substitute it in the file itself with
-[`${VAR}`](#variable-substitution-in-files) -- which does reach any depth,
-because it is applied to the file's own text before the config is built.
+A list is never extended to make an override fit. An absent mapping key is
+created, because there is somewhere obvious to put it; an absent list position
+is not, because appending would put the value somewhere you did not name. So
+`ALLOWED_ORIGINS__7` against a one-element list is logged and dropped, and the
+list is the one from the file.
+
+Substituting the value in the file itself with
+[`${VAR}`](#variable-substitution-in-files) remains the other way to reach a
+nested value, and is still the only one that works on a document whose shape
+is not known in advance -- it is applied to the file's own text before the
+config is built.
 
 ## Complex Examples
 
@@ -547,34 +580,38 @@ config = Config.from_file("config.yaml")
 
 ### Custom Override Logic
 
-Overrides are applied inside `Config.__init__`, so there is no post-load hook
-to override. Build with `use_env=False` and drive `EnvironmentOverrides`
-yourself when you need to preprocess or filter:
+Which variables reach configuration is a property of the source, so it belongs
+to a subclass of the source. Override `get_overrides` and hand back less than
+you were given:
 
 ```python
 from dataknobs_config import Config
 from dataknobs_config.environment import EnvironmentOverrides
 
 
-def load_with_filtered_overrides(path, *, prefix="DATAKNOBS_", skip=()):
-    """Apply every override except the ones named in `skip`."""
-    config = Config(path, use_env=False)
-    reader = EnvironmentOverrides(prefix=prefix)
+class SkipSecrets(EnvironmentOverrides):
+    """Apply every override except the ones naming a secret."""
 
-    for ref, value in reader.get_overrides().items():
-        type_name, name_or_index, attr = reader.parse_env_reference(ref)
-        if attr in skip:
-            continue
-        item = config.get(type_name, name_or_index)
-        item[attr] = value
-        config.set(type_name, name_or_index, item)
+    SECRETS = ("password", "api_key", "token")
 
-    return config
+    def get_overrides(self):
+        return {
+            ref: value
+            for ref, value in super().get_overrides().items()
+            if self.parse_env_reference(ref)[2] not in self.SECRETS
+        }
 
 
-# A custom prefix is reachable this way, and only this way.
-config = load_with_filtered_overrides("config.yaml", prefix="MYAPP_", skip=("password",))
+config = Config("config.yaml", env_overrides=SkipSecrets(prefix="MYAPP_"))
 ```
+
+The guide used to answer this with a function that drove `EnvironmentOverrides`
+itself and assigned each value with `item[attr] = value`. That is the override
+loop rewritten by hand, and it did not survive the loop learning to walk a
+`__`-joined attribute into the value it names: a recipe written that way
+applies `MYAPP_DB__0__CONNECTION__TIMEOUT` as a flat `connection__timeout` key
+beside the `connection` it was aimed at. Subclassing the source keeps one
+implementation of the assignment, which is the half that has the sharp edges.
 
 ### Dynamic Environment Variables
 

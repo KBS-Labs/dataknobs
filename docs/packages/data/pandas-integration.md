@@ -160,41 +160,92 @@ plain = converter.records_to_dataframe(records)
 print(list(plain.columns))         # ['name', 'score']
 ```
 
-!!! warning "`metadata_strategy` is not honoured by this converter"
+### Choosing where metadata lands
 
-    `ConversionOptions.metadata_strategy` names four placements — `ATTRS`,
-    `COLUMNS`, `MULTI_INDEX` and `NONE` — but `records_to_dataframe` writes the
-    `_metadata` column regardless of which one is set. The four are implemented
-    in `MetadataHandler`, which the converter does not call. Until that is
-    reconciled, treat the option as inert here and reach for `MetadataHandler`
-    directly if you need a particular placement.
+`include_metadata` writes one `_metadata` column holding each record's
+metadata dict. `ConversionOptions.metadata_strategy` is the separate question
+of *where* metadata goes, and it names four placements:
 
 ```python
-from dataknobs_data.pandas import MetadataHandler
+from dataknobs_data.pandas.metadata import MetadataStrategy
+
+# ATTRS (the default): on the frame, not in the data.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.ATTRS)
+)
+print(list(df.columns))                  # ['name', 'score']
+print(df.attrs["record_metadata"])       # [{'source': 'a'}, {'source': 'b'}]
+
+# COLUMNS: one prefixed column per metadata key.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.COLUMNS)
+)
+print(list(df.columns))                  # ['name', 'score', '_meta_source']
+
+# MULTI_INDEX: the field type becomes a second column level.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.MULTI_INDEX)
+)
+print(df.columns.names)                  # ['field_name', 'field_type']
+
+# NONE: neither.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.NONE)
+)
+print(list(df.columns))                  # ['name', 'score']
+print(df.attrs)                          # {}
+```
+
+Pass the same options back to `dataframe_to_records` and the placement is
+undone rather than read as data — under `COLUMNS` the `_meta_` columns return
+as record metadata, and under `MULTI_INDEX` the field names come back as
+names rather than as `(name, type)` tuples.
+
+`MetadataHandler` is the same machinery under its own name, for when you want
+a placement applied to a frame you already have, or want to vary the settings
+the converter leaves at their defaults — the `_meta_` prefix among them:
+
+```python
+from dataknobs_data.pandas import ConversionOptions, MetadataHandler
 from dataknobs_data.pandas.metadata import MetadataConfig, MetadataStrategy
 
-handler = MetadataHandler(MetadataConfig(strategy=MetadataStrategy.ATTRS))
-frame = converter.records_to_dataframe(records)
-extracted = handler.extract_metadata_from_records(records)
-frame = handler.apply_metadata_to_dataframe(frame, extracted)
+# A prefix of your own. `ConversionOptions` carries no field for it, so this
+# is a placement only the handler can reach.
+handler = MetadataHandler(
+    MetadataConfig(strategy=MetadataStrategy.COLUMNS, metadata_prefix="meta.")
+)
 
-print(list(frame.columns))              # ['name', 'score']
-print("record_metadata" in frame.attrs)  # True
+# The frame you already have -- built here with no placement of its own, so
+# the handler's is the only one applied.
+frame = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.NONE)
+)
+frame = handler.apply_metadata_to_dataframe(
+    frame, handler.extract_metadata_from_records(records), records
+)
+
+print(list(frame.columns))              # ['name', 'score', 'meta.source']
 ```
 
 ### ID Preservation
 
 Preserve record IDs during conversion:
 
-```python
-# Convert with ID preservation
-df = converter.records_to_dataframe(records, preserve_ids=True)
-print(df.index)  # Record IDs as index
+Both directions take a `ConversionOptions`, not loose keywords. Record ids
+become the frame's index by default — `preserve_index` is True — and
+`use_index_as_id` puts them back on the way out:
 
-# Convert back preserving IDs
-records = converter.dataframe_to_records(df, use_index_as_id=True)
-for record in records:
-    print(record.id)  # Original IDs preserved
+```python
+# Record ids are the index already, under the default options.
+df = converter.records_to_dataframe(records)
+print(list(df.index))    # ['r1', 'r2']
+print(df.index.name)     # record_id
+
+# Convert back preserving ids.
+back = converter.dataframe_to_records(
+    df, ConversionOptions(use_index_as_id=True)
+)
+print([record.id for record in back])   # ['r1', 'r2']
 ```
 
 ## Batch Operations
