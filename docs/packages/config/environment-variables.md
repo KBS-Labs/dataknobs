@@ -22,28 +22,36 @@ Environment variables follow this pattern:
 DATAKNOBS_<TYPE>__<NAME_OR_INDEX>__<ATTRIBUTE>
 ```
 
-- **DATAKNOBS**: Default prefix (configurable)
-- **TYPE**: Configuration type (e.g., DATABASE, CACHE, SERVICE)
-- **NAME_OR_INDEX**: Item name or numeric index
-- **ATTRIBUTE**: Configuration attribute (supports nesting)
+- **DATAKNOBS**: The prefix. Fixed for `Config`; see
+  [Prefix and Selection](#prefix-and-selection)
+- **TYPE**: The configuration type, **spelled exactly as the config file's
+  top-level key is**, upper-cased. A file declaring `databases:` is addressed
+  by `DATAKNOBS_DATABASES__`, not `DATAKNOBS_DATABASE__` -- the name is matched
+  verbatim, with no singular/plural reconciliation, and a variable naming a
+  type that does not exist is logged at WARNING and skipped
+- **NAME_OR_INDEX**: The item's `name`, or a numeric index (negative allowed)
+- **ATTRIBUTE**: One top-level attribute of that item. Not a path -- see
+  [Nesting](#nesting)
 
 ### Examples
 
+These address a file declaring `databases:` and `caches:`:
+
 ```bash
 # Override database host by name
-DATAKNOBS_DATABASE__PRIMARY__HOST=prod.example.com
+DATAKNOBS_DATABASES__PRIMARY__HOST=prod.example.com
 
 # Override database port by index
-DATAKNOBS_DATABASE__0__PORT=5433
+DATAKNOBS_DATABASES__0__PORT=5433
 
 # Override cache TTL
-DATAKNOBS_CACHE__REDIS__TTL=7200
+DATAKNOBS_CACHES__REDIS__TTL=7200
 ```
 
 ### Nesting
 
 There is none. Everything after the second separator is folded back into a
-single attribute name, so `DATAKNOBS_DATABASE__PRIMARY__CONNECTION__TIMEOUT`
+single attribute name, so `DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT`
 does not reach `connection.timeout` -- it adds a top-level key literally named
 `connection__timeout` beside the untouched `connection` mapping:
 
@@ -67,17 +75,17 @@ Values are automatically converted to appropriate types:
 
 ```bash
 # String (default)
-DATAKNOBS_DATABASE__PRIMARY__HOST=localhost
+DATAKNOBS_DATABASES__PRIMARY__HOST=localhost
 
 # Integer
-DATAKNOBS_DATABASE__PRIMARY__PORT=5432
+DATAKNOBS_DATABASES__PRIMARY__PORT=5432
 
 # Float
-DATAKNOBS_SERVICE__API__TIMEOUT=30.5
+DATAKNOBS_SERVICES__API__TIMEOUT=30.5
 
 # Boolean (true, false, yes, no, 1, 0)
-DATAKNOBS_DATABASE__PRIMARY__SSL_ENABLED=true
-DATAKNOBS_SERVICE__API__DEBUG=1
+DATAKNOBS_DATABASES__PRIMARY__SSL_ENABLED=true
+DATAKNOBS_SERVICES__API__DEBUG=1
 ```
 
 ## Applying Environment Overrides
@@ -96,14 +104,18 @@ config = Config.from_file("config.yaml")
 
 ### Opting Out
 
-Pass `use_env=False` to the constructor. `from_file` does not forward it, so
-opting out means building the `Config` directly -- it takes the same path:
+Pass `use_env=False`. The constructor and both classmethods take it:
 
 ```python
 from dataknobs_config import Config
 
 config = Config("config.yaml", use_env=False)
+config = Config.from_file("config.yaml", use_env=False)
+config = Config.from_dict(declared, use_env=False)
 ```
+
+It is a declared keyword, so a misspelling raises `TypeError` rather than
+leaving the overrides silently on.
 
 ### Prefix and Selection
 
@@ -218,7 +230,7 @@ Use the configuration item's name:
 #   - name: primary
 #     host: localhost
 
-DATAKNOBS_DATABASE__PRIMARY__HOST=prod.example.com
+DATAKNOBS_DATABASES__PRIMARY__HOST=prod.example.com
 ```
 
 ### Indexed Access
@@ -227,46 +239,53 @@ Use numeric indices (0-based):
 
 ```bash
 # First database
-DATAKNOBS_DATABASE__0__HOST=prod.example.com
+DATAKNOBS_DATABASES__0__HOST=prod.example.com
 
 # Second database
-DATAKNOBS_DATABASE__1__HOST=analytics.example.com
+DATAKNOBS_DATABASES__1__HOST=analytics.example.com
 
 # Last database (negative indexing)
-DATAKNOBS_DATABASE__-1__HOST=backup.example.com
+DATAKNOBS_DATABASES__-1__HOST=backup.example.com
 ```
 
-## Nested Attributes
+## Nested Attributes and List Elements
 
-Access deeply nested configuration attributes:
+Neither is addressable, and both fail the same way -- quietly, by creating a
+flat key beside the value you meant to change. This is the [Nesting](#nesting)
+rule seen from the two directions people most often try.
+
+A nested mapping:
 
 ```bash
 # config.yaml:
 # databases:
 #   - name: search
-#     backend: elasticsearch
 #     settings:
 #       number_of_shards: 3
-#       refresh_interval: 1s
 
-DATAKNOBS_DATABASE__SEARCH__SETTINGS__NUMBER_OF_SHARDS=5
-DATAKNOBS_DATABASE__SEARCH__SETTINGS__REFRESH_INTERVAL=30s
+# Adds `settings__number_of_shards: 5` to the item.
+# `settings.number_of_shards` stays 3.
+DATAKNOBS_DATABASES__SEARCH__SETTINGS__NUMBER_OF_SHARDS=5
 ```
 
-## Lists and Arrays
-
-Override list values using indexed notation:
+A list element:
 
 ```bash
 # config.yaml:
-# service:
-#   allowed_origins:
-#     - http://localhost:3000
-#     - http://localhost:8080
+# services:
+#   - name: api
+#     allowed_origins:
+#       - http://localhost:3000
 
-DATAKNOBS_SERVICE__API__ALLOWED_ORIGINS__0=https://app.example.com
-DATAKNOBS_SERVICE__API__ALLOWED_ORIGINS__1=https://www.example.com
+# Adds `allowed_origins__0: 'https://app.example.com'` to the item.
+# `allowed_origins` is still the one-element list from the file.
+DATAKNOBS_SERVICES__API__ALLOWED_ORIGINS__0=https://app.example.com
 ```
+
+To vary either from the environment, put the value at the top level of the
+item, or substitute it in the file itself with
+[`${VAR}`](#variable-substitution-in-files) -- which does reach any depth,
+because it is applied to the file's own text before the config is built.
 
 ## Complex Examples
 
@@ -274,45 +293,45 @@ DATAKNOBS_SERVICE__API__ALLOWED_ORIGINS__1=https://www.example.com
 
 ```bash
 # Development
-export DATAKNOBS_DATABASE__PRIMARY__HOST=localhost
-export DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-export DATAKNOBS_DATABASE__PRIMARY__USERNAME=dev_user
-export DATAKNOBS_DATABASE__PRIMARY__PASSWORD=dev_pass
+export DATAKNOBS_DATABASES__PRIMARY__HOST=localhost
+export DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+export DATAKNOBS_DATABASES__PRIMARY__USERNAME=dev_user
+export DATAKNOBS_DATABASES__PRIMARY__PASSWORD=dev_pass
 
 # Production
-export DATAKNOBS_DATABASE__PRIMARY__HOST=prod-db.example.com
-export DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-export DATAKNOBS_DATABASE__PRIMARY__USERNAME=prod_user
-export DATAKNOBS_DATABASE__PRIMARY__PASSWORD=${SECRET_DB_PASSWORD}
-export DATAKNOBS_DATABASE__PRIMARY__SSL_ENABLED=true
-export DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE=50
+export DATAKNOBS_DATABASES__PRIMARY__HOST=prod-db.example.com
+export DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+export DATAKNOBS_DATABASES__PRIMARY__USERNAME=prod_user
+export DATAKNOBS_DATABASES__PRIMARY__PASSWORD=${SECRET_DB_PASSWORD}
+export DATAKNOBS_DATABASES__PRIMARY__SSL_ENABLED=true
+export DATAKNOBS_DATABASES__PRIMARY__POOL_SIZE=50
 ```
 
 ### Service Configuration
 
 ```bash
 # API Service
-export DATAKNOBS_SERVICE__API__PORT=8000
-export DATAKNOBS_SERVICE__API__HOST=0.0.0.0
-export DATAKNOBS_SERVICE__API__DEBUG=false
-export DATAKNOBS_SERVICE__API__LOG_LEVEL=INFO
-export DATAKNOBS_SERVICE__API__RATE_LIMIT=1000
+export DATAKNOBS_SERVICES__API__PORT=8000
+export DATAKNOBS_SERVICES__API__HOST=0.0.0.0
+export DATAKNOBS_SERVICES__API__DEBUG=false
+export DATAKNOBS_SERVICES__API__LOG_LEVEL=INFO
+export DATAKNOBS_SERVICES__API__RATE_LIMIT=1000
 
 # Worker Service
-export DATAKNOBS_SERVICE__WORKER__CONCURRENCY=10
-export DATAKNOBS_SERVICE__WORKER__QUEUE_NAME=tasks
-export DATAKNOBS_SERVICE__WORKER__RETRY_ATTEMPTS=3
+export DATAKNOBS_SERVICES__WORKER__CONCURRENCY=10
+export DATAKNOBS_SERVICES__WORKER__QUEUE_NAME=tasks
+export DATAKNOBS_SERVICES__WORKER__RETRY_ATTEMPTS=3
 ```
 
 ### Cache Configuration
 
 ```bash
 # Redis Cache
-export DATAKNOBS_CACHE__REDIS__HOST=redis.example.com
-export DATAKNOBS_CACHE__REDIS__PORT=6379
-export DATAKNOBS_CACHE__REDIS__DB=0
-export DATAKNOBS_CACHE__REDIS__TTL=3600
-export DATAKNOBS_CACHE__REDIS__MAX_CONNECTIONS=100
+export DATAKNOBS_CACHES__REDIS__HOST=redis.example.com
+export DATAKNOBS_CACHES__REDIS__PORT=6379
+export DATAKNOBS_CACHES__REDIS__DB=0
+export DATAKNOBS_CACHES__REDIS__TTL=3600
+export DATAKNOBS_CACHES__REDIS__MAX_CONNECTIONS=100
 ```
 
 ## Docker and Container Usage
@@ -325,12 +344,12 @@ services:
   app:
     image: myapp:latest
     environment:
-      - DATAKNOBS_DATABASE__PRIMARY__HOST=db
-      - DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-      - DATAKNOBS_DATABASE__PRIMARY__USERNAME=postgres
-      - DATAKNOBS_DATABASE__PRIMARY__PASSWORD=${DB_PASSWORD}
-      - DATAKNOBS_CACHE__REDIS__HOST=redis
-      - DATAKNOBS_SERVICE__API__PORT=8000
+      - DATAKNOBS_DATABASES__PRIMARY__HOST=db
+      - DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+      - DATAKNOBS_DATABASES__PRIMARY__USERNAME=postgres
+      - DATAKNOBS_DATABASES__PRIMARY__PASSWORD=${DB_PASSWORD}
+      - DATAKNOBS_CACHES__REDIS__HOST=redis
+      - DATAKNOBS_SERVICES__API__PORT=8000
 ```
 
 ### Kubernetes ConfigMap
@@ -341,10 +360,10 @@ kind: ConfigMap
 metadata:
   name: app-config
 data:
-  DATAKNOBS_DATABASE__PRIMARY__HOST: "postgres-service"
-  DATAKNOBS_DATABASE__PRIMARY__PORT: "5432"
-  DATAKNOBS_CACHE__REDIS__HOST: "redis-service"
-  DATAKNOBS_SERVICE__API__LOG_LEVEL: "INFO"
+  DATAKNOBS_DATABASES__PRIMARY__HOST: "postgres-service"
+  DATAKNOBS_DATABASES__PRIMARY__PORT: "5432"
+  DATAKNOBS_CACHES__REDIS__HOST: "redis-service"
+  DATAKNOBS_SERVICES__API__LOG_LEVEL: "INFO"
 ```
 
 ### Kubernetes Secret
@@ -356,8 +375,8 @@ metadata:
   name: app-secrets
 type: Opaque
 stringData:
-  DATAKNOBS_DATABASE__PRIMARY__PASSWORD: "secret-password"
-  DATAKNOBS_SERVICE__API__SECRET_KEY: "secret-api-key"
+  DATAKNOBS_DATABASES__PRIMARY__PASSWORD: "secret-password"
+  DATAKNOBS_SERVICES__API__SECRET_KEY: "secret-api-key"
 ```
 
 ## .env File Support
@@ -366,14 +385,14 @@ Use .env files for local development:
 
 ```bash
 # .env
-DATAKNOBS_DATABASE__PRIMARY__HOST=localhost
-DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-DATAKNOBS_DATABASE__PRIMARY__USERNAME=dev_user
-DATAKNOBS_DATABASE__PRIMARY__PASSWORD=dev_password
-DATAKNOBS_CACHE__REDIS__HOST=localhost
-DATAKNOBS_CACHE__REDIS__PORT=6379
-DATAKNOBS_SERVICE__API__DEBUG=true
-DATAKNOBS_SERVICE__API__LOG_LEVEL=DEBUG
+DATAKNOBS_DATABASES__PRIMARY__HOST=localhost
+DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+DATAKNOBS_DATABASES__PRIMARY__USERNAME=dev_user
+DATAKNOBS_DATABASES__PRIMARY__PASSWORD=dev_password
+DATAKNOBS_CACHES__REDIS__HOST=localhost
+DATAKNOBS_CACHES__REDIS__PORT=6379
+DATAKNOBS_SERVICES__API__DEBUG=true
+DATAKNOBS_SERVICES__API__LOG_LEVEL=DEBUG
 ```
 
 Load with python-dotenv:
@@ -426,8 +445,8 @@ config = Config.from_file("config.yaml")
 def validate_env_overrides(config):
     """Validate that required environment variables are set."""
     required = [
-        "DATAKNOBS_DATABASE__PRIMARY__PASSWORD",
-        "DATAKNOBS_SERVICE__API__SECRET_KEY",
+        "DATAKNOBS_DATABASES__PRIMARY__PASSWORD",
+        "DATAKNOBS_SERVICES__API__SECRET_KEY",
     ]
     
     missing = []
@@ -482,14 +501,14 @@ Create an environment variable reference:
 # Environment Variables Reference
 
 ## Database Configuration
-- `DATAKNOBS_DATABASE__PRIMARY__HOST`: Database host (default: localhost)
-- `DATAKNOBS_DATABASE__PRIMARY__PORT`: Database port (default: 5432)
-- `DATAKNOBS_DATABASE__PRIMARY__USER`: Database user (required)
-- `DATAKNOBS_DATABASE__PRIMARY__PASSWORD`: Database password (required)
+- `DATAKNOBS_DATABASES__PRIMARY__HOST`: Database host (default: localhost)
+- `DATAKNOBS_DATABASES__PRIMARY__PORT`: Database port (default: 5432)
+- `DATAKNOBS_DATABASES__PRIMARY__USER`: Database user (required)
+- `DATAKNOBS_DATABASES__PRIMARY__PASSWORD`: Database password (required)
 
 ## Cache Configuration
-- `DATAKNOBS_CACHE__REDIS__HOST`: Redis host (default: localhost)
-- `DATAKNOBS_CACHE__REDIS__PORT`: Redis port (default: 6379)
+- `DATAKNOBS_CACHES__REDIS__HOST`: Redis host (default: localhost)
+- `DATAKNOBS_CACHES__REDIS__PORT`: Redis port (default: 6379)
 ```
 
 ## Troubleshooting
@@ -497,8 +516,10 @@ Create an environment variable reference:
 ### Common Issues
 
 1. **Variables Not Applied**: They are applied at construction -- check the
-   variable was set *before* the `Config` was built, and that `use_env=False`
-   was not passed
+   variable was set *before* the `Config` was built, that `use_env=False` was
+   not passed, and that the TYPE segment matches the config file's top-level
+   key exactly (`databases:` is `DATAKNOBS_DATABASES__`, never
+   `DATAKNOBS_DATABASE__`)
 2. **Wrong Type**: Check automatic type conversion is working as expected.
    Note that `0` and `1` become booleans, not integers
 3. **Name Mismatch**: Verify configuration item names match environment
@@ -563,11 +584,11 @@ import os
 def set_dynamic_env_vars(environment):
     """Set environment variables based on deployment environment."""
     if environment == "production":
-        os.environ["DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE"] = "50"
-        os.environ["DATAKNOBS_SERVICE__API__WORKERS"] = "4"
+        os.environ["DATAKNOBS_DATABASES__PRIMARY__POOL_SIZE"] = "50"
+        os.environ["DATAKNOBS_SERVICES__API__WORKERS"] = "4"
     else:
-        os.environ["DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE"] = "10"
-        os.environ["DATAKNOBS_SERVICE__API__WORKERS"] = "1"
+        os.environ["DATAKNOBS_DATABASES__PRIMARY__POOL_SIZE"] = "10"
+        os.environ["DATAKNOBS_SERVICES__API__WORKERS"] = "1"
 
 # Again: set the variables first, then build.
 set_dynamic_env_vars("production")
