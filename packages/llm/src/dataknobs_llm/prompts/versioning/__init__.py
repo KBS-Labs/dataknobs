@@ -57,6 +57,16 @@ from .types import (
     MetricEvent,
 )
 
+from .store import (
+    DatabaseVersionStore,
+    ExperimentStore,
+    InMemoryVersionStore,
+    MetricsStore,
+    VersionStore,
+    VersioningStore,
+    require_store,
+)
+
 from .version_manager import VersionManager
 
 from .ab_testing import ABTestManager
@@ -76,4 +86,12 @@ __all__ = [
     "VersionManager",
     "ABTestManager",
     "MetricsCollector",
+    # Storage
+    "VersionStore",
+    "ExperimentStore",
+    "MetricsStore",
+    "VersioningStore",
+    "InMemoryVersionStore",
+    "DatabaseVersionStore",
+    "require_store",
 ]

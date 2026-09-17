@@ -110,12 +110,18 @@ from .versioning import (
     VersionManager,
     ABTestManager,
     MetricsCollector,
+    DatabaseVersionStore,
+    ExperimentStore,
+    InMemoryVersionStore,
+    MetricsStore,
     PromptVersion,
     PromptExperiment,
     PromptVariant,
     PromptMetrics,
     VersioningError,
+    VersioningStore,
     VersionStatus,
+    VersionStore,
     MetricEvent,
 )
 
@@ -184,4 +190,11 @@ __all__ = [
     "VersioningError",
     "VersionStatus",
     "MetricEvent",
+    # Versioning storage
+    "VersionStore",
+    "ExperimentStore",
+    "MetricsStore",
+    "VersioningStore",
+    "InMemoryVersionStore",
+    "DatabaseVersionStore",
 ]
