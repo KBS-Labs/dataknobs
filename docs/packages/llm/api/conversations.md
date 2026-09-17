@@ -23,10 +23,10 @@ The conversations API provides a powerful system for managing multi-turn convers
         - scoped_middleware
         - switch_to_node
         - branch_from
-        - get_tree_structure
+        - get_branches
         - get_rag_metadata
         - save
-        - load
+        - resume
 
 ## Conversation Types
 

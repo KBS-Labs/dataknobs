@@ -22,10 +22,11 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
         - create_version
         - get_version
         - list_versions
+        - list_names
         - update_status
         - tag_version
         - untag_version
-        - get_version_by_tag
+        - get_version_history
 
 ### PromptVersion
 
@@ -56,7 +57,7 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
         - get_variant_for_user
         - get_random_variant
         - update_experiment_status
-        - get_active_experiments
+        - get_variant_distribution
 
 ### PromptExperiment
 
@@ -421,17 +422,34 @@ version = await library.get_variant_for_user(experiment.experiment_id, "user123"
 template = await library.get_version("greeting", "system", version)
 ```
 
-!!! warning "The inherited sync accessors do not work here"
+!!! note "This library is the asynchronous flavour"
 
-    `get_system_prompt` / `get_user_prompt` are synchronous, because
-    `AbstractPromptLibrary` declares them so, and they reach the async version
-    manager with `loop.run_until_complete`. On a running event loop that
-    raises `RuntimeError: This event loop is already running` -- and a running
-    loop is the only place this library can be populated from, because
-    `create_version` and `create_experiment` are coroutines.
+    `VersionedPromptLibrary` implements `AsyncPromptLibrary`, not
+    `AbstractPromptLibrary`: every answer it gives comes from a version
+    manager that awaits, so its accessors are coroutines like its writers.
 
-    Use the async `get_version(name, prompt_type, version)` instead, as above.
-    The sync accessors work only from code that is not already on a loop.
+    ```python
+    template = await library.get_system_prompt("greeting")
+    names = await library.list_system_prompts()
+    ```
+
+    A `def` caller reaches it through `as_sync`, which runs the coroutine on a
+    private event loop — so the call returns rather than raising, at the cost
+    of a daemon thread and a blocked calling thread for the whole call:
+
+    ```python
+    from dataknobs_llm.prompts import as_sync
+
+    with as_sync(library, timeout=30) as view:
+        template = view.get_system_prompt("greeting")
+    ```
+
+    The accessors were synchronous before, because the only library protocol
+    available said so. They reached the async version manager with
+    `loop.run_until_complete`, which raises `RuntimeError: This event loop is
+    already running` for a caller already on one — and a running loop is the
+    only place this library can be populated from, because `create_version`
+    and `create_experiment` are coroutines.
 
 ## Best Practices
 

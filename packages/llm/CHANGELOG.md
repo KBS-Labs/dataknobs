@@ -40,13 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one daemon thread and two descriptors per attempt. `AsyncLLMResource.aclose()`
   closed the async provider and the rate limiter but never the adapters that
   the inherited synchronous `complete()` builds, leaking one per model key.
-- **The versioned prompt library's synchronous accessors work from async
-  code.** `VersionedPromptLibrary.get_system_prompt` and `get_user_prompt`
-  each carried the same `run_until_complete` preamble, so both raised
-  `RuntimeError: This event loop is already running` for any caller already on
-  a loop — which is every realistic caller, since every writer on the library
-  is a coroutine, and the sequence in the class's own usage example. Both now
-  run their lookup on a private loop via `run_coro_sync`.
 - **`VersionedPromptLibrary` can be constructed.** `AbstractPromptLibrary.reload`
   carried an `@abstractmethod` that its own docstring contradicted — *"This is
   optional… Default implementation does nothing."* The method shipped
@@ -60,8 +53,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop and installing it thread-globally with `set_event_loop`, then never used
   or closed it — so calling it from a loopless thread left a live loop behind.
   Its sibling `list_user_prompts` does the same dict read with none of that.
+- **Reloading a prompt library no longer empties it.** `FileSystemPromptLibrary`
+  and `ConfigPromptLibrary` keep their whole content in the caches
+  `BasePromptLibrary` manages — the listings answer from those caches — and
+  both inherited a `reload()` that only *cleared* them. Reloading a filesystem
+  library discarded every prompt and read nothing back, leaving
+  `list_system_prompts()` empty. Each library now spells its own `reload()`
+  over the mixin's shared `_reload_caches()`, and re-reads its source after
+  clearing.
+- **A prompt library's listings match what its getters answer.** Two defects in
+  one walk. Deleting a prompt's last version left the version index holding its
+  name against an empty list, so `list_system_prompts()` kept naming a prompt
+  `get_system_prompt()` then answered `None` for. And a prompt name containing
+  a `:` was dropped from its own listing: the index key is `f"{name}:{type}"`
+  and the walk split on the *first* colon, putting the tail of the name into
+  the type slot — such a prompt could be created and fetched but never listed.
+- **`AsyncPromptBuilder` no longer calls its prompt library on the event loop.**
+  All three library reaches — the system-prompt fetch, the user-prompt fetch
+  and the RAG-config fetch — ran synchronously inside `async def` bodies over
+  an `AbstractPromptLibrary` the builder does not choose, so a library that
+  read a file to answer stalled the builder's loop and every other task on it
+  for the duration. The builder holds an `as_async` view privately and awaits
+  it; `builder.library` is still the object that was passed, and the inherited
+  synchronous helpers still answer over it.
 
 ### Changed
+
+- **Prompt libraries come in two flavours, and there are two named doors
+  between them (breaking).** `AsyncPromptLibrary` joins `AbstractPromptLibrary`
+  as the interface for a library that has to reach a store to answer, and
+  `VersionedPromptLibrary` is the first implementation of it — its accessors
+  are coroutines now, like the writers that populate it. The two protocols
+  declare one surface member for member, with one stated difference:
+  `get_metadata` is synchronous on both, because it answers from the library's
+  own configuration rather than from its content. `as_async(library)` presents
+  a synchronous library to an async consumer, offloading each call to a worker
+  thread so a library that reads a file cannot stall the consumer's loop;
+  `as_sync(library)` presents an async library to a `def` consumer, at the cost
+  of a private event loop on a daemon thread and a calling thread blocked for
+  the whole of every call. The asymmetry is the point: where a consumer can
+  take the async library directly, that is always cheaper than `as_sync`.
+  `as_sync` into `AsyncPromptBuilder` pays twice for one read — that builder is
+  still typed to the synchronous interface and offloads through `as_async`
+  itself, so the fetch crosses to a worker thread, blocks it on the bridge and
+  crosses back — and the bridge it opens is one nothing downstream will close,
+  because `AbstractPromptLibrary` declares no `close()`. Widening the builder
+  to take either flavour is still open.
+
+  Breaking on paper, vacuous in fact: `VersionedPromptLibrary` was abstract in
+  every published version, so nothing has ever held one. `get_metadata` no
+  longer reports `version_count` / `experiment_count` — they counted rows by
+  reaching into two managers' private dictionaries, and counting rows in a
+  store is a query, not metadata about a library. `base_library` now accepts
+  either flavour, normalising a synchronous one through `as_async`, and is a
+  property so that replacing it replaces what lookups reach; a library
+  answering to neither protocol is a `TypeError` at the point it is set rather
+  than an un-awaitable object surfacing from a later fallback. `VersionManager`
+  gains `list_names(prompt_type)`, which is what the library's two listings
+  walk now — they previously read the manager's private index and parsed its
+  key format back.
+
+- **`BasePromptLibrary` no longer stubs the interface it extends, and no
+  longer declares it (breaking).** Eight `NotImplementedError` overrides stood
+  in for the ABC's abstract methods — and to `abc` a stub is an
+  implementation, so those eight switched off the construct-time check for
+  every subclass: a library missing a method built fine and raised at the
+  first call instead, which is the one moment its author is no longer
+  watching. They are gone; `get_metadata`, the ninth and the only real one,
+  stays. With them gone the class carries no interface at all, so it stops
+  declaring one: it is a mixin holding caching, parsing and metadata, which is
+  what lets a library of *either* flavour reuse it. `FileSystemPromptLibrary`
+  and `ConfigPromptLibrary` name `AbstractPromptLibrary` themselves, so every
+  `isinstance` check against them answers as before. A consumer subclassing
+  `BasePromptLibrary` directly now names the flavour too, and a subclass
+  missing a method is refused at construction, naming what it is missing.
+  Flavour-neutrality reaches the members as well as the bases: the shared
+  reloading is `_reload_caches()`, because a public `def reload` on the mixin
+  wins the MRO over `AsyncPromptLibrary`'s `async def` default and left an
+  asynchronous library that reused the mixin raising `TypeError` on
+  `await library.reload()`.
 
 - **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
   `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly

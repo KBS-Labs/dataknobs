@@ -1,30 +1,24 @@
 {
-  "timestamp": "2026-09-17T18:15:45Z",
+  "timestamp": "2026-09-17T19:29:44Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "packages": "bots data fsm llm",
   "tested_packages": [
     "bots",
-    "common",
-    "config",
     "data",
     "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
+    "llm"
   ],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "e788871acdc95973d589a3a33ae848b38223d185ee422a3bafab15d7a5dd4488",
     "common": "2372477f39dfa31593f58d6c66aa9fd151b89e22a94e1bc673f9c225013b4fab",
     "config": "584be0ff0665b9d3360459af7c42c325b08e9ef5362ff763a0f76309c375098a",
-    "data": "593c88b49f68bce37ef9f85eb65ab77b9b9c54a5b0ba7193435d2ded6731e80c",
+    "data": "ca4b014ea5a84f38a1b860d3fa330d82f3dd1a4c4ffc30ea274a4677252b0add",
     "fsm": "caf631115ee1943be5236aac21b28371fa5096be80e33e3d7aad66d5fda95324",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
-    "llm": "b7bad24bdf6b388c04904ee6f3559c589105cbfefde392ea5ee260ef156d302e",
+    "llm": "8e71556aea041a102b3a02c3fd84d45b3ee4c75705f6a384792bf9115e866f34",
     "structures": "a3fe8b06685533e4584b60111289dac9f453c028ff21581cb9aa68a5447e09cf",
     "utils": "dee225f96d8e789b657d45f54e703c21bcaa37be5a2a50d40f61ee47e528a0d9",
     "xization": "247a60089daa7863ff0b7a3caad9f9ab674c890a91468641c9026cff6207c9e5",
@@ -34,10 +28,10 @@
     "toolchain": "021e30fac8df7f1778866002aeb7fec6e7fc126da719426499e42667716964f6",
     "toolchain_test": "a3c996e51c661e2fc0d1c26400dbbe16708cad0bd629827aec331bf99a4c82b1",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
-    "workspace_tests": "849643fcb6ebfdbedc49f6739fc85b1d6a9fa78414a7fee15caaf3ee1eca81eb",
-    "docs": "d8d060009d0dddf5823938948e456f3bb0756768328e3db7492e33b305fb6da2"
+    "workspace_tests": "d04b52b1c2a790efa0d2bf25648cda18c2c889c3c63d5ff541dca31db20e4e2b",
+    "docs": "3ffc2f3a4587b87bef74d3c42335fb4de3ca2f9e35adc247b9dc4aa788cc32a3"
   },
-  "total_seconds": 376,
+  "total_seconds": 344,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -62,14 +56,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 94
+      "duration_seconds": 82
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 27
+      "duration_seconds": 28
     },
     "documentation_versions": {
       "status": "pass",
@@ -89,14 +83,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 153,
-      "workspace_guards_seconds": 88
+      "duration_seconds": 132,
+      "workspace_guards_seconds": 96
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 90
+      "duration_seconds": 89
     }
   }
 }

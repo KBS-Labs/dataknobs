@@ -138,6 +138,18 @@ faith is whether one paragraph says the word. That also reaches where the
 readers cannot: a document is pulled in by any one qualified mention, and the
 notice it then has to carry covers every bare prose mention beside it.
 
+**A curated reference also names members, and a renderer that drops one says
+nothing.** An ``mkdocstrings`` block lists the members to render under the
+path it documents, and an entry naming a member that is not there is rendered
+as *nothing at all* -- no warning, and ``mkdocs build --strict`` green over
+the page with the entry still in it. So the page reads as complete while a
+method the reader went looking for is silently absent from it, and the
+absence looks like the method not existing rather than like a stale list.
+Seven such entries sat in four pages when this was written, out of 85 across
+17 pages. The position is the fifth this file has had to learn, and the same
+shape as the fourth: the claim is in the directive's options block, which is
+neither a fence nor prose, so no reader above could reach it.
+
 Scope is every markdown document a reader can reach: the site tree, each
 package's ``docs/``, and the READMEs. Two carve-outs, both narrow and both
 stated in the code below rather than left to a path convention: a document
@@ -635,6 +647,66 @@ def path_findings_in(path: Path) -> list[str]:
 #: that are entirely correct -- 21 sites where the directive finds 15.
 #: ``.. deprecated::`` is authored deliberately and read by Sphinx; it states
 #: what the prose only implies.
+#: The head of an ``mkdocstrings`` block: ``::: dotted.path`` on its own line.
+MKDOCSTRINGS = re.compile(r"^:::\s+(?P<path>[A-Za-z_][\w.]*)\s*$")
+
+#: The ``members:`` key inside such a block's options, and one entry under it.
+MEMBERS_KEY = re.compile(r"^\s+members:\s*$")
+MEMBER_ENTRY = re.compile(r"^\s+-\s+(?P<member>\w+)\s*$")
+
+
+def member_targets(path: Path) -> list[tuple[int, str, str]]:
+    """``(line, documented path, member)`` for every ``mkdocstrings`` entry.
+
+    Scoped to the options block of a ``:::`` directive and to the list under
+    its ``members:`` key, rather than to the text of a list item. That
+    distinction is not pedantry: ``- code`` under a ``required:`` key in a YAML
+    fence is the identical token, and a reader matching the item alone reports
+    it as a missing member of whatever class the page documented last.
+    """
+    found: list[tuple[int, str, str]] = []
+    documented: str | None = None
+    in_members = False
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        head = MKDOCSTRINGS.match(line)
+        if head:
+            documented, in_members = head.group("path"), False
+            continue
+        if documented is None:
+            continue
+        if not line.strip():
+            continue
+        if not line.startswith((" ", "\t")):
+            # The block ends at the first line that is not indented under it.
+            documented, in_members = None, False
+            continue
+        if MEMBERS_KEY.match(line):
+            in_members = True
+            continue
+        entry = MEMBER_ENTRY.match(line)
+        if in_members and entry:
+            found.append((number, documented, entry.group("member")))
+        elif in_members:
+            in_members = False
+    return found
+
+
+def member_findings() -> list[str]:
+    """Every documented member that the path it is listed under does not have."""
+    broken: list[str] = []
+    for path in documentation_files():
+        for number, documented, member in member_targets(path):
+            owner, why = _resolved_path(documented)
+            if why is not None:
+                # The path itself is already a finding of the prose reader; a
+                # second report of the same absence, once per member, would
+                # bury it rather than add to it.
+                continue
+            if not hasattr(owner, member):
+                broken.append(f"{rel(path)}:{number}: {documented} has no member {member!r}")
+    return broken
+
+
 DEPRECATED = re.compile(r"\.\.\s*deprecated::")
 
 #: Says the document knows the symbol it is naming is on its way out.
@@ -894,6 +966,47 @@ def test_the_prose_scan_reads_a_meaningful_corpus() -> None:
         f"only {found} paths named in prose; the documents naming a module by "
         "dotted path have not gone away, so the likelier reading is that "
         "``PROSE_PATH`` or ``prose_lines`` has stopped reaching some of them"
+    )
+
+
+def test_every_documented_member_exists() -> None:
+    """A member an API page lists must be one the renderer can find.
+
+    ``mkdocstrings`` drops an entry naming a member that is not there without
+    a word, so the page renders clean and short and the reader concludes the
+    method does not exist. That is the quietest failure in this file: the
+    other four leave something a reader can paste and watch fail, and this one
+    leaves nothing at all.
+    """
+    broken = member_findings()
+    assert not broken, (
+        f"{len(broken)} documented member(s) do not exist, so the API page "
+        "renders without them and a reader sent there finds the method simply "
+        "missing:\n  " + "\n  ".join(broken) + "\n\nRepoint the entry at the member "
+        "that replaced it, or drop the entry -- and check the surrounding prose, "
+        "which is usually naming the same absent member a second time."
+    )
+
+
+def test_the_member_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, and this reader needs its own like every reader before it.
+
+    Every entry it reads sits in a directive's options block, which is neither
+    a fence nor prose -- so a pattern that stopped matching would leave all
+    four floors above at their full value and report a clean sweep of an
+    unread corpus.
+
+    The number is placed under what the tree holds and above what a reader
+    with one arm dark still reaches. 85 entries sit in 17 pages; the two
+    patterns are consecutive, so ``MEMBERS_KEY`` going dark takes all 85 and
+    ``MKDOCSTRINGS`` going dark takes them too. A floor of 60 fails on either,
+    and on a scope that has stopped visiting the largest page.
+    """
+    found = sum(len(member_targets(path)) for path in documentation_files())
+    assert found > 60, (
+        f"only {found} documented members found; the API pages listing members "
+        "have not gone away, so the likelier reading is that ``MKDOCSTRINGS`` "
+        "or ``MEMBERS_KEY`` has stopped matching the form they are written in"
     )
 
 

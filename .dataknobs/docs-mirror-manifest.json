@@ -255,8 +255,7 @@
         "llm-architecture-exploration.md",
         "rag-caching.md",
         "README.md",
-        "schema-versioning.md",
-        "user-guide.md"
+        "schema-versioning.md"
       ],
       "site_only": [
         "examples/conversation-flows.md",
@@ -275,6 +274,14 @@
           "package": "providers.md",
           "site": "guides/providers.md",
           "reason": "Hand-authored copies of the same guide that have drifted in prose (rewrapped paragraphs, plus a passage each copy carries and the other does not). Classified so the pair is recorded and both files are existence-checked: as 'package_only' the site copy was invisible to this guard entirely -- it lives under guides/, and llm is not recursive -- so an edit to one copy had nothing at all checking the other. Reconciling the content, and classifying llm's remaining guides/ pairs, is its own task."
+        },
+        {
+          "package": "user-guide.md",
+          "site": "guides/prompts.md",
+          "reason": "Two documents on one subject, in two trees, previously compared by nothing: the package tree documents prompt libraries in a 16-section user guide and the site tree in a shorter prompt-engineering reference. The basenames differ, so the unpaired-counterpart check never tripped, and guides/ is unclassified while llm is not recursive -- so the site page had no verification at all. shared_sections pins the one block that must not drift: the two library flavours and the cost of each door between them.",
+          "shared_sections": [
+            "library-flavours"
+          ]
         },
         {
           "package": "versioning.md",

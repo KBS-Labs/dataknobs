@@ -559,8 +559,9 @@ await manager.untag_version(new_version.version_id, "production")
 await manager.tag_version(previous.version_id, "production")
 await manager.update_status(new_version.version_id, VersionStatus.DEPRECATED)
 
-# Use the rollback version
-library.get_system_prompt("greeting", version=previous.version)
+# Use the rollback version. `VersionedPromptLibrary` is an `AsyncPromptLibrary`,
+# so its readers are awaited like its writers.
+template = await library.get_system_prompt("greeting", version=previous.version)
 ```
 
 ### Example 3: Team Collaboration

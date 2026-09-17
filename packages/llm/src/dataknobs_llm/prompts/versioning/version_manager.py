@@ -227,6 +227,31 @@ class VersionManager:
         # Sort by version (newest first)
         return sorted(versions, key=lambda v: self._parse_version(v.version), reverse=True)
 
+    async def list_names(self, prompt_type: str) -> set[str]:
+        """Names carrying at least one version of ``prompt_type``.
+
+        The listing counterpart to :meth:`list_versions`, which can only answer
+        for a name the caller already has. Without it a caller wanting "every
+        system prompt" had to walk ``_version_index`` itself and parse the keys
+        back --- which is how two consumers came to split on the *first* colon,
+        putting the tail of any name containing one into the type slot and
+        dropping that prompt from its own listing.
+
+        Args:
+            prompt_type: Prompt type to filter on ("system", "user", "message").
+
+        Returns:
+            The set of prompt names holding a live version of that type. A name
+            whose last version was deleted is absent, so a listing built from
+            this cannot name a prompt the getters then answer ``None`` for.
+        """
+        suffix = f":{prompt_type}"
+        return {
+            key[: -len(suffix)]
+            for key, version_ids in self._version_index.items()
+            if key.endswith(suffix) and version_ids
+        }
+
     async def tag_version(
         self,
         version_id: str,
@@ -338,9 +363,14 @@ class VersionManager:
         # Remove from index
         key = self._make_key(version.name, version.prompt_type)
         if key in self._version_index:
-            self._version_index[key] = [
-                vid for vid in self._version_index[key] if vid != version_id
-            ]
+            remaining = [vid for vid in self._version_index[key] if vid != version_id]
+            if remaining:
+                self._version_index[key] = remaining
+            else:
+                # Drop the key rather than leaving it mapped to an empty list.
+                # A key outliving its last version is a name with no versions,
+                # and the index is the only record of which names exist.
+                del self._version_index[key]
 
         # Remove from storage
         del self._versions[version_id]
@@ -403,7 +433,7 @@ class VersionManager:
         major, minor, patch = self._parse_version(latest.version)
         return f"{major}.{minor}.{patch + 1}"
 
-    async def _persist_version(self, version: PromptVersion):
+    async def _persist_version(self, version: PromptVersion) -> None:
         """Persist version to backend storage."""
         if hasattr(self.storage, "set"):
             key = f"version:{version.version_id}"
