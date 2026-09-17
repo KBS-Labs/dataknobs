@@ -297,7 +297,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         tokens: int | None = None,
         user_rating: float | None = None,
         metadata: Dict[str, Any] | None = None,
-    ):
+    ) -> None:
         """Record a usage event for metrics tracking.
 
         Args:
@@ -422,15 +422,9 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             List of prompt names
         """
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        # Get unique prompt names from version index
+        # No loop here: the index is a plain dict and reading it awaits
+        # nothing. `list_user_prompts` below is the same method without the
+        # ceremony, which is what makes this one's absence the correct shape.
         names = set()
         for key in self.version_manager._version_index.keys():
             name, ptype = key.split(":", 1)

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`VersionedPromptLibrary` can be constructed.** `AbstractPromptLibrary.reload`
+  carried an `@abstractmethod` that its own docstring contradicted — *"This is
+  optional… Default implementation does nothing."* The method shipped
+  undecorated; a later lint sweep added the decorator and left the docstring
+  standing. `VersionedPromptLibrary` is the one subclass that did not override
+  `reload`, so it was abstract and every one of its twenty-odd methods was
+  unreachable. The decorator is removed, with a per-line `# noqa: B027` naming
+  the reason, and the class now has behavioural tests.
+- **Listing system prompts no longer installs an event loop.**
+  `VersionedPromptLibrary.list_system_prompts` opened by constructing an event
+  loop and installing it thread-globally with `set_event_loop`, then never used
+  or closed it — so calling it from a loopless thread left a live loop behind.
+  Its sibling `list_user_prompts` does the same dict read with none of that.
+
 ### Changed
 
 - **tree walks bind `children` once per node rather than re-reading it.**

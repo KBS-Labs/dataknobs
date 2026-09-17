@@ -13,6 +13,7 @@ would have caught it.
 
 import asyncio
 import inspect
+import threading
 
 import pytest
 
@@ -136,3 +137,58 @@ async def test_a_user_gets_one_variant_and_keeps_it() -> None:
 
     chosen = await library.get_version("greeting", "system", assigned)
     assert chosen is not None
+
+
+@pytest.mark.asyncio
+async def test_listing_prompts_reads_the_index_without_a_loop() -> None:
+    """Both listings are plain dict reads, and both report the same shape."""
+    library = VersionedPromptLibrary()
+    await library.create_version(
+        name="greeting", prompt_type="system", template="Hello!", version="1.0.0"
+    )
+    await library.create_version(
+        name="signoff", prompt_type="user", template="Bye!", version="1.0.0"
+    )
+
+    assert library.list_system_prompts() == ["greeting"]
+    assert library.list_user_prompts() == ["signoff"]
+
+
+def test_listing_prompts_installs_no_event_loop_in_the_calling_thread() -> None:
+    """A read-only listing must not leave a loop behind in its thread.
+
+    ``list_system_prompts`` opened with a ``get_event_loop``/``new_event_loop``
+    preamble whose ``loop`` was then never used -- so on any thread without one
+    it constructed a loop, installed it thread-globally with ``set_event_loop``,
+    never ran anything on it and never closed it. Its sibling
+    ``list_user_prompts`` does the identical work with none of that, which is
+    how the drift shows.
+    """
+    library = VersionedPromptLibrary()
+    observed: dict[str, object] = {}
+
+    def call_on_a_bare_thread() -> None:
+        # A non-main thread starts with no current loop, so the policy raises
+        # rather than fabricating one -- which makes "was a loop installed?"
+        # answerable here and nowhere else.
+        try:
+            observed["before"] = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError as exc:
+            observed["before"] = exc
+
+        observed["result"] = library.list_system_prompts()
+
+        try:
+            observed["after"] = asyncio.get_event_loop_policy().get_event_loop()
+        except RuntimeError as exc:
+            observed["after"] = exc
+
+    thread = threading.Thread(target=call_on_a_bare_thread)
+    thread.start()
+    thread.join()
+
+    assert isinstance(observed["before"], RuntimeError), "thread should start loopless"
+    assert observed["result"] == []
+    assert isinstance(observed["after"], RuntimeError), (
+        f"a loop was installed and left running: {observed['after']!r}"
+    )
