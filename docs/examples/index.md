@@ -281,7 +281,7 @@ asyncio.run(main())
 
 **Application Development:**
 - [Configuration Examples](configuration.md) - App configuration patterns
-- [Data Structure Examples](basic-tree.md) - Trees and documents
+- [Data Structure Examples](basic-tree.md) - Tree structures
 - [Text Processing Examples](text-normalization.md) - Text utilities
 
 ### By Package
