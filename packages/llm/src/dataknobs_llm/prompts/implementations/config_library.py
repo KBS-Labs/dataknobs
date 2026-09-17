@@ -37,6 +37,7 @@ import logging
 from typing import Any, Dict, List
 
 from ..base import (
+    AbstractPromptLibrary,
     BasePromptLibrary,
     PromptTemplateDict,
     RAGConfig,
@@ -46,7 +47,7 @@ from ..base import (
 logger = logging.getLogger(__name__)
 
 
-class ConfigPromptLibrary(BasePromptLibrary):
+class ConfigPromptLibrary(BasePromptLibrary, AbstractPromptLibrary):
     """Prompt library that loads prompts from configuration dictionaries.
 
     Features:

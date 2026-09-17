@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
 # SPDX-License-Identifier: Apache-2.0
 
-"""Base implementation of prompt library with shared functionality.
+"""Shared functionality for prompt libraries of either flavour.
 
-This module provides BasePromptLibrary, a concrete implementation of
-AbstractPromptLibrary that includes caching and common utilities.
+This module provides BasePromptLibrary, a mixin carrying the caching and
+parsing every library implementation needs and none of the interface itself.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Any
 import logging
 
-from .abstract_prompt_library import AbstractPromptLibrary
 from .types import (
     MessageIndex,
     PromptTemplateDict,
@@ -25,17 +24,36 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
-class BasePromptLibrary(AbstractPromptLibrary):
-    """Base implementation with caching and common functionality.
+class BasePromptLibrary:
+    """Caching, parsing and metadata, shared by libraries of either flavour.
 
     This class provides:
     - Optional caching of loaded prompts and message indexes
     - Helper methods for cache management
     - Shared metadata handling
-    - Default implementations of optional methods
+    - Shared parsing of templates, validation blocks and RAG configs
 
-    Subclasses should implement the abstract methods to provide
-    the actual prompt loading logic.
+    It is a **mixin, not an interface**. It declares neither
+    :class:`AbstractPromptLibrary` nor :class:`AsyncPromptLibrary`, so a
+    library names its flavour itself and inherits the machinery here
+    alongside it::
+
+        class FileSystemPromptLibrary(BasePromptLibrary, AbstractPromptLibrary):
+
+    That is the shape this package already runs one layer down --
+    ``ResourceAdapterBase`` with ``ResourceAdapter`` and
+    ``AsyncResourceAdapter`` -- and it is what lets an asynchronous library
+    reuse this caching rather than copy it. A mixin that declared the
+    synchronous interface could only be reused by making an async library
+    answer ``True`` to both.
+
+    It also used to *stub* that interface: eight ``NotImplementedError``
+    bodies, one per abstract method. To :class:`abc.ABC` a stub is an
+    implementation, so those eight switched off the construct-time check for
+    every subclass -- a library missing a method built fine and raised at the
+    first call instead, which is the one moment its author is no longer
+    watching. They are gone; the ninth, :meth:`get_metadata`, was never a stub
+    and stays.
     """
 
     def __init__(self, enable_cache: bool = True, metadata: dict[str, Any] | None = None):
@@ -355,69 +373,3 @@ class BasePromptLibrary(AbstractPromptLibrary):
             template["rag_configs"] = [
                 self._parse_rag_config(rag_data) for rag_data in data["rag_configs"]
             ]
-
-    # ===== Abstract Methods (must be implemented by subclasses) =====
-
-    def get_system_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
-        """Retrieve a system prompt template by name.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement get_system_prompt()")
-
-    def list_system_prompts(self) -> list[str]:
-        """List all available system prompt names.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement list_system_prompts()")
-
-    def get_user_prompt(
-        self, name: str, index: int = 0, **kwargs: Any
-    ) -> PromptTemplateDict | None:
-        """Retrieve a user prompt template by name and index.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement get_user_prompt()")
-
-    def list_user_prompts(self) -> list[str]:
-        """List available user prompts.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement list_user_prompts()")
-
-    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
-        """Retrieve a message index by name.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement get_message_index()")
-
-    def list_message_indexes(self) -> list[str]:
-        """List all available message index names.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement list_message_indexes()"
-        )
-
-    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
-        """Retrieve a standalone RAG configuration by name.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(f"{self.__class__.__name__} must implement get_rag_config()")
-
-    def get_prompt_rag_configs(
-        self, prompt_name: str, prompt_type: str = "user", index: int = 0, **kwargs: Any
-    ) -> list[RAGConfig]:
-        """Retrieve RAG configurations for a specific prompt.
-
-        Subclasses must implement this method.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement get_prompt_rag_configs()"
-        )

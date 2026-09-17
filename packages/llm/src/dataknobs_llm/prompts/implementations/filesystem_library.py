@@ -42,6 +42,7 @@ from dataknobs_common.config_loading import (
 )
 
 from ..base import (
+    AbstractPromptLibrary,
     BasePromptLibrary,
     PromptTemplateDict,
     RAGConfig,
@@ -51,7 +52,7 @@ from ..base import (
 logger = logging.getLogger(__name__)
 
 
-class FileSystemPromptLibrary(BasePromptLibrary):
+class FileSystemPromptLibrary(BasePromptLibrary, AbstractPromptLibrary):
     """Prompt library that loads prompts from filesystem directory.
 
     Features:
