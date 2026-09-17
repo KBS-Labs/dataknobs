@@ -323,8 +323,11 @@ converting.
 Perform aggregations with pandas:
 
 ```python
+from dataknobs_data.pandas import BatchOperations
+from dataknobs_data.query import Query
+
 # Get all data as DataFrame
-df = pandas_db.all_as_dataframe()
+df = BatchOperations(database).query_as_dataframe(Query())
 
 # Complex aggregation
 result = df.groupby(["category", "status"]).agg({
@@ -353,13 +356,13 @@ class DataPipeline:
     """ETL pipeline using pandas"""
     
     def __init__(self, source_db, target_db):
-        self.source_db = PandasDatabase(source_db)
-        self.target_db = PandasDatabase(target_db)
+        self.source_db = BatchOperations(source_db)
+        self.target_db = BatchOperations(target_db)
         self.converter = DataFrameConverter()
     
     def run(self, query=None):
         # Extract
-        df = self.source_db.search_dataframe(query or Query())
+        df = self.source_db.query_as_dataframe(query or Query())
         
         # Transform
         df = self.transform(df)
@@ -403,8 +406,8 @@ def clean_dataset(database):
     """Clean and validate dataset"""
     
     # Load data
-    pandas_db = PandasDatabase(database)
-    df = pandas_db.all_as_dataframe()
+    batch_ops = BatchOperations(database)
+    df = batch_ops.query_as_dataframe(Query())
     
     # Remove duplicates
     df = df.drop_duplicates(subset=["email"], keep="first")
@@ -443,8 +446,8 @@ Perform statistical analysis on data:
 def analyze_dataset(database):
     """Statistical analysis of dataset"""
     
-    pandas_db = PandasDatabase(database)
-    df = pandas_db.all_as_dataframe()
+    batch_ops = BatchOperations(database)
+    df = batch_ops.query_as_dataframe(Query())
     
     # Basic statistics
     print("Dataset Overview:")
@@ -602,8 +605,8 @@ def export_data(database, format="csv", query=None):
     """Export data in various formats"""
     
     # Get data as DataFrame
-    pandas_db = PandasDatabase(database)
-    df = pandas_db.search_dataframe(query or Query())
+    batch_ops = BatchOperations(database)
+    df = batch_ops.query_as_dataframe(query or Query())
     
     if format == "csv":
         df.to_csv("export.csv", index=False)
@@ -668,7 +671,7 @@ class RealTimeAnalytics:
     """Real-time analytics using pandas"""
     
     def __init__(self, database):
-        self.db = PandasDatabase(database)
+        self.db = BatchOperations(database)
         self.cache = {}
         self.cache_ttl = 60  # seconds
     
@@ -687,7 +690,7 @@ class RealTimeAnalytics:
             Filter("created_at", ">=", cutoff)
         ])
         
-        df = self.db.search_dataframe(query)
+        df = self.db.query_as_dataframe(query)
         
         # Calculate metrics
         metrics = {

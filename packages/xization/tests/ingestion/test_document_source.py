@@ -554,10 +554,14 @@ async def test_backend_iter_files_size_of_none_is_the_unknown_sentinel() -> None
     """A size the backend has but does not know is ``-1``, not a ``TypeError``.
 
     The third tier of the same fallback, and the one the other two hid: a
-    record carrying ``size_bytes=None`` satisfies every ``getattr`` in the
-    chain and reached ``int(None)``. The type checker named it --- ``Argument
-    1 to "int" has incompatible type "Any | None"`` --- while the two tests
-    above reported green, because neither record can produce a ``None``.
+    record carrying ``size=None`` gets past the ``size_bytes`` tier, then
+    *satisfies* the ``size`` tier rather than falling to its default, and so
+    reached ``int(None)``. ``size_bytes=None`` alone was never broken --- the
+    ``size`` tier's default caught it --- which is why the attribute this
+    record carries is the one that matters. The type checker named it ---
+    ``Argument 1 to "int" has incompatible type "Any | None"`` --- while the
+    two tests above reported green, because neither record can produce a
+    ``None`` at the tier that lacked a default.
     """
     backend = _StaticBackend(
         {"a.md": b"hello"},

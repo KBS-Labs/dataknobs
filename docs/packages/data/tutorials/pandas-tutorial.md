@@ -149,13 +149,13 @@ sales_df = pd.DataFrame(sales_data)
 ### Bulk Insert from DataFrame
 
 ```python
-# Configure batch insertion
+# Configure batch insertion. Every batch knob lives on BatchConfig; there is
+# no schema-validation flag and no worker-count flag, and `parallel` /
+# `max_workers` are stored but read nowhere -- the insert is sequential
+# whatever they say.
 config = BatchConfig(
     chunk_size=100,              # Process 100 records at a time
-    parallel=True,               # Use parallel processing
-    num_workers=4,               # Number of parallel workers
     error_handling="log",        # Log errors but continue
-    validate=True,               # Validate before insert
     progress_callback=lambda current, total: print(f"Inserted {current}/{total} records", end="\r")
 )
 
@@ -163,10 +163,10 @@ config = BatchConfig(
 result = batch_ops.bulk_insert_dataframe(sales_df, config)
 
 print(f"\nBulk insert results:")
+print(f"  Rows seen: {result['total_rows']}")
 print(f"  Inserted: {result['inserted']}")
 print(f"  Failed: {result['failed']}")
-print(f"  Duration: {result['duration']:.2f} seconds")
-print(f"  Rate: {result['rate']:.0f} records/second")
+print(f"  Errors: {result['errors']}")
 ```
 
 ### Query as DataFrame
@@ -300,8 +300,8 @@ def process_chunk(chunk_df):
 # Process large DataFrame in chunks
 chunk_results = processor.process_dataframe(
     sales_df,
-    process_func=process_chunk,
-    combine_func=lambda results: pd.DataFrame(results)
+    processor=process_chunk,
+    combine=lambda results: pd.DataFrame(results)
 )
 
 print("\nChunk processing results:")
@@ -427,7 +427,7 @@ def import_csv_to_db(filepath, db, batch_ops):
     
     results = processor.read_csv_chunked(
         filepath,
-        process_func=process_and_import
+        processor=process_and_import
     )
     
     total_imported = sum(results)
@@ -614,7 +614,7 @@ class SalesDataPipeline:
         records = self.converter.dataframe_to_records(df)
         
         # Bulk insert to target table
-        config = BatchConfig(chunk_size=1000, parallel=True)
+        config = BatchConfig(chunk_size=1000, error_handling="log")
         result = self.batch_ops.bulk_insert_dataframe(df, config)
         
         return result
@@ -694,13 +694,15 @@ def benchmark_operations(db, num_records=10000):
     )
     results["bulk_insert"] = time.time() - start
     
-    # Method 3: Parallel bulk insert
+    # Method 3: Bulk insert with a larger chunk size. (There is no parallel
+    # method to compare against: `BatchConfig.parallel` and `max_workers` are
+    # stored and read nowhere, so the insert is sequential whatever they say.)
     start = time.time()
     batch_ops.bulk_insert_dataframe(
         test_df,
-        BatchConfig(chunk_size=1000, parallel=True, num_workers=4)
+        BatchConfig(chunk_size=1000)
     )
-    results["parallel_insert"] = time.time() - start
+    results["large_chunk_insert"] = time.time() - start
     
     return results
 
