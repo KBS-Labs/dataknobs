@@ -16,6 +16,7 @@ import inspect
 import threading
 
 import pytest
+from dataknobs_common.testing import assert_no_leaked_bridge_threads
 
 from dataknobs_llm.prompts import VersionedPromptLibrary
 from dataknobs_llm.prompts.base import AbstractPromptLibrary
@@ -61,18 +62,54 @@ async def test_a_version_round_trips_through_the_library() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_sync_accessors_cannot_be_called_from_async_code() -> None:
-    """A second, separate defect -- pinned here rather than left to surprise.
+async def test_the_sync_accessors_can_be_called_from_async_code() -> None:
+    """The inversion this test was written waiting for.
 
     ``get_system_prompt`` and ``get_user_prompt`` are synchronous, to satisfy
-    :class:`AbstractPromptLibrary`, and reach their async version manager with
-    ``loop.run_until_complete``. On a running loop that raises, and a running
-    loop is the only place this library can be populated from, since every
-    writer on it is a coroutine. So the two inherited accessors are
-    unreachable in practice.
+    :class:`AbstractPromptLibrary`, and reached their async version manager
+    with ``loop.run_until_complete`` --- the same eight-line preamble
+    ``SyncProviderAdapter`` carried six copies of. On a running loop that
+    raises, and a running loop is the only place this library can be
+    populated from, since every writer on it is a coroutine. So the two
+    accessors were unreachable in practice: the class's own usage example
+    awaits ``create_version`` and then calls ``get_system_prompt``.
 
-    This test documents the behaviour as it stands. It is not an endorsement:
-    when the sync/async bridge is redesigned, invert it.
+    Its predecessor pinned that as the behaviour "as it stands", and said in
+    so many words that it was not an endorsement --- invert it when the
+    sync/async bridge is redesigned. This is that bridge.
+    """
+    library = VersionedPromptLibrary()
+    await library.create_version(
+        name="greeting",
+        prompt_type="system",
+        template="Hello {{name}}!",
+        version="1.0.0",
+    )
+    await library.create_version(
+        name="greeting",
+        prompt_type="user",
+        template="Hi {{name}}!",
+        version="1.0.0",
+    )
+
+    system = library.get_system_prompt("greeting", version="1.0.0")
+    user = library.get_user_prompt("greeting", version="1.0.0")
+
+    assert system is not None
+    assert system["template"] == "Hello {{name}}!"
+    assert user is not None
+    assert user["template"] == "Hi {{name}}!"
+
+
+@pytest.mark.asyncio
+async def test_the_sync_accessors_leave_no_bridge_thread_behind() -> None:
+    """The accessors have no lifetime to hang a bridge on.
+
+    :class:`AbstractPromptLibrary` declares no ``close()``, so a library
+    owning a long-lived bridge would owe a teardown no consumer of that
+    protocol knows to call --- a leaked daemon thread per library. A
+    throwaway bridge per call is the trade ``run_coro_sync`` exists for: a
+    short-lived thread, and no obligation left behind.
     """
     library = VersionedPromptLibrary()
     await library.create_version(
@@ -82,11 +119,9 @@ async def test_the_sync_accessors_cannot_be_called_from_async_code() -> None:
         version="1.0.0",
     )
 
-    with pytest.raises(RuntimeError, match="already running"):
-        library.get_system_prompt("greeting", version="1.0.0")
-
-    with pytest.raises(RuntimeError, match="already running"):
-        library.get_user_prompt("greeting", version="1.0.0")
+    with assert_no_leaked_bridge_threads():
+        assert library.get_system_prompt("greeting", version="1.0.0") is not None
+        assert library.get_system_prompt("missing", version="1.0.0") is None
 
 
 def test_the_sync_accessors_do_work_off_a_running_loop() -> None:

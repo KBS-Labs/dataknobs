@@ -64,6 +64,62 @@ an async provider rather than subclassing `LLMProvider`, and no
 `SyncLLMProvider` subclass exists in tree — so `initialize()` and `close()` are
 synchronous on that half and awaited only on the async one.
 
+The adapter is callable from inside a running event loop. Every method that
+*awaits* the wrapped provider runs its coroutine on a private `SyncLoopBridge`
+loop rather than on the caller's — `run_until_complete()` on the caller's own
+loop raises `RuntimeError: This event loop is already running`, which is
+precisely the position a synchronous wrapper reached from async code is in.
+That is the one case a sync wrapper exists to serve, so the adapter does not
+ask the caller to avoid it.
+
+**"Callable from inside a running loop" means it does not deadlock. It still
+blocks.** The calling thread waits on the bridge for the whole completion, so
+every other task on the caller's loop is stalled for as long as the provider
+takes — and an LLM completion is a long time to stall a shared loop. From
+async code, build the async arm and `await` it:
+
+```python
+provider = create_llm_provider(config, is_async=True)   # not is_async=False
+await provider.initialize()
+response = await provider.complete("hello")
+```
+
+The sync arm is for the `def` call sites that cannot await. Where one of those
+is reached from async code anyway, pass `timeout=` so the wait has an upper
+bound the caller can otherwise neither cancel nor interrupt:
+
+```python
+provider = SyncProviderAdapter(async_provider, timeout=30.0)
+```
+
+The cost is one daemon thread, created the first time the adapter reaches its
+provider and held until `close()`. Building one to read `provider_name` or
+`get_capabilities()` therefore costs nothing. An adapter that *has* reached its
+provider is one the caller should close — as `LLMResource` does for the one it
+builds per model — and the context manager is the reliable form:
+
+```python
+with create_llm_provider(config, is_async=False) as provider:
+    provider.initialize()
+    print(provider.complete("hello").content)
+```
+
+From async code, `await provider.aclose()` instead: it awaits the provider's
+teardown directly rather than blocking the caller's loop on the bridge.
+
+An adapter nobody closes emits a `ResourceWarning` naming its thread when it is
+collected. Python ignores `ResourceWarning` by default, so run under
+`-W always::ResourceWarning`, `-X dev`, or pytest to see it.
+
+Several adapters can share one bridge, and one thread, by being handed the same
+one — in which case it belongs to the caller and `close()` leaves it running:
+
+```python
+with SyncLoopBridge(thread_name="my-service") as bridge:
+    fast = SyncProviderAdapter(small_model, bridge=bridge)
+    slow = SyncProviderAdapter(large_model, bridge=bridge)
+```
+
 ### Passing constructor arguments
 
 `LLMProviderFactory.create()` forwards `**kwargs` to the provider constructor.

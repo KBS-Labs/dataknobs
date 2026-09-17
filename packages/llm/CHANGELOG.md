@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The synchronous provider adapter no longer raises inside a running event
+  loop.** All six of `SyncProviderAdapter`'s async-reaching methods —
+  `initialize`, `close`, `complete`, `stream`, `embed`, `validate_model` —
+  reached their provider with `loop.run_until_complete`, which raises
+  `RuntimeError: This event loop is already running` when the caller is
+  already on a loop, and left an un-awaited coroutine behind with it. That is
+  the case a synchronous wrapper exists to serve, and it was the case that
+  failed. Each now runs its coroutine on a private `SyncLoopBridge` loop.
+  `LLMResource` — the FSM integration's LLM resource, which holds one adapter
+  per model — was unusable from async code for the same reason and is fixed
+  with it. The adapter owns one daemon thread, named `dk-sync-llm-provider`,
+  from the first call that reaches its provider until `close()`.
+- **Abandoning a partially consumed sync stream now closes the provider's
+  generator.** `SyncProviderAdapter.stream` drove a wrapper around the
+  provider's async generator, and closing a wrapper does not close what it was
+  iterating: `async for` has no implicit `aclose`, so the provider's generator
+  merely lost its last reference and was finalized later by the event loop's
+  async-generator hook — after the caller had moved on, and possibly not
+  before the loop was torn down. Its `finally` is where a provider releases
+  the HTTP response the stream was reading. The provider's generator is now
+  driven directly, so breaking out of a stream closes it synchronously.
+- **Tearing down an LLM resource releases the threads it allocated.** A
+  `LLMResource` whose provider failed to `initialize()` kept the adapter that
+  failed — it is recorded only after initialization succeeds, so `close()`
+  could not reach it and the `ResourceError`'s traceback kept the finalizer
+  from collecting it. A caller that caught the error and retried accumulated
+  one daemon thread and two descriptors per attempt. `AsyncLLMResource.aclose()`
+  closed the async provider and the rate limiter but never the adapters that
+  the inherited synchronous `complete()` builds, leaking one per model key.
+- **The versioned prompt library's synchronous accessors work from async
+  code.** `VersionedPromptLibrary.get_system_prompt` and `get_user_prompt`
+  each carried the same `run_until_complete` preamble, so both raised
+  `RuntimeError: This event loop is already running` for any caller already on
+  a loop — which is every realistic caller, since every writer on the library
+  is a coroutine, and the sequence in the class's own usage example. Both now
+  run their lookup on a private loop via `run_coro_sync`.
 - **`VersionedPromptLibrary` can be constructed.** `AbstractPromptLibrary.reload`
   carried an `@abstractmethod` that its own docstring contradicted — *"This is
   optional… Default implementation does nothing."* The method shipped
@@ -25,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A synchronous provider carries a teardown obligation, and a wider surface
+  to meet it with.** `create_llm_provider(config, is_async=False)` and
+  `LLMProviderFactory(is_async=False).create(...)` return an adapter that
+  allocates an event loop on a daemon thread the first time it reaches its
+  provider, and holds it until `close()`. Construction itself allocates
+  nothing, so building one to read `provider_name` or `get_capabilities()`
+  stays free; an adapter that has served a call and is then dropped emits a
+  `ResourceWarning` (which Python's default filters ignore — run under
+  `-W always::ResourceWarning` to see it). `SyncProviderAdapter` is now a
+  context manager, takes `timeout=` for an upper bound on a blocking wait a
+  synchronous caller cannot otherwise cancel, takes `bridge=` so several
+  adapters can share one thread, and offers `aclose()` for async holders,
+  which awaits the provider's teardown rather than blocking the caller's loop
+  on it.
 - **tree walks bind `children` once per node rather than re-reading it.**
   `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
   than the list the node holds, so each read allocates one. `get_node_by_id`
