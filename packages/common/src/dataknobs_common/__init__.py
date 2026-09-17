@@ -80,6 +80,7 @@ from dataknobs_common.aws import (
     create_aioboto3_session,
 )
 from dataknobs_common.sync_bridge import (
+    SyncBridgeAdapter,
     SyncLoopBridge,
     run_coro_sync,
 )
@@ -513,6 +514,7 @@ __all__ = [
     # Async iteration
     "aiter_sync_in_thread",
     # Async->sync bridge
+    "SyncBridgeAdapter",
     "SyncLoopBridge",
     "run_coro_sync",
     # Lifecycle

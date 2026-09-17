@@ -53,9 +53,9 @@ import threading
 import warnings
 from collections.abc import Coroutine
 from types import TracebackType
-from typing import Any, Self, TypeVar
+from typing import Any, ClassVar, Self, TypeVar
 
-__all__ = ["SyncLoopBridge", "bridge_thread_names", "run_coro_sync"]
+__all__ = ["SyncBridgeAdapter", "SyncLoopBridge", "bridge_thread_names", "run_coro_sync"]
 
 T = TypeVar("T")
 
@@ -339,6 +339,220 @@ class SyncLoopBridge:
         tb: TracebackType | None,
     ) -> None:
         self.close()
+
+
+class SyncBridgeAdapter:
+    """Shared shape for a synchronous wrapper over an asynchronous object.
+
+    Three classes in three packages reached an async object from synchronous
+    code by holding a :class:`SyncLoopBridge`, and each declared the same
+    surface by hand: a keyword-only ``timeout``, a bridge under a per-class
+    thread name, ``close()``, and the context-manager pair. Nothing declared
+    the shape, so it drifted in both directions --- the third was written by
+    copying the first two, and then grew ``bridge=``, ``aclose()``, lazy
+    construction and a use-after-close guard that the first two did not have.
+    This class is that shape, declared once. A subclass supplies only what
+    varies: the object it wraps, the methods that forward to it, and --- if it
+    *owns* that object --- how to close it.
+
+    A subclass names its loop thread with :attr:`BRIDGE_THREAD_NAME` and
+    forwards through :meth:`_run`::
+
+        class SyncThing(SyncBridgeAdapter):
+            BRIDGE_THREAD_NAME = "dk-sync-thing"
+
+            def __init__(self, inner: AsyncThing, **kwargs: Any) -> None:
+                super().__init__(**kwargs)
+                self._inner = inner
+
+            def do(self, x: int) -> str:
+                return self._run(self._inner.do(x))
+
+    The wrapped object is deliberately **not** stored here. It is the one
+    thing that genuinely varies --- each of the three names it differently and
+    one of them exposes it publicly --- and a base that owned it would force a
+    rename on a published attribute to buy nothing.
+
+    "Callable from inside a running loop" means it does not *deadlock*. It
+    still **blocks**: the calling thread waits on the bridge's result for the
+    whole call, so every other task on the caller's loop is stalled meanwhile.
+    From async code, await the wrapped object directly; a subclass of this is
+    for the ``def`` sites that cannot. :meth:`aclose` exists so that an async
+    holder's *teardown*, at least, does not pay that cost, and ``async with``
+    is its context-manager form — both protocols are here because both
+    teardowns are.
+    """
+
+    #: Loop-thread name for this class's bridge. Registered by the bridge
+    #: itself, so the leaked-thread guard sees it rather than being escaped by
+    #: it; it is a diagnostic label, not an opt-out. Subclasses override it so
+    #: a stack dump names which wrapper allocated the thread.
+    BRIDGE_THREAD_NAME: ClassVar[str] = _THREAD_NAME
+
+    def __init__(
+        self, *, bridge: SyncLoopBridge | None = None, timeout: float | None = None
+    ) -> None:
+        """Args:
+        bridge: A bridge to run this object's coroutines on. The default
+            builds a private one on first use and ends it in :meth:`close`.
+            A bridge handed in here belongs to the caller: it is shared with
+            whatever else uses it, and :meth:`close` leaves it running.
+        timeout: Seconds to allow each call, giving a synchronous caller an
+            upper bound on a blocking wait it cannot otherwise cancel.
+            ``None`` (the default) waits as long as the call takes.
+        """
+        self._timeout = timeout
+        self._owns_bridge = bridge is None
+        self._bridge = bridge
+        # Guards lazy construction only. The bridge itself is thread-safe, so
+        # nothing past the first `_ensure_bridge` needs serializing.
+        self._bridge_lock = threading.Lock()
+        self._closed = False
+
+    def _ensure_bridge(self) -> SyncLoopBridge:
+        """This object's bridge, built on first use.
+
+        Deferred because construction is also how a consumer reaches whatever
+        the subclass forwards *without* awaiting --- a model id, a capability
+        set, a provider name --- and a daemon thread per discovery-only
+        construction is a cost those callers never asked for.
+        """
+        bridge = self._bridge
+        if bridge is not None:
+            return bridge
+        with self._bridge_lock:
+            if self._bridge is None:
+                self._bridge = SyncLoopBridge(thread_name=self.BRIDGE_THREAD_NAME)
+            return self._bridge
+
+    def _run(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run ``coro`` on this object's bridge and return its result.
+
+        The one place the bridge is reached, so a wrapper's forwarding methods
+        cannot disagree about which loop they run on or whether ``timeout``
+        applies. One copy of that decision per method is what made the
+        provider adapter's version a six-method defect rather than a
+        one-method one.
+        """
+        if self._closed:
+            # Without this, an object closed before it was ever used would
+            # build a *second* bridge here and quietly work --- because the
+            # first was never built, so there is no closed bridge left to
+            # refuse. The thread that one allocates is then leaked by
+            # construction: `close()` has already run.
+            coro.close()
+            raise RuntimeError(
+                f"{type(self).__name__} is closed; build another rather than reusing this one"
+            )
+        try:
+            bridge = self._ensure_bridge()
+        except BaseException:
+            # Symmetric with the bridge's own refusal paths: a coroutine that
+            # is never handed to a loop must be closed, or it warns as
+            # never-awaited from wherever collection happens to run.
+            coro.close()
+            raise
+        return bridge.run(coro, timeout=self._timeout)
+
+    def _close_inner(self) -> None:
+        """Close the wrapped object, synchronously. Default: it is not ours.
+
+        Two of the three wrappers are handed an object somebody else built and
+        must not close it; the third is what a factory returns and owns what
+        it wraps. That is ownership, not drift, which is why it is a hook
+        rather than a shared body.
+
+        Called with ``_closed`` already set, so an override must reach the
+        bridge through :meth:`_ensure_bridge` directly --- :meth:`_run`
+        refuses once closed, and this is the one call allowed after the mark.
+        """
+        return None
+
+    async def _aclose_inner(self) -> None:
+        """Close the wrapped object from async code. Default: it is not ours.
+
+        The async twin of :meth:`_close_inner`, awaited rather than bridged,
+        so an async holder's teardown does not block its own loop for what is
+        usually an HTTP round trip.
+        """
+        return None
+
+    def close(self) -> None:
+        """Close the wrapped object if it is ours, then this object's bridge.
+
+        Idempotent. The wrapped object is closed once --- ``_closed`` records
+        that, and only that. The bridge is asked on **every** call, because
+        the bridge is already idempotent, concurrency-safe, and the thing that
+        actually holds the thread: an early return on a flag beside it is how
+        a teardown that raises part way leaves the flag true, the loop thread
+        running, and every later ``close()`` returning without ever reaching
+        it --- unrecoverable, since nothing else holds a reference to the
+        thread.
+        """
+        try:
+            if not self._closed:
+                self._closed = True
+                self._close_inner()
+        finally:
+            self._end_bridge()
+
+    async def aclose(self) -> None:
+        """Close from async code: the wrapped object awaited, then the bridge.
+
+        The async twin of :meth:`close`, and the reason it exists is that
+        :meth:`close` reaches the wrapped object *through* the bridge --- so
+        an async holder calling it blocks its own event loop for that object's
+        entire teardown. Here it is awaited directly, and the only synchronous
+        part left is the bridge's own shutdown: a ``stop`` on an idle loop and
+        a thread join, no I/O.
+
+        Shares :meth:`_end_bridge` with :meth:`close` rather than repeating
+        it, so the two cannot come to disagree about whose bridge it is.
+        """
+        try:
+            if not self._closed:
+                self._closed = True
+                await self._aclose_inner()
+        finally:
+            self._end_bridge()
+
+    def _end_bridge(self) -> None:
+        """End the bridge iff this object built it.
+
+        A bridge handed to the constructor is shared --- ending it here would
+        close it under whatever else is using it.
+        """
+        if self._owns_bridge and self._bridge is not None:
+            self._bridge.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        """Entry for an async holder, pairing with :meth:`aclose`.
+
+        Both protocols are here because both teardowns are, and a teardown
+        with no context-manager form is one a holder writes ``try``/``finally``
+        around by hand --- where the cost of getting it wrong is a leaked
+        daemon thread, which is the failure this whole class exists to make
+        hard. A synchronous holder writes ``with`` and pays the bridged
+        teardown it was always going to pay; an async holder writes
+        ``async with`` and does not block its loop for it.
+
+        Refusing one of the two --- the shape ``AsyncLLMProvider`` takes, where
+        ``__enter__`` raises ``TypeError`` --- is right for an object only one
+        kind of holder can have, and wrong here. A wrapper whose whole purpose
+        is to be *called* synchronously is routinely built and torn down by
+        async code that hands it to a ``def`` site in a worker thread, so both
+        kinds of holder are real and neither entry is a mistake.
+        """
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
 
 def run_coro_sync(coro: Coroutine[Any, Any, T], *, timeout: float | None = None) -> T:
