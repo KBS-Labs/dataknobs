@@ -24,7 +24,7 @@ This is not one shared number. The packages sit on independent lines —
 `dataknobs-utils` in 2.x — and collapsing them would throw away more than it
 carries. What is shared is the **moment**: when a release is cut, every package
 is bumped, tagged and published together, so there is such a thing as "the
-workspace as of this release" rather than nine lines a consumer has to
+workspace as of this release" rather than ten lines a consumer has to
 reconcile from a lock file.
 
 A package with nothing to release still takes a patch bump and still gets a
@@ -37,9 +37,10 @@ version set rather than because anything here changed"*.
 package's changelog and leave every version file alone; the major bump is taken
 at the next release along with everything else. Do not cut one package early to
 take its bump sooner — the dependency layers make that worse than waiting.
-`packages/structures` is one layer above `common`, with six packages above it,
-so a consumer who takes its new major alone is on a combination nothing in the
-workspace was tested against.
+`packages/structures` is one layer above `common`, and seven of the other nine
+depend on it — `utils`, `fsm`, `llm`, `xization` and `legacy` directly, `data`
+and `bots` through those — so a consumer who takes its new major alone is on a
+combination nothing in the workspace was tested against.
 
 **The helper cannot do this yet, and this is the step that gets skipped.**
 `bin/release-helper.sh bump` builds its menu from the packages with commits
