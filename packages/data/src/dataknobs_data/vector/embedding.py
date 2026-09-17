@@ -69,7 +69,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+
+from dataknobs_common.sync_bridge import SyncBridgeAdapter, SyncLoopBridge
 
 from .embedding_fn import call_embedding_fn, call_embedding_fn_batch
 
@@ -462,7 +464,7 @@ async def embed_text(
     return await call_embedding_fn(cast("Callable[..., Any]", embedding_fn), text, timeout=timeout)
 
 
-class SyncTextEmbedder:
+class SyncTextEmbedder(SyncBridgeAdapter):
     """A :class:`TextEmbedder` reached from synchronous code.
 
     Five embedding sites in this package are plain ``def`` --- ``Query.near_text``,
@@ -471,12 +473,13 @@ class SyncTextEmbedder:
     directly, and giving the protocol a synchronous twin would put the seam
     back where it started: two shapes for one concept.
 
-    This is the other way round. It holds one
-    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge` --- a private event
-    loop on a daemon thread, so it is callable from plain sync code *and* from
-    inside a running loop without the ``run_until_complete`` deadlock --- and
-    exposes the protocol's two arities as ordinary methods. Those methods are
-    the shape the sync sites already declare, so **no sync signature changes**:
+    This is the other way round. It is a
+    :class:`~dataknobs_common.sync_bridge.SyncBridgeAdapter`, so it reaches the
+    embedder over a private event loop on a daemon thread --- callable from
+    plain sync code *and* from inside a running loop without the
+    ``run_until_complete`` deadlock --- and exposes the protocol's two arities
+    as ordinary methods. Those methods are the shape the sync sites already
+    declare, so **no sync signature changes**:
 
     "Callable from inside a running loop" means it does not *deadlock*. It
     still *blocks*: the calling thread waits on the bridge's result for the
@@ -485,36 +488,68 @@ class SyncTextEmbedder:
     directly --- this class is for the five ``def`` sites that cannot.
 
     ```python
-    sync = SyncTextEmbedder(await create_text_embedder(config))
-    try:
+    with SyncTextEmbedder(embedder) as sync:
         query.near_text("some text", sync.embed_one)
         store.bulk_embed_and_store(records, "body", embedding_fn=sync.embed)
-    finally:
-        sync.close()
     ```
+
+    An async holder --- code that builds one of these to hand to the ``def``
+    sites in a worker thread --- writes ``async with`` instead, and the
+    teardown is awaited rather than put through the bridge:
+
+    ```python
+    embedder = await create_text_embedder(config)
+    try:
+        async with SyncTextEmbedder(embedder) as sync:
+            await asyncio.to_thread(store.bulk_embed_and_store, records, "body",
+                                    embedding_fn=sync.embed)
+    finally:
+        await embedder.provider.close()
+    ```
+
+    The embedder is bound rather than built inline, because this class does
+    not close what it is handed --- so an embedder constructed in the ``with``
+    header is one the caller keeps no reference to and nothing can ever close,
+    with a live HTTP session inside it. ``LLMProviderEmbedder.provider`` is
+    published for exactly this.
 
     :meth:`embed_one` and :meth:`embed` are separate methods rather than one
     arity-polymorphic call, because that polymorphism is what every consumer
     of :meth:`AsyncLLMProvider.embed` had to narrow for itself and is half of
     what this module exists to end.
 
-    The bridge costs one daemon thread for the object's lifetime, so build one
-    and keep it rather than one per call. It is a daemon, so it can never block
-    process exit; :meth:`close` is for deterministic teardown, and the class is
-    a context manager for the same reason.
+    The bridge costs one daemon thread, created when the embedder is first
+    reached and held until :meth:`~SyncBridgeAdapter.close` --- so building one
+    to read :attr:`model_id` or :attr:`dimensions` costs nothing. Hand several
+    embedders the same ``bridge`` and they share the one thread. It is a
+    daemon, so it can never block process exit;
+    :meth:`~SyncBridgeAdapter.close` is for deterministic teardown and ``with``
+    is its context-manager form; :meth:`~SyncBridgeAdapter.aclose` and
+    ``async with`` are the same pair for an async holder.
+
+    The embedder handed in is **not** this object's to close: it was built
+    elsewhere, so ``close()`` ends only the bridge. That is why no
+    ``_close_inner`` is overridden here.
     """
 
-    def __init__(self, embedder: TextEmbedder, *, timeout: float | None = None) -> None:
+    BRIDGE_THREAD_NAME = "dk-sync-embedder"
+
+    def __init__(
+        self,
+        embedder: TextEmbedder,
+        *,
+        bridge: SyncLoopBridge | None = None,
+        timeout: float | None = None,
+    ) -> None:
         """Args:
         embedder: The async embedder to reach.
+        bridge: A bridge to run this embedder's coroutines on. The default
+            builds a private one on first use and ends it in ``close()``.
         timeout: Seconds to allow each call, giving a synchronous caller an
             upper bound on a blocking wait it cannot otherwise cancel.
         """
-        from dataknobs_common.sync_bridge import SyncLoopBridge
-
+        super().__init__(bridge=bridge, timeout=timeout)
         self._embedder = embedder
-        self._timeout = timeout
-        self._bridge = SyncLoopBridge(thread_name="dk-sync-embedder")
 
     @property
     def dimensions(self) -> int:
@@ -540,7 +575,7 @@ class SyncTextEmbedder:
         "something indexable and sized", so the list arm was always accepted
         at runtime and the annotation simply understated it.
         """
-        return self._bridge.run(self._embedder.embed(list(texts)), timeout=self._timeout)
+        return self._run(self._embedder.embed(list(texts)))
 
     def embed_one(self, text: str) -> list[float]:
         """Blocking single-text embed, for the per-text sync sites.
@@ -551,17 +586,3 @@ class SyncTextEmbedder:
         :meth:`Query.similar_to`, which has always declared the same union.
         """
         return self.embed([text])[0]
-
-    def close(self) -> None:
-        """Stop the bridge's loop and join its thread.
-
-        Idempotent. Closes only the bridge --- the wrapped embedder is not
-        this object's to close, since it was handed in already built.
-        """
-        self._bridge.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()

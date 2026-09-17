@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from dataknobs_common import entity_resolution
+from dataknobs_common import SyncLoopBridge, entity_resolution
 from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncAliasSignal,
@@ -54,6 +54,7 @@ from dataknobs_common.ontology import (
 )
 from dataknobs_common.testing import (
     assert_no_leaked_bridge_threads,
+    live_dk_daemon_threads,
     assert_twin_types_agree,
     assert_twins_agree,
 )
@@ -186,40 +187,48 @@ def test_patching_the_core_changes_both_flavours(monkeypatch: pytest.MonkeyPatch
     assert async_result() == ()
 
 
+#: The twin pairs this family declares one surface for. Named rather than
+#: written inline at the ``parametrize`` because
+#: ``test_the_bridge_is_not_one_of_the_twins`` has to read it: the claim it
+#: makes is about what is *absent* here, and a list only ``parametrize`` can
+#: see is one no test can make that claim about.
+_TWIN_PAIRS = [
+    (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], (), ()),
+    (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], (), ()),
+    (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], (), ()),
+    (
+        ExactNormalizedSignal,
+        AsyncExactNormalizedSignal,
+        ["candidates", "candidates_many", "_hits"],
+        (),
+        (),
+    ),
+    (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], (), ()),
+    (
+        ScanningSignal,
+        AsyncScanningSignal,
+        # ``__init__`` is checked by
+        # ``test_the_scanning_twins_constructors_agree`` rather than here:
+        # ``flavour_typed`` is declared once for the whole pair and
+        # compared against *every* member, so a parameter flavoured on one
+        # member only cannot be expressed in this table.
+        ["candidates", "candidates_many", "_located"],
+        (),
+        (),
+    ),
+    (
+        DeclaredSignal,
+        AsyncDeclaredSignal,
+        ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
+        ("_fold", "_order"),
+        (),
+    ),
+]
+
+
 @pytest.mark.parametrize(
     ("sync_type", "async_type", "members", "unflavoured", "flavour_typed"),
-    [
-        (EntityResolver, AsyncEntityResolver, ["resolve", "resolve_many"], (), ()),
-        (MatchSignal, AsyncMatchSignal, ["candidates", "candidates_many"], (), ()),
-        (CascadingResolver, AsyncCascadingResolver, ["resolve", "resolve_many"], (), ()),
-        (
-            ExactNormalizedSignal,
-            AsyncExactNormalizedSignal,
-            ["candidates", "candidates_many", "_hits"],
-            (),
-            (),
-        ),
-        (AliasSignal, AsyncAliasSignal, ["candidates", "candidates_many", "_hits"], (), ()),
-        (
-            ScanningSignal,
-            AsyncScanningSignal,
-            # ``__init__`` is checked by
-            # ``test_the_scanning_twins_constructors_agree`` rather than here:
-            # ``flavour_typed`` is declared once for the whole pair and
-            # compared against *every* member, so a parameter flavoured on one
-            # member only cannot be expressed in this table.
-            ["candidates", "candidates_many", "_located"],
-            (),
-            (),
-        ),
-        (
-            DeclaredSignal,
-            AsyncDeclaredSignal,
-            ["candidates", "candidates_many", "_hits", "_located", "_fold", "_order"],
-            ("_fold", "_order"),
-            (),
-        ),
-    ],
+    _TWIN_PAIRS,
 )
 def test_the_twins_expose_one_surface(
     sync_type: type,
@@ -290,10 +299,30 @@ def test_the_bridge_is_not_one_of_the_twins() -> None:
     obvious maintenance move on it is to add every class that has both
     flavours' members. This one does not have a twin to compare against: the
     thing it would be twinned with is the resolver it holds.
+
+    Two halves, because the docstring makes two claims. That the bridge is
+    **not in the table** is the maintenance move this test is named for, and
+    only a reading of the table itself can catch it --- which is why
+    ``_TWIN_PAIRS`` is a name rather than a literal inside the
+    ``parametrize``. That it *should* not be is settled by the flavour of the
+    resolution members, checked against the async cascade as a control. This asserted ``__aenter__``'s
+    absence when it was written, which was the same claim only for as long as
+    the class had no async anything: it has since gained ``aclose()`` and the
+    ``async with`` that pairs with it, and a second way to *tear down* is not
+    a second flavour of resolving. Both context-manager protocols on one
+    object is the shape ``SimpleFSM`` already ships.
     """
+    declared = {pair[0] for pair in _TWIN_PAIRS} | {pair[1] for pair in _TWIN_PAIRS}
+    assert BridgedEntityResolver not in declared, (
+        "the bridge was added to the twin table; it forwards to a resolver rather "
+        "than twinning one, so there is no second half to hold it to"
+    )
+
     assert hasattr(BridgedEntityResolver, "__enter__")
     assert hasattr(BridgedEntityResolver, "__exit__")
-    assert not hasattr(BridgedEntityResolver, "__aenter__")
+    assert not inspect.iscoroutinefunction(BridgedEntityResolver.resolve)
+    assert not inspect.iscoroutinefunction(BridgedEntityResolver.resolve_many)
+    assert inspect.iscoroutinefunction(AsyncCascadingResolver.resolve)
 
 
 # --------------------------------------------------------------------------
@@ -731,6 +760,67 @@ def test_the_bridge_resolves_from_inside_a_running_loop(mammals_path: Path) -> N
 
     with assert_no_leaked_bridge_threads():
         assert asyncio.run(inside_a_loop()) == ["beagle"]
+
+
+def test_two_bridges_can_share_one_loop_thread(mammals_path: Path) -> None:
+    """``bridge=``, inherited from :class:`SyncBridgeAdapter`.
+
+    Before the shape was declared once, this class had no way to say it: two
+    resolvers meant two daemon threads, and a consumer holding one of these
+    beside a ``SyncTextEmbedder`` could not ask for one thread between them.
+    """
+    ontology = asyncio.run(async_load_ontology(mammals_path))
+
+    def inner() -> AsyncCascadingResolver:
+        return AsyncCascadingResolver(
+            [AsyncExactNormalizedSignal(ontology.entities)], ontology.entities
+        )
+
+    with assert_no_leaked_bridge_threads():
+        with SyncLoopBridge(thread_name="dk-sync-resolver") as shared:
+            first = BridgedEntityResolver(inner(), bridge=shared)
+            second = BridgedEntityResolver(inner(), bridge=shared)
+            assert first.resolve("beagles", k=5).candidates
+            first.close()
+            assert second.resolve("beagles", k=5).candidates, (
+                "closing one holder must not end a bridge it only borrowed"
+            )
+            second.close()
+
+
+def test_constructing_a_bridge_allocates_no_thread(mammals_path: Path) -> None:
+    """Lazy, so building one to hand around costs nothing until it is used."""
+    ontology = asyncio.run(async_load_ontology(mammals_path))
+    inner = AsyncCascadingResolver(
+        [AsyncExactNormalizedSignal(ontology.entities)], ontology.entities
+    )
+    before = set(live_dk_daemon_threads({"dk-sync-resolver"}))
+    bridged = BridgedEntityResolver(inner)
+    try:
+        assert set(live_dk_daemon_threads({"dk-sync-resolver"})) == before
+    finally:
+        bridged.close()
+
+
+def test_the_bridge_has_an_async_teardown(mammals_path: Path) -> None:
+    """``aclose()``, for a holder that is itself on a loop.
+
+    ``close()`` is synchronous and joins the loop thread; from async code
+    ``aclose()`` is the form that says so at the call site. The resolver
+    inside is not this object's to close either way.
+    """
+
+    async def inside_a_loop() -> None:
+        ontology = await async_load_ontology(mammals_path)
+        inner = AsyncCascadingResolver(
+            [AsyncExactNormalizedSignal(ontology.entities)], ontology.entities
+        )
+        bridged = BridgedEntityResolver(inner)
+        assert bridged.resolve("beagles", k=5).candidates
+        await bridged.aclose()
+
+    with assert_no_leaked_bridge_threads():
+        asyncio.run(inside_a_loop())
 
 
 # --------------------------------------------------------------------------

@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   async-generator hook — after the caller had moved on, and possibly not
   before the loop was torn down. Its `finally` is where a provider releases
   the HTTP response the stream was reading. The provider's generator is now
-  driven directly, so breaking out of a stream closes it synchronously.
+  driven directly, so breaking out of a stream closes it synchronously — and
+  that holds after `close()` on a shared `bridge=` too, where there is no
+  bridge teardown to drain it because the bridge belongs to someone else.
 - **Tearing down an LLM resource releases the threads it allocated.** A
   `LLMResource` whose provider failed to `initialize()` kept the adapter that
   failed — it is recorded only after initialization succeeds, so `close()`
@@ -61,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
+  `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly
+  as before, and it still closes the provider it wraps, which the base leaves
+  to a hook because the other adopters do not own what they wrap. Two things
+  are new. The bridge it accepts can be shared with anything else built on
+  that base, so a service holding a sync provider and a `SyncTextEmbedder`
+  need not hold two daemon threads. And it answers `async with`, which pairs
+  with the `aclose()` it already had: entry initializes nothing, so an async
+  holder still runs the blocking calls in a worker and takes the async form
+  only for the teardown.
+
 - **A synchronous provider carries a teardown obligation, and a wider surface
   to meet it with.** `create_llm_provider(config, is_async=False)` and
   `LLMProviderFactory(is_async=False).create(...)` return an adapter that
@@ -72,9 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-W always::ResourceWarning` to see it). `SyncProviderAdapter` is now a
   context manager, takes `timeout=` for an upper bound on a blocking wait a
   synchronous caller cannot otherwise cancel, takes `bridge=` so several
-  adapters can share one thread, and offers `aclose()` for async holders,
-  which awaits the provider's teardown rather than blocking the caller's loop
-  on it.
+  adapters can share one thread, and offers `aclose()` for async holders, which
+  frees the caller's loop for the teardown rather than blocking it. The
+  provider itself is closed on the bridge in both forms: its HTTP session, its
+  transports and its in-flight tasks were created by an `initialize()` that
+  went through the bridge and belong to that loop.
 - **tree walks bind `children` once per node rather than re-reading it.**
   `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
   than the list the node holds, so each read allocates one. `get_node_by_id`

@@ -474,26 +474,60 @@ class _CloseThreadRecordingProvider(EchoProvider):
         await super().close()
 
 
-async def test_aclose_awaits_the_provider_instead_of_bridging_to_it() -> None:
-    """An async holder must not stall its own loop to tear one of these down.
+async def test_close_blocks_the_loop_that_aclose_leaves_free() -> None:
+    """Why ``aclose`` exists, asserted as a difference between the two arms.
 
-    ``close()`` reaches the provider through the bridge, which is right for a
-    synchronous caller and wrong for an async one: the calling thread --- the
-    one running the event loop --- blocks for the provider's whole teardown,
-    an HTTP round trip for every provider that is not ``echo``. The thread the
-    coroutine runs on is what tells the two apart, so that is what is asserted
-    rather than a duration.
+    Both paths close the provider on the *bridge* --- that is where its session
+    and its tracked tasks live, and
+    ``test_aclose_closes_the_provider_on_the_loop_that_built_it`` is what pins
+    that. So the thread the teardown runs on no longer tells the two apart;
+    what does is which thread **waits**. ``close()`` blocks its caller, and
+    from async code the caller is the thread running the loop, so every other
+    task on it stalls for the provider's whole teardown. ``aclose()`` waits off
+    the loop instead.
+
+    Neither arm proves anything alone --- a tick count with nothing to compare
+    against is a duration in disguise --- so both run against the same ticker
+    and the assertion is the contrast.
     """
-    provider = _CloseThreadRecordingProvider(ECHO_CONFIG)
-    adapter = SyncProviderAdapter(provider)
-    adapter.initialize()
-    assert live_dk_daemon_threads([BRIDGE_THREAD]), "the bridge exists to be avoided"
 
-    await adapter.aclose()
+    class _SlowClosingProvider(_CloseThreadRecordingProvider):
+        async def close(self) -> None:  # type: ignore[override]
+            await asyncio.sleep(0.2)
+            await super().close()
 
-    assert provider.closed_on == threading.current_thread().name
-    assert provider.closed_on != BRIDGE_THREAD
-    assert not live_dk_daemon_threads([BRIDGE_THREAD]), "aclose still ends the thread"
+    async def ticks_during(teardown: str) -> int:
+        provider = _SlowClosingProvider(ECHO_CONFIG)
+        adapter = SyncProviderAdapter(provider)
+        adapter.initialize()
+        assert live_dk_daemon_threads([BRIDGE_THREAD]), "the bridge exists to be avoided"
+
+        counted = 0
+
+        async def ticker() -> None:
+            nonlocal counted
+            while True:
+                await asyncio.sleep(0.01)
+                counted += 1
+
+        beat = asyncio.get_running_loop().create_task(ticker())
+        try:
+            if teardown == "sync":
+                adapter.close()
+            else:
+                await adapter.aclose()
+        finally:
+            beat.cancel()
+            await asyncio.gather(beat, return_exceptions=True)
+
+        assert provider.closed_on == BRIDGE_THREAD, (
+            "the provider must be torn down on the loop that opened its session"
+        )
+        assert not live_dk_daemon_threads([BRIDGE_THREAD])
+        return counted
+
+    assert await ticks_during("sync") == 0, "close() is supposed to block its caller"
+    assert await ticks_during("async") > 0, "aclose() must leave the holder's loop free"
 
 
 async def test_aclose_is_idempotent_and_agrees_with_close() -> None:
@@ -525,3 +559,97 @@ def test_a_closed_adapter_refuses_rather_than_building_a_second_bridge() -> None
         adapter.complete("hello")
 
     assert set(live_dk_daemon_threads([BRIDGE_THREAD])) == before
+
+
+# ---------------------------------------------------------------------------
+# Which loop the teardown belongs on
+#
+# `aclose()` exists so an async holder does not block its own loop on the
+# bridge. That is a claim about the *thread that waits*, and it was
+# implemented as a claim about the loop the teardown runs on --- which is a
+# different thing, and the wrong one, because what a provider holds is bound
+# to the loop that built it.
+# ---------------------------------------------------------------------------
+
+
+class _LoopBoundProvider(EchoProvider):
+    """Holds loop-bound state, the way a real provider holds a session.
+
+    ``AsyncLLMProvider.close`` cancels ``self._in_flight`` and gathers it, and
+    a :class:`asyncio.Task` belongs to the loop that created it. This is that
+    shape, reduced to the one task, so the cross-loop teardown fails the way
+    the real one does rather than by an identity assertion standing in for it.
+    """
+
+    def __init__(self, config: Any) -> None:
+        super().__init__(config)
+        self.initialized_on: asyncio.AbstractEventLoop | None = None
+        self.closed_on: asyncio.AbstractEventLoop | None = None
+        self._background: asyncio.Task[None] | None = None
+
+    async def initialize(self) -> None:
+        await super().initialize()
+        self.initialized_on = asyncio.get_running_loop()
+        self._background = asyncio.get_running_loop().create_task(asyncio.sleep(3600))
+
+    async def close(self) -> None:  # type: ignore[override]
+        self.closed_on = asyncio.get_running_loop()
+        if self._background is not None:
+            self._background.cancel()
+            await asyncio.gather(self._background, return_exceptions=True)
+            self._background = None
+        await super().close()
+
+
+async def test_aclose_closes_the_provider_on_the_loop_that_built_it() -> None:
+    """A session opened on the bridge's loop cannot be closed from another.
+
+    ``initialize()`` goes through the bridge, so everything the provider opens
+    --- its ``aiohttp`` session, its transports, every task it tracks in
+    ``_in_flight`` --- belongs to the bridge's loop. Awaiting ``close()`` on
+    the holder's loop instead runs that teardown on a loop that owns none of
+    it: ``asyncio.gather`` over another loop's tasks raises outright, and what
+    does not raise is doing its cleanup across a thread boundary it was never
+    meant to cross.
+    """
+    provider = _LoopBoundProvider(ECHO_CONFIG)
+    adapter = SyncProviderAdapter(provider)
+    try:
+        adapter.initialize()
+        assert provider.initialized_on is not None
+
+        await adapter.aclose()
+
+        assert provider.closed_on is provider.initialized_on, (
+            "the provider was torn down on a loop that did not build it"
+        )
+    finally:
+        adapter.close()
+    assert not live_dk_daemon_threads([BRIDGE_THREAD])
+
+
+def test_an_abandoned_stream_on_a_borrowed_bridge_is_still_closed() -> None:
+    """The skip in ``stream``'s ``finally`` is only safe on an *owned* bridge.
+
+    It skips ``aclose`` once the adapter is closed, on the stated grounds that
+    the bridge's own teardown has already drained the generator. A borrowed
+    bridge has no such teardown --- ``close()`` deliberately leaves it running
+    for whoever else is on it --- so the provider's generator is never closed,
+    the ``finally`` that releases the HTTP response never runs, and the
+    session it was reading is already gone. It is held until the shared bridge
+    closes, which for a service that shares one is process exit.
+    """
+    provider = _CleanupRecordingProvider(ECHO_CONFIG)
+    with SyncLoopBridge(thread_name=BRIDGE_THREAD) as shared:
+        adapter = SyncProviderAdapter(provider, bridge=shared)
+        adapter.initialize()
+        stream = adapter.stream("hi")
+        assert next(stream).delta
+        assert not provider.stream_cleanup_ran, "cleanup cannot have run yet"
+
+        adapter.close()
+        stream.close()
+
+        assert provider.stream_cleanup_ran, (
+            "the abandoned stream was left open on a bridge that is still running"
+        )

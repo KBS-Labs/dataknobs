@@ -95,6 +95,109 @@ thread for its lifetime. When a synchronous component makes repeated calls,
 **own a long-lived bridge and reuse it** rather than calling
 `run_coro_sync` per call or spawning a bridge per call.
 
+### `SyncBridgeAdapter` — the wrapper shape, declared once
+
+A synchronous wrapper over an asynchronous object is the common case for a
+long-lived bridge, and three of them in this workspace wrote the same surface
+by hand before it had a name: `SyncTextEmbedder` (`dataknobs-data`),
+`BridgedEntityResolver` (here) and `SyncProviderAdapter` (`dataknobs-llm`).
+`SyncBridgeAdapter` is that surface. A subclass supplies only what varies —
+the object it wraps, the methods that forward to it, and, if it *owns* that
+object, how to close it:
+
+```python
+from dataknobs_common import SyncBridgeAdapter
+
+class SyncThing(SyncBridgeAdapter):
+    BRIDGE_THREAD_NAME = "dk-sync-thing"   # required: see below
+
+    def __init__(self, inner, **kwargs):
+        super().__init__(**kwargs)
+        self._inner = inner
+
+    def do(self, x):
+        return self._run(self._inner.do(x))
+```
+
+What a subclass gets for free:
+
+| Member | What it is for |
+|---|---|
+| `bridge=` | run on a bridge the caller owns, so several wrappers cost one thread. `close()` then leaves it running |
+| `timeout=` | an upper bound on a blocking wait a synchronous caller cannot otherwise cancel |
+| `_run(coro)` | the one place the bridge is reached, so forwarding methods cannot disagree about which loop they run on |
+| `_run_teardown(coro)` | the same, for a `_close_inner` override — the one call allowed after the wrapper is marked closed, since `_run` refuses there |
+| `close()` / `aclose()` | teardown from sync and from async code. Exactly one caller of either tears down; the rest wait for it, so a holder closed from two threads at once cannot stop the loop under its own teardown |
+| `with` / `async with` | the reliable teardown form, one per kind of holder |
+| lazy construction | the thread is allocated on first `_run`, so building one to read a model id or a capability set costs nothing |
+
+The wrapped object is deliberately **not** stored by the base: each of the
+three names it differently and one exposes it publicly, so a base that owned it
+would force a rename on a published attribute to buy nothing.
+
+Override `_close_inner()` / `_aclose_inner()` only if the wrapper **owns** what
+it wraps. Two of the three are handed an object the caller keeps and must not
+close; the third is what a factory returns, so nothing else can close it. That
+is ownership, not drift, which is why it is a hook rather than a shared body.
+An override reaches the wrapped object through `_run_teardown(coro)`, not
+`_run(coro)`: the hook runs with the wrapper already marked closed, and `_run`
+refuses there by design.
+
+**`aclose()` is a claim about which thread waits, not about which loop runs the
+teardown.** What it guarantees is that the *holder's* loop is free; where the
+teardown belongs is the subclass's decision, and the answer is not always "this
+loop". A wrapper whose object holds loop-bound state — an `aiohttp` session
+opened by an `initialize()` that went through `_run`, and therefore bound to
+the *bridge's* loop — must still close it there, with
+`await asyncio.to_thread(self._close_inner)`. Awaiting the object directly is
+right only when nothing it holds is tied to a loop. `SyncProviderAdapter` is
+the worked example: closing a provider from the holder's loop makes
+`AsyncLLMProvider.close`'s `asyncio.gather` over its in-flight tasks raise
+`got Future ... attached to a different loop`.
+
+Both context-manager protocols are present because both teardowns are. A
+wrapper whose purpose is to be *called* synchronously is routinely built and
+torn down by async code that hands it to a `def` site in a worker thread, so
+both kinds of holder are real:
+
+```python
+async with SyncThing(inner) as sync:               # teardown is awaited
+    await asyncio.to_thread(run_sync_pipeline, sync)
+
+with SyncThing(inner) as sync:                     # teardown goes via the bridge
+    run_sync_pipeline(sync)
+```
+
+Neither entry is a mistake, so neither is refused. An async holder that writes
+the synchronous form gets the bridged teardown, which is a cost rather than a
+bug — unlike `AsyncLLMProvider`, where sync entry is *always* wrong and
+`__enter__` therefore raises.
+
+> **Quiesce the callers before the block ends.** `asyncio.to_thread` cannot
+> cancel the thread it started. If the holding task is cancelled — a client
+> disconnects, a `TaskGroup` sibling fails, a shutdown timeout fires — the
+> `async with` body unwinds *while the worker is still inside a `_run` call*,
+> and teardown stops the loop out from under it. This is
+> [`SyncLoopBridge`'s own rule](#behavior) reaching the wrapper: a `run` that
+> races an in-flight `close` is undefined. Pass `timeout=` — it is the only
+> upper bound a blocked worker has — and join or cancel-and-await your workers
+> before leaving the block.
+
+Teardown itself is not guaranteed to be free of I/O, in either form. Ending the
+bridge joins its thread, and the loop drains its async generators on the way
+down — so an abandoned stream's `finally` runs inside that join. Usually
+microseconds; a holder that cannot afford even that wraps `aclose()` in
+`asyncio.to_thread` as well.
+
+`BRIDGE_THREAD_NAME` is **required** — a subclass that omits it raises
+`TypeError` at class-creation time. It is also a diagnostic label rather than a
+way out of the leak guard: the bridge registers every name it runs under, so
+`assert_no_leaked_bridge_threads()` watches a subclass's name too. The reason
+it is not merely defaulted is that the default would be the shared
+`dk-sync-loop-bridge` that `run_coro_sync`'s throwaway bridges already use, so
+a subclass that forgot would report a real registered name belonging to
+something else: the diagnostic silently inverted rather than absent.
+
 ## sync → async: driving a blocking iterator from async
 
 The counterpart, [`aiter_sync_in_thread`](https://kbs-labs.github.io/dataknobs/packages/common/api/), drives a *lazy,

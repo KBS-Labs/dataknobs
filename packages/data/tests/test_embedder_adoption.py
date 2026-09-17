@@ -28,6 +28,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from dataknobs_common import SyncLoopBridge
+from dataknobs_common.testing import live_dk_daemon_threads
 from dataknobs_data import Record
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.fields import VectorField
@@ -404,6 +406,55 @@ async def test_a_sync_embedder_used_as_an_async_one_fails_loudly() -> None:
     with SyncTextEmbedder(DeterministicEmbedder(dimensions=4)) as sync:
         with pytest.raises(TypeError, match="can't be used in 'await' expression"):
             await embed_texts(["alpha"], embedder=sync)  # type: ignore[arg-type]
+
+
+def test_two_sync_embedders_can_share_one_loop_thread() -> None:
+    """``bridge=``, inherited from :class:`SyncBridgeAdapter`.
+
+    Before the shape was declared once this class had no way to say it, so a
+    consumer holding an embedder and a sync LLM provider held two daemon
+    threads with no way to ask for one between them.
+    """
+    with SyncLoopBridge(thread_name="dk-sync-embedder") as shared:
+        first = SyncTextEmbedder(DeterministicEmbedder(dimensions=4), bridge=shared)
+        second = SyncTextEmbedder(DeterministicEmbedder(dimensions=4), bridge=shared)
+        assert len(first.embed_one("alpha")) == 4
+        first.close()
+        assert len(second.embed_one("beta")) == 4, (
+            "closing one holder must not end a bridge it only borrowed"
+        )
+        second.close()
+
+
+def test_constructing_a_sync_embedder_allocates_no_thread() -> None:
+    """Lazy, so reading :attr:`model_id` off one costs nothing.
+
+    This class built its bridge eagerly in ``__init__`` until the shape moved
+    to a base, which meant a daemon thread for the object's whole life just to
+    ask it which model it stands for --- the staleness key every write site
+    reads before it decides whether to embed at all.
+    """
+    before = set(live_dk_daemon_threads({"dk-sync-embedder"}))
+    sync = SyncTextEmbedder(DeterministicEmbedder(dimensions=4, model_id="m"))
+    try:
+        assert sync.model_id == "m"
+        assert set(live_dk_daemon_threads({"dk-sync-embedder"})) == before
+    finally:
+        sync.close()
+
+
+async def test_a_sync_embedder_has_an_async_teardown() -> None:
+    """``aclose()``, for a holder that is itself on a loop.
+
+    The embedder handed in is not this object's to close either way, so what
+    ``aclose`` buys here is a teardown that says at the call site which side
+    of the seam it is on --- and the same method exists on every other adopter
+    of the base, which is the point of declaring the shape once.
+    """
+    sync = SyncTextEmbedder(DeterministicEmbedder(dimensions=4))
+    assert len(sync.embed_one("alpha")) == 4
+    await sync.aclose()
+    assert not live_dk_daemon_threads({"dk-sync-embedder"})
 
 
 class TestTheVectorStoreFamily:

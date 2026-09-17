@@ -21,6 +21,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SyncBridgeAdapter` — the shape of a synchronous wrapper over an
+  asynchronous object, declared once.** A subclass names its loop thread with
+  `BRIDGE_THREAD_NAME` (required — omitting it raises `TypeError` at
+  class-creation time, since the only available default is the shared name
+  `run_coro_sync` already uses) and forwards through `_run(coro)`. It inherits
+  `bridge=` (run on a bridge the caller owns, so several wrappers cost one
+  thread), `timeout=`, `close()`, `aclose()`, both context-manager protocols,
+  and a bridge built on first use rather than at construction. Override
+  `_close_inner()` / `_aclose_inner()` only where the wrapper owns what it
+  wraps, and reach the wrapped object from them through `_run_teardown(coro)`:
+  the hooks run with the wrapper already marked closed, where `_run` refuses.
+  `aclose()` guarantees the holder's *loop* is free, not that the teardown runs
+  on it — a subclass whose object holds loop-bound state closes it on the
+  bridge with `await asyncio.to_thread(self._close_inner)`. Teardown is
+  concurrency-safe: exactly one caller of `close()` or `aclose()` tears the
+  wrapped object down and the rest wait for it, so two holders closing at once
+  cannot stop the loop under each other's teardown, and the bridge is asked on
+  every call so a teardown that raises part way stays recoverable. The wrapped
+  object is not stored by the base: it is the one thing that genuinely varies,
+  and the three adopters name it differently.
+
+- **`SyncLoopBridge.is_closed`** — whether `close()` has been claimed, for a
+  teardown path that must not raise. The case it is written for is a
+  finalizer, where a `RuntimeError: SyncLoopBridge is closed` has nowhere to go
+  and is printed as "Exception ignored".
+
 - **`Ontology.inherited_attributes(entity_type)` and its asynchronous twin** —
   the same walk `Taxonomy` publishes, on the object that owns the store it
   reads. It walks `entity_types` and nothing else, which is why every taxonomy
@@ -447,7 +473,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 133 names, taking the package's `__all__` to 338.
+  the resolution cascade — 133 names, taking the package's `__all__` to 339.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing
@@ -1086,6 +1112,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the door exports it, so it cannot fail for the one reason this test exists.
 
 ### Changed
+
+- **`BridgedEntityResolver` takes `bridge=` and answers `aclose()`, and builds
+  its loop thread on first use.** It is now a `SyncBridgeAdapter`. Hand several
+  resolvers the same bridge and they share one thread; a bridge passed in
+  belongs to the caller, so `close()` leaves it running. `aclose()` and
+  `async with` are the teardown forms for a holder that is itself on a loop,
+  and they await the teardown rather than putting it through the bridge. Constructing one no
+  longer allocates a thread — that happens on the first `resolve`. Its
+  forwarding methods, their signatures and the fact that it does not close the
+  resolver handed to it are all unchanged.
 
 - **`KeyCodec` and `StrCodec` are on the top-level door**, beside the `Ontology`
   that now requires one. A required constructor argument whose only two possible
