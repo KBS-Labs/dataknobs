@@ -108,9 +108,10 @@ def process_document(text, metadata=None):
     if metadata and not isinstance(metadata, dict):
         raise TypeError(f"Metadata must be dict, got {type(metadata)}")
     
-    # Process
+    # Process. TextMetaData requires a text_id, so there is no argument-less
+    # form to fall back on -- supply one when the caller gave no metadata.
     from dataknobs_structures import Text, TextMetaData
-    meta = TextMetaData(**metadata) if metadata else TextMetaData()
+    meta = TextMetaData(**metadata) if metadata else TextMetaData("unidentified")
     return Text(text, meta)
 ```
 

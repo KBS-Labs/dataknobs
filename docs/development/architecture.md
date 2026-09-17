@@ -159,8 +159,9 @@ from dataknobs_xization import normalize
 from dataknobs_structures import Text, TextMetaData, Tree
 from dataknobs_utils import elasticsearch_utils
 
-# 1. Read input
-content = file_utils.read_file("input.txt")
+# 1. Read input. file_utils streams a file by line (gzip included); joining
+# the generator is how you get the whole text from it.
+content = "".join(file_utils.fileline_generator("input.txt"))
 
 # 2. Normalize text
 normalized = normalize.basic_normalization_fn(content)

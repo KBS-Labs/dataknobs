@@ -132,7 +132,8 @@ print(result)  # "Hello world"
 # Keep embedded symbols
 text2 = "user@domain.com"
 result2 = normalize.drop_non_embedded_symbols_fn(text2)
-print(result2)  # "user@domain.com" (@ and . are embedded)
+# @ and . are embedded, so they survive this one.
+print(result2)  # user@domain.com
 
 # Custom replacement
 text3 = "*important*"
@@ -200,24 +201,27 @@ Generate variations of hyphenated or slash-separated text.
 # Generate hyphen variations
 text = "multi-word-phrase"
 variations = normalize.get_hyphen_slash_expansions_fn(text)
-print(variations)
-# {'multi-word-phrase', 'multi word phrase', 'multiwordphrase', 'multi', 'word', 'phrase'}
+# A set has no order, so sort it before showing it.
+print(sorted(variations))
+# ['multi', 'multi word phrase', 'multi-word-phrase', 'multiwordphrase', 'phrase', 'word']
 
 # Custom substitutions
 text2 = "data/science"
 variations2 = normalize.get_hyphen_slash_expansions_fn(
     text2, subs=[" ", "_", ""], do_split=False
 )
-print(variations2)
-# {'data/science', 'data science', 'data_science', 'datascience'}
+print(sorted(variations2))
+# ['data science', 'data/science', 'data_science', 'datascience']
 
 # Without original text
 text3 = "machine-learning"
 variations3 = normalize.get_hyphen_slash_expansions_fn(
     text3, add_self=False, do_split=False
 )
-print(variations3)
-# {'machine learning', 'machinelearning'}
+# add_self=False drops the ORIGINAL, but "-" is itself in the default subs,
+# so substituting it back regenerates that spelling anyway.
+print(sorted(variations3))
+# ['machine learning', 'machine-learning', 'machinelearning']
 ```
 
 ### drop_parentheticals_fn()
@@ -239,10 +243,12 @@ text = "Python (programming language) is popular"
 result = normalize.drop_parentheticals_fn(text)
 print(result)  # "Python  is popular"
 
-# Multiple parentheticals
+# Multiple parentheticals. PARENTHETICAL_RE is `\(.*\)` -- greedy -- so it
+# matches from the FIRST "(" to the LAST ")" and takes the text between them
+# with it. Everything from "and ML" onward is lost here.
 text2 = "AI (Artificial Intelligence) and ML (Machine Learning)"
 result2 = normalize.drop_parentheticals_fn(text2)
-print(result2)  # "AI  and ML "
+print(repr(result2))  # 'AI ' 
 ```
 
 ### expand_ampersand_fn()
@@ -323,8 +329,8 @@ variations2 = normalize.get_lexical_variations(
     drop_non_embedded_symbols=False,
     add_eng_plurals=True
 )
-print(variations2)
-# {'JavaScript', 'Java Script', 'JavaScripts', 'Java Scripts'}
+print(sorted(variations2))
+# ['Java Script', 'Java Scripts', 'JavaScript', 'JavaScripts']
 ```
 
 ### basic_normalization_fn()
@@ -343,9 +349,14 @@ Applies common normalization steps to text.
 **Example:**
 ```python
 # Basic normalization
+# Whitespace is left alone unless squash_whitespace is asked for; the three
+# default transforms are lowercasing, camelCase expansion and quote
+# simplification.
 text = "  Hello,    WORLD!  \n\t How   are you?  "
 result = normalize.basic_normalization_fn(text)
-print(repr(result))  # 'hello, world! how are you?'
+print(repr(result))  # '  hello,    world!  \n\t how   are you?  '
+print(repr(normalize.basic_normalization_fn(text, squash_whitespace=True)))
+# 'hello, world! how are you?'
 ```
 
 ## Usage Patterns
@@ -624,6 +635,8 @@ query = elasticsearch_utils.build_field_query_dict(
 
 ### With File Processing
 ```python
+import os
+
 from dataknobs_xization import normalize
 from dataknobs_utils import file_utils
 
@@ -641,8 +654,8 @@ def normalize_text_files(input_dir: str, output_dir: str):
                 if normalized.strip():  # Skip empty lines
                     normalized_lines.append(normalized)
             
-            # Save normalized version
-            basename = file_utils.get_basename(filepath)
+            # Save normalized version. Basenames are os.path's job.
+            basename = os.path.basename(filepath)
             output_path = f"{output_dir}/normalized_{basename}"
             file_utils.write_lines(output_path, normalized_lines)
 

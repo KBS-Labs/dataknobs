@@ -107,8 +107,11 @@ result = fsm.process({"input": "data"})
 tree = Tree("root")
 tree.add_child("child1")
 
-# Work with JSON
-data = json_utils.load_json_file("data.json")
+# Work with JSON. Reading the file is stdlib json; what json_utils adds is
+# addressing into the result by path.
+import json
+with open("data.json") as handle:
+    data = json.load(handle)
 value = json_utils.get_value(data, "path.to.value")
 ```
 

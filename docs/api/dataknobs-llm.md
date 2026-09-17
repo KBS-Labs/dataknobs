@@ -254,7 +254,9 @@ v2 = PromptVersion(
     name="summarize",
     version="2.0.0",
     template="Provide a concise summary:\n\n{{text}}",
-    status=VersionStatus.TESTING
+    # DRAFT | ACTIVE | PRODUCTION | DEPRECATED | ARCHIVED -- a version still
+    # being trialled is a DRAFT; there is no TESTING.
+    status=VersionStatus.DRAFT
 )
 
 version_manager.register_version(v1)

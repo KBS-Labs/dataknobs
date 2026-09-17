@@ -37,17 +37,26 @@ pip install dataknobs-utils
 ## Usage
 
 ```python
+import json
+from pathlib import Path
+
 from dataknobs_utils import json_utils, file_utils
 
-# Read JSON file
-data = json_utils.load_json_file("data.json")
+# Reading and writing whole files is stdlib; this package adds what sits on
+# top of that -- addressing into a structure, and streaming a file by line.
+with open("data.json") as handle:
+    data = json.load(handle)
 
-# Extract nested values
+# Extract nested values. List elements are indexed with [n], not .n
 value = json_utils.get_value(data, "path.to.nested[0].value")
 
-# File operations
-content = file_utils.read_text_file("example.txt")
-file_utils.write_json_file("output.json", {"key": "value"})
+# File operations: a line generator that transparently handles gzip, and a
+# writer that takes the lines to put in it.
+for line in file_utils.fileline_generator("example.txt"):
+    process(line)
+file_utils.write_lines("output.txt", ["one", "two"])
+
+Path("output.json").write_text(json.dumps({"key": "value"}))
 ```
 
 ## Dependencies
