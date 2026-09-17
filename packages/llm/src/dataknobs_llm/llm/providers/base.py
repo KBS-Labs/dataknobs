@@ -6,6 +6,8 @@
 from collections.abc import AsyncGenerator, Iterator
 from typing import List, Union, Any
 
+from dataknobs_common import SyncLoopBridge
+
 from ..base import (
     AsyncLLMProvider,
     LLMMessage,
@@ -16,7 +18,24 @@ from ..base import (
 
 
 class SyncProviderAdapter:
-    """Sync adapter for async LLM providers."""
+    """Sync adapter for async LLM providers.
+
+    Every method that reaches the wrapped provider runs its coroutine on a
+    private :class:`~dataknobs_common.sync_bridge.SyncLoopBridge` loop, so the
+    adapter is callable from plain synchronous code and from inside a running
+    event loop alike. The alternative --- ``loop.run_until_complete`` on
+    whatever loop the caller is on --- raises ``RuntimeError: This event loop
+    is already running`` in the second case, which is the case a synchronous
+    wrapper exists to serve.
+
+    The bridge costs one daemon thread for the adapter's lifetime.
+    :meth:`close` ends it.
+    """
+
+    #: Loop-thread name for this adapter's bridge. Registered by the bridge
+    #: itself, so the leaked-thread guard sees it rather than being escaped by
+    #: it; it is a diagnostic label, not an opt-out.
+    BRIDGE_THREAD_NAME = "dk-sync-llm-provider"
 
     def __init__(self, async_provider: AsyncLLMProvider):
         """Initialize with async provider.
@@ -25,6 +44,8 @@ class SyncProviderAdapter:
             async_provider: The async provider to wrap.
         """
         self.async_provider = async_provider
+        self._bridge = SyncLoopBridge(thread_name=self.BRIDGE_THREAD_NAME)
+        self._closed = False
 
     @property
     def config(self) -> Any:
@@ -60,92 +81,61 @@ class SyncProviderAdapter:
 
     def initialize(self) -> None:
         """Initialize the provider synchronously."""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.async_provider.initialize())
+        return self._bridge.run(self.async_provider.initialize())
 
     def close(self) -> None:
-        """Close the provider synchronously."""
-        import asyncio
+        """Close the provider synchronously, then this adapter's bridge.
 
+        Idempotent, as it was before the bridge owned the loop: a second call
+        has no provider left to close and no loop left to close it on, so it
+        returns. The bridge goes down in a ``finally`` so a provider that
+        fails to close does not strand the thread.
+        """
+        if self._closed:
+            return
+        self._closed = True
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.async_provider.close())
+            self._bridge.run(self.async_provider.close())
+        finally:
+            self._bridge.close()
 
     def complete(self, messages: Union[str, List[LLMMessage]], **kwargs: Any) -> LLMResponse:
         """Generate completion synchronously."""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.async_provider.complete(messages, **kwargs))
+        return self._bridge.run(self.async_provider.complete(messages, **kwargs))
 
     def stream(
         self, messages: Union[str, List[LLMMessage]], **kwargs: Any
     ) -> Iterator[LLMStreamResponse]:
         """Stream completion synchronously."""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
 
         async def _stream() -> AsyncGenerator[LLMStreamResponse, None]:
             async for chunk in self.async_provider.stream_complete(messages, **kwargs):
                 yield chunk
 
-        # Convert async generator to sync generator
+        # Drive the async generator one step at a time on the bridge loop. The
+        # generator is bound to whichever loop first iterates it, so every
+        # ``__anext__`` and the final ``aclose`` have to go through the same
+        # bridge --- including when the consumer abandons the stream partway
+        # and the ``finally`` below is what runs.
         async_gen = _stream()
         try:
             while True:
                 try:
-                    yield loop.run_until_complete(async_gen.__anext__())
+                    yield self._bridge.run(async_gen.__anext__())
                 except StopAsyncIteration:
                     break
         finally:
-            loop.run_until_complete(async_gen.aclose())
+            self._bridge.run(async_gen.aclose())
 
     def embed(
         self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
         """Generate embeddings synchronously."""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.async_provider.embed(texts, **kwargs))
+        return self._bridge.run(self.async_provider.embed(texts, **kwargs))
 
     def validate_model(self) -> bool:
         """Validate model synchronously."""
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        return loop.run_until_complete(self.async_provider.validate_model())
+        return self._bridge.run(self.async_provider.validate_model())
 
     def get_capabilities(self) -> List[ModelCapability]:
         """Get capabilities synchronously."""
