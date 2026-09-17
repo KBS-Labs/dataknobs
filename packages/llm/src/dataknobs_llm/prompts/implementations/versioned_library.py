@@ -21,11 +21,14 @@ from ..versioning import (
     VersionManager,
     ABTestManager,
     MetricsCollector,
+    InMemoryVersionStore,
     PromptVersion,
     PromptExperiment,
     PromptVariant,
     PromptMetrics,
+    VersioningStore,
     VersionStatus,
+    require_store,
 )
 
 
@@ -86,8 +89,9 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
         ```python
         from dataknobs_llm.prompts import VersionedPromptLibrary
 
-        # Create library (with optional backend storage)
-        library = VersionedPromptLibrary(storage=backend)
+        # In memory by default; DatabaseVersionStore(db) for any of the
+        # seven dataknobs backends.
+        library = VersionedPromptLibrary()
 
         # Create a version
         v1 = await library.create_version(
@@ -122,13 +126,19 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
 
     def __init__(
         self,
-        storage: Any | None = None,
+        store: VersioningStore | None = None,
         base_library: AbstractPromptLibrary | AsyncPromptLibrary | None = None,
     ):
         """Initialize versioned prompt library.
 
         Args:
-            storage: Backend storage for persistence (None for in-memory)
+            store: Where versions, experiments and metrics live. Defaults to
+                :class:`~dataknobs_llm.prompts.versioning.InMemoryVersionStore`;
+                pass
+                :class:`~dataknobs_llm.prompts.versioning.DatabaseVersionStore`
+                for persistence across processes. One object serves all three
+                managers, which is why the parameter is singular and why the
+                protocol it names is the three of theirs together.
             base_library: Optional base library to wrap (for migration). Either
                 flavour: a synchronous one is reached through
                 :func:`~dataknobs_llm.prompts.base.views.as_async`, so a
@@ -137,21 +147,27 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
                 was passed; the view is private.
 
         Raises:
-            TypeError: If ``base_library`` answers to neither protocol. A class
-                extending :class:`BasePromptLibrary` alone is the likely case:
-                that mixin declares no interface, so such a library has to name
-                a flavour before anything can tell which one it is.
+            TypeError: If ``store`` is not a
+                :class:`~dataknobs_llm.prompts.versioning.VersioningStore`, or
+                if ``base_library`` answers to neither library protocol. For
+                the latter a class extending :class:`BasePromptLibrary` alone
+                is the likely case: that mixin declares no interface, so such a
+                library has to name a flavour before anything can tell which
+                one it is.
         """
-        self.storage = storage
+        self.store: VersioningStore = require_store(
+            store if store is not None else InMemoryVersionStore(),
+            VersioningStore,
+            holder="VersionedPromptLibrary",
+        )
         self.base_library = base_library
 
-        # Initialize managers
-        self.version_manager = VersionManager(storage)
-        self.ab_test_manager = ABTestManager(storage)
-        self.metrics_collector = MetricsCollector(storage)
-
-        # Cache for converting versions to templates
-        self._template_cache: Dict[str, PromptTemplateDict] = {}
+        # One store, three managers -- each declaring only the part of it that
+        # it uses. ``self.store`` rather than the argument, which is still
+        # ``None`` when the default was taken.
+        self.version_manager = VersionManager(self.store)
+        self.ab_test_manager = ABTestManager(self.store)
+        self.metrics_collector = MetricsCollector(self.store)
 
     @property
     def base_library(self) -> AbstractPromptLibrary | AsyncPromptLibrary | None:
@@ -580,36 +596,41 @@ class VersionedPromptLibrary(AsyncPromptLibrary):
         """
         return {
             "type": "VersionedPromptLibrary",
-            "storage": str(type(self.storage).__name__) if self.storage else "in-memory",
+            "store": type(self.store).__name__,
             "has_base_library": self.base_library is not None,
         }
 
     # ===== Helper Methods =====
 
     def _version_to_template(self, version: PromptVersion) -> PromptTemplateDict:
-        """Convert PromptVersion to PromptTemplateDict for compatibility."""
-        # Check cache
-        cache_key = version.version_id
-        if cache_key in self._template_cache:
-            return self._template_cache[cache_key]
+        """Convert PromptVersion to PromptTemplateDict for compatibility.
 
+        Uncached. What stood here kept a dictionary keyed by version id that
+        nothing ever invalidated, so a tag added to a version already read was
+        invisible to every later read. It was invisible in a way that hid
+        itself: the cached ``tags`` was the *same list object* the manager
+        held, so mutating it in place showed through, and the staleness healed
+        itself for exactly the fields a test would have poked at. Now that a
+        load hands back a copy, the alias is gone and the cache would be a
+        snapshot of whatever the version looked like the first time anybody
+        asked.
+
+        It bought one dictionary construction from an object already in hand.
+        """
         template: PromptTemplateDict = {
             "template": version.template,
-            "defaults": version.defaults,
+            "defaults": dict(version.defaults),
             "metadata": {
                 **version.metadata,
                 "version_id": version.version_id,
                 "version": version.version,
                 "created_at": version.created_at.isoformat(),
-                "tags": version.tags,
+                "tags": list(version.tags),
                 "status": version.status.value,
             },
         }
 
         if version.validation:
             template["validation"] = version.validation  # type: ignore[typeddict-item]
-
-        # Cache it
-        self._template_cache[cache_key] = template
 
         return template

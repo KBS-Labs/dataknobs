@@ -12,6 +12,7 @@ The versioning system provides:
 - **Metrics Tracking**: Success rates, response times, ratings
 - **Performance Comparison**: Compare variants to find winners
 - **Rollback**: Easy rollback to previous versions
+- **Pluggable storage**: In memory by default, or any dataknobs backend
 
 ## Quick Start
 
@@ -207,6 +208,84 @@ top = await mc.get_top_versions(
     limit=3
 )
 ```
+
+## Storage
+
+The managers keep nothing of their own -- versions, experiments, user
+assignments, aggregates and events all live in a **store**, and which store
+you pass decides whether they outlive the process.
+
+```python
+from dataknobs_llm.prompts import VersionManager
+
+vm = VersionManager()          # in memory: the default
+```
+
+To persist, hand the managers a `DatabaseVersionStore` over any dataknobs
+`AsyncDatabase` -- memory, file, SQLite, PostgreSQL, S3, DuckDB or
+Elasticsearch:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import DatabaseVersionStore, VersionedPromptLibrary
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()                 # the factory builds; it does not connect
+
+library = VersionedPromptLibrary(store=DatabaseVersionStore(db))
+
+# ... use the library ...
+
+await db.close()                   # the store does not own your database
+```
+
+Wiring the managers yourself, give all three the same store, as
+`VersionedPromptLibrary` does:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
+store = DatabaseVersionStore(db)
+
+vm = VersionManager(store)
+ab = ABTestManager(store)
+mc = MetricsCollector(store)
+
+await db.close()
+```
+
+Each manager declares only what it uses -- `VersionStore`, `ExperimentStore`
+and `MetricsStore` respectively, with `VersioningStore` for all three at once
+-- so a store you write yourself need only implement the manager you are
+serving. A manager checks its store at construction and names any method it
+cannot find.
+
+A load returns a value rather than a handle: mutate what you loaded and
+nothing is stored until you save it. That is true of the in-memory store too,
+so code developed against it behaves the same against a database.
+
+Backends past memory and file need their driver -- `dataknobs-data[sqlite]`
+for the example above, `dataknobs-data[postgres]` for PostgreSQL.
+
+Two things the store does rather than its callers. `record_event` appends an
+event **and** folds it into the version's aggregate in one operation, because
+folding is a read-modify-write and doing it in the caller loses an increment
+when two recordings race; `DatabaseVersionStore` writes the aggregate as a
+compare-and-set and re-folds when it loses, up to
+`DatabaseVersionStore(db, max_retries=8)` times. And `load_events` returns
+events newest first and takes a `limit` that reaches the query, so an
+unbounded stream is never fully loaded to answer for its most recent few.
+
+See `packages/llm/docs/versioning.md` for the full treatment.
 
 ## Detailed Documentation
 

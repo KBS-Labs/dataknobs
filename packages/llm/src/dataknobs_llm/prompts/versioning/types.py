@@ -115,7 +115,7 @@ class PromptVariant:
     description: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate weight is positive."""
         if self.weight <= 0.0:
             raise ValueError(f"Variant weight must be positive, got {self.weight}")
@@ -163,7 +163,7 @@ class PromptExperiment:
     metrics: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate traffic split sums to 1.0."""
         total = sum(self.traffic_split.values())
         if not (0.99 <= total <= 1.01):  # Allow small floating point error
@@ -257,6 +257,31 @@ class PromptMetrics:
             return 0.0
         return sum(self.user_ratings) / len(self.user_ratings)
 
+    def fold(self, event: "MetricEvent") -> None:
+        """Absorb one event into these running totals.
+
+        The whole of what recording an event does to an aggregate, in one
+        place. Both shipped stores perform this fold --- it is the half of
+        ``record_event`` that is not persistence --- and a fold each of them
+        wrote for itself is a fold they could come to disagree about.
+
+        Args:
+            event: The event to add. Its ``timestamp`` becomes ``last_used``,
+                so folding events in order leaves the latest one there.
+        """
+        self.total_uses += 1
+        if event.success:
+            self.success_count += 1
+        else:
+            self.error_count += 1
+        if event.response_time is not None:
+            self.total_response_time += event.response_time
+        if event.tokens is not None:
+            self.total_tokens += event.tokens
+        if event.user_rating is not None:
+            self.user_ratings.append(event.user_rating)
+        self.last_used = event.timestamp
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
@@ -312,10 +337,21 @@ class MetricEvent:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for storage."""
+        """Convert to dictionary for storage.
+
+        An aware timestamp is written as UTC, so that the stored strings sort
+        chronologically. A store orders an event stream by this field and asks
+        its backend to do it, which is a comparison of the text: two events a
+        minute apart recorded in different offsets would otherwise come back
+        in the wrong order, and a limit would take the wrong ones. A naive
+        timestamp is left alone --- there is nothing to convert it from.
+        """
+        timestamp = self.timestamp
+        if timestamp.tzinfo is not None:
+            timestamp = timestamp.astimezone(UTC)
         return {
             "version_id": self.version_id,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": timestamp.isoformat(),
             "success": self.success,
             "response_time": self.response_time,
             "tokens": self.tokens,

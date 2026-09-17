@@ -101,7 +101,116 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
       show_source: true
       heading_level: 3
 
+## Storage
+
+Where the three managers keep what they are given. The default is in memory;
+`DatabaseVersionStore` puts everything into any dataknobs `AsyncDatabase`.
+
+Each manager declares only the part of the surface it uses, so a store written
+for one need not implement the others. `VersioningStore` is all three at once,
+which is what `VersionedPromptLibrary` asks for.
+
+Two members of `MetricsStore` carry a guarantee a caller could not reconstruct
+from the others. `record_event` appends an event and folds it into the
+version's aggregate in one operation, so concurrent recordings cannot lose an
+increment between a read and a write; `load_events` orders newest first and
+takes a `limit` the query applies, so an unbounded stream is never fully
+materialized. Implement both if you write your own store.
+
+### VersionStore
+
+::: dataknobs_llm.prompts.VersionStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### ExperimentStore
+
+::: dataknobs_llm.prompts.ExperimentStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### MetricsStore
+
+::: dataknobs_llm.prompts.MetricsStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### VersioningStore
+
+::: dataknobs_llm.prompts.VersioningStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### InMemoryVersionStore
+
+::: dataknobs_llm.prompts.InMemoryVersionStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### DatabaseVersionStore
+
+::: dataknobs_llm.prompts.DatabaseVersionStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### require_store
+
+The check each manager runs on the store it is handed. Exported because a
+consumer writing their own store wants the same answer before wiring it in.
+
+::: dataknobs_llm.prompts.require_store
+    options:
+      show_source: false
+      heading_level: 3
+
 ## Usage Examples
+
+### Persisting to a Backend
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+# "memory", "file", "sqlite", "postgres", "s3", "duckdb", "elasticsearch".
+# The factory builds the database; it does not connect it.
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
+# One store for all three managers, so they share a database rather than
+# three configurations of one.
+store = DatabaseVersionStore(db)
+vm = VersionManager(store)
+ab = ABTestManager(store)
+mc = MetricsCollector(store)
+
+# ... use them ...
+
+# The store does not own the database. You opened it; you close it.
+await db.close()
+```
+
+A load hands back a value rather than a handle, so an in-place change is not
+stored until it is saved:
+
+```python
+version = await store.load_version(version_id)
+version.tags.append("production")
+await store.save_version(version)
+```
+
+That holds for `InMemoryVersionStore` too, so code developed against it
+behaves the same against a database.
 
 ### Version Management
 
