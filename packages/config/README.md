@@ -333,9 +333,9 @@ db = config.get_instance("database", "primary", database="myapp")
 
 ```python
 class Config:
-    def __init__(self, *sources, use_env=True)
-    def from_file(cls, path) -> Config
-    def from_dict(cls, data) -> Config
+    def __init__(self, *sources, allow_reference_outside_config_root=False, use_env=True)
+    def from_file(cls, path, *, allow_reference_outside_config_root=False, use_env=True) -> Config
+    def from_dict(cls, data, *, allow_reference_outside_config_root=False, use_env=True) -> Config
     
     # Access
     def get_types() -> List[str]

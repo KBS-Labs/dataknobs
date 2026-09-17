@@ -1,5 +1,7 @@
 """Tests for environment variable overrides."""
 
+import pytest
+
 from dataknobs_config import Config
 from dataknobs_config.environment import EnvironmentOverrides
 
@@ -144,6 +146,80 @@ class TestEnvironmentOverrides:
 
         db = config.get("database", 0)
         assert db["host"] == "original"  # Should not be overridden
+
+    def test_the_type_segment_is_matched_verbatim(self, env_vars):
+        """Test that TYPE is the config's own key, with no plural folding.
+
+        The documentation carried forty-odd examples spelling the type
+        singular against a config declaring it plural. Every one of them was
+        inert: `_apply_environment_overrides` hands the parsed name straight
+        to `get`, which raises `ConfigNotFoundError`, and the override is
+        logged at WARNING and dropped. Nothing about the variable's shape says
+        it missed.
+        """
+        env_vars(
+            DATAKNOBS_DATABASE__PRIMARY__HOST="singular",
+            DATAKNOBS_DATABASES__PRIMARY__PORT="6000",
+        )
+        declared = {"databases": [{"name": "primary", "host": "original", "port": 5432}]}
+
+        db = Config(declared).get("databases", "primary")
+
+        assert db["host"] == "original", "a type that does not exist is skipped"
+        assert db["port"] == 6000, "the type spelled as declared is applied"
+
+    def test_a_list_element_is_not_addressable_either(self, env_vars):
+        """Test the other direction of the flat-attribute rule.
+
+        `A__B__C__0` reads as an attribute literally named `c__0`, so the list
+        gains a flat neighbour and keeps its elements. Same mechanism as
+        test_nested_style_name_is_one_flat_attribute, and the shape readers
+        reach for second.
+        """
+        env_vars(DATAKNOBS_SERVICES__API__ALLOWED_ORIGINS__0="https://app.example.com")
+
+        declared = {"services": [{"name": "api", "allowed_origins": ["http://localhost:3000"]}]}
+        api = Config(declared).get("services", "api")
+
+        assert api["allowed_origins"] == ["http://localhost:3000"]
+        assert api["allowed_origins__0"] == "https://app.example.com"
+
+    def test_from_file_can_decline_the_environment(self, temp_dir, env_vars):
+        """Test that `from_file` forwards the constructor's opt-out."""
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("database:\n  - name: db\n    host: original\n")
+        env_vars(DATAKNOBS_DATABASE__DB__HOST="overridden")
+
+        # The switch was read out of `**kwargs` by `__init__` alone, so the
+        # documented door was the one that could not decline: `from_file` had
+        # no `use_env` to forward and every classmethod-built Config took the
+        # environment whether or not the caller wanted it.
+        assert Config.from_file(config_file, use_env=False).get("database", "db")["host"] == (
+            "original"
+        )
+        assert Config.from_file(config_file).get("database", "db")["host"] == "overridden"
+
+    def test_from_dict_can_decline_the_environment(self, env_vars):
+        """Test that `from_dict` forwards the constructor's opt-out."""
+        env_vars(DATAKNOBS_DATABASE__DB__HOST="overridden")
+        declared = {"database": [{"name": "db", "host": "original"}]}
+
+        assert Config.from_dict(declared, use_env=False).get("database", "db")["host"] == (
+            "original"
+        )
+        assert Config.from_dict(declared).get("database", "db")["host"] == "overridden"
+
+    def test_a_misspelled_opt_out_is_refused_rather_than_ignored(self, env_vars):
+        """Test that a typo in the switch raises instead of failing open."""
+        env_vars(DATAKNOBS_DATABASE__DB__HOST="overridden")
+
+        # `use_env` used to be read as `kwargs.get("use_env", True)`, so every
+        # misspelling was absorbed by `**kwargs` and left the overrides on --
+        # silently, and for the one switch that decides whether environment
+        # values reach configuration at all. Declaring the parameter makes
+        # Python refuse the call.
+        with pytest.raises(TypeError, match="use_emv"):
+            Config({"database": [{"name": "db", "host": "original"}]}, use_emv=False)
 
     def test_override_nonexistent_config(self, env_vars):
         """Test that overrides for nonexistent configs don't cause errors."""
