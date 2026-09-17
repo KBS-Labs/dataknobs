@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than destroying its cleanup mid-flight, so the worst case is
   `timeout` plus that. Documented in the directory-processor guide.
 
+- **The sequence defaults on `get_lexical_variations` and
+  `get_hyphen_slash_expansions_fn` are annotated `Sequence[str]`.** Each was
+  declared `List[str]` while defaulting to a tuple, so the annotation
+  described neither the default it carried nor what the body does with the
+  value, which is iterate it. Callers passing a list are unaffected; a caller
+  passing a tuple now type-checks, as it always ran.
+
 ### Fixed
 
 - **`BackendDocumentSource` yields `-1` for a size a backend reports as
@@ -53,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direction before. No runtime behaviour changes; what changes is that a third
   implementation written to the declaration can no longer be one that breaks
   `async for` at every call site.
+
+- **Dropping parentheticals no longer takes the text between two of them.**
+  `PARENTHETICAL_RE` was `\(.*\)`, which is greedy: it matched from the first
+  opening parenthesis to the last closing one, so `drop_parentheticals_fn` on
+  `'AI (Artificial Intelligence) and ML (Machine Learning)'` answered `'AI '`,
+  losing two words that were never inside a parenthetical. The class is now
+  negated, `\([^)]*\)`, so two parentheticals are two matches. Negating the
+  class rather than making the quantifier lazy: both stop at the first `)`,
+  but `[^)]*` also cannot span one. `get_lexical_variations` drops
+  parentheticals by default, so the truncated string was among the variations
+  a caller matches against.
 
 ### Licensing
 

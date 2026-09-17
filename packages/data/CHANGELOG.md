@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that relied on the batch error being absorbed should pass
   `error_handling="log"`, which is what that now says.
 
+- **`ConversionOptions.metadata_strategy` now selects where the metadata
+  goes.** The option names four placements and `records_to_dataframe` never
+  read it, so all four answered the same frame: the record fields as columns
+  and the metadata nowhere. The placements were implemented in
+  `MetadataHandler`, which the converter did not call. It now does, in both
+  directions. **`ATTRS` is the declared default, so a caller who never set the
+  option sees a change**: `records_to_dataframe` populates `df.attrs` where it
+  previously left it empty. `COLUMNS` writes the prefixed columns it always
+  documented, and `dataframe_to_records` reads those back as metadata rather
+  than returning them as ordinary fields; a `MULTI_INDEX` frame's column
+  labels are flattened on the way back, so field names return as names rather
+  than as `(name, type)` tuples. `validate_conversion` takes the prefix it
+  filters from `MetadataConfig` instead of repeating `_meta_` literally, so a
+  changed `metadata_prefix` is reflected there too.
+
 ### Changed
 
 - **`BatchOperations` reaches an async database through one loop per operation,

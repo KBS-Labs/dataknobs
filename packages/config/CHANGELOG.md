@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `**kwargs` is gone from `Config.__init__`; nothing else was ever read from
   it, so a call passing anything else was already a no-op and is now an error.
 
+### Fixed
+
+- **An environment override naming a nested value now reaches it, or is
+  refused.** The attribute field of a `DATAKNOBS_` variable is everything past
+  the second separator, so
+  `DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT=60` arrived as the single
+  name `connection__timeout` and was assigned flat. Against a configuration
+  holding `connection: {timeout: 30}` that produced both keys — the junk one
+  carrying the operator's value and the real one still at `30` — and nothing
+  warned, because the guard around the assignment fires only when the lookup
+  raises, and this lookup succeeds. The path is now walked: each leading
+  segment must name an existing dict key or an in-range list index (negative
+  included, that being the notation the reference's own index field already
+  accepts), and the final segment is then written. A dict gains that key if it
+  is absent, as a single-segment name always has; a list does not gain a
+  position, because there is none to create and appending would put the value
+  somewhere the operator did not name. A path that does not resolve is logged
+  and dropped rather than written beside its target, as is a reference that
+  names no attribute at all.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

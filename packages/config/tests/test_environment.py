@@ -315,6 +315,55 @@ class TestEnvironmentOverrides:
 
         assert db["workers"] == 8
 
+    def test_a_reference_naming_no_attribute_parses_to_none(self):
+        """Test the contract that makes the attr-less branch necessary.
+
+        `parse_env_reference` is public and its attribute is declared
+        optional: a reference that names a whole configuration rather than one
+        of its values legitimately has none. `reference_to_env_var` is the
+        other consumer of that state and raises on it; the override loop skips
+        it. Neither is dead code, and this is why.
+        """
+        env = EnvironmentOverrides()
+
+        assert env.parse_env_reference("xref:databases[primary]") == (
+            "databases",
+            "primary",
+            None,
+        )
+        assert env.parse_env_reference("xref:databases[primary].host") == (
+            "databases",
+            "primary",
+            "host",
+        )
+
+    def test_a_reference_naming_no_attribute_is_skipped(self, caplog):
+        """Test that an attr-less reference is logged and dropped.
+
+        No `DATAKNOBS_` variable produces one: `_env_var_to_reference` requires
+        three fields and always joins the third onto the reference with a `.`,
+        so every key `get_overrides` builds carries an attribute. The state is
+        reachable through `parse_env_reference` itself, which is public, so the
+        loop is written against its declared return rather than against its
+        one current producer. Driving the loop with a real overrides source
+        that returns such a reference is what pins the skip.
+        """
+
+        class WholeConfigOverrides(EnvironmentOverrides):
+            """An overrides source naming a configuration, not a value."""
+
+            def get_overrides(self) -> dict:
+                return {"xref:database[primary]": 6000}
+
+        config = Config({"database": [{"name": "primary", "port": 5432}]}, use_env=False)
+        config._environment_overrides = WholeConfigOverrides()
+
+        with caplog.at_level(logging.WARNING, logger="dataknobs_config.config"):
+            config._apply_environment_overrides()
+
+        assert config.get("database", "primary")["port"] == 5432, "nothing was written"
+        assert "names no attribute" in caplog.text
+
 
 class TestEnvironmentIntegration:
     """Test environment override integration with Config."""

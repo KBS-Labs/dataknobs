@@ -206,16 +206,25 @@ a placement applied to a frame you already have, or want to vary the settings
 the converter leaves at their defaults — the `_meta_` prefix among them:
 
 ```python
-from dataknobs_data.pandas import MetadataHandler
+from dataknobs_data.pandas import ConversionOptions, MetadataHandler
 from dataknobs_data.pandas.metadata import MetadataConfig, MetadataStrategy
 
-handler = MetadataHandler(MetadataConfig(strategy=MetadataStrategy.ATTRS))
-frame = converter.records_to_dataframe(records)
-extracted = handler.extract_metadata_from_records(records)
-frame = handler.apply_metadata_to_dataframe(frame, extracted)
+# A prefix of your own. `ConversionOptions` carries no field for it, so this
+# is a placement only the handler can reach.
+handler = MetadataHandler(
+    MetadataConfig(strategy=MetadataStrategy.COLUMNS, metadata_prefix="meta.")
+)
 
-print(list(frame.columns))              # ['name', 'score']
-print("record_metadata" in frame.attrs)  # True
+# The frame you already have -- built here with no placement of its own, so
+# the handler's is the only one applied.
+frame = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.NONE)
+)
+frame = handler.apply_metadata_to_dataframe(
+    frame, handler.extract_metadata_from_records(records), records
+)
+
+print(list(frame.columns))              # ['name', 'score', 'meta.source']
 ```
 
 ### ID Preservation

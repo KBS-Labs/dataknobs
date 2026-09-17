@@ -407,8 +407,8 @@ class Config:
 
                 if attr is None:
                     # Every reference `get_overrides` builds carries an
-                    # attribute; one that does not names a whole configuration
-                    # and there is nothing to assign into it.
+                    # attribute; one that does not is naming a whole
+                    # configuration, and there is nothing to assign into it.
                     logger.warning(
                         "Failed to apply environment override %s: it names no attribute",
                         ref,
