@@ -412,17 +412,26 @@ await library.create_experiment(
     ]
 )
 
-# Use with prompt builder (automatically selects variant)
-from dataknobs_llm.prompts import AsyncPromptBuilder
+# Pick the variant for a user, then fetch that version. Selection is explicit
+# -- the prompt builder has no user_id and does not choose for you.
+experiment = await library.get_experiment(experiment_id)
+version = await library.get_variant_for_user(experiment.experiment_id, "user123")
 
-builder = AsyncPromptBuilder(
-    library=library,
-    user_id="user123"  # For sticky assignment
-)
-
-result = await builder.render_system_prompt("greeting", {"name": "Alice"})
-# Uses versioned prompt based on A/B test
+# Sticky: the same user gets the same variant on every later turn.
+template = await library.get_version("greeting", "system", version)
 ```
+
+!!! warning "The inherited sync accessors do not work here"
+
+    `get_system_prompt` / `get_user_prompt` are synchronous, because
+    `AbstractPromptLibrary` declares them so, and they reach the async version
+    manager with `loop.run_until_complete`. On a running event loop that
+    raises `RuntimeError: This event loop is already running` -- and a running
+    loop is the only place this library can be populated from, because
+    `create_version` and `create_experiment` are coroutines.
+
+    Use the async `get_version(name, prompt_type, version)` instead, as above.
+    The sync accessors work only from code that is not already on a loop.
 
 ## Best Practices
 

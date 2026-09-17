@@ -622,47 +622,79 @@ print(f"Stream processed: {stats['total_processed']} items in {stats['duration']
 
 ### FSMBuilder
 
-Programmatic FSM construction:
+Programmatic FSM construction. The builder does not accumulate the machine
+piece by piece -- it takes a finished `FSMConfig` and turns it into an
+executable FSM, so the structure is described with the config models and
+`build()` is the last step rather than the first:
 
 ```python
 from dataknobs_fsm import FSMBuilder
-from dataknobs_fsm.core.data_modes import DataHandlingMode
+from dataknobs_fsm.config.schema import (
+    ArcConfig,
+    FSMConfig,
+    FunctionReference,
+    NetworkConfig,
+    StateConfig,
+)
 
-builder = FSMBuilder(name='programmatic_fsm')
-builder.set_data_mode(DataHandlingMode.COPY)
+# Arcs belong to the state they leave, so states and transitions are one
+# structure rather than two lists to keep in step.
+config = FSMConfig(
+    name="programmatic_fsm",
+    main_network="main",
+    networks=[
+        NetworkConfig(
+            name="main",
+            states=[
+                StateConfig(
+                    name="start",
+                    is_start=True,
+                    arcs=[ArcConfig(target="process")],
+                ),
+                StateConfig(
+                    name="process",
+                    # A function is named by reference, never passed inline --
+                    # that is what keeps a config serializable.
+                    transforms=[
+                        FunctionReference(type="registered", name="process_func")
+                    ],
+                    arcs=[ArcConfig(target="end")],
+                ),
+                StateConfig(name="end", is_end=True),
+            ],
+        )
+    ],
+)
 
-# Add network
-network = builder.add_network('main', is_main=True)
-
-# Add states
-network.add_state('start', is_start=True)
-network.add_state('process', transform='process_func')
-network.add_state('end', is_end=True)
-
-# Add arcs
-network.add_arc('start', 'process')
-network.add_arc('process', 'end')
-
-# Build FSM
-fsm_config = builder.build()
-fsm = SimpleFSM(fsm_config)
+builder = FSMBuilder()
+builder.register_function("process_func", process_func)
+fsm = builder.build(config)       # an executable FSM, not a config
+print(fsm.name)                   # programmatic_fsm
 ```
 
 ### Configuration Loader
 
 Load FSM from files:
 
+`SimpleFSM` already accepts a path, so the loader is for the cases where you
+want the parsed `FSMConfig` itself -- to inspect it, merge two of them, or
+validate a file without building anything. Note the method names: there is no
+bare `load()`, because the source matters.
+
 ```python
 from dataknobs_fsm import ConfigLoader, SimpleFSM
 
-# Load from YAML
-loader = ConfigLoader()
-config = loader.load('workflow.yaml')
-fsm = SimpleFSM(config)
+# The common case -- SimpleFSM loads the file for you, YAML or JSON
+fsm = SimpleFSM('workflow.yaml')
+fsm = SimpleFSM('workflow.json')
 
-# Load from JSON
-config = loader.load('workflow.json')
-fsm = SimpleFSM(config)
+# The loader, when you want the config object
+loader = ConfigLoader()
+config = loader.load_from_file('workflow.yaml')   # -> FSMConfig
+print(config.name, config.main_network)
+
+# Or validate without building -- answers a bool, not a list of errors
+is_valid = loader.validate_file('workflow.yaml')
 ```
 
 ### Execution Context

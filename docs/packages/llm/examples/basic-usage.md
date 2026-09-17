@@ -10,7 +10,7 @@ Common use cases and patterns for getting started with the LLM package.
 from dataknobs_llm import create_llm_provider, LLMConfig
 
 # Create LLM provider
-config = LLMConfig(provider="openai", api_key="your-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
 llm = create_llm_provider(config, is_async=False)
 
 # Ask a question
@@ -38,7 +38,7 @@ import asyncio
 from dataknobs_llm import create_llm_provider, LLMConfig
 
 async def ask_question():
-    config = LLMConfig(provider="openai", api_key="your-key")
+    config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
     llm = create_llm_provider(config)  # is_async=True by default
     response = await llm.acomplete("What are Python decorators?")
     print(response.content)
@@ -63,7 +63,7 @@ print()  # Newline at end
 from dataknobs_llm import create_llm_provider, LLMConfig
 
 async def stream_story():
-    config = LLMConfig(provider="openai", api_key="your-key")
+    config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
     llm = create_llm_provider(config)
     async for chunk in llm.astream("Tell me a story"):
         print(chunk.content, end="", flush=True)
@@ -101,7 +101,9 @@ templates = {
 }
 
 # Create library and builder
-library = ConfigPromptLibrary(prompts={"user": templates})
+# The config is one positional dict keyed by prompt type -- "system",
+# "user", "messages", "rag" -- not a `prompts=` keyword.
+library = ConfigPromptLibrary({"user": templates})
 builder = AsyncPromptBuilder(library=library)
 
 # Render prompt
@@ -226,8 +228,9 @@ from dataknobs_llm import create_llm_provider, LLMConfig
 # Creative writing (high temperature)
 creative_config = LLMConfig(
     provider="openai",
+    model="gpt-4",
     api_key="your-key",
-    temperature=0.9
+    temperature=0.9,
 )
 creative_llm = create_llm_provider(creative_config, is_async=False)
 story = creative_llm.complete("Write a creative story about a robot")
@@ -235,8 +238,9 @@ story = creative_llm.complete("Write a creative story about a robot")
 # Factual answers (low temperature)
 factual_config = LLMConfig(
     provider="openai",
+    model="gpt-4",
     api_key="your-key",
-    temperature=0.1
+    temperature=0.1,
 )
 factual_llm = create_llm_provider(factual_config, is_async=False)
 answer = factual_llm.complete("What is the capital of France?")
@@ -384,7 +388,8 @@ from dataknobs_llm import create_llm_provider, LLMConfig
 # Read from environment
 config = LLMConfig(
     provider="openai",
-    api_key=os.getenv("OPENAI_API_KEY")
+    model="gpt-4",
+    api_key=os.getenv("OPENAI_API_KEY"),
 )
 llm = create_llm_provider(config)
 ```

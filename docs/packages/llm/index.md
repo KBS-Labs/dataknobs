@@ -26,7 +26,7 @@ from dataknobs_llm.prompts import FileSystemPromptLibrary, AsyncPromptBuilder
 from pathlib import Path
 
 # Initialize LLM provider
-config = LLMConfig(provider="openai", api_key="your-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
 llm = create_llm_provider(config)
 
 # Create prompt library

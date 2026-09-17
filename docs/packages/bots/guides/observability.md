@@ -555,9 +555,17 @@ from dataknobs_bots.reasoning.observability import (
     transition_stats_to_execution_stats,
 )
 from dataknobs_fsm.observability import ExecutionRecord
+import time
 
-# Convert wizard record to FSM record
-wizard_record = TransitionRecord(...)
+# Convert wizard record to FSM record. The first four fields are required:
+# where it came from, where it went, when, and what triggered it.
+wizard_record = TransitionRecord(
+    from_stage="gather",
+    to_stage="confirm",
+    timestamp=time.time(),
+    trigger="condition",
+    duration_in_stage_ms=1250.0,
+)
 fsm_record = transition_record_to_execution_record(wizard_record)
 
 # Convert FSM record to wizard record

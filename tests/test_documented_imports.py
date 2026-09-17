@@ -28,13 +28,25 @@ naming because the next hundred will be one of them again:
   ``ModuleNotFoundError``. There the docs were right and the package was wrong,
   which is the case a guard scoped to "fix the docs" would have mis-diagnosed.
 
-**The check is import resolution, not execution.** It proves the name exists at
-the path shown; it cannot prove the call beneath it passes the right arguments.
-That boundary is real and was paid for: repointing an import while leaving the
-body calling the old name produces a sample that looks corrected and fails on
-its second line, which is worse than one that fails on its first. Renaming a
-symbol at its uses is therefore part of fixing an import here, and is the
-reviewer's job rather than this guard's.
+**The checks are static resolution, not execution.** Three readers now ask
+three questions of the same fence, and each was added because the one before it
+reported green over a whole population:
+
+- **the name exists at the path shown** -- import resolution, 218 findings;
+- **the name beneath the import exists on it** -- attribute resolution, 44,
+  because repointing an import while leaving the body calling the old name
+  produces a sample that looks corrected and fails on its second line;
+- **the call beneath the name could bind** -- signature binding, 91, because a
+  class that is really there still fails on the line that constructs it if the
+  sample omits an argument it requires.
+
+That progression is the shape to expect of the next one. Each boundary was
+handed to the reviewer in this docstring, in these words, and each was found by
+measurement rather than by review -- so a boundary named below is a backlog
+with a number on it, not a division of labour. What remains outside all three
+is a receiver the fence does not import: ``response.content`` on an instance,
+``registry.register(tool)`` on a local. Binding also answers only whether the
+arguments could be *accepted*, never whether they are the right values.
 
 **A star import is the one form that satisfies the check while defeating it**,
 which is why it is now refused outright below. The module it names really does
@@ -140,6 +152,7 @@ import dataclasses
 import importlib
 import inspect
 import re
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
@@ -1556,8 +1569,8 @@ def test_historical_documents_are_excluded_and_say_so() -> None:
 # --- The name beneath the import -------------------------------------------
 #
 # Every reader above asks whether a documented name exists at the path shown.
-# None of them reads the line *under* the import, and this file's own docstring
-# names that boundary and hands it to the reviewer: "repointing an import while
+# None of them reads the line *under* the import. This file's docstring used to
+# name that boundary and hand it to the reviewer: "repointing an import while
 # leaving the body calling the old name produces a sample that looks corrected
 # and fails on its second line, which is worse than one that fails on its
 # first."
@@ -1832,3 +1845,272 @@ def test_attribute_findings_report_one_when_the_tree_has_one(
 
     assert len(found) == 1, f"expected the one broken access, got {found}"
     assert "sample.md:3" in found[0], f"wrong line reported: {found[0]}"
+
+
+# --- The arguments beneath the name ----------------------------------------
+#
+# The reader above asks whether a documented attribute exists. It cannot ask
+# whether a documented CALL could bind: ``TextMetaData()`` names a class that
+# is really there, and fails on the line that constructs it because the class
+# requires an argument the sample never passes. That miss is not theoretical.
+# One of those sat on a page this file's own attribute scan had just cleared,
+# in a commit that reported the page fixed.
+#
+# When this was written, 91 documented calls could not bind, against 3,290 that
+# could. As with the class above, the population was a handful of shapes rather
+# than ninety-one mistakes:
+#
+# - **A required argument the docs treat as optional.** ``LLMConfig`` needs a
+#   ``model``; twelve samples passed only a provider. Every provider takes one
+#   config object and four pages passed it the config's fields instead.
+# - **A keyword that was never there.** ``Config.from_file(apply_env_overrides=True)``
+#   across six pages, for behaviour that is unconditional -- a whole page was
+#   built on a method that does not exist.
+# - **An abstract class instantiated.** ``Tool(name=..., func=...)`` in six
+#   places; ``Tool`` is an ABC and the function-wrapping constructor is
+#   imagined. Here the finding is the *keyword*, and the abstractness is what
+#   the reader finds when they follow it.
+# - **A parameter renamed and not followed.** ``file_extension`` for
+#   ``file_extensions``, ``polling_interval`` for ``poll_interval``,
+#   ``metadata_fields`` for ``metadata_field``.
+#
+# **The scope is the same receiver the attribute reader uses** -- a name the
+# fence imported, or an attribute of one -- for the same reason: it is the only
+# callable whose identity is knowable without executing the fence. A call on an
+# instance (``registry.register(tool)``) is out of reach and stays out.
+#
+# **Binding is not calling.** ``signature().bind()`` answers whether the
+# arguments could be *accepted*, never whether they are the right values, so a
+# sample passing ``model=3`` binds cleanly. That is deliberate: the check has
+# no false positives to trade away, which is what lets it run over the whole
+# corpus. Calls carrying ``*args``/``**kwargs``, and callables whose signature
+# cannot be read at all, are counted separately and skipped rather than
+# guessed at.
+
+
+def _call_target(node: ast.Call, env: dict[str, object]) -> Callable[..., object] | None:
+    """The live callable a ``Call`` node names, or ``None`` if unknowable."""
+    func = node.func
+    found: object = None
+    if isinstance(func, ast.Name):
+        found = env.get(func.id)
+    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        owner = env.get(func.value.id)
+        found = None if owner is None else getattr(owner, func.attr, None)
+    return found if callable(found) else None
+
+
+def _unpacks(node: ast.Call) -> bool:
+    """Whether the call spreads a sequence or mapping, hiding its real arity."""
+    return any(isinstance(arg, ast.Starred) for arg in node.args) or any(
+        keyword.arg is None for keyword in node.keywords
+    )
+
+
+def _arity(node: ast.Call) -> tuple[list[object], dict[str, object]]:
+    """Placeholder arguments matching the call's shape, standing in for values.
+
+    ``_unpacks`` has already rejected the unnamed-keyword form, so every
+    ``keyword.arg`` reaching here is a real name; the filter restates that for
+    the type checker rather than asserting it.
+    """
+    return (
+        [object()] * len(node.args),
+        {kw.arg: object() for kw in node.keywords if kw.arg is not None},
+    )
+
+
+def call_sites(
+    path: Path,
+) -> tuple[list[tuple[int, str, Callable[..., object], ast.Call]], int]:
+    """``(sites, unanalysable)`` for the calls in ``path`` on imported names."""
+    sites: list[tuple[int, str, Callable[..., object], ast.Call]] = []
+    unanalysable = 0
+    for fence in code_fences(path):
+        if fence.lang not in PYTHON_FENCE or ILLUSTRATIVE.match(fence.marker or ""):
+            continue
+        tree = parsed(fence.body)
+        if tree is None:
+            continue
+        env = _bound(tree)
+        if not env:
+            continue
+        for name in _rebound(tree):
+            env.pop(name, None)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            target = _call_target(node, env)
+            if target is None:
+                continue
+            if _unpacks(node):
+                unanalysable += 1
+                continue
+            try:
+                inspect.signature(target)
+            except (ValueError, TypeError):
+                # A C-level or otherwise unreadable signature. Counted, not guessed.
+                unanalysable += 1
+                continue
+            sites.append((fence.line + node.lineno - 1, ast.unparse(node.func), target, node))
+    return sites, unanalysable
+
+
+def binding_findings() -> list[str]:
+    """Every documented call whose arguments cannot bind to the real signature."""
+    broken: list[str] = []
+    for path in documentation_files():
+        sites, _ = call_sites(path)
+        for line, shown, target, node in sites:
+            positional, keywords = _arity(node)
+            try:
+                inspect.signature(target).bind(*positional, **keywords)
+            except TypeError as exc:
+                broken.append(f"{rel(path)}:{line}: {shown}(...) -- {exc}")
+    return broken
+
+
+def test_every_documented_call_can_bind() -> None:
+    """A documented call must be one the reader could actually make."""
+    broken = binding_findings()
+    assert not broken, (
+        f"{len(broken)} documented call(s) cannot bind to the signature of the "
+        "name they invoke, so the sample fails on the line that calls rather "
+        "than the line that imports:\n  "
+        + "\n  ".join(broken)
+        + "\n\nRepoint the call at the real signature. If the call is not meant "
+        "to resolve, mark the fence with "
+        "<!-- dk-imports: illustrative -- why --> as an import would be."
+    )
+
+
+def test_the_binding_scan_reads_a_meaningful_corpus() -> None:
+    """Non-vacuity, with the same hazard as the attribute floor above.
+
+    This reader filters the corpus three times -- a fence must import from the
+    namespace, call what it imported, and expose a readable signature -- so it
+    can fall silent while every count above holds. The floor is placed below
+    what the tree holds (3,290 when written) and far above any one page, so
+    losing a document is survivable and losing an arm of ``_bound`` or
+    ``_call_target`` is not.
+    """
+    bindable = sum(len(call_sites(path)[0]) for path in documentation_files())
+    assert bindable > 2500, (
+        f"only {bindable} analysable calls found; the documents calling an "
+        "imported name have not gone away, so the likelier reading is that "
+        "``_call_target`` has stopped resolving one of the receiver forms"
+    )
+
+
+def test_the_unanalysable_calls_stay_a_small_minority() -> None:
+    """The skip path is an escape hatch, and an escape hatch can swallow a corpus.
+
+    ``*args``/``**kwargs`` and unreadable signatures are skipped rather than
+    guessed at, which is correct and also the one way this check could report
+    green over everything. Thirteen were skipped when this was written. The
+    bound is loose because the number is small; what it forbids is the skip
+    path quietly becoming the common path.
+    """
+    unanalysable = sum(call_sites(path)[1] for path in documentation_files())
+    bindable = sum(len(call_sites(path)[0]) for path in documentation_files())
+    assert unanalysable < bindable // 10, (
+        f"{unanalysable} calls were skipped as unanalysable against {bindable} "
+        "read, which is too large a share for an escape hatch -- check whether "
+        "``inspect.signature`` has started failing on a whole family"
+    )
+
+
+def test_a_call_missing_a_required_argument_is_detected(tmp_path: Path) -> None:
+    """The shape that shipped: a real class, constructed without what it needs."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\nfrom dataknobs_structures import TextMetaData\nmeta = TextMetaData()\n```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert len(sites) == 1, f"expected the one call, got {sites}"
+    _, _, target, node = sites[0]
+    positional, keywords = _arity(node)
+    with pytest.raises(TypeError):
+        inspect.signature(target).bind(*positional, **keywords)
+
+
+def test_a_call_passing_an_unknown_keyword_is_detected(tmp_path: Path) -> None:
+    """The other half of the population: a keyword that was never there."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_config import Config\n"
+        "config = Config.from_file('c.yaml', apply_env_overrides=True)\n"
+        "```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert len(sites) == 1, f"expected the one call, got {sites}"
+    _, _, target, node = sites[0]
+    positional, keywords = _arity(node)
+    with pytest.raises(TypeError):
+        inspect.signature(target).bind(*positional, **keywords)
+
+
+def test_a_correct_call_is_not_flagged(tmp_path: Path) -> None:
+    """The floor under the two above: a good call must stay quiet."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "meta = TextMetaData('doc-1', source='input.txt')\n"
+        "```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert len(sites) == 1, f"expected the one call, got {sites}"
+    _, _, target, node = sites[0]
+    positional, keywords = _arity(node)
+    inspect.signature(target).bind(*positional, **keywords)
+
+
+def test_an_unpacked_call_is_skipped_rather_than_guessed(tmp_path: Path) -> None:
+    """``**kwargs`` at a call site hides its arity; the reader must not invent one."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "meta = TextMetaData(**settings)\n"
+        "```\n"
+    )
+    sites, unanalysable = call_sites(doc)
+    assert sites == [], f"an unpacked call must not be analysed, got {sites}"
+    assert unanalysable == 1, f"it must still be counted, got {unanalysable}"
+
+
+def test_an_illustrative_fence_is_not_read_for_calls(tmp_path: Path) -> None:
+    """The marker that exempts an import exempts the calls beneath it too."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "<!-- dk-imports: illustrative -- the API before the migration -->\n"
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "meta = TextMetaData()\n"
+        "```\n"
+    )
+    sites, _ = call_sites(doc)
+    assert sites == [], f"an illustrative fence must not be read, got {sites}"
+
+
+def test_binding_findings_report_one_when_the_tree_has_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-vacuity for the finding path, as the checks above each have one."""
+    doc = tmp_path / "sample.md"
+    doc.write_text(
+        "```python\n"
+        "from dataknobs_structures import TextMetaData\n"
+        "good = TextMetaData('doc-1')\n"
+        "bad = TextMetaData()\n"
+        "```\n"
+    )
+    monkeypatch.setitem(globals(), "documentation_files", lambda: [doc])
+    monkeypatch.setitem(globals(), "rel", str)
+
+    found = binding_findings()
+
+    assert len(found) == 1, f"expected the one unbindable call, got {found}"
+    assert "sample.md:4" in found[0], f"wrong line reported: {found[0]}"

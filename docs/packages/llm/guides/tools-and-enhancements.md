@@ -166,9 +166,12 @@ from dataknobs_llm.conversations import ConversationManager
 config = LLMConfig(provider="openai", model="gpt-4")
 llm = create_llm_provider(config)
 
+# `llm`, `prompt_builder` and `storage` are all required; everything else,
+# conversation_id included, has a default.
 manager = await ConversationManager.create(
     conversation_id="conv-123",
     llm=llm,
+    prompt_builder=builder,
     storage=storage
 )
 
@@ -262,6 +265,7 @@ rate_limiter = RateLimitMiddleware(
 manager = await ConversationManager.create(
     conversation_id="conv-123",
     llm=llm,
+    prompt_builder=builder,
     storage=storage,
     middleware=[rate_limiter]
 )
@@ -477,6 +481,7 @@ rate_limiter = RateLimitMiddleware(
 manager = await ConversationManager.create(
     conversation_id="conv-456",
     llm=llm,
+    prompt_builder=builder,
     storage=storage,
     middleware=[rate_limiter]
 )

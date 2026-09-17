@@ -325,10 +325,12 @@ config_adapter = AsyncDictResourceAdapter(config_data)
 # Database adapter
 docs_db = AsyncMemoryDatabase()
 # ... populate database with documents ...
+# One metadata field, named singular: the adapter reads a single record field
+# holding the metadata, not a list of fields to collect.
 docs_adapter = AsyncDataknobsBackendAdapter(
     docs_db,
     text_field="content",
-    metadata_fields=["title", "category"]
+    metadata_field="metadata",
 )
 
 # Create builder with adapters
@@ -1986,7 +1988,7 @@ async def create_analysis_assistant():
     docs_adapter = AsyncDataknobsBackendAdapter(
         docs_db,
         text_field="content",
-        metadata_fields=["category"]
+        metadata_field="metadata",
     )
 
     # Load prompts (with RAG config)

@@ -7,10 +7,12 @@ The DataKnobs Config package provides comprehensive environment variable support
 Environment variables can override any configuration value using a structured naming convention. The system supports:
 
 - Automatic type conversion
-- Nested attribute access
-- Default values
-- Variable substitution in configuration files
 - Both named and indexed access
+- Variable substitution in configuration files
+
+Overrides address a **top-level attribute** of a configuration item. Reaching
+into a nested mapping is not supported -- see [Nesting](#nesting) below for
+what happens if you try.
 
 ## Naming Convention
 
@@ -34,12 +36,30 @@ DATAKNOBS_DATABASE__PRIMARY__HOST=prod.example.com
 # Override database port by index
 DATAKNOBS_DATABASE__0__PORT=5433
 
-# Override nested attribute
-DATAKNOBS_DATABASE__PRIMARY__CONNECTION__TIMEOUT=60
-
 # Override cache TTL
 DATAKNOBS_CACHE__REDIS__TTL=7200
 ```
+
+### Nesting
+
+There is none. Everything after the second separator is folded back into a
+single attribute name, so `DATAKNOBS_DATABASE__PRIMARY__CONNECTION__TIMEOUT`
+does not reach `connection.timeout` -- it adds a top-level key literally named
+`connection__timeout` beside the untouched `connection` mapping:
+
+```python
+# config.yaml has databases[primary].connection.timeout: 30
+os.environ["DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT"] = "60"
+
+config = Config.from_file("config.yaml")
+print(config.get("databases", "primary"))
+# {'name': 'primary', 'connection': {'timeout': 30}, 'type': 'databases',
+#  'connection__timeout': 60}
+```
+
+Nothing warns, and the nested value the variable was aimed at is unchanged.
+Override a top-level attribute, or restructure the config so the value you
+need to vary is one.
 
 ## Type Conversion
 
@@ -64,38 +84,36 @@ DATAKNOBS_SERVICE__API__DEBUG=1
 
 ### During Configuration Load
 
+Overrides are applied **at construction, automatically**. There is no
+`apply_env_overrides()` to call afterwards and no flag to switch it on:
+
 ```python
 from dataknobs_config import Config
 
-# Apply environment overrides automatically
-config = Config.from_file("config.yaml", apply_env_overrides=True)
-
-# Or apply manually
+# Environment overrides are already applied
 config = Config.from_file("config.yaml")
-config.apply_env_overrides()
 ```
 
-### Custom Prefix
+### Opting Out
+
+Pass `use_env=False` to the constructor. `from_file` does not forward it, so
+opting out means building the `Config` directly -- it takes the same path:
 
 ```python
-# Use custom prefix
-config.apply_env_overrides(prefix="MYAPP_")
+from dataknobs_config import Config
 
-# Now use: MYAPP_DATABASE__PRIMARY__HOST=localhost
+config = Config("config.yaml", use_env=False)
 ```
 
-### Selective Application
+### Prefix and Selection
 
-```python
-# Apply only to specific types
-config.apply_env_overrides(types=["databases", "caches"])
+The prefix is fixed at `DATAKNOBS_`, and every matching variable is applied.
+Selecting a subset, filtering by name, or using a custom prefix are not
+exposed through `Config`; a variable is either named so that it addresses an
+existing item or it is silently skipped.
 
-# Apply with filter function
-def filter_func(var_name, value):
-    return not var_name.endswith("__PASSWORD")
-
-config.apply_env_overrides(filter_func=filter_func)
-```
+To narrow what can be applied, control the environment rather than the load --
+unset the variables you do not want, or run with a curated environment.
 
 ## Variable Substitution in Files
 
@@ -364,28 +382,42 @@ Load with python-dotenv:
 from dotenv import load_dotenv
 from dataknobs_config import Config
 
-# Load .env file
+# Load .env file FIRST -- Config reads the environment as it is built, so a
+# .env loaded afterwards arrives too late to override anything.
 load_dotenv()
 
-# Apply environment overrides
-config = Config.from_file("config.yaml", apply_env_overrides=True)
+config = Config.from_file("config.yaml")
 ```
 
 ## Debugging Environment Variables
 
 ### List Applied Overrides
 
+`Config` does not report what it applied. Ask the override reader the same
+question it asks the environment, before building the config:
+
 ```python
-# Enable debug logging
+from dataknobs_config.environment import EnvironmentOverrides
+
+overrides = EnvironmentOverrides().get_overrides()
+
+print("Overrides visible in the environment:")
+for ref, value in overrides.items():
+    print(f"  {ref}: {value!r}")
+# xref:databases[primary].host: 'db.prod.internal'
+# xref:databases[primary].pool_size: 20
+```
+
+That lists what the environment *offers*. An entry naming a type or item the
+config does not contain is logged at WARNING and skipped, so turn logging on
+to see the difference between offered and applied:
+
+```python
 import logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)
 
 config = Config.from_file("config.yaml")
-overrides = config.apply_env_overrides(return_applied=True)
-
-print("Applied overrides:")
-for key, value in overrides.items():
-    print(f"  {key}: {value}")
+# WARNING  Failed to apply environment override xref:caches[redis].ttl: ...
 ```
 
 ### Validate Environment Variables
@@ -406,9 +438,10 @@ def validate_env_overrides(config):
     if missing:
         raise ValueError(f"Missing required environment variables: {missing}")
 
-# Use before applying overrides
+# Use BEFORE building the config -- by the time you hold one, the overrides
+# have already been applied.
 validate_env_overrides(config)
-config.apply_env_overrides()
+config = Config.from_file("config.yaml")
 ```
 
 ## Best Practices
@@ -463,38 +496,63 @@ Create an environment variable reference:
 
 ### Common Issues
 
-1. **Variables Not Applied**: Ensure `apply_env_overrides=True` or call `apply_env_overrides()`
-2. **Wrong Type**: Check automatic type conversion is working as expected
-3. **Name Mismatch**: Verify configuration item names match environment variable names
-4. **Case Sensitivity**: Environment variable names are case-sensitive
+1. **Variables Not Applied**: They are applied at construction -- check the
+   variable was set *before* the `Config` was built, and that `use_env=False`
+   was not passed
+2. **Wrong Type**: Check automatic type conversion is working as expected.
+   Note that `0` and `1` become booleans, not integers
+3. **Name Mismatch**: Verify configuration item names match environment
+   variable names. A variable naming an item that does not exist is skipped
+   with a WARNING, not an error
+4. **Nothing Beyond the Second Separator**: `A__B__C__D` sets an attribute
+   literally named `c__d`; see [Nesting](#nesting)
+5. **Case Sensitivity**: The variable name is upper-case by convention; the
+   type and attribute are lower-cased when parsed, so the config keys they
+   address are matched in lower case
 
 ### Debug Mode
 
-```python
-# Enable detailed logging
-config.apply_env_overrides(debug=True)
+There is no debug flag. Failures to apply an override are logged at WARNING by
+`dataknobs_config.config`:
 
-# Or set environment variable
-os.environ["DATAKNOBS_DEBUG"] = "true"
+```python
+import logging
+logging.basicConfig(level=logging.WARNING)
+
+config = Config.from_file("config.yaml")
 ```
 
 ## Advanced Usage
 
 ### Custom Override Logic
 
+Overrides are applied inside `Config.__init__`, so there is no post-load hook
+to override. Build with `use_env=False` and drive `EnvironmentOverrides`
+yourself when you need to preprocess or filter:
+
 ```python
 from dataknobs_config import Config
+from dataknobs_config.environment import EnvironmentOverrides
 
-class CustomConfig(Config):
-    def apply_env_overrides(self, **kwargs):
-        # Custom preprocessing
-        self.preprocess_env_vars()
-        
-        # Apply standard overrides
-        super().apply_env_overrides(**kwargs)
-        
-        # Custom postprocessing
-        self.validate_overrides()
+
+def load_with_filtered_overrides(path, *, prefix="DATAKNOBS_", skip=()):
+    """Apply every override except the ones named in `skip`."""
+    config = Config(path, use_env=False)
+    reader = EnvironmentOverrides(prefix=prefix)
+
+    for ref, value in reader.get_overrides().items():
+        type_name, name_or_index, attr = reader.parse_env_reference(ref)
+        if attr in skip:
+            continue
+        item = config.get(type_name, name_or_index)
+        item[attr] = value
+        config.set(type_name, name_or_index, item)
+
+    return config
+
+
+# A custom prefix is reachable this way, and only this way.
+config = load_with_filtered_overrides("config.yaml", prefix="MYAPP_", skip=("password",))
 ```
 
 ### Dynamic Environment Variables
@@ -511,6 +569,7 @@ def set_dynamic_env_vars(environment):
         os.environ["DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE"] = "10"
         os.environ["DATAKNOBS_SERVICE__API__WORKERS"] = "1"
 
+# Again: set the variables first, then build.
 set_dynamic_env_vars("production")
-config = Config.from_file("config.yaml", apply_env_overrides=True)
+config = Config.from_file("config.yaml")
 ```

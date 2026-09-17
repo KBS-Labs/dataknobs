@@ -424,9 +424,11 @@ results = await db.search(query)
 from dataknobs_data import StreamConfig
 
 # Stream large datasets efficiently
+# `prefetch` counts BATCHES held ahead of the consumer, not records -- so
+# this buffers 200 records, not 1000.
 config = StreamConfig(
     batch_size=100,
-    buffer_size=1000
+    prefetch=2
 )
 
 # Stream read

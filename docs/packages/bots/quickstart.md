@@ -450,9 +450,12 @@ Here's how to set up a multi-tenant bot serving multiple clients:
 ```python
 import asyncio
 from dataknobs_bots import BotRegistry, BotContext
+from dataknobs_bots.registry import InMemoryBackend
 
 async def main():
-    # Create bot registry with base configuration
+    # The registry stores whole bot configs; it holds no base of its own, and
+    # registering does not merge with anything. Share the common part in
+    # Python and register the complete config per client.
     base_config = {
         "llm": {
             "provider": "ollama",
@@ -463,16 +466,20 @@ async def main():
         }
     }
 
+    # The constructor takes the storage backend for those configs, not a
+    # config of its own.
     registry = BotRegistry(
-        config=base_config,
+        backend=InMemoryBackend(),
         cache_ttl=300,  # Cache bots for 5 minutes
         max_cache_size=1000
     )
+    await registry.initialize()
 
-    # Register clients with custom configurations
-    await registry.register_client(
+    # Register clients with their own configurations
+    await registry.register(
         "client-a",
         {
+            **base_config,
             "memory": {"type": "buffer", "max_messages": 10},
             "prompts": {
                 "system": "You are a helpful customer support assistant."
@@ -480,9 +487,10 @@ async def main():
         }
     )
 
-    await registry.register_client(
+    await registry.register(
         "client-b",
         {
+            **base_config,
             "memory": {"type": "buffer", "max_messages": 20},
             "prompts": {
                 "system": "You are a technical expert."

@@ -160,7 +160,8 @@ templates = {
 }
 
 # Create library
-library = ConfigPromptLibrary(prompts={"system": templates})
+# One positional dict, keyed by prompt type -- there is no `prompts=` keyword.
+library = ConfigPromptLibrary({"system": templates})
 
 # Use with builder
 builder = AsyncPromptBuilder(library=library)

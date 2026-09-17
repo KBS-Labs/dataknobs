@@ -65,18 +65,29 @@ context = BotContext(
 
 Multi-tenant bot registry for managing multiple clients with shared or isolated configurations.
 
+The registry holds no base config of its own: each client registers a whole
+bot config, and the constructor takes the *storage* for those configs plus the
+environment they resolve `$resource` references against.
+
 ```python
 from dataknobs_bots import BotRegistry
+from dataknobs_bots.registry import InMemoryBackend
 
-registry = BotRegistry(config=base_config)
+registry = BotRegistry(
+    backend=InMemoryBackend(),
+    environment="production",
+    cache_ttl=300,
+)
+await registry.initialize()
 
-await registry.register_client("client-a", client_config)
+await registry.register("client-a", client_config)
 bot = await registry.get_bot("client-a")
 ```
 
 #### Key Methods
 
-- `register_client(client_id, config)` - Register a new client with specific configuration
+- `register(bot_id, config)` - Register a bot/client with its own complete configuration
+  (`register_client` is a deprecated alias)
 - `get_bot(client_id)` - Get bot instance for a client
 - `remove_client(client_id)` - Remove a client and cleanup resources
 
@@ -154,35 +165,33 @@ config = {
 
 ReAct pattern (Reasoning + Acting) for tool-using agents.
 
+Tools are a **top-level** config key, not a member of `reasoning`, and each
+entry names a `Tool` subclass by import path rather than holding an instance --
+which is what lets the same config travel as YAML or JSON:
+
 ```python
-from dataknobs_llm.tools import Tool
-
-def search_tool(query: str) -> str:
-    return f"Results for: {query}"
-
 config = {
     "reasoning": {
-        "type": "react",
-        "tools": [
-            Tool(name="search", func=search_tool, description="Search the web")
-        ]
-    }
+        "type": "react"
+    },
+    "tools": [
+        {"class": "my_tools.SearchTool", "params": {}}
+    ]
 }
 ```
+
+`my_tools.SearchTool` is an ordinary `dataknobs_llm.tools.Tool` subclass: a
+`schema` property describing the parameters, and an async `execute` doing the
+work. See the [tools guide](../packages/bots/guides/tools.md)
+for the full shape.
 
 ## Full Example
 
 ```python
 from dataknobs_bots import DynaBot, BotContext
-from dataknobs_llm.tools import Tool
 
-# Define custom tools
-def get_weather(location: str) -> str:
-    return f"Weather in {location}: Sunny, 72°F"
-
-def get_time() -> str:
-    from datetime import datetime
-    return datetime.now().strftime("%H:%M:%S")
+# Tools live in my_tools.py as Tool subclasses -- WeatherTool and TimeTool --
+# and the config names them by import path.
 
 # Create bot with memory, knowledge base, and tools
 config = {
@@ -203,12 +212,12 @@ config = {
         "vector_store": {"backend": "faiss"}
     },
     "reasoning": {
-        "type": "react",
-        "tools": [
-            Tool(name="weather", func=get_weather, description="Get weather for location"),
-            Tool(name="time", func=get_time, description="Get current time")
-        ]
-    }
+        "type": "react"
+    },
+    "tools": [
+        {"class": "my_tools.WeatherTool", "params": {}},
+        {"class": "my_tools.TimeTool", "params": {}}
+    ]
 }
 
 # Create bot and chat

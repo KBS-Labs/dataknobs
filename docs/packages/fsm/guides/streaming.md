@@ -170,12 +170,14 @@ Write processed data to files:
 ```python
 from dataknobs_fsm.streaming.file_stream import FileStreamSink
 
-# Create file sink
+# Create file sink. Overwrite vs append is a bool, not a mode string, and
+# both format and compression are detected from the suffix when omitted.
 sink = FileStreamSink(
     file_path="output.jsonl",
-    format=FileFormat.JSONL,
-    mode="w",  # Write mode (w, a)
-    encoding="utf-8"
+    format=FileFormat.JSONL,   # optional -- ".jsonl" would have said so
+    append=False,              # True to add to an existing file
+    encoding="utf-8",
+    atomic=True,               # write to a .tmp and rename (ignored if append)
 )
 
 # Write chunks

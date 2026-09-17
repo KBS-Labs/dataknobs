@@ -144,7 +144,13 @@ Then use with conversation manager:
 # Setup resource adapter
 from dataknobs_llm.prompts import InMemoryAdapter
 
-adapter = InMemoryAdapter(documents=[...])
+# `search_results` is what search() answers back, whatever the query; each
+# entry needs at least a `content` key.
+adapter = InMemoryAdapter(
+    search_results=[
+        {"content": "a document the template can cite"},
+    ]
+)
 builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
 
 manager = await ConversationManager.create(

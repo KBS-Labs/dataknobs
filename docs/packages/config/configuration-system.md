@@ -47,8 +47,10 @@ config = Config({
     ]
 })
 
-# Load with environment overrides
-config = Config.from_file("config.yaml", apply_env_overrides=True)
+# Environment overrides are applied as the Config is built, every time --
+# there is no flag to enable them. Pass use_env=False to the constructor to
+# opt out (from_file does not forward it).
+config = Config("config.yaml", use_env=False)
 ```
 
 ### Accessing Configuration
