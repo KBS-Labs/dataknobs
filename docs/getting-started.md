@@ -203,23 +203,27 @@ from dataknobs_structures import Tree
 from dataknobs_utils import json_utils
 from dataknobs_xization import normalize
 
-# Hierarchical data
+# Hierarchical data -- a Tree node IS the tree; there is no container
 tree = Tree("root")
 chapter1 = tree.add_child("Chapter 1")
 chapter1.add_child("Section 1.1")
 chapter1.add_child("Section 1.2")
 
-# Navigate tree
-for node in tree.traverse():
-    print(f"{'  ' * node.level}{node.value}")
+# Navigate tree: find_nodes walks it, and depth is the hop count from the root
+for node in tree.find_nodes(lambda n: True):
+    print(f"{'  ' * node.depth}{node.data}")
+# root
+#   Chapter 1
+#     Section 1.1
+#     Section 1.2
 
 # JSON utilities
 data = {"users": {"alice": {"age": 30, "city": "Paris"}}}
 age = json_utils.get_value(data, "users.alice.age")  # 30
 
-# Text normalization
+# Text normalization -- lowercases; it does not strip or collapse whitespace
 text = "  Hello   WORLD!!!  "
-normalized = normalize.basic_normalization_fn(text)  # "hello world!"
+normalized = normalize.basic_normalization_fn(text)  # "  hello   world!!!  "
 ```
 
 [Learn more about Structures →](packages/structures/index.md) | [Learn more about Utils →](packages/utils/index.md)

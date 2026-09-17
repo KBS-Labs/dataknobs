@@ -33,10 +33,11 @@ root = Tree("root_data")
 child1 = root.add_child("child1_data")
 child2 = root.add_child("child2_data")
 
-# Navigate the tree
-print(root.children)  # Tuple of child nodes -- a snapshot, not the live list
-print(child1.parent)  # Parent node
-print(root.depth)     # Depth in tree (0 for root)
+# Navigate the tree. `children` answers a snapshot tuple, not the live list,
+# and printing a node renders the subtree standing under it.
+print(root.children)      # (child1_data, child2_data)
+print(child1.parent.data) # root_data
+print(root.depth)         # 0
 
 # Tree operations
 all_descendants = root.find_nodes(lambda node: True, include_self=False)
@@ -61,35 +62,66 @@ metadata = TextMetaData(
 # Create a document
 doc = Text("This is the document content", metadata)
 
-# Access properties
-print(doc.text)       # Document text
-print(doc.text_id)    # ID from metadata
-print(doc.metadata.data)  # All metadata
+# Access properties. The content is `.text`; `text_id` and `text_label` are
+# promoted from the metadata, and the rest stays in `.data`.
+print(doc.text)           # This is the document content
+print(doc.text_id)        # 1
+print(doc.metadata.data)
+# {'text_id': 1, 'text_label': 'document', 'source': 'input.txt', 'timestamp': '2024-01-01'}
 ```
 
 ### Record Store
 
 Manage collections of records:
 
+`RecordStore` is a **row** store, not a key-value store: records are appended
+dicts, kept in step with a pandas DataFrame and optionally a TSV on disk.
+
 ```python
 from dataknobs_structures import RecordStore
 
-# Create a record store
-store = RecordStore()
+# The backing file path is required and positional; pass None for memory only.
+store = RecordStore(None)
 
-# Add records
-store.add_record("key1", {"data": "value1"})
-store.add_record("key2", {"data": "value2"})
+# Add records -- each is a row, and there is no key to address it by.
+store.add_rec({"user": "alice", "score": 100})
+store.add_rec({"user": "bob", "score": 95})
 
-# Retrieve records
-record = store.get_record("key1")
-all_records = store.get_all_records()
+print(len(store.records))          # 2
+print(store.records[0]["user"])    # alice
 
-# Update records
-store.update_record("key1", {"data": "updated_value"})
+# The same rows as a DataFrame, built on demand.
+print(list(store.df.columns))      # ['user', 'score']
+print(store.df["score"].max())     # 100
 
-# Delete records
-store.delete_record("key2")
+# Selecting and updating go through the DataFrame or the list; the store
+# exposes no get/update/delete of its own. `clear` empties it.
+store.clear()
+print(store.records)               # []
+```
+
+Give it a path instead of `None` and `save()` writes the TSV, `restore()` reads
+it back:
+
+```python
+import tempfile
+from pathlib import Path
+
+from dataknobs_structures import RecordStore
+
+path = Path(tempfile.mkdtemp()) / "results.tsv"
+store = RecordStore(str(path))
+store.add_rec({"user": "alice", "score": 100})
+store.save()
+
+# repr, so the tab that makes it a TSV is visible rather than looking like
+# run-together spaces.
+print(repr(path.read_text()))
+# 'user\tscore\nalice\t100\n'
+
+reloaded = RecordStore(str(path))
+reloaded.restore()
+print(reloaded.records)            # [{'user': 'alice', 'score': 100}]
 ```
 
 ### Conditional Dictionary
@@ -139,26 +171,41 @@ print(cd.rejected)  # {'b': -5}
 ### Tree Serialization
 
 ```python
-from dataknobs_structures import Tree
 import json
+
+from dataknobs_structures import Tree
 
 # Create a tree
 tree = Tree({"type": "root", "value": 100})
 tree.add_child({"type": "child", "value": 50})
 
-# Serialize to dict
-tree_dict = tree.to_dict()
+# There is no to_dict()/from_dict(). Walk the tree to build the shape you
+# want: a node exposes `data` and `children`, and `children` is None until a
+# node first holds a child.
+def to_record(node):
+    return {
+        "data": node.data,
+        "children": [to_record(child) for child in node.children or ()],
+    }
+
+def from_record(record):
+    node = Tree(record["data"])
+    for child in record["children"]:
+        node.add_child(from_record(child))
+    return node
 
 # Save to JSON
 with open("tree.json", "w") as f:
-    json.dump(tree_dict, f)
+    json.dump(to_record(tree), f)
 
-# Load from JSON
-with open("tree.json", "r") as f:
-    tree_dict = json.load(f)
-    
-# Reconstruct tree
-new_tree = Tree.from_dict(tree_dict)
+# Load from JSON and reconstruct
+with open("tree.json") as f:
+    new_tree = from_record(json.load(f))
+
+# The built-in round trip is the parenthesized string form, but it rebuilds
+# every node's data as a string -- so it suits string payloads, not the dicts
+# used here.
+#   build_tree_from_string(tree.as_string())
 ```
 
 ### Custom Document Types
@@ -214,8 +261,9 @@ from dataknobs_xization import normalize
 tree = Tree("root")
 child = tree.add_child({"text": "Hello WORLD!"})
 
-# Use with utils
-json_str = json_utils.to_json(tree.to_dict())
+# Use with utils -- get_value reads into a loaded object using indexed dot
+# notation; there is no to_json() helper, so serialize with the stdlib.
+print(json_utils.get_value(child.data, "text"))   # Hello WORLD!
 
 # Use with text processing
 normalized = normalize.basic_normalization_fn(child.data["text"])

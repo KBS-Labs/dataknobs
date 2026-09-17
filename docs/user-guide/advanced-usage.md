@@ -183,8 +183,10 @@ config = {
     ]
 }
 
-fsm = SimpleFSM(config)
-fsm.context["database"] = db
+# Resources are passed in at construction, or registered before processing --
+# there is no fsm.context to assign into.
+fsm = SimpleFSM(config, resources={"database": db})
+# equivalently: fsm.register_resource("database", db)
 result = fsm.process(data)
 ```
 
@@ -387,39 +389,53 @@ asyncio.run(main())
 ```python
 from dataknobs_structures import Tree, build_tree_from_string
 
-# Merge multiple trees
-tree1 = build_tree_from_string("root -> a, b")
-tree2 = build_tree_from_string("root -> c, d")
+# The string form is parenthesized, not arrow-separated. Anything that does
+# not start with "(" is taken as a single node's data, so an arrow string
+# parses without error into a childless node holding the whole string.
+tree1 = build_tree_from_string("(root a b)")
+tree2 = build_tree_from_string("(other c d)")
 
-merged = Tree.merge(tree1, tree2)
-# Result: root -> a, b, c, d
+# There is no Tree.merge. Grafting is add_child, which detaches each node
+# from its current parent on the way -- so iterate over a snapshot of the
+# source's children rather than the list you are emptying.
+for node in tree2.children or ():
+    tree1.add_child(node)
+print(tree1.as_string())   # (root a b c d)
+print(tree2.as_string())   # other
 
-# Split tree at a node
-subtree = tree1.extract_subtree("a")
+# There is no extract_subtree either. prune() detaches a node and returns its
+# former parent; the subtree below it stays intact and is usable on its own.
+a = tree1.find_nodes(lambda n: n.data == "a", only_first=True)[0]
+a.prune()
+print(a.as_string())       # a
+print(tree1.as_string())   # (root b c d)
 ```
 
 ### Tree Serialization
 
 ```python
 import json
-from dataknobs_structures import Tree
 
-# Serialize tree to JSON
-tree = build_tree_from_string("root -> child1, child2")
-tree_json = tree.to_json()
+from dataknobs_structures import build_tree_from_string
 
-# Deserialize from JSON
-restored_tree = Tree.from_json(tree_json)
+# There is no to_json/from_json. The built-in round trip is the parenthesized
+# string form: as_string() writes it and build_tree_from_string() reads it.
+tree = build_tree_from_string("(root child1 child2)")
+restored = build_tree_from_string(tree.as_string())
+print(restored.as_string() == tree.as_string())   # True
 
-# Custom serialization format
-def custom_serializer(node):
+# Nodes are rebuilt from their *string* form, so a tree carrying non-string
+# data does not survive that round trip unchanged. Write your own walk when
+# the payload matters -- a node exposes `data` and `children`, and `children`
+# is None until a node first holds a child.
+def to_record(node):
     return {
-        "id": node.id,
-        "value": node.value,
-        "children": [custom_serializer(c) for c in node.children]
+        "data": node.data,
+        "children": [to_record(child) for child in node.children or ()],
     }
 
-serialized = custom_serializer(tree.root)
+serialized = json.dumps(to_record(tree))
+# {"data": "root", "children": [{"data": "child1", "children": []}, ...]}
 ```
 
 ## Advanced Text Processing
@@ -427,25 +443,37 @@ serialized = custom_serializer(tree.root)
 ### Custom Tokenizers
 
 ```python
+import re
+
 from dataknobs_xization import masking_tokenizer
 
-class CustomTokenizer(masking_tokenizer.MaskingTokenizer):
-    def __init__(self):
-        super().__init__()
-        self.add_pattern(r'\b[A-Z]{2,}\b', 'ACRONYM')
-        self.add_pattern(r'\$\d+\.\d{2}', 'CURRENCY')
-    
-    def mask_token(self, token, token_type):
-        if token_type == 'ACRONYM':
-            return '[ACRONYM]'
-        elif token_type == 'CURRENCY':
-            return '[MONEY]'
-        return super().mask_token(token, token_type)
+# There is no MaskingTokenizer base class to subclass and no add_pattern hook.
+# Tokenizing is TextFeatures; classifying the tokens it yields is your own pass
+# over them, which keeps the pattern set in your code rather than in a subclass.
+PATTERNS = (
+    ("ACRONYM", re.compile(r"^[A-Z]{2,}$"), "[ACRONYM]"),
+    ("NUMBER", re.compile(r"^\d+$"), "[NUM]"),
+)
 
-tokenizer = CustomTokenizer()
-text = "IBM costs $150.99 per share"
-tokens = tokenizer.tokenize(text)
-# Output: ["[ACRONYM]", "costs", "[MONEY]", "per", "share"]
+def classify(token_text):
+    for name, pattern, replacement in PATTERNS:
+        if pattern.match(token_text):
+            return name, replacement
+    return None, token_text
+
+text = "IBM costs 150.99 per share"
+features = masking_tokenizer.TextFeatures(
+    text, mark_alpha=True, mark_digit=True, emoji_data=None
+)
+
+masked = [classify(token.token_text)[1] for token in features.get_tokens()]
+print(masked)
+# ['[ACRONYM]', 'costs', '[NUM]', '[NUM]', 'per', 'share']
+
+# Note the two [NUM]s: the period is a delimiter, so "150.99" tokenizes as
+# "150" and "99". A pattern spanning a delimiter cannot match a single token,
+# which is why multi-token entities are matched over the token *sequence*
+# rather than over token text -- see the lexicon and annotations modules.
 ```
 
 ### Text Annotation Pipeline
@@ -461,23 +489,37 @@ class AnnotationPipeline:
     def add_annotator(self, annotator):
         self.annotators.append(annotator)
     
-    def process(self, text):
-        metadata = TextMetaData()
-        doc = Text(text, metadata)
-        
+    def process(self, text, text_id):
+        # TextMetaData requires a text_id
+        doc = Text(text, TextMetaData(text_id))
+
         for annotator in self.annotators:
-            doc = annotator.annotate(doc)
-        
+            annotator.annotate_input(doc)
+
         return doc
 
-# Create pipeline
+# There is no NamedEntityAnnotator, SentimentAnnotator or LanguageDetector.
+# What the package ships is the contract: Annotator is abstract on
+# annotate_input, and BasicAnnotator and EntityAnnotator are abstract on more
+# still, so each of them is a base you subclass rather than a class you
+# instantiate. CompoundAnnotator is the one concrete type, and it runs a
+# series of annotators through an AnnotatorKernel.
+class KeywordAnnotator(annotations.Annotator):
+    def __init__(self, name, keywords):
+        super().__init__(name)
+        self.keywords = keywords
+
+    def annotate_input(self, text_obj, **kwargs):
+        # Return the annotations added; the real signature takes an
+        # AnnotatedText and returns an Annotations.
+        return [word for word in text_obj.text.split() if word in self.keywords]
+
 pipeline = AnnotationPipeline()
-pipeline.add_annotator(NamedEntityAnnotator())
-pipeline.add_annotator(SentimentAnnotator())
-pipeline.add_annotator(LanguageDetector())
+pipeline.add_annotator(KeywordAnnotator("person", {"John", "Smith"}))
+pipeline.add_annotator(KeywordAnnotator("language", {"Python"}))
 
 # Process text
-result = pipeline.process("John Smith loves Python programming.")
+result = pipeline.process("John Smith loves Python programming.", "doc_001")
 ```
 
 ## Advanced Elasticsearch Integration
@@ -485,14 +527,18 @@ result = pipeline.process("John Smith loves Python programming.")
 ### Bulk Operations
 
 ```python
+import tempfile
+from pathlib import Path
+
 from dataknobs_utils import elasticsearch_utils
 
 class BulkIndexer:
-    def __init__(self, es_client, index_name):
-        self.es = es_client
+    def __init__(self, batchfile_path, index_name):
+        self.batchfile_path = batchfile_path
         self.index = index_name
         self.buffer = []
         self.buffer_size = 1000
+        self.next_id = 1
     
     def add(self, doc):
         self.buffer.append(doc)
@@ -510,14 +556,26 @@ class BulkIndexer:
                 "_source": doc
             })
         
-        elasticsearch_utils.bulk_index(self.es, actions)
+        # There is no bulk_index(). This module WRITES the NDJSON bulk file
+        # that Elasticsearch's bulk API consumes; add_batch_data takes an open
+        # file handle and a generator of source records, and returns the next
+        # id to use, so successive flushes can continue the numbering.
+        with open(self.batchfile_path, "a") as batchfile:
+            self.next_id = elasticsearch_utils.add_batch_data(
+                batchfile, iter(self.buffer), self.index, cur_id=self.next_id
+            )
         self.buffer.clear()
 
-# Usage
-indexer = BulkIndexer(es_client, "my_index")
+# Usage. The file is opened for append so successive flushes accumulate, which
+# also means a fresh path per run rather than one in the working directory.
+scratch = Path(tempfile.mkdtemp()) / "bulk_payload.ndjson"
+indexer = BulkIndexer(scratch, "my_index")
 for i in range(10000):
     indexer.add({"id": i, "data": f"Document {i}"})
 indexer.flush()
+
+print(indexer.next_id)                              # 10001
+print(sum(1 for _ in scratch.open()))               # 20000
 ```
 
 ### Custom Query Builders
@@ -557,7 +615,11 @@ query = (QueryBuilder()
     .should({"match": {"tags": "tutorial"}})
     .build())
 
-results = es_client.search(index="docs", body=query)
+# Hand the built body to the index; search() answers a ServerResponse, so
+# read .result rather than subscripting it.
+index = elasticsearch_utils.SimplifiedElasticsearchIndex("docs")
+response = index.search(query)
+results = response.result["hits"]["hits"] if response.succeeded else []
 ```
 
 ## Performance Optimization
@@ -580,8 +642,10 @@ class CachedTreeProcessor:
     
     def process_tree(self, tree):
         results = []
-        for node in tree.traverse():
-            result = self.process_node(node.id, "analyze")
+        # find_nodes returns a materialised list, and `data` is the payload --
+        # there is no traverse() and no node.id
+        for node in tree.find_nodes(lambda n: True):
+            result = self.process_node(node.data, "analyze")
             results.append(result)
         return results
 ```
