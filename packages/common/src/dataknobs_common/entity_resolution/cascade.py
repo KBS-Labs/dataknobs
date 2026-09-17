@@ -26,8 +26,9 @@ implementations of one algorithm. Patch :func:`merge_rung` and both change.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.sync_bridge import SyncBridgeAdapter, SyncLoopBridge
 from dataknobs_common.entity_resolution.values import (
     CompatibilityVerdict,
     Coverage,
@@ -45,7 +46,6 @@ from dataknobs_common.entity_resolution.values import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from types import TracebackType
 
     from dataknobs_common.entity_resolution.protocols import (
         AsyncEntityResolver,
@@ -592,16 +592,18 @@ def _merge_batch(
     ]
 
 
-class BridgedEntityResolver:
+class BridgedEntityResolver(SyncBridgeAdapter):
     """An :class:`~dataknobs_common.entity_resolution.protocols.EntityResolver`
     over an asynchronous cascade.
 
     For a synchronous caller who has no choice: the rungs they need are
-    asynchronous, and the call site cannot await. It holds one
-    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge` -- a private event
-    loop on a daemon thread -- so it is callable from plain synchronous code
-    *and* from inside a running loop without the ``run_until_complete``
-    deadlock.
+    asynchronous, and the call site cannot await. It is a
+    :class:`~dataknobs_common.sync_bridge.SyncBridgeAdapter`, so it reaches
+    the cascade over a private event loop on a daemon thread and is callable
+    from plain synchronous code *and* from inside a running loop without the
+    ``run_until_complete`` deadlock. That base is also where ``bridge=``,
+    ``timeout=``, :meth:`~SyncBridgeAdapter.close`,
+    :meth:`~SyncBridgeAdapter.aclose` and the context-manager pair come from.
 
     It is **not** a twin of :class:`CascadingResolver`. It satisfies the
     synchronous protocol by forwarding rather than by implementing, which is
@@ -615,48 +617,44 @@ class BridgedEntityResolver:
     ``await resolver.resolve(...)`` directly.
 
     The bridge costs one daemon thread for the object's lifetime, so build one
-    and keep it rather than one per call. It is a daemon, so it can never
-    block process exit; :meth:`close` is for deterministic teardown, and the
-    class is a context manager for the same reason.
+    and keep it rather than one per call --- or hand several resolvers the same
+    ``bridge`` and they share the one thread. It is a daemon, so it can never
+    block process exit; :meth:`~SyncBridgeAdapter.close` is for deterministic
+    teardown, and ``with`` is its context-manager form. An async holder ---
+    code that builds one of these to hand to a ``def`` site in a worker thread
+    --- takes ``async with`` instead, so tearing the bridge down does not
+    block its loop.
+
+    The resolver handed in is **not** this object's to close: it was built
+    elsewhere, so :meth:`~SyncBridgeAdapter.close` ends only the bridge. That
+    is why no ``_close_inner`` is overridden here.
     """
 
-    def __init__(self, inner: AsyncEntityResolver, *, timeout: float | None = None) -> None:
+    BRIDGE_THREAD_NAME = "dk-sync-resolver"
+
+    def __init__(
+        self,
+        inner: AsyncEntityResolver,
+        *,
+        bridge: SyncLoopBridge | None = None,
+        timeout: float | None = None,
+    ) -> None:
         """Args:
         inner: The asynchronous resolver to reach.
+        bridge: A bridge to run this resolver's coroutines on. The default
+            builds a private one on first use and ends it in ``close()``.
         timeout: Seconds to allow each call, giving a synchronous caller an
             upper bound on a blocking wait it cannot otherwise cancel.
         """
-        from dataknobs_common.sync_bridge import SyncLoopBridge
-
+        super().__init__(bridge=bridge, timeout=timeout)
         self._inner = inner
-        self._timeout = timeout
-        self._bridge = SyncLoopBridge(thread_name="dk-sync-resolver")
 
     def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult:
         """The inner resolver's, run on the bridge's loop."""
-        return self._bridge.run(
-            self._inner.resolve(name, k=k, within=within), timeout=self._timeout
-        )
+        return self._run(self._inner.resolve(name, k=k, within=within))
 
     def resolve_many(
         self, names: Sequence[str], *, k: int = 5, within: Within = None
     ) -> list[ResolutionResult]:
         """The inner resolver's, run on the bridge's loop."""
-        return self._bridge.run(
-            self._inner.resolve_many(names, k=k, within=within), timeout=self._timeout
-        )
-
-    def close(self) -> None:
-        """Stop the bridge's loop and join its thread."""
-        self._bridge.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
+        return self._run(self._inner.resolve_many(names, k=k, within=within))

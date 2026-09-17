@@ -36,7 +36,7 @@ declare_import_root(Path(__file__).parent / "_support")
 
 
 @pytest.fixture(autouse=True)
-def _no_leaked_bridge_threads() -> Iterator[None]:
+def _no_leaked_daemon_threads() -> Iterator[None]:
     """Fail the test that leaves a dataknobs daemon thread behind.
 
     ``SyncProviderAdapter`` owns a :class:`SyncLoopBridge`, so every sync
