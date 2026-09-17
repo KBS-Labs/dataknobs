@@ -85,6 +85,7 @@ def test_the_two_protocols_declare_one_surface() -> None:
             "validate",
         ],
         unflavoured_members=["get_metadata"],
+        compare_return=True,
     )
 
 
@@ -240,3 +241,80 @@ def test_converting_both_ways_round_trips_a_read(sync_library: ConfigPromptLibra
 async def _one() -> int:
     """A coroutine whose only job is to prove a bridge is still running."""
     return 1
+
+
+# ===== Positive controls for the guard above =====
+#
+# The parity assertion is the only thing standing between "one surface" and a
+# second silent divergence, and an assertion that has never been observed to
+# fail is not evidence that it can. These three drive it against pairs that are
+# wrong in each of the ways the real pair could go wrong.
+
+
+class _SyncHalf:
+    """The synchronous half of a deliberately broken twin."""
+
+    def fetch(self, name: str) -> str:
+        return name
+
+    def label(self) -> str:
+        return "sync"
+
+
+class _DriftedHalf:
+    """Its twin, carrying an undeclared extra parameter."""
+
+    async def fetch(self, name: str, retries: int = 0) -> str:
+        return name
+
+    async def label(self) -> str:
+        return "async"
+
+
+class _UnflavouredHalf:
+    """Its twin, where ``label`` really *is* flavoured."""
+
+    async def fetch(self, name: str) -> str:
+        return name
+
+    async def label(self) -> str:
+        return "async"
+
+
+class _RetypedHalf:
+    """Its twin, agreeing on every parameter and not on what it returns."""
+
+    async def fetch(self, name: str) -> bytes:
+        return name.encode()
+
+    def label(self) -> str:
+        return "async"
+
+
+def test_the_guard_fires_on_a_drifted_signature() -> None:
+    """A parameter on one half only is what the guard is mostly for."""
+    with pytest.raises(AssertionError, match="retries"):
+        assert_twin_types_agree(_SyncHalf, _DriftedHalf, members=["fetch"])
+
+
+def test_the_guard_fires_on_a_member_wrongly_declared_unflavoured() -> None:
+    """The declaration is compared against what is observed, both ways.
+
+    Declaring ``get_metadata`` unflavoured is what lets the real pair pass, so
+    the cost of getting that declaration wrong has to be a failure and not a
+    quiet exemption --- otherwise the list is a way to switch the guard off one
+    member at a time.
+    """
+    with pytest.raises(AssertionError, match="declared unflavoured"):
+        assert_twin_types_agree(
+            _SyncHalf,
+            _UnflavouredHalf,
+            members=["label"],
+            unflavoured_members=["label"],
+        )
+
+
+def test_the_guard_fires_on_a_drifted_return_annotation() -> None:
+    """``compare_return`` is on for the real pair, so it must have teeth."""
+    with pytest.raises(AssertionError, match=r"str.*bytes"):
+        assert_twin_types_agree(_SyncHalf, _RetypedHalf, members=["fetch"], compare_return=True)

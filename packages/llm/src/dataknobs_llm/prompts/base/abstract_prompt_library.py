@@ -7,7 +7,7 @@ This module defines the interface that all prompt library implementations must f
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any
 
 from .types import PromptTemplateDict, MessageIndex, RAGConfig
 
@@ -36,7 +36,7 @@ class AbstractPromptLibrary(ABC):
         pass
 
     @abstractmethod
-    def list_system_prompts(self) -> List[str]:
+    def list_system_prompts(self) -> list[str]:
         """List all available system prompt names.
 
         Returns:
@@ -60,7 +60,7 @@ class AbstractPromptLibrary(ABC):
         pass
 
     @abstractmethod
-    def list_user_prompts(self) -> List[str]:
+    def list_user_prompts(self) -> list[str]:
         """List available user prompts.
 
         Returns:
@@ -84,7 +84,7 @@ class AbstractPromptLibrary(ABC):
         pass
 
     @abstractmethod
-    def list_message_indexes(self) -> List[str]:
+    def list_message_indexes(self) -> list[str]:
         """List all available message index names.
 
         Returns:
@@ -112,7 +112,7 @@ class AbstractPromptLibrary(ABC):
     @abstractmethod
     def get_prompt_rag_configs(
         self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
-    ) -> List[RAGConfig]:
+    ) -> list[RAGConfig]:
         """Retrieve RAG configurations for a specific prompt.
 
         This resolves both inline RAG configs and references to standalone configs.
@@ -130,7 +130,7 @@ class AbstractPromptLibrary(ABC):
     # ===== Metadata & Lifecycle =====
 
     @abstractmethod
-    def get_metadata(self) -> Dict[str, Any]:
+    def get_metadata(self) -> dict[str, Any]:
         """Get metadata about this prompt library.
 
         Returns:
@@ -148,7 +148,7 @@ class AbstractPromptLibrary(ABC):
 
     # ===== Validation & Health Checks =====
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """Validate the prompt library configuration.
 
         Returns:
