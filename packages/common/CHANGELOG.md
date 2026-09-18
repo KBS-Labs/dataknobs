@@ -9,12 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`LexicalSignal` / `AsyncLexicalSignal` --- a rung for the query that does
+  not spell the form.** Every other rung here answers a lookup, so a query
+  carrying a typo reaches none of them. This one compares each window of the
+  query against every form the vocabulary declares and proposes the ones that
+  came close, with a span into the **query** and a score saying how close.
+
+  ```python
+  from dataknobs_common.entity_resolution import LexicalSignal
+
+  rung = LexicalSignal(onto.entities)                  # threshold=0.85
+  found = rung.candidates("my goldne retriver has been limping", k=5)
+  found[0].evidence[0].matched_text                    # "retriver"
+  found[0].evidence[0].kind                            # EvidenceKind.INFERRED
+  ```
+
+  Registered as `kind: "lexical"` in both registries. The evidence is
+  `INFERRED` and `NATIVE`: the entity was proposed rather than found, and the
+  number means whatever the configured scorer means --- so it stays out of
+  `as_distribution()` by construction.
+
+  `scorer` is the seam for a vocabulary large enough that the standard
+  library's `difflib` stops being free; the default takes no dependency, and a
+  consumer who needs the fast end passes `rapidfuzz.fuzz.ratio` and takes it in
+  their own tree. `threshold` defaults to `0.85`, which is measured rather than
+  chosen: a lower one does not find more entities, it finds the same ones at
+  spans that run past them.
+
+- **`SurfaceFormCatalog` / `AsyncSurfaceFormCatalog` --- an optional protocol
+  for a source that can hand over its forms.** One member,
+  `surface_forms()`. `EntitySource` publishes lookups alone, so a query
+  spelling no form has nothing to hand it; a near-spelling rung reads the
+  vocabulary out instead.
+
+  Separate from `EntitySource` rather than a member on it, on
+  `AliasFormSource`'s precedent: that protocol is `@runtime_checkable` and
+  consumers satisfy it structurally, so a member added to it turns every
+  implementation we never see from conforming into non-conforming, silently
+  and at once. `MappingEntitySource` and `AsyncMappingEntitySource` satisfy the
+  new one for free --- their index is already keyed by the folded form.
+
+
 - **`declared_candidates` --- the assembly a rung over declared forms owes,
   now on the package door.** Find your hits; this turns them into what the
   cascade expects. It groups them by entity so `k` counts **entities** rather
-  than places, keeps the order the rung returned them in, scores each `1.0`
-  with `Scoring.DECLARED`, and slices `matched_text` out of the query so the
-  text and the span agree by construction.
+  than places, keeps the order the rung returned them in, and slices
+  `matched_text` out of the query so the text and the span agree by
+  construction. Evidence is `DECLARED` and scored `1.0` unless a rung passes
+  `kind=` and `scoring=`, which is what a rung that *measures* does.
 
   ```python
   from dataknobs_common.entity_resolution import declared_candidates
@@ -97,6 +139,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which shadows that name), so `except TimeoutError` keeps working. The
   distinct type is for the caller that must let the *operation's* deadline
   through a per-item error handler while still absorbing an item's own failure.
+
+### Changed
+
+- **A rung written on `DeclaredSignal` can now carry a measured score.** The
+  two bases gained `kind` and `scoring` as overridable class attributes, and
+  `FormHit` gained an optional `score`. A rung that sets none of them is
+  unchanged: the defaults are the three constants the base wrote
+  unconditionally before, so every shipped rung and every consumer rung
+  produces exactly the evidence it did.
+
+  What it buys is that a rung proposing an entity the query did not spell no
+  longer has to drop to the bare `MatchSignal` protocol and reimplement the
+  assembly to say so. A hit's score is its own where it measured one and `1.0`
+  where it did not; a candidate's is the best of its hits'.
 
 ### Fixed
 
@@ -606,8 +662,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 343,
-  the three beyond them being the operation family added above.
+  the resolution cascade — 134 names, taking the package's `__all__` to 347,
+  the seven beyond them being the operation family, `declared_candidates`, the
+  near-spelling rung and the surface-form catalogue, each added by its own
+  entry above.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing

@@ -25,9 +25,16 @@ and not the first one configured.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from difflib import SequenceMatcher
+from math import ceil
+from typing import TYPE_CHECKING, Any, NoReturn
 
-from dataknobs_common.entity_resolution.protocols import AliasFormSource, AsyncAliasFormSource
+from dataknobs_common.entity_resolution.protocols import (
+    AliasFormSource,
+    AsyncAliasFormSource,
+    AsyncSurfaceFormCatalog,
+    SurfaceFormCatalog,
+)
 from dataknobs_common.hierarchy import K
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.entity_resolution.values import (
@@ -40,7 +47,7 @@ from dataknobs_common.entity_resolution.values import (
     within_axes,
     within_memberships,
 )
-from dataknobs_common.text import content_span, token_spans
+from dataknobs_common.text import content_span, default_normalizer, token_spans
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence, Set as AbstractSet
@@ -52,9 +59,11 @@ __all__ = [
     "AsyncAliasSignal",
     "AsyncDeclaredSignal",
     "AsyncExactNormalizedSignal",
+    "AsyncLexicalSignal",
     "AsyncScanningSignal",
     "DeclaredSignal",
     "ExactNormalizedSignal",
+    "LexicalSignal",
     "ScanningSignal",
     "declared_candidates",
 ]
@@ -65,10 +74,29 @@ __all__ = [
 _DECLARED_SCORE = 1.0
 
 
+def _hit_score(hit: FormHit[K]) -> float:
+    """What a hit scored, or the declared 1.0 for a rung that did not measure.
+
+    The fallback is the whole of what makes
+    :attr:`~dataknobs_common.entity_resolution.values.FormHit.score` a
+    widening rather than a change: a hit carrying ``None`` produces exactly
+    the number this module wrote unconditionally before the field existed, so
+    every rung that does not measure is unchanged by construction rather than
+    by inspection.
+    """
+    return _DECLARED_SCORE if hit.score is None else hit.score
+
+
 def _candidate(
-    entity_id: K, signal: str, query: str, found: Sequence[FormHit[K]]
+    entity_id: K,
+    signal: str,
+    query: str,
+    found: Sequence[FormHit[K]],
+    *,
+    kind: EvidenceKind,
+    scoring: Scoring,
 ) -> EntityCandidate[K]:
-    """One declared entity, with one piece of evidence per place it was found.
+    """One entity, with one piece of evidence per place it was found.
 
     **Every declared hit carries a span**, including the whole-string one.
     That was once refused here on the grounds that reporting the query's own
@@ -86,16 +114,24 @@ def _candidate(
     ``matched_text`` is the slice rather than the query, which is the same
     sentence read the other way: it is what the span points at, so the two
     fields agree by construction instead of by a caller's trust.
+
+    **The candidate's own score is its best hit's.** An entity found at two
+    places is one candidate carrying two pieces of evidence, and the number
+    on the candidate answers *how good is this entity* rather than *how good
+    is this place* -- so the best of them is the only reading that does not
+    penalise an entity for having been found twice. For a rung that measures
+    nothing every hit is 1.0 and so is the maximum, which is the constant
+    this line used to write.
     """
     return EntityCandidate(
         entity_id=entity_id,
-        score=_DECLARED_SCORE,
+        score=max(_hit_score(hit) for hit in found),
         evidence=tuple(
             MatchEvidence(
                 signal=signal,
-                kind=EvidenceKind.DECLARED,
-                score=_DECLARED_SCORE,
-                scoring=Scoring.DECLARED,
+                kind=kind,
+                score=_hit_score(hit),
+                scoring=scoring,
                 matched_text=query[hit.span[0] : hit.span[1]],
                 span=hit.span,
             )
@@ -131,6 +167,8 @@ def declared_candidates(
     signal: str,
     query: str,
     admitted: AbstractSet[K] | None = None,
+    kind: EvidenceKind = EvidenceKind.DECLARED,
+    scoring: Scoring = Scoring.DECLARED,
 ) -> list[EntityCandidate[K]]:
     """One candidate per id found, in the rung's own order, cut to ``k``.
 
@@ -159,7 +197,19 @@ def declared_candidates(
     of the mapping below. That is the rung's to set: a declared score is
     ``1.0`` by fiat and carries none, so if the order is to mean anything --
     the longer form before the shorter one it contains -- the rung is the
-    only layer that can say so.
+    only layer that can say so. A rung that *does* measure has a number that
+    could be sorted on and still publishes its own order, because the cascade
+    positions by arrival and this function is not the layer that ranks.
+
+    **Still named for declared forms**, although two of its arguments now let
+    a rung say its hits were inferred. The word names where the forms came
+    from and not how sure the rung is: a near-spelling rung proposes an
+    entity whose form the vocabulary *declares*, having found it spelled
+    almost that way, which is the same relation
+    :class:`~dataknobs_common.entity_resolution.values.FormHit` keeps its own
+    name for. A rung with no declared form behind its hit -- a cosine over an
+    embedded utterance, which has no span either -- cannot build a
+    :class:`FormHit` at all and so was never a caller of this.
 
     Args:
         found: Where the rung found each declared form, in the order it wants
@@ -175,12 +225,27 @@ def declared_candidates(
             default admits every id found, which is what a rung answering
             ``narrows() is False`` wants -- it is offered no filter, and the
             cascade rules on its candidates itself.
+        kind: What the evidence claims -- the closed half of a rung's
+            identity, and the only half a consumer branches on. The default
+            is what a rung matching a form the vocabulary carries means; a
+            rung proposing an entity the query did not spell passes
+            :attr:`EvidenceKind.INFERRED`.
+        scoring: What kind of number the score is. The default marks it as
+            carrying no information, which is the truth for a hit with no
+            :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`;
+            a rung that measures passes the kind its scorer produces, and
+            :attr:`Scoring.NATIVE` is what a scorer a caller chose produces.
+            Passed separately from ``kind`` rather than derived from it
+            because the two are independent: ``cascade.py``'s ``_SCORING_FOR``
+            pairs them only for a candidate carrying no evidence at all.
 
     Returns:
-        At most ``k`` candidates, each scored ``1.0`` with
-        :attr:`Scoring.DECLARED`, carrying one
+        At most ``k`` candidates, each carrying one
         :class:`~dataknobs_common.entity_resolution.values.MatchEvidence` per
-        place its form was found.
+        place its form was found. A hit's score is its own where it measured
+        one and ``1.0`` where it did not, and a candidate's is the best of
+        its hits' -- so a rung that measures nothing produces exactly what
+        this function produced before it could carry a measurement.
 
     Raises:
         ValidationError: For a negative ``k``. The cut is a list slice, where
@@ -202,7 +267,10 @@ def declared_candidates(
     for hit in found:
         if admitted is None or hit.entity_id in admitted:
             hits.setdefault(hit.entity_id, []).append(hit)
-    return [_candidate(entity_id, signal, query, at) for entity_id, at in list(hits.items())[:k]]
+    return [
+        _candidate(entity_id, signal, query, at, kind=kind, scoring=scoring)
+        for entity_id, at in list(hits.items())[:k]
+    ]
 
 
 def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
@@ -331,6 +399,278 @@ def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
     return [FormHit(entity_id=entity_id, span=span) for entity_id in ids]
 
 
+def _refuse_catalogue(entities: object, protocol: str) -> NoReturn:
+    """Refuse a source that cannot hand over its forms.
+
+    Raised at **construction**, which is the whole of the difference between
+    this rung and :class:`AliasSignal`. That one falls back to an empty
+    answer, because a vocabulary declaring no aliases is a fact the fallback
+    reports honestly. No vocabulary has no forms, so the same fallback here
+    would report a misconfigured source as an empty one -- and an empty one
+    is exactly what a near-spelling rung looks like when it is working and
+    the query was simply not near anything.
+
+    The message names the protocol and the member, because a source
+    satisfies one of these **structurally**: there is nothing to inherit and
+    nothing to register, so the repair is to add a method with that name and
+    the reader needs the name.
+
+    Raises:
+        ValidationError: Always.
+    """
+    raise ValidationError(
+        f"{type(entities).__name__} does not publish its surface forms, so a "
+        f"near-spelling rung has nothing to compare a query against. It must "
+        f"satisfy {protocol}, which asks for one member: surface_forms(), "
+        f"answering with every form the vocabulary declares. The protocol is "
+        f"structural -- a source satisfies it by having the member, with "
+        f"nothing to subclass or register."
+    )
+
+
+def _window_chars(forms: Sequence[str], threshold: float) -> int:
+    """The widest window, **in characters**, that could still clear ``threshold``.
+
+    A near-spelling rung's equivalent of :func:`_probe_spans`'s token bound,
+    and it exists because that one is **not sound here**. The scan's bound
+    rests on a window of *L* tokens needing a key of *L* tokens or more; a
+    rung that scores does not need the key to be there at all, so a window
+    one token wider than the longest declared form may still score above the
+    threshold -- and the typo class *a space where the vocabulary has none*
+    needs exactly that. Measured over a vocabulary declaring the one token
+    ``labradorretriever``: the query ``labrador retriever`` scores ``0.97``
+    at a two-token window and ``0.69`` at the best one-token window, so the
+    token bound loses the entity outright rather than losing a span.
+
+    **This bound loses nothing, and that is arithmetic rather than a
+    budget.** :meth:`difflib.SequenceMatcher.ratio` is ``2M/T`` for ``M``
+    matched characters out of ``T = len(a) + len(b)``, and ``M`` cannot
+    exceed the shorter string -- so a window longer than the form can score
+    at most ``2|F|/(|W|+|F|)``, which reaches ``threshold`` only while
+    ``|W| <= |F|(2-t)/t``. Every window past that answers *below the
+    threshold* for **every** form, so removing it removes no candidate.
+
+    Rounded **up**, and deliberately: the equality case is a real match --
+    a 17-character form at ``0.85`` admits a 23-character window scoring
+    exactly ``0.85`` -- and the division that produces 23 produces
+    ``22.999999999999996``. A bound that is one character generous costs a
+    handful of probes; a bound that is one character short costs an answer
+    the docstring above promises it does not.
+
+    The claim is measured as well as argued, in
+    ``packages/common/tests/test_lexical_signal.py``: no window past this
+    bound clears its threshold, over pairs drawn to include a form with
+    padding on either side, which is the shape that would break it.
+
+    **It is a property of the scorer**, so a rung handed one that is not a
+    ratio of matched characters to total length has a bound that does not
+    describe it -- see :class:`LexicalSignal`'s ``scorer`` argument, where
+    that is the stated contract rather than an assumption.
+    """
+    longest = max((len(form) for form in forms), default=0)
+    return ceil(longest * (2.0 - threshold) / threshold)
+
+
+def _scored_probe_spans(query: str, max_chars: int) -> Iterator[tuple[int, int]]:
+    """Every span of consecutive tokens no wider than ``max_chars`` characters.
+
+    :func:`_probe_spans`'s counterpart for a rung bounded by characters
+    rather than by tokens, and shared by both flavours for that function's
+    reason: the enumeration has nothing to do with awaiting.
+
+    The inner loop **breaks** rather than filtering, which is what keeps the
+    cost linear: spans grow monotonically from a fixed start, so the first
+    one too wide means every longer one is too. That leaves *n x w* spans for
+    *n* tokens and *w* the number that fit in the bound -- and *w* is set by
+    the vocabulary's longest form, not by the query.
+
+    Shortest first within each start, which is the opposite of
+    :func:`_probe_spans`: that one publishes an order because a declared
+    score carries none, and this rung's hits carry a score that does. The
+    enumeration order is therefore free, and growing spans is what lets the
+    loop break.
+    """
+    tokens = token_spans(query)
+    for first in range(len(tokens)):
+        for last in range(first, len(tokens)):
+            span = (tokens[first][0], tokens[last][1])
+            if span[1] - span[0] > max_chars:
+                break
+            yield span
+
+
+def _checked_threshold(threshold: float) -> float:
+    """``threshold`` as given, having refused a value that means no rung.
+
+    Shared so the twins refuse identically, for
+    :func:`_checked_max_window`'s reason.
+
+    Zero and below are refused rather than clamped: a threshold of zero
+    admits every window against every form, which is a rung proposing the
+    whole vocabulary for any query, and a negative one says the same thing
+    less legibly. Zero is also the value that would divide by itself in
+    :func:`_window_chars`, so the refusal is what keeps that arithmetic from
+    having to have an opinion.
+
+    Above one is refused because nothing can reach it: a ratio is in
+    ``[0, 1]``, so such a rung matches nothing for every query, which is
+    indistinguishable from a vocabulary that declares nothing and is the kind
+    of silence this family refuses to ship. One exactly is a real request --
+    *only an exact fold* -- and is kept.
+
+    Raises:
+        ValidationError: For a threshold outside ``(0, 1]``.
+    """
+    if not 0.0 < threshold <= 1.0:
+        raise ValidationError(
+            f"threshold must be greater than 0 and at most 1, got {threshold}. "
+            f"A threshold of 0 or less admits every form for every query, and "
+            f"one above 1 is unreachable for a score that is a ratio, so "
+            f"neither builds a rung that can answer."
+        )
+    return threshold
+
+
+def _near_forms(
+    query: str,
+    forms: Sequence[str],
+    *,
+    threshold: float,
+    scorer: Callable[[str, str], float],
+    fold: Callable[[str], str],
+) -> list[tuple[str, tuple[int, int], float]]:
+    """Each form a window of ``query`` scored at or above ``threshold``.
+
+    The half of a near-spelling probe that reaches for nothing, shared by the
+    twins so the two cannot disagree about what *near* means.
+
+    **Both sides are folded, with the same function**, which is this rung's
+    one departure from the family's fold policy and the reason
+    :class:`LexicalSignal` defaults its ``normalizer`` where every other rung
+    defaults to no fold at all. The others hand a string to the index and the
+    index folds it; this one *is* the comparison, so an unfolded window
+    against a source-folded form would score a case difference as a
+    misspelling. Folding both sides with one function makes the comparison
+    well defined whatever the source's own fold was.
+
+    **Forms outermost**, which is a performance property rather than a
+    semantic one and is stated because :class:`_RatioScorer` depends on it:
+    that scorer holds an index built from the *form*, so a loop holding the
+    form still while the windows change builds it once per form rather than
+    once per pair. The order the hits come out in is not affected --
+    :func:`_ranked` sorts.
+
+    Returns:
+        ``(form, span, score)`` per form-and-window that cleared the
+        threshold -- the **form** as the catalogue spelled it, so the caller
+        can resolve it through ``by_surface_form`` without folding it twice.
+    """
+    folded = [(form, fold(form)) for form in forms]
+    bound = _window_chars([shape for _form, shape in folded], threshold)
+    windows = [(span, fold(query[span[0] : span[1]])) for span in _scored_probe_spans(query, bound)]
+    found: list[tuple[str, tuple[int, int], float]] = []
+    for form, shape in folded:
+        for span, window in windows:
+            score = scorer(window, shape)
+            if score >= threshold:
+                found.append((form, span, score))
+    return found
+
+
+def _ranked(found: Sequence[FormHit[K]]) -> list[FormHit[K]]:
+    """One hit per entity per span, the best of them first.
+
+    Two collapses and one order, none of which a declared rung ever needed.
+
+    **One hit per (entity, span).** An entity's id, its name and its aliases
+    all fold into the catalogue separately, so one window routinely clears
+    the threshold against several forms of the same entity -- and reporting
+    three pieces of evidence at one span for one entity would say the
+    vocabulary was found three times where it was found once. The best score
+    wins, because the others are the same finding measured against a worse
+    spelling of it.
+
+    **Best first**, which is the order
+    :meth:`DeclaredSignal._order` describes and cannot supply: it says an
+    order that is to *mean* something has to be published by the rung, and
+    for a rung whose hits carry a measurement the meaningful order is the
+    measurement. The cascade positions by arrival, so this is what decides
+    which near-spelling a caller sees first.
+
+    Ties break on the **longer span, then the earlier one, then the id** --
+    entirely for determinism, since a score is the only thing here that
+    carries meaning. Longer first for :func:`_probe_spans`'s reason: where a
+    form contains another, the containing one is proposed before the form it
+    contains.
+    """
+    best: dict[tuple[K, tuple[int, int]], FormHit[K]] = {}
+    for hit in found:
+        at = (hit.entity_id, hit.span)
+        current = best.get(at)
+        if current is None or _hit_score(hit) > _hit_score(current):
+            best[at] = hit
+    return sorted(
+        best.values(),
+        key=lambda hit: (
+            -_hit_score(hit),
+            -(hit.span[1] - hit.span[0]),
+            hit.span[0],
+            str(hit.entity_id),
+        ),
+    )
+
+
+class _RatioScorer:
+    """:meth:`difflib.SequenceMatcher.ratio`, refusing early what it can rule out.
+
+    The default :class:`LexicalSignal` builds when a caller supplies no
+    ``scorer``. It is a stateful object rather than a function for two
+    reasons, both of them measured, and both **lossless** in the sense
+    :func:`_window_chars` uses the word: they remove work that could not have
+    changed an answer.
+
+    **It skips a pair the cheap bounds already refuse.**
+    :meth:`~difflib.SequenceMatcher.real_quick_ratio` and
+    :meth:`~difflib.SequenceMatcher.quick_ratio` are documented *upper
+    bounds* on ``ratio()`` -- the first from the lengths alone, the second
+    from the multiset of characters -- so a pair either of them scores below
+    the threshold cannot reach it, and computing the real ratio for it is
+    work with a known answer. Measured over 12,000 pairs at ``0.85``: 80 ms
+    becomes 17 ms.
+
+    **It reuses one matcher across the windows of a form.**
+    :meth:`~difflib.SequenceMatcher.set_seq2` builds the index this algorithm
+    runs on and :meth:`~difflib.SequenceMatcher.set_seq1` does not, so a
+    matcher whose *form* is held still while its *windows* change builds that
+    index once instead of once per pair. :func:`_near_forms` iterates forms
+    outermost so that this holds; if that loop were ever turned inside out,
+    the cache would stop paying and nothing else would change. The two
+    together: 80 ms becomes 6 ms.
+
+    **Below the threshold it answers ``0.0`` rather than the true score**,
+    which is the one thing here a reader should not take for a ratio. It is
+    private and has exactly one caller, which keeps only what reaches the
+    threshold -- so the substitution is unobservable, and saying so is
+    cheaper than computing a number nobody reads.
+    """
+
+    def __init__(self, threshold: float) -> None:
+        self._threshold = threshold
+        self._matcher = SequenceMatcher(None)
+        self._form: str | None = None
+
+    def __call__(self, window: str, form: str) -> float:
+        if form != self._form:
+            self._matcher.set_seq2(form)
+            self._form = form
+        self._matcher.set_seq1(window)
+        if self._matcher.real_quick_ratio() < self._threshold:
+            return 0.0
+        if self._matcher.quick_ratio() < self._threshold:
+            return 0.0
+        return self._matcher.ratio()
+
+
 class DeclaredSignal:
     """What every synchronous rung shares: everything but the index it asks.
 
@@ -347,7 +687,12 @@ class DeclaredSignal:
     *locates* a form inside the query rather than comparing the whole of it
     overrides :meth:`_located` instead, as :class:`ScanningSignal` does, and a
     rung that wants its own order over :meth:`_hits`'s answer overrides
-    :meth:`_order`. In particular the narrowing comes with it *correct*: it is a superset filter, and
+    :meth:`_order`. A rung that *measures* -- one proposing an entity the
+    query did not spell, rather than one the vocabulary spells exactly --
+    sets :attr:`kind` and :attr:`scoring` as well and puts its number on each
+    :class:`~dataknobs_common.entity_resolution.values.FormHit` it returns;
+    :class:`LexicalSignal` is the one in this package that does.
+    In particular the narrowing comes with it *correct*: it is a superset filter, and
     :meth:`~dataknobs_common.entity_resolution.MatchSignal.narrows` explains
     why getting that direction wrong is the one mistake nothing downstream can
     recover. A rung written against the bare
@@ -361,6 +706,26 @@ class DeclaredSignal:
     #: ``signal`` -- one value, so a caller reading ``evidence.signal`` can
     #: correlate a hit back to the ``kind:`` they configured.
     key = ""
+
+    #: What this rung's evidence claims -- **overridable**, and the closed
+    #: half of a rung's identity. The default is what a rung matching a form
+    #: the vocabulary carries means, which is the three rungs below and every
+    #: rung this base was written for; a rung proposing an entity the query
+    #: did not spell sets :attr:`~EvidenceKind.INFERRED`.
+    kind = EvidenceKind.DECLARED
+
+    #: What kind of number this rung's score is -- **overridable**. The
+    #: default marks it as carrying none, which is the truth for a rung whose
+    #: hits carry no
+    #: :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`.
+    #:
+    #: Separate from :attr:`kind` because the two are independent. A rung that
+    #: infers may still have nothing to measure, and a rung that measures
+    #: decides for itself whether its number is comparable with another
+    #: rung's -- which is what
+    #: :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
+    #: and :attr:`~Scoring.NATIVE` declines.
+    scoring = Scoring.DECLARED
 
     def __init__(
         self,
@@ -464,7 +829,15 @@ class DeclaredSignal:
         """At most ``k`` entities whose forms match this query."""
         found = self._located(query)
         admitted = _admitted(self._entities, frozenset(hit.entity_id for hit in found), filter)
-        return declared_candidates(found, k, signal=self.key, query=query, admitted=admitted)
+        return declared_candidates(
+            found,
+            k,
+            signal=self.key,
+            query=query,
+            admitted=admitted,
+            kind=self.kind,
+            scoring=self.scoring,
+        )
 
     def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
@@ -594,6 +967,156 @@ class ScanningSignal(DeclaredSignal):
         return found
 
 
+class LexicalSignal(DeclaredSignal):
+    """Propose an entity the query did **not** spell, and say how near it came.
+
+    The first rung in this package whose evidence is a *measurement*. The
+    three beside it answer a lookup -- the form is in the vocabulary or it is
+    not -- so a query carrying a typo reaches none of them, and
+    ``"my goldne retriver has been limping"`` returns nothing at all from a
+    cascade of all three. This rung compares each window of the query against
+    every form the vocabulary declares and proposes the ones that came close.
+
+    **It needs the forms, not a lookup**, which is what makes it the one rung
+    here that asks its source for something
+    :class:`~dataknobs_common.ontology.EntitySource` does not publish: every
+    member there takes a form and answers with ids, and a query spelling no
+    form has nothing to hand them. So the source must also satisfy
+    :class:`~dataknobs_common.entity_resolution.SurfaceFormCatalog`, and one
+    that does not is refused **at construction** rather than yielding a rung
+    that matches nothing.
+
+    That refusal is where this differs from :class:`AliasSignal`, which falls
+    back to *declares no aliases* for a source without
+    :class:`~dataknobs_common.entity_resolution.AliasFormSource`. The
+    difference is in the vocabulary rather than in the taste: a vocabulary
+    may legitimately declare no aliases, and none has no forms -- so an empty
+    answer there is a fact and here would be a misconfiguration reported as
+    one.
+
+    **Both sides of the comparison are folded**, and this rung's
+    ``normalizer`` therefore defaults to
+    :func:`~dataknobs_common.text.default_normalizer` where every other rung
+    in this family defaults to no fold at all. Those hand a string to the
+    index and the index folds it; this one performs the comparison itself, so
+    an unfolded window scored against a source-folded form would read a
+    capital letter as a misspelling. See :func:`_near_forms`.
+
+    **The evidence is** :attr:`~EvidenceKind.INFERRED` **and**
+    :attr:`~Scoring.NATIVE`. The first because the entity was proposed rather
+    than found: the vocabulary does not carry what the query said. The second
+    although a ratio is already in ``[0, 1]`` -- the number means whatever the
+    configured ``scorer`` means, so two rungs with different scorers produce
+    incomparable ``0.8``s, and
+    :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
+    :attr:`~Scoring.NORMALIZED` alone precisely so that a scorer-defined
+    number cannot enter distribution arithmetic.
+
+    **A near-spelling hit scoring 0.94 still sits behind a declared hit
+    scoring 1.0**, and not because 0.94 is smaller: a cascade positions by
+    the first rung that produced an id, so the composition decides it. Put
+    this rung after the declared ones, which is where the guide puts it and
+    what the acceptance criterion asserts.
+    """
+
+    key = "lexical"
+
+    kind = EvidenceKind.INFERRED
+    scoring = Scoring.NATIVE
+
+    def __init__(
+        self,
+        entities: EntitySource,
+        *,
+        threshold: float = 0.85,
+        scorer: Callable[[str, str], float] | None = None,
+        normalizer: Callable[[str], str] | None = None,
+    ) -> None:
+        """Args:
+        entities: The vocabulary to match against. It must also satisfy
+            :class:`~dataknobs_common.entity_resolution.SurfaceFormCatalog`,
+            because this rung reads the forms out rather than looking one up.
+        threshold: The score at or above which a window is proposed.
+            **Measured rather than chosen**, over a vocabulary declaring
+            ``golden retriever`` and ``retriever``:
+
+            - ``0.60`` admits ``log`` against ``dog`` at ``0.67``, from an
+              ordinary sentence naming no entity. That is
+              ``structured_config.py``'s cutoff and is right *there*, where
+              the candidates are long configuration keys; a vocabulary
+              carries three-letter forms, and any three-letter word is within
+              one edit of many others.
+            - ``0.75`` admits the window ``retriver has`` at ``0.76`` -- a
+              real entity at a span that overreaches into the next token.
+            - ``0.85`` returns the two intended entities on the typo query
+              and nothing else, and the same two at ``1.0`` on the clean one.
+
+            It also sets how far the probe reaches: see
+            :func:`_window_chars`, where a lower threshold buys wider windows
+            and the windows it buys are the overreaching ones above.
+        scorer: How near two strings are, in ``[0, 1]``. ``None`` means
+            :meth:`difflib.SequenceMatcher.ratio` -- the standard library,
+            which is why this rung ships here and needs no dependency.
+
+            **A scorer must not exceed** ``2 * min(len(a), len(b)) /
+            (len(a) + len(b))``, which is what *a ratio of matched characters
+            to total length* means and what both the default and
+            ``rapidfuzz.fuzz.ratio`` are. The probe's bound is derived from
+            that inequality, so a scorer breaking it has a rung that stops
+            probing before its scorer would have answered.
+
+            ``rapidfuzz.fuzz.partial_ratio`` is the one to **not** pass. It
+            scores any substring ``1.0``, so ``gold retriever`` against
+            ``retriever`` is ``1.00`` and picks the wrong entity over a
+            vocabulary whose forms contain one another -- and it breaks the
+            inequality above, so it also silently shortens the probe.
+        normalizer: The fold applied to **both** the window and the form
+            before they are compared. Defaults to
+            :func:`~dataknobs_common.text.default_normalizer`, which is the
+            fold this package's own sources apply, rather than to ``None`` as
+            it does on every other rung here -- see the class docstring.
+
+        Raises:
+            ValidationError: For a ``threshold`` outside ``(0, 1]``, or for a
+                source that does not publish its forms.
+        """
+        super().__init__(entities, normalizer=normalizer or default_normalizer)
+        if not isinstance(entities, SurfaceFormCatalog):
+            _refuse_catalogue(entities, "SurfaceFormCatalog")
+        self._catalogue = entities
+        self._threshold = _checked_threshold(threshold)
+        self._scorer = scorer or _RatioScorer(self._threshold)
+
+    def _located(self, query: str) -> Sequence[FormHit]:
+        """Every entity a window of the query came near, best first.
+
+        :meth:`~DeclaredSignal._hits` is not the hook here for
+        :class:`ScanningSignal`'s reason one step further on: a
+        ``frozenset[str]`` has nowhere to put an offset, and this rung also
+        has a score to carry.
+
+        :meth:`~DeclaredSignal._order` is not reached either, and that is
+        worth stating because a subclass overriding it would silently change
+        nothing. That hook orders the ids found at one span, for a rung whose
+        hits are all 1.0; here the order is the score's and
+        :func:`_ranked` is where it is decided.
+        """
+        found = _near_forms(
+            query,
+            list(self._catalogue.surface_forms()),
+            threshold=self._threshold,
+            scorer=self._scorer,
+            fold=self._fold,
+        )
+        return _ranked(
+            [
+                FormHit(entity_id=entity_id, span=span, score=score)
+                for form, span, score in found
+                for entity_id in self._entities.by_surface_form(form)
+            ]
+        )
+
+
 class AsyncDeclaredSignal:
     """The asynchronous twin's shared half -- **subclass this** for an async rung.
 
@@ -604,6 +1127,13 @@ class AsyncDeclaredSignal:
     synchronous on this side as well -- ordering a set that has already
     arrived reaches for nothing.
 
+    :attr:`kind` and :attr:`scoring` are declared here too, with the same
+    defaults, rather than being reached through the synchronous base. The two
+    bases share no superclass by design, so a widening applied to one and not
+    the other is the per-flavour drift this family's twin-parity guard exists
+    to refuse -- and a guard over the *rungs* could not see it, because both
+    twins would simply be wrong in the same way.
+
     ``name`` and ``narrows()`` stay synchronous: neither reaches for data, and
     making them awaitable would cost every caller an ``await`` for nothing.
     They are also what lets a registry tell the twins apart -- the guard that
@@ -612,6 +1142,26 @@ class AsyncDeclaredSignal:
     """
 
     key = ""
+
+    #: What this rung's evidence claims -- **overridable**, and the closed
+    #: half of a rung's identity. The default is what a rung matching a form
+    #: the vocabulary carries means, which is the three rungs below and every
+    #: rung this base was written for; a rung proposing an entity the query
+    #: did not spell sets :attr:`~EvidenceKind.INFERRED`.
+    kind = EvidenceKind.DECLARED
+
+    #: What kind of number this rung's score is -- **overridable**. The
+    #: default marks it as carrying none, which is the truth for a rung whose
+    #: hits carry no
+    #: :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`.
+    #:
+    #: Separate from :attr:`kind` because the two are independent. A rung that
+    #: infers may still have nothing to measure, and a rung that measures
+    #: decides for itself whether its number is comparable with another
+    #: rung's -- which is what
+    #: :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
+    #: and :attr:`~Scoring.NATIVE` declines.
+    scoring = Scoring.DECLARED
 
     def __init__(
         self,
@@ -659,7 +1209,15 @@ class AsyncDeclaredSignal:
         admitted = await _async_admitted(
             self._entities, frozenset(hit.entity_id for hit in found), filter
         )
-        return declared_candidates(found, k, signal=self.key, query=query, admitted=admitted)
+        return declared_candidates(
+            found,
+            k,
+            signal=self.key,
+            query=query,
+            admitted=admitted,
+            kind=self.kind,
+            scoring=self.scoring,
+        )
 
     async def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
@@ -742,6 +1300,72 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
         return found
+
+
+class AsyncLexicalSignal(AsyncDeclaredSignal):
+    """:class:`LexicalSignal` over an asynchronous source.
+
+    The same rung one ``await`` further in, and the source must satisfy
+    :class:`~dataknobs_common.entity_resolution.AsyncSurfaceFormCatalog`.
+
+    **Reading the forms is awaited on every query**, where the synchronous
+    twin's is a dict view. That is the honest shape for a source that does
+    reach for data: a catalogue is the source's whole contents, so a rung
+    that read it once at construction would hold a vocabulary that had since
+    changed and report matches against forms the source no longer carries. A
+    source that can afford to answer from memory answers immediately, which
+    is what :class:`~dataknobs_common.ontology.AsyncMappingEntitySource`
+    does.
+
+    The id resolution is one ``await`` per **winning form** rather than per
+    window, which is what the threshold buys: the probe is characters of
+    arithmetic and only the forms that cleared it are looked up.
+    """
+
+    key = "lexical"
+
+    kind = EvidenceKind.INFERRED
+    scoring = Scoring.NATIVE
+
+    def __init__(
+        self,
+        entities: AsyncEntitySource,
+        *,
+        threshold: float = 0.85,
+        scorer: Callable[[str, str], float] | None = None,
+        normalizer: Callable[[str], str] | None = None,
+    ) -> None:
+        """The same constructor as the synchronous twin's, over an asynchronous source.
+
+        See :class:`LexicalSignal` for what each argument means, for the
+        measurement behind the default threshold, and for the inequality a
+        replacement ``scorer`` must satisfy.
+
+        Raises:
+            ValidationError: For a ``threshold`` outside ``(0, 1]``, or for a
+                source that does not publish its forms.
+        """
+        super().__init__(entities, normalizer=normalizer or default_normalizer)
+        if not isinstance(entities, AsyncSurfaceFormCatalog):
+            _refuse_catalogue(entities, "AsyncSurfaceFormCatalog")
+        self._catalogue = entities
+        self._threshold = _checked_threshold(threshold)
+        self._scorer = scorer or _RatioScorer(self._threshold)
+
+    async def _located(self, query: str) -> Sequence[FormHit]:
+        """:meth:`LexicalSignal._located` over an asynchronous source."""
+        found = _near_forms(
+            query,
+            list(await self._catalogue.surface_forms()),
+            threshold=self._threshold,
+            scorer=self._scorer,
+            fold=self._fold,
+        )
+        hits: list[FormHit] = []
+        for form, span, score in found:
+            for entity_id in await self._entities.by_surface_form(form):
+                hits.append(FormHit(entity_id=entity_id, span=span, score=score))
+        return _ranked(hits)
 
 
 def _admitted(

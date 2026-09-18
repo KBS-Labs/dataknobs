@@ -33,8 +33,10 @@ from dataknobs_common.entity_resolution.signals import (
     AliasSignal,
     AsyncAliasSignal,
     AsyncExactNormalizedSignal,
+    AsyncLexicalSignal,
     AsyncScanningSignal,
     ExactNormalizedSignal,
+    LexicalSignal,
     ScanningSignal,
 )
 from dataknobs_common.registry import PluginRegistry
@@ -81,6 +83,20 @@ def _make_scan(config: dict[str, Any]) -> MatchSignal:
     )
 
 
+def _make_lexical(config: dict[str, Any]) -> MatchSignal:
+    # ``threshold`` and ``scorer`` are forwarded for ``max_window``'s reason
+    # on the rung above: a caller reaching this factory by writing
+    # ``kind: lexical`` has no other way to supply either, and the scorer in
+    # particular is the whole of this rung's published answer to a consumer
+    # whose vocabulary is too large for the standard library's.
+    return LexicalSignal(
+        config["entities"],
+        threshold=config.get("threshold", 0.85),
+        scorer=config.get("scorer"),
+        normalizer=config.get("normalizer"),
+    )
+
+
 def _make_async_exact(config: dict[str, Any]) -> AsyncMatchSignal:
     return AsyncExactNormalizedSignal(config["entities"], normalizer=config.get("normalizer"))
 
@@ -97,6 +113,15 @@ def _make_async_scan(config: dict[str, Any]) -> AsyncMatchSignal:
     )
 
 
+def _make_async_lexical(config: dict[str, Any]) -> AsyncMatchSignal:
+    return AsyncLexicalSignal(
+        config["entities"],
+        threshold=config.get("threshold", 0.85),
+        scorer=config.get("scorer"),
+        normalizer=config.get("normalizer"),
+    )
+
+
 #: Every rung declares its flavour and whether it needs I/O, so a door can
 #: refuse a composition *before* building anything. A capability read off an
 #: instance is read too late to refuse with.
@@ -106,9 +131,11 @@ _ASYNC_DECLARED_METADATA = {"flavour": "async", "needs_io": False}
 signal_backends.register("exact", _make_exact, metadata=_DECLARED_METADATA)
 signal_backends.register("alias", _make_alias, metadata=_DECLARED_METADATA)
 signal_backends.register("scan", _make_scan, metadata=_DECLARED_METADATA)
+signal_backends.register("lexical", _make_lexical, metadata=_DECLARED_METADATA)
 async_signal_backends.register("exact", _make_async_exact, metadata=_ASYNC_DECLARED_METADATA)
 async_signal_backends.register("alias", _make_async_alias, metadata=_ASYNC_DECLARED_METADATA)
 async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARED_METADATA)
+async_signal_backends.register("lexical", _make_async_lexical, metadata=_ASYNC_DECLARED_METADATA)
 
 
 # A rung that exists in one flavour only is *declared* in the other with a
@@ -126,6 +153,14 @@ async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARE
 # The reason is the **fact** and says nothing about doors. A door composes the
 # sentence naming itself and its twin; this registry is also read by callers
 # that have no door at all.
+#
+# ``lexical`` carries no mark, and the absence is a ruling rather than an
+# oversight: the rung lives in this distribution, in the module this registry
+# imports, and exists in both flavours -- so neither condition below applies
+# and the key is simply registered. It is worth saying because the rung is the
+# one here that can need an install, and the install it can need buys *speed*
+# rather than the rung: ``scorer`` takes a faster implementation and the
+# standard library answers the same way without one.
 #
 # Two members, and they are marked for **different** conditions, which is why
 # the reason is a sentence rather than a flag. ``semantic`` is

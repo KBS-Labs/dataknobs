@@ -1,0 +1,619 @@
+"""The near-spelling rung: an entity the query did not spell, and how near it came.
+
+One of these is the increment's acceptance criterion and is marked as such.
+It asserts **both** halves -- that the three declared rungs return nothing for
+a query carrying a typo, and that this one returns the entity -- because a
+criterion asserting only the second would pass against a rung that matched
+everything, and one asserting only the first would pass against no rung at all.
+
+The negative half is also the half that can rot. The declared rungs returning
+nothing for ``"goldne retriver"`` is a property of *today's* folds; a
+normalizer that stripped vowels would make it false without touching this rung.
+Asserting it directly rather than assuming it means such a change fails here
+and names the rung that moved.
+"""
+
+from __future__ import annotations
+
+import random
+from difflib import SequenceMatcher
+
+import pytest
+
+from dataknobs_common.entity_resolution import (
+    AliasSignal,
+    AsyncAliasSignal,
+    AsyncDeclaredSignal,
+    AsyncExactNormalizedSignal,
+    AsyncLexicalSignal,
+    AsyncScanningSignal,
+    DeclaredSignal,
+    EvidenceKind,
+    ExactNormalizedSignal,
+    LexicalSignal,
+    ScanningSignal,
+    Scoring,
+)
+from dataknobs_common.entity_resolution.registry import (
+    async_signal_backends,
+    signal_backends,
+)
+from dataknobs_common.entity_resolution.signals import (
+    _RatioScorer,
+    _scored_probe_spans,
+    _window_chars,
+)
+from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.ontology import AsyncMappingEntitySource, Entity, MappingEntitySource
+from dataknobs_common.testing import assert_twin_types_agree
+
+#: The query the criterion is written around: two typos, one of which sits
+#: inside the other's form. Neither word is in the vocabulary.
+TYPO = "my goldne retriver has been limping"
+
+#: The same sentence spelled correctly, so the rung can be shown scoring 1.0
+#: where it scores 0.9 above -- a rung that always scored below 1.0 would pass
+#: the criterion and be wrong.
+CLEAN = "my golden retriever has been limping"
+
+#: One form contains the other, which is what lets the ordering and the
+#: overlap assertions below say anything. The **id** and the **name** are
+#: spelled differently on purpose: an assertion is meaningless if both sides
+#: agree only by echoing the text they matched.
+VOCABULARY = {
+    "golden_retriever": Entity(id="golden_retriever", type="Breed", name="Golden Retriever"),
+    "retriever": Entity(id="retriever", type="Breed", name="Retriever"),
+}
+
+
+@pytest.fixture
+def entities() -> MappingEntitySource:
+    return MappingEntitySource(VOCABULARY)
+
+
+@pytest.fixture
+def async_entities() -> AsyncMappingEntitySource:
+    return AsyncMappingEntitySource(VOCABULARY)
+
+
+def _found(candidates) -> list[tuple[str, str, float]]:
+    """Every candidate's id, the text it matched, and what it scored.
+
+    Flattened over **evidence**, so a candidate found at two windows appears
+    twice. That is the shape the assertions here want: this rung reports every
+    window that scored rather than choosing one, so a test reading only the
+    candidates would not see the spans at all.
+    """
+    return [
+        (str(candidate.entity_id), evidence.matched_text, round(evidence.score, 3))
+        for candidate in candidates
+        for evidence in candidate.evidence
+    ]
+
+
+def _proposed(candidates) -> list[tuple[str, float]]:
+    """Each candidate's id and its own score, ignoring where it was found."""
+    return [(str(candidate.entity_id), round(candidate.score, 3)) for candidate in candidates]
+
+
+# ===== The increment's acceptance criterion =====
+
+
+def test_a_near_spelling_rung_proposes_what_the_declared_rungs_cannot(entities):
+    """**Criterion: a rung that proposes rather than looks up.**
+
+    A query the vocabulary does not carry, and an entity it does. The three
+    declared rungs each answer *this form is not declared*, correctly and
+    uselessly; this one proposes the entity the query was reaching for, says
+    how near it came, and points at the words in the **query** rather than at
+    a form the query never contained.
+    """
+    for rung in (ExactNormalizedSignal, AliasSignal, ScanningSignal):
+        assert rung(entities).candidates(TYPO, k=5) == [], (
+            f"{rung.__name__} matched a query spelling none of its forms, so "
+            f"the half of this criterion that makes the other half mean "
+            f"something is no longer true"
+        )
+
+    candidates = LexicalSignal(entities).candidates(TYPO, k=5)
+    proposed = {str(candidate.entity_id): candidate for candidate in candidates}
+    assert "golden_retriever" in proposed
+
+    candidate = proposed["golden_retriever"]
+    (evidence,) = candidate.evidence
+    assert evidence.kind is EvidenceKind.INFERRED
+    assert evidence.scoring is Scoring.NATIVE
+    assert 0.0 < evidence.score < 1.0
+    assert evidence.matched_text == "goldne retriver"
+    assert TYPO[evidence.span[0] : evidence.span[1]] == evidence.matched_text
+
+
+def test_the_same_query_spelled_correctly_scores_one(entities):
+    """The other end of the measurement, so ``below 1.0`` means something.
+
+    A rung that returned ``0.9`` for everything would satisfy the criterion
+    above. This pins that the number tracks the spelling.
+    """
+    assert _proposed(LexicalSignal(entities).candidates(CLEAN, k=5)) == [
+        ("golden_retriever", 1.0),
+        ("retriever", 1.0),
+    ]
+
+
+# ===== What the threshold is, measured =====
+
+
+def test_the_default_threshold_returns_the_two_intended_entities_and_nothing_else(entities):
+    assert _found(LexicalSignal(entities).candidates(TYPO, k=9)) == [
+        ("retriever", "retriver", 0.941),
+        ("golden_retriever", "goldne retriver", 0.903),
+    ]
+
+
+def test_a_lower_threshold_buys_windows_that_overreach(entities):
+    """0.75, and why the default is not it.
+
+    Every extra hit is a **real entity at a span that runs past it** --
+    ``retriver has`` reaching into the next token. The entity is right and the
+    offsets are wrong, which is the worse of the two failures: a caller
+    trusting the span highlights a word the vocabulary never matched.
+
+    The threshold is also what sets how far the probe reaches, so this is one
+    effect rather than two: a lower number widens the window bound and the
+    windows it buys are these.
+    """
+    assert _found(LexicalSignal(entities, threshold=0.75).candidates(TYPO, k=9)) == [
+        ("retriever", "retriver", 0.941),
+        ("retriever", "retriver has", 0.762),
+        ("golden_retriever", "goldne retriver", 0.903),
+        ("golden_retriever", "my goldne retriver", 0.824),
+        ("golden_retriever", "goldne retriver has", 0.8),
+    ]
+
+
+def test_the_cutoff_that_is_right_for_configuration_keys_is_wrong_for_a_vocabulary():
+    """0.60 -- ``structured_config.py``'s cutoff -- admits ``log`` as ``dog``.
+
+    It is right *there*, where the candidates are long configuration keys and
+    a caller has already misspelled one. A vocabulary carries three-letter
+    forms, and any three-letter word is within one edit of many others -- so
+    the same number turns an ordinary sentence naming no entity into a match.
+    """
+    animals = MappingEntitySource({"dog": Entity(id="dog", type="Species", name="Dog")})
+
+    assert _found(LexicalSignal(animals, threshold=0.60).candidates("the log fell over", k=5)) == [
+        ("dog", "log", 0.667)
+    ]
+    assert LexicalSignal(animals).candidates("the log fell over", k=5) == []
+
+
+# ===== The probe's bound =====
+
+
+def test_the_bound_is_characters_because_a_token_bound_loses_a_whole_entity():
+    """The typo class *a space where the vocabulary has none*.
+
+    A form declared as one token, spelled by the caller as two. Bounding the
+    probe at :meth:`EntitySource.longest_form_tokens` -- which is exactly what
+    the scanning rung does, correctly, for an exact lookup -- would cap the
+    window at one token here, and the best single token scores 0.69. The
+    entity is not found at a worse span; it is not found.
+    """
+    source = MappingEntitySource(
+        {
+            "labradorretriever": Entity(
+                id="labradorretriever", type="Breed", name="LabradorRetriever"
+            )
+        }
+    )
+    assert source.longest_form_tokens() == 1, (
+        "this fixture only says anything while every form it declares is one "
+        "token -- the id and the name fold together here, which is what keeps "
+        "it so"
+    )
+
+    found = _found(LexicalSignal(source).candidates("my labrador retriever is limping", k=5))
+
+    assert found[0] == ("labradorretriever", "labrador retriever", 0.971)
+    assert all(len(text.split()) > 1 for _id, text, _score in found), (
+        "every window that matched spans more than one token, which is the "
+        "whole finding: a probe capped at the vocabulary's own token count "
+        "would have produced none of them"
+    )
+
+
+def test_no_window_past_the_bound_could_have_cleared_its_threshold():
+    """The claim that makes the bound arithmetic rather than a budget.
+
+    :meth:`difflib.SequenceMatcher.ratio` is ``2M/T``, and ``M`` cannot exceed
+    the shorter string -- so a window longer than ``|F|(2-t)/t`` scores below
+    ``t`` against a form of length ``|F|``, whatever the two strings are. Every
+    probe the bound removes would have answered *no*.
+
+    Pairs are drawn to include the shape that would break it if anything did:
+    a form with padding on one side or the other, which is what an overreaching
+    window actually is. Random rather than hand-picked, because the cases that
+    would falsify this are exactly the ones nobody thinks to write down.
+    """
+    rng = random.Random(20260917)
+    alphabet = "abcdefghijklmnopqrstuvwxyz "
+    for threshold in (0.90, 0.85, 0.75, 0.60):
+        for _ in range(2000):
+            form = "".join(rng.choice(alphabet) for _ in range(rng.randint(2, 20)))
+            pad = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 20)))
+            window = rng.choice([form + pad, pad + form, pad])
+            bound = _window_chars([form], threshold)
+            if len(window) <= bound:
+                continue
+            score = SequenceMatcher(None, window, form).ratio()
+            assert score < threshold, (
+                f"{window!r} is longer than the bound {bound} for {form!r} at "
+                f"threshold {threshold}, and scores {score:.4f} -- so the probe "
+                f"stops before a window that would have matched"
+            )
+
+
+def test_the_bound_rounds_up_because_the_equality_case_is_a_real_match():
+    """A 17-character form at 0.85 admits a 23-character window, scoring exactly 0.85.
+
+    ``17 * 1.15 / 0.85`` is ``22.999999999999996`` in binary floating point, so
+    a bound that truncated would stop at 22 and lose the equality case. One
+    character of generosity costs a handful of probes; one character short
+    costs an answer.
+    """
+    assert _window_chars(["a" * 17], 0.85) == 23
+    assert SequenceMatcher(None, "b" * 6 + "a" * 17, "a" * 17).ratio() == pytest.approx(0.85)
+
+
+def test_the_probe_stops_widening_rather_than_filtering():
+    """Spans grow from each start and the loop breaks at the first one too wide.
+
+    Which is what keeps the enumeration linear in the query: filtering would
+    still have built every one of the *n(n+1)/2* spans before discarding them.
+    """
+    query = "alpha beta gamma delta"
+    assert list(_scored_probe_spans(query, max_chars=10)) == [
+        (0, 5),
+        (0, 10),
+        (6, 10),
+        (6, 16),
+        (11, 16),
+        (17, 22),
+    ]
+
+
+# ===== The default scorer =====
+
+
+def test_the_default_scorer_agrees_with_a_plain_ratio_wherever_it_matters():
+    """It prefilters and it caches, and neither may move a score at the threshold.
+
+    The default refuses a pair the cheap upper bounds already rule out, and
+    answers ``0.0`` there rather than the true ratio. That is invisible to the
+    rung, which keeps only what clears the threshold -- so what has to hold is
+    that **at or above** the threshold it is exactly
+    :meth:`difflib.SequenceMatcher.ratio`, and below it never claims to clear.
+
+    It also reuses one matcher across calls, so this runs many pairs through
+    **one** scorer object: a cache that answered the previous form's question
+    would show up here and nowhere else.
+    """
+    rng = random.Random(4242)
+    alphabet = "abcdefghijklmnopqrstuvwxyz "
+    threshold = 0.85
+    scorer = _RatioScorer(threshold)
+    for _ in range(4000):
+        form = "".join(rng.choice(alphabet) for _ in range(rng.randint(2, 20)))
+        window = (
+            form
+            if rng.random() < 0.3
+            else form[: rng.randint(0, len(form))]
+            + "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 8)))
+        )
+        plain = SequenceMatcher(None, window, form).ratio()
+        answered = scorer(window, form)
+        if plain >= threshold:
+            assert answered == plain, (
+                f"the default scorer answered {answered} where a plain ratio "
+                f"answers {plain} for {window!r} against {form!r}"
+            )
+        else:
+            assert answered < threshold
+
+
+def test_the_cheap_bounds_the_default_scorer_skips_on_are_upper_bounds():
+    """The property the prefilter rests on, asserted rather than cited.
+
+    :meth:`~difflib.SequenceMatcher.quick_ratio` and
+    :meth:`~difflib.SequenceMatcher.real_quick_ratio` are documented as upper
+    bounds on ``ratio()``. The default scorer skips any pair either of them
+    puts below the threshold, so if that documentation were ever wrong the
+    rung would silently stop finding matches -- which is the failure mode this
+    file exists to make loud.
+    """
+    rng = random.Random(909)
+    alphabet = "abcdefghijklmnopqrstuvwxyz "
+    for _ in range(4000):
+        left = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 26)))
+        right = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 26)))
+        if rng.random() < 0.4:
+            right = left[: rng.randint(0, len(left))] + right
+        matcher = SequenceMatcher(None, left, right)
+        exact = matcher.ratio()
+        assert matcher.quick_ratio() >= exact
+        assert matcher.real_quick_ratio() >= exact
+
+
+# ===== The scorer seam =====
+
+
+def test_a_scorer_can_be_injected(entities):
+    """The seam that is this rung's answer to a vocabulary too large for difflib.
+
+    Asserted with a scorer that answers differently rather than faster, since
+    *it was called* is the property and speed is not testable here.
+    """
+    calls: list[tuple[str, str]] = []
+
+    def always(window: str, form: str) -> float:
+        calls.append((window, form))
+        return 1.0
+
+    candidates = LexicalSignal(entities, scorer=always).candidates("x", k=9)
+
+    assert calls, "the injected scorer was never called"
+    assert {str(candidate.entity_id) for candidate in candidates} == {
+        "golden_retriever",
+        "retriever",
+    }
+
+
+def test_a_substring_scorer_picks_the_wrong_entity(entities):
+    """Why ``partial_ratio`` is named in the docstring as the one not to pass.
+
+    It scores any substring 1.0, so over a vocabulary whose forms contain one
+    another every query containing the shorter form matches the longer one
+    just as well -- and the discrimination this rung exists to have is exactly
+    what buys its "it can locate" property.
+
+    Written inline rather than imported: the claim is about the *shape* of
+    such a scorer, and asserting it needs no dependency.
+    """
+
+    def substring(window: str, form: str) -> float:
+        return 1.0 if window in form or form in window else 0.0
+
+    found = _found(LexicalSignal(entities, scorer=substring).candidates("gold retriever", k=9))
+
+    assert ("golden_retriever", "retriever", 1.0) in found, (
+        "a substring scorer proposes the containing entity for a query that "
+        "names the contained one, at the same score as the right answer"
+    )
+
+
+# ===== The fold =====
+
+
+def test_both_sides_of_the_comparison_are_folded(entities):
+    """A capital letter is not a misspelling.
+
+    This rung compares strings itself instead of handing them to the index, so
+    it performs the fold the index would have performed -- which is why its
+    ``normalizer`` defaults to one where every other rung here defaults to
+    none. Without it, ``Golden Retriever`` against the folded form would lose
+    a character's worth of score for each capital.
+    """
+    assert _proposed(LexicalSignal(entities).candidates("My GOLDEN RETRIEVER", k=5)) == [
+        ("golden_retriever", 1.0),
+        ("retriever", 1.0),
+    ]
+
+
+def test_a_supplied_normalizer_folds_both_sides(entities):
+    """A caller whose source folds differently passes theirs, and it reaches both.
+
+    The identity fold makes the case difference visible again, which is the
+    only way to show that the parameter is doing anything.
+    """
+    unfolded = LexicalSignal(entities, normalizer=lambda form: form)
+
+    assert _found(unfolded.candidates("GOLDEN RETRIEVER", k=5)) == []
+    assert _found(unfolded.candidates("golden retriever", k=5)) == [
+        ("golden_retriever", "golden retriever", 1.0),
+        ("retriever", "retriever", 1.0),
+    ]
+
+
+# ===== What the rung reports =====
+
+
+def test_one_entity_at_one_span_is_one_piece_of_evidence(entities):
+    """An id, a name and an alias all fold into the catalogue separately.
+
+    So a window routinely clears the threshold against several forms of the
+    same entity -- here ``golden_retriever`` the id and ``golden retriever``
+    the name. Reporting both would say the vocabulary was found twice where it
+    was found once, so the best score wins and the rest are the same finding
+    measured against a worse spelling.
+    """
+    (candidate,) = [
+        candidate
+        for candidate in LexicalSignal(entities).candidates("golden retriever", k=5)
+        if candidate.entity_id == "golden_retriever"
+    ]
+
+    assert len(candidate.evidence) == 1
+    assert candidate.evidence[0].score == 1.0
+
+
+def test_a_window_wider_than_the_form_is_reported_rather_than_resolved(entities):
+    """Overlap is visible in the offsets; nothing here chooses between spans.
+
+    A window one token wider than a form it contains can still clear the
+    threshold -- ``my golden retriever`` against ``golden retriever`` is
+    ``0.914`` -- so the exact window and the overreaching one are both
+    reported, best first. Choosing one would be a verdict, and this family
+    does not make verdicts: it is the same answer
+    :class:`~dataknobs_common.entity_resolution.FormHit` gives for two
+    declared forms at overlapping spans, and the reason an overlap policy is
+    nobody's yet.
+
+    The candidate's own score is the exact window's, so a caller who wants
+    one number is not shown the overreach at all.
+    """
+    at_spans = [
+        (text, score)
+        for entity_id, text, score in _found(LexicalSignal(entities).candidates(CLEAN, k=9))
+        if entity_id == "golden_retriever"
+    ]
+
+    assert at_spans == [
+        ("golden retriever", 1.0),
+        ("my golden retriever", 0.914),
+        ("golden retriever has", 0.889),
+    ]
+
+
+def test_the_best_score_is_proposed_first(entities):
+    """The order :meth:`DeclaredSignal._order` says the rung has to publish.
+
+    A declared score is 1.0 by fiat and carries no order; a measured one does,
+    and the cascade positions by arrival -- so this is what decides which
+    near-spelling a caller sees first.
+    """
+    scores = [score for _id, _text, score in _found(LexicalSignal(entities).candidates(TYPO, k=9))]
+
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_the_candidates_own_score_is_its_best_hit(entities):
+    """An entity found twice is not penalised for having been found twice."""
+    (candidate,) = [
+        candidate
+        for candidate in LexicalSignal(entities, threshold=0.75).candidates(TYPO, k=9)
+        if candidate.entity_id == "retriever"
+    ]
+
+    assert len(candidate.evidence) > 1
+    assert candidate.score == max(evidence.score for evidence in candidate.evidence)
+
+
+def test_the_rung_narrows(entities):
+    """It reads an entity source, so a filter can be honoured against it."""
+    assert LexicalSignal(entities).narrows() is True
+    assert AsyncLexicalSignal(AsyncMappingEntitySource(VOCABULARY)).narrows() is True
+
+
+def test_a_filter_narrows_the_rungs_own_answer(entities):
+    """Rung-side narrowing comes from the base, and reaches this rung unchanged."""
+    assert LexicalSignal(entities).candidates(TYPO, k=5, filter="Breed")
+    assert LexicalSignal(entities).candidates(TYPO, k=5, filter="Species") == []
+
+
+# ===== Refusals =====
+
+
+def test_a_source_that_does_not_publish_its_forms_is_refused_at_construction():
+    """Not an empty rung, which is what :class:`AliasSignal` correctly answers.
+
+    A vocabulary may declare no aliases; none has no forms. So an empty answer
+    from this rung means *nothing was near enough*, and a source that cannot
+    be asked has to fail where the mistake was made rather than look like a
+    query that matched nothing.
+    """
+
+    class Bare:
+        def by_surface_form(self, form: str) -> frozenset[str]:
+            return frozenset()
+
+    with pytest.raises(ValidationError, match="does not publish its surface forms"):
+        LexicalSignal(Bare())
+    with pytest.raises(ValidationError, match="surface_forms"):
+        AsyncLexicalSignal(Bare())
+
+
+@pytest.mark.parametrize("threshold", [0.0, -0.5, 1.5])
+def test_a_threshold_outside_the_unit_interval_is_refused(entities, threshold):
+    """Zero admits the whole vocabulary for any query; above one admits nothing."""
+    with pytest.raises(ValidationError, match="threshold must be"):
+        LexicalSignal(entities, threshold=threshold)
+
+
+def test_a_threshold_of_exactly_one_is_a_real_request(entities):
+    """*Only an exact fold* -- which is a rung a caller may genuinely want."""
+    rung = LexicalSignal(entities, threshold=1.0)
+
+    assert _found(rung.candidates(CLEAN, k=5)) == [
+        ("golden_retriever", "golden retriever", 1.0),
+        ("retriever", "retriever", 1.0),
+    ]
+    assert rung.candidates(TYPO, k=5) == []
+
+
+def test_a_vocabulary_declaring_nothing_answers_nothing_rather_than_dividing():
+    """The empty catalogue reaches :func:`_window_chars`, whose ``max`` has a default."""
+    assert LexicalSignal(MappingEntitySource({})).candidates(TYPO, k=5) == []
+
+
+# ===== Both flavours =====
+
+
+@pytest.mark.asyncio
+async def test_the_twin_answers_identically(async_entities, entities):
+    """Same vocabulary, same query, same candidates -- ids, spans and scores."""
+    assert _found(await AsyncLexicalSignal(async_entities).candidates(TYPO, k=9)) == _found(
+        LexicalSignal(entities).candidates(TYPO, k=9)
+    )
+
+
+def test_the_twins_agree_on_their_surface():
+    """``name`` is excluded: a property has no signature to compare, and what
+    it answers is asserted directly below.
+    """
+    assert_twin_types_agree(
+        LexicalSignal,
+        AsyncLexicalSignal,
+        members=["candidates", "candidates_many", "narrows"],
+        unflavoured_members=["narrows"],
+    )
+
+
+def test_the_two_bases_carry_the_same_scoring_declarations():
+    """The parity obligation the widening **creates**, and the one a twin check
+    over the rungs could not see.
+
+    :attr:`kind` and :attr:`scoring` are declared on each base separately --
+    the two share no superclass by design -- so a widening applied to one
+    flavour and not the other is invisible from the rungs: both twins would
+    simply be wrong in the same way.
+    """
+    assert (DeclaredSignal.kind, DeclaredSignal.scoring) == (
+        AsyncDeclaredSignal.kind,
+        AsyncDeclaredSignal.scoring,
+    )
+    for sync_rung, async_rung in [
+        (ExactNormalizedSignal, AsyncExactNormalizedSignal),
+        (AliasSignal, AsyncAliasSignal),
+        (ScanningSignal, AsyncScanningSignal),
+        (LexicalSignal, AsyncLexicalSignal),
+    ]:
+        assert (sync_rung.kind, sync_rung.scoring) == (async_rung.kind, async_rung.scoring), (
+            f"{sync_rung.__name__} and {async_rung.__name__} declare different "
+            f"evidence, so one flavour of the same rung reports a kind the "
+            f"other does not"
+        )
+
+
+def test_the_rung_is_named_for_the_key_it_registers_under(entities, async_entities):
+    assert LexicalSignal(entities).name == "lexical"
+    assert AsyncLexicalSignal(async_entities).name == "lexical"
+
+
+def test_both_registries_build_it(entities):
+    """And the factory forwards the two arguments a document is the only way to set."""
+    built = signal_backends.create("lexical", {"entities": entities, "threshold": 1.0})
+    built_async = async_signal_backends.create("lexical", {"entities": entities})
+
+    assert isinstance(built, LexicalSignal)
+    assert isinstance(built_async, AsyncLexicalSignal)
+    assert built.candidates(TYPO, k=5) == [], "the threshold the config named was dropped"

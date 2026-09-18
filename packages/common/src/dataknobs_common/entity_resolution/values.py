@@ -223,6 +223,24 @@ class FormHit(Generic[K]):
     through the whole-string hook instead.
     """
 
+    score: float | None = None
+    """How well this form matched, where the rung measured it.
+
+    ``None`` means **this rung did not measure**, which is what every rung
+    over declared forms means: the form is in the vocabulary, it was found,
+    and there is nothing further to say about how well. That is why the
+    default is ``None`` rather than ``1.0`` -- a field reading ``1.0`` would
+    claim a measurement that was never taken, and ``1.0`` is exactly the
+    number :attr:`Scoring.DECLARED` exists to mark as carrying no information.
+
+    A near-spelling rung is the case this exists for: it proposes an entity
+    the query did not spell, so *how near* is the whole of what it found out.
+    The number means whatever that rung's scorer means -- see
+    :attr:`Scoring.NATIVE` -- and the rung says so by carrying its own
+    :attr:`~DeclaredSignal.scoring` rather than by this field having a
+    published scale.
+    """
+
 
 @dataclass(frozen=True)
 class EntityCandidate(Generic[K]):

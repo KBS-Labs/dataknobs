@@ -26,6 +26,7 @@ from dataknobs_common.entity_resolution import (
     CascadingResolver,
     EvidenceKind,
     ExactNormalizedSignal,
+    LexicalSignal,
     ScanningSignal,
 )
 ```
@@ -211,6 +212,206 @@ candidate whose rung of record produced a kind that does not normalize.
 cascade positions by rung rather than by number. It does *not* survive an
 `INCOMPATIBLE` corpus, so a caller putting candidates in front of a person
 reads `compatibility` first.
+
+## When the query does not spell the form
+
+Every rung above answers a **lookup**: the form is in the vocabulary or it is
+not. So a query carrying a typo reaches none of them, and a cascade of all
+three returns nothing at all.
+
+`LexicalSignal` is the rung for that case. It compares each window of the query
+against every form the vocabulary declares, and proposes the ones that came
+close — so it is the first rung here whose score is a **measurement** rather
+than a `1.0` by fiat.
+
+<!-- worked-near-spelling -->
+
+```python
+from dataknobs_common.entity_resolution import (
+    AliasSignal,
+    ExactNormalizedSignal,
+    LexicalSignal,
+    ScanningSignal,
+)
+from dataknobs_common.ontology import Entity, MappingEntitySource
+
+breeds = MappingEntitySource(
+    {
+        "golden_retriever": Entity(id="golden_retriever", type="Breed", name="Golden Retriever"),
+        "retriever": Entity(id="retriever", type="Breed", name="Retriever"),
+    }
+)
+typo = "my goldne retriver has been limping"
+
+for rung in (ExactNormalizedSignal, AliasSignal, ScanningSignal):
+    print(f"{rung.__name__:21} {rung(breeds).candidates(typo, k=5)}")
+
+for candidate in LexicalSignal(breeds).candidates(typo, k=5):
+    found = candidate.evidence[0]
+    print(
+        f"{candidate.entity_id:17}{found.matched_text!r:19}{found.score:.3f}"
+        f"  {found.kind.value}/{found.scoring.value}  {found.span}"
+    )
+```
+
+```
+ExactNormalizedSignal []
+AliasSignal           []
+ScanningSignal        []
+retriever        'retriver'         0.941  inferred/native  (10, 18)
+golden_retriever 'goldne retriver'  0.903  inferred/native  (3, 18)
+```
+
+Every block in this section is executed, and the output block under each one is
+compared against what running it prints. The numbers here are the whole reason
+the section exists, so a number the code stopped producing takes the suite red
+rather than leaving the page quietly wrong.
+
+The span points into the **query** — at the words the caller actually typed —
+rather than at the form they were reaching for. That is the half a consumer
+cannot recover: they already have the vocabulary, and what they do not have is
+where in their own sentence the near-miss sat.
+
+`kind` is `INFERRED` because the entity was *proposed* rather than found: the
+vocabulary carries nothing the query said. `scoring` is `NATIVE` even though a
+ratio is already in `[0, 1]`, because the number means whatever the configured
+scorer means — two rungs with different scorers produce incomparable `0.8`s, so
+it stays out of `as_distribution()` by construction.
+
+A near-spelling hit scoring `0.94` still sits **behind** a declared hit scoring
+`1.0`, and not because `0.94` is the smaller number: a cascade positions by the
+first rung that produced an id. Put this rung after the declared ones.
+
+### The threshold, and what a lower one buys
+
+<!-- worked-threshold -->
+
+```python
+for threshold in (0.60, 0.75, 0.85, 1.00):
+    found = [
+        evidence.matched_text
+        for candidate in LexicalSignal(breeds, threshold=threshold).candidates(typo, k=9)
+        for evidence in candidate.evidence
+    ]
+    widest = max(found, key=len, default="-")
+    print(f"{threshold:.2f}  {len(found):2} hit(s)   widest window: {widest!r}")
+```
+
+```
+0.60  11 hit(s)   widest window: 'my goldne retriver has been'
+0.75   5 hit(s)   widest window: 'goldne retriver has'
+0.85   2 hit(s)   widest window: 'goldne retriver'
+1.00   0 hit(s)   widest window: '-'
+```
+
+The default is `0.85`, and the table is why. What a lower threshold buys is not
+*more entities* — it is the **same two entities at spans that run past them**.
+At `0.75` the rung reports `retriever` across `retriver has`, reaching into a
+word the vocabulary never matched; at `0.60` it reports `golden_retriever`
+across most of the sentence. The entity is right and the offsets are wrong,
+which is the worse of the two failures for a caller who highlights what the
+span points at.
+
+`1.00` is a real request rather than a mistake — *only an exact fold* — and is
+kept for it.
+
+The threshold is also what decides how far the probe reaches, so those are one
+effect and not two. A window can only score `t` against a form of length `|F|`
+while it is no longer than `|F| × (2 − t) / t` characters, so the rung stops
+widening there — and every window that bound removes is one that would have
+answered *below the threshold* for every form. It is arithmetic rather than a
+budget, the way `ScanningSignal`'s token bound is, and it is **not** that bound:
+a scored probe can match a window wider than the longest declared form, which
+is what the typo class *a space where the vocabulary has none* requires.
+
+And `0.60` is not an arbitrary low number: it is `difflib`'s own default cutoff,
+and it is right where that default is used, on long configuration keys a caller
+has already half-typed. A vocabulary carries three-letter forms, and any
+three-letter word is within one edit of many others:
+
+<!-- worked-cutoff -->
+
+```python
+sentence = "the log fell over"
+animals = MappingEntitySource({"dog": Entity(id="dog", type="Species", name="Dog")})
+for threshold in (0.60, 0.85):
+    rung = LexicalSignal(animals, threshold=threshold)
+    print(
+        f"{threshold:.2f}  "
+        f"{[(str(c.entity_id), c.evidence[0].matched_text) for c in rung.candidates(sentence, k=5)]}"
+    )
+```
+
+```
+0.60  [('dog', 'log')]
+0.85  []
+```
+
+### What it costs, and the seam for when that is too much
+
+The rung scores **every window against every form**, so the cost is the product
+rather than the vocabulary size. Measured on one laptop, over a nine-token query
+and a vocabulary of two-word names — indicative, not a promise, and the shape is
+the point rather than the milliseconds:
+
+| entities | forms | per query |
+|---|---|---|
+| 100 | 200 | ~3 ms |
+| 1,000 | 2,000 | ~30 ms |
+| 10,000 | 20,000 | ~315 ms |
+
+Linear in the vocabulary, which means there is a size at which the standard
+library stops being free. `scorer` is the seam for that: any
+`Callable[[str, str], float]`, and `rapidfuzz.fuzz.ratio` is the usual one.
+Measured 2026-09-17 with `rapidfuzz` installed, the two **agree to two decimal
+places on every case tried**, so taking the dependency costs no answers — which
+is exactly why it is a seam here rather than a dependency in `pyproject.toml`.
+A consumer whose vocabulary is small never installs anything, and one who needs
+the fast end writes `LexicalSignal(breeds, scorer=fuzz.ratio)` and takes the
+dependency in their own tree. That line is prose rather than a fence precisely
+because this repository does not have `rapidfuzz` installed: a block the suite
+cannot run is a block nothing checks, and every other block in this section is
+executed.
+
+**Do not pass `rapidfuzz.fuzz.partial_ratio`.** It scores any substring `1.0`,
+so over a vocabulary whose forms contain one another — which is this one —
+`gold retriever` matches `retriever` at `1.00` and picks the wrong entity. Its
+"it can locate" property is bought with exactly the discrimination this rung
+exists to have, and it also breaks the inequality the probe's bound is derived
+from, so it silently shortens the probe as well.
+
+### What the source has to be able to do
+
+This is the one rung here that needs something `EntitySource` does not publish.
+Every member there takes a form and answers with ids; a query spelling no form
+has nothing to hand them. So the source must also satisfy
+`SurfaceFormCatalog` — one member, `surface_forms()`, answering with every form
+the vocabulary declares:
+
+```python
+from dataknobs_common.entity_resolution import SurfaceFormCatalog
+
+assert isinstance(breeds, SurfaceFormCatalog)     # structural: nothing to register
+```
+
+`MappingEntitySource` satisfies it for free, because its index is already keyed
+by the folded form. A source that does **not** is refused when the rung is
+constructed, rather than yielding a rung that matches nothing — which is where
+this differs from `AliasSignal`, whose fallback is *this vocabulary declares no
+aliases*. A vocabulary may legitimately declare no aliases; none has no forms,
+so an empty answer there is a fact and here would be a misconfiguration wearing
+the costume of one.
+
+It is a separate protocol rather than a member on `EntitySource` for the reason
+`AliasFormSource` is: `EntitySource` is `@runtime_checkable` and consumers
+satisfy it structurally, so a member added to it turns every implementation we
+never see from conforming into non-conforming, silently and at once.
+
+Both sides of the comparison are folded, and with the same function — so this
+rung's `normalizer` defaults to `default_normalizer` where every other rung here
+defaults to no fold at all. The others hand a string to the index and the index
+folds it; this one *is* the comparison, so an unfolded window scored against a
+folded form would read a capital letter as a misspelling.
 
 ## Where a match sat
 
@@ -454,10 +655,22 @@ signal_backends.register("my_rung", MyRung)
 `AsyncDeclaredSignal` is the same for a rung that reaches for data — one
 `async def _hits`, everything else shared.
 
+**To measure rather than look up, set `kind` and `scoring` too.** They are class
+attributes on both bases, defaulting to `DECLARED`/`DECLARED` — which is what
+every rung above means — and a rung proposing an entity the query did not spell
+sets `EvidenceKind.INFERRED` and `Scoring.NATIVE`, then carries its number on
+each `FormHit`. `LexicalSignal` is the one in this package that does, and
+[When the query does not spell the form](#when-the-query-does-not-spell-the-form)
+is what it looks like from the outside.
+
 **To scan rather than compare, override `_located` instead.** `_hits` answers
 with a `frozenset[str]`, which has nowhere to put an offset; `_located` answers
 with `FormHit`s — an id and where its form sat — in the order the rung wants
 them proposed.
+
+**If a near-spelling match is what you want, it ships too.** `LexicalSignal`,
+in the section linked above — and note that its probe is bounded by
+*characters* rather than by tokens, which the next paragraph is the reason for.
 
 **If an n-gram scan is what you want, it ships — construct it.** That is
 `ScanningSignal`, at the top of this page: every span of consecutive tokens
@@ -574,11 +787,16 @@ class MyRung:
 ```
 
 It groups hits by entity so `k` counts **entities** rather than places, keeps
-the order you returned them in, scores each `1.0` with `Scoring.DECLARED`, and
-slices `matched_text` out of the query so the text and the span agree by
-construction rather than because you computed both. A rung that narrows passes
-the ids its filter left standing as `admitted=`; one that does not — like the
-example above — leaves it out.
+the order you returned them in, and slices `matched_text` out of the query so
+the text and the span agree by construction rather than because you computed
+both. A rung that narrows passes the ids its filter left standing as
+`admitted=`; one that does not — like the example above — leaves it out.
+
+Each piece of evidence is `DECLARED` and scored `1.0` unless you say otherwise,
+which is what a rung over declared forms means. A rung that **measures** passes
+`kind=` and `scoring=`, and puts its number on each `FormHit` — the hit's score
+where it has one, `1.0` where it does not, and the candidate's own score is the
+best of its hits'.
 
 This is shared with `DeclaredSignal` rather than parallel to it: the base runs
 the same function, so a rung written against the protocol produces the same
