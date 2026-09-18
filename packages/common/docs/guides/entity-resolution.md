@@ -282,30 +282,36 @@ A near-spelling hit scoring `0.94` still sits **behind** a declared hit scoring
 `1.0`, and not because `0.94` is the smaller number: a cascade positions by the
 first rung that produced an id. Put this rung after the declared ones.
 
-### What it changes about coverage
+### What it does not change: coverage
 
-This is the first rung here whose evidence is `INFERRED` *and* carries a span,
-and `Coverage` is positional — it is the union of the evidence spans and reads
-no `kind` at all. So adding this rung to a cascade changes what
-`unmatched_text()` answers, in two directions:
+This is the first rung here whose evidence is `INFERRED` *and* carries a span.
+Before it, *inferred* meant *unlocated* by construction — a cosine neighbour
+has no position in the utterance it neighbours — so `Coverage` could test for
+a span and get the right answer. A near-spelling proposal is located, so that
+implication became a condition: **`Coverage` counts `DECLARED` spans.**
 
-- **A misspelling it resolved stops being reported as uncovered.** For the
-  query above, a declared-only cascade reports the whole sentence as
-  unmatched; with this rung it reports `('my', 'has been limping')`. That is
-  the reading `unmatched` wants — a phrase the vocabulary *resolved* is not an
-  entry somebody should go and add.
-- **An overreaching window carries its whole extent into `matched`.** The rung
-  reports every window that cleared the threshold rather than choosing one, so
-  on the *correctly spelled* sentence `my golden retriever has been limping` it
-  also proposes `golden_retriever` across `my golden retriever` (`0.914`) and
-  `golden retriever has` (`0.889`). `matched_text()` is then
-  `('my golden retriever has',)`, and neither `my` nor `has` is a word the
-  vocabulary matched.
+`DECLARED` is the half kept because *what the vocabulary accounted for* is the
+question both coverage fields are read for, and a near-spelling proposal is
+the rung reporting that the vocabulary accounts for **none** of what the query
+said. Two things follow:
 
-A caller who wants the stricter question — *where was a form the vocabulary
-actually spells* — reads it off the evidence rather than off coverage:
-`EntityCandidate.declared` per candidate, or `kind` on each piece of
-`result.explain(entity_id)`.
+- **A phrase this rung resolved is still reported as uncovered.** For the typo
+  query above, `unmatched_text()` is the whole sentence with this rung and
+  without it. That is what a maintainer wants: the vocabulary does not carry
+  `goldne retriver`, and now they also get a candidate naming the entry it was
+  probably reaching for.
+- **An overreaching window cannot widen `matched`.** The rung reports every
+  window that cleared the threshold rather than choosing one, so on the
+  *correctly spelled* sentence it also proposes `golden_retriever` across
+  `my golden retriever` (`0.914`) and `golden retriever has` (`0.889`). Merged
+  positionally those would report `my` and `has` as covered. They are not.
+
+So adding this rung to a cascade adds candidates and never coverage. Its own
+spans are not hidden — they are on the evidence, where
+`result.explain(entity_id)` hands them over with each piece's `kind`, and
+`EntityCandidate.declared` answers the same question per candidate. A consumer
+wanting *everywhere any rung read something* builds it from those; coverage
+answers the narrower question, which is the one that is hard to reconstruct.
 
 ### The threshold, and what a lower one buys
 

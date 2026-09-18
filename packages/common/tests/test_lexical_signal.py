@@ -951,63 +951,56 @@ def test_a_native_score_keeps_the_result_out_of_distribution_arithmetic(entities
     assert cascade.resolve(TYPO, k=5).as_distribution() is None
 
 
-def test_a_resolved_misspelling_stops_being_reported_as_an_uncovered_phrase(
-    entities, declared_rungs
-):
-    """**Coverage is positional, and this rung is the first to occupy a span
-    it did not declare.**
+def test_an_inferred_hit_does_not_cover_the_words_it_read(entities, declared_rungs):
+    """**Coverage counts declared spans, and this rung is why it says so.**
 
-    ``Coverage`` is the union of the *evidence spans*, so a near-spelling
-    proposal contributes one -- it found something, at a place, and says how
-    near it came. The consequence is a change in what ``unmatched_text()``
-    answers for a composition that includes this rung, and it is a change in
-    the direction the field's own purpose wants: a misspelling the vocabulary
-    resolved is **covered**, and is not a phrase somebody should go and add.
+    ``Coverage`` is the account of *what the vocabulary accounted for*, and
+    the phrase it is read for is the residue: the phrases a corpus's users
+    ask about and the vocabulary does not carry are the next entries somebody
+    should add. A near-spelling proposal is the opposite of an entry that
+    exists -- it is the rung saying the vocabulary carries **nothing** the
+    query spelled -- so counting the words it read as covered would delete
+    exactly the line the field is maintained for.
 
-    Both readings are asserted here because the difference is the finding. A
-    consumer who wants the stricter one -- *where was a form the vocabulary
-    actually spells* -- reads ``kind`` off the evidence, which is what that
-    field is for.
+    So adding this rung to a cascade leaves coverage alone. The typo sentence
+    reads the same with it and without it, and the entities it proposes are
+    in ``ranked()`` where a caller who wants them looks.
     """
     declared_only = CascadingResolver(declared_rungs, entities)
     with_lexical = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
 
-    assert declared_only.resolve(TYPO, k=5).unmatched_text() == (TYPO,), (
-        "no declared form is in this query, so every word of it is uncovered"
-    )
+    assert declared_only.resolve(TYPO, k=5).unmatched_text() == (TYPO,)
 
     result = with_lexical.resolve(TYPO, k=5)
-    assert result.matched_text() == ("goldne retriver",)
-    assert result.unmatched_text() == ("my", "has been limping")
-    assert all(
-        evidence.kind is EvidenceKind.INFERRED
-        for candidate in result.ranked()
-        for evidence in result.explain(candidate.entity_id)
-    ), "everything holding that span open is inferred, which is the recoverable half"
+    assert result.matched_text() == ()
+    assert result.unmatched_text() == (TYPO,), (
+        "the vocabulary still carries nothing this query spelled, which is "
+        "the line a consumer maintaining one acts on"
+    )
+    assert [str(candidate.entity_id) for candidate in result.ranked()] == [
+        "retriever",
+        "golden_retriever",
+    ], "and the proposals are still there, which is what ranked() is for"
 
 
-def test_an_overreaching_window_widens_coverage_past_what_the_vocabulary_matched(
-    entities, declared_rungs
-):
-    """The same mechanism on a query with **no typo in it at all**.
+def test_an_overreaching_window_does_not_widen_coverage(entities, declared_rungs):
+    """The reading that makes the rule worth having, on a query with no typo.
 
     The rung reports every window that cleared the threshold rather than
-    choosing one, which is its documented policy and is right for evidence:
-    containment stays visible in the offsets. Coverage is a union over those
-    spans, so the widest one decides -- and at the default threshold a window
-    padded by a neighbouring word still clears it, because the padding is
-    small against the form. ``my`` and ``has`` are then inside ``matched``,
-    and neither is a word the vocabulary matched.
+    choosing one -- its documented policy, and right for evidence, since
+    containment stays visible in the offsets. At the default threshold a
+    window padded by a neighbouring word still clears it, because the padding
+    is small against the form: ``my golden retriever`` at ``0.914`` and
+    ``golden retriever has`` at ``0.889``.
 
-    Asserted rather than fixed. It is a property of merging a *measured*
-    rung's spans into a positional account, so the reading to change is
-    coverage's rather than the rung's, and that is a decision about a
-    published field.
+    Merged positionally those would carry ``my`` and ``has`` into ``matched``,
+    and neither is a word the vocabulary matched. Counting declared spans
+    alone means the scan decides the extent and the measured rung cannot
+    widen it -- so adding this rung changes what a caller is *told*, and
+    never what is *covered*.
     """
     declared_only = CascadingResolver(declared_rungs, entities)
     with_lexical = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
-
-    assert declared_only.resolve(CLEAN, k=5).matched_text() == ("golden retriever",)
 
     result = with_lexical.resolve(CLEAN, k=5)
     spans = {
@@ -1015,11 +1008,17 @@ def test_an_overreaching_window_widens_coverage_past_what_the_vocabulary_matched
         for candidate in result.ranked()
         for evidence in result.explain(candidate.entity_id)
     }
-    assert ("lexical", "my golden retriever") in spans
+    assert ("lexical", "my golden retriever") in spans, (
+        "the overreaching evidence is still reported -- it is the coverage "
+        "reading that changed, not what the rung found"
+    )
     assert ("lexical", "golden retriever has") in spans
-    assert result.matched_text() == ("my golden retriever has",), (
-        "the union reaches two words the vocabulary never matched, so a "
-        "caller highlighting matched_text() highlights them"
+
+    assert result.matched_text() == ("golden retriever",)
+    assert result.unmatched_text() == ("my", "has been limping")
+    assert result.coverage == declared_only.resolve(CLEAN, k=5).coverage, (
+        "identical to the cascade without this rung, which is the property: "
+        "a rung that measures adds candidates and never coverage"
     )
 
 

@@ -54,12 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can see it, because the work is arithmetic rather than a syscall.
 
   **Its evidence is the first here that is `INFERRED` *and* carries a span**,
-  which changes what `Coverage` reports for a cascade holding this rung: a
-  misspelling it resolved stops being listed by `unmatched_text()`, and an
-  overreaching window carries its whole extent into `matched`. A caller who
-  wants *where a form the vocabulary actually spells was found* reads `kind`
-  off the evidence or `EntityCandidate.declared` off the candidate; `Coverage`
-  is positional and reads neither.
+  which is why `Coverage` now reads the evidence's `kind` --- see *Changed*
+  below. Adding this rung to a cascade adds candidates and never coverage.
 
 - **`SurfaceFormCatalog` / `AsyncSurfaceFormCatalog` --- an optional protocol
   for a source that can hand over its forms.** One member,
@@ -173,6 +169,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a per-item error handler while still absorbing an item's own failure.
 
 ### Changed
+
+- **`Coverage` counts `DECLARED` evidence spans**, where it counted every
+  span that was not `None`. No shipped composition changes: until
+  `LexicalSignal` there was no rung whose evidence was `INFERRED` *and*
+  located, so *inferred* implied *unlocated* by construction and the two
+  tests were one. A near-spelling proposal is located --- it knows exactly
+  which words it scored --- so the implication had to become a condition or
+  the field would change meaning under the first cascade holding such a rung.
+
+  `DECLARED` is the half kept, because *what the vocabulary accounted for* is
+  the question `matched` and `unmatched` are read for, and a near-spelling
+  proposal is a rung reporting that the vocabulary accounts for **none** of
+  what the query said. Counting the words it scored would delete the residue
+  that proposal is evidence for --- the maintenance line `unmatched` exists to
+  give. It would also let an *overreaching* window widen `matched` on a query
+  with no typo in it, since a measured rung reports every window that cleared
+  its threshold and one padded by a neighbouring word still does.
+
+  Nothing is hidden: the proposals are candidates, they carry their spans, and
+  `explain()` hands the evidence over with its `kind`. A consumer wanting
+  everywhere any rung read something builds it from those; coverage answers
+  the narrower question, which is the one that is hard to reconstruct.
 
 - **A rung written on `DeclaredSignal` can now carry a measured score.** The
   two bases gained `kind` and `scoring` as overridable class attributes, and

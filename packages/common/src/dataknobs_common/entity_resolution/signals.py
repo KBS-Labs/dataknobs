@@ -1247,14 +1247,16 @@ class LexicalSignal(DeclaredSignal):
     ``1.0`` and an order by number would be a coin toss.
 
     **It is the first rung here whose evidence carries a span it did not
-    declare**, and that changes what
-    :class:`~dataknobs_common.entity_resolution.values.Coverage` reports for
-    a cascade holding it. A misspelling this rung resolved is *covered* and
-    stops appearing in ``unmatched_text()``, which is the reading that field
-    wants; a window overreaching a neighbouring word carries its whole extent
-    into ``matched``, which is the reading nobody asked for. Both are
-    asserted rather than incidental -- see :class:`Coverage` for what a
-    caller reads instead when they want *where a declared form was found*.
+    declare**, and
+    :class:`~dataknobs_common.entity_resolution.values.Coverage` reads
+    ``DECLARED`` evidence because of it. Until this rung, *inferred* implied
+    *unlocated* by construction and the two tests were one; a near-spelling
+    proposal is located and inferred, so the implication had to become a
+    condition. The effect is that adding this rung to a cascade adds
+    candidates and never coverage: the phrase it resolved stays in
+    ``unmatched_text()``, where a maintainer wants it, and the windows it
+    overreaches into cannot widen ``matched``. Its own spans are on its
+    evidence, which is where a caller reads them.
     """
 
     key = "lexical"
