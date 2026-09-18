@@ -14,15 +14,21 @@ because it has a lifecycle:
     registry = await OntologyRegistry.from_config_async(
         cfg.resolve_for_build("ontology")
     )
-    onto = registry.get("catalog")
-    entity = await onto.entity(onto.localize("catalog:sku-4471"))
-    ...
-    await registry.close()
+    async with registry:
+        onto = registry.get("catalog")
+        entity = await onto.entity(onto.localize("catalog:sku-4471"))
+        ...
 
 The vocabulary itself stays a value. It is the registry that opened the
 handles, so it is the registry that closes them -- and only the ones it opened:
 a handle handed to :meth:`~OntologyRegistry.from_components` belongs to
 whoever built it.
+
+The block is ``await registry.close()`` on the way out, and the reason to
+prefer it is the way out an exception takes: a close written after the last
+statement runs on the paths its author thought about, and a registry holding
+database connections has to be released on the other one too. Calling
+``close()`` yourself stays supported -- it is what the block does.
 """
 
 from dataknobs_data.ontology.registry import OntologyRegistry

@@ -85,12 +85,18 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "async_load_ontology", "normalizer", "text"),
     ("<module>", "async_load_ontology", "source", "payload"),
     ("<module>", "async_load_ontology", "->", "bound"),
-    # A taxonomy id, in both positions -- the same space `Ontology.taxonomy`'s
-    # `name` is in. The predicate became public when a third door needed it,
-    # and its `str`s name axes the document declares rather than anything the
-    # entities are keyed by.
-    ("<module>", "axes_to_copy", "taxonomies", "schema"),
-    ("<module>", "axes_to_copy", "->", "schema"),
+    # The assembly the three doors share. `bound` throughout, for the doors'
+    # reason and by the same route: the sources handed in are the ones a door
+    # bound over a document, and a document's ids are the strings its author
+    # typed. The predicate these two call -- which axes to copy -- was briefly
+    # published for the third door and is private again now that the door
+    # calls the assembly instead, so its two rows are gone from here.
+    ("<module>", "assemble_async_ontology", "assertions", "bound"),
+    ("<module>", "assemble_async_ontology", "entities", "bound"),
+    ("<module>", "assemble_async_ontology", "->", "bound"),
+    ("<module>", "assemble_ontology", "assertions", "bound"),
+    ("<module>", "assemble_ontology", "entities", "bound"),
+    ("<module>", "assemble_ontology", "->", "bound"),
     ("<module>", "build_resolver", "config", "payload"),
     ("<module>", "build_resolver", "ontology", "bound"),
     ("<module>", "build_resolver", "->", "bound"),
@@ -414,7 +420,7 @@ _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 312
+_ROWS = 316
 
 
 def _modules() -> Iterator[ast.Module]:

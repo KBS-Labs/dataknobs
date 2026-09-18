@@ -64,10 +64,15 @@ from dataknobs_common.ontology.model import (
     Term,
 )
 from dataknobs_common.ontology.sources import (
+    AssertionSource,
+    AsyncAssertionSource,
+    AsyncEntitySource,
     AsyncMappingAssertionSource,
     AsyncMappingEntitySource,
+    EntitySource,
     MappingAssertionSource,
     MappingEntitySource,
+    SourceDescription,
 )
 from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts, StrCodec
 
@@ -210,21 +215,11 @@ def load_ontology(
     parts = _validated_parts(config)
     entities = MappingEntitySource(parts.declared_entities, normalizer=normalizer)
     assertions = MappingAssertionSource(parts.declared_assertions)
-    return Ontology(
-        id=parts.id,
-        version=parts.version,
-        entity_types=parts.entity_types,
-        relation_types=parts.relation_types,
+    return assemble_ontology(
+        parts,
         entities=entities,
         assertions=assertions,
-        taxonomies=parts.taxonomies,
         describes=(entities.describe(),),
-        codec=StrCodec(),
-        structures={
-            name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
-            for name, definition in axes_to_copy(parts.taxonomies)
-        },
-        imports=parts.imports,
     )
 
 
@@ -262,6 +257,99 @@ async def async_load_ontology(
     parts = _validated_parts(config)
     entities = AsyncMappingEntitySource(parts.declared_entities, normalizer=normalizer)
     assertions = AsyncMappingAssertionSource(parts.declared_assertions)
+    return await assemble_async_ontology(
+        parts,
+        entities=entities,
+        assertions=assertions,
+        describes=(entities.describe(),),
+    )
+
+
+def assemble_ontology(
+    parts: OntologyParts,
+    *,
+    entities: EntitySource[str],
+    assertions: AssertionSource[str],
+    describes: tuple[SourceDescription, ...],
+) -> Ontology[str]:
+    """The value a door returns, from the parts every door has in common.
+
+    Everything a vocabulary carries that is not a *bound source* comes off
+    ``parts`` and is the same for every door: the id, the version, the two
+    type tables, the taxonomy definitions, the imports, the codec, and which
+    structure axes are copied at load. What differs between doors is the three
+    keywords below, which is why they are the three parameters.
+
+    **Extracted because there are three doors and one of them is in another
+    distribution.** ``OntologyRegistry`` (``dataknobs_data.ontology``) is the
+    door that owns a lifecycle and binds live sources, and it assembles a
+    vocabulary of its own from parts this same function shapes. Written out at
+    each door, a field added to :class:`~dataknobs_common.ontology.Ontology`
+    has to be added in three places across a package boundary with nothing
+    checking -- and the drift that produces is quiet, because each door's own
+    tests pass against its own copy.
+
+    ``describes`` is a parameter rather than ``(entities.describe(),)``
+    computed here, although a one-tuple is what all three doors pass today.
+    The field is plural in the value's own declaration because a binding over
+    several sources describes each of them, and a door composing those is what
+    the two "not built yet" refusals in the registry stand in for.
+
+    ``Ontology[str]``, bound rather than generic, for :func:`load_ontology`'s
+    reason: ``parts`` came from a document, and a document's ids are the
+    strings its author typed.
+
+    Args:
+        parts: The validated document, as :func:`build_ontology` maps it
+        entities: The bound entity source this vocabulary reads through
+        assertions: The bound assertion source, which the copied structure
+            axes are walked over
+        describes: One description per bound source, in binding order
+
+    Returns:
+        The vocabulary, with synchronous backings
+    """
+    return Ontology(
+        id=parts.id,
+        version=parts.version,
+        entity_types=parts.entity_types,
+        relation_types=parts.relation_types,
+        entities=entities,
+        assertions=assertions,
+        taxonomies=parts.taxonomies,
+        describes=describes,
+        codec=StrCodec(),
+        structures={
+            name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
+            for name, definition in _axes_to_copy(parts.taxonomies)
+        },
+        imports=parts.imports,
+    )
+
+
+async def assemble_async_ontology(
+    parts: OntologyParts,
+    *,
+    entities: AsyncEntitySource[str],
+    assertions: AsyncAssertionSource[str],
+    describes: tuple[SourceDescription, ...],
+) -> AsyncOntology[str]:
+    """:func:`assemble_ontology`'s twin, and the one the third door calls.
+
+    ``async def`` for the one keyword that differs: a copied structure axis is
+    snapshotted from an asynchronous hierarchy, and there is nowhere in a
+    ``def`` to await that. Everything else is the synchronous twin's, which is
+    why the two sit together rather than each beside the door that calls it.
+
+    Args:
+        parts: The validated document, as :func:`build_ontology` maps it
+        entities: The bound entity source this vocabulary reads through
+        assertions: The bound assertion source
+        describes: One description per bound source, in binding order
+
+    Returns:
+        The vocabulary, with asynchronous backings
+    """
     return AsyncOntology(
         id=parts.id,
         version=parts.version,
@@ -270,37 +358,37 @@ async def async_load_ontology(
         entities=entities,
         assertions=assertions,
         taxonomies=parts.taxonomies,
-        describes=(entities.describe(),),
+        describes=describes,
         codec=StrCodec(),
         structures={
             name: await AsyncMappingHierarchy.snapshot(
                 AsyncAssertionHierarchy(assertions, definition.relation)
             )
-            for name, definition in axes_to_copy(parts.taxonomies)
+            for name, definition in _axes_to_copy(parts.taxonomies)
         },
         imports=parts.imports,
     )
 
 
-def axes_to_copy(
+def _axes_to_copy(
     taxonomies: Mapping[str, TaxonomyDefinition],
 ) -> tuple[tuple[str, TaxonomyDefinition], ...]:
     """The definitions whose structure axis a door must copy at load.
 
-    Shared by the doors rather than written into each. What each door does with
-    the answer *is* flavoured -- one snapshot is a coroutine and the other is
-    not -- but which axes to take is the same question, and it is the question
-    :func:`~dataknobs_common.ontology.values._structure_for` asks again on the
-    way out. Two spellings of it is how a door and an accessor come to disagree
-    about which axes were copied.
+    Shared by the two assemblers rather than written into each. What each does
+    with the answer *is* flavoured -- one snapshot is a coroutine and the other
+    is not -- but which axes to take is the same question, and it is the
+    question :func:`~dataknobs_common.ontology.values._structure_for` asks
+    again on the way out. Two spellings of it is how a door and an accessor
+    come to disagree about which axes were copied.
 
-    **Public, because the third door is in another distribution.** It was
-    private while the only callers were the two module-level doors below.
-    ``OntologyRegistry`` (``dataknobs_data.ontology``) is the door that owns a
-    lifecycle and binds live sources, and it assembles an ``AsyncOntology`` of
-    its own -- so it asks this question too, and a copy of the predicate over
-    there is precisely the drift the paragraph above describes, with a package
-    boundary added to make it harder to notice.
+    **Private again, and that is the point of the assemblers.** It was briefly
+    published, because the third door is in another distribution and had to
+    ask this question for itself. It no longer asks: it calls
+    :func:`assemble_async_ontology`, which asks on its behalf -- so what
+    crosses the package boundary is the whole assembly rather than one
+    predicate out of it, and the surface a consumer can reach for is smaller
+    by exactly the name that was only ever an ingredient.
 
     At load rather than at the accessor because that is the only place both
     flavours can take a copy: ``taxonomy()`` is a plain ``def`` on both twins,

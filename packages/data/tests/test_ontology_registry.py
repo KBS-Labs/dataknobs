@@ -10,14 +10,17 @@ distinction between closing a registry and unloading from one.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from dataknobs_common.events import Event, EventType, InMemoryEventBus
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.events import Event, EventType, InMemoryEventBus, event_bus_backends
+from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import (
     AUTHORED_SOURCE_ID,
     AsyncOntology,
@@ -25,11 +28,17 @@ from dataknobs_common.ontology import (
     async_load_ontology,
 )
 from dataknobs_common.records import Record
-from dataknobs_common.testing import assert_no_blocking, assert_structured_config_consumer
+from dataknobs_common.testing import (
+    assert_no_blocking,
+    assert_structured_config_consumer,
+    requires_package,
+)
 from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 from dataknobs_config.environment_config import ResourceNotFoundError
 
+from dataknobs_data.backends import async_backends
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.factory import async_database_factory
 from dataknobs_data.ontology import OntologyRegistry
 from dataknobs_data.query import Filter, Operator, Query
 
@@ -331,17 +340,34 @@ async def test_the_shipped_refusal_names_a_class_that_now_loads_the_document() -
 def test_the_structured_config_pattern_is_applied() -> None:
     """The mixin's contracts, with the three ctor params that are not config fields.
 
-    `environment`, `strict_resources` and `config_key` are properties of a
-    *registry*, not of an ontology document, so none of them is a field on
-    `OntologyConfig` and none should be. Naming them is the guard's own
-    documented channel for saying so. The other direction cannot drift: the
-    ctor takes `**kwargs` through the mixin, so every config field is accepted
-    by construction.
+    `environment`, `strict_resources`, `config_key` and `normalizer` are
+    properties of a *registry*, not of an ontology document, so none of them
+    is a field on `OntologyConfig` and none should be. Naming them is the
+    guard's own documented channel for saying so. The other direction cannot
+    drift: the ctor takes `**kwargs` through the mixin, so every config field
+    is accepted by construction.
     """
     assert_structured_config_consumer(
         OntologyRegistry,
-        ignore_params={"environment", "strict_resources", "config_key"},
+        ignore_params=set(OntologyRegistry.CONSTRUCTION_SETTINGS),
     )
+
+
+def test_the_registrys_own_settings_are_declared_once() -> None:
+    """`CONSTRUCTION_SETTINGS` and the ctor's keyword-only parameters are one fact.
+
+    Spelled twice, they drift, and the drift is quiet in the direction that
+    matters: a parameter added to the ctor and not to the set is a setting the
+    published doors go on swallowing, which is the defect the set exists to
+    close. The underscore-prefixed ones are the mixin's channels rather than
+    this registry's settings, and are excluded here for that reason.
+    """
+    declared = {
+        name
+        for name, parameter in inspect.signature(OntologyRegistry.__init__).parameters.items()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY and not name.startswith("_")
+    }
+    assert declared == OntologyRegistry.CONSTRUCTION_SETTINGS
 
 
 async def test_close_releases_what_it_opened_and_leaves_what_it_was_handed(
@@ -386,6 +412,11 @@ async def test_the_three_events_are_a_topic_and_a_type() -> None:
     The rebuild is asserted through the public replacement rather than by
     editing what the registry stored, because a replacement *is* what a rebuild
     is: ``reload`` is ``load(stored, replace=True)`` and nothing else.
+
+    A rebuild is **two** announcements, at the two levels a delta can be over:
+    the ontology's whole declared population, and each axis's own nodes. The
+    entity below is placed on the axis by an assertion, which is what puts it
+    in both.
     """
     seen: list[Event] = []
 
@@ -398,8 +429,12 @@ async def test_the_three_events_are_a_topic_and_a_type() -> None:
     await bus.subscribe("taxonomy:kinds", record)
 
     document = _document(
-        entities=[{"id": "beagle", "type": "Breed", "name": "Beagle"}],
+        entities=[
+            {"id": "beagle", "type": "Breed", "name": "Beagle"},
+            {"id": "dog", "type": "Breed", "name": "Dog"},
+        ],
         entity_types=[{"id": "Breed"}],
+        assertions=[{"subject": "beagle", "relation": "isa", "object": "dog"}],
         sources=[],
         taxonomies=[{"id": "kinds", "relation": "isa"}],
     )
@@ -410,18 +445,23 @@ async def test_the_three_events_are_a_topic_and_a_type() -> None:
 
         seen.clear()
         renamed = dict(document)
-        renamed["entities"] = [{"id": "beagle", "type": "Breed", "name": "Beagle Hound"}]
+        renamed["entities"] = [
+            {"id": "beagle", "type": "Breed", "name": "Beagle Hound"},
+            {"id": "dog", "type": "Breed", "name": "Dog"},
+        ]
         await registry.load(renamed, replace=True)
         assert [(e.topic, e.type) for e in seen] == [
             ("ontology:t", EventType.DELETED),
             ("ontology:t", EventType.CREATED),
+            ("ontology:t", EventType.UPDATED),
             ("taxonomy:kinds", EventType.UPDATED),
         ]
         # The third set is the point: a rename keeps its id, so a two-set
         # delta would report it as no change at all.
-        rebuilt = seen[-1].payload
-        assert rebuilt["gone"] == [] and rebuilt["arrived"] == []
-        assert rebuilt["renamed"] == ["beagle"]
+        for rebuilt in (seen[-2].payload, seen[-1].payload):
+            assert rebuilt["gone"] == [] and rebuilt["arrived"] == []
+            assert rebuilt["renamed"] == ["beagle"]
+        assert seen[-1].payload["taxonomy_id"] == "kinds"
     finally:
         await registry.close()
         await bus.close()
@@ -644,3 +684,766 @@ async def test_a_configured_load_does_no_blocking_io_on_the_loop(
             assert (await registry.load(stored)).id == "catalog"
     finally:
         await registry.close()
+
+
+# --------------------------------------------------------------------------
+# What a published door can carry
+# --------------------------------------------------------------------------
+
+
+#: An authored vocabulary with a copied structure axis, and nothing live.
+#:
+#: Authored so that every door below can load it with no handle, no
+#: environment and no file; the axis is materialized because ``structures`` is
+#: the assembly keyword most likely to be left out of a door that writes the
+#: assembly itself.
+AUTHORED = {
+    "id": "t",
+    "version": "1.1",
+    "imports": ["other"],
+    "entity_types": [{"id": "Species"}],
+    "entities": [
+        {"id": "mammal", "type": "Species", "name": "Mammal"},
+        {"id": "dog", "type": "Species", "name": "The Hound", "aliases": ["Canine"]},
+    ],
+    "assertions": [{"subject": "dog", "relation": "isa", "object": "mammal"}],
+    "taxonomies": [
+        {
+            "id": "species",
+            "name": "Species",
+            "relation": "isa",
+            "materialization": {"structure": "materialized"},
+        }
+    ],
+}
+
+
+def _authored(**overrides: Any) -> dict[str, Any]:
+    """:data:`AUTHORED` with keys added or replaced."""
+    return {**AUTHORED, **overrides}
+
+
+async def _empty(door: str, **settings: Any) -> OntologyRegistry:
+    """A registry holding no document, built through the named door.
+
+    The settings travel as loose keywords in every case, which is the point:
+    three of these four doors have the shape ``(config, **components)`` and
+    put everything that is not the config into the component channel, so a
+    setting only arrives if the constructor takes it back out of there.
+    """
+    if door == "construct":
+        return OntologyRegistry(**settings)
+    if door == "from_config":
+        return OntologyRegistry.from_config(OntologyConfig(id=""), **settings)
+    if door == "from_config_async":
+        return await OntologyRegistry.from_config_async(OntologyConfig(id=""), **settings)
+    return OntologyRegistry.from_components(config=OntologyConfig(id=""), **settings)
+
+
+@pytest.mark.parametrize(
+    "door", ["construct", "from_config", "from_config_async", "from_components"]
+)
+async def test_every_door_carries_the_environment_this_registry_resolves_against(
+    deployment: Path, door: str
+) -> None:
+    """`environment=` reaches the registry through whichever door it was written on.
+
+    `construct` is the control: it is the door whose signature names the
+    setting, and it passed before the other three did. The other three name
+    nothing but `config` and `**components`, so an environment written on one
+    of them landed on `self.components`, where the registry never looked --
+    and the load below then reached `async_database_factory` holding an
+    unresolved `$resource` block.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    stored = OntologyRegistry.get_portable_config(cfg)
+    registry = await _empty(door, environment=cfg.environment)
+    try:
+        assert (await registry.load(stored)).id == "catalog"
+    finally:
+        await registry.close()
+
+
+async def test_a_door_carries_the_strictness_level(
+    deployment: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`strict_resources=False` written on a door degrades where the default raises.
+
+    The pair, because the lenient answer alone is also what a registry that
+    ignored the keyword would give if the default were lenient -- and it is
+    not. What proves the level was read through the door is that two
+    registries built the same way, differing in that one keyword, answer
+    differently over one document.
+    """
+    (deployment / "config/apps/catalog.yaml").write_text(APP_WITH_A_MISSING_RESOURCE)
+    environment = EnvironmentConfig.load("production")
+    stored = OntologyRegistry.get_portable_config(EnvironmentAwareConfig.load_app("catalog"))
+
+    strict = await _empty("from_config_async", environment=environment)
+    try:
+        with pytest.raises(ResourceNotFoundError):
+            await strict.load(stored)
+    finally:
+        await strict.close()
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        lenient = await _empty("from_config_async", environment=environment, strict_resources=False)
+        try:
+            assert (await lenient.load(stored)).id == "catalog"
+        finally:
+            await lenient.close()
+    assert "it declares no inline defaults, so this resolves to an empty config" in caplog.text
+
+
+async def test_a_door_carries_the_section_key() -> None:
+    """`config_key=` written on a door reaches the read that uses it."""
+    registry = await _empty("from_config_async", config_key="vocab")
+    try:
+        assert (await registry.load({"vocab": _authored()})).id == "t"
+    finally:
+        await registry.close()
+
+
+def _drop_the(text: str) -> str:
+    """A fold that differs from the default in one observable way."""
+    return text.strip().casefold().removeprefix("the ")
+
+
+async def test_the_registrys_normalizer_reaches_the_authored_source() -> None:
+    """A fold handed to the registry is the fold the vocabulary it builds uses.
+
+    The module-level door has taken `normalizer=` since it shipped; the
+    registry loading the same document could not be given one, so the same
+    vocabulary folded differently depending on which door loaded it.
+    """
+    registry = await _empty("from_config_async", normalizer=_drop_the)
+    try:
+        ontology = await registry.load(_authored())
+        assert await ontology.by_surface_form("hound") == frozenset({"dog"})
+    finally:
+        await registry.close()
+
+    default = await _empty("from_config_async")
+    try:
+        ontology = await default.load(_authored())
+        # `The Hound` folds to `the hound` under the default, so the form a
+        # consumer folded their own way does not reach it.
+        assert await ontology.by_surface_form("hound") == frozenset()
+    finally:
+        await default.close()
+
+
+async def test_the_registrys_normalizer_reaches_a_record_source() -> None:
+    """The same fold, on the live half, over a lookup table folded with it.
+
+    This is the half the parameter was documented for: a consumer who folded
+    their `surface_forms:` table with their own callable needs the source
+    reading it to fold the query the same way, and the registry is the door
+    that builds that source.
+    """
+    document = _document(
+        sources=[
+            {
+                "id": "products",
+                "kind": "record",
+                "entity_projection": {
+                    "table": "products",
+                    "id": "sku",
+                    "name": "title",
+                    "type": {"const": "Product"},
+                    "surface_forms": {
+                        "table": "product_forms",
+                        "form": "folded_form",
+                        "entity": "sku",
+                    },
+                },
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                    {"name": "folded_form", "type": "string"},
+                ],
+            }
+        ]
+    )
+    store = AsyncMemoryDatabase()
+    await store.create(Record({"sku": "sku-4471", "title": "The Beagle"}))
+    await store.create(Record({"folded_form": "beagle", "sku": "sku-4471"}))
+
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=store, normalizer=_drop_the
+    )
+    try:
+        ontology = await registry.load()
+        assert await ontology.by_surface_form("The Beagle") == frozenset({"sku-4471"})
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# One assembly, three doors
+# --------------------------------------------------------------------------
+
+
+async def test_the_registry_and_the_module_door_assemble_one_vocabulary() -> None:
+    """Every field that is not a bound source agrees across the two doors.
+
+    The guard on the extraction: both doors call one assembler, so a keyword
+    added to `AsyncOntology` and threaded at one of them cannot pass here. It
+    is asserted field by field rather than by equality because the two
+    vocabularies hold *different* source objects by construction -- which is
+    the one difference between them, and the reason the rest must match.
+    """
+    document = _authored()
+    from_module = await async_load_ontology(document)
+    registry = await OntologyRegistry.from_config_async(document)
+    try:
+        from_registry = registry.get("t")
+        assert from_registry is not None
+        for field in (
+            "id",
+            "version",
+            "entity_types",
+            "relation_types",
+            "taxonomies",
+            "imports",
+        ):
+            assert getattr(from_registry, field) == getattr(from_module, field), field
+        assert type(from_registry.codec) is type(from_module.codec)
+        # The copied axis, by what it answers: the snapshot is a value with
+        # no equality of its own, and what matters is that the registry took
+        # one at all and took it over the same edges.
+        assert set(from_registry.structures) == {"species"}
+        copied, published = from_registry.structures["species"], from_module.structures["species"]
+        assert type(copied) is type(published)
+        assert await copied.roots() == await published.roots()
+        assert await copied.parents("dog") == await published.parents("dog") == ("mammal",)
+        assert [d.source_id for d in from_registry.describes] == [
+            d.source_id for d in from_module.describes
+        ]
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# The bus a document configures
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def probe_bus() -> Iterator[InMemoryEventBus]:
+    """A bus a document can name, which the test holds a reference to.
+
+    Registered rather than injected, because what is under test is the path a
+    *configured* bus takes -- an injected one wins over it and would hide the
+    question.
+    """
+    bus = InMemoryEventBus()
+    event_bus_backends.register("probe", lambda config: bus)
+    try:
+        yield bus
+    finally:
+        event_bus_backends.unregister("probe")
+
+
+async def test_the_configured_door_announces_on_the_bus_the_document_declares(
+    probe_bus: InMemoryEventBus,
+) -> None:
+    """`from_config_async` builds the bus its document configures, and publishes to it.
+
+    The door the guide leads with, and the one that could not configure a bus
+    at all: the block was read off the raw mapping, and every published door
+    coerces to `OntologyConfig` before the constructor sees anything, so what
+    the constructor read was always `None`. A bus configured this way is also
+    this registry's to close.
+    """
+    seen: list[Event] = []
+
+    async def record(event: Event) -> None:
+        seen.append(event)
+
+    await probe_bus.subscribe("ontology:t", record)
+    registry = await OntologyRegistry.from_config_async(_authored(event_bus={"backend": "probe"}))
+    try:
+        assert [event.type for event in seen] == [EventType.CREATED]
+        assert registry._event_bus is probe_bus
+        assert registry._owns_event_bus is True
+    finally:
+        await registry.close()
+
+
+async def test_a_configured_bus_is_built_off_the_event_loop(tmp_path: Path) -> None:
+    """Building the bus does no blocking I/O on the caller's loop.
+
+    A backend factory reads a file here, standing in for what every built-in
+    one does: import its driver -- `asyncpg`, `redis`, `aioboto3` -- inside
+    the factory call, so that a base install pulls none of them. That import
+    is disk I/O, it happens on the first bus of its backend in a process and
+    never again, and it was running on whatever loop the caller had.
+    """
+    probe = tmp_path / "driver.txt"
+    probe.write_text("a stand-in for the driver an event bus backend imports\n")
+
+    def _factory(config: dict[str, Any]) -> InMemoryEventBus:
+        Path(config["driver"]).read_text(encoding="utf-8")
+        return InMemoryEventBus()
+
+    event_bus_backends.register("slow-probe", _factory)
+    registry = None
+    try:
+        with assert_no_blocking():
+            registry = await OntologyRegistry.from_config_async(
+                _authored(event_bus={"backend": "slow-probe", "driver": str(probe)})
+            )
+    finally:
+        if registry is not None:
+            await registry.close()
+        event_bus_backends.unregister("slow-probe")
+
+
+# --------------------------------------------------------------------------
+# What teardown leaves behind
+# --------------------------------------------------------------------------
+
+
+class _CountingBus(InMemoryEventBus):
+    """A real in-memory bus that records how many times it was closed.
+
+    A real bus rather than a stand-in, because what is under test is the
+    registry's bookkeeping and not the bus's: ``InMemoryEventBus.close`` is
+    itself idempotent, so the second close is invisible from the outside
+    unless something counts it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closes = 0
+
+    async def close(self) -> None:
+        self.closes += 1
+        await super().close()
+
+
+class _UnconnectableBus(InMemoryEventBus):
+    """A bus whose ``connect()`` fails, as a backend with a bad address would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    async def connect(self) -> None:
+        raise OperationError("the probe bus cannot reach its broker")
+
+    async def close(self) -> None:
+        self.closed = True
+        await super().close()
+
+
+async def test_close_forgets_the_bus_it_built_and_keeps_the_one_it_was_handed() -> None:
+    """A second ``close()`` closes an owned bus once, and an injected one never.
+
+    ``close()`` empties ``_handles``, so the handle half is idempotent; the bus
+    half was not, because the two fields recording it survived the close. A
+    registry closed twice therefore closed an owned bus twice, and an
+    ``unload()`` after a close published a departure to a bus this registry had
+    already torn down.
+
+    The injected half is the other direction, and it is why the reset is
+    conditional: a bus this registry did not close is still live, so the
+    departure event a post-close ``unload()`` announces has somewhere to go.
+    """
+    built = _CountingBus()
+    event_bus_backends.register("counting-probe", lambda config: built)
+    try:
+        registry = await OntologyRegistry.from_config_async(
+            _authored(event_bus={"backend": "counting-probe"})
+        )
+        await registry.close()
+        await registry.close()
+        assert built.closes == 1
+        assert registry._event_bus is None
+        assert registry._owns_event_bus is False
+    finally:
+        event_bus_backends.unregister("counting-probe")
+
+    handed_over = _CountingBus()
+    await handed_over.connect()
+    seen: list[Event] = []
+
+    async def record(event: Event) -> None:
+        seen.append(event)
+
+    await handed_over.subscribe("ontology:t", record)
+    injected = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored()), event_bus=handed_over
+    )
+    await injected.load()
+    await injected.close()
+    assert handed_over.closes == 0, "it was handed over, so it is not this registry's to close"
+    assert injected._event_bus is handed_over
+    seen.clear()
+    assert await injected.unload("t") is True
+    assert [event.type for event in seen] == [EventType.DELETED]
+    await handed_over.close()
+
+
+async def test_a_bus_whose_connect_fails_is_closed_rather_than_leaked() -> None:
+    """A backend that fails mid-connect never reaches ``close()``, so it is closed here.
+
+    Ownership was recorded *after* the connect, so a bus that raised was
+    discarded still holding whatever its constructor acquired -- and the
+    registry, having recorded nothing, had no way to release it. The load
+    still fails; what changes is that nothing is left behind, and that a
+    retry builds a fresh bus rather than finding a broken one wired in.
+    """
+    unconnectable = _UnconnectableBus()
+    event_bus_backends.register("unconnectable-probe", lambda config: unconnectable)
+    try:
+        registry = OntologyRegistry.from_components(config=OntologyConfig(**_authored()))
+        with pytest.raises(OperationError, match="cannot reach its broker"):
+            await registry.load(_authored(event_bus={"backend": "unconnectable-probe"}))
+        assert unconnectable.closed is True
+        assert registry._event_bus is None
+        assert registry._owns_event_bus is False
+        await registry.close()
+    finally:
+        event_bus_backends.unregister("unconnectable-probe")
+
+
+# --------------------------------------------------------------------------
+# One handle per block, decided on the loop
+# --------------------------------------------------------------------------
+
+
+#: How many times the probe backend below was constructed. Module level
+#: because a registered backend is a class and the registry constructs it,
+#: so there is nowhere in the call to hand a counter.
+_OPENED: list[str] = []
+
+
+class _SlowMemoryDatabase(AsyncMemoryDatabase):
+    """A real memory store that takes long enough to build to overlap with itself.
+
+    The sleep is the whole point: without it two concurrent loads may or may
+    not be inside the factory at once, and a race asserted by timing is a
+    test that passes for the wrong reason roughly as often as it fails.
+    """
+
+    def _setup(self) -> None:
+        super()._setup()
+        _OPENED.append("built")
+        time.sleep(0.05)
+
+
+def _probe_document(ontology_id: str) -> dict[str, Any]:
+    """A live binding over the probe backend -- no environment, no file."""
+    return {
+        "id": ontology_id,
+        "entity_types": [{"id": "Product"}],
+        "sources": [
+            {
+                "id": "products",
+                "kind": "record",
+                "database": {"backend": "probeslow"},
+                "entity_projection": {
+                    "table": "products",
+                    "id": "sku",
+                    "name": "title",
+                    "type": {"const": "Product"},
+                },
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                ],
+            }
+        ],
+    }
+
+
+async def test_two_concurrent_loads_over_one_block_open_one_handle() -> None:
+    """The cache is checked on the loop, so two loads cannot both miss it.
+
+    The check-then-set ran inside the worker thread the open was offloaded
+    to, so two concurrent loads naming one resolved block each found the
+    cache empty and each opened a handle -- two connections where the
+    docstring promises one, and two entries in ``_handles`` for one store.
+
+    The document is loaded twice under two ids rather than once, because a
+    second load of the *same* id is refused before it reaches a handle.
+    """
+    _OPENED.clear()
+    async_backends.register("probeslow", _SlowMemoryDatabase)
+    registry = OntologyRegistry()
+    try:
+        await asyncio.gather(
+            registry.load(_probe_document("first")),
+            registry.load(_probe_document("second")),
+        )
+        assert _OPENED == ["built"], "one resolved block is one handle"
+        assert [owned for _, owned in registry._handles] == [True]
+    finally:
+        await registry.close()
+        async_backends.unregister("probeslow")
+
+
+@requires_package("aiosqlite")
+async def test_a_binding_naming_two_tables_opens_a_handle_for_each(tmp_path: Path) -> None:
+    """The arrangement the whole two-handle path exists for, over a backend that has tables.
+
+    ``memory``, ``file``, ``s3`` and ``elasticsearch`` declare no ``table`` on
+    their config, so every test above binds one handle however many tables the
+    projection names -- which left the branch that opens a second one, and the
+    ``connect()`` a SQL backend needs before its first read, covered by
+    nothing.
+
+    Both halves are asserted: two handles, and a read that crosses them.
+    """
+    path = str(tmp_path / "catalog.db")
+    entities = async_database_factory.create(backend="sqlite", path=path, table="products")
+    forms = async_database_factory.create(backend="sqlite", path=path, table="product_forms")
+    await entities.connect()
+    await forms.connect()
+    try:
+        await entities.create(Record({"sku": "sku-4471", "title": "Beagle"}))
+        await forms.create(Record({"folded_form": "beagle", "sku": "sku-4471"}))
+    finally:
+        await entities.close()
+        await forms.close()
+
+    document = _document(
+        sources=[
+            {
+                "id": "products",
+                "kind": "record",
+                "database": {"backend": "sqlite", "path": path},
+                "entity_projection": {
+                    "table": "products",
+                    "id": "sku",
+                    "name": "title",
+                    "type": {"const": "Product"},
+                    "surface_forms": {
+                        "table": "product_forms",
+                        "form": "folded_form",
+                        "entity": "sku",
+                    },
+                },
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                    {"name": "folded_form", "type": "string"},
+                ],
+            }
+        ]
+    )
+    registry = OntologyRegistry()
+    try:
+        ontology = await registry.load(document)
+        assert len(registry._handles) == 2, "a backend whose config names a table is one table's"
+        assert all(owned for _, owned in registry._handles)
+        entity = await ontology.entity("sku-4471")
+        assert entity is not None and entity.name == "Beagle"
+        assert await ontology.by_surface_form("Beagle") == frozenset({"sku-4471"})
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# What a refusal names
+# --------------------------------------------------------------------------
+
+
+async def test_reload_names_the_condition_rather_than_reporting_it_unloaded() -> None:
+    """A vocabulary the constructor loaded is loaded; it just cannot be re-resolved.
+
+    ``reload`` reads the **portable** document this registry stored, and only
+    :meth:`load` stores one. The configured door is handed the already-resolved
+    form, so there is nothing for a re-resolution to do -- and the refusal said
+    ``No ontology loaded with id 't'`` about an id ``list_ids()`` reports.
+    """
+    registry = await OntologyRegistry.from_config_async(_authored())
+    try:
+        assert registry.list_ids() == ["t"]
+        with pytest.raises(KeyError, match="already-resolved"):
+            await registry.reload("t")
+        with pytest.raises(KeyError, match="No ontology loaded"):
+            await registry.reload("never-loaded")
+    finally:
+        await registry.close()
+
+
+async def test_load_refuses_with_the_error_type_it_documents() -> None:
+    """Every refusal ``load`` makes is a ``ValidationError`` carrying a context.
+
+    Two were not: no argument over a registry constructed with no document
+    raised a bare ``ValueError``, and a config of the wrong type raised
+    ``TypeError`` from the coercion. Both are refusals of a *document*, which
+    is what the rest of this module spells one way.
+    """
+    empty = OntologyRegistry()
+    try:
+        with pytest.raises(ValidationError, match="constructed with none"):
+            await empty.load()
+        with pytest.raises(ValidationError, match="OntologyConfig or a Mapping"):
+            await empty.load(42)  # type: ignore[arg-type]
+    finally:
+        await empty.close()
+
+
+# --------------------------------------------------------------------------
+# A rebuild, per axis
+# --------------------------------------------------------------------------
+
+
+#: Two axes over two relations, with a disjoint population under each.
+TWO_AXES: dict[str, Any] = {
+    "id": "t",
+    "entity_types": [{"id": "Thing"}],
+    "entities": [
+        {"id": "beagle", "type": "Thing", "name": "Beagle"},
+        {"id": "dog", "type": "Thing", "name": "Dog"},
+        {"id": "crimson", "type": "Thing", "name": "Crimson"},
+        {"id": "red", "type": "Thing", "name": "Red"},
+    ],
+    "assertions": [
+        {"subject": "beagle", "relation": "isa", "object": "dog"},
+        {"subject": "crimson", "relation": "shade_of", "object": "red"},
+    ],
+    "taxonomies": [
+        {"id": "kinds", "relation": "isa"},
+        {"id": "colours", "relation": "shade_of"},
+    ],
+}
+
+
+async def _delta_bus() -> tuple[InMemoryEventBus, list[Event]]:
+    """A bus subscribed to the ontology topic and both axis topics."""
+    seen: list[Event] = []
+
+    async def record(event: Event) -> None:
+        seen.append(event)
+
+    bus = InMemoryEventBus()
+    await bus.connect()
+    for topic in ("ontology:t", "taxonomy:kinds", "taxonomy:colours"):
+        await bus.subscribe(topic, record)
+    return bus, seen
+
+
+def _delta(seen: list[Event], topic: str) -> dict[str, Any]:
+    """The one ``UPDATED`` payload this topic carried."""
+    updates = [e.payload for e in seen if e.topic == topic and e.type is EventType.UPDATED]
+    assert len(updates) == 1, f"{topic} carried {len(updates)} deltas"
+    return updates[0]
+
+
+async def test_a_rebuilt_axis_carries_its_own_delta_and_not_the_ontologys() -> None:
+    """A subscriber to one axis hears about that axis.
+
+    The three sets were computed over the whole declared population and then
+    published once per axis, so a rename in ``kinds`` arrived on
+    ``taxonomy:colours`` as a change to the colour axis. The whole-population
+    delta is still published -- an entity in no axis at all would otherwise
+    change nowhere -- but on the ontology's own topic, which is the level it
+    is a delta over.
+    """
+    bus, seen = await _delta_bus()
+    registry = OntologyRegistry.from_components(config=OntologyConfig(**TWO_AXES), event_bus=bus)
+    try:
+        await registry.load()
+        seen.clear()
+        renamed = dict(TWO_AXES)
+        renamed["entities"] = [
+            {"id": "beagle", "type": "Thing", "name": "Beagle Hound"},
+            *[e for e in TWO_AXES["entities"] if e["id"] != "beagle"],
+        ]
+        await registry.load(renamed, replace=True)
+
+        assert _delta(seen, "ontology:t")["renamed"] == ["beagle"]
+        assert _delta(seen, "taxonomy:kinds")["renamed"] == ["beagle"]
+        colours = _delta(seen, "taxonomy:colours")
+        assert (colours["gone"], colours["arrived"], colours["renamed"]) == ([], [], [])
+    finally:
+        await registry.close()
+        await bus.close()
+
+
+async def test_an_axis_a_rebuild_removes_reports_its_population_gone() -> None:
+    """The loop ran over the new axes only, so a removed one announced nothing.
+
+    Its subscribers were the ones with most to learn: the axis they read is no
+    longer declared, and every node that was in it has left.
+    """
+    bus, seen = await _delta_bus()
+    registry = OntologyRegistry.from_components(config=OntologyConfig(**TWO_AXES), event_bus=bus)
+    try:
+        await registry.load()
+        seen.clear()
+        without = dict(TWO_AXES)
+        without["taxonomies"] = [{"id": "kinds", "relation": "isa"}]
+        await registry.load(without, replace=True)
+
+        colours = _delta(seen, "taxonomy:colours")
+        assert colours["gone"] == ["crimson", "red"]
+        assert (colours["arrived"], colours["renamed"]) == ([], [])
+        kinds = _delta(seen, "taxonomy:kinds")
+        assert (kinds["gone"], kinds["arrived"], kinds["renamed"]) == ([], [], [])
+    finally:
+        await registry.close()
+        await bus.close()
+
+
+# --------------------------------------------------------------------------
+# The block that closes what the registry opened
+# --------------------------------------------------------------------------
+
+
+async def test_the_registry_closes_what_it_opened_when_the_block_ends(
+    deployment: Path,
+) -> None:
+    """``async with`` is ``close()``, so the ownership story is enforced not remembered.
+
+    Entry builds nothing. A registry opens handles at :meth:`load`, so there
+    is no ``connect()`` here to pair the exit with -- which is the difference
+    from :class:`AsyncDatabase`'s block and the reason entry only hands back
+    the registry.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = await OntologyRegistry.from_config_async(cfg.resolve_for_build("ontology"))
+    async with registry as entered:
+        assert entered is registry, "entry hands back the registry, not a wrapper"
+        built = [handle for handle, owned in registry._handles if owned]
+        assert built, "a configured registry resolved its own handle"
+        assert registry.list_ids() == ["catalog"]
+
+    assert all(getattr(handle, "_connected", False) is False for handle in built)
+    # The vocabulary stays listed: the block is close(), which is not unload().
+    assert registry.list_ids() == ["catalog"]
+
+
+async def test_the_block_closes_on_the_way_out_of_an_exception(deployment: Path) -> None:
+    """The half that makes it worth having: the path a ``finally`` is forgotten on.
+
+    A handle released only when the caller remembers is released only on the
+    paths the caller thought about, and this is the other one.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = await OntologyRegistry.from_config_async(cfg.resolve_for_build("ontology"))
+    built = [handle for handle, owned in registry._handles if owned]
+    assert built
+
+    with pytest.raises(RuntimeError, match="from inside the block"):
+        async with registry:
+            raise RuntimeError("raised from inside the block")
+
+    assert all(getattr(handle, "_connected", False) is False for handle in built)
+
+
+async def test_an_injected_handle_survives_the_block_that_the_registry_did_not_open() -> None:
+    """The block is ``close()`` exactly, so it draws ownership on the same line."""
+    handed_over = await _seeded()
+    async with OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=handed_over
+    ) as registry:
+        await registry.load()
+
+    assert await handed_over.search(Query(filters=[Filter("sku", Operator.EQ, "sku-4471")]))

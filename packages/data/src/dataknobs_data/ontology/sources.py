@@ -21,12 +21,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.capabilities import (
     Capability,
     CapabilityLike,
     CapabilityNotSupportedError,
+    DynamicCapabilityMixin,
 )
 from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import Entity, SourceDescription, SourceRef
@@ -349,7 +350,7 @@ def validate_against_schema(
             )
 
 
-class RecordEntitySource:
+class RecordEntitySource(DynamicCapabilityMixin):
     """An :class:`~dataknobs_common.ontology.AsyncEntitySource` over a table.
 
     Every member that reaches for data is ``async`` because the protocol says
@@ -377,8 +378,24 @@ class RecordEntitySource:
             to both halves
         forms_database: The handle the surface-form table is read through.
             Defaults to ``database``, which is what an injected handle means:
-            one store, whose rows carry whichever columns they carry
+            one store holding rows of both kinds. That arrangement is
+            supported rather than merely tolerated, and
+            :meth:`_entity_filters` is what makes the entity side of it
+            answer with entity rows
     """
+
+    #: Everything a ``kind: record`` binding **can** declare -- the ceiling,
+    #: answerable without an instance, which is what the classmethod half of
+    #: :class:`~dataknobs_common.capabilities.CapabilityContract` is for: a
+    #: caller choosing a source kind has a kind and no source yet.
+    #:
+    #: Both are conditional on the projection, so what any one binding has is
+    #: :meth:`_compute_instance_capabilities`'s answer and is a subset of
+    #: this. That is the whole reason the *dynamic* mixin rather than the
+    #: plain one.
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
+        {Capability.ORIGIN_FETCH, Capability.SURFACE_FORM_LOOKUP}
+    )
 
     def __init__(
         self,
@@ -396,24 +413,55 @@ class RecordEntitySource:
         self._backend = backend or type(database).__name__
         self._normalizer = normalizer or default_normalizer
         self._forms_db = forms_database if forms_database is not None else database
-        # Computed once: both are properties of the projection, which is
-        # configuration and does not change after construction.
-        declared: set[Capability] = set()
-        if projection.expose_origin:
-            declared.add(Capability.ORIGIN_FETCH)
-        if projection.surface_forms is not None:
-            declared.add(Capability.SURFACE_FORM_LOOKUP)
-        self._capabilities = frozenset(declared)
+        # Computed once: every one of these is a property of the projection
+        # and the handles, which are configuration and do not change after
+        # construction.
+        self._shared_store = self._forms_db is self._db
+        self._capabilities = self._declared_capabilities()
+        self._init_capability_cache()
 
     @property
     def projection(self) -> EntityProjection:
         """The map this source projects with -- configuration, and read-only."""
         return self._projection
 
+    def _entity_filters(self) -> list[Filter]:
+        """What narrows a read to the **entity** table, on this pair of handles.
+
+        Empty where the two tables have handles of their own: the three SQL
+        backends declare a ``table`` on their config, so the registry opens
+        one handle per table and a query through either reaches only its own
+        rows.
+
+        Not empty where the handle *is* the store. ``memory``, ``file``,
+        ``s3`` and ``elasticsearch`` declare no table, so one ``$resource``
+        is one store and rows of both kinds live in it -- and a form row
+        carries the projection's id column, because
+        :attr:`SurfaceFormLookup.entity` names the space the projection's
+        ``id:`` names. An id filter alone therefore reaches both kinds, and
+        which one a read answers with is decided by insertion order: over the
+        guide's own example ``get`` can return a form row projected as the
+        entity, with an empty name and no aliases, and report nothing.
+
+        The discriminator is the form column, which is what the *other*
+        direction already relies on: :meth:`by_surface_form` filters on it
+        and reaches only form rows because an entity row does not carry it.
+        This is that same invariant read the other way round, so a shared
+        store needs no assumption it did not already need.
+        """
+        if not self._shared_store or self._projection.surface_forms is None:
+            return []
+        return [Filter(self._projection.surface_forms.form, Operator.NOT_EXISTS)]
+
     async def get(self, entity_id: str) -> Entity[str] | None:
         """The entity this local id names, or None."""
         found = await self._db.search(
-            Query(filters=[Filter(self._projection.id, Operator.EQ, entity_id)]).limit(1)
+            Query(
+                filters=[
+                    Filter(self._projection.id, Operator.EQ, entity_id),
+                    *self._entity_filters(),
+                ]
+            ).limit(1)
         )
         return self._projected(found[0]) if found else None
 
@@ -426,7 +474,12 @@ class RecordEntitySource:
         if not entity_ids:
             return {}
         found = await self._db.search(
-            Query(filters=[Filter(self._projection.id, Operator.IN, list(entity_ids))])
+            Query(
+                filters=[
+                    Filter(self._projection.id, Operator.IN, list(entity_ids)),
+                    *self._entity_filters(),
+                ]
+            )
         )
         projected = (self._projected(record) for record in found)
         return {entity.id: entity for entity in projected}
@@ -444,7 +497,12 @@ class RecordEntitySource:
         if local_id is None:
             return None
         found = await self._db.search(
-            Query(filters=[Filter(self._projection.id, Operator.EQ, local_id)]).limit(1)
+            Query(
+                filters=[
+                    Filter(self._projection.id, Operator.EQ, local_id),
+                    *self._entity_filters(),
+                ]
+            ).limit(1)
         )
         return found[0] if found else None
 
@@ -505,16 +563,33 @@ class RecordEntitySource:
             declares=frozenset({self._projection.const_type}),
         )
 
-    def supports(self, capability: CapabilityLike) -> bool:
-        """Whether this source declares ``capability``.
+    def _declared_capabilities(self) -> frozenset[Capability]:
+        """The two this projection declares, read off the projection.
 
-        The same set :meth:`describe` reports, asked the way
-        :func:`~dataknobs_common.capabilities.require_capability` asks it, so a
-        caller may guard before the call instead of catching after it. One
-        answer, plus the accessor the guard needs.
+        Narrowly typed, and that is why it exists beside the mixin's hook:
+        :attr:`~dataknobs_common.ontology.SourceDescription.capabilities` is
+        ``frozenset[Capability]`` while the hook's is
+        ``frozenset[CapabilityLike]``, which also admits a consumer's own
+        capability string. This class declares enum members only, so the
+        narrow type is the true one and the hook widens it rather than
+        :meth:`describe` narrowing.
         """
-        wanted = capability.value if isinstance(capability, Capability) else str(capability)
-        return wanted in {member.value for member in self._capabilities}
+        declared: set[Capability] = set()
+        if self._projection.expose_origin:
+            declared.add(Capability.ORIGIN_FETCH)
+        if self._projection.surface_forms is not None:
+            declared.add(Capability.SURFACE_FORM_LOOKUP)
+        return frozenset(declared)
+
+    def _compute_instance_capabilities(self) -> frozenset[CapabilityLike]:
+        """The mixin's hook, over the set :meth:`_declared_capabilities` computed.
+
+        Which makes ``supports()``, ``instance_capabilities()`` and
+        ``supported_capabilities()`` this class's too, rather than one of the
+        three hand-rolled here and the other two absent -- so a caller
+        enumerating capabilities *through the contract* sees a contract host.
+        """
+        return self._capabilities
 
     async def by_surface_form(self, form: str) -> frozenset[str]:
         """The ids of entities carrying this form, folded the way this source folds.
@@ -563,14 +638,52 @@ class RecordEntitySource:
         shape rather than this implementation that makes it one: a table with a
         type column answers with a filter, and binding one is the leg that also
         teaches ``declares`` to say *I cannot enumerate*.
+
+        **It costs one pass over the table, every call.** The answer is every
+        id, so nothing bounds what the *caller* receives -- on a million-row
+        binding this returns a million-element set and there is no ``limit:``
+        that would make it something else. What the whole-table read below
+        does bound is the peak in between: a ``Record`` carries the whole row,
+        and ``stream_read`` keeps one batch of them alive rather than all of
+        them, which on the backends that page for real -- Postgres by cursor,
+        DuckDB, SQLite and Elasticsearch by batch -- is the difference between
+        a bounded read and one whose footprint is the table's.
+
+        **The narrowed read stays on ``search``, and the asymmetry is load-
+        bearing rather than an oversight.** ``stream_read`` and ``search`` are
+        separate implementations on every backend and they do not agree
+        everywhere: Postgres's ``stream_read`` open-codes its WHERE clause and
+        *silently drops* non-EQ filters, which is exactly what
+        :meth:`_entity_filters` emits -- ``NOT_EXISTS`` on the form column.
+        Routing that through streaming would answer with form rows projected
+        as entities, on one backend, with no error.
+
+        It is tempting to argue the two cases cannot meet, because a filter is
+        emitted only for a shared store and Postgres declares a ``table`` so
+        the registry gives it one handle per table. **That argument is false
+        and was checked rather than assumed**: a projection whose
+        ``surface_forms:`` names the *same* table as the entity rows keys to
+        one handle on any backend, so ``_shared_store`` is true and the filter
+        is emitted -- a configuration this package accepts today. So the
+        narrowed branch keeps the member whose filter semantics are correct
+        everywhere, and takes the materialising cost with it. That cost is
+        bounded by the same filter: it reads the entity rows, not the table.
         """
         if type_id != self._projection.const_type:
             return frozenset()
-        found = await self._db.all()
+        narrowing = self._entity_filters()
+        if narrowing:
+            return frozenset(
+                str(local_id)
+                for record in await self._db.search(Query(filters=narrowing))
+                if (local_id := record.get_value(self._projection.id)) is not None
+            )
         return frozenset(
-            str(local_id)
-            for local_id in (record.get_value(self._projection.id) for record in found)
-            if local_id is not None
+            {
+                str(local_id)
+                async for record in self._db.stream_read()
+                if (local_id := record.get_value(self._projection.id)) is not None
+            }
         )
 
     def longest_form_tokens(self) -> int | None:

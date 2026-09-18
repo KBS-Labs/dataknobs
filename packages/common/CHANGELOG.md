@@ -20,12 +20,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-memory implementation's private index, which is one implementation away
   from two packages answering the same question two ways.
 
-- **`axes_to_copy`**, exported from `dataknobs_common.ontology`. Which
-  taxonomy definitions have their structure copied at load, as one predicate
-  rather than one per door. It was private while both callers were in this
-  module; a third door lives in another distribution now, and a copy of the
-  predicate over there is how a door and an accessor come to disagree about
-  which axes were copied.
+  The contract has a **reader** as well as a writer. `MappingEntitySource` and
+  its async twin declare the capability --- the index folds every entity's id,
+  name and aliases when it is built, which is exactly what the member answers
+  over --- and a rung that reads the member refuses at construction over a
+  source that withholds it, rather than carrying a call that can only fail.
+  Each rung kind declares whether it reads folded forms, as
+  `reads_surface_forms` on the class and in the registry it is registered
+  under; `exact`, `scan` and `lexical` do, `alias` does not. A consumer's own
+  rung declares the same thing and gets the same guard.
+
+  This reaches the composition **nobody wrote**, which is the one that needed
+  it: a document declaring no `resolver:` section gets the default rungs, two
+  of whose three read the member, and no inspection of the document can see
+  that. The refusal is where the rungs are constructed, which is the one place
+  holding both the composition and the source.
+
+- **`assemble_ontology` / `assemble_async_ontology`**, exported from
+  `dataknobs_common.ontology`. Everything a vocabulary carries that is not a
+  bound source --- the id, the version, the two type tables, the taxonomy
+  definitions, the imports, the codec, and which structure axes are copied at
+  load --- comes off an `OntologyParts` and is the same for every door, so it
+  is written once and the doors pass only what differs:
+
+  ```python
+  parts = build_ontology(config)
+  entities = MySource(parts.declared_entities)
+  onto = await assemble_async_ontology(
+      parts,
+      entities=entities,
+      assertions=MyAssertions(parts.declared_assertions),
+      describes=(entities.describe(),),
+  )
+  ```
+
+  Published because the third door is in another distribution:
+  `OntologyRegistry` (`dataknobs-data`) binds live sources and owns their
+  lifecycle, and assembled a vocabulary of its own. A field added to
+  `Ontology` now reaches all three doors rather than needing to be threaded
+  three times, across a package boundary, with nothing checking.
+
+- **`event_bus:` on `OntologyConfig`**, raw, beside `index:` and `resolver:`
+  and for their reason: a section whose backends belong to other packages,
+  which a module-level loader ignores and a registry reads. It is a declared
+  field rather than a key read off the mapping beside it because every
+  published construction door coerces its argument to this class first, so a
+  section this class does not declare does not survive the trip.
 
 - **`LexicalSignal` / `AsyncLexicalSignal` --- a rung for the query that does
   not spell the form.** Every other rung here answers a lookup, so a query
@@ -223,6 +263,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where it did not; a candidate's is the best of its hits'.
 
 ### Fixed
+
+- **The authored entity sources answer the guard their description
+  declares.** `MappingEntitySource` and its async twin report
+  `Capability.SURFACE_FORM_LOOKUP` from `describe()` and had no `supports`
+  member at all --- and `require_capability` / `supports_capability`, the
+  pre-call guards this surface tells a consumer to use, duck-type on that
+  member and read its absence as *no*. So the guard refused the one source
+  that always folds, for the capability it is built around. Both twins take
+  the contract from `CapabilityMixin` now, over a single constant that the
+  index building the description also reads, so the two answers cannot
+  drift.
+
+- **`supports_capability` is in `dataknobs_common.capabilities.__all__`**
+  alongside `require_capability`. It was reachable by name and absent from
+  the export list, so the non-raising half of a documented pair was missing
+  from `import *` and from anything reading the module's declared surface.
 
 - **A source publishing an index member in the wrong flavour is refused by
   name.** `AliasSignal` checks `isinstance(..., AliasFormSource)` before asking

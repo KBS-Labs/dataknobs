@@ -444,4 +444,5 @@ __all__ = [
     "CapabilityNotSupportedError",
     "DynamicCapabilityMixin",
     "require_capability",
+    "supports_capability",
 ]

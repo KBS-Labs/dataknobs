@@ -26,7 +26,7 @@ beside the protocol is reachable from both.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any
 
 from dataknobs_common.entity_resolution.protocols import AsyncMatchSignal, MatchSignal
 from dataknobs_common.entity_resolution.signals import (
@@ -40,9 +40,6 @@ from dataknobs_common.entity_resolution.signals import (
     ScanningSignal,
 )
 from dataknobs_common.registry import PluginRegistry
-
-if TYPE_CHECKING:
-    from typing import Any
 
 __all__ = ["async_signal_backends", "signal_backends"]
 
@@ -139,14 +136,48 @@ def _make_async_lexical(config: dict[str, Any]) -> AsyncMatchSignal:
 _DECLARED_METADATA = {"flavour": "sync", "needs_io": False}
 _ASYNC_DECLARED_METADATA = {"flavour": "async", "needs_io": False}
 
-signal_backends.register("exact", _make_exact, metadata=_DECLARED_METADATA)
-signal_backends.register("alias", _make_alias, metadata=_DECLARED_METADATA)
-signal_backends.register("scan", _make_scan, metadata=_DECLARED_METADATA)
-signal_backends.register("lexical", _make_lexical, metadata=_DECLARED_METADATA)
-async_signal_backends.register("exact", _make_async_exact, metadata=_ASYNC_DECLARED_METADATA)
-async_signal_backends.register("alias", _make_async_alias, metadata=_ASYNC_DECLARED_METADATA)
-async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARED_METADATA)
-async_signal_backends.register("lexical", _make_async_lexical, metadata=_ASYNC_DECLARED_METADATA)
+
+def _declared(rung: type[Any], base: dict[str, Any]) -> dict[str, Any]:
+    """This rung's registered metadata, with the facts read off the class.
+
+    ``reads_surface_forms`` is a property of the rung and is enforced by the
+    rung -- it refuses at construction over a source that withholds the
+    capability. It is *also* the fact a caller holding a composition and no
+    instances needs, which is the only reason it appears here as well: a
+    loader binding a live source refuses the document before anything is
+    built, and a registry is the one place it can ask.
+
+    Derived rather than restated, because two spellings of one fact drift and
+    the drift is silent: a rung marked here and not on the class refuses
+    nothing, and a rung marked on the class and not here is not refused early.
+    """
+    return dict(base, reads_surface_forms=rung.reads_surface_forms)
+
+
+signal_backends.register(
+    "exact", _make_exact, metadata=_declared(ExactNormalizedSignal, _DECLARED_METADATA)
+)
+signal_backends.register("alias", _make_alias, metadata=_declared(AliasSignal, _DECLARED_METADATA))
+signal_backends.register("scan", _make_scan, metadata=_declared(ScanningSignal, _DECLARED_METADATA))
+signal_backends.register(
+    "lexical", _make_lexical, metadata=_declared(LexicalSignal, _DECLARED_METADATA)
+)
+async_signal_backends.register(
+    "exact",
+    _make_async_exact,
+    metadata=_declared(AsyncExactNormalizedSignal, _ASYNC_DECLARED_METADATA),
+)
+async_signal_backends.register(
+    "alias", _make_async_alias, metadata=_declared(AsyncAliasSignal, _ASYNC_DECLARED_METADATA)
+)
+async_signal_backends.register(
+    "scan", _make_async_scan, metadata=_declared(AsyncScanningSignal, _ASYNC_DECLARED_METADATA)
+)
+async_signal_backends.register(
+    "lexical",
+    _make_async_lexical,
+    metadata=_declared(AsyncLexicalSignal, _ASYNC_DECLARED_METADATA),
+)
 
 
 # A rung that exists in one flavour only is *declared* in the other with a

@@ -13,11 +13,18 @@ failure the second of them is itself about.
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from dataknobs_common.capabilities import Capability, CapabilityNotSupportedError
+from dataknobs_common.capabilities import (
+    Capability,
+    CapabilityContract,
+    CapabilityNotSupportedError,
+    require_capability,
+    supports_capability,
+)
 from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import OntologyConfig
 from dataknobs_common.records import Record
@@ -25,6 +32,10 @@ from dataknobs_common.records import Record
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.ontology import EntityProjection, OntologyRegistry, RecordEntitySource
 from dataknobs_data.query import Filter, Operator, Query
+from dataknobs_data.streaming import StreamConfig
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 PROJECTION: dict[str, Any] = {
     "table": "products",
@@ -458,3 +469,345 @@ def test_the_source_folds_with_the_normalizer_it_was_built_with() -> None:
         normalizer=str.upper,
     )
     assert source._normalizer("beagle") == "BEAGLE"
+
+
+# --------------------------------------------------------------------------
+# One store, two kinds of row -- and the entity side telling them apart
+# --------------------------------------------------------------------------
+
+
+async def _mixed_store() -> AsyncMemoryDatabase:
+    """A shared store holding form rows on **both** sides of the entity row.
+
+    Both sides deliberately. ``get`` takes the first row a search answers and
+    ``get_many`` keeps the last, so a store with form rows on one side only
+    lets whichever member reads from the other end pass by luck. Insertion
+    order is not something the source may depend on, and a suite that seeds
+    one order cannot say so.
+    """
+    return await _store(
+        {"folded_form": "beagle", "sku": "sku-4471"},
+        {"sku": "sku-4471", "title": "Beagle", "alt_names": "hound,beagle dog"},
+        {"folded_form": "hound", "sku": "sku-4471"},
+        # A form row whose entity row is gone -- a stale index, which is the
+        # ordinary state of one written by a separate job.
+        {"folded_form": "ghost", "sku": "sku-9999"},
+    )
+
+
+async def test_get_over_a_shared_store_answers_the_entity_row_not_a_form_row() -> None:
+    """A form row carries the projection's id column, so an id filter matches it.
+
+    On ``memory``, ``file``, ``s3`` and ``elasticsearch`` the handle *is* the
+    store: both kinds of row live in it and one id filter reaches both. The
+    form side already tells them apart -- it filters on a column only a form
+    row carries -- and this is that same rule applied in the other direction.
+    """
+    database = await _mixed_store()
+    registry, ontology = await _bound(
+        database, projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP)
+    )
+    try:
+        found = await ontology.entity("sku-4471")
+        assert found is not None
+        assert found.name == "Beagle", "a form row was projected as the entity"
+        assert found.aliases == ["hound", "beagle dog"]
+    finally:
+        await registry.close()
+
+
+async def test_get_many_over_a_shared_store_answers_the_entity_row_not_a_form_row() -> None:
+    """The bulk member keeps the last row per id, so it fails from the other end."""
+    database = await _mixed_store()
+    registry, ontology = await _bound(
+        database, projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP)
+    )
+    try:
+        found = await ontology.entities.get_many(["sku-4471"])
+        assert set(found) == {"sku-4471"}
+        assert found["sku-4471"].name == "Beagle", "a form row was projected as the entity"
+    finally:
+        await registry.close()
+
+
+async def test_fetch_origin_over_a_shared_store_answers_the_entity_row() -> None:
+    """The origin is the row the entity was projected from, not a row beside it."""
+    database = await _mixed_store()
+    registry, ontology = await _bound(
+        database, projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP)
+    )
+    try:
+        found = await ontology.entity("sku-4471")
+        assert found is not None
+        origin = await ontology.entities.fetch_origin(found.source)
+        assert origin is not None
+        assert origin.get_value("title") == "Beagle", "a form row was returned as the origin"
+    finally:
+        await registry.close()
+
+
+async def test_by_type_over_a_shared_store_does_not_invent_entities_from_form_rows() -> None:
+    """A stale form row names an id no entity row carries; the scan must not report it."""
+    database = await _mixed_store()
+    registry, ontology = await _bound(
+        database, projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP)
+    )
+    try:
+        assert await ontology.entities.by_type("Product") == frozenset({"sku-4471"})
+    finally:
+        await registry.close()
+
+
+async def test_a_binding_with_no_lookup_reads_every_row_it_always_did() -> None:
+    """The discrimination costs nothing where there is nothing to discriminate.
+
+    A projection declaring no ``surface_forms:`` has no form column to
+    exclude, so the entity side asks exactly what it asked before -- asserted
+    because a filter added unconditionally would quietly drop every row of a
+    table that happens to carry no such column.
+    """
+    database = await _store({"sku": "sku-1", "title": "Widget"})
+    registry, ontology = await _bound(database)
+    try:
+        found = await ontology.entity("sku-1")
+        assert found is not None and found.name == "Widget"
+        assert await ontology.entities.by_type("Product") == frozenset({"sku-1"})
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# Every rung that reads a folded lookup, not only the one that named it
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["exact", "scan", "lexical"])
+async def test_a_rung_reading_surface_forms_over_a_binding_with_no_lookup_is_refused(
+    kind: str,
+) -> None:
+    """``exact`` is one of three, and the other two fail identically at query time.
+
+    ``ScanningSignal`` and ``LexicalSignal`` both reach ``by_surface_form``;
+    a refusal naming only ``exact`` lets a document declaring either of them
+    load clean and raise on the first resolve. The set is read from what each
+    rung kind declares about itself, so a consumer's own rung is covered by
+    declaring the same thing.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document(resolver={"rungs": [{"kind": kind}]})),
+        database=await _store(),
+    )
+    try:
+        with pytest.raises(ValidationError) as excinfo:
+            await registry.load()
+        assert "surface_forms" in str(excinfo.value)
+        assert "'products'" in str(excinfo.value)
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize(
+    "resolver",
+    [
+        {"rungs": [{"kind": "alias"}]},
+        {"rungs": []},
+        {},
+    ],
+    ids=["a rung that reads alias forms", "an empty composition", "a section with no rungs"],
+)
+async def test_a_composition_that_reads_no_surface_forms_loads_unchanged(
+    resolver: dict[str, Any],
+) -> None:
+    """The other direction, so the refusal is not "refuse every record binding".
+
+    ``alias`` reads ``by_alias_form``, and an empty composition reads nothing.
+    A document writing either has declared a policy this binding satisfies.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document(resolver=resolver)),
+        database=await _store({"sku": "sku-1", "title": "Widget"}),
+    )
+    try:
+        ontology = await registry.load()
+        assert Capability.SURFACE_FORM_LOOKUP not in ontology.describes[0].capabilities
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# The capability contract, answered rather than re-implemented
+# --------------------------------------------------------------------------
+
+
+async def test_the_source_answers_the_capability_contract_it_advertises() -> None:
+    """Every member of the contract, not only the one a duck-typed guard reads.
+
+    ``supports()`` worked, because :func:`supports_capability` duck-types on
+    it. The other three members did not exist, so a caller enumerating
+    capabilities *through the contract* -- ``isinstance(source,
+    CapabilityContract)``, then ``supported_capabilities()`` for what the kind
+    can do and ``instance_capabilities()`` for what this binding does -- saw a
+    source that was not a contract host at all.
+    """
+    registry, ontology = await _bound(
+        await _store({"sku": "sku-1", "title": "Beagle"}),
+        projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP),
+    )
+    try:
+        source = ontology.entities
+        assert isinstance(source, CapabilityContract)
+        # The classmethod half is the ceiling: what a `kind: record` binding
+        # can declare, answerable before one exists.
+        assert RecordEntitySource.supported_capabilities() == frozenset(
+            {Capability.ORIGIN_FETCH, Capability.SURFACE_FORM_LOOKUP}
+        )
+        assert source.instance_capabilities() == source.describe().capabilities
+        assert source.supports(Capability.SURFACE_FORM_LOOKUP)
+        assert source.supports("surface_form_lookup"), "a raw string is the consumer's spelling"
+        require_capability(source, Capability.ORIGIN_FETCH)
+    finally:
+        await registry.close()
+
+
+async def test_a_binding_without_a_lookup_declares_less_than_its_kind_can() -> None:
+    """The instance set is the projection's answer; the class set is the kind's."""
+    registry, ontology = await _bound(await _store({"sku": "sku-1", "title": "Beagle"}))
+    try:
+        source = ontology.entities
+        assert Capability.SURFACE_FORM_LOOKUP in RecordEntitySource.supported_capabilities()
+        assert Capability.SURFACE_FORM_LOOKUP not in source.instance_capabilities()
+        assert not supports_capability(source, Capability.SURFACE_FORM_LOOKUP)
+        with pytest.raises(CapabilityNotSupportedError):
+            require_capability(source, Capability.SURFACE_FORM_LOOKUP)
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# What the scan costs, on the door it takes
+# --------------------------------------------------------------------------
+
+
+class _ReadDoorProbe(AsyncMemoryDatabase):
+    """A real store that records which read door each call arrived through.
+
+    A subclass rather than a mock, so every call still runs the memory
+    backend's own code and the rows come back for real -- the recording is
+    the only thing added.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.doors: list[str] = []
+
+    async def all(self) -> list[Record]:
+        self.doors.append("all")
+        return await super().all()
+
+    async def search(self, query: Any) -> list[Record]:
+        self.doors.append("search")
+        return await super().search(query)
+
+    def stream_read(
+        self, query: Query | None = None, config: StreamConfig | None = None
+    ) -> AsyncIterator[Record]:
+        self.doors.append("stream_read")
+        return super().stream_read(query, config)
+
+
+@pytest.mark.parametrize(
+    ("projection", "rows", "expected", "door", "refused"),
+    [
+        pytest.param(
+            PROJECTION,
+            [{"sku": "sku-1", "title": "Widget"}, {"sku": "sku-2", "title": "Gadget"}],
+            frozenset({"sku-1", "sku-2"}),
+            "stream_read",
+            "all",
+            id="whole-table-streams",
+        ),
+        pytest.param(
+            dict(PROJECTION, surface_forms=FOLDED_LOOKUP),
+            [
+                {"sku": "sku-1", "title": "Widget"},
+                {"folded_form": "widget", "sku": "sku-1"},
+            ],
+            frozenset({"sku-1"}),
+            "search",
+            "stream_read",
+            id="narrowed-does-not",
+        ),
+    ],
+)
+async def test_the_type_scan_streams_the_read_that_has_no_filter_to_lose(
+    projection: dict[str, Any],
+    rows: list[dict[str, Any]],
+    expected: frozenset[str],
+    door: str,
+    refused: str,
+) -> None:
+    """The whole-table read streams; the narrowed one keeps ``search``, deliberately.
+
+    The asymmetry is the subject. ``stream_read`` bounds what a scan holds,
+    which is worth having on the branch that reads the table -- but the two
+    members are separate implementations per backend and do not agree
+    everywhere: Postgres's ``stream_read`` silently drops non-EQ filters, and
+    ``NOT_EXISTS`` on the form column is exactly what the narrowed branch
+    sends. Streaming that branch would answer with form rows projected as
+    entities, on one backend, with no error.
+
+    ``test_a_sql_backend_can_share_one_store_which_is_why_the_filter_stays_on_search``
+    is the other half: it pins that the two cases *can* meet, so this
+    asymmetry cannot be argued away later.
+    """
+    database = _ReadDoorProbe()
+    for row in rows:
+        await database.create(Record(dict(row)))
+    registry, ontology = await _bound(database, projection=projection)
+    try:
+        database.doors.clear()
+        assert await ontology.entities.by_type("Product") == expected
+    finally:
+        await registry.close()
+
+    assert database.doors[0] == door, f"the scan took {database.doors[0]!r}"
+    assert refused not in database.doors
+
+
+async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_stays_on_search(
+    tmp_path: Path,
+) -> None:
+    """The argument that would license streaming the narrowed branch is false.
+
+    It goes: a filter is emitted only for a shared store, and a shared store
+    is only the backends declaring no ``table``, so Postgres -- the one whose
+    ``stream_read`` drops non-EQ filters -- is never reached with one. The
+    second step does not hold. A projection whose ``surface_forms:`` names the
+    *same* table as its entity rows keys to one handle on **any** backend,
+    including one that declares a ``table``, so the store is shared and the
+    filter is emitted.
+
+    SQLite stands in for Postgres here because it is the SQL backend a test
+    can run; what is being pinned is the *configuration* reaching the filtered
+    branch on a table-declaring backend, which is backend-independent.
+    """
+    document = _document(
+        projection=dict(
+            PROJECTION,
+            surface_forms={"table": "products", "form": "folded_form", "entity": "sku"},
+        ),
+        schema=[*SCHEMA, {"name": "folded_form", "type": "string"}],
+    )
+    document["sources"][0]["database"] = {
+        "backend": "sqlite",
+        "path": str(tmp_path / "catalog.db"),
+    }
+    registry = OntologyRegistry(config=OntologyConfig(**document), strict_resources=False)
+    try:
+        ontology = await registry.load()
+        source = ontology.entities
+        assert len(registry._handles) == 1, "one table named twice is one handle"
+        assert source._shared_store is True
+        assert [f.operator for f in source._entity_filters()] == [Operator.NOT_EXISTS]
+    finally:
+        await registry.close()

@@ -79,7 +79,7 @@ below runs against the file above, exactly as written.
 ```python
 from pathlib import Path
 
-from dataknobs_common import ancestors
+from dataknobs_common import Capability, ancestors
 from dataknobs_common.ontology import (
     AssertionHierarchy,
     build_resolver,
@@ -104,8 +104,10 @@ onto.assertions.find(subject="beagle", relation="isa")  # -> [Assertion(...)]
 
 # (4) leave with something spendable on your own data
 beagle.source  # SourceRef(clinic_db, ...)
-onto.entities.describe().capabilities  # frozenset() -- no ORIGIN_FETCH, so the
-# reference is yours to spend and not ours to dereference
+capabilities = onto.entities.describe().capabilities
+Capability.ORIGIN_FETCH in capabilities  # False -- the reference is yours to
+# spend and not ours to dereference
+Capability.SURFACE_FORM_LOOKUP in capabilities  # True -- step (1) is this one
 
 # (5) the same placement, ranked and with its reasons
 resolver = build_resolver(Path("mammals.yaml"), onto)
@@ -141,6 +143,31 @@ Underneath, the document is validated into an `OntologyConfig` and assembled by
 before any source is constructed over it. Reach for those two when you want the
 parse without the assembly; `load_ontology` is the whole path and is what most
 callers want.
+
+### Writing a door of your own
+
+A door is `build_ontology` for the parse, sources of your own over the result,
+and `assemble_ontology` (or `assemble_async_ontology`) to turn the two back
+into a vocabulary:
+
+```python
+from dataknobs_common.ontology import assemble_async_ontology, build_ontology
+
+parts = build_ontology(config)
+entities = MySource(parts.declared_entities)
+onto = await assemble_async_ontology(
+    parts,
+    entities=entities,
+    assertions=MyAssertions(parts.declared_assertions),
+    describes=(entities.describe(),),
+)
+```
+
+The assembler is published because the third door in this workspace is in
+another distribution — `OntologyRegistry`, in `dataknobs-data`, which binds
+live sources and owns their lifecycle. Everything a vocabulary carries that is
+not a bound source is the same for every door, so it is written once: a field
+added to `Ontology` reaches all three without anyone threading it three times.
 
 ## What one holds
 
@@ -320,6 +347,38 @@ Two capabilities a source may have and need not, across three protocols:
 
 A source that implements one is used through it; a source that does not is
 used without it, and nothing degrades silently.
+
+### The one member that is partial
+
+`by_surface_form` is on the protocol rather than beside it, and is the one
+member a conforming source may decline. The fold is the **source's** —
+a caller hands the query as it was typed — and a source reading a live table
+holds the form as it was written, with no engine primitive folding at query
+time the way `str.casefold` does. Such a source withholds
+`Capability.SURFACE_FORM_LOOKUP` from `describe()` and raises
+`CapabilityNotSupportedError` when asked anyway, because `frozenset()` already
+means *ran and matched nothing* and a cascade falls through to a guessing rung
+on exactly that reading.
+
+An authored vocabulary declares the capability: its index folds every entity's
+id, name and aliases when it is built, which is what the member answers over.
+
+A rung reading the member declares `reads_surface_forms`, and refuses **at
+construction** over a source that withholds it rather than carrying a call that
+can only fail. `exact`, `scan` and `lexical` do; `alias` does not, because it
+reads `by_alias_form` and a vocabulary genuinely may declare no aliases.
+
+Both sources here answer the **capability contract**, so either question
+reaches the same answer — the probe on the description, and the guard the
+capability surface tells you to call:
+
+```python
+from dataknobs_common.capabilities import Capability, require_capability
+
+require_capability(onto.entities, Capability.SURFACE_FORM_LOOKUP)
+onto.entities.supported_capabilities()   # what this kind of source can do
+onto.entities.instance_capabilities()    # what this one does — describe()'s set
+```
 
 ## Taxonomies and how a tree is projected
 

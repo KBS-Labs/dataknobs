@@ -17,9 +17,9 @@ twice; the flavour classes hold only the difference, which is the ``async``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
-from dataknobs_common.capabilities import Capability
+from dataknobs_common.capabilities import Capability, CapabilityLike, CapabilityMixin
 from dataknobs_common.hierarchy import K
 from dataknobs_common.ontology.model import (
     Assertion,
@@ -50,6 +50,21 @@ if TYPE_CHECKING:
 #: is more useful than an empty string: a caller reading ``backend`` learns
 #: what kind of thing this is rather than that the field was not filled in.
 AUTHORED_SOURCE_ID = "authored"
+
+#: What an authored vocabulary can do, as one fact with one spelling.
+#:
+#: Read by the index that builds the description **and** declared by both
+#: twins as their ``SUPPORTED_CAPABILITIES``, because those are the two
+#: questions a consumer may ask -- ``describe().capabilities`` and
+#: :func:`~dataknobs_common.capabilities.require_capability` -- and two
+#: spellings of one answer drift in the direction that hurts: a guard saying
+#: no about a member that works sends every guarded caller down a fallback.
+#:
+#: :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP` and
+#: not ``ORIGIN_FETCH``: the index folds every entity's id, name and aliases
+#: when it is built, which is what the member answers over, and an authored
+#: file has no database behind it to reach an origin in.
+_AUTHORED_CAPABILITIES: frozenset[Capability] = frozenset({Capability.SURFACE_FORM_LOOKUP})
 
 
 @dataclass(eq=True, frozen=False)
@@ -436,19 +451,39 @@ class _EntityIndex:
             # `SourceRef` still travels out intact: we cannot reach the row,
             # the caller can, and saying so costs one capability rather than
             # a caller's failed round trip.
-            capabilities=frozenset(),
+            #
+            # SURFACE_FORM_LOOKUP is present, and is what this index *is*:
+            # the `by_form` map folds every entity's id, name and aliases
+            # with the normalizer it was built with, so the member answers
+            # over forms already folded. Declared rather than left implicit
+            # because a probe on this field is what the capability's contract
+            # instructs a caller to guard with -- a source answering the
+            # member while reporting that it cannot sends every guarded
+            # caller down a fallback path, and a rung reading the field
+            # refuses to build over it.
+            capabilities=_AUTHORED_CAPABILITIES,
             declares=frozenset(self.by_type),
         )
 
 
-class MappingEntitySource:
+class MappingEntitySource(CapabilityMixin):
     """An :class:`EntitySource` over entities already in memory.
 
     Backs a hand-edited vocabulary. ``fetch_origin`` always answers ``None``
     and ``describe()`` says so, which is the honest arrangement: an authored
     file has no database behind it, and an entity's ``source:`` is a reference
     the *consumer* can spend on their own data even though we cannot.
+
+    **A capability contract host**, which is the other half of saying so.
+    ``describe().capabilities`` is where the protocol puts the answer, and
+    :func:`~dataknobs_common.capabilities.require_capability` is the guard
+    the capability surface tells a consumer to use -- and that guard reads
+    ``supports``, which an object without it answers ``False`` to for
+    everything. The source that always folds was refusing the guard for the
+    member it is built around.
     """
+
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = _AUTHORED_CAPABILITIES
 
     def __init__(
         self,
@@ -564,14 +599,19 @@ class MappingEntitySource:
         return self._index.longest_form_tokens()
 
 
-class AsyncMappingEntitySource:
+class AsyncMappingEntitySource(CapabilityMixin):
     """:class:`MappingEntitySource` with ``async`` on the members that read.
 
     Nothing here awaits anything -- the data is already in memory. The class
     exists so an ``AsyncOntology`` over an authored file satisfies the same
     protocol as one over a database, which is what lets a consumer swap the
     backing without rewriting the calls.
+
+    Its twin's capability contract too, and from the same constant: a
+    capability that differs by flavour is a bug in one of the two.
     """
+
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = _AUTHORED_CAPABILITIES
 
     def __init__(
         self,

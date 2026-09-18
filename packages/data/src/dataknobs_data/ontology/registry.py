@@ -21,32 +21,35 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import json
 import logging
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, ClassVar
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
+from dataknobs_common.entity_resolution import async_signal_backends
 from dataknobs_common.events import Event, EventType, create_event_bus
 from dataknobs_common.exceptions import ValidationError
-from dataknobs_common.hierarchy import AsyncMappingHierarchy
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.ontology import (
     AUTHORED_SOURCE_ID,
     AUTHORED_SOURCE_KINDS,
-    AsyncAssertionHierarchy,
+    AssertionHierarchy,
     AsyncMappingAssertionSource,
     AsyncMappingEntitySource,
     AsyncOntology,
     Entity,
+    MappingAssertionSource,
     OntologyConfig,
-    StrCodec,
-    axes_to_copy,
+    assemble_async_ontology,
     build_ontology,
     split_qualified,
 )
 from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
+from dataknobs_data.backend_selection import normalize_backend
+from dataknobs_data.backends import async_backends
 from dataknobs_data.factory import async_database_factory
 from dataknobs_data.fields import FieldType
 from dataknobs_data.ontology.sources import (
@@ -58,9 +61,11 @@ from dataknobs_data.ontology.sources import (
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from dataknobs_common.entity_resolution.protocols import AsyncEntityResolver
     from dataknobs_common.events import EventBus
-    from dataknobs_common.ontology import OntologyParts, SourceDescription
+    from dataknobs_common.ontology import OntologyParts, RelationRef, SourceDescription
     from dataknobs_config import EnvironmentConfig
 
     from dataknobs_data.database import AsyncDatabase
@@ -130,6 +135,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     and never calls ``require_components()``, whose answer would be wrong for
     the configured door. This is the field's first adopter in the tree; if the
     two readings need separating, this is the class that found it.
+
+    **Settings are not collaborators, and both arrive through one channel.**
+    Every door has the shape ``(config, **components)``, so a caller writing
+    ``from_config_async(resolved, environment="production")`` sends a
+    *setting* down the collaborator channel. It is taken back out in
+    ``__init__`` -- see :attr:`CONSTRUCTION_SETTINGS` for the four and for why
+    the lift is there rather than in each door.
     """
 
     CONFIG_CLS: ClassVar[type[OntologyConfig]] = OntologyConfig
@@ -147,6 +159,27 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     #: package that could bind it happens to be importable.
     LIVE_SOURCE_KINDS: ClassVar[frozenset[str]] = frozenset({RECORD_SOURCE_KIND})
 
+    #: This registry's own construction settings, as opposed to the
+    #: collaborators :attr:`EXPECTED_COMPONENTS` names.
+    #:
+    #: **Why the distinction needs a name.** Every published door has the
+    #: shape ``(config, **components)`` and puts everything that is not the
+    #: config into the component channel, so ``from_config_async(resolved,
+    #: environment="production")`` lands the environment on
+    #: ``self.components`` where nothing reads it. These four are lifted back
+    #: out in ``__init__``, which is the one place all four doors -- the three
+    #: the mixin publishes and direct construction -- funnel through. A door
+    #: override per settings would be three copies of the same sorting, and
+    #: the one that got missed would be the silent one.
+    #:
+    #: Kept in step with the keyword-only parameters below by
+    #: ``test_the_registrys_own_settings_are_declared_once``: two spellings of
+    #: one fact drift, and this drift is quiet in the direction that matters
+    #: -- a parameter added here and not there is a setting the doors swallow.
+    CONSTRUCTION_SETTINGS: ClassVar[frozenset[str]] = frozenset(
+        {"environment", "strict_resources", "config_key", "normalizer"}
+    )
+
     def __init__(
         self,
         config: OntologyConfig | Mapping[str, Any] | None = None,
@@ -154,6 +187,8 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         environment: EnvironmentConfig | str | None = None,
         strict_resources: bool | None = True,
         config_key: str = "ontology",
+        normalizer: Callable[[str], str] | None = None,
+        _components: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """Build a registry.
@@ -184,7 +219,33 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             config_key: The section of a stored document that holds the
                 ontology. A document that *is* the section is used as-is, so
                 both shapes a caller can hold resolve to the same answer
+            normalizer: How a surface form is folded, for every source this
+                registry binds -- the authored one and the live one alike.
+                Defaults to
+                :func:`~dataknobs_common.text.default_normalizer`. It is the
+                same parameter the module-level doors carry and the same one
+                :class:`~dataknobs_data.ontology.RecordEntitySource` takes, so
+                a consumer who folded their lookup table with their own
+                callable hands it here once instead of to each half
+            _components: The mixin's collaborator channel. Named rather than
+                left to ``**kwargs`` because the four settings above are
+                lifted out of it -- see :attr:`CONSTRUCTION_SETTINGS`
+
+        Note:
+            Every keyword above may also arrive through a published door, as
+            ``from_config_async(resolved, environment=...)``. The doors put
+            everything that is not the config into ``_components``, so that is
+            where such a keyword lands, and this constructor takes it back
+            out. The channel wins where both carry a name, and that ordering
+            decides nothing: a door has no parameter to pass directly with,
+            and a direct call has no reason to reach for the mixin's internal
+            channel, so the two are never populated at once.
         """
+        settings, collaborators = self._split_settings(_components)
+        environment = settings.get("environment", environment)
+        strict_resources = settings.get("strict_resources", strict_resources)
+        config_key = settings.get("config_key", config_key)
+        normalizer = settings.get("normalizer", normalizer)
         # A name is held, not resolved: `EnvironmentConfig.load` reads a file
         # from disk, and a constructor called inside an `async def` would do
         # that read on the event loop. It happens once, off the loop, at the
@@ -195,6 +256,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         self._environment_name = environment if isinstance(environment, str) else None
         self._strict_resources = strict_resources
         self._config_key = config_key
+        self._normalizer = normalizer
         self._ontologies: dict[str, AsyncOntology[str]] = {}
         self._parts: dict[str, OntologyParts] = {}
         self._documents: dict[str, dict[str, Any]] = {}
@@ -207,21 +269,43 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # handle rather than opening a second connection and leaving the first
         # to a `close()` that may be a long way off.
         self._database_cache: dict[str, AsyncDatabase] = {}
+        # One handle opened at a time, so that the cache lookup and the open
+        # it guards are one step. Held on the loop rather than in the worker
+        # thread the open is offloaded to -- see `_database_handle`.
+        self._handle_lock = asyncio.Lock()
         self._injected_database: AsyncDatabase | None = None
         self._event_bus: EventBus | None = None
         self._owns_event_bus = False
-        # Read off the raw mapping, because `OntologyConfig` has no field for
-        # it and `from_dict` drops what it does not declare -- rightly: a bus
-        # is not part of a vocabulary. It is the registry that owns a
-        # lifecycle, so it is the registry that reads this.
-        self._event_bus_block = _event_bus_block(config)
         # A registry may hold no document at all -- `OntologyRegistry()` then
         # `await registry.load(stored)` is the shape a deployment reading from
         # a backend has. The mixin requires *a* config, and `id` is the one
         # field an ontology cannot do without, so the empty id is what "none
         # was configured" is spelled as: no document can claim it, which is
         # exactly what makes it available to mean this.
-        super().__init__(OntologyConfig(id="") if config is None else config, **kwargs)
+        super().__init__(
+            OntologyConfig(id="") if config is None else config,
+            _components=collaborators or None,
+            **kwargs,
+        )
+
+    @classmethod
+    def _split_settings(
+        cls, components: Mapping[str, Any] | None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The component channel, split into this registry's settings and the rest.
+
+        The settings are *removed* rather than copied out. A setting left in
+        the channel is on ``self.components``, which is what
+        :meth:`~dataknobs_common.structured_config.StructuredConfigConsumer.forwardable_components`
+        hands to a child consumer -- and ``strict_resources=False`` arriving
+        at some other object's constructor is a worse failure than the one
+        this lift exists to fix.
+        """
+        supplied = dict(components or {})
+        settings = {
+            name: supplied.pop(name) for name in list(supplied) if name in cls.CONSTRUCTION_SETTINGS
+        }
+        return settings, supplied
 
     # ----------------------------------------------------------------- hooks
 
@@ -259,8 +343,6 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         """
         if self._prebuilt or not self._config.id:
             return
-        if self._event_bus_block is not None:
-            await self._event_bus_from(self._event_bus_block)
         await self._load_resolved(self._config)
 
     # ------------------------------------------------------------ the config
@@ -273,6 +355,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         An :class:`~dataknobs_config.EnvironmentAwareConfig` answers it
         directly; a mapping is already portable and passes through, copied so
         the caller's dict is not the registry's.
+
+        Raises:
+            TypeError: For anything else. A ``TypeError`` rather than the
+                ``ValidationError`` every refusal in :meth:`load` is: this
+                takes a *holder* of a config rather than a config, so a
+                wrong argument here is a call that cannot be made rather
+                than a document that cannot be accepted
         """
         accessor = getattr(cfg, "get_portable_config", None)
         if callable(accessor):
@@ -322,10 +411,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 environment does not define and the effective level is strict
         """
         if config is None and not self._config.id:
-            raise ValueError(
+            raise ValidationError(
                 "load() with no argument loads the document this registry was "
                 "constructed with, and this one was constructed with none. Pass "
-                "the document, or construct the registry with it"
+                "the document, or construct the registry with it",
+                context={"ontology_id": None},
             )
         await self._ensure_environment()
         document = self._as_document(self._config if config is None else config)
@@ -337,9 +427,6 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             )
         portable = copy.deepcopy(dict(section))
         resolved = self._resolve(portable)
-        bus_block = resolved.get("event_bus")
-        if isinstance(bus_block, Mapping):
-            await self._event_bus_from(bus_block)
         ontology = await self._load_resolved(resolved, replace=replace)
         self._documents[ontology.id] = portable
         return ontology
@@ -382,13 +469,34 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         environment whose ``$resource`` now names a different backend, or a
         ``${VAR}`` that has moved, reaches the sources here.
 
+        **Only :meth:`load` stores a document**, because only :meth:`load` is
+        handed one: the configured door takes the *resolved* form, which is
+        what this method's whole value is measured against. So an id loaded
+        through that door is refused here, and the refusal names that
+        condition rather than reporting the vocabulary absent -- it is
+        loaded, and :meth:`list_ids` says so.
+
         Raises:
-            KeyError: When no document with this id is loaded
+            KeyError: When no ontology with this id is loaded, and when one
+                is but came from the constructor's already-resolved config
         """
         document = self._documents.get(ontology_id)
         if document is None:
-            raise KeyError(f"No ontology loaded with id {ontology_id!r}")
+            raise KeyError(self._unreloadable(ontology_id))
         return await self.load(document, replace=True)
+
+    def _unreloadable(self, ontology_id: str) -> str:
+        """Which of the two reasons this id has no document to re-resolve."""
+        if ontology_id in self._ontologies:
+            return (
+                f"ontology {ontology_id!r} is loaded and cannot be reloaded: it came "
+                f"from the already-resolved config this registry was constructed "
+                f"with, so there is no portable document here to re-resolve against "
+                f"today's environment. Pass the stored document to "
+                f"load(document, replace=True), which is the door reload() is "
+                f"written over"
+            )
+        return f"No ontology loaded with id {ontology_id!r}"
 
     def get(self, ontology_id: str) -> AsyncOntology[str] | None:
         """The vocabulary this id names, or None.
@@ -436,19 +544,27 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         return await ontology.entity(local)
 
     def index(self, ontology_id: str) -> None:
-        """The semantic index built for this ontology, or None.
+        """``None``: the semantic index this ontology declared, which is never one yet.
 
-        ``None`` for every id this registry builds today: the index and its
-        sources are a later leg's, and this member is declared here because
-        absence is a configuration answer rather than an error -- an ontology
-        that declared no ``index:`` section answers ``None`` for good, and one
-        whose registry has no index builder answers the same thing from the
-        other side.
+        The summary says ``None`` rather than *the index, or None* because
+        the annotation does, and a docstring promising a value its signature
+        cannot return is the half a caller reads. The member exists anyway,
+        because absence is a configuration answer rather than an error -- an
+        ontology that declared no ``index:`` section answers ``None`` for
+        good, and one whose registry has no index builder answers the same
+        thing from the other side, so a caller writes the same branch either
+        way and only the reason differs.
 
         It **returns** what ``load()`` built and is not a second way to build
         one. The return type widens to ``SemanticIndex | None`` when that type
         exists; today ``None`` is the only value it can have, and declaring
         that is more useful than declaring a type nothing can produce.
+
+        ``ontology_id`` is unread for the same reason, and is in the signature
+        rather than out of it because :meth:`resolver` -- which answers the
+        same shape of question and *will* read it -- takes it too. A member
+        that grows a parameter when its body starts needing one is a
+        signature change a consumer pays for.
         """
         return None
 
@@ -457,9 +573,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
 
         ``None`` for every id this registry builds today, for :meth:`index`'s
         reason and with :meth:`index`'s contract: it returns what ``load()``
-        built. The ``resolver:`` section *is* read at load -- an ``exact`` rung
-        declared over a live binding with no folded lookup is refused there --
-        so the section is not ignored, only unbuilt.
+        built. The ``resolver:`` section *is* read at load -- a rung that
+        reads folded surface forms, declared over a live binding with none,
+        is refused there -- so the section is not ignored, only unbuilt. A
+        composition the document does not write is refused where its rungs
+        are constructed instead, which is the only place it can be seen.
         """
         return None
 
@@ -473,12 +591,66 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         **It does not unload.** The ids stay listed and the values stay
         reachable; what is gone is the ability to read through them. A caller
         who wants the departure events calls :meth:`unload` first.
+
+        **Idempotent, and that is what the resets below are for**: what this
+        registry owned is closed and *forgotten*, what it was handed is
+        untouched and still recorded. A second call therefore closes nothing
+        twice, and an :meth:`unload` after a close still announces its
+        departure when the bus is one this registry did not close -- which is
+        the case where the bus is still there to hear it.
+
+        **The lists are swapped before the first await**, so a load still in
+        flight appends its handle to the list this close is no longer walking.
+        That handle is the next close's rather than nobody's, which is the
+        one outcome a registry whose thesis is *what it opened it closes* may
+        not have.
         """
-        for handle, owned in self._handles:
-            await close_if_owned(handle, owned, on_error=self._teardown_failed)
-        await close_if_owned(self._event_bus, self._owns_event_bus, on_error=self._teardown_failed)
-        self._handles = []
+        held, self._handles = self._handles, [entry for entry in self._handles if not entry[1]]
         self._database_cache = {}
+        bus, owns_bus = self._event_bus, self._owns_event_bus
+        if owns_bus:
+            self._event_bus = None
+            self._owns_event_bus = False
+        for handle, owned in held:
+            await close_if_owned(handle, owned, on_error=self._teardown_failed)
+        await close_if_owned(bus, owns_bus, on_error=self._teardown_failed)
+
+    async def __aenter__(self) -> Self:
+        """Enter a block whose exit is :meth:`close`.
+
+        **Entry builds nothing, and that is the difference from
+        :class:`~dataknobs_data.database.AsyncDatabase`'s block.** A handle
+        connects on entry because a handle is the thing being opened; a
+        registry opens handles at :meth:`load`, when a document says which
+        ones, so there is nothing here to pair the exit with. Entry hands back
+        the registry and the caller loads inside the block.
+
+        **What the block buys is the path nobody writes.** ``close()`` in a
+        ``finally`` releases handles on the paths its author thought about;
+        the exit below releases them on the other one too, which is the whole
+        of why a lifecycle owner publishes a block rather than documenting a
+        call.
+        """
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Leave the block by closing, however the block ended.
+
+        :meth:`close` exactly -- so the block draws the owned-versus-injected
+        line in the same place, and does not :meth:`unload`. A caller who
+        wants the departure events published calls ``unload`` inside the
+        block, where there is still a bus to publish them to.
+
+        Returns ``None`` rather than ``False``, which suppresses nothing: an
+        exception raised inside the block propagates, with the handles
+        already released.
+        """
+        await self.close()
 
     @staticmethod
     def _teardown_failed(exc: Exception) -> None:
@@ -492,8 +664,9 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             return dict(config.to_dict())
         if isinstance(config, Mapping):
             return dict(config)
-        raise TypeError(
-            f"load: `config` must be an OntologyConfig or a Mapping, got {type(config).__name__}"
+        raise ValidationError(
+            f"load: `config` must be an OntologyConfig or a Mapping, got {type(config).__name__}",
+            context={"config_type": type(config).__name__},
         )
 
     async def _ensure_environment(self) -> None:
@@ -536,10 +709,25 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         *,
         replace: bool = False,
     ) -> AsyncOntology[str]:
-        """Build a vocabulary from an already-resolved document, and announce it."""
+        """Build a vocabulary from an already-resolved document, and announce it.
+
+        **Where an ``event_bus:`` block is read, and the only place.** Both
+        doors arrive here -- the constructor's through :meth:`_ainit` and
+        :meth:`load`'s after resolution -- so reading it here is what makes
+        the two agree about where the block lives. Read off the *typed*
+        config rather than the mapping beside it, because a published door
+        coerces before this object sees anything and a key the type does not
+        declare does not survive that.
+
+        Before the announcement below rather than after, which is the whole
+        point of building it here: a document that configures a bus and loads
+        a vocabulary expects the arrival of that vocabulary on that bus.
+        """
         typed = (
             config if isinstance(config, OntologyConfig) else OntologyConfig.from_dict(dict(config))
         )
+        if typed.event_bus is not None:
+            await self._event_bus_from(typed.event_bus)
         parts = build_ontology(typed)
         if parts.id in self._ontologies and not replace:
             raise ValidationError(
@@ -551,24 +739,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         replaced = self._ontologies.get(parts.id)
         before = self._parts.get(parts.id)
         entities, describes = await self._bind_sources(typed, parts)
-        assertions = AsyncMappingAssertionSource(parts.declared_assertions)
-        ontology: AsyncOntology[str] = AsyncOntology(
-            id=parts.id,
-            version=parts.version,
-            entity_types=parts.entity_types,
-            relation_types=parts.relation_types,
+        ontology = await assemble_async_ontology(
+            parts,
             entities=entities,
-            assertions=assertions,
-            taxonomies=parts.taxonomies,
+            assertions=AsyncMappingAssertionSource(parts.declared_assertions),
             describes=describes,
-            codec=StrCodec(),
-            structures={
-                name: await AsyncMappingHierarchy.snapshot(
-                    AsyncAssertionHierarchy(assertions, definition.relation)
-                )
-                for name, definition in axes_to_copy(parts.taxonomies)
-            },
-            imports=parts.imports,
         )
         # Announced before the swap, so a subscriber reading the registry on
         # the departure event still sees what departed -- and in this order,
@@ -619,7 +794,9 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     context={"source_id": spec.get("id"), "kind": kind},
                 )
         if not live:
-            authored = AsyncMappingEntitySource(parts.declared_entities)
+            authored = AsyncMappingEntitySource(
+                parts.declared_entities, normalizer=self._normalizer
+            )
             return authored, (authored.describe(),)
         if parts.declared_entities:
             raise ValidationError(
@@ -663,7 +840,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         validate_against_schema(
             projection, _declared_schema(spec, binding=source_id), binding=source_id
         )
-        _refuse_an_exact_rung_with_no_lookup(config, projection, binding=source_id)
+        _refuse_a_form_reading_rung_with_no_lookup(config, projection, binding=source_id)
 
         database_block = spec.get("database")
         if self._injected_database is not None:
@@ -697,6 +874,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             projection,
             source_id=source_id,
             backend=backend,
+            normalizer=self._normalizer,
             forms_database=forms_database,
         )
 
@@ -716,31 +894,105 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         declare a ``table`` on their config, so a binding naming two tables
         needs two handles there; ``memory``, ``file``, ``s3`` and
         ``elasticsearch`` declare none, because for them the handle *is* the
-        store and rows of both kinds live in it. A backend that names its unit
-        something else -- Elasticsearch's index -- is given a second one by
-        naming a second ``$resource``, which is the general escape and needs no
-        special case here.
+        store and rows of both kinds live in it.
+
+        **One handle for two tables is a supported arrangement, not a
+        degenerate one**, and what makes it work is on the source rather than
+        here: the surface-form column is what tells the two kinds of row
+        apart, in both directions. See
+        :meth:`~dataknobs_data.ontology.sources.RecordEntitySource._entity_filters`
+        for the invariant that rests on -- an entity row must not carry the
+        form column, which is what the lookup direction already required.
 
         Built once per distinct block-and-table. A second binding naming the
         same one gets neither a second handle nor a second connection, and a
         reload against an unchanged environment resolves to the same block and
         so reuses what is open -- which is what keeps a reload loop from
         accumulating connections that only :meth:`close` would release.
-        """
-        return await asyncio.to_thread(self._open_database, block, table)
 
-    def _open_database(self, block: dict[str, Any], table: str) -> AsyncDatabase:
-        """The blocking half of :meth:`_database_handle`, run in a worker thread."""
-        if _backend_addresses_one_table(block):
-            block["table"] = table
-        key = json.dumps(block, sort_keys=True, default=str)
-        cached = self._database_cache.get(key)
-        if cached is not None:
-            return cached
-        handle: AsyncDatabase = async_database_factory.create(**block)
-        self._database_cache[key] = handle
-        self._handles.append((handle, True))
-        return handle
+        **Against a *changed* environment it does accumulate, and that is the
+        deliberate half.** A reload resolving to a different block is a
+        different key, so it opens a handle and the superseded one stays in
+        ``_handles`` until :meth:`close`. Releasing it at ``replace=True``
+        would be releasing a handle that a vocabulary handed out by
+        :meth:`get` may still be reading through -- the value outlives its
+        entry and this object cannot know who holds one, which is
+        :meth:`unload`'s stated reason for releasing nothing either. So a
+        long-lived loop reloading against an environment that keeps moving
+        grows one handle per distinct resolution, and the way to bound that
+        is to close the registry rather than to reload it forever.
+
+        **The bookkeeping stays on the loop, and only the blocking calls are
+        offloaded.** The cache lookup, the cache write and the append to
+        ``_handles`` are a check-then-set over this registry's own state: run
+        inside the worker thread, two concurrent loads naming one resolved
+        block each found the cache empty and each opened a handle. On the
+        loop, under :attr:`_handle_lock`, they cannot -- the second waits and
+        then finds what the first opened. Two thread hops rather than one is
+        what that costs, and a handle is opened once.
+
+        **Connected here, because this registry built it.** ``memory`` and
+        ``file`` answer a read either way, which is why nothing reported
+        this; every other backend -- the three SQL ones, ``s3`` and
+        ``elasticsearch`` -- raises *Database not connected* on its first
+        query, so a ``$resource`` naming one produced a source that loaded
+        clean and failed on its first read. An injected handle is connected
+        by whoever handed it over, which is the same line ownership is drawn
+        on everywhere else here. Not through
+        :meth:`~dataknobs_data.database.AsyncDatabase.from_backend`, which
+        does both halves in one call: it resolves and builds on the caller's
+        loop, which is the import this offload exists to keep off it.
+        """
+        async with self._handle_lock:
+            keyed = await asyncio.to_thread(self._keyed_block, block, table)
+            key = json.dumps(keyed, sort_keys=True, default=str)
+            cached = self._database_cache.get(key)
+            if cached is not None:
+                return cached
+            handle: AsyncDatabase = await asyncio.to_thread(async_database_factory.create, **keyed)
+            await self._connect_or_close(handle)
+            self._database_cache[key] = handle
+            self._handles.append((handle, True))
+            return handle
+
+    @staticmethod
+    def _keyed_block(block: dict[str, Any], table: str) -> dict[str, Any]:
+        """The resolved block, carrying the table it addresses where that applies.
+
+        The blocking half of the decision, and the reason it is one: asking
+        the backend registry for a name resolves it by *importing* the module
+        that implements it, on the first such question in a process.
+        """
+        keyed = dict(block)
+        if _backend_addresses_one_table(keyed):
+            keyed["table"] = table
+        return keyed
+
+    async def _connect_or_close(self, resource: Any) -> None:
+        """Connect something this registry just built, and close it if that fails.
+
+        The window between *built* and *recorded* is where a collaborator
+        gets lost: a backend that raises mid-connect has already acquired
+        whatever its constructor acquired, and a registry that records
+        ownership afterwards never learns it exists. So the close happens
+        here, where the only reference is, and the caller records only what
+        connected.
+
+        One helper for the handle and the bus, because the hazard is the
+        acquire-then-connect shape rather than either collaborator: the two
+        had the same gap and a second spelling of the remedy is one that can
+        be fixed on one of them.
+
+        ``BaseException`` rather than ``Exception``, so a cancellation
+        between the two steps releases what it interrupted. The close itself
+        is error-isolated -- a teardown that raises must not replace the
+        failure the caller is about to see.
+        """
+        try:
+            await resource.connect()
+        except BaseException:
+            await close_if_owned(resource, True, on_error=self._teardown_failed)
+            raise
 
     async def _publish_departure(self, ontology: AsyncOntology[str]) -> None:
         """Announce a vocabulary leaving, however it is leaving.
@@ -766,30 +1018,61 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     async def _publish_taxonomy_delta(
         self, ontology_id: str, before: OntologyParts, after: OntologyParts
     ) -> None:
-        """Announce what a replacement changed, in three sets rather than two.
+        """Announce what a replacement changed -- once for the whole, once per axis.
 
-        The third set is the point: an entity that **changed name while keeping
-        its id** is in neither *gone* nor *arrived*, so a two-set delta reports
-        a rename as no change at all. An empty payload therefore means a
-        genuine no-op.
+        Three sets rather than two, and the third is the point: an entity
+        that **changed name while keeping its id** is in neither *gone* nor
+        *arrived*, so a two-set delta reports a rename as no change at all.
+        An empty payload therefore means a genuine no-op.
+
+        **A topic carries a delta over what that topic is about.** The three
+        sets are computed over one population per event: the declared
+        entities for the ontology's own topic, and *that axis's nodes* for an
+        axis topic. One delta published to every axis told a subscriber to
+        ``taxonomy:colours`` about a rename in ``taxonomy:sizes``, which is
+        indistinguishable from a change to the axis they read.
+
+        **Both levels, because neither contains the other.** An entity in no
+        axis at all changes nothing on any axis topic and would otherwise be
+        announced nowhere; an axis node that is not a declared entity -- an
+        id an assertion places and no ``entities:`` row names -- is in no
+        ontology-level set. The ontology topic already carries the pair of a
+        departure and an arrival for the replacement itself; this is what
+        *within* it moved.
+
+        **Every axis either side declares**, in the order the new document
+        writes them and then the ones it no longer does. An axis a rebuild
+        removed reports its whole population gone, which is the strongest
+        thing its subscribers can be told: the axis they read is not there
+        any more.
         """
-        was, now = before.declared_entities, after.declared_entities
-        renamed = sorted(
-            entity_id
-            for entity_id, entity in now.items()
-            if entity_id in was and was[entity_id].name != entity.name
+        departed = [t for t in before.taxonomies if t not in after.taxonomies]
+        await self._publish(
+            topic=f"ontology:{ontology_id}",
+            event_type=EventType.UPDATED,
+            payload={
+                "ontology_id": ontology_id,
+                **_three_sets(
+                    before, after, set(before.declared_entities), set(after.declared_entities)
+                ),
+            },
         )
-        payload = {
-            "ontology_id": ontology_id,
-            "gone": sorted(set(was) - set(now)),
-            "arrived": sorted(set(now) - set(was)),
-            "renamed": renamed,
-        }
-        for taxonomy_id in after.taxonomies:
+        for taxonomy_id in (*after.taxonomies, *departed):
+            was_axis = before.taxonomies.get(taxonomy_id)
+            now_axis = after.taxonomies.get(taxonomy_id)
             await self._publish(
                 topic=f"taxonomy:{taxonomy_id}",
                 event_type=EventType.UPDATED,
-                payload={**payload, "taxonomy_id": taxonomy_id},
+                payload={
+                    "ontology_id": ontology_id,
+                    "taxonomy_id": taxonomy_id,
+                    **_three_sets(
+                        before,
+                        after,
+                        _axis_nodes(before, was_axis.relation) if was_axis else set(),
+                        _axis_nodes(after, now_axis.relation) if now_axis else set(),
+                    ),
+                },
             )
 
     async def _publish(self, *, topic: str, event_type: EventType, payload: dict[str, Any]) -> None:
@@ -814,13 +1097,81 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
 
         An injected bus always wins and is never closed by this registry; one
         built here is closed by :meth:`close`, because the registry built it.
+
+        **Off the event loop**, for :meth:`_database_handle`'s reason and the
+        same measured one: every built-in backend factory imports its driver
+        --- ``asyncpg``, ``redis``, ``aioboto3`` --- inside the factory call,
+        so that it is not imported at all in a base install. An import is
+        disk I/O, and it happens on the first bus of that backend in a
+        process and never again, which is the order-dependence that makes
+        this the kind of stall review does not find.
+
+        **Through the synchronous door, deliberately.**
+        ``create_event_bus_async`` exists and awaits a factory whose
+        *construction* is asynchronous, on the caller's loop -- which is
+        right for such a factory and is exactly what must not happen to a
+        synchronous one whose first act is an import. ``EventBusFactory``,
+        the shape the registry publishes for a consumer's own backend, is
+        synchronous, so the door taken here is the one the extension point
+        describes. A consumer whose bus really is built asynchronously builds
+        it themselves and hands it over: that is the ``event_bus``
+        collaborator :attr:`EXPECTED_COMPONENTS` names, and an injected bus
+        wins over a configured one at the line above.
         """
         if self._event_bus is not None:
             return
-        bus = create_event_bus(dict(block))
-        await bus.connect()
+        bus = await asyncio.to_thread(create_event_bus, dict(block))
+        await self._connect_or_close(bus)
         self._event_bus = bus
         self._owns_event_bus = True
+
+
+def _axis_nodes(parts: OntologyParts, relation: RelationRef) -> set[str]:
+    """Every node this relation's edges place, as the axis over them reads it.
+
+    Asked of :class:`~dataknobs_common.ontology.AssertionHierarchy` rather
+    than derived here, because *which edges count* is that class's rule --
+    asserted, of this relation, between entities rather than to a literal --
+    and a second copy of it is one that can disagree with the axis a
+    subscriber is holding. ``parent_edges`` is the member that answers for
+    the whole axis rather than the part a descent from the roots reaches,
+    and it gives every node an entry including one that is only ever a
+    parent.
+
+    Synchronous and over declared rows: an axis a *document* wrote is what a
+    delta between two documents is computed over, which is the same
+    population :meth:`_departing` reads and the same reason -- a live
+    binding's rows change underneath the registry with no reload at all.
+    """
+    axis: AssertionHierarchy[str] = AssertionHierarchy(
+        MappingAssertionSource(parts.declared_assertions), relation
+    )
+    return set(axis.parent_edges())
+
+
+def _three_sets(
+    before: OntologyParts, after: OntologyParts, was: set[str], now: set[str]
+) -> dict[str, list[str]]:
+    """Gone, arrived and renamed over one population, from two documents.
+
+    The population is the caller's -- a declared-entity set for the
+    ontology, an axis's nodes for an axis -- and the *names* are always the
+    two documents', because that is the only place a name is written. An id
+    in the population with no declared row cannot be renamed and is reported
+    only by its arrival or departure.
+    """
+    names_before, names_after = before.declared_entities, after.declared_entities
+    return {
+        "gone": sorted(was - now),
+        "arrived": sorted(now - was),
+        "renamed": sorted(
+            entity_id
+            for entity_id in was & now
+            if entity_id in names_before
+            and entity_id in names_after
+            and names_before[entity_id].name != names_after[entity_id].name
+        ),
+    }
 
 
 def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
@@ -829,12 +1180,21 @@ def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
     Asked of the registered backend's own config class rather than decided
     from a list here, so a consumer-registered backend answers for itself and
     a backend added to this package answers without an edit in this file.
+
+    **Imported at module scope, and the laziness it dropped was buying
+    nothing.** All three names here were once imported in the body, which
+    reads as a deferral this function needs. It does not: this module already
+    imports ``dataknobs_data.factory`` at module scope, and that import alone
+    puts ``backend_selection`` and ``backends`` in ``sys.modules`` before this
+    file finishes loading -- so the statements deferred an import that had
+    already happened. What genuinely stays off the event loop is the
+    ``get_factory`` call below, whose ``on_first_access`` hook imports each
+    backend implementation at *call* time; that is offloaded by
+    :meth:`OntologyRegistry._database_handle`, which runs this whole function
+    in a worker thread, and it would be offloaded from wherever the ``import``
+    statement sat. An in-body import implies a constraint, and the next reader
+    preserves it.
     """
-    import dataclasses
-
-    from dataknobs_data.backend_selection import normalize_backend
-    from dataknobs_data.backends import async_backends
-
     declared = block.get("backend")
     if not declared:
         return False
@@ -843,17 +1203,6 @@ def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
     if config_cls is None or not dataclasses.is_dataclass(config_cls):
         return False
     return any(field.name == "table" for field in dataclasses.fields(config_cls))
-
-
-def _event_bus_block(
-    config: OntologyConfig | Mapping[str, Any] | None,
-) -> dict[str, Any] | None:
-    """An ``event_bus:`` block carried by a mapping handed to a constructor."""
-    if isinstance(config, Mapping):
-        block = config.get("event_bus")
-        if isinstance(block, Mapping):
-            return dict(block)
-    return None
 
 
 def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema | None:
@@ -902,37 +1251,75 @@ def _field_type(declared: Any, *, binding: str) -> FieldType:
         ) from exc
 
 
-def _refuse_an_exact_rung_with_no_lookup(
+def _refuse_a_form_reading_rung_with_no_lookup(
     config: OntologyConfig, projection: EntityProjection, *, binding: str
 ) -> None:
-    """Refuse an ``exact`` rung over a binding that declares no folded lookup.
+    """Refuse a **declared** rung that reads folded forms this binding has none of.
 
     The declared-schema rule's shape, for a second thing the loader cannot
-    introspect. The first
-    rung of a cascade matches surface forms, the **source** folds, and a live
-    table holds the form as it was written -- so a binding under an ``exact``
-    rung either declares where its folded forms live or it is rejected here,
-    at load, naming the key. A binding with no exact rung over it needs none
-    and loads unchanged.
+    introspect. A rung reading
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
+    matches a surface form the person typed against forms the *source* folds,
+    and a live table holds the form as it was written -- so a binding under
+    one either declares where its folded forms live or it is rejected here,
+    at load, naming the key.
+
+    **Which rungs those are is asked, not listed.** ``exact`` is one of
+    three: ``scan`` and ``lexical`` reach the same member, and a refusal
+    naming only the first let a document declaring either of the others load
+    clean and fail on the first resolve. Each kind declares the fact in the
+    registry it is registered under, so this covers a rung added to
+    ``dataknobs-common`` and a consumer's own without an edit here.
+
+    **Declared rungs only, which is narrower than every rung that will be
+    built.** A document with no ``resolver:`` section gets the *default*
+    composition, two of whose three rungs read the member, and nothing in the
+    document says so. That case is not this function's: the rung is refused
+    where it is constructed, by the door that holds both the composition and
+    the source. Refusing it here would refuse every record binding a
+    consumer loads to read entities from and never resolves against --
+    :func:`~dataknobs_common.ontology.loader._refuse_async_only_rungs` states
+    that precedent, and this registry builds no rung at all.
     """
     if projection.surface_forms is not None:
         return
-    section = config.resolver or {}
-    rungs = section.get("rungs") or ()
-    if not any(
-        isinstance(rung, Mapping) and str(rung.get("kind", "")) == "exact" for rung in rungs
-    ):
+    declared = _declared_rung_kinds(config)
+    reading = sorted(
+        kind
+        for kind in declared
+        if async_signal_backends.get_metadata(kind).get("reads_surface_forms")
+    )
+    if not reading:
         return
     raise ValidationError(
-        f"binding {binding!r} is read by an `exact` rung and declares no "
-        f"`surface_forms:`. That rung matches a surface form the person typed "
+        f"binding {binding!r} is read by the {reading} rung(s) and declares no "
+        f"`surface_forms:`. Such a rung matches a surface form the person typed "
         f"against forms the source folds, and a live table holds the form as it "
         f"was written -- no engine folds at query time the way `str.casefold` "
         f"does. Declare the lookup: `surface_forms: {{table: <table>, form: "
         f"<column holding the folded form>, entity: <column holding this "
         f"projection's id>}}`",
-        context={"source_id": binding},
+        context={"source_id": binding, "rungs": reading},
     )
+
+
+def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
+    """The rung kinds this document **writes**, in the order it writes them.
+
+    ``None`` and ``{}`` are different answers upstream -- silence gets the
+    default composition, an empty section is a composition somebody chose --
+    and both are *written* rungs of nothing, so both answer ``()`` here. The
+    distinction is kept in the read rather than collapsed in a ``or {}``,
+    because a later caller asking a different question of this section needs
+    it back and would not find it.
+    """
+    section = config.resolver
+    if section is None:
+        return ()
+    rungs = section.get("rungs")
+    if not isinstance(rungs, list):
+        return ()
+    return tuple(str(rung.get("kind", "")) for rung in rungs if isinstance(rung, Mapping))
 
 
 __all__ = ["OntologyRegistry"]

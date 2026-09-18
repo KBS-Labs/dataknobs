@@ -85,6 +85,22 @@ onto = await registry.load()          # the document it was constructed with
 An injected handle is used for every source in the document, and its
 `database:` block is not resolved: a handle already built needs no name.
 
+### The registry's own settings travel on any door
+
+`environment`, `strict_resources`, `config_key` and `normalizer` are
+properties of a *registry* rather than of a document, so none of them is a
+field on `OntologyConfig`. Write them on whichever door you are already
+using — the constructor names them, and the three published doors carry them
+through the same keyword channel their collaborators arrive on:
+
+```python
+registry = await OntologyRegistry.from_config_async(
+    cfg.resolve_for_build("ontology"),
+    environment="production",      # a setting
+    database=my_handle,            # a collaborator
+)
+```
+
 ## A missing resource raises
 
 ```python
@@ -189,9 +205,25 @@ A table rather than a column, because one folded form reaches many entities and
 one entity is reached by many forms — an entity's id, its name and every one of
 its aliases all fold into it.
 
-A binding whose document declares an `exact` rung and whose projection declares
-no `surface_forms:` is **rejected at load**, naming the key. A binding with no
-exact rung over it needs none and loads unchanged.
+On `sqlite`, `postgres` and `duckdb` the two tables get a handle each, because
+those backends declare a `table` on their config. On `memory`, `file`, `s3` and
+`elasticsearch` the handle *is* the store, so both kinds of row live in one and
+the form column is what tells them apart — `by_surface_form` filters on it and
+reaches only form rows, and the entity-side reads exclude it and reach only
+entity rows. An entity row must therefore not carry the form column, which is
+the same thing the lookup direction already required.
+
+A binding whose document declares a rung that *reads* folded forms — `exact`,
+`scan` or `lexical` — and whose projection declares no `surface_forms:` is
+**rejected at load**, naming the key and the rungs. Which kinds those are is
+read from what each kind declares about itself, so a rung added later, or one a
+consumer registers, is covered without an edit to this package.
+
+A document declaring no `resolver:` section has written no rungs and loads
+unchanged — but silence is the *default* composition, two of whose three rungs
+read the member, so a cascade built over such a binding is refused when the
+rungs are constructed rather than here. A binding loaded only to read entities
+from is never refused for a cascade nobody builds.
 
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:
@@ -206,11 +238,73 @@ falls through to a guessing rung on exactly that reading. A source answering the
 unfolded column would return it for every query whose case differs by one
 letter, and the cascade would report a vocabulary gap that is not there.
 
-The fold is injectable, and it is one callable for both halves:
+The fold is injectable, and it is one callable for both halves — the table
+you folded and the query folded against it:
 
 ```python
 RecordEntitySource(db, projection, source_id="products", normalizer=my_fold)
 ```
+
+Hand it to the registry instead when the registry is what builds the source,
+and it reaches every source that registry binds — the live one and an authored
+vocabulary alike:
+
+```python
+registry = await OntologyRegistry.from_config_async(resolved, normalizer=my_fold)
+```
+
+### `by_type` is a scan, and it is streamed
+
+A projection declares one constant `type:`, so `by_type` over a live binding is
+*every row* for that id — and there is no `limit:` that would make it something
+else, because the answer is every id. What it costs is therefore one pass over
+the table, on every call.
+
+What it does **not** cost is the table in memory. The rows are read through
+`stream_read`, so a batch of `Record`s is alive at a time rather than all of
+them — which on the backends that page for real (Postgres by cursor; DuckDB,
+SQLite and Elasticsearch by batch) is the difference between a bounded read and
+one whose footprint is the table's. The set of ids it returns is still the whole
+population, so a caller with a million-row binding gets a million-element set;
+if that is the wrong shape, the fix is a type column on the table, which is also
+what would let `declares` say it cannot enumerate.
+
+Over a **shared** store the scan narrows to the entity rows, and that read stays
+on `search()` rather than streaming. `stream_read` and `search` are separate
+implementations on every backend and they do not agree everywhere — Postgres's
+`stream_read` silently drops non-EQ filters, which is what this narrowing is —
+so the branch that carries a filter keeps the member whose filter semantics hold
+everywhere. Its cost is bounded by that same filter: it reads the entity rows,
+not the table.
+
+### One handle per table, opened and connected by the registry
+
+Whether a binding naming two tables needs two handles is the **backend's**
+answer, not the registry's, and it is asked rather than assumed: the three SQL
+backends declare a `table` on their config, so `products` and `product_forms`
+are two handles there; `memory`, `file`, `s3` and `elasticsearch` declare none,
+because for them the handle *is* the store and rows of both kinds live in it.
+Both arrangements work — what tells the two kinds of row apart in a shared
+store is the surface-form column, in both directions.
+
+A handle the registry opens it also **connects**, because it opened it: every
+backend but `memory` and `file` raises *Database not connected* on its first
+query. A handle injected through `from_components` is connected by whoever
+handed it over.
+One handle per distinct resolved block and table, built once however many
+bindings name it, and one at a time — so two concurrent loads over one
+`$resource` share a connection rather than opening two. A reload against an
+**unchanged** environment resolves to the same block, so it reuses what is
+open and a reload loop accumulates nothing.
+
+Against a **changed** one it does accumulate, deliberately. A reload resolving
+to a different block is a different handle, and the superseded one stays open
+until `close()` — releasing it at `replace=True` would release a handle that a
+vocabulary `get()` handed out may still be reading through, which is the same
+reason `unload()` releases nothing. A long-lived loop reloading against an
+environment that keeps moving therefore grows one handle per distinct
+resolution; the way to bound it is to close the registry, not to reload it
+forever.
 
 ## What it refuses
 
@@ -231,7 +325,10 @@ Loading, unloading and rebuilding are announced on an injected or configured
 |---|---|---|
 | loaded | `ontology:{id}` | `CREATED` |
 | unloaded | `ontology:{id}` | `DELETED` |
-| rebuilt | `taxonomy:{id}` | `UPDATED` |
+| rebuilt | `ontology:{id}` | `UPDATED` |
+| rebuilt, one axis | `taxonomy:{id}` | `UPDATED` |
+
+A bus is either injected or configured. Injected:
 
 ```python
 from dataknobs_common.events import InMemoryEventBus
@@ -240,6 +337,29 @@ bus = InMemoryEventBus()
 await bus.connect()
 registry = OntologyRegistry.from_components(config=..., event_bus=bus)
 ```
+
+Configured — an `event_bus:` block beside `id:` in the ontology document,
+which the registry builds and closes because it built it:
+
+```yaml
+ontology:
+  id: catalog
+  event_bus:
+    backend: memory
+  sources: [...]
+```
+
+One level and one reader: the block sits in the ontology section, where
+`index:` and `resolver:` sit, and both doors read it after resolution — so a
+`${VAR}` in a connection string is expanded and a bus configured this way is
+connected before the load it announces. An injected bus always wins, and is
+never closed by the registry.
+
+The block is built **off the event loop**, for the reason a handle is: every
+backend factory imports its driver — `asyncpg`, `redis`, `aioboto3` — inside
+the factory call, so that a base install pulls none of them, and an import is
+disk I/O. A backend whose *construction* is genuinely asynchronous is built by
+its owner and injected.
 
 An unload carries the departing ids in one of two forms, decided by the sources
 rather than by a size threshold: the **id set** where every bound source is
@@ -253,7 +373,33 @@ genuine no-op. The delta is over the *declared* population: a live binding's
 rows change underneath the registry with no reload at all, which is what *live*
 means.
 
+**A topic carries a delta over what that topic is about**, so a rebuild
+publishes at two levels. The ontology's own topic gets the delta over its
+declared entities; each axis topic gets the delta over *that axis's nodes* —
+the ones its relation's asserted edges place. Neither contains the other: an
+entity in no axis at all would be announced nowhere, and an id an assertion
+places that no `entities:` row names is in no ontology-level set.
+
+Every axis either document declares gets an event, in the order the new one
+writes them and then the ones it no longer does. An axis a rebuild **removed**
+reports its whole population `gone`, which is the strongest thing its
+subscribers can be told: the axis they read is not there any more.
+
 ## Teardown
+
+```python
+async with await OntologyRegistry.from_config_async(resolved) as registry:
+    ontology = await registry.load(document)
+    ...
+# every handle the registry opened is released here, on the way out of the
+# block -- including the way out an exception takes
+```
+
+The block is `close()` exactly, so everything below is what it does. Entry
+builds nothing and hands back the registry: a handle connects on entry to
+`AsyncDatabase`'s block because a handle is the thing being opened, and a
+registry opens handles at `load()`, when a document says which ones. Writing
+the call yourself is equally supported and is what the examples above do:
 
 ```python
 await registry.close()
@@ -270,6 +416,12 @@ listed after a close and the values stay reachable; what is gone is the ability
 to read through them. And a value `get()` handed back outlives its entry — this
 object cannot know whether you still hold one — so releasing a handle is your
 decision, spelled `close()`.
+
+**It is idempotent**: what the registry owned is closed and forgotten, what it
+was handed is untouched and still recorded. So a second `close()` closes
+nothing twice, and an `unload()` after a close still announces its departure
+when the bus is an injected one — which is the case where a bus is still there
+to hear it.
 
 ```python
 await registry.unload("catalog")   # the events, and the id leaves this registry
