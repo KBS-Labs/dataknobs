@@ -16,6 +16,7 @@ import re
 import pandas as pd
 import pytest
 
+import dataknobs_common.exceptions as dk_exc
 import dataknobs_xization.authorities as dk_auth
 import dataknobs_xization.lexicon as dk_lex
 from dataknobs_common.entity_resolution import EvidenceKind, ScanningSignal, Scoring
@@ -25,6 +26,7 @@ from dataknobs_common.entity_resolution.registry import (
 )
 from dataknobs_common.ontology import Entity, MappingEntitySource
 from dataknobs_common.testing import assert_twin_types_agree
+import dataknobs_xization.entity_resolution as dk_er
 from dataknobs_xization.entity_resolution import AsyncAuthoritySignal, AuthoritySignal
 
 QUERY = "my golden retriever has been limping"
@@ -278,3 +280,183 @@ def test_the_factory_builds_the_rung_a_consumer_configured(one_axis):
     assert isinstance(built, AuthoritySignal)
     assert isinstance(built_async, AsyncAuthoritySignal)
     assert _spans(built.candidates(QUERY, k=5)) == [("golden_retriever", (3, 19))]
+
+
+# ===== A stack whose members name their own columns =====
+
+
+@pytest.fixture
+def mixed_columns() -> dk_auth.AuthoritiesBundle:
+    """The same vocabulary as ``one_per_form``, with one member renaming its columns.
+
+    A supported configuration rather than an exotic one: ``find_matches``
+    documents that a caller reading rows back "wants the other one, because
+    the rows are in their finder's columns and not in this bundle's", and
+    ``find_matches_with_finders`` exists to carry that pairing. So a member
+    built with its own metadata is a case the stack already answers -- and a
+    rung reading every row through one vocabulary is a rung that cannot.
+    """
+    return dk_auth.AuthoritiesBundle(
+        "animals",
+        auths=[
+            dk_auth.RegexAuthority(
+                "golden_retriever",
+                re.compile(re.escape("Golden Retriever"), re.IGNORECASE),
+                lambda _text, _group: "golden_retriever",
+            ),
+            dk_auth.RegexAuthority(
+                "retriever",
+                re.compile(re.escape("Retriever"), re.IGNORECASE),
+                lambda _text, _group: "retriever",
+                auth_anns_builder=dk_auth.AuthorityAnnotationsBuilder(
+                    metadata=dk_auth.AuthorityAnnotationsMetaData(
+                        start_pos_col="begin", end_pos_col="finish"
+                    )
+                ),
+            ),
+        ],
+    )
+
+
+def test_a_member_that_named_its_own_columns_is_read_through_its_own_names(mixed_columns):
+    """Each row is read through the authority that wrote it, not through the stack.
+
+    The rung used to take the column names from the *stack* it was handed and
+    read every row with them. For a bundle that is the wrong vocabulary by
+    construction: its members write in theirs, and a member built with its
+    own metadata produced rows whose position columns the bundle's names do
+    not reach -- read back as ``NaN`` and turned into a span by ``int()``,
+    which raises ``ValueError`` several frames below anything naming an
+    authority.
+    """
+    assert _spans(AuthoritySignal(mixed_columns).candidates(QUERY, k=5)) == [
+        ("golden_retriever", (3, 19)),
+        ("retriever", (10, 19)),
+    ]
+
+
+def test_the_order_survives_a_member_naming_its_own_columns(mixed_columns):
+    """Start ascending and end descending, which is the order the rung publishes.
+
+    The order used to be the shared frame's, and a frame can only sort by one
+    vocabulary -- so a member whose position column the sort could not read
+    was placed by where its ``NaN`` landed rather than by where its match
+    sat. The containing form comes first here because it starts earlier, and
+    :func:`test_one_authority_per_form_keeps_the_overlap` is the same claim
+    over a stack that shares one vocabulary.
+    """
+    spans = [span for _, span in _spans(AuthoritySignal(mixed_columns).candidates(QUERY, k=5))]
+
+    assert spans == sorted(spans, key=lambda span: (span[0], -span[1]))
+
+
+def test_a_row_no_finder_can_read_is_named_rather_than_turned_into_a_span():
+    """The branch that says an authority's ``finders()`` is wrong about it.
+
+    Reachable only by an ``Authority`` that writes rows in a vocabulary it
+    does not report -- which the two shipped arms cannot do, so the subclass
+    below is what such an authority looks like. Worth a named refusal rather
+    than a skip: dropping the row would lose a match silently, and reading it
+    through the wrong names is what produced ``int(NaN)``.
+    """
+
+    class WritesElsewhere(dk_auth.Authority):
+        """Reports its own metadata and writes in somebody else's columns."""
+
+        def has_value(self, value):
+            return True
+
+        def add_annotations(self, text_obj):
+            text_obj.annotations.add_dict(
+                {"who": "retriever", "from": 10, "to": 19, "text": "retriever"}
+            )
+            return text_obj.annotations
+
+    with pytest.raises(dk_exc.ValidationError, match="names the columns of a row it produced"):
+        AuthoritySignal(WritesElsewhere("animal")).candidates(QUERY, k=5)
+
+
+# ===== One assembly, not two =====
+
+
+def test_the_declared_evidence_agrees_with_a_dataknobs_common_rung(entities, one_axis):
+    """The same shape from both, because both assemble through the same function.
+
+    Asserted as an agreement rather than as two literals, because the claim is
+    that what a declared hit's evidence *is* belongs to the cascade's
+    vocabulary and not to whichever rung found the hit. This rung used to
+    carry its own copy of that assembly -- the ``1.0`` by fiat, the
+    :class:`Scoring` member, the ``matched_text`` slice -- in a second
+    distribution, with nothing comparing the two. A change to declared
+    evidence in ``dataknobs_common`` would have reached one and not the other,
+    and no test would have failed.
+
+    The **spans** are deliberately left out of the comparison: that the two
+    rungs locate forms differently is the whole subject of the criteria at the
+    top of this file. What must agree is everything else.
+    """
+    (from_common,) = [
+        candidate
+        for candidate in ScanningSignal(entities).candidates(QUERY, k=5)
+        if candidate.entity_id == "golden_retriever"
+    ]
+    (from_stack,) = AuthoritySignal(one_axis).candidates(QUERY, k=5)
+
+    assert str(from_stack.entity_id) == from_common.entity_id
+    assert from_stack.score == from_common.score
+
+    (stack_evidence,) = from_stack.evidence
+    (common_evidence,) = from_common.evidence
+
+    assert stack_evidence.kind is common_evidence.kind
+    assert stack_evidence.scoring is common_evidence.scoring
+    assert stack_evidence.score == common_evidence.score
+    assert stack_evidence.matched_text == common_evidence.matched_text
+
+
+# ===== A consumer who registered their own rung under this key =====
+
+
+def _consumer_rung(config):
+    """Stand-in for a rung a consumer wrote and registered themselves."""
+    return AuthoritySignal(config["authorities"])
+
+
+@pytest.fixture
+def consumer_owns_the_key():
+    """This key already registered when this module's registration runs.
+
+    Which is the order a consumer following ``dataknobs_common``'s own
+    registry prose produces: *"A consumer who writes either kind and
+    registers their own clears the mark the same way -- which is the
+    extension point, not a leak."*
+    """
+    signal_backends.register("authority", _consumer_rung, override=True)
+    async_signal_backends.register("authority", _consumer_rung, override=True)
+    yield
+    dk_er._register_rungs(override=True)
+
+
+def test_this_packages_registration_does_not_crash_on_a_consumers_own(consumer_owns_the_key):
+    """``register`` refuses a key it already holds, and this one runs at import.
+
+    So a consumer who registered their own ``authority`` rung first made
+    **any** later ``import dataknobs_xization`` raise ``OperationError`` --
+    out of the import statement, naming a registry they may never have heard
+    of, and taking down every other thing this package does. Reaching the
+    import indirectly, for the markdown chunker or the normalizer, was enough.
+    """
+    dk_er._register_rungs()
+
+
+def test_a_consumers_own_rung_survives_this_packages_registration(consumer_owns_the_key):
+    """And it is theirs that stands, not ours.
+
+    The half a bare ``override=True`` would have got wrong: not crashing is
+    not the same as not clobbering, and the registry's prose calls a
+    consumer's own registration the extension point.
+    """
+    dk_er._register_rungs()
+
+    assert signal_backends.get_factory("authority") is _consumer_rung
+    assert async_signal_backends.get_factory("authority") is _consumer_rung

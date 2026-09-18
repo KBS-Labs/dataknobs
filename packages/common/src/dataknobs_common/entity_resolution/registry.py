@@ -131,6 +131,12 @@ async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARE
 # the reason is a sentence rather than a flag. ``semantic`` is
 # flavour-asymmetric: there is no synchronous form of it to register, in this
 # distribution or any other, so the synchronous registry alone carries it.
+# The asynchronous side carries no mark because it is waiting on a class that
+# does not exist yet rather than on an import -- ``SemanticSignal`` is
+# unwritten, here and everywhere, so asking the asynchronous registry for it
+# today reports an unknown kind. That is the gap this mechanism exists to
+# close, and it closes when the rung ships: the mark belongs beside the class,
+# and inventing one now would name an install that supplies nothing.
 # ``authority`` has both flavours and ships in another distribution, so both
 # registries carry it and both marks are cleared the moment an application
 # imports the module that implements it. A consumer who writes either kind and

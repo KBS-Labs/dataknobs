@@ -74,6 +74,7 @@ from dataknobs_common.entity_resolution.signals import (
     DeclaredSignal,
     ExactNormalizedSignal,
     ScanningSignal,
+    declared_candidates,
 )
 from dataknobs_common.entity_resolution.values import (
     ENTITY_TYPE_KEY,
@@ -132,6 +133,7 @@ __all__ = [
     "Within",
     "async_signal_backends",
     "content_span",
+    "declared_candidates",
     "finish",
     "merge_rung",
     "signal_backends",

@@ -156,6 +156,21 @@ A frame left on its default `RangeIndex` therefore resolves every query to a
 layer above can detect it — which is why it is stated here rather than guarded
 in code.
 
+### Under a `within` scope, an id your ontology does not carry is set aside
+
+The cascade decides a scope against **its own** entity source, and an id that
+source does not carry cannot be shown to be inside a type — so it is dropped
+from the candidates and reported separately, under
+`Coverage.beyond_authority`. Not an error, and not silent: it is the channel
+for exactly this case.
+
+It matters most for the capability this rung exists for. A `canonical_fn`
+computing an id from the matched text — the `K-901` above — produces an id that
+is by construction **not** in an ontology that describes chip numbers rather
+than enumerating them. So that resolution answers as shown when asked without a
+scope, and lands in `beyond_authority` the moment one is given. If you need
+such ids to survive a scope, they have to be ids your ontology carries.
+
 ## Reaching it by configuration
 
 `dataknobs_common` declares the key and cannot implement it: `common` does not
@@ -201,15 +216,22 @@ AuthoritySignal authority False
 
 `narrows()` is `False` because an authority stack holds no index of which types
 an entity belongs to, so a scope handed to it could only be ignored or guessed
-at. The cascade rules on this rung's candidates itself.
+at. The cascade rules on this rung's candidates itself — against its own
+source, which is what the note above on `beyond_authority` is about.
 
 ## Both flavours
 
 `AsyncAuthoritySignal` is the same rung for an asynchronous cascade. It exists
-for **composition, not concurrency**: an authority stack is regular expressions
-and in-memory frames, so there is nothing to await and nothing worth offloading.
-What it buys is that a cascade whose other rungs really do reach a store can
-hold this one without a bridge.
+for **composition, not concurrency**: what it buys is that a cascade whose other
+rungs really do reach a store can hold this one without a bridge.
+
+The work runs on the caller's event loop. The two arms here perform no I/O, but
+they are not free — the first call on a dictionary arm materializes the whole
+vocabulary — and a loop is shared, so a co-tenant waits for it. The constructor
+accepts any `Authority`, which is an abstract base you may subclass: one whose
+`add_annotations` reaches a service does **not** belong here, because there is
+no `await` for it to be reached through and it would hold the loop for its
+whole round trip.
 
 ## What this rung is not
 

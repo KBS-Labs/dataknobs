@@ -556,6 +556,35 @@ the key consumers will write as `kind:`; the evidence it produces carries that
 same key, so a caller reading `evidence.signal` can correlate a hit back to
 what they configured.
 
+**What it does not mean is assembling the candidates yourself.** Find your
+hits; `declared_candidates` turns them into what the cascade expects:
+
+```python
+from dataknobs_common.entity_resolution import declared_candidates
+
+
+class MyRung:
+    name = "my_rung"
+
+    def narrows(self) -> bool:
+        return False
+
+    def candidates(self, query, k, *, filter=None):
+        return declared_candidates(self._located(query), k, signal=self.name, query=query)
+```
+
+It groups hits by entity so `k` counts **entities** rather than places, keeps
+the order you returned them in, scores each `1.0` with `Scoring.DECLARED`, and
+slices `matched_text` out of the query so the text and the span agree by
+construction rather than because you computed both. A rung that narrows passes
+the ids its filter left standing as `admitted=`; one that does not — like the
+example above — leaves it out.
+
+This is shared with `DeclaredSignal` rather than parallel to it: the base runs
+the same function, so a rung written against the protocol produces the same
+evidence shape as a shipped one instead of a copy that agrees until one of them
+changes.
+
 Registering also clears an *unavailable* mark. A rung that exists in only one
 flavour is declared in the other with a reason, so asking the synchronous
 registry for it says why rather than `unknown key`:

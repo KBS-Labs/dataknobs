@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.entity_resolution.protocols import AliasFormSource, AsyncAliasFormSource
+from dataknobs_common.hierarchy import K
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
@@ -42,7 +43,7 @@ from dataknobs_common.entity_resolution.values import (
 from dataknobs_common.text import content_span, token_spans
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Iterator, Sequence, Set as AbstractSet
 
     from dataknobs_common.ontology.sources import AsyncEntitySource, EntitySource
 
@@ -55,6 +56,7 @@ __all__ = [
     "DeclaredSignal",
     "ExactNormalizedSignal",
     "ScanningSignal",
+    "declared_candidates",
 ]
 
 #: A declared hit's score. 1.0 by fiat and carrying no information, which is
@@ -64,8 +66,8 @@ _DECLARED_SCORE = 1.0
 
 
 def _candidate(
-    entity_id: str, signal: str, query: str, found: Sequence[FormHit]
-) -> EntityCandidate:
+    entity_id: K, signal: str, query: str, found: Sequence[FormHit[K]]
+) -> EntityCandidate[K]:
     """One declared entity, with one piece of evidence per place it was found.
 
     **Every declared hit carries a span**, including the whole-string one.
@@ -122,15 +124,30 @@ def _folded(query: str, normalizer: Callable[[str], str] | None) -> str:
     return query if normalizer is None else normalizer(query)
 
 
-def _grouped(
-    found: Sequence[FormHit],
-    admitted: frozenset[str],
+def declared_candidates(
+    found: Sequence[FormHit[K]],
     k: int,
     *,
     signal: str,
     query: str,
-) -> list[EntityCandidate]:
-    """One candidate per admitted id, in the rung's own order, cut to ``k``.
+    admitted: AbstractSet[K] | None = None,
+) -> list[EntityCandidate[K]]:
+    """One candidate per id found, in the rung's own order, cut to ``k``.
+
+    **What a rung over declared forms owes its cascade, once it knows where
+    the forms are.** A rung reaching a backing this package cannot see --
+    an authority stack, a gazetteer, a service holding a consumer's own
+    vocabulary -- finds its own hits and has the same assembly left to do,
+    and that assembly is not a detail of how the hits were found.
+
+    Published for that reason rather than because a caller asked. It was
+    private while :class:`DeclaredSignal` was the only way to reach it, and
+    that class's own docstring names the rung it cannot serve: one whose
+    backing is not a dictionary lookup, which must be written against the
+    bare protocol instead. Leaving the assembly private meant such a rung
+    reimplemented it, so a declared score of ``1.0`` and the shape of a
+    :class:`MatchEvidence` existed in as many copies as there were rungs,
+    with nothing comparing them.
 
     **``k`` counts entities, not hits.** A query naming one entity twice is
     one candidate carrying two pieces of evidence, which is what the cascade
@@ -138,15 +155,52 @@ def _grouped(
     twice itself answers the same shape rather than spending two of the
     caller's ``k`` on one entity.
 
-    The order is whatever :meth:`DeclaredSignal._located` returned, preserved
-    by the insertion order of the mapping below. That is the rung's to set:
-    a declared score is ``1.0`` by fiat and carries none, so if the order is
-    to mean anything -- the longer form before the shorter one it contains --
-    the rung is the only layer that can say so.
+    The order is whatever ``found`` is in, preserved by the insertion order
+    of the mapping below. That is the rung's to set: a declared score is
+    ``1.0`` by fiat and carries none, so if the order is to mean anything --
+    the longer form before the shorter one it contains -- the rung is the
+    only layer that can say so.
+
+    Args:
+        found: Where the rung found each declared form, in the order it wants
+            them proposed. Overlapping forms are the several hits they are.
+        k: How many **entities** to return at most.
+        signal: What the evidence carries as its ``signal``, which is the
+            rung's :attr:`~MatchSignal.name` and the string a consumer wrote
+            as ``kind:``.
+        query: The text the spans point into. ``matched_text`` is sliced from
+            it rather than taken from the caller, so the two agree by
+            construction instead of by trust.
+        admitted: Ids a filter left standing, for a rung that narrows. The
+            default admits every id found, which is what a rung answering
+            ``narrows() is False`` wants -- it is offered no filter, and the
+            cascade rules on its candidates itself.
+
+    Returns:
+        At most ``k`` candidates, each scored ``1.0`` with
+        :attr:`Scoring.DECLARED`, carrying one
+        :class:`~dataknobs_common.entity_resolution.values.MatchEvidence` per
+        place its form was found.
+
+    Raises:
+        ValidationError: For a negative ``k``. The cut is a list slice, where
+            a negative counts back from the end -- so ``k=-1`` returned every
+            entity **but the last one** rather than none, which is an answer
+            no caller meant and none could distinguish from a real one.
+            Nothing upstream validates ``k``: a resolver takes it as a keyword
+            and hands it down, so the rungs are where a nonsensical one first
+            becomes visible, and refusing it here refuses it for every rung at
+            once. ``0`` is a real request and answers the empty list.
     """
-    hits: dict[str, list[FormHit]] = {}
+    if k < 0:
+        raise ValidationError(
+            f"k must not be negative, got {k}: a rung cannot return fewer than "
+            "no entities, and the cut is a slice that would otherwise read a "
+            "negative as counting back from the end"
+        )
+    hits: dict[K, list[FormHit[K]]] = {}
     for hit in found:
-        if hit.entity_id in admitted:
+        if admitted is None or hit.entity_id in admitted:
             hits.setdefault(hit.entity_id, []).append(hit)
     return [_candidate(entity_id, signal, query, at) for entity_id, at in list(hits.items())[:k]]
 
@@ -410,7 +464,7 @@ class DeclaredSignal:
         """At most ``k`` entities whose forms match this query."""
         found = self._located(query)
         admitted = _admitted(self._entities, frozenset(hit.entity_id for hit in found), filter)
-        return _grouped(found, admitted, k, signal=self.key, query=query)
+        return declared_candidates(found, k, signal=self.key, query=query, admitted=admitted)
 
     def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
@@ -605,7 +659,7 @@ class AsyncDeclaredSignal:
         admitted = await _async_admitted(
             self._entities, frozenset(hit.entity_id for hit in found), filter
         )
-        return _grouped(found, admitted, k, signal=self.key, query=query)
+        return declared_candidates(found, k, signal=self.key, query=query, admitted=admitted)
 
     async def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None

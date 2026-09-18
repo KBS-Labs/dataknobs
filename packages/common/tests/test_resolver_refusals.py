@@ -9,6 +9,7 @@ to what was and was not reached.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -294,16 +295,35 @@ def test_a_rung_that_ships_elsewhere_says_so_rather_than_reading_as_a_typo() -> 
     carry it, and importing ``dataknobs_xization.entity_resolution`` clears
     both marks by registering over them.
 
-    **This file's process never imports that package**, which is what makes
-    the pre-import state assertable here: ``bin/test.sh`` gives each package
-    its own pytest process, and nothing in ``common`` depends on ``xization``.
-    The post-import state is ``xization``'s to assert, and it does.
+    **The pre-import state is what is asserted, so the test checks that it is
+    still the pre-import state.** ``bin/test.sh`` gives each package its own
+    pytest process and nothing in ``common`` depends on ``xization``, so under
+    the runner of record nothing here has imported it. That is a property of
+    *that runner* and not of this test, and the workspace supports another:
+    the root ``pytest.ini`` sets ``testpaths = packages tests`` -- deliberately,
+    so a bare ``pytest`` at the root does not skip the workspace guards -- and
+    under it ``xization``'s own suite imports the module and registers the kind
+    in these same process-global registries. ``pytest-randomly`` then decides
+    which suite runs first, so the assertion below held or failed by seed.
+
+    Skipping rather than asserting a weaker thing: once the module is imported
+    the mark is *correctly* gone, and there is no version of these assertions
+    that is true in both worlds. The condition is named so a reader who meets
+    the skip learns why rather than assuming the test was disabled.
 
     The reason names the distribution *and* the import, because a reader
     stuck on this key has two questions and a package name answers only the
     first: registration happens at a module's import, not at a distribution's
     presence.
     """
+    if "dataknobs_xization.entity_resolution" in sys.modules:
+        pytest.skip(
+            "dataknobs_xization.entity_resolution is imported in this process, "
+            "so it has registered over both marks -- which is the behaviour "
+            "xization's own suite asserts. The mark is only observable before "
+            "that import, and bin/test.sh is the runner that guarantees it."
+        )
+
     from dataknobs_common.entity_resolution import async_signal_backends
 
     for registry in (signal_backends, async_signal_backends):

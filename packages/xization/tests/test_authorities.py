@@ -762,3 +762,110 @@ def test_input_carrying_no_text_annotates_nothing_rather_than_raising(empty):
         # `test_regex_authority_named_groups` already pins for a match its
         # validator rejected. Empty is empty however it was arrived at.
         assert anns.is_empty(), f"{type(auth).__name__} annotated {empty!r}"
+
+
+# ===== Reading rows back from an authority that named its own columns =====
+
+
+def _renamed_arm() -> dk_auth.RegexAuthority:
+    """The date arm, built with a column vocabulary of its own.
+
+    ``start_pos_col`` alone, rather than every column: the defect is that a
+    *configured* name and a *key* name are two vocabularies, so one renamed
+    column is enough to separate them and leaving the rest alone keeps the
+    assertion pointed at the one that moved.
+    """
+    return dk_auth.RegexAuthority(
+        "date",
+        DATE_PATTERN,
+        auth_anns_builder=dk_auth.AuthorityAnnotationsBuilder(
+            metadata=dk_auth.AuthorityAnnotationsMetaData(start_pos_col="begin")
+        ),
+    )
+
+
+def test_an_authority_that_named_its_own_columns_can_have_its_rows_read_back():
+    """``sort_fields`` holds col *types*; ``sort_df`` handed them to pandas raw.
+
+    The parameter's own docstring says "the col **types** relevant for
+    sorting", and the key column types are exactly what
+    :meth:`AnnotationsMetaData.get_col` exists to translate into names. The
+    translation was never applied, so the sort asked pandas for ``start_pos``
+    on a frame whose column is ``begin`` and raised ``KeyError`` out of the
+    ``df`` accessor -- several frames below anything naming an authority.
+
+    Invisible for as long as nothing configured a column name, because the
+    two vocabularies agree by default: ``get_col("start_pos")`` answers
+    ``"start_pos"`` until a consumer says otherwise. That is what makes this
+    a defect in the *configurability* rather than in the sort -- the feature
+    the parameter exists for is the only thing that reaches it.
+    """
+    anns = _renamed_arm().annotate_input(BUNDLE_QUERY)
+
+    assert anns.df["begin"].to_list() == [36], "where the date starts"
+
+
+def test_a_column_name_that_is_not_a_col_type_still_sorts():
+    """The other reading of ``sort_fields``, which some caller may already hold.
+
+    Translating a col *type* to a name must not break a caller who put an
+    actual column *name* there -- the two are the same string for every
+    default, so both readings have always appeared to work. A name that
+    matches no col type is passed through rather than translated away.
+    """
+    arm = dk_auth.RegexAuthority(
+        "date",
+        DATE_PATTERN,
+        auth_anns_builder=dk_auth.AuthorityAnnotationsBuilder(
+            metadata=dk_auth.AuthorityAnnotationsMetaData(
+                start_pos_col="begin", sort_fields=["begin"], sort_fields_ascending=[True]
+            )
+        ),
+    )
+
+    assert arm.annotate_input(BUNDLE_QUERY).df["begin"].to_list() == [36]
+
+
+# ===== A named group the match did not use is not a match =====
+
+
+def test_a_named_group_that_did_not_participate_is_not_annotated():
+    """An optional group that matched nothing has no extent, and had a row anyway.
+
+    ``build_match_annotations`` walks every entry in ``regex.groupindex``
+    rather than the groups the match actually used. For one that did not
+    participate, ``match.group(n)`` is ``None`` and ``match.start``/``end``
+    are ``-1`` -- so the row carried a null text at a span pointing nowhere,
+    and ``canonical_fn`` was called on ``None``.
+
+    Reachable from any pattern with an optional alternative, which is most of
+    what a vocabulary *describes* rather than enumerates: the account code
+    below is written with an optional prefix precisely so it can match both
+    spellings, and a query using the shorter one got a phantom second
+    annotation for free.
+    """
+    arm = dk_auth.RegexAuthority(
+        "acct",
+        re.compile(r"(?P<prefix>[A-Z]{2})?-?(?P<num>\d{6})"),
+        lambda text, group: f"{group}:{text}",
+    )
+
+    anns = arm.annotate_input("account 123456 please")
+
+    assert anns.df["text"].to_list() == ["123456"]
+    assert anns.df["start_pos"].to_list() == [8]
+    assert anns.df["acct_field"].to_list() == ["num"]
+
+
+def test_a_named_group_that_did_participate_is_still_annotated():
+    """The other half, so the filter cannot pass by annotating nothing at all."""
+    arm = dk_auth.RegexAuthority(
+        "acct",
+        re.compile(r"(?P<prefix>[A-Z]{2})?-?(?P<num>\d{6})"),
+        lambda text, group: f"{group}:{text}",
+    )
+
+    anns = arm.annotate_input("account XY-123456 please")
+
+    assert anns.df["text"].to_list() == ["XY", "123456"]
+    assert anns.df["acct_field"].to_list() == ["prefix", "num"]
