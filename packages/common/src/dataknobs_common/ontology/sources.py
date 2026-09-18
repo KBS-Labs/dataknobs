@@ -34,8 +34,14 @@ from dataknobs_common.ontology.model import (
 from dataknobs_common.text import default_normalizer, token_spans
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
+    from dataknobs_common.entity_resolution.protocols import (
+        AliasFormSource,
+        AsyncAliasFormSource,
+        AsyncSurfaceFormCatalog,
+        SurfaceFormCatalog,
+    )
     from dataknobs_common.records import Record
 
 #: The ``source_id`` and ``backend`` an authored vocabulary reports.
@@ -357,6 +363,15 @@ class _EntityIndex:
     def surface_form(self, form: str) -> frozenset[str]:
         return self.by_form.get(self.normalizer(form), frozenset())
 
+    def forms(self) -> Iterable[str]:
+        """Every folded form this index holds, in the order it built them.
+
+        A view rather than a copy: the index is immutable after construction,
+        and a rung reading every form on every query is the caller this
+        exists for.
+        """
+        return self.by_form.keys()
+
     def alias_form(self, form: str) -> frozenset[str]:
         return self.by_alias.get(self.normalizer(form), frozenset())
 
@@ -446,6 +461,28 @@ class MappingEntitySource:
         """
         return self._index.alias_form(form)
 
+    def surface_forms(self) -> Iterable[str]:
+        """Every form this source carries, folded the way its index holds them.
+
+        Satisfies
+        :class:`~dataknobs_common.entity_resolution.SurfaceFormCatalog` for free -- the
+        shared index already keys its lookup map by the folded form, so this
+        is a view over what was built at construction rather than a second
+        pass over the vocabulary.
+
+        **Folded rather than as written**, which is the spelling a comparison
+        wants: a rung scoring a query window against these forms and then
+        resolving the winner through :meth:`by_surface_form` would otherwise
+        score one spelling and look up another. What it costs is that a
+        caller cannot recover the display spelling from this member; they
+        fetch the entity, which is where the vocabulary keeps it.
+
+        The order is the vocabulary's own, so two runs over the same source
+        enumerate identically -- a rung breaking a tie by arrival would
+        otherwise return a different winner on a different process.
+        """
+        return self._index.forms()
+
     def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type."""
         return self._index.of_type(type_id)
@@ -531,6 +568,28 @@ class AsyncMappingEntitySource:
         rather than something a caller reconstructs.
         """
         return self._index.alias_form(form)
+
+    async def surface_forms(self) -> Iterable[str]:
+        """Every form this source carries, folded the way its index holds them.
+
+        Satisfies
+        :class:`~dataknobs_common.entity_resolution.AsyncSurfaceFormCatalog` for free -- the
+        shared index already keys its lookup map by the folded form, so this
+        is a view over what was built at construction rather than a second
+        pass over the vocabulary.
+
+        **Folded rather than as written**, which is the spelling a comparison
+        wants: a rung scoring a query window against these forms and then
+        resolving the winner through :meth:`by_surface_form` would otherwise
+        score one spelling and look up another. What it costs is that a
+        caller cannot recover the display spelling from this member; they
+        fetch the entity, which is where the vocabulary keeps it.
+
+        The order is the vocabulary's own, so two runs over the same source
+        enumerate identically -- a rung breaking a tie by arrival would
+        otherwise return a different winner on a different process.
+        """
+        return self._index.forms()
 
     async def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type."""
@@ -751,4 +810,15 @@ if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run
         async_entities: AsyncEntitySource = AsyncMappingEntitySource({})
         assertions: AssertionSource = MappingAssertionSource([])
         async_assertions: AsyncAssertionSource = AsyncMappingAssertionSource([])
+        # The optional protocols the mapping sources also satisfy. They are
+        # here for the reason the four above are, and for one more: a source
+        # satisfies an optional protocol *structurally*, so nothing would
+        # otherwise notice a member renamed out from under the rung that
+        # checks for it -- the rung would simply stop finding it and report
+        # an empty vocabulary.
+        catalogue: SurfaceFormCatalog = MappingEntitySource({})
+        async_catalogue: AsyncSurfaceFormCatalog = AsyncMappingEntitySource({})
+        aliases: AliasFormSource = MappingEntitySource({})
+        async_aliases: AsyncAliasFormSource = AsyncMappingEntitySource({})
         del entities, async_entities, assertions, async_assertions
+        del catalogue, async_catalogue, aliases, async_aliases

@@ -46,7 +46,7 @@ else:
 K_co = TypeVar("K_co", bound=Hashable, default=str, covariant=True)
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Collection, Iterable, Mapping, Sequence
 
     from dataknobs_common.entity_resolution.values import (
         EntityCandidate,
@@ -60,9 +60,11 @@ __all__ = [
     "AsyncAliasFormSource",
     "AsyncEntityResolver",
     "AsyncMatchSignal",
+    "AsyncSurfaceFormCatalog",
     "EntityResolver",
     "MatchSignal",
     "MembershipOracle",
+    "SurfaceFormCatalog",
 ]
 
 
@@ -307,3 +309,88 @@ class AsyncAliasFormSource(Protocol[K_co]):
     """
 
     async def by_alias_form(self, form: str) -> frozenset[K_co]: ...
+
+
+@runtime_checkable
+class SurfaceFormCatalog(Protocol):
+    """A source that can hand over **every form it carries**.
+
+    What a rung comparing a query against each form needs, and the one thing
+    :class:`~dataknobs_common.ontology.sources.EntitySource` cannot answer:
+    every member there is a *lookup*, so a rung can ask whether a form is
+    declared and never which forms are. A near-spelling rung has no form to
+    look up -- the query spells none of them -- so it must read the
+    vocabulary out.
+
+    **Separate from** ``EntitySource``, on
+    :class:`AliasFormSource`'s precedent and for the reason that protocol
+    states: ``EntitySource`` is ``@runtime_checkable`` and consumers satisfy
+    it structurally, so a member added to it turns every implementation we
+    never see from conforming into non-conforming, silently and at once.
+
+    The free window in which that could still be spent is open and is
+    deliberately not spent here.
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`
+    calls itself *the only member that will ever be able to say that*, so a
+    second member added on the same authority would make this package
+    contradict its own docstring -- and a separate protocol costs a source
+    that does not satisfy it nothing at all.
+
+    **The member yields forms, not ``(form, ids)`` pairs.** A rung scores
+    forms and resolves the winners back to ids through
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`,
+    which every entity source already has, so the pairs would be a second
+    spelling of a lookup that exists. One extra lookup per *hit* -- not per
+    form -- buys the smallest protocol there is, and a small protocol is what
+    makes it plausible that a source we never see satisfies this by accident.
+
+    **A default body would not have rescued a source that lacks the member.**
+    A Protocol's method body runs for an explicit subclass and for nothing
+    else, so ``isinstance`` stays ``False`` for a structural conformer and a
+    default fixes the type checker's complaint while leaving the runtime
+    break where it was. :class:`~dataknobs_common.entity_resolution.LexicalSignal`
+    checks for this and refuses at construction rather than matching
+    nothing -- which is where it differs from
+    :class:`~dataknobs_common.entity_resolution.AliasSignal`, and the
+    difference is that a vocabulary genuinely may declare no aliases while no
+    vocabulary has no forms.
+
+    **Not generic in the entity key**, where its two neighbours here are. A
+    surface form is text: this protocol's one member takes nothing and
+    answers with strings, so a key parameter would appear in no signature it
+    declares. Carrying one anyway would cost something real rather than
+    nothing -- ``isinstance`` against a subscripted generic protocol raises,
+    so the parameter's only visible effect would be to offer a spelling that
+    fails at runtime.
+
+    The forms are expected in the spelling the source's own index holds --
+    folded, where it folds -- because that is the spelling a comparison
+    against a folded query wants and the one
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
+    will resolve.
+    """
+
+    def surface_forms(self) -> Iterable[str]: ...
+
+
+@runtime_checkable
+class AsyncSurfaceFormCatalog(Protocol):
+    """:class:`SurfaceFormCatalog` for a source that reaches for data.
+
+    **This member is ``async`` where**
+    :meth:`~dataknobs_common.ontology.sources.AsyncEntitySource.longest_form_tokens`
+    **is not**, and the two are not inconsistent. That one stays synchronous
+    because it answers from a number the source measured at construction; a
+    catalogue of every form a source carries is the source's whole contents,
+    which a database-backed or service-backed one does not hold and must go
+    and get. This protocol is written for the sources we never see rather
+    than for the one concrete that happens to keep its forms in a dict.
+
+    ``isinstance`` cannot tell this from its twin, for
+    :class:`AsyncAliasFormSource`'s reason: a runtime-checkable protocol
+    compares member *names* and both spell it ``surface_forms``. Each
+    flavour's rung holds a source of its own flavour already, so what the
+    check asks is *does this source publish its forms at all*.
+    """
+
+    async def surface_forms(self) -> Iterable[str]: ...

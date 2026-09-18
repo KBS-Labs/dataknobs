@@ -118,6 +118,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "refuse_unknown_axes", "axes", "schema"),
     ("AliasFormSource", "by_alias_form", "->", "key"),
     ("AliasFormSource", "by_alias_form", "form", "text"),
+    ("SurfaceFormCatalog", "surface_forms", "->", "text"),
     ("Assertion", "<field>", "derived_from", "schema"),
     ("Assertion", "<field>", "id", "schema"),
     ("Assertion", "<field>", "metadata", "payload"),
@@ -152,6 +153,12 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AssertionSource", "get", "assertion_id", "schema"),
     ("AsyncAliasFormSource", "by_alias_form", "->", "key"),
     ("AsyncAliasFormSource", "by_alias_form", "form", "text"),
+    # The two catalogue protocols answer with **forms**, so their one member
+    # mentions no key at all -- which is why neither is generic where the two
+    # alias-form protocols above are. `text` rather than `key`: a surface form
+    # is what a person typed or wrote, and it stays `str` however the entities
+    # it resolves to are keyed.
+    ("AsyncSurfaceFormCatalog", "surface_forms", "->", "text"),
     ("AsyncAssertionHierarchy", "<field>", "source", "key"),
     ("AsyncAssertionHierarchy", "_find", "->", "key"),
     ("AsyncAssertionHierarchy", "_find", "object", "key"),
@@ -396,12 +403,12 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
 #: subpackage, or a value type newly reachable from one, changes these numbers,
 #: and the pass that makes that change is the pass that should be reading the
 #: rows it brings with it.
-_PROTOCOLS = 13
+_PROTOCOLS = 15
 _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 308
+_ROWS = 310
 
 
 def _modules() -> Iterator[ast.Module]:

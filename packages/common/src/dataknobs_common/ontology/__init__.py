@@ -29,7 +29,9 @@ must be closed, and a module-level function has no ``close()``.
 from dataknobs_common.entity_resolution.protocols import (
     AliasFormSource,
     AsyncAliasFormSource,
+    AsyncSurfaceFormCatalog,
     MembershipOracle,
+    SurfaceFormCatalog,
 )
 from dataknobs_common.entity_resolution.values import (
     CompatibilityVerdict,
@@ -123,6 +125,7 @@ __all__ = [
     "AssertionHierarchy",
     "AssertionSource",
     "AsyncAliasFormSource",
+    "AsyncSurfaceFormCatalog",
     "AsyncAssertionHierarchy",
     "AsyncAssertionSource",
     "AsyncEntitySource",
@@ -165,6 +168,7 @@ __all__ = [
     "SourceDescription",
     "SourceRef",
     "StrCodec",
+    "SurfaceFormCatalog",
     "Taxonomy",
     "TaxonomyDefinition",
     "TaxonomyView",

@@ -223,6 +223,24 @@ class FormHit(Generic[K]):
     through the whole-string hook instead.
     """
 
+    score: float | None = None
+    """How well this form matched, where the rung measured it.
+
+    ``None`` means **this rung did not measure**, which is what every rung
+    over declared forms means: the form is in the vocabulary, it was found,
+    and there is nothing further to say about how well. That is why the
+    default is ``None`` rather than ``1.0`` -- a field reading ``1.0`` would
+    claim a measurement that was never taken, and ``1.0`` is exactly the
+    number :attr:`Scoring.DECLARED` exists to mark as carrying no information.
+
+    A near-spelling rung is the case this exists for: it proposes an entity
+    the query did not spell, so *how near* is the whole of what it found out.
+    The number means whatever that rung's scorer means -- see
+    :attr:`Scoring.NATIVE` -- and the rung says so by carrying its own
+    :attr:`~DeclaredSignal.scoring` rather than by this field having a
+    published scale.
+    """
+
 
 @dataclass(frozen=True)
 class EntityCandidate(Generic[K]):
@@ -285,14 +303,47 @@ class Coverage(Generic[K]):
     here, and that is the reading rather than a gap in it: a cosine neighbour
     over an embedded utterance has no position in that utterance, so a query
     whose only hits are vector hits has an empty :attr:`matched` and the whole
-    string :attr:`unmatched` -- no declared form was found in the text, and a
-    neighbourhood guess is being offered anyway. That is the single strongest
-    line a consumer maintaining a vocabulary can act on, and the older
+    string :attr:`unmatched` -- a neighbourhood guess is being offered and
+    nothing the vocabulary carries was found in the text. That is a strong
+    line for a consumer maintaining a vocabulary, and the older
     all-or-nothing reading could not state it.
+
+    **Declared evidence only**, which used to be the same sentence as *has a
+    span* and no longer is. While every rung that could place a hit was a
+    rung that looked one up, ``INFERRED`` implied ``span is None`` by
+    construction and the distinction cost nothing.
+    :class:`~dataknobs_common.entity_resolution.LexicalSignal` is the first
+    rung that is ``INFERRED`` *and* located -- it proposes an entity the
+    query **misspelled**, and it knows exactly where it read.
+
+    ``DECLARED`` is the half kept, because *what the vocabulary accounted
+    for* is the question both fields are read for. A near-spelling proposal
+    is the rung reporting that the vocabulary accounts for **none** of what
+    the query said, so counting the words it scored would delete the residue
+    that proposal is evidence *for* -- the maintenance line
+    :attr:`unmatched` exists to give. Two consequences worth stating, because
+    the alternative reading gets both wrong:
+
+    - **Adding a measured rung to a cascade cannot change coverage.** It adds
+      candidates; the declared rungs decide the extent. A caller comparing
+      two compositions is comparing what was *found*, not how hard the
+      cascade tried.
+    - **An overreaching window cannot widen it.** A measured rung reports
+      every window that cleared its threshold, so a window padded by a
+      neighbouring word carries its whole extent -- on a query with no typo
+      in it at all. Merged positionally that would report words the
+      vocabulary never matched as covered.
+
+    None of this hides the proposals. They are candidates, they carry their
+    spans, and :meth:`ResolutionResult.explain` hands the evidence over with
+    its :attr:`~MatchEvidence.kind`; :attr:`EntityCandidate.declared` answers
+    the same question per candidate. A consumer wanting *everywhere any rung
+    read something* builds it from those -- this field answers the narrower
+    question, and the narrower one is the one that is hard to reconstruct.
     """
 
     matched: tuple[tuple[int, int], ...] = ()
-    """The union of the evidence spans: half-open, into
+    """The union of the **declared** evidence spans: half-open, into
     :attr:`ResolutionResult.query`, merged, ordered, and neither overlapping
     nor touching.
 
@@ -300,6 +351,10 @@ class Coverage(Generic[K]):
     two rungs finding the same form, and a longer form containing a shorter
     one, each contribute one interval. Which rung found what is
     :meth:`ResolutionResult.explain`'s answer, and lives on the evidence.
+
+    Evidence that is :attr:`~EvidenceKind.INFERRED` contributes nothing even
+    where it carries a span -- see the class docstring for why that is
+    ``DECLARED``'s question rather than the span's.
     """
 
     unmatched: tuple[tuple[int, int], ...] = ()
@@ -310,6 +365,13 @@ class Coverage(Generic[K]):
     resolution wrong -- an absence is not a falsehood. What it is good for is
     maintenance: the phrases a corpus's users ask about and the vocabulary
     does not cover are the next entries somebody should add.
+
+    A phrase a near-spelling rung **resolved** stays here, and that is the
+    reading rather than a gap in it: the vocabulary does not carry what the
+    query said, which is exactly the fact a maintainer is looking for. What
+    they also get, in that case, is a candidate saying which entry the
+    phrase was probably reaching for -- which is a better prompt for the
+    edit than the phrase alone.
 
     Trimmed because the gap between two matched spans is bounded by them
     rather than by the text, so it begins and ends on whatever separated them;

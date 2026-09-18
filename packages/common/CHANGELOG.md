@@ -9,12 +9,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`LexicalSignal` / `AsyncLexicalSignal` --- a rung for the query that does
+  not spell the form.** Every other rung here answers a lookup, so a query
+  carrying a typo reaches none of them. This one compares each window of the
+  query against every form the vocabulary declares and proposes the ones that
+  came close, with a span into the **query** and a score saying how close.
+
+  ```python
+  from dataknobs_common.entity_resolution import LexicalSignal
+
+  rung = LexicalSignal(onto.entities)                  # threshold=0.85
+  found = rung.candidates("my goldne retriver has been limping", k=5)
+  found[0].evidence[0].matched_text                    # "retriver"
+  found[0].evidence[0].kind                            # EvidenceKind.INFERRED
+  ```
+
+  Registered as `kind: "lexical"` in both registries. The evidence is
+  `INFERRED` and `NATIVE`: the entity was proposed rather than found, and the
+  number means whatever the configured scorer means --- so it stays out of
+  `as_distribution()` by construction.
+
+  `scorer` is the seam for a vocabulary large enough that the standard
+  library's `difflib` stops being free; the default takes no dependency, and a
+  consumer who needs the fast end passes `rapidfuzz.fuzz.ratio` and takes it in
+  their own tree. `threshold` defaults to `0.85`, which is measured rather than
+  chosen: a lower one does not find more entities, it finds the same ones at
+  spans that run past them.
+
+  `max_query_tokens` caps the query, and is off by default because it is the
+  one parameter here that can cost an answer. The threshold bounds how *wide*
+  a window may be; how many there are is the caller's token count, and each
+  costs a scorer call per declared form where a scan's costs a dictionary
+  lookup --- linear in the token count, and a nine-hundred-token paste over a
+  five-hundred-entity vocabulary is two seconds of one CPU. A query over the
+  cap is refused rather than truncated, because answering from the head of a
+  paste is a plausible-looking answer to a question nobody asked.
+
+  **The asynchronous twin runs its scan on a worker thread.** Every other rung
+  in this family awaits a lookup and does arithmetic on the answer; this one
+  scores every window against every form, which is CPU proportional to the
+  vocabulary with no `await` inside it to yield on. Left on the event loop
+  that is the whole scan's duration during which nothing else on the loop
+  makes progress --- and neither the `ASYNC2xx` lint nor `assert_no_blocking`
+  can see it, because the work is arithmetic rather than a syscall.
+
+  **Its evidence is the first here that is `INFERRED` *and* carries a span**,
+  which is why `Coverage` now reads the evidence's `kind` --- see *Changed*
+  below. Adding this rung to a cascade adds candidates and never coverage.
+
+- **`SurfaceFormCatalog` / `AsyncSurfaceFormCatalog` --- an optional protocol
+  for a source that can hand over its forms.** One member,
+  `surface_forms()`. `EntitySource` publishes lookups alone, so a query
+  spelling no form has nothing to hand it; a near-spelling rung reads the
+  vocabulary out instead.
+
+  Separate from `EntitySource` rather than a member on it, on
+  `AliasFormSource`'s precedent: that protocol is `@runtime_checkable` and
+  consumers satisfy it structurally, so a member added to it turns every
+  implementation we never see from conforming into non-conforming, silently
+  and at once. `MappingEntitySource` and `AsyncMappingEntitySource` satisfy the
+  new one for free --- their index is already keyed by the folded form.
+
+  Both twins spell the member `surface_forms`, and a runtime-checkable
+  protocol compares member *names* --- so `isinstance` alone cannot tell a
+  synchronous source from an asynchronous one. The rungs ask the flavour
+  separately and refuse with a message naming the one they found, because
+  `entities:` is resolved before either registry sees it and the flavours are
+  exactly what a configuration gets wrong.
+
+
 - **`declared_candidates` --- the assembly a rung over declared forms owes,
   now on the package door.** Find your hits; this turns them into what the
   cascade expects. It groups them by entity so `k` counts **entities** rather
-  than places, keeps the order the rung returned them in, scores each `1.0`
-  with `Scoring.DECLARED`, and slices `matched_text` out of the query so the
-  text and the span agree by construction.
+  than places, keeps the order the rung returned them in, and slices
+  `matched_text` out of the query so the text and the span agree by
+  construction. Evidence is `DECLARED` and scored `1.0` unless a rung passes
+  `kind=` and `scoring=`, which is what a rung that *measures* does.
 
   ```python
   from dataknobs_common.entity_resolution import declared_candidates
@@ -98,7 +168,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinct type is for the caller that must let the *operation's* deadline
   through a per-item error handler while still absorbing an item's own failure.
 
+### Changed
+
+- **`Coverage` counts `DECLARED` evidence spans**, where it counted every
+  span that was not `None`. No shipped composition changes: until
+  `LexicalSignal` there was no rung whose evidence was `INFERRED` *and*
+  located, so *inferred* implied *unlocated* by construction and the two
+  tests were one. A near-spelling proposal is located --- it knows exactly
+  which words it scored --- so the implication had to become a condition or
+  the field would change meaning under the first cascade holding such a rung.
+
+  `DECLARED` is the half kept, because *what the vocabulary accounted for* is
+  the question `matched` and `unmatched` are read for, and a near-spelling
+  proposal is a rung reporting that the vocabulary accounts for **none** of
+  what the query said. Counting the words it scored would delete the residue
+  that proposal is evidence for --- the maintenance line `unmatched` exists to
+  give. It would also let an *overreaching* window widen `matched` on a query
+  with no typo in it, since a measured rung reports every window that cleared
+  its threshold and one padded by a neighbouring word still does.
+
+  Nothing is hidden: the proposals are candidates, they carry their spans, and
+  `explain()` hands the evidence over with its `kind`. A consumer wanting
+  everywhere any rung read something builds it from those; coverage answers
+  the narrower question, which is the one that is hard to reconstruct.
+
+- **A rung written on `DeclaredSignal` can now carry a measured score.** The
+  two bases gained `kind` and `scoring` as overridable class attributes, and
+  `FormHit` gained an optional `score`. A rung that sets none of them is
+  unchanged: the defaults are the three constants the base wrote
+  unconditionally before, so every shipped rung and every consumer rung
+  produces exactly the evidence it did.
+
+  What it buys is that a rung proposing an entity the query did not spell no
+  longer has to drop to the bare `MatchSignal` protocol and reimplement the
+  assembly to say so. A hit's score is its own where it measured one and `1.0`
+  where it did not; a candidate's is the best of its hits'.
+
 ### Fixed
+
+- **A source publishing an index member in the wrong flavour is refused by
+  name.** `AliasSignal` checks `isinstance(..., AliasFormSource)` before asking
+  for alias forms, and its asynchronous twin checks the asynchronous protocol
+  --- but both protocols spell the member `by_alias_form`, and a
+  runtime-checkable protocol compares member *names*. Either check therefore
+  passed for either flavour, so a synchronous source in `AsyncAliasSignal`
+  raised `TypeError: object frozenset can't be used in 'await' expression`
+  from inside a cascade, and the mirror case raised `'coroutine' object is not
+  iterable` alongside a *coroutine was never awaited* warning. Both now raise
+  `ValidationError` saying which flavour was found and which was wanted. A
+  source that simply *lacks* the member still yields the empty answer it
+  always did --- a vocabulary may legitimately declare no aliases, and that is
+  a different fact from a misconfigured one.
+
+- **A `normalizer` that is not callable is refused where it was supplied.**
+  Every rung takes it straight from its config dict, and a configuration
+  document cannot write a callable --- so `normalizer: "casefold"`, the
+  obvious thing to write, is a string. A string is truthy: it passed every
+  guard and raised `TypeError: 'str' object is not callable` at the first
+  query, from inside the fold. Both bases now refuse it at construction, which
+  covers every rung and both flavours; `LexicalSignal` refuses its `scorer` on
+  the same grounds. The path is refused, not resolved: turning a dotted path
+  into the function it names would let a document reach any importable
+  callable, which is a wider decision than this one.
 
 - **A negative `k` is refused rather than read as counting back from the end.**
   Every rung's cut to `k` is a list slice, so `k=-1` returned all but the *last*
@@ -606,8 +737,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 343,
-  the three beyond them being the operation family added above.
+  the resolution cascade — 134 names, taking the package's `__all__` to 347,
+  the seven beyond them being the operation family, the near-spelling rung and
+  the surface-form catalogue, each in both flavours and each added by its own
+  entry above. `declared_candidates` is inside the 134 rather than beyond
+  them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing

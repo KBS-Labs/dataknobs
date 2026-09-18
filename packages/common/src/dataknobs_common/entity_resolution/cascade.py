@@ -226,7 +226,7 @@ def _trimmed(query: str, start: int, end: int) -> tuple[int, int] | None:
 def _coverage(
     candidates: Sequence[EntityCandidate], query: str
 ) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
-    """The union of the evidence spans, and the residue the query has left.
+    """The union of the **declared** evidence spans, and the query's residue.
 
     **Positional, and derived rather than accumulated.** Coverage is a view
     over the candidates now, not a second computation kept in step with them
@@ -237,10 +237,29 @@ def _coverage(
     reading rather than a hole in it: a cosine neighbour over an embedded
     utterance has no position in that utterance to report. So a query whose
     only hits are vector hits comes back with nothing matched and the whole
-    string unmatched -- no declared form was found in the text and a
-    neighbourhood guess is being offered anyway, which is the line a consumer
+    string unmatched -- a neighbourhood guess is being offered and nothing the
+    vocabulary carries was found in the text, which is a line a consumer
     maintaining a vocabulary can act on and the older all-or-nothing rule
     could not state.
+
+    **Two conditions, and the second used to be implied by the first.** A span
+    alone was the whole test while every rung able to place a hit was a rung
+    that looked one up -- so ``INFERRED`` meant ``span is None`` by
+    construction, and reading the kind would have changed no answer.
+    :class:`~dataknobs_common.entity_resolution.LexicalSignal` breaks that: it
+    proposes an entity the query **misspelled** and knows exactly where it
+    read. Its evidence is ``INFERRED`` *and* located, so the implication has
+    to become a condition or the field silently changes meaning under the
+    first cascade that holds such a rung.
+
+    It is ``DECLARED`` that is kept, because *what the vocabulary accounted
+    for* is the question both fields are read for --- and a near-spelling
+    proposal is the rung reporting that the vocabulary accounts for **none**
+    of what the query said. Counting the words it scored would delete the
+    residue that proposal is evidence *for*. The proposals themselves are
+    unaffected: they are candidates, they carry their spans, and
+    :meth:`~dataknobs_common.entity_resolution.values.ResolutionResult.explain`
+    hands them over.
 
     An empty span is dropped rather than reported: the union of point sets is
     what ``matched`` means, and an empty interval adds no points to it.
@@ -249,7 +268,9 @@ def _coverage(
         item.span
         for candidate in candidates
         for item in candidate.evidence
-        if item.span is not None and item.span[1] > item.span[0]
+        if item.kind is EvidenceKind.DECLARED
+        and item.span is not None
+        and item.span[1] > item.span[0]
     )
     merged: list[tuple[int, int]] = []
     for start, end in spans:
