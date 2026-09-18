@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`AuthoritySignal` and `AsyncAuthoritySignal` --- the authority stack as a
+  resolution rung.** `dataknobs_common`'s rungs match text a vocabulary
+  *enumerates*; these match text it *describes* as well, so a declared pattern
+  --- a chip number, an account code, a date --- resolves where no enumeration
+  could have carried it. They implement
+  `dataknobs_common.entity_resolution.MatchSignal` over any `Authority`, hold
+  no entity source, and publish `narrows() is False` because an authority
+  stack has no declared types to filter against.
+
+  ```python
+  from dataknobs_xization import AuthoritySignal
+
+  rung = AuthoritySignal(AuthoritiesBundle("clinic", auths=[breeds, chips]))
+  rung.candidates("my golden retriever K-901 has been limping", k=5)
+  ```
+
+  Importing `dataknobs_xization` registers both flavours under
+  `kind: "authority"`, which is also what clears the mark `dataknobs_common`
+  leaves for the key it declares and cannot implement.
+
+  **The evidence is `DECLARED` at 1.0**, like every rung over forms a
+  vocabulary carries, and the entity id is the authority's own value id ---
+  a regex arm's `canonical_fn` answer, a dictionary arm's frame **index**. A
+  frame left on its default `RangeIndex` therefore resolves to row numbers,
+  which the guide states plainly because no layer above can detect it.
+
+  **It keeps less overlap than the `common` default and the guide says so.**
+  An authority suppresses a form contained by one it already matched, so a
+  vocabulary loaded as one authority per axis returns `golden_retriever` where
+  `ScanningSignal` returns `golden_retriever` and `retriever` both. One
+  authority per form keeps them. Both directions are pinned by tests.
+
+### Fixed
+
+- **`Authority.annotate_input` no longer raises for input carrying no text.**
+  `None` reached the return with its local never bound, for an
+  `UnboundLocalError`; an empty or all-whitespace string failed the wrapping
+  guard, stayed a `str`, and was handed to `add_annotations`, which asks it
+  for `.annotations`. All three now answer with empty `Annotations`. A
+  resolution rung is called with whatever a consumer typed, so every one of
+  these was reachable from a cascade rather than only from a test.
+
 ### Changed
 
 - **`DirectoryProcessor.process()` no longer refuses a caller already on an

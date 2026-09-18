@@ -505,7 +505,7 @@ _LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 140 of the 148 are read only by
+#: Almost no package document is one of these. 141 of the 149 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so
@@ -1258,7 +1258,7 @@ def map_files_to_packages(
 
         if filepath.startswith("packages/"):
             # What the generic rule below must not map to its package. A
-            # package *document* is the bulk of it: 158 files match both — 148
+            # package *document* is the bulk of it: 159 files match both — 149
             # under docs/ and ten changelogs — and mapping them ran a whole
             # suite and its dependents for a prose edit while running none of
             # the four guards that actually read the file. A document reaches

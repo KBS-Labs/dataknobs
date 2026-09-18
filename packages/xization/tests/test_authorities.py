@@ -727,3 +727,38 @@ def test_a_bundle_orders_a_match_by_the_column_its_finder_names():
 
     assert [finder for finder, _ in found] == [leaf]
     assert [rows[0]["begin"] for _, rows in found] == [36], "where the date starts"
+
+
+# ===== What an authority answers for input carrying no text =====
+#
+# A rung is called with whatever a consumer typed, so every one of these is
+# reachable from a resolution cascade rather than only from a test.
+
+
+def _arms() -> list[dk_auth.Authority]:
+    """One of each arm, plus a bundle over both, all over the same data."""
+    dictionary = _dictionary_arm()
+    regex = _regex_arm()
+    return [dictionary, regex, dk_auth.AuthoritiesBundle("both", auths=[dictionary, regex])]
+
+
+@pytest.mark.parametrize("empty", [None, "", "   ", "\n\t "])
+def test_input_carrying_no_text_annotates_nothing_rather_than_raising(empty):
+    """Three spellings of *nothing to annotate*, and each used to raise its own way.
+
+    ``None`` reached the ``return`` with ``annotations`` never bound, for an
+    ``UnboundLocalError``; an empty or all-whitespace string failed the
+    ``len(strip) > 0`` guard, stayed a ``str``, and reached
+    ``add_annotations`` -- which asks it for ``.annotations`` and gets an
+    ``AttributeError``. Both are the same defect read at two lines: the
+    method decides whether to *wrap* the input and then acts as though it
+    had decided whether to *process* it.
+    """
+    for auth in _arms():
+        anns = auth.annotate_input(empty)
+        assert isinstance(anns, dk_annots.Annotations)
+        # `is_empty()` rather than the dataframe: an `Annotations` holding no
+        # rows answers `None` for `df`, which is what
+        # `test_regex_authority_named_groups` already pins for a match its
+        # validator rejected. Empty is empty however it was arrived at.
+        assert anns.is_empty(), f"{type(auth).__name__} annotated {empty!r}"

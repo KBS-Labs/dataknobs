@@ -571,6 +571,23 @@ kind and the loader that *can* build it. The refusal is computed from the
 declared kind, so it holds with nothing constructed — and supplying the rung is
 what makes the door accept it.
 
+A rung that ships in **another distribution** is declared the same way, for a
+different reason. `kind: "authority"` reads an authority stack and lives in
+`dataknobs-xization`, which this package does not depend on and must not, so
+both registries carry the key with a sentence naming the distribution and the
+module that registers it:
+
+```python
+assert signal_backends.get_metadata("authority")["requires_install"] == (
+    "pip install dataknobs-xization"
+)
+```
+
+It matches text a vocabulary *describes* — a pattern — as well as text it
+enumerates, and it keeps less overlap than `ScanningSignal` does. Both
+directions are written up at
+<https://kbs-labs.github.io/dataknobs/packages/xization/entity-resolution/>.
+
 ## Where this package sits
 
 `dataknobs_common.entity_resolution` imports nothing from

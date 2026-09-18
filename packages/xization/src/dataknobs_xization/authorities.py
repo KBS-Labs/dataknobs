@@ -440,15 +440,22 @@ class Authority(dk_annots.Annotator):
         Returns:
             An Annotations instance.
         """
-        if text_obj is not None:
-            if isinstance(text_obj, str) and len(text_obj.strip()) > 0:
-                text_obj = dk_annots.AnnotatedText(
-                    text_obj,
-                    annots_metadata=self.metadata,
-                )
-        if text_obj is not None:
-            annotations = self.add_annotations(text_obj)
-        return annotations
+        # Input carrying no text annotates nothing. It used to raise, two
+        # ways: `None` reached the return with `annotations` never bound, and
+        # an empty or all-whitespace string failed the strip guard below,
+        # stayed a `str`, and was handed to `add_annotations`, which asks it
+        # for `.annotations`. The guard was deciding whether to *wrap* the
+        # input while the code after it acted as though it had decided
+        # whether to *process* it -- so an empty string is now wrapped like
+        # any other and the arms find nothing in it, which is the answer.
+        if text_obj is None:
+            return dk_annots.Annotations(self.metadata)
+        if isinstance(text_obj, str):
+            text_obj = dk_annots.AnnotatedText(
+                text_obj,
+                annots_metadata=self.metadata,
+            )
+        return self.add_annotations(text_obj)
 
     @abstractmethod
     def add_annotations(

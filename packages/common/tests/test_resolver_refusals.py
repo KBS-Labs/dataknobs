@@ -282,3 +282,44 @@ def test_a_loader_does_not_refuse_a_rung_it_never_builds(
 
     asynchronous = asyncio.run(async_load_ontology(path))
     assert asynchronous.id == ontology.id
+
+
+def test_a_rung_that_ships_elsewhere_says_so_rather_than_reading_as_a_typo() -> None:
+    """The second mark, and it is marked for a different condition than the first.
+
+    ``semantic`` is withdrawn because no synchronous form of it exists
+    anywhere. ``authority`` exists in both flavours and ships in
+    ``dataknobs-xization``, which ``dataknobs-common`` cannot import and must
+    not -- so the key is declared here and the class is not. Both registries
+    carry it, and importing ``dataknobs_xization.entity_resolution`` clears
+    both marks by registering over them.
+
+    **This file's process never imports that package**, which is what makes
+    the pre-import state assertable here: ``bin/test.sh`` gives each package
+    its own pytest process, and nothing in ``common`` depends on ``xization``.
+    The post-import state is ``xization``'s to assert, and it does.
+
+    The reason names the distribution *and* the import, because a reader
+    stuck on this key has two questions and a package name answers only the
+    first: registration happens at a module's import, not at a distribution's
+    presence.
+    """
+    from dataknobs_common.entity_resolution import async_signal_backends
+
+    for registry in (signal_backends, async_signal_backends):
+        assert registry.is_known("authority")
+        assert not registry.is_registered("authority")
+
+        reason = registry.unavailable_reason("authority")
+        assert reason is not None
+        assert "dataknobs-xization" in reason
+        assert "dataknobs_xization.entity_resolution" in reason
+
+        assert registry.get_metadata("authority")["requires_install"] == (
+            "pip install dataknobs-xization"
+        )
+
+    # The flavour a door refuses a composition by, which is per registry and
+    # is the one piece of this metadata the two marks do not share.
+    assert signal_backends.get_metadata("authority")["flavour"] == "sync"
+    assert async_signal_backends.get_metadata("authority")["flavour"] == "async"

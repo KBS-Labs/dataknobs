@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kind: "authority"` is a known rung kind, declared unavailable until its
+  package is imported.** `dataknobs-xization` ships the rung that reads an
+  authority stack, and `dataknobs_common` cannot import it --- so both rung
+  registries now declare the key with a reason naming the distribution *and*
+  the module, rather than reporting an unknown kind. Importing
+  `dataknobs_xization.entity_resolution` registers over both marks and clears
+  them. `get_metadata("authority")["requires_install"]` answers either way.
+
+  This is the second such mark and the first for this condition: `semantic` is
+  withdrawn because no synchronous form of it exists anywhere, while
+  `authority` exists in both flavours and merely ships elsewhere.
+
+
 - **`BridgedOperation` and `bridged_operation()` --- one loop and one budget,
   for the span of one synchronous call.** A synchronous wrapper over an
   asynchronous object reaches that object more than once per public call (a
