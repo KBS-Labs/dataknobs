@@ -85,6 +85,12 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "async_load_ontology", "normalizer", "text"),
     ("<module>", "async_load_ontology", "source", "payload"),
     ("<module>", "async_load_ontology", "->", "bound"),
+    # A taxonomy id, in both positions -- the same space `Ontology.taxonomy`'s
+    # `name` is in. The predicate became public when a third door needed it,
+    # and its `str`s name axes the document declares rather than anything the
+    # entities are keyed by.
+    ("<module>", "axes_to_copy", "taxonomies", "schema"),
+    ("<module>", "axes_to_copy", "->", "schema"),
     ("<module>", "build_resolver", "config", "payload"),
     ("<module>", "build_resolver", "ontology", "bound"),
     ("<module>", "build_resolver", "->", "bound"),
@@ -408,7 +414,7 @@ _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 310
+_ROWS = 312
 
 
 def _modules() -> Iterator[ast.Module]:

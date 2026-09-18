@@ -8,6 +8,15 @@ discriminated by a ``kind:`` their entries carry, and the set of kinds is a
 registry read rather than a list this module could close over -- so typing them
 here would mean naming, in ``dataknobs-common``, kinds that other packages
 register. The loader validates what it needs and hands the rest on.
+
+``index:`` is raw for a different reason, and it is worth saying which. Its
+blocks are ``$resource`` references into binding categories -- ``vector_stores``,
+``embedders`` -- whose concrete types belong to ``dataknobs-data`` and
+``dataknobs-llm``. There is no discriminator to leave open here; there is a
+package boundary. The reader that resolves those references is
+``dataknobs_data.ontology.OntologyRegistry``, which is also the only door that
+binds a live source, for the same reason: it owns a lifecycle and a
+module-level loader does not.
 """
 
 from __future__ import annotations

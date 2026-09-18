@@ -222,7 +222,7 @@ def load_ontology(
         codec=StrCodec(),
         structures={
             name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
-            for name, definition in _axes_to_copy(parts.taxonomies)
+            for name, definition in axes_to_copy(parts.taxonomies)
         },
         imports=parts.imports,
     )
@@ -276,16 +276,16 @@ async def async_load_ontology(
             name: await AsyncMappingHierarchy.snapshot(
                 AsyncAssertionHierarchy(assertions, definition.relation)
             )
-            for name, definition in _axes_to_copy(parts.taxonomies)
+            for name, definition in axes_to_copy(parts.taxonomies)
         },
         imports=parts.imports,
     )
 
 
-def _axes_to_copy(
+def axes_to_copy(
     taxonomies: Mapping[str, TaxonomyDefinition],
 ) -> tuple[tuple[str, TaxonomyDefinition], ...]:
-    """The definitions whose structure axis this door must copy at load.
+    """The definitions whose structure axis a door must copy at load.
 
     Shared by the doors rather than written into each. What each door does with
     the answer *is* flavoured -- one snapshot is a coroutine and the other is
@@ -293,6 +293,14 @@ def _axes_to_copy(
     :func:`~dataknobs_common.ontology.values._structure_for` asks again on the
     way out. Two spellings of it is how a door and an accessor come to disagree
     about which axes were copied.
+
+    **Public, because the third door is in another distribution.** It was
+    private while the only callers were the two module-level doors below.
+    ``OntologyRegistry`` (``dataknobs_data.ontology``) is the door that owns a
+    lifecycle and binds live sources, and it assembles an ``AsyncOntology`` of
+    its own -- so it asks this question too, and a copy of the predicate over
+    there is precisely the drift the paragraph above describes, with a package
+    boundary added to make it harder to notice.
 
     At load rather than at the accessor because that is the only place both
     flavours can take a copy: ``taxonomy()`` is a plain ``def`` on both twins,

@@ -505,7 +505,7 @@ _LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 141 of the 149 are read only by
+#: Almost no package document is one of these. 142 of the 150 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so

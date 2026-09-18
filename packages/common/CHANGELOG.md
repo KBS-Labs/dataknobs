@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Capability.SURFACE_FORM_LOOKUP`**, and the contract it declares. An
+  `EntitySource` answers `by_surface_form` from forms **it** folded, with
+  `default_normalizer` unless it was built with another --- and `frozenset()`
+  means *ran and matched nothing*, which is what every cascade reads it as
+  before falling through to a guessing rung. A source that cannot fold now has
+  a way to say so: it withholds this capability from `describe()` and raises
+  `CapabilityNotSupportedError` when asked, rather than answering over
+  unfolded values. Both protocol twins state it; it had lived only in the
+  in-memory implementation's private index, which is one implementation away
+  from two packages answering the same question two ways.
+
+- **`axes_to_copy`**, exported from `dataknobs_common.ontology`. Which
+  taxonomy definitions have their structure copied at load, as one predicate
+  rather than one per door. It was private while both callers were in this
+  module; a third door lives in another distribution now, and a copy of the
+  predicate over there is how a door and an accessor come to disagree about
+  which axes were copied.
+
 - **`LexicalSignal` / `AsyncLexicalSignal` --- a rung for the query that does
   not spell the form.** Every other rung here answers a lookup, so a query
   carrying a typo reaches none of them. This one compares each window of the

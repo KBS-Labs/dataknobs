@@ -132,7 +132,33 @@ class EntitySource(Protocol[K]):
 
     def describe(self) -> SourceDescription: ...
 
-    def by_surface_form(self, form: str) -> frozenset[K]: ...
+    def by_surface_form(self, form: str) -> frozenset[K]:
+        """The ids of entities carrying this form, **folded by the source**.
+
+        The fold is the source's own and is not the caller's to apply: a
+        rung hands this member the query as the person typed it, and the
+        source folds both sides with the normalizer it was built with --
+        :func:`~dataknobs_common.text.default_normalizer` unless one was
+        supplied. Folding in the caller instead would put the vocabulary's
+        own answer in the matcher's hands, and two matchers would fold two
+        ways over one vocabulary.
+
+        ``frozenset()`` means **ran and matched nothing**, which is what
+        every cascade reads it as before falling through to a guessing
+        rung. A source that cannot fold must not answer it: it withholds
+        :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP`
+        from :meth:`describe` and raises
+        :class:`~dataknobs_common.capabilities.CapabilityNotSupportedError`
+        when asked anyway, because an unfolded answer is indistinguishable
+        from a genuine miss and the caller takes its fallback for the wrong
+        reason.
+
+        Stated here rather than left to each implementation, and stated
+        once this protocol had a second implementor: a silent protocol is
+        how two packages came to answer one question two ways before
+        anyone noticed.
+        """
+        ...
 
     def by_type(self, type_id: str) -> frozenset[K]: ...
 
@@ -170,7 +196,25 @@ class AsyncEntitySource(Protocol[K]):
 
     def describe(self) -> SourceDescription: ...
 
-    async def by_surface_form(self, form: str) -> frozenset[K]: ...
+    async def by_surface_form(self, form: str) -> frozenset[K]:
+        """The ids of entities carrying this form, **folded by the source**.
+
+        The synchronous twin's contract, unchanged by the ``await``:
+        the source folds with its own normalizer, ``frozenset()`` means
+        *ran and matched nothing*, and a source that cannot fold withholds
+        :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP`
+        and raises
+        :class:`~dataknobs_common.capabilities.CapabilityNotSupportedError`
+        rather than answering over an unfolded column. See
+        :meth:`EntitySource.by_surface_form`.
+
+        This twin is where the contract costs something to keep. A live
+        table holds the form as it was written and no engine folds the way
+        :meth:`str.casefold` does at query time, so a source over one
+        reads a lookup whose rows were folded when they were written, or
+        it declines.
+        """
+        ...
 
     async def by_type(self, type_id: str) -> frozenset[K]: ...
 

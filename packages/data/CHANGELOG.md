@@ -137,6 +137,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_data.ontology` --- an ontology over a table you already have.**
+  `OntologyRegistry` loads an ontology document, binds its declared source to a
+  configured database, and closes what it opened. It is the object the
+  `dataknobs-common` loaders point at when they refuse a live source: binding
+  one creates something that must be closed, and a module-level function owns
+  no lifecycle to do that with.
+
+  ```python
+  from dataknobs_config import EnvironmentAwareConfig
+  from dataknobs_data.ontology import OntologyRegistry
+
+  cfg = EnvironmentAwareConfig.load_app("catalog")
+  registry = await OntologyRegistry.from_config_async(
+      cfg.resolve_for_build("ontology")
+  )
+  onto = registry.get("catalog")
+  entity = await onto.entity(onto.localize("catalog:sku-4471"))
+  entity.name                                     # "Beagle"
+  await registry.close()
+  ```
+
+  Two doors, and which config form each takes is the distinction between them:
+  `from_config_async` takes the **resolved** form, `load()` takes the
+  **portable** one --- `$resource` references intact and `${VAR}` unexpanded,
+  which is the form a deployment stores --- and resolves it through the
+  registry's own `environment=` and `strict_resources=`. `from_components`
+  takes handles already built, for a caller with no environment and no file.
+  A `$resource` this environment does not define **raises** by default:
+  the reference block carries no inline defaults to degrade to, so leniency
+  over it produces an entity source built over an empty config rather than one
+  reading the wrong catalogue. Pass `strict_resources=None` to hand the level
+  back to the environment's own setting.
+
+  `RecordEntitySource` projects rows through an `EntityProjection` that is
+  **configuration, not a callable** --- which is what keeps the mapping
+  invertible. Every bare scalar names a column and may be a dotted path into a
+  JSON value; the braced forms are the ones that do something else. A binding
+  declares the columns it projects and is rejected at load without them, and a
+  projection naming a column that declaration lacks is rejected naming the
+  column. Nothing here interpolates a name into a query.
+
+  A binding read by an `exact` rung also declares **where its folded surface
+  forms live**, and is rejected at load without that:
+
+  ```yaml
+  entity_projection:
+    table: products
+    id: sku
+    name: title
+    aliases: {column: alt_names, split: ","}
+    surface_forms:                # one row per (folded form, entity)
+      table: product_forms
+      form: folded_form           # holds normalizer(form)
+      entity: sku
+  ```
+
+  The fold a surface-form lookup compares by is `str.casefold`, and no engine
+  performs it at query time --- so the fold happens before the row is written
+  or it does not happen at all. A source with no declared lookup **refuses**
+  `by_surface_form` rather than answering over the unfolded column, because an
+  unfolded answer is indistinguishable from a genuine miss and a cascade falls
+  through to a guessing rung on exactly that reading. The same callable folds
+  both halves: `normalizer=` is the parameter the in-memory source already
+  carries.
+
+  Loading, unloading and rebuilding are announced on an injected or configured
+  `EventBus` as a topic and a type, with nothing added to `EventType`. A
+  rebuild carries three sets --- gone, arrived, and *changed name while keeping
+  its id* --- because a two-set delta reports a rename as no change at all.
+  `close()` releases every handle the registry opened and leaves every handle
+  it was handed; it does not unload, and `unload()` does not close, because the
+  vocabulary `get()` hands back is a value that outlives its entry.
+
 - **`known_backend_classes`**, on `dataknobs_data.backend_selection` with
   `KnownBackend`, for a caller that wants to read something off every backend
   class rather than build one. `available_backends` answers "what can I build

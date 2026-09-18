@@ -171,6 +171,10 @@
           "site": "grounded-sources.md"
         },
         {
+          "package": "guides/ontology-registry.md",
+          "site": "guides/ontology-registry.md"
+        },
+        {
           "package": "text-embedder.md",
           "site": "text-embedder.md"
         },
