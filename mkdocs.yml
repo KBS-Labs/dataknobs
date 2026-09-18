@@ -299,6 +299,7 @@ nav:
         - packages/xization/quality-filtering.md
         - packages/xization/heading-enrichment.md
       - packages/xization/json-chunking.md
+      - packages/xization/entity-resolution.md
       - Ingestion:
         - packages/xization/ingestion.md
         - packages/xization/ingestion/directory-processor.md

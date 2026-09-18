@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`AuthoritySignal` and `AsyncAuthoritySignal` --- the authority stack as a
+  resolution rung.** `dataknobs_common`'s rungs match text a vocabulary
+  *enumerates*; these match text it *describes* as well, so a declared pattern
+  --- a chip number, an account code, a date --- resolves where no enumeration
+  could have carried it. They implement
+  `dataknobs_common.entity_resolution.MatchSignal` over any `Authority`, hold
+  no entity source, and publish `narrows() is False` because an authority
+  stack has no declared types to filter against.
+
+  ```python
+  from dataknobs_xization import AuthoritySignal
+
+  rung = AuthoritySignal(AuthoritiesBundle("clinic", auths=[breeds, chips]))
+  rung.candidates("my golden retriever K-901 has been limping", k=5)
+  ```
+
+  Importing `dataknobs_xization` registers both flavours under
+  `kind: "authority"`, which is also what clears the mark `dataknobs_common`
+  leaves for the key it declares and cannot implement.
+
+  **The evidence is `DECLARED` at 1.0**, like every rung over forms a
+  vocabulary carries, and the entity id is the authority's own value id ---
+  a regex arm's `canonical_fn` answer, a dictionary arm's frame **index**. A
+  frame left on its default `RangeIndex` therefore resolves to row numbers,
+  which the guide states plainly because no layer above can detect it.
+
+  **It keeps less overlap than the `common` default and the guide says so.**
+  An authority suppresses a form contained by one it already matched, so a
+  vocabulary loaded as one authority per axis returns `golden_retriever` where
+  `ScanningSignal` returns `golden_retriever` and `retriever` both. One
+  authority per form keeps them. Both directions are pinned by tests.
+
+  Each row is read through the column vocabulary of the authority that *wrote*
+  it, so a bundle whose members were built with their own metadata answers
+  correctly rather than reading `NaN` through the bundle's names. The order ---
+  start ascending, end descending --- is the rung's own rather than a shared
+  frame's sort, which can only order by one vocabulary.
+
+  The registration leaves a key alone if something already holds it, so a
+  consumer who registered their own `authority` rung keeps it and importing
+  this package does not raise out of the import statement.
+
+  The candidates are assembled by `dataknobs_common`'s `declared_candidates`
+  rather than here, so a declared hit's evidence has one definition across both
+  distributions.
+
+- **`Authority.finders()` --- the authorities whose column vocabulary a row
+  may be written in.** The read-back counterpart to
+  `find_matches_with_finders`, for the point after a match's rows have been
+  added to a shared `Annotations` and the boundaries are gone. A leaf answers
+  with itself; an `AuthoritiesBundle` answers with its members' finders,
+  recursively, because both of its annotation paths leave a member's rows in
+  the member's own columns. An `AnnotatedText` carries one `Annotations` with
+  one metadata while the rows in it may be in several vocabularies, and this is
+  what lets a reader tell which.
+
+### Fixed
+
+- **A configured annotation column name no longer breaks reading the rows
+  back.** `AnnotationsMetaData.sort_fields` holds col *types*, as its own
+  parameter documents, and `sort_df` handed them to pandas as though they were
+  col *names* --- so an authority built with, say, `start_pos_col="begin"` had
+  its frame sorted on `start_pos`, and `KeyError` came out of the `df`
+  accessor several frames below anything naming an authority. Each field is now
+  translated through `get_col`, and one matching no col type is passed through
+  unchanged so a caller who put an actual column name there keeps sorting by
+  it. Invisible until something configured a name, because the two
+  vocabularies agree for every default --- the feature the parameter exists for
+  was the only thing that could reach it.
+
+- **A named or numbered regex group that did not participate in a match is no
+  longer annotated.** `RegexAuthority.build_match_annotations` walked the
+  *pattern's* groups rather than the match's, so an optional group that matched
+  nothing produced a row carrying a null text at span `(-1, -1)`, with
+  `canonical_fn` called on `None` to name it. Reachable from any pattern
+  written to match two spellings of one thing --- an account code with an
+  optional prefix --- where the shorter spelling gained a phantom second
+  annotation. Both loops now skip a group whose text is `None`; a group that
+  legitimately matched the empty string has real offsets and keeps its row.
+
+- **`Authority.annotate_input` no longer raises for input carrying no text.**
+  `None` reached the return with its local never bound, for an
+  `UnboundLocalError`; an empty or all-whitespace string failed the wrapping
+  guard, stayed a `str`, and was handed to `add_annotations`, which asks it
+  for `.annotations`. All three now answer with empty `Annotations`. A
+  resolution rung is called with whatever a consumer typed, so every one of
+  these was reachable from a cascade rather than only from a test. The
+  parameter now declares the domain it accepts. The abstract `Annotator` base
+  is deliberately left narrower: its other implementations dereference the
+  argument and would raise, so widening the declared type there without
+  widening the behaviour would publish a promise three classes do not keep.
+
 ### Changed
 
 - **`DirectoryProcessor.process()` no longer refuses a caller already on an

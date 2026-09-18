@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`declared_candidates` --- the assembly a rung over declared forms owes,
+  now on the package door.** Find your hits; this turns them into what the
+  cascade expects. It groups them by entity so `k` counts **entities** rather
+  than places, keeps the order the rung returned them in, scores each `1.0`
+  with `Scoring.DECLARED`, and slices `matched_text` out of the query so the
+  text and the span agree by construction.
+
+  ```python
+  from dataknobs_common.entity_resolution import declared_candidates
+
+  declared_candidates(self._located(query), k, signal=self.name, query=query)
+  ```
+
+  `DeclaredSignal` runs the same function, so a rung written against the bare
+  `MatchSignal` protocol --- the escape hatch that base's own docstring names,
+  for a backing that is not a dictionary lookup --- produces the same evidence
+  shape as a shipped rung rather than a copy of it. A rung that narrows passes
+  the ids its filter left standing as `admitted=`; one that does not omits it.
+
+- **`kind: "authority"` is a known rung kind, declared unavailable until its
+  package is imported.** `dataknobs-xization` ships the rung that reads an
+  authority stack, and `dataknobs_common` cannot import it --- so both rung
+  registries now declare the key with a reason naming the distribution *and*
+  the module, rather than reporting an unknown kind. Importing
+  `dataknobs_xization.entity_resolution` registers over both marks and clears
+  them. `get_metadata("authority")["requires_install"]` answers either way.
+
+  This is the second such mark and the first for this condition: `semantic` is
+  withdrawn because no synchronous form of it exists anywhere, while
+  `authority` exists in both flavours and merely ships elsewhere.
+
+
 - **`BridgedOperation` and `bridged_operation()` --- one loop and one budget,
   for the span of one synchronous call.** A synchronous wrapper over an
   asynchronous object reaches that object more than once per public call (a
@@ -67,6 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a per-item error handler while still absorbing an item's own failure.
 
 ### Fixed
+
+- **A negative `k` is refused rather than read as counting back from the end.**
+  Every rung's cut to `k` is a list slice, so `k=-1` returned all but the *last*
+  entity: not an error, not the empty list, and indistinguishable from a rung
+  that genuinely found that many. Nothing upstream validates it --- a resolver
+  takes `k` as a keyword and hands it down untouched --- so `declared_candidates`
+  now raises `ValidationError`, which refuses it for every rung that assembles
+  through it. `k=0` is a real request and still answers the empty list.
 
 - **A closing `SyncLoopBridge` no longer destroys work that is still running
   on its loop.** Teardown drained the loop's async generators and nothing
@@ -566,7 +606,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 133 names, taking the package's `__all__` to 342,
+  the resolution cascade — 134 names, taking the package's `__all__` to 343,
   the three beyond them being the operation family added above.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

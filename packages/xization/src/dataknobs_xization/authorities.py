@@ -416,7 +416,7 @@ class Authority(dk_annots.Annotator):
 
     def annotate_input(
         self,
-        text_obj: Union[dk_annots.AnnotatedText, str],
+        text_obj: Union[dk_annots.AnnotatedText, str, None],
         **kwargs: Any,
     ) -> dk_annots.Annotations:
         """Find and annotate this authority's entities in the document text
@@ -433,22 +433,42 @@ class Authority(dk_annots.Annotator):
             },
         ]
 
+        **Wider than** :meth:`~dataknobs_xization.annotations.Annotator.annotate_input`,
+        which declares an ``AnnotatedText``. This override already accepted a
+        bare ``str`` and wraps it; ``None`` and a string carrying no text join
+        it as inputs that annotate nothing rather than raising. The base is
+        left as it is on purpose: its other implementations dereference
+        ``text_obj`` and would raise ``AttributeError``, so widening the
+        declared type there without widening the behaviour would publish a
+        promise three classes do not keep. The rule is this class's, and it is
+        stated here because an authority is what a resolution rung calls with
+        whatever a consumer typed.
+
         Args:
-            text_obj: The text object or string to process.
+            text_obj: The text object or string to process. ``None``, an empty
+                string and an all-whitespace one are accepted and carry
+                nothing to annotate.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            An Annotations instance.
+            An Annotations instance, empty for input carrying no text.
         """
-        if text_obj is not None:
-            if isinstance(text_obj, str) and len(text_obj.strip()) > 0:
-                text_obj = dk_annots.AnnotatedText(
-                    text_obj,
-                    annots_metadata=self.metadata,
-                )
-        if text_obj is not None:
-            annotations = self.add_annotations(text_obj)
-        return annotations
+        # Input carrying no text annotates nothing. It used to raise, two
+        # ways: `None` reached the return with `annotations` never bound, and
+        # an empty or all-whitespace string failed the strip guard below,
+        # stayed a `str`, and was handed to `add_annotations`, which asks it
+        # for `.annotations`. The guard was deciding whether to *wrap* the
+        # input while the code after it acted as though it had decided
+        # whether to *process* it -- so an empty string is now wrapped like
+        # any other and the arms find nothing in it, which is the answer.
+        if text_obj is None:
+            return dk_annots.Annotations(self.metadata)
+        if isinstance(text_obj, str):
+            text_obj = dk_annots.AnnotatedText(
+                text_obj,
+                annots_metadata=self.metadata,
+            )
+        return self.add_annotations(text_obj)
 
     @abstractmethod
     def add_annotations(
@@ -525,6 +545,35 @@ class Authority(dk_annots.Annotator):
             them, in document order.
         """
         return ((self, ann_dicts) for ann_dicts in self.find_matches(text_obj))
+
+    def finders(self) -> Iterable["Authority"]:
+        """Every authority whose column vocabulary this one's rows may be in.
+
+        The read-back counterpart to :meth:`find_matches_with_finders`, and
+        the same notion of *finder*: the authority whose ``metadata`` names
+        the columns of the rows it wrote. That method pairs a finder with
+        each match while the matches are still separable; this one answers
+        the question left over once the rows have been added to a shared
+        :class:`~dataknobs_xization.annotations.Annotations` and the
+        boundaries are gone -- which vocabularies can a row in there be in?
+
+        An authority that writes its own rows is its own finder, so the
+        default is ``self`` and a leaf needs nothing more. A composite
+        overrides this, because :meth:`add_valid_annotations` adds each
+        match's rows exactly as their finder wrote them: being judged by a
+        composite does not rewrite a row's columns, so the composite's own
+        vocabulary is not among the answers unless it also writes rows.
+
+        Needed because an ``AnnotatedText`` carries **one** ``Annotations``
+        with one metadata, while the rows in it may be in several
+        vocabularies -- so a reader holding only the authority it asked has
+        no way to read back what a member of that authority wrote.
+
+        Returns:
+            The authorities whose column vocabularies rows added by this one
+            may be written in, nearest first.
+        """
+        return (self,)
 
     def validate_ann_dicts(
         self,
@@ -1037,6 +1086,20 @@ class RegexAuthority(Authority):
         a single row spanning the whole match when it has none. A match's rows
         are the fields of one entity, so they are judged and added together.
 
+        **A group the match did not use is not a row.** Both loops below walk
+        the pattern's groups rather than the match's, and an optional group
+        that did not participate answers ``None`` for its text and ``-1`` for
+        both offsets -- so it used to produce a row carrying a null text at a
+        span pointing nowhere, with ``canonical_fn`` called on ``None`` to
+        name it. An optional alternative is most of what a vocabulary
+        *describes* rather than enumerates, so this was reachable from any
+        pattern written to match two spellings of one thing.
+
+        ``group_text is None`` is the test rather than the offsets, because
+        it is the one the ``re`` module documents for non-participation; a
+        group that legitimately matched the empty string has real offsets and
+        keeps its row.
+
         Args:
             match: A match of this authority's regex.
 
@@ -1048,6 +1111,8 @@ class RegexAuthority(Authority):
             if len(self.regex.groupindex) > 0:  # we have named groups
                 for group_name, group_num in self.regex.groupindex.items():
                     group_text = match.group(group_num)
+                    if group_text is None:  # the group did not participate
+                        continue
                     kwargs = {self.field_groups.get_field_type_col(self.name): group_name}
                     ann_dicts.append(
                         self.build_annotation(
@@ -1060,6 +1125,8 @@ class RegexAuthority(Authority):
                     )
             else:  # we have only numbers for groups
                 for group_num, group_text in enumerate(match.groups(), start=1):
+                    if group_text is None:  # the group did not participate
+                        continue
                     kwargs = {self.field_groups.get_field_type_col(self.name): group_num}
                     ann_dicts.append(
                         self.build_annotation(
@@ -1173,6 +1240,29 @@ class AuthoritiesBundle(Authority):
                 auth.annotate_input(text_obj)
             return text_obj.annotations
         return self.add_valid_annotations(text_obj, self.find_matches_with_finders(text_obj))
+
+    def finders(self) -> Iterable["Authority"]:
+        """The members' finders, because a bundle writes no rows of its own.
+
+        Both of :meth:`add_annotations`'s paths leave a member's rows in the
+        member's vocabulary -- the unjudged path has each member annotate the
+        text directly, and the judged one goes through
+        :meth:`Authority.add_valid_annotations`, which adds each match's rows
+        exactly as its finder wrote them. So the vocabularies a reader may
+        meet in this bundle's annotations are its members', never this
+        bundle's.
+
+        Recursive through :meth:`Authority.finders` rather than reading
+        ``auths`` directly, so that a member which is itself a bundle
+        contributes the vocabularies of *its* members rather than its own --
+        the same reason :meth:`find_matches_with_finders` carries the pairs
+        along instead of rebuilding them around whichever authority was asked
+        last.
+
+        Returns:
+            Each member's finders, in the order the members were added.
+        """
+        return [finder for auth in self.auths for finder in auth.finders()]
 
     def find_matches(
         self,

@@ -127,12 +127,47 @@ async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARE
 # sentence naming itself and its twin; this registry is also read by callers
 # that have no door at all.
 #
-# One member today, and that is a measurement rather than a shape: of the
-# rungs the design contemplates, only this one is flavour-asymmetric. A
-# consumer who writes a synchronous rung under this kind registers it, and
-# registering clears the mark -- which is the extension point, not a leak.
+# Two members, and they are marked for **different** conditions, which is why
+# the reason is a sentence rather than a flag. ``semantic`` is
+# flavour-asymmetric: there is no synchronous form of it to register, in this
+# distribution or any other, so the synchronous registry alone carries it.
+# The asynchronous side carries no mark because it is waiting on a class that
+# does not exist yet rather than on an import -- ``SemanticSignal`` is
+# unwritten, here and everywhere, so asking the asynchronous registry for it
+# today reports an unknown kind. That is the gap this mechanism exists to
+# close, and it closes when the rung ships: the mark belongs beside the class,
+# and inventing one now would name an install that supplies nothing.
+# ``authority`` has both flavours and ships in another distribution, so both
+# registries carry it and both marks are cleared the moment an application
+# imports the module that implements it. A consumer who writes either kind and
+# registers their own clears the mark the same way -- which is the extension
+# point, not a leak.
 signal_backends.declare_unavailable(
     "semantic",
     reason="SemanticSignal has no synchronous form",
     metadata={"flavour": "async", "needs_io": True},
+)
+
+# The reason names the distribution **and** the import, because they answer
+# two different questions and a reader stuck on this key has both: what do I
+# install, and -- having installed it -- why is the kind still unknown. The
+# second is the one a package name alone leaves open, since the registration
+# happens at a module's import rather than at the distribution's presence.
+_SHIPS_IN_XIZATION = (
+    "AuthoritySignal ships in dataknobs-xization; import "
+    "dataknobs_xization.entity_resolution to register it"
+)
+_XIZATION_METADATA = {
+    "needs_io": False,
+    "requires_install": "pip install dataknobs-xization",
+}
+signal_backends.declare_unavailable(
+    "authority",
+    reason=_SHIPS_IN_XIZATION,
+    metadata=dict(_XIZATION_METADATA, flavour="sync"),
+)
+async_signal_backends.declare_unavailable(
+    "authority",
+    reason=_SHIPS_IN_XIZATION,
+    metadata=dict(_XIZATION_METADATA, flavour="async"),
 )

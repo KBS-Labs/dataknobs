@@ -111,6 +111,21 @@ class AnnotationsMetaData(dk_doc.MetaData):
     def sort_df(self, an_df: pd.DataFrame) -> pd.DataFrame:
         """Sort an annotations dataframe according to this metadata.
 
+        ``sort_fields`` holds col **types**, as its own parameter documents,
+        and a frame's columns are col **names** -- so each field is
+        translated through :meth:`get_col` on the way to pandas. Skipping the
+        translation asked for ``start_pos`` on a frame whose column is
+        whatever ``start_pos_col`` was configured to, and raised ``KeyError``
+        from inside the ``df`` accessor.
+
+        Invisible until something configured a name, because the two
+        vocabularies agree for every default: the feature the parameter
+        exists for was the only thing that could reach the defect.
+
+        A field matching no col type is passed through unchanged, so a caller
+        who put an actual column name there -- indistinguishable from a col
+        type while the two agreed -- keeps sorting by it.
+
         Args:
             an_df: An annotations dataframe.
 
@@ -118,7 +133,8 @@ class AnnotationsMetaData(dk_doc.MetaData):
             The sorted annotations dataframe.
         """
         if self.sort_fields is not None:
-            an_df = an_df.sort_values(self.sort_fields, ascending=self.ascending)
+            columns = [self.get_col(field, field) for field in self.sort_fields]
+            an_df = an_df.sort_values(columns, ascending=self.ascending)
         return an_df
 
 
