@@ -282,6 +282,31 @@ A near-spelling hit scoring `0.94` still sits **behind** a declared hit scoring
 `1.0`, and not because `0.94` is the smaller number: a cascade positions by the
 first rung that produced an id. Put this rung after the declared ones.
 
+### What it changes about coverage
+
+This is the first rung here whose evidence is `INFERRED` *and* carries a span,
+and `Coverage` is positional — it is the union of the evidence spans and reads
+no `kind` at all. So adding this rung to a cascade changes what
+`unmatched_text()` answers, in two directions:
+
+- **A misspelling it resolved stops being reported as uncovered.** For the
+  query above, a declared-only cascade reports the whole sentence as
+  unmatched; with this rung it reports `('my', 'has been limping')`. That is
+  the reading `unmatched` wants — a phrase the vocabulary *resolved* is not an
+  entry somebody should go and add.
+- **An overreaching window carries its whole extent into `matched`.** The rung
+  reports every window that cleared the threshold rather than choosing one, so
+  on the *correctly spelled* sentence `my golden retriever has been limping` it
+  also proposes `golden_retriever` across `my golden retriever` (`0.914`) and
+  `golden retriever has` (`0.889`). `matched_text()` is then
+  `('my golden retriever has',)`, and neither `my` nor `has` is a word the
+  vocabulary matched.
+
+A caller who wants the stricter question — *where was a form the vocabulary
+actually spells* — reads it off the evidence rather than off coverage:
+`EntityCandidate.declared` per candidate, or `kind` on each piece of
+`result.explain(entity_id)`.
+
 ### The threshold, and what a lower one buys
 
 <!-- worked-threshold -->
@@ -373,6 +398,37 @@ because this repository does not have `rapidfuzz` installed: a block the suite
 cannot run is a block nothing checks, and every other block in this section is
 executed.
 
+The cost also grows with the **query**, and nothing about the vocabulary
+bounds that. The threshold decides how *wide* a window may be; how many there
+are is the caller's token count, and each one costs a scorer call per declared
+form where a scan's costs a dictionary lookup. Measured: linear in the token
+count, and a nine-hundred-token paste over a five-hundred-entity vocabulary is
+two seconds of one CPU. `max_query_tokens` is the cap for text a caller did not
+write, and it is off by default because it is the one parameter here that can
+cost an answer:
+
+A query over the cap is **refused rather than truncated**. Probing the first
+*n* tokens of a paste and answering from them is a plausible-looking answer to
+a question nobody asked — the entity is as likely to be in the tail as in the
+head — so the refusal names the count and leaves the repair, chunk the text or
+raise the cap, to the caller.
+
+<!-- worked-cap -->
+
+```python
+from dataknobs_common.exceptions import ValidationError
+
+capped = LexicalSignal(breeds, max_query_tokens=4)
+try:
+    capped.candidates(typo, k=5)
+except ValidationError as refused:
+    print(refused)
+```
+
+```
+this query carries 6 tokens and max_query_tokens is 4. A near-spelling rung scores every window against every declared form, so the work grows with the caller's own text -- chunk the text, or raise the cap for a vocabulary small enough to afford it.
+```
+
 **Do not pass `rapidfuzz.fuzz.partial_ratio`.** It scores any substring `1.0`,
 so over a vocabulary whose forms contain one another — which is this one —
 `gold retriever` matches `retriever` at `1.00` and picks the wrong entity. Its
@@ -388,10 +444,16 @@ has nothing to hand them. So the source must also satisfy
 `SurfaceFormCatalog` — one member, `surface_forms()`, answering with every form
 the vocabulary declares:
 
+<!-- worked-catalogue -->
+
 ```python
 from dataknobs_common.entity_resolution import SurfaceFormCatalog
 
-assert isinstance(breeds, SurfaceFormCatalog)     # structural: nothing to register
+print(isinstance(breeds, SurfaceFormCatalog))     # structural: nothing to register
+```
+
+```
+True
 ```
 
 `MappingEntitySource` satisfies it for free, because its index is already keyed
@@ -412,6 +474,39 @@ rung's `normalizer` defaults to `default_normalizer` where every other rung here
 defaults to no fold at all. The others hand a string to the index and the index
 folds it; this one *is* the comparison, so an unfolded window scored against a
 folded form would read a capital letter as a misspelling.
+
+Your own `normalizer` must not **shorten** as its input grows. The probe's
+bound is spent in folded characters and it stops widening at the first window
+over it, so a fold that deleted more from a longer slice than from a shorter
+one could stop the probe early. Every character-wise fold satisfies this —
+anything built from `strip`, `casefold`, `lower` or `replace`, including one
+that deletes separators outright.
+
+**And the source's flavour is checked, not just its shape.** Both catalogues
+spell the member `surface_forms`, and `isinstance` against a runtime-checkable
+protocol compares member *names* — so a structural check alone accepts either
+one, and a synchronous source reaching `AsyncLexicalSignal` builds a rung whose
+every query raises from inside the scan. The flavour is asked separately and
+the refusal says which one it found:
+
+<!-- worked-flavour -->
+
+```python
+from dataknobs_common.entity_resolution import AsyncLexicalSignal
+
+try:
+    AsyncLexicalSignal(breeds)
+except ValidationError as refused:
+    print(refused)
+```
+
+```
+MappingEntitySource publishes surface_forms() as a synchronous member, and this rung needs the asynchronous one. The two protocols spell the member identically, so a structural check cannot tell them apart -- pass the asynchronous source, or the rung of the other flavour.
+```
+
+That matters because a configuration is where the mistake gets made:
+`entities:` is resolved before either registry sees it, so nothing between the
+two flavours' factories would otherwise catch it.
 
 ## Where a match sat
 

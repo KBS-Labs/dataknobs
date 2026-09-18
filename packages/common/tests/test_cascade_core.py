@@ -1384,3 +1384,36 @@ def test_a_source_without_alias_forms_still_conforms_and_still_resolves() -> Non
     assert [c.entity_id for c in result.candidates] == ["beagle"]
     assert [e.signal for e in result.explain("beagle")] == ["exact"]
     assert AliasSignal(source).candidates("beagle", 5) == []
+
+
+def test_an_alias_source_of_the_wrong_flavour_is_refused_rather_than_awaited():
+    """The other way a capability check can be satisfied without being right.
+
+    ``AliasSignal`` asks ``isinstance(..., AliasFormSource)`` and falls back to
+    *this vocabulary declares no aliases* when the answer is no. A
+    runtime-checkable protocol compares member **names**, and both flavours
+    spell it ``by_alias_form`` -- so the answer was *yes* for an asynchronous
+    source too, and the rung went on to call it synchronously. What a cascade
+    then saw was a ``'coroutine' object is not iterable`` from inside a rung
+    that had reported itself satisfied, plus a *coroutine was never awaited*
+    warning from somewhere else entirely.
+
+    The flavour is now settled at construction, which is where the source was
+    chosen. The **absent** case is untouched and is asserted beside this one:
+    those two are different facts, and only one of them is a mistake.
+    """
+    from dataknobs_common.entity_resolution.signals import AsyncAliasSignal
+    from dataknobs_common.exceptions import ValidationError
+    from dataknobs_common.ontology import AsyncMappingEntitySource
+
+    vocabulary = {"beagle": Entity(id="beagle", type="Breed", name="Beagle", aliases=("Beagles",))}
+
+    with pytest.raises(ValidationError, match="synchronous"):
+        AliasSignal(AsyncMappingEntitySource(vocabulary))
+    with pytest.raises(ValidationError, match="asynchronous"):
+        AsyncAliasSignal(MappingEntitySource(vocabulary))
+
+    assert AliasSignal(AliaslessSource(vocabulary)).candidates("beagles", 5) == [], (
+        "a source that simply lacks the member still declares no aliases, "
+        "which is a fact rather than a misconfiguration"
+    )

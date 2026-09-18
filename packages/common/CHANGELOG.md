@@ -36,6 +36,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chosen: a lower one does not find more entities, it finds the same ones at
   spans that run past them.
 
+  `max_query_tokens` caps the query, and is off by default because it is the
+  one parameter here that can cost an answer. The threshold bounds how *wide*
+  a window may be; how many there are is the caller's token count, and each
+  costs a scorer call per declared form where a scan's costs a dictionary
+  lookup --- linear in the token count, and a nine-hundred-token paste over a
+  five-hundred-entity vocabulary is two seconds of one CPU. A query over the
+  cap is refused rather than truncated, because answering from the head of a
+  paste is a plausible-looking answer to a question nobody asked.
+
+  **The asynchronous twin runs its scan on a worker thread.** Every other rung
+  in this family awaits a lookup and does arithmetic on the answer; this one
+  scores every window against every form, which is CPU proportional to the
+  vocabulary with no `await` inside it to yield on. Left on the event loop
+  that is the whole scan's duration during which nothing else on the loop
+  makes progress --- and neither the `ASYNC2xx` lint nor `assert_no_blocking`
+  can see it, because the work is arithmetic rather than a syscall.
+
+  **Its evidence is the first here that is `INFERRED` *and* carries a span**,
+  which changes what `Coverage` reports for a cascade holding this rung: a
+  misspelling it resolved stops being listed by `unmatched_text()`, and an
+  overreaching window carries its whole extent into `matched`. A caller who
+  wants *where a form the vocabulary actually spells was found* reads `kind`
+  off the evidence or `EntityCandidate.declared` off the candidate; `Coverage`
+  is positional and reads neither.
+
 - **`SurfaceFormCatalog` / `AsyncSurfaceFormCatalog` --- an optional protocol
   for a source that can hand over its forms.** One member,
   `surface_forms()`. `EntitySource` publishes lookups alone, so a query
@@ -48,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation we never see from conforming into non-conforming, silently
   and at once. `MappingEntitySource` and `AsyncMappingEntitySource` satisfy the
   new one for free --- their index is already keyed by the folded form.
+
+  Both twins spell the member `surface_forms`, and a runtime-checkable
+  protocol compares member *names* --- so `isinstance` alone cannot tell a
+  synchronous source from an asynchronous one. The rungs ask the flavour
+  separately and refuse with a message naming the one they found, because
+  `entities:` is resolved before either registry sees it and the flavours are
+  exactly what a configuration gets wrong.
 
 
 - **`declared_candidates` --- the assembly a rung over declared forms owes,
@@ -155,6 +187,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where it did not; a candidate's is the best of its hits'.
 
 ### Fixed
+
+- **A source publishing an index member in the wrong flavour is refused by
+  name.** `AliasSignal` checks `isinstance(..., AliasFormSource)` before asking
+  for alias forms, and its asynchronous twin checks the asynchronous protocol
+  --- but both protocols spell the member `by_alias_form`, and a
+  runtime-checkable protocol compares member *names*. Either check therefore
+  passed for either flavour, so a synchronous source in `AsyncAliasSignal`
+  raised `TypeError: object frozenset can't be used in 'await' expression`
+  from inside a cascade, and the mirror case raised `'coroutine' object is not
+  iterable` alongside a *coroutine was never awaited* warning. Both now raise
+  `ValidationError` saying which flavour was found and which was wanted. A
+  source that simply *lacks* the member still yields the empty answer it
+  always did --- a vocabulary may legitimately declare no aliases, and that is
+  a different fact from a misconfigured one.
+
+- **A `normalizer` that is not callable is refused where it was supplied.**
+  Every rung takes it straight from its config dict, and a configuration
+  document cannot write a callable --- so `normalizer: "casefold"`, the
+  obvious thing to write, is a string. A string is truthy: it passed every
+  guard and raised `TypeError: 'str' object is not callable` at the first
+  query, from inside the fold. Both bases now refuse it at construction, which
+  covers every rung and both flavours; `LexicalSignal` refuses its `scorer` on
+  the same grounds. The path is refused, not resolved: turning a dotted path
+  into the function it names would let a document reach any importable
+  callable, which is a wider decision than this one.
 
 - **A negative `k` is refused rather than read as counting back from the end.**
   Every rung's cut to `k` is a list slice, so `k=-1` returned all but the *last*
@@ -663,9 +720,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
   the resolution cascade — 134 names, taking the package's `__all__` to 347,
-  the seven beyond them being the operation family, `declared_candidates`, the
-  near-spelling rung and the surface-form catalogue, each added by its own
-  entry above.
+  the seven beyond them being the operation family, the near-spelling rung and
+  the surface-form catalogue, each in both flavours and each added by its own
+  entry above. `declared_candidates` is inside the 134 rather than beyond
+  them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing

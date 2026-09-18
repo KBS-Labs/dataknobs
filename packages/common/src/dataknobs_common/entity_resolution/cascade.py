@@ -237,10 +237,18 @@ def _coverage(
     reading rather than a hole in it: a cosine neighbour over an embedded
     utterance has no position in that utterance to report. So a query whose
     only hits are vector hits comes back with nothing matched and the whole
-    string unmatched -- no declared form was found in the text and a
-    neighbourhood guess is being offered anyway, which is the line a consumer
-    maintaining a vocabulary can act on and the older all-or-nothing rule
-    could not state.
+    string unmatched -- a neighbourhood guess is being offered and nothing was
+    located in the text, which is a line a consumer maintaining a vocabulary
+    can act on and the older all-or-nothing rule could not state.
+
+    **The span decides, not the kind**, and this function reads no ``kind``
+    at all. That distinction was once immaterial, because every rung able to
+    place a hit was a rung that looked one up; a near-spelling rung is
+    ``INFERRED`` *and* knows where it read, so the words it scored are
+    matched here. See
+    :class:`~dataknobs_common.entity_resolution.values.Coverage` for why that
+    is the reading ``unmatched`` wants, and for how a caller recovers the
+    stricter question from the evidence it already has.
 
     An empty span is dropped rather than reported: the union of point sets is
     what ``matched`` means, and an empty interval adds no points to it.

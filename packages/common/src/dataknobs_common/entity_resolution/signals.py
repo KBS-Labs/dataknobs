@@ -25,9 +25,12 @@ and not the first one configured.
 
 from __future__ import annotations
 
+import asyncio
 from difflib import SequenceMatcher
 from math import ceil
 from typing import TYPE_CHECKING, Any, NoReturn
+
+from dataknobs_common.callbacks import is_async_callable
 
 from dataknobs_common.entity_resolution.protocols import (
     AliasFormSource,
@@ -363,6 +366,90 @@ def _window_bound(
     return max_window if derived is None else min(derived, max_window)
 
 
+def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
+    """``max_query_tokens`` as given, having refused a cap that probes nothing.
+
+    Shared so the twins refuse identically, for :func:`_checked_max_window`'s
+    reason and with its ruling: below one is refused rather than clamped,
+    because it builds a rung that reports nothing for every query and is
+    indistinguishable from a vocabulary that matches nothing.
+
+    Raises:
+        ValidationError: For a ``max_query_tokens`` below one.
+    """
+    if max_query_tokens is not None and max_query_tokens < 1:
+        raise ValidationError(
+            f"max_query_tokens must be at least 1, got {max_query_tokens}. A "
+            f"rung that may probe no tokens reports an empty result for every "
+            f"query, which is what a vocabulary matching nothing looks like."
+        )
+    return max_query_tokens
+
+
+def _checked_query(query: str, max_query_tokens: int | None) -> None:
+    """Refuse a query with more tokens than this rung agreed to probe.
+
+    **Refused rather than truncated.** Probing the first *n* tokens and
+    answering from them is a plausible-looking answer to a question nobody
+    asked: the entity a caller is reaching for is as likely to be in the tail
+    of a paste as in its head, so a truncating cap converts a cost problem
+    into a correctness one and reports nothing about the swap. A caller who
+    set this number wants to hear that the input was the wrong shape, and the
+    repair -- chunk the text, or raise the cap -- is theirs either way.
+
+    Raises:
+        ValidationError: For a query carrying more tokens than the cap.
+    """
+    if max_query_tokens is None:
+        return
+    tokens = len(token_spans(query))
+    if tokens > max_query_tokens:
+        raise ValidationError(
+            f"this query carries {tokens} tokens and max_query_tokens is "
+            f"{max_query_tokens}. A near-spelling rung scores every window "
+            f"against every declared form, so the work grows with the "
+            f"caller's own text -- chunk the text, or raise the cap for a "
+            f"vocabulary small enough to afford it."
+        )
+
+
+def _checked_callable(
+    value: Callable[..., Any] | None, parameter: str
+) -> Callable[..., Any] | None:
+    """``value`` as given, having refused something that cannot be called.
+
+    **A document is the reason.** Every rung here takes its ``normalizer``
+    from a config dict, and the near-spelling rung takes its ``scorer`` the
+    same way -- but a YAML or JSON document cannot express a callable, so the
+    obvious thing to write is the dotted path, ``scorer: "rapidfuzz.fuzz.ratio"``.
+    A string is truthy: it passes ``scorer or _RatioScorer(...)`` and every
+    other guard, then raises ``TypeError: 'str' object is not callable`` at
+    the first query, once per ``(window, form)`` pair, from inside a loop the
+    caller did not write.
+
+    Refused here instead, where the value was supplied and the parameter has
+    a name. Shared by both bases and both flavours so that a rung cannot be
+    reached by a route that skips it.
+
+    This is the refusal and **not** a resolution: a dotted path is not
+    resolved into the function it names. Doing that would make a config
+    document able to name any importable callable, which is a wider decision
+    than this one and belongs to the layer that already has a convention for
+    it.
+
+    Raises:
+        ValidationError: For a value that is neither ``None`` nor callable.
+    """
+    if value is not None and not callable(value):
+        raise ValidationError(
+            f"{parameter} must be callable or None, got {type(value).__name__} "
+            f"({value!r}). A configuration document cannot write a callable, so "
+            f"a dotted path here names nothing this rung can call -- build the "
+            f"rung in code, or resolve the path before handing it over."
+        )
+    return value
+
+
 def _checked_max_window(max_window: int | None) -> int | None:
     """``max_window`` as given, having refused a value that means no scan.
 
@@ -397,6 +484,60 @@ def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
     a rung "with a longer form and a shorter one inside it".
     """
     return [FormHit(entity_id=entity_id, span=span) for entity_id in ids]
+
+
+def _require_flavour(entities: object, member: str, *, asynchronous: bool) -> None:
+    """Refuse a source publishing ``member`` in the **other** flavour.
+
+    ``isinstance`` against a runtime-checkable protocol compares member
+    *names* and nothing else, and every capability protocol in this package
+    is twinned under one name -- ``surface_forms`` on both catalogues,
+    ``by_alias_form`` on both alias sources. So the structural check alone
+    answers ``True`` for either flavour, and the two protocol docstrings that
+    say so rest the cost on *each flavour's rung holds a source of its own
+    flavour already*. Nothing establishes that: a source arrives as
+    ``entities:`` in a document, resolved before either registry sees it, so
+    the flavours are exactly what a configuration gets wrong.
+
+    What it costs unguarded is not a refusal anyone can read. A synchronous
+    source in an asynchronous rung constructs cleanly and raises
+    ``TypeError: object dict_keys can't be used in 'await' expression`` from
+    inside the scan; the mirror case raises ``'coroutine' object is not
+    iterable`` and warns that a coroutine was never awaited. Both are a
+    misconfiguration wearing the costume of a bug in this package.
+
+    So the flavour is asked separately, of the **member** rather than of the
+    type. :func:`~dataknobs_common.callbacks.is_async_callable` is the
+    judgement rather than :func:`inspect.iscoroutinefunction`, because a
+    source may publish the member as a callable *object* -- a client holding
+    a session -- whose async-ness lives on its ``__call__``.
+
+    Whether the member is there **at all** is the caller's question and not
+    this one's, because the two have different answers: a source lacking
+    ``by_alias_form`` declares no aliases and a source lacking
+    ``surface_forms`` is misconfigured. Only the flavour means the same thing
+    in both places, which is why only the flavour is shared.
+
+    Separate from :func:`_refuse_catalogue` for the same reason one layer
+    down: the repair differs, and the reader needs to know which they have.
+    That one is missing a member; this one has it and spelled it for the
+    other twin, so a message naming only the protocol would send a reader to
+    write a method they have already written.
+
+    Raises:
+        ValidationError: For a member of the other flavour.
+    """
+    if is_async_callable(getattr(entities, member)) is asynchronous:
+        return
+    wanted, got = (
+        ("asynchronous", "synchronous") if asynchronous else ("synchronous", "asynchronous")
+    )
+    raise ValidationError(
+        f"{type(entities).__name__} publishes {member}() as a {got} member, "
+        f"and this rung needs the {wanted} one. The two protocols spell the "
+        f"member identically, so a structural check cannot tell them apart -- "
+        f"pass the {wanted} source, or the rung of the other flavour."
+    )
 
 
 def _refuse_catalogue(entities: object, protocol: str) -> NoReturn:
@@ -471,32 +612,56 @@ def _window_chars(forms: Sequence[str], threshold: float) -> int:
     return ceil(longest * (2.0 - threshold) / threshold)
 
 
-def _scored_probe_spans(query: str, max_chars: int) -> Iterator[tuple[int, int]]:
-    """Every span of consecutive tokens no wider than ``max_chars`` characters.
+def _scored_probe_spans(
+    query: str, max_chars: int, fold: Callable[[str], str]
+) -> Iterator[tuple[tuple[int, int], str]]:
+    """Every span of consecutive tokens whose **folded** width fits ``max_chars``.
 
     :func:`_probe_spans`'s counterpart for a rung bounded by characters
     rather than by tokens, and shared by both flavours for that function's
     reason: the enumeration has nothing to do with awaiting.
 
+    **It folds, and it measures what the fold left**, which is the unit the
+    bound is stated in: :func:`_window_chars` derives it from the folded
+    forms and :func:`_near_forms` scores folded windows against them, so a
+    probe counting the raw slice would be spending a budget denominated in
+    one unit against a quantity measured in another. With the default fold
+    the two agree to within a conservative margin -- ``strip`` is a no-op
+    inside a token span and ``casefold`` never shortens -- and a caller's own
+    ``normalizer`` is free to *delete*, at which point the raw count exceeds
+    the bound while the folded one is still under it and the window that
+    would have matched is never probed.
+
+    Folding here rather than in the caller also means each window is folded
+    once: the admission test and the comparison read the same string.
+
     The inner loop **breaks** rather than filtering, which is what keeps the
     cost linear: spans grow monotonically from a fixed start, so the first
     one too wide means every longer one is too. That leaves *n x w* spans for
     *n* tokens and *w* the number that fit in the bound -- and *w* is set by
-    the vocabulary's longest form, not by the query.
+    the vocabulary's longest form, not by the query. The break is sound for a
+    fold that does not shorten as its input grows, which is what
+    :class:`LexicalSignal`'s ``normalizer`` argument asks for and what every
+    character-wise fold is.
 
     Shortest first within each start, which is the opposite of
     :func:`_probe_spans`: that one publishes an order because a declared
     score carries none, and this rung's hits carry a score that does. The
     enumeration order is therefore free, and growing spans is what lets the
     loop break.
+
+    Yields:
+        ``(span, window)`` -- the half-open extent in the **query**, and what
+        the fold made of the slice it points at.
     """
     tokens = token_spans(query)
     for first in range(len(tokens)):
         for last in range(first, len(tokens)):
             span = (tokens[first][0], tokens[last][1])
-            if span[1] - span[0] > max_chars:
+            window = fold(query[span[0] : span[1]])
+            if len(window) > max_chars:
                 break
-            yield span
+            yield span, window
 
 
 def _checked_threshold(threshold: float) -> float:
@@ -551,7 +716,9 @@ def _near_forms(
     index folds it; this one *is* the comparison, so an unfolded window
     against a source-folded form would score a case difference as a
     misspelling. Folding both sides with one function makes the comparison
-    well defined whatever the source's own fold was.
+    well defined whatever the source's own fold was. The windows arrive
+    already folded, because :func:`_scored_probe_spans` has to fold each one
+    to decide whether it fits the bound -- the same string, folded once.
 
     **Forms outermost**, which is a performance property rather than a
     semantic one and is stated because :class:`_RatioScorer` depends on it:
@@ -567,7 +734,14 @@ def _near_forms(
     """
     folded = [(form, fold(form)) for form in forms]
     bound = _window_chars([shape for _form, shape in folded], threshold)
-    windows = [(span, fold(query[span[0] : span[1]])) for span in _scored_probe_spans(query, bound)]
+    windows = list(_scored_probe_spans(query, bound, fold))
+    # The catalogue is folded and measured on every query rather than cached
+    # against the source, and that is a ruling rather than an omission: the
+    # asynchronous twin re-reads because a source's contents can change under
+    # it, and caching the derived half alone would put mutable state back on
+    # a rung whose scorer was just taken off it. Measured at 0.5% of a query
+    # over both 1,000 and 10,000 entities -- the scan below is the other
+    # 99.5%, so the cache would buy a rounding error and cost a hazard.
     found: list[tuple[str, tuple[int, int], float]] = []
     for form, shape in folded:
         for span, window in windows:
@@ -671,6 +845,35 @@ class _RatioScorer:
         return self._matcher.ratio()
 
 
+def _scorer_for(
+    scorer: Callable[[str, str], float] | None, threshold: float
+) -> Callable[[str, str], float]:
+    """The scorer one query will use: the caller's, or a fresh default.
+
+    **A fresh one per query**, which is what makes :class:`_RatioScorer`'s
+    cache safe. That object holds a matcher and the form it was last given,
+    and skips rebuilding the index when the two agree -- so its bookkeeping
+    and the matcher's state are two things that must stay in step, and sole
+    ownership for the length of one scan is the only thing that keeps them
+    there. Held on the rung instead, two callers interleave: one moves
+    ``set_seq2`` between the other's cache check and its ``ratio()``, and the
+    other scores against a form it never asked about. A wrong number, not a
+    crash -- and a rung built once and served from a thread pool, or one
+    whose scan has been moved off the event loop, is an ordinary shape rather
+    than an exotic one.
+
+    It costs one object per query and no index work: ``SequenceMatcher(None)``
+    builds nothing until a sequence is set, and the cache it exists for is
+    within a single scan, where the forms are the outer loop.
+
+    A scorer the caller supplied is returned as it was given. Whether it is
+    safe to share is then the caller's to know, which it has to be: they may
+    have handed over a module-level function, and nothing here could make a
+    copy of one.
+    """
+    return _RatioScorer(threshold) if scorer is None else scorer
+
+
 class DeclaredSignal:
     """What every synchronous rung shares: everything but the index it asks.
 
@@ -742,7 +945,7 @@ class DeclaredSignal:
             caller matches differently from the way the index was built.
         """
         self._entities = entities
-        self._normalizer = normalizer
+        self._normalizer = _checked_callable(normalizer, "normalizer")
 
     @property
     def name(self) -> str:
@@ -872,6 +1075,28 @@ class AliasSignal(DeclaredSignal):
     """
 
     key = "alias"
+
+    def __init__(
+        self,
+        entities: EntitySource,
+        *,
+        normalizer: Callable[[str], str] | None = None,
+    ) -> None:
+        """The base's constructor, having settled the source's flavour.
+
+        **At construction rather than per query**, which is both where the
+        mistake was made and off a path whose entire work is one dictionary
+        lookup. A source *lacking* ``by_alias_form`` is not settled here at
+        all -- that is the legitimate *declares no aliases* case, and
+        :meth:`_hits` answers it with the empty set as it always has.
+
+        Raises:
+            ValidationError: For a source publishing ``by_alias_form``
+                asynchronously, which no synchronous rung can call.
+        """
+        super().__init__(entities, normalizer=normalizer)
+        if isinstance(entities, AliasFormSource):
+            _require_flavour(entities, "by_alias_form", asynchronous=False)
 
     def _hits(self, query: str) -> frozenset[str]:
         if not isinstance(self._entities, AliasFormSource):
@@ -1016,7 +1241,20 @@ class LexicalSignal(DeclaredSignal):
     scoring 1.0**, and not because 0.94 is smaller: a cascade positions by
     the first rung that produced an id, so the composition decides it. Put
     this rung after the declared ones, which is where the guide puts it and
-    what the acceptance criterion asserts.
+    what ``test_lexical_signal.py`` asserts over a real
+    :class:`~dataknobs_common.entity_resolution.CascadingResolver` -- on the
+    correctly spelled query, where both rungs score the same entities at
+    ``1.0`` and an order by number would be a coin toss.
+
+    **It is the first rung here whose evidence carries a span it did not
+    declare**, and that changes what
+    :class:`~dataknobs_common.entity_resolution.values.Coverage` reports for
+    a cascade holding it. A misspelling this rung resolved is *covered* and
+    stops appearing in ``unmatched_text()``, which is the reading that field
+    wants; a window overreaching a neighbouring word carries its whole extent
+    into ``matched``, which is the reading nobody asked for. Both are
+    asserted rather than incidental -- see :class:`Coverage` for what a
+    caller reads instead when they want *where a declared form was found*.
     """
 
     key = "lexical"
@@ -1031,6 +1269,7 @@ class LexicalSignal(DeclaredSignal):
         threshold: float = 0.85,
         scorer: Callable[[str, str], float] | None = None,
         normalizer: Callable[[str], str] | None = None,
+        max_query_tokens: int | None = None,
     ) -> None:
         """Args:
         entities: The vocabulary to match against. It must also satisfy
@@ -1076,16 +1315,41 @@ class LexicalSignal(DeclaredSignal):
             fold this package's own sources apply, rather than to ``None`` as
             it does on every other rung here -- see the class docstring.
 
+            It must not **shorten** as its input grows: the probe's bound is
+            spent in folded characters and stops widening at the first window
+            over it, so a fold that deletes more from a longer slice than
+            from a shorter one could stop the probe early. Every
+            character-wise fold satisfies this, including the default and
+            anything built from ``strip``, ``casefold`` or ``replace``.
+        max_query_tokens: How many tokens a query may carry, or ``None`` --
+            the default -- for no limit.
+
+            **The one parameter here that can cost an answer**, which is why
+            it is off unless asked for, and the reason it exists is that
+            nothing else bounds the *number* of windows. ``threshold`` bounds
+            how wide one may be; how many there are is the caller's token
+            count, and each costs one scorer call per declared form where a
+            scan's costs one dictionary lookup. Measured: linear in the
+            token count, with a nine-hundred-token paste over a
+            five-hundred-entity vocabulary taking two seconds of one CPU.
+
+            A query over the cap is **refused rather than truncated** -- see
+            :func:`_checked_query`.
+
         Raises:
-            ValidationError: For a ``threshold`` outside ``(0, 1]``, or for a
-                source that does not publish its forms.
+            ValidationError: For a ``threshold`` outside ``(0, 1]``, for a
+                ``max_query_tokens`` below one, for a ``scorer`` or
+                ``normalizer`` that is not callable, or for a source that
+                does not publish its forms in this flavour.
         """
         super().__init__(entities, normalizer=normalizer or default_normalizer)
         if not isinstance(entities, SurfaceFormCatalog):
             _refuse_catalogue(entities, "SurfaceFormCatalog")
+        _require_flavour(entities, "surface_forms", asynchronous=False)
         self._catalogue = entities
         self._threshold = _checked_threshold(threshold)
-        self._scorer = scorer or _RatioScorer(self._threshold)
+        self._scorer = _checked_callable(scorer, "scorer")
+        self._max_query_tokens = _checked_query_tokens(max_query_tokens)
 
     def _located(self, query: str) -> Sequence[FormHit]:
         """Every entity a window of the query came near, best first.
@@ -1101,11 +1365,12 @@ class LexicalSignal(DeclaredSignal):
         hits are all 1.0; here the order is the score's and
         :func:`_ranked` is where it is decided.
         """
+        _checked_query(query, self._max_query_tokens)
         found = _near_forms(
             query,
             list(self._catalogue.surface_forms()),
             threshold=self._threshold,
-            scorer=self._scorer,
+            scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
         )
         return _ranked(
@@ -1175,7 +1440,7 @@ class AsyncDeclaredSignal:
             ``None``, the default, means the source's fold is the only one.
         """
         self._entities = entities
-        self._normalizer = normalizer
+        self._normalizer = _checked_callable(normalizer, "normalizer")
 
     @property
     def name(self) -> str:
@@ -1239,6 +1504,22 @@ class AsyncAliasSignal(AsyncDeclaredSignal):
     """:class:`AliasSignal` over an asynchronous source."""
 
     key = "alias"
+
+    def __init__(
+        self,
+        entities: AsyncEntitySource,
+        *,
+        normalizer: Callable[[str], str] | None = None,
+    ) -> None:
+        """:meth:`AliasSignal.__init__` over an asynchronous source.
+
+        Raises:
+            ValidationError: For a source publishing ``by_alias_form``
+                synchronously, which this rung would await.
+        """
+        super().__init__(entities, normalizer=normalizer)
+        if isinstance(entities, AsyncAliasFormSource):
+            _require_flavour(entities, "by_alias_form", asynchronous=True)
 
     async def _hits(self, query: str) -> frozenset[str]:
         if not isinstance(self._entities, AsyncAliasFormSource):
@@ -1334,6 +1615,7 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         threshold: float = 0.85,
         scorer: Callable[[str, str], float] | None = None,
         normalizer: Callable[[str], str] | None = None,
+        max_query_tokens: int | None = None,
     ) -> None:
         """The same constructor as the synchronous twin's, over an asynchronous source.
 
@@ -1341,24 +1623,56 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         measurement behind the default threshold, and for the inequality a
         replacement ``scorer`` must satisfy.
 
+        ``max_query_tokens`` carries more weight on this flavour than on the
+        other one, for the reason :class:`AsyncScanningSignal`'s
+        ``max_window`` does and then one further: the scan is handed to a
+        worker thread, so an unbounded one occupies a thread from the default
+        executor for as long as it runs rather than merely occupying the
+        caller.
+
         Raises:
-            ValidationError: For a ``threshold`` outside ``(0, 1]``, or for a
-                source that does not publish its forms.
+            ValidationError: For a ``threshold`` outside ``(0, 1]``, for a
+                ``max_query_tokens`` below one, for a ``scorer`` or
+                ``normalizer`` that is not callable, or for a source that
+                does not publish its forms in this flavour.
         """
         super().__init__(entities, normalizer=normalizer or default_normalizer)
         if not isinstance(entities, AsyncSurfaceFormCatalog):
             _refuse_catalogue(entities, "AsyncSurfaceFormCatalog")
+        _require_flavour(entities, "surface_forms", asynchronous=True)
         self._catalogue = entities
         self._threshold = _checked_threshold(threshold)
-        self._scorer = scorer or _RatioScorer(self._threshold)
+        self._scorer = _checked_callable(scorer, "scorer")
+        self._max_query_tokens = _checked_query_tokens(max_query_tokens)
 
     async def _located(self, query: str) -> Sequence[FormHit]:
-        """:meth:`LexicalSignal._located` over an asynchronous source."""
-        found = _near_forms(
+        """:meth:`LexicalSignal._located` over an asynchronous source.
+
+        **The scan is offloaded**, and it is the one place in this family
+        that needs to be. Every other rung here awaits a lookup and does
+        arithmetic on the answer; this one scores every window against every
+        form, which is pure CPU proportional to the vocabulary -- ~315 ms per
+        query over 10,000 entities, measured, with no ``await`` inside it to
+        yield on. Left on the event loop that is 315 ms during which every
+        other task sharing the loop makes no progress: the harm
+        ``async-transport.md`` names, reached through arithmetic rather than
+        through a syscall, so neither the ``ASYNC2xx`` lint nor
+        ``assert_no_blocking`` reports it and a test asserting the answer
+        cannot see it either.
+
+        :func:`_near_forms` is a plain function taking only values, which is
+        what makes it handable to a thread -- and
+        :func:`_scorer_for` building a scorer per query is what makes it safe
+        to, since the default one is stateful and would otherwise be shared
+        across whatever else the loop is running.
+        """
+        _checked_query(query, self._max_query_tokens)
+        found = await asyncio.to_thread(
+            _near_forms,
             query,
             list(await self._catalogue.surface_forms()),
             threshold=self._threshold,
-            scorer=self._scorer,
+            scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
         )
         hits: list[FormHit] = []

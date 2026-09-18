@@ -84,16 +84,26 @@ def _make_scan(config: dict[str, Any]) -> MatchSignal:
 
 
 def _make_lexical(config: dict[str, Any]) -> MatchSignal:
-    # ``threshold`` and ``scorer`` are forwarded for ``max_window``'s reason
-    # on the rung above: a caller reaching this factory by writing
-    # ``kind: lexical`` has no other way to supply either, and the scorer in
-    # particular is the whole of this rung's published answer to a consumer
-    # whose vocabulary is too large for the standard library's.
+    # ``threshold``, ``scorer`` and ``max_query_tokens`` are forwarded for
+    # ``max_window``'s reason on the rung above: a caller reaching this
+    # factory by writing ``kind: lexical`` has no other way to supply any of
+    # them, and the scorer in particular is the whole of this rung's
+    # published answer to a consumer whose vocabulary is too large for the
+    # standard library's.
+    #
+    # Forwarded, **not** resolved. ``scorer`` and ``normalizer`` are
+    # callables and a document cannot write one, so the value arriving here
+    # from a parsed document is a string however it was spelled -- which the
+    # rung refuses by name rather than letting it reach a call site deep in
+    # the scan. Resolving a dotted path into the function it names would let
+    # a document reach any importable callable, which is a wider decision
+    # than this one.
     return LexicalSignal(
         config["entities"],
         threshold=config.get("threshold", 0.85),
         scorer=config.get("scorer"),
         normalizer=config.get("normalizer"),
+        max_query_tokens=config.get("max_query_tokens"),
     )
 
 
@@ -119,6 +129,7 @@ def _make_async_lexical(config: dict[str, Any]) -> AsyncMatchSignal:
         threshold=config.get("threshold", 0.85),
         scorer=config.get("scorer"),
         normalizer=config.get("normalizer"),
+        max_query_tokens=config.get("max_query_tokens"),
     )
 
 

@@ -28,6 +28,7 @@ import pytest
 
 from dataknobs_common.entity_resolution import (
     AliasSignal,
+    FormHit,
     AsyncAliasSignal,
     AsyncExactNormalizedSignal,
     AsyncScanningSignal,
@@ -67,6 +68,19 @@ def _declared(candidates) -> None:
             assert evidence.score == 1.0
             assert evidence.kind is EvidenceKind.DECLARED
             assert evidence.scoring is Scoring.DECLARED
+
+
+def test_an_unmeasured_hit_carries_no_score_rather_than_a_declared_one() -> None:
+    """The half of the widening the rung-level assertions below cannot see.
+
+    Every assertion in this file reads ``evidence.score``, which
+    :func:`~dataknobs_common.entity_resolution.declared_candidates` fills
+    with ``1.0`` when the hit carries nothing -- so a default that quietly
+    became ``1.0`` on the **field** would satisfy all of them while claiming
+    a measurement nobody took. ``None`` is the whole distinction
+    :attr:`Scoring.DECLARED` exists to mark, and this is where it is asserted.
+    """
+    assert FormHit(entity_id="beagle", span=(0, 6)).score is None
 
 
 @pytest.mark.parametrize(

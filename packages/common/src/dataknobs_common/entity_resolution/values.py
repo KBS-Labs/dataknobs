@@ -303,10 +303,36 @@ class Coverage(Generic[K]):
     here, and that is the reading rather than a gap in it: a cosine neighbour
     over an embedded utterance has no position in that utterance, so a query
     whose only hits are vector hits has an empty :attr:`matched` and the whole
-    string :attr:`unmatched` -- no declared form was found in the text, and a
-    neighbourhood guess is being offered anyway. That is the single strongest
-    line a consumer maintaining a vocabulary can act on, and the older
-    all-or-nothing reading could not state it.
+    string :attr:`unmatched` -- a neighbourhood guess is being offered and
+    nothing was located in the text at all. That is a strong line for a
+    consumer maintaining a vocabulary, and the older all-or-nothing reading
+    could not state it.
+
+    **Positional is not the same as declared**, and the two were once written
+    here as though they were. *Carries no span* used to be glossed as *no
+    declared form was found in the text*, which held only while every rung
+    that could place a hit was also a rung that looked one up.
+    :class:`~dataknobs_common.entity_resolution.LexicalSignal` is the first
+    that is not: it proposes an entity the query **misspelled**, and it knows
+    exactly where -- so its evidence is
+    :attr:`~EvidenceKind.INFERRED` *and* carries a span, and the words it
+    read enter :attr:`matched`.
+
+    That is the right reading for what :attr:`unmatched` is for. A
+    misspelling the vocabulary resolved is covered, and is not an entry
+    anybody should go and add. Two things follow that a caller should know:
+
+    - A phrase can be :attr:`matched` although the vocabulary spells nothing
+      in it. **Which kind of evidence holds a span open is recoverable** --
+      :meth:`ResolutionResult.explain` answers with the evidence and each
+      piece carries its :attr:`~MatchEvidence.kind`, and
+      :attr:`EntityCandidate.declared` answers the same question per
+      candidate. A consumer wanting *where a form the vocabulary actually
+      spells was found* filters on that rather than reading this field.
+    - A **measured** rung reports every window that cleared its threshold, so
+      a window overreaching a neighbouring word contributes its whole extent.
+      Over a query with no typo in it, that can widen :attr:`matched` past
+      what any form matched.
     """
 
     matched: tuple[tuple[int, int], ...] = ()

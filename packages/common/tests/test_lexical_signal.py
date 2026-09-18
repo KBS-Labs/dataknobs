@@ -16,6 +16,8 @@ and names the rung that moved.
 from __future__ import annotations
 
 import random
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 
 import pytest
@@ -23,6 +25,7 @@ import pytest
 from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncAliasSignal,
+    CascadingResolver,
     AsyncDeclaredSignal,
     AsyncExactNormalizedSignal,
     AsyncLexicalSignal,
@@ -41,11 +44,12 @@ from dataknobs_common.entity_resolution.registry import (
 from dataknobs_common.entity_resolution.signals import (
     _RatioScorer,
     _scored_probe_spans,
+    _scorer_for,
     _window_chars,
 )
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import AsyncMappingEntitySource, Entity, MappingEntitySource
-from dataknobs_common.testing import assert_twin_types_agree
+from dataknobs_common.testing import assert_twin_types_agree, assert_twins_agree
 
 #: The query the criterion is written around: two typos, one of which sits
 #: inside the other's form. Neither word is in the vocabulary.
@@ -272,7 +276,7 @@ def test_the_probe_stops_widening_rather_than_filtering():
     still have built every one of the *n(n+1)/2* spans before discarding them.
     """
     query = "alpha beta gamma delta"
-    assert list(_scored_probe_spans(query, max_chars=10)) == [
+    assert [span for span, _window in _scored_probe_spans(query, 10, str)] == [
         (0, 5),
         (0, 10),
         (6, 10),
@@ -569,12 +573,26 @@ async def test_the_twin_answers_identically(async_entities, entities):
 def test_the_twins_agree_on_their_surface():
     """``name`` is excluded: a property has no signature to compare, and what
     it answers is asserted directly below.
+
+    ``__init__`` **is** included, and was the gap: it is where every one of
+    this rung's four knobs is named and defaulted, and a check over the query
+    members alone would pass a twin whose ``threshold`` defaulted to a
+    different number or whose ``max_query_tokens`` it never grew. It is
+    unflavoured -- a constructor is a plain ``def`` on both sides -- and its
+    ``entities`` parameter is the one that is flavour-typed by design.
     """
     assert_twin_types_agree(
         LexicalSignal,
         AsyncLexicalSignal,
         members=["candidates", "candidates_many", "narrows"],
         unflavoured_members=["narrows"],
+    )
+    assert_twins_agree(
+        LexicalSignal.__init__,
+        AsyncLexicalSignal.__init__,
+        unflavoured=True,
+        flavour_typed=["entities"],
+        label="LexicalSignal/AsyncLexicalSignal.__init__",
     )
 
 
@@ -609,11 +627,458 @@ def test_the_rung_is_named_for_the_key_it_registers_under(entities, async_entiti
     assert AsyncLexicalSignal(async_entities).name == "lexical"
 
 
-def test_both_registries_build_it(entities):
-    """And the factory forwards the two arguments a document is the only way to set."""
+@pytest.mark.asyncio
+async def test_both_registries_build_it(entities, async_entities):
+    """And the factory forwards the two arguments a document is the only way to set.
+
+    **Each flavour gets a source of its own flavour**, and each built rung is
+    then *asked a query*. Building one and asserting its type is what this
+    test used to do, and it passed while holding a rung whose every query
+    would raise: ``isinstance`` is the one thing a wrong-flavour source does
+    not fail. The ``await`` is the assertion.
+    """
     built = signal_backends.create("lexical", {"entities": entities, "threshold": 1.0})
-    built_async = async_signal_backends.create("lexical", {"entities": entities})
+    built_async = async_signal_backends.create("lexical", {"entities": async_entities})
 
     assert isinstance(built, LexicalSignal)
     assert isinstance(built_async, AsyncLexicalSignal)
     assert built.candidates(TYPO, k=5) == [], "the threshold the config named was dropped"
+    assert _found(await built_async.candidates(TYPO, k=9)) == _found(
+        LexicalSignal(entities).candidates(TYPO, k=9)
+    ), "the rung the asynchronous factory built cannot answer a query"
+
+
+# ===== What a review found: the probe's units, the loop, and the flavours =====
+
+
+def test_a_fold_that_deletes_characters_does_not_shorten_the_probe():
+    """The bound is derived in folded characters and must be spent in them.
+
+    :func:`_window_chars` measures the **folded** forms, and the comparison
+    scores a folded window against a folded form -- so a probe that decides
+    how far to widen by counting the *raw* slice is mixing two units. With
+    the default fold that is invisible, because ``strip`` is a no-op inside a
+    token span and ``casefold`` never shortens, so the raw length is a lower
+    bound on the folded one and the enumeration is merely conservative.
+
+    A ``normalizer`` that **deletes** characters inverts that, and one is an
+    ordinary thing for a consumer to write: the fold here removes spaces, so
+    the query spells the declared form exactly and scores ``1.0`` -- at a raw
+    width of 19 against a bound of 14, which a raw-counting probe never
+    reaches. The entity is not found at a worse span. It is not found.
+    """
+    source = MappingEntitySource(
+        {"abcdefghij": Entity(id="abcdefghij", type="Breed", name="abcdefghij")}
+    )
+    spaces_are_nothing = LexicalSignal(
+        source, normalizer=lambda form: form.replace(" ", "").casefold()
+    )
+
+    assert _window_chars(["abcdefghij"], 0.85) == 14, (
+        "the fixture only says anything while the bound is narrower than the "
+        "raw query below -- otherwise the probe reaches it for the wrong reason"
+    )
+    found = _found(spaces_are_nothing.candidates("a b c d e f g h i j", k=5))
+
+    assert ("abcdefghij", "a b c d e f g h i j", 1.0) in found, (
+        "the query folds to exactly the declared form, so the widest window "
+        "scores 1.0 -- and it is 19 raw characters against a bound of 14, "
+        "which is the window a probe counting raw characters never reaches"
+    )
+    assert found[0] == ("abcdefghij", "a b c d e f g h i j", 1.0), (
+        "and it is the best of them, so it is proposed first"
+    )
+
+
+def test_a_probe_span_is_admitted_on_what_the_fold_leaves():
+    """The enumerator's own account of the above, one layer down.
+
+    Four tokens of one character each, separated by spaces a fold deletes.
+    Measured after the fold, three characters of budget reach three tokens;
+    measured before it, the same budget reaches two -- and the difference is
+    every window the rung would have been asked about and was not.
+    """
+
+    def deletes_spaces(form: str) -> str:
+        return form.replace(" ", "")
+
+    folded = list(_scored_probe_spans("a b c d", 3, deletes_spaces))
+
+    assert folded == [
+        ((0, 1), "a"),
+        ((0, 3), "ab"),
+        ((0, 5), "abc"),
+        ((2, 3), "b"),
+        ((2, 5), "bc"),
+        ((2, 7), "bcd"),
+        ((4, 5), "c"),
+        ((4, 7), "cd"),
+        ((6, 7), "d"),
+    ]
+    raw = [span for span, _window in _scored_probe_spans("a b c d", 3, str)]
+    assert (0, 5) not in raw and (0, 5) in [span for span, _ in folded], (
+        "the widest window from the first token is five raw characters and "
+        "three folded ones, so which unit the probe counts in decides whether "
+        "it is ever scored"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_scoring_loop_runs_off_the_event_loop(async_entities):
+    """A per-query scan of the vocabulary is CPU, and CPU on the loop is a stall.
+
+    The guide measures this rung at ~315 ms per query over 10,000 entities.
+    Held on the event loop that freezes every other task on it for as long --
+    the harm ``async-transport.md`` names, arriving through arithmetic rather
+    than through a syscall, so neither the ``ASYNC2xx`` lint nor
+    ``assert_no_blocking`` can see it. The proof has to be structural: the
+    scorer records which thread called it, and it must not be the loop's.
+    """
+    ran_on: set[int] = set()
+
+    def scorer(window: str, form: str) -> float:
+        ran_on.add(threading.get_ident())
+        return SequenceMatcher(None, window, form).ratio()
+
+    rung = AsyncLexicalSignal(async_entities, scorer=scorer)
+    await rung.candidates(TYPO, k=5)
+
+    assert ran_on, "the scorer was never called, so this asserts nothing"
+    assert threading.get_ident() not in ran_on, (
+        "the scoring loop ran on the event loop's own thread, so every other "
+        "task on that loop was stalled for the length of the scan"
+    )
+
+
+def test_a_source_of_the_wrong_flavour_is_refused_at_construction(entities, async_entities):
+    """The refusal this rung advertises, against the mistake config actually makes.
+
+    ``isinstance`` against a runtime-checkable protocol compares member
+    *names*, and both catalogues spell it ``surface_forms`` -- so a check that
+    asks only *does this publish its forms* accepts either flavour, and the
+    rung constructs cleanly around a source it can never await correctly. A
+    missing member is the mistake a reader makes; the wrong flavour is the one
+    a document makes, because ``entities:`` is resolved before either registry
+    sees it.
+    """
+    with pytest.raises(ValidationError, match="synchronous"):
+        LexicalSignal(async_entities)
+    with pytest.raises(ValidationError, match="asynchronous"):
+        AsyncLexicalSignal(entities)
+
+
+def test_the_async_registry_refuses_a_synchronous_source(entities):
+    """The same mistake by the route that actually makes it.
+
+    A document names ``kind: lexical`` and the flavour of ``entities:`` is
+    resolved elsewhere, so nothing between the two registries stops a
+    synchronous source reaching the asynchronous factory. The registry wraps
+    what a factory raises, so the refusal arrives as the cause -- which is
+    what a caller reading a traceback gets, and it is the sentence that says
+    what to change.
+    """
+    with pytest.raises(OperationError) as raised:
+        async_signal_backends.create("lexical", {"entities": entities})
+
+    assert isinstance(raised.value.__cause__, ValidationError)
+    assert "asynchronous" in str(raised.value.__cause__)
+
+
+@pytest.mark.parametrize("parameter", ["scorer", "normalizer"])
+def test_a_value_that_is_not_callable_is_refused_at_construction(entities, parameter):
+    """A document cannot write a callable, and a string is truthy.
+
+    ``scorer`` and ``normalizer`` are both forwarded straight from the config
+    dict, so ``scorer: "rapidfuzz.fuzz.ratio"`` -- the obvious thing to write,
+    and the one the registry's own comment invites by naming the parameter as
+    the reason for forwarding -- passes ``scorer or _RatioScorer(...)`` and
+    fails at the first query, once per ``(window, form)`` pair, from inside
+    the scan.
+    """
+    with pytest.raises(OperationError) as raised:
+        signal_backends.create("lexical", {"entities": entities, parameter: "fuzz.ratio"})
+
+    assert isinstance(raised.value.__cause__, ValidationError)
+    assert parameter in str(raised.value.__cause__)
+
+
+@pytest.mark.parametrize("kind", ["exact", "alias", "scan"])
+def test_a_normalizer_that_is_not_callable_is_refused_on_every_rung(entities, kind):
+    """The same defect one layer up, where it was already reachable.
+
+    ``normalizer`` is forwarded from the document by every factory here, so
+    the refusal belongs on the shared base rather than beside the rung that
+    happened to surface it.
+    """
+    with pytest.raises(OperationError) as raised:
+        signal_backends.create(kind, {"entities": entities, "normalizer": "casefold"})
+
+    assert isinstance(raised.value.__cause__, ValidationError)
+    assert "normalizer" in str(raised.value.__cause__)
+
+
+def test_the_default_scorer_is_built_per_query_and_an_injected_one_is_not():
+    """The seam that keeps :class:`_RatioScorer`'s cache safe to have.
+
+    A fresh default per query is the whole fix for sharing: the object is
+    stateful, and one owner for the length of one scan is what its cache
+    needs. A scorer the caller supplied is passed through untouched, because
+    nothing here could copy a module-level function and whether theirs is
+    shareable is theirs to know.
+    """
+
+    def supplied(window: str, form: str) -> float:
+        return 1.0
+
+    assert _scorer_for(None, 0.85) is not _scorer_for(None, 0.85)
+    assert isinstance(_scorer_for(None, 0.85), _RatioScorer)
+    assert _scorer_for(supplied, 0.85) is supplied
+
+
+def test_a_matcher_whose_form_is_cached_is_why_it_cannot_be_shared():
+    """The hazard the seam above exists for, characterized rather than fixed.
+
+    :class:`_RatioScorer` skips ``set_seq2`` when the form it is handed equals
+    the one it last saw, which is its second optimisation and is correct for a
+    single caller. What it makes is an object whose bookkeeping and whose
+    matcher must stay in step, with nothing but sole ownership keeping them
+    there: a second caller moving ``set_seq2`` between this one's cache check
+    and its ``ratio()`` leaves the first scoring against a form it never
+    asked about -- a wrong number, not a crash.
+
+    Reproduced by moving the matcher directly, because a thread cannot be
+    scheduled into that window on demand. **This asserts the hazard, not a
+    defect**: it is what makes the per-query construction above load-bearing,
+    so a future scorer that stopped caching should delete this test rather
+    than satisfy it.
+    """
+    scorer = _RatioScorer(0.0)
+    assert scorer("golden retriver", "golden retriever") == pytest.approx(0.968, abs=0.001)
+
+    scorer._matcher.set_seq2("dog")  # what another caller's turn does
+
+    assert scorer("golden retriver", "golden retriever") != pytest.approx(0.968, abs=0.001), (
+        "the cached form no longer decides what the matcher holds, so sharing "
+        "one of these between callers would be safe and the per-query "
+        "construction it forces is dead weight"
+    )
+
+
+def test_two_threads_asking_one_rung_get_the_same_answers_as_one():
+    """The rung is an ordinary thing to build once and serve from a pool."""
+    vocabulary = {
+        f"breed_{index:03d}": Entity(
+            id=f"breed_{index:03d}", type="Breed", name=f"Retriever Number {index:03d}"
+        )
+        for index in range(60)
+    }
+    rung = LexicalSignal(MappingEntitySource(vocabulary), threshold=0.75)
+    queries = ["retreiver number 017 is limping", "my retriver numbr 042 has been limping"]
+    expected = [_found(rung.candidates(query, k=9)) for query in queries]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        answers = list(pool.map(lambda q: _found(rung.candidates(q, k=9)), queries * 24))
+
+    assert answers == expected * 24
+
+
+# ===== In a cascade: the composition the docstrings recommend =====
+
+
+@pytest.fixture
+def declared_rungs(entities):
+    """The three rungs this one is documented as going *after*."""
+    return [ExactNormalizedSignal(entities), AliasSignal(entities), ScanningSignal(entities)]
+
+
+def test_a_declared_hit_is_positioned_ahead_of_a_near_spelling_one(entities, declared_rungs):
+    """The claim :class:`LexicalSignal`'s docstring makes about its own placement.
+
+    That docstring says a near-spelling hit "still sits behind a declared hit,
+    and not because 0.94 is smaller: a cascade positions by the first rung
+    that produced an id" -- and until this test nothing composed the rung into
+    a cascade at all, so the sentence was prose with no assertion under it.
+
+    The clean query is the one that can distinguish the two readings: both
+    rungs score the same entities at ``1.0`` there, so an order by *number*
+    would be a coin toss and an order by *arrival* is the scan's.
+    """
+    cascade = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
+
+    result = cascade.resolve(CLEAN, k=5)
+
+    assert [str(candidate.entity_id) for candidate in result.ranked()] == [
+        "golden_retriever",
+        "retriever",
+    ]
+    assert next(evidence.signal for evidence in result.explain("golden_retriever")) == "scan", (
+        "the declared rung produced the id first, so its evidence leads -- "
+        "which is what 'the cascade positions by arrival' means"
+    )
+    assert result.ranked()[0].declared, "a declared hit is still declared in this composition"
+
+
+def test_the_typo_query_resolves_only_because_the_near_spelling_rung_is_there(
+    entities, declared_rungs
+):
+    """The acceptance criterion's claim, this time through a real cascade."""
+    declared_only = CascadingResolver(declared_rungs, entities)
+    with_lexical = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
+
+    assert declared_only.resolve(TYPO, k=5).ranked() == ()
+
+    candidates = with_lexical.resolve(TYPO, k=5).ranked()
+    assert [str(candidate.entity_id) for candidate in candidates] == [
+        "retriever",
+        "golden_retriever",
+    ]
+    assert not any(candidate.declared for candidate in candidates), (
+        "nothing here was declared -- the vocabulary carries neither word the "
+        "query spelled, which is what INFERRED says"
+    )
+
+
+def test_a_native_score_keeps_the_result_out_of_distribution_arithmetic(entities, declared_rungs):
+    """``Scoring.NATIVE`` is the half of the rung's identity that stops a caller.
+
+    A scorer-defined number means whatever that scorer means, so two rungs
+    with different scorers produce incomparable ``0.8``s. ``as_distribution``
+    admits ``NORMALIZED`` alone, and this is the first rung in the package
+    that can put anything else in a result.
+    """
+    cascade = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
+
+    assert cascade.resolve(TYPO, k=5).as_distribution() is None
+
+
+def test_a_resolved_misspelling_stops_being_reported_as_an_uncovered_phrase(
+    entities, declared_rungs
+):
+    """**Coverage is positional, and this rung is the first to occupy a span
+    it did not declare.**
+
+    ``Coverage`` is the union of the *evidence spans*, so a near-spelling
+    proposal contributes one -- it found something, at a place, and says how
+    near it came. The consequence is a change in what ``unmatched_text()``
+    answers for a composition that includes this rung, and it is a change in
+    the direction the field's own purpose wants: a misspelling the vocabulary
+    resolved is **covered**, and is not a phrase somebody should go and add.
+
+    Both readings are asserted here because the difference is the finding. A
+    consumer who wants the stricter one -- *where was a form the vocabulary
+    actually spells* -- reads ``kind`` off the evidence, which is what that
+    field is for.
+    """
+    declared_only = CascadingResolver(declared_rungs, entities)
+    with_lexical = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
+
+    assert declared_only.resolve(TYPO, k=5).unmatched_text() == (TYPO,), (
+        "no declared form is in this query, so every word of it is uncovered"
+    )
+
+    result = with_lexical.resolve(TYPO, k=5)
+    assert result.matched_text() == ("goldne retriver",)
+    assert result.unmatched_text() == ("my", "has been limping")
+    assert all(
+        evidence.kind is EvidenceKind.INFERRED
+        for candidate in result.ranked()
+        for evidence in result.explain(candidate.entity_id)
+    ), "everything holding that span open is inferred, which is the recoverable half"
+
+
+def test_an_overreaching_window_widens_coverage_past_what_the_vocabulary_matched(
+    entities, declared_rungs
+):
+    """The same mechanism on a query with **no typo in it at all**.
+
+    The rung reports every window that cleared the threshold rather than
+    choosing one, which is its documented policy and is right for evidence:
+    containment stays visible in the offsets. Coverage is a union over those
+    spans, so the widest one decides -- and at the default threshold a window
+    padded by a neighbouring word still clears it, because the padding is
+    small against the form. ``my`` and ``has`` are then inside ``matched``,
+    and neither is a word the vocabulary matched.
+
+    Asserted rather than fixed. It is a property of merging a *measured*
+    rung's spans into a positional account, so the reading to change is
+    coverage's rather than the rung's, and that is a decision about a
+    published field.
+    """
+    declared_only = CascadingResolver(declared_rungs, entities)
+    with_lexical = CascadingResolver([*declared_rungs, LexicalSignal(entities)], entities)
+
+    assert declared_only.resolve(CLEAN, k=5).matched_text() == ("golden retriever",)
+
+    result = with_lexical.resolve(CLEAN, k=5)
+    spans = {
+        (evidence.signal, evidence.matched_text)
+        for candidate in result.ranked()
+        for evidence in result.explain(candidate.entity_id)
+    }
+    assert ("lexical", "my golden retriever") in spans
+    assert ("lexical", "golden retriever has") in spans
+    assert result.matched_text() == ("my golden retriever has",), (
+        "the union reaches two words the vocabulary never matched, so a "
+        "caller highlighting matched_text() highlights them"
+    )
+
+
+# ===== The cost a caller's own text can impose =====
+
+
+def test_a_query_longer_than_the_cap_is_refused_rather_than_truncated(entities):
+    """``max_query_tokens``: the knob this rung was missing.
+
+    The character bound caps how *wide* a window may be. It says nothing
+    about how *many* there are, and that count is the query's token count --
+    the caller's input, not the vocabulary's. Each window costs one scorer
+    call per declared form, where a scan's costs one dictionary lookup, so
+    the same paste that :func:`_probe_spans` bounds for a scan is a far
+    larger bill here. Measured: linear in the token count, and a
+    nine-hundred-token paste over a five-hundred-entity vocabulary is two
+    seconds of one CPU.
+
+    **Refused rather than truncated**, which is the choice this family makes
+    everywhere it has one: probing the first *n* tokens of a paste and
+    answering from them is a plausible-looking answer to a question nobody
+    asked, and a caller who set this number wants to hear about the input
+    rather than to be quietly served less of it.
+    """
+    rung = LexicalSignal(entities, max_query_tokens=6)
+
+    assert _found(rung.candidates(TYPO, k=9)) == _found(
+        LexicalSignal(entities).candidates(TYPO, k=9)
+    ), "six tokens is exactly this query, so the cap changes nothing about it"
+
+    with pytest.raises(ValidationError, match="max_query_tokens"):
+        rung.candidates(TYPO + " and also quite sad", k=9)
+
+
+def test_the_cap_is_off_by_default(entities):
+    """It can cost an answer, so nothing gets it without asking."""
+    assert LexicalSignal(entities)._max_query_tokens is None
+    assert _found(LexicalSignal(entities).candidates(TYPO + " " * 0 + " and more words here", k=9))
+
+
+@pytest.mark.parametrize("max_query_tokens", [0, -1])
+def test_a_cap_below_one_is_refused(entities, max_query_tokens):
+    """A rung that probes nothing, which is the silence this family refuses."""
+    with pytest.raises(ValidationError, match="max_query_tokens"):
+        LexicalSignal(entities, max_query_tokens=max_query_tokens)
+
+
+@pytest.mark.asyncio
+async def test_the_twin_caps_identically(async_entities, entities):
+    """The refusal is shared, so the flavours cannot disagree about the limit."""
+    with pytest.raises(ValidationError, match="max_query_tokens"):
+        await AsyncLexicalSignal(async_entities, max_query_tokens=2).candidates(TYPO, k=9)
+    with pytest.raises(ValidationError, match="max_query_tokens"):
+        LexicalSignal(entities, max_query_tokens=2).candidates(TYPO, k=9)
+
+
+def test_the_cap_reaches_the_rung_through_the_registry(entities):
+    """A document is where a caller who cannot reach the constructor sets it."""
+    rung = signal_backends.create("lexical", {"entities": entities, "max_query_tokens": 2})
+
+    with pytest.raises(ValidationError, match="max_query_tokens"):
+        rung.candidates(TYPO, k=9)
