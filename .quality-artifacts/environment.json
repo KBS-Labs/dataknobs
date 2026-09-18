@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-17T23:19:59Z",
+  "timestamp": "2026-09-18T00:25:34Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/no-option-answers-silently",
-  "git_commit": "291e1e26bc0171a4c0b4845c7e5dc6f3341b3690",
+  "git_branch": "sbk/the-lexical-upgrade",
+  "git_commit": "c001e28a21312a87827b10ad93fc673f19a23bd6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
