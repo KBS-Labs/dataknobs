@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import ast
 import runpy
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -71,14 +70,21 @@ def test_the_executed_copy_is_the_published_one() -> None:
 def test_the_call_site_imports_only_through_the_doors() -> None:
     """Every import in the block is a package door, not a module path.
 
-    Three doors and two distributions, which is the page's subject: a
+    Four doors and two distributions, which is the page's subject: a
     consumer writes one document, hands it to one registry, and the rung that
     reads their vector store arrives because the package holding it registered
     the kind. A block reaching into ``dataknobs_data.entity_resolution``
     directly would run identically and would show the opposite --- that you
     have to know where the class lives.
+
+    The fourth is ``common``'s resolution door, and it carries the same point
+    one step further: what this registry hands back is typed by the package
+    that defines resolution, not by the one that holds the index. A reader
+    writing a function around the result imports the name from there, so the
+    block does too rather than leaving its own return unannotated.
     """
     doors = {
+        "dataknobs_common.entity_resolution",
         "dataknobs_common.ontology",
         "dataknobs_data.ontology",
         "dataknobs_data.testing",
@@ -120,9 +126,7 @@ def test_the_call_site_names_no_rung_and_builds_them_from_the_document() -> None
     defined = [
         node.name for node in ast.walk(ast.parse(published)) if isinstance(node, ast.ClassDef)
     ]
-    assert not defined, (
-        f"the published call site defines {defined} instead of using what ships"
-    )
+    assert not defined, f"the published call site defines {defined} instead of using what ships"
 
 
 def test_the_block_carries_its_own_assertions(ran: dict[str, Any]) -> None:

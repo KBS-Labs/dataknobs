@@ -373,9 +373,7 @@ def test_the_bridge_block_imports_only_through_the_doors() -> None:
     reached = door_imports(published_fence(GUIDE, BRIDGE_MARKER))
 
     assert reached, "the bridge block imports nothing from this package"
-    assert reached <= doors, (
-        f"{sorted(reached - doors)} is a module path rather than a door"
-    )
+    assert reached <= doors, f"{sorted(reached - doors)} is a module path rather than a door"
 
 
 def test_the_bridge_block_asserts_what_it_teaches(bridged: dict[str, Any]) -> None:
@@ -403,8 +401,7 @@ def test_the_bridge_block_asserts_what_it_teaches(bridged: dict[str, Any]) -> No
     from dataknobs_common.testing import DK_SYNC_BRIDGE_THREAD, live_dk_daemon_threads
 
     assert live_dk_daemon_threads([DK_SYNC_BRIDGE_THREAD]) == [], (
-        "the block leaves the bridge's daemon thread running, which is what the "
-        "`with` is for"
+        "the block leaves the bridge's daemon thread running, which is what the `with` is for"
     )
 
 

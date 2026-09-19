@@ -724,11 +724,11 @@ waits for the whole cascade. From async code, await the resolver directly.
 import asyncio
 from pathlib import Path
 
-from dataknobs_common.entity_resolution import BridgedEntityResolver
+from dataknobs_common.entity_resolution import AsyncEntityResolver, BridgedEntityResolver
 from dataknobs_common.ontology import async_build_resolver, async_load_ontology
 
 
-async def cascade():
+async def cascade() -> AsyncEntityResolver:
     onto = await async_load_ontology(Path("mammals.yaml"))
     return await async_build_resolver(Path("mammals.yaml"), onto)
 
