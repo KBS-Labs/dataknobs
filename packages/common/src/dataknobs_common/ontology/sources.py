@@ -81,7 +81,34 @@ class SourceDescription:
     """
 
     source_id: str
+
+    #: What is behind this source, in **whichever vocabulary the door that
+    #: built it had**. Three of them, and a caller reading this must not
+    #: assume one:
+    #:
+    #: * :data:`AUTHORED_SOURCE_ID` -- ``"authored"`` -- for a vocabulary a
+    #:   document declared, which has no backend to name;
+    #: * a **backend key** (``"memory"``, ``"sqlite"``) where a binding named
+    #:   one in a ``database:`` block, which is the string a consumer wrote;
+    #: * a **class name** (``"AsyncMemoryDatabase"``) where a handle was
+    #:   injected, because that door is handed an object and never a name.
+    #:
+    #: The third is not a spelling this could normalise into the second. A
+    #: handle carries no key of its own -- ``CONFIG_CLS`` is the nearest thing
+    #: and it names a config class, not a registered kind -- so the only route
+    #: from an object back to a key is a reverse lookup over the backend
+    #: registry, and resolving a key there *imports the module implementing
+    #: it*. Normalising one field would import every backend a process had not
+    #: already loaded, which is the cost the door that does resolve a key pays
+    #: deliberately, once, in a worker thread. The class name is the most
+    #: specific true thing available without it.
+    #:
+    #: So this is for a person to read and for a log line to carry. Switching
+    #: on it means pinning the door as well as the value, which is what the
+    #: one in-tree comparison does: it tests for ``AUTHORED_SOURCE_ID``, the
+    #: only value no backend and no class can produce.
     backend: str
+
     table: str | None
     projection: Mapping[str, Any]
     capabilities: frozenset[Capability]

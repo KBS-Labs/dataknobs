@@ -283,7 +283,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its id* --- because a two-set delta reports a rename as no change at all, and
   each axis topic carries the delta over *its own* nodes so a subscriber to
   `taxonomy:colours` is not told about a rename in `taxonomy:sizes`. The
-  whole-population delta is the ontology's own topic.
+  whole-population delta is the ontology's own topic. A registry holds **one**
+  bus for every vocabulary it loads, so the first one wins --- an injected bus
+  over a configured block, and the first configured block over a later one ---
+  and a document whose `event_bus:` is passed over is reported at `INFO`
+  naming which kind of bus is already held, rather than left to read as a bus
+  that never publishes.
   `close()` releases every handle the registry opened and leaves every handle
   it was handed; it does not unload, and `unload()` does not close, because the
   vocabulary `get()` hands back is a value that outlives its entry.

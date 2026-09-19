@@ -24,6 +24,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 
+from dataknobs_common.testing import requires_package
+
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.user.store import AsyncUserStateStore, UserStateStore
 
@@ -47,6 +49,7 @@ def _config(tmp_path: Path, name: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+@requires_package("aiosqlite")
 async def test_the_async_store_can_use_the_database_it_built(tmp_path: Path) -> None:
     """Round-trips a record through a backend that has a connection to open."""
     store = await AsyncUserStateStore.from_config(_config(tmp_path, "async.db"))

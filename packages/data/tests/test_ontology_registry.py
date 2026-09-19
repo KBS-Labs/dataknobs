@@ -1955,3 +1955,66 @@ async def test_replacing_a_document_does_not_collide_with_the_one_it_replaces(
         assert again.describes[0].table == "widgets"
     finally:
         await registry.close()
+
+
+async def test_a_second_documents_event_bus_block_is_reported_rather_than_applied(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One registry holds one bus, so the second block cannot be honoured.
+
+    Moving to it would leave every vocabulary already announced on the first
+    bus talking to subscribers nobody is holding, so the first wins -- and the
+    consequence of *not* saying so is a consumer watching a bus their document
+    configured and concluding the registry never published, which is the
+    reading a silent pass-over invites. Reported at ``INFO``, like a
+    ``database:`` block passed over for an injected handle.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=await _seeded()
+    )
+    try:
+        await registry.load(_document(event_bus={"backend": "memory"}))
+        first = registry._event_bus
+        assert first is not None
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            await registry.load(
+                _document(id="second", event_bus={"backend": "memory"}), replace=False
+            )
+
+        assert registry._event_bus is first, "the bus the first document built is kept"
+        assert "second" in caplog.text
+        assert "the block is not built" in caplog.text
+        assert "a configured" in caplog.text, "it says which kind of bus is already held"
+    finally:
+        await registry.close()
+
+
+async def test_an_injected_bus_says_so_when_it_passes_over_a_block(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The same report, naming the other reason the block was not built.
+
+    An injected bus winning over a configured block was already the documented
+    rule; what was missing is that the document declaring the block is never
+    told. The two cases are one sentence with one word different, so a reader
+    of the log learns *which* bus they are watching instead of theirs.
+    """
+    handed_over = InMemoryEventBus()
+    await handed_over.connect()
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=await _seeded(), event_bus=handed_over
+    )
+    try:
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            await registry.load(_document(event_bus={"backend": "memory"}))
+
+        assert registry._event_bus is handed_over
+        assert registry._owns_event_bus is False
+        assert "an injected" in caplog.text
+        assert "the block is not built" in caplog.text
+    finally:
+        await registry.close()
+        await handed_over.close()

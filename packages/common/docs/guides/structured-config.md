@@ -974,9 +974,9 @@ it and the object behaves differently when it arrives, **and** the object is
 complete without it. Declared under `EXPECTED_COMPONENTS` instead, such a
 name makes a correctly built consumer report itself under-wired —
 `missing_components()` names it and `require_components()` raises, on an
-object with nothing wrong with it. `OntologyRegistry` in `dataknobs-data` was
-the first adopter of `EXPECTED_COMPONENTS` in the tree and hit exactly that,
-which is why the second field exists.
+object with nothing wrong with it. That reading is what `OntologyRegistry` in
+`dataknobs-data` ran into, and this field is what it produced — which is why
+the two halves above are a rule rather than a preference.
 
 `OPTIONAL_COMPONENTS` is read by **one** helper, and deliberately not by the
 diffs:

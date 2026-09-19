@@ -1496,8 +1496,8 @@ class StructuredConfigConsumer(Generic[ConfigT]):
     #: instead, such a name makes a correctly built consumer report itself
     #: under-wired: :meth:`missing_components` names it and
     #: :meth:`require_components` raises, on an object with nothing wrong
-    #: with it. The first adopter of ``EXPECTED_COMPONENTS`` in this tree hit
-    #: exactly that, which is what this field is for.
+    #: with it. That is not a hypothetical: it is the reading a consumer in
+    #: ``dataknobs-data`` ran into, and this field is what it produced.
     #:
     #: **Read by :meth:`accepted_components` only.** It is deliberately
     #: absent from :meth:`missing_components`, :meth:`missing_from` and

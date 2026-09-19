@@ -1147,6 +1147,15 @@ class AsyncPostgresDatabase(
         self.auto_create_table = cfg.auto_create_table
         self._init_vector_state()
 
+        # Declared here for the sync twin's stated reason, and it was the twin
+        # difference that made this class's own readers disagree: ``search``
+        # re-created the builder under ``hasattr`` while ``stream_read`` reached
+        # for it directly, which reads as one of the two missing a guard.
+        # Neither is. ``connect()`` binds this before it sets ``_connected``,
+        # and every reader passes ``_check_connection()`` first, so a builder
+        # that is not there yet is unreachable from any of them.
+        self.query_builder: SQLQueryBuilder = None  # type: ignore[assignment]  # set in connect()
+
         # Table manager for parameterized existence checks (asyncpg numeric style)
         self.table_manager = SQLTableManager(
             self.table_name,
@@ -1715,12 +1724,6 @@ class AsyncPostgresDatabase(
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
         self._check_connection()
-
-        # Initialize query builder if not already done
-        if not hasattr(self, "query_builder"):
-            self.query_builder = SQLQueryBuilder(
-                self.table_name, self.schema_name, dialect="postgres"
-            )
 
         # Handle ComplexQuery with native SQL support
         if isinstance(query, ComplexQuery):

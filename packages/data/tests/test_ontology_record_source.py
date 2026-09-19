@@ -29,6 +29,7 @@ from dataknobs_common.entity_resolution.signals import AsyncScanningSignal
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import OntologyConfig, SourceRef
 from dataknobs_common.records import Record
+from dataknobs_common.testing import requires_package
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.ontology import EntityProjection, OntologyRegistry, RecordEntitySource
@@ -658,6 +659,41 @@ async def test_fetch_origin_over_a_shared_store_answers_the_entity_row() -> None
         await registry.close()
 
 
+async def test_fetch_origins_over_a_shared_store_answers_entity_rows_in_order() -> None:
+    """The plural member, which the singular one's pass does not cover.
+
+    ``fetch_origin`` reads one ref through an ``EQ``; ``fetch_origins`` reads
+    every ref through one ``IN`` split into batches, which is a second query
+    shape over the same rows -- so the narrowing has to be emitted on both
+    paths and only one of them was asserted. The stale form row is what makes
+    the difference visible: its ``sku`` names no entity row, so a plural read
+    that reached form rows would answer that slot with one instead of None,
+    and the caller would read a folded form as the origin of an entity that
+    is not there.
+    """
+    database = await _mixed_store()
+    registry, ontology = await _bound(
+        database, projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP)
+    )
+    try:
+        present = await ontology.entity("sku-4471")
+        assert present is not None
+        absent = SourceRef(
+            source_id=present.source.source_id,
+            kind=present.source.kind,
+            locator={"sku": "sku-9999"},
+        )
+
+        origins = await ontology.entities.fetch_origins([present.source, absent])
+
+        assert len(origins) == 2, "one slot per ref, in the order asked"
+        assert origins[0] is not None
+        assert origins[0].get_value("title") == "Beagle", "a form row was returned as an origin"
+        assert origins[1] is None, "a stale form row is not an entity's origin"
+    finally:
+        await registry.close()
+
+
 async def test_by_type_over_a_shared_store_does_not_invent_entities_from_form_rows() -> None:
     """A stale form row names an id no entity row carries; the scan must not report it."""
     database = await _mixed_store()
@@ -891,6 +927,7 @@ async def test_the_type_scan_streams_whichever_branch_it_takes(
     assert "all" not in database.doors, "the scan read the table rather than a query"
 
 
+@requires_package("aiosqlite")
 async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_must_survive_streaming(
     tmp_path: Path,
 ) -> None:

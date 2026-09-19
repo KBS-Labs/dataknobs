@@ -47,6 +47,7 @@ from dataknobs_common.ontology import (
 )
 from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
+from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 from dataknobs_data.backend_selection import normalize_backend
 from dataknobs_data.backends import async_backends
@@ -66,7 +67,6 @@ if TYPE_CHECKING:
     from dataknobs_common.entity_resolution.protocols import AsyncEntityResolver
     from dataknobs_common.events import EventBus
     from dataknobs_common.ontology import OntologyParts, RelationRef, SourceDescription
-    from dataknobs_config import EnvironmentConfig
 
     from dataknobs_data.database import AsyncDatabase
 
@@ -134,12 +134,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     :attr:`~dataknobs_common.structured_config.StructuredConfigConsumer.OPTIONAL_COMPONENTS`,
     read by ``accepted_components()``.
 
-    They were declared under ``EXPECTED_COMPONENTS`` first, because that was
-    the only field there was, and the cost was not a documentation one: a
-    fully loaded registry with nothing wrong with it answered
-    ``{"database", "event_bus"}`` to ``missing_components()`` and raised from
-    ``require_components()``. This class was that field's first adopter in the
-    tree and is the reason the second spelling exists.
+    ``EXPECTED_COMPONENTS`` is the wrong field for them, and the cost of
+    using it would not be a documentation one: it means *must be supplied*
+    and feeds ``missing_components()`` and ``require_components()``, so a
+    fully loaded registry with nothing wrong with it would answer
+    ``{"database", "event_bus"}`` to the first and raise from the second.
+    This class is the consumer ``OPTIONAL_COMPONENTS`` was added for, which
+    is why the reading above is worth stating rather than assuming.
 
     **Settings are not collaborators, and both arrive through one channel.**
     Every door has the shape ``(config, **components)``, so a caller writing
@@ -708,12 +709,22 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         who handed over an ``EnvironmentConfig`` object, or none at all, pays
         for no thread. Same shape, and the same reason, as the one read
         ``async_load_ontology`` offloads.
+
+        **The class it loads through is imported at module scope**, which
+        matters more in this method than in the other one that reaches for it:
+        an ``import`` executed inside an ``async def`` is disk I/O on the event
+        loop the first time it runs, so an in-body import here is either
+        deferring nothing or blocking the loop, and only a measurement says
+        which. It defers nothing. This module imports ``dataknobs_data.factory``
+        at module scope, that import puts ``dataknobs_config`` in
+        ``sys.modules`` before this file finishes loading, and the package binds
+        both names eagerly with no module ``__getattr__`` -- so the statement
+        was a dictionary lookup wearing the shape of a deferral, and the shape
+        is what the next reader would have preserved.
         """
         if self._environment is not None or self._environment_name is None:
             return
-        from dataknobs_config import EnvironmentConfig as _EnvironmentConfig
-
-        self._environment = await asyncio.to_thread(_EnvironmentConfig.load, self._environment_name)
+        self._environment = await asyncio.to_thread(EnvironmentConfig.load, self._environment_name)
 
     def _resolve(self, section: Mapping[str, Any]) -> dict[str, Any]:
         """Late-bind ``$resource`` and ``${VAR}`` against this registry's environment.
@@ -725,8 +736,6 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         """
         if self._environment is None:
             return dict(section)
-        from dataknobs_config import EnvironmentAwareConfig
-
         aware = EnvironmentAwareConfig(
             dict(section),
             environment=self._environment,
@@ -758,7 +767,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             config if isinstance(config, OntologyConfig) else OntologyConfig.from_dict(dict(config))
         )
         if typed.event_bus is not None:
-            await self._event_bus_from(typed.event_bus)
+            await self._event_bus_from(typed.event_bus, ontology_id=typed.id)
         parts = build_ontology(typed)
         if parts.id in self._ontologies and not replace:
             raise ValidationError(
@@ -1146,11 +1155,20 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             return
         await bus.publish(topic, Event(type=event_type, topic=topic, payload=payload))
 
-    async def _event_bus_from(self, block: Mapping[str, Any]) -> None:
+    async def _event_bus_from(self, block: Mapping[str, Any], *, ontology_id: str) -> None:
         """Build the bus a document configured, and own it.
 
-        An injected bus always wins and is never closed by this registry; one
-        built here is closed by :meth:`close`, because the registry built it.
+        **The first bus wins, whatever built it, and a later block is
+        reported rather than applied.** An injected bus always wins and is
+        never closed by this registry; one built here is closed by
+        :meth:`close`, because the registry built it. A registry holds *one*
+        bus for every vocabulary it loads, so a second document declaring
+        ``event_bus:`` is asking for something the registry cannot give it
+        without moving the ontologies already announced on the first one onto
+        a bus their subscribers are not holding. It is logged at ``INFO``, the
+        way a ``database:`` block passed over for an injected handle is: a
+        block that did not take effect is exactly the kind of silence that
+        reads as a broken bus rather than as a decision.
 
         **Off the event loop**, for :meth:`_database_handle`'s reason and the
         same measured one: every built-in backend factory imports its driver
@@ -1173,6 +1191,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         wins over a configured one at the line above.
         """
         if self._event_bus is not None:
+            logger.info(
+                "Ontology %r declares `event_bus:` and this registry already holds "
+                "%s bus; the block is not built, and this vocabulary's events are "
+                "announced on the bus already here.",
+                ontology_id,
+                "an injected" if not self._owns_event_bus else "a configured",
+            )
             return
         bus = await asyncio.to_thread(create_event_bus, dict(block))
         await self._connect_or_close(bus)

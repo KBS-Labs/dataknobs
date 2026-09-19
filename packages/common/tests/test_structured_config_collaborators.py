@@ -665,8 +665,8 @@ def test_both_spellings_are_readable_before_the_consumer_exists() -> None:
 
     ``accepted_components()`` is what a caller writing a ``from_components``
     call wants -- everything this class takes. ``expected_components()`` is
-    what a composing parent must satisfy. Conflating them is what cost the
-    first adopter a truthful ``missing_components()``.
+    what a composing parent must satisfy. Conflating them is what costs a
+    consumer with no required collaborators a truthful ``missing_components()``.
     """
     assert _BuildsItsOwn.optional_components() == frozenset({"database", "event_bus"})
     assert _BuildsItsOwn.expected_components() == frozenset()
