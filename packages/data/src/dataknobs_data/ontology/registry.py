@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 from dataknobs_common.entity_resolution import async_signal_backends
 from dataknobs_common.events import Event, EventType, create_event_bus
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import NotFoundError, OperationError, ValidationError
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.hierarchy import AsyncEnumerableHierarchy
 from dataknobs_common.ontology import (
@@ -41,6 +41,7 @@ from dataknobs_common.ontology import (
     Entity,
     OntologyConfig,
     assemble_async_ontology,
+    async_build_resolver,
     build_ontology,
     split_qualified,
 )
@@ -50,6 +51,14 @@ from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
+# Imported for its registration, which is the whole of what this line is for:
+# the module puts `kind: semantic` in `dataknobs_common`'s asynchronous
+# registry, and `_resolver_from` below builds a cascade a document may name it
+# in. A consumer reaching the rung through this registry therefore never
+# imports it by hand, which is the half of the `authority` precedent that does
+# not apply here -- that rung's registering module is imported by the
+# application because no door in this repository builds an authority stack.
+import dataknobs_data.entity_resolution  # noqa: F401
 from dataknobs_data.backend_selection import normalize_backend
 from dataknobs_data.backends import async_backends
 from dataknobs_data.factory import async_database_factory
@@ -79,6 +88,16 @@ from dataknobs_data.vector.types import DistanceMetric
 #: reported success over, and acted on in no way. The same silent-drop failure
 #: the ``embedder:`` refusal in that method exists to prevent.
 INDEX_BLOCK_KEYS = frozenset({"store", "embedder", "metric", "fields", "join", "aliases"})
+
+#: The keys a ``resolver:`` section is read for, and the only ones.
+#:
+#: :data:`INDEX_BLOCK_KEYS`'s argument, over a section with **one** key. A key
+#: nothing acts on is configuration a consumer wrote and this registry
+#: accepted while ignoring -- and here it is worse than inert, because
+#: ``rungs`` absent is read one layer down as *a composition of nothing*
+#: rather than as silence. So ``resolver: {rung: [...]}``, singular, would
+#: build a cascade that matches nothing and report success.
+RESOLVER_BLOCK_KEYS = frozenset({"rungs"})
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -364,6 +383,12 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # behind it is released by `close()` and not here, for `unload`'s own
         # stated reason -- a value handed out by `index()` outlives its entry.
         self._indexes: dict[str, SemanticIndex] = {}
+        # Every loaded ontology's configured cascade, where its document
+        # declared a `resolver:` section. Held and dropped exactly as the
+        # indexes above are, and for the same reasons -- it is a value built
+        # at load, it opens nothing of its own, and a caller holding one
+        # outlives its entry.
+        self._resolvers: dict[str, AsyncEntityResolver] = {}
         self._injected_database: AsyncDatabase | None = None
         self._injected_forms_database: AsyncDatabase | None = None
         self._injected_embedder: TextEmbedder | None = None
@@ -563,6 +588,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         self._documents.pop(ontology_id, None)
         self._populations.pop(ontology_id, None)
         self._indexes.pop(ontology_id, None)
+        self._resolvers.pop(ontology_id, None)
         return True
 
     async def reload(self, ontology_id: str) -> AsyncOntology[str]:
@@ -682,17 +708,33 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         return self._indexes.get(ontology_id)
 
     def resolver(self, ontology_id: str) -> AsyncEntityResolver | None:
-        """The configured placement cascade for this ontology, or None.
+        """The configured placement cascade for this ontology, or ``None``.
 
-        ``None`` for every id this registry builds today, for :meth:`index`'s
-        reason and with :meth:`index`'s contract: it returns what ``load()``
-        built. The ``resolver:`` section *is* read at load -- a rung that
-        reads folded surface forms, declared over a live binding with none,
-        is refused there -- so the section is not ignored, only unbuilt. A
-        composition the document does not write is refused where its rungs
-        are constructed instead, which is the only place it can be seen.
+        ``None`` where the document declared no ``resolver:`` section, which
+        is :meth:`index`'s answer to the same question and is a configuration
+        answer rather than an error: silence is *use your own composition*,
+        and this registry does not invent one. A document that wrote the
+        section gets the cascade it wrote.
+
+        It **returns** what ``load()`` built and is not a second way to build
+        one, exactly as :meth:`index` does -- which is also why the two land
+        together: the rung that searches an index is constructed over the
+        index this registry just built, so a second builder would have to
+        open a second store.
+
+        **What it holds is the caller's to keep alive.** The cascade opens
+        nothing and closes nothing; a semantic rung inside it holds this
+        registry's index, so a resolver held across a :meth:`close` inherits
+        what :meth:`index` records about an index held across one --- a live
+        object over a dead store, one object further out.
+
+        Args:
+            ontology_id: Which loaded vocabulary's cascade to return.
+
+        Returns:
+            The cascade, or ``None`` where that document declared none.
         """
-        return None
+        return self._resolvers.get(ontology_id)
 
     async def close(self) -> None:
         """Release every handle this registry opened, and nothing it was handed.
@@ -837,8 +879,8 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     ) -> AsyncOntology[str]:
         """Build a vocabulary from an already-resolved document, and announce it.
 
-        **Where the ``event_bus:`` and ``index:`` blocks are read, and the
-        only place.** Both doors arrive here -- the constructor's through
+        **Where the ``event_bus:``, ``index:`` and ``resolver:`` blocks are
+        read, and the only place.** Both doors arrive here -- the constructor's through
         :meth:`_ainit` and :meth:`load`'s after resolution -- so reading them
         here is what makes the two agree about where a block lives. Read off
         the *typed* config rather than the mapping beside it, because a
@@ -880,6 +922,12 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # subscriber reading the registry on the arrival event finds what
         # arrived, index included.
         index = await self._index_from(typed, ontology)
+        # After the index, because a semantic rung is constructed over the one
+        # that call just built -- which is also why the two readers cannot
+        # land in different releases. Before the announcement, for the index's
+        # reason: a subscriber reading the registry on the arrival event finds
+        # what arrived, cascade included.
+        resolved = await self._resolver_from(typed, ontology, index)
         # Announced before the swap, so a subscriber reading the registry on
         # the departure event still sees what departed -- and in this order,
         # rather than as a third event meaning both, because a subscriber who
@@ -894,6 +942,10 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             self._indexes.pop(parts.id, None)
         else:
             self._indexes[parts.id] = index
+        if resolved is None:
+            self._resolvers.pop(parts.id, None)
+        else:
+            self._resolvers[parts.id] = resolved
         await self._publish(
             topic=f"ontology:{parts.id}",
             event_type=EventType.CREATED,
@@ -1426,6 +1478,117 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 f"ontology {config.id!r} declares an `index:` section whose store "
                 f"disagrees with it: {exc}",
                 context={"ontology_id": config.id, "metric": metric},
+            ) from exc
+
+    async def _resolver_from(
+        self,
+        config: OntologyConfig,
+        ontology: AsyncOntology[str],
+        index: SemanticIndex | None,
+    ) -> AsyncEntityResolver | None:
+        """Build the cascade a ``resolver:`` section asks for, or answer ``None``.
+
+        :meth:`_index_from`'s shape one section over, because that is the
+        sibling and a second shape here would be a second thing to keep in
+        step. Where the two differ, they differ for a stated reason:
+
+        * an absent section answers ``None`` here as it does there ---
+          silence is a configuration answer;
+        * a section carrying no ``rungs:`` is **not** an error, because the
+          door one layer down rules an absent key and an empty list different
+          answers and this reader must keep them so;
+        * **nothing is opened.** The index is already built and the store
+          inside it is already recorded, so this reader takes a handle rather
+          than taking a resource.
+
+        **The rungs are constructed through**
+        :func:`~dataknobs_common.ontology.loader.async_build_resolver`, which
+        is the one door that turns a ``resolver:`` section into rungs. A
+        registry assembling its own list beside that door would be a second
+        implementation of it, drifting silently, and the door takes a
+        *handles* channel precisely so this reader does not have to.
+
+        **What the rung it may construct searches is what the caller built.**
+        A ``kind: semantic`` rung is handed the index this load just
+        assembled, and ``load()`` does not fill it: building an index is the
+        caller's line, for the reason :meth:`index` states. So a cascade built
+        here over a store nobody has written to resolves through its declared
+        rungs and reports the empty index rather than silently answering
+        without it --- the rung says so itself, once, the first time it finds
+        nothing.
+
+        Args:
+            config: The typed, already-resolved document.
+            ontology: The vocabulary just assembled, which the rungs match
+                against.
+            index: The index this load built, or ``None``. Passed rather than
+                read back off ``self``, because the entry is not stored until
+                after both readers have run.
+
+        Returns:
+            The cascade, or ``None`` where the document declared no section.
+
+        Raises:
+            ValidationError: When the section carries a key this block does
+                not read, names a rung kind nothing registers, or names one
+                whose handles this registry cannot supply.
+
+                **One exception type, and two used to escape it.** An unknown
+                ``kind:`` reaches the registry as a ``NotFoundError`` and a
+                factory's own refusal reaches it wrapped in an
+                ``OperationError``, so a caller catching what this docstring
+                named caught neither a misspelled rung nor a rung asking for
+                something the document did not declare. What is being refused
+                in every one of these cases is a *document*, which is what
+                ``ValidationError`` means here --- the argument
+                :meth:`_index_from` makes about its own last two.
+        """
+        section = config.resolver
+        if section is None:
+            return None
+
+        undeclared = sorted(set(section) - RESOLVER_BLOCK_KEYS)
+        if undeclared:
+            raise ValidationError(
+                f"ontology {config.id!r} declares a `resolver:` section with key(s) "
+                f"{undeclared}, which this block does not read. A key nothing acts on is "
+                f"configuration a consumer wrote and the registry accepted while ignoring "
+                f"-- and here it is worse than inert: a section with no `rungs:` key is "
+                f"read as a composition of nothing, so `rung:` builds a cascade that "
+                f"matches nothing and reports success. This block reads: "
+                f"{', '.join(sorted(RESOLVER_BLOCK_KEYS))}",
+                context={"ontology_id": config.id, "undeclared": undeclared},
+            )
+
+        # **The section, not the document**, and the difference is a second
+        # parse rather than a convenience. The door takes a document because
+        # its other callers hold one; this caller holds a document that has
+        # already been resolved, typed and accepted, and handing it back would
+        # have it read again by a reader that can refuse what the first one
+        # passed. What the door consumes is `read.resolver` and nothing else,
+        # so the minimal document carrying that section is the whole of what
+        # there is to hand over -- and `id` travels with it because a config
+        # cannot be built without one and a refusal that names the ontology is
+        # worth more than one that does not.
+        #
+        # The handles are forwarded whatever the composition asks for, because
+        # a factory reads the keys it names and ignores the rest: a cascade of
+        # declared rungs is unaffected by their presence, and one naming a
+        # semantic rung finds them there. `index` may be `None`, which the
+        # rung's own factory refuses by name -- a document asking for a rung
+        # over an index it never declared is a document missing a section,
+        # not a registry missing a handle.
+        try:
+            return await async_build_resolver(
+                {"id": config.id, "resolver": dict(section)},
+                ontology,
+                handles={"index": index, "ontology": ontology},
+            )
+        except (NotFoundError, OperationError) as exc:
+            raise ValidationError(
+                f"ontology {config.id!r} declares a `resolver:` section this registry "
+                f"cannot build: {_document_fault(exc)}",
+                context={"ontology_id": config.id},
             ) from exc
 
     def _index_source_from(
@@ -2218,6 +2381,27 @@ def _refuse_a_form_reading_rung_with_no_lookup(
         f"projection's id>}}`",
         context={"source_id": binding, "rungs": reading},
     )
+
+
+def _document_fault(exc: Exception) -> str:
+    """What to say about a rung this reader could not build.
+
+    ``PluginRegistry.create`` bounds its own message **on purpose** --- a
+    plugin factory builds a backend from deployment configuration, so the
+    exception it wraps can be a driver's text carrying a connection URL, and
+    the registry's answer names the key and keeps the rest on ``__cause__``.
+    That reasoning is right and this does not defeat it.
+
+    What it does is read one exception type back out: a ``ValidationError``
+    from a rung factory is **ours**, authored to describe a document, and it
+    is the one that says *which handle was missing*. Losing it would leave a
+    document author holding "failed to create plugin" for a fault they can
+    fix in one line. Every other type stays where that bounding put it.
+    """
+    cause = exc.__cause__
+    if isinstance(exc, OperationError) and isinstance(cause, ValidationError):
+        return str(cause)
+    return str(exc)
 
 
 def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:

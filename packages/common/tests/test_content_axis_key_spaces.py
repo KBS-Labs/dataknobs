@@ -80,6 +80,13 @@ _CARRIES_THE_KEY = "key"
 #: tree by construction, which is the one thing it must not do.
 _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "async_build_resolver", "config", "payload"),
+    # The live objects a rung is constructed over and a document cannot
+    # write. `payload` for `declared_signal_metadata`'s reason one entry
+    # down: the `str` is the name a rung's factory looks a handle up by --
+    # "index", "ontology", or one a consumer coins for their own rung -- and
+    # never an entity id. It is the only channel here that is *not* `bound`,
+    # because what travels through it is not keyed by the vocabulary at all.
+    ("<module>", "async_build_resolver", "handles", "payload"),
     ("<module>", "async_build_resolver", "ontology", "bound"),
     ("<module>", "async_build_resolver", "->", "bound"),
     ("<module>", "async_load_ontology", "normalizer", "text"),
@@ -446,7 +453,7 @@ _REACHABLE_VALUE_TYPES = 37
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 333
+_ROWS = 334
 
 
 def _modules() -> Iterator[ast.Module]:

@@ -1172,30 +1172,61 @@ def build_resolver(
 async def async_build_resolver(
     config: Path | Mapping[str, Any],
     ontology: AsyncOntology[str],
+    *,
+    handles: Mapping[str, Any] | None = None,
 ) -> AsyncEntityResolver[str]:
     """:func:`build_resolver` for a cascade whose rungs reach for data.
 
     Keyed by ``str`` for the reason the synchronous door states, and declared
     the same way.
 
-    The remedy the synchronous door's refusal names. A refusal whose remedy
-    builds nothing is not a remedy, which is why this ships in the same
-    increment as the refusal that points at it.
+    The remedy the synchronous door's refusal names, **for the rungs whose
+    remedy it is**. A refusal whose remedy builds nothing is not a remedy,
+    which is why this ships in the same increment as the refusal that points
+    at it --- and why *handles* exists: a rung reaching for data is
+    constructed over a live object, this function's caller may be holding one,
+    and until there was a channel for it the refusal pointed here at a door
+    that could only fail differently. See
+    :func:`_refuse_async_only_rungs`, which now sends such a kind to a door
+    that holds what it reaches for.
 
     ``async`` because the read is offloaded, exactly as
     :func:`async_load_ontology` offloads it. The prefix names the flavour of
     what is built as much as the callability of the builder -- both are true
     here.
 
+    **No synchronous twin takes this parameter**, and the asymmetry is right
+    rather than merely tolerated: the synchronous door builds no rung that
+    needs a handle, because the one rung that does has no synchronous form.
+
     Args:
         config: A path to a YAML or JSON document, or the document itself.
         ontology: The loaded vocabulary the rungs match against.
+        handles: Live objects a rung is constructed over and a document
+            cannot write --- an index, a store, a client. Forwarded into
+            **every** rung's spec, because a factory reads the keys it names
+            and ignores the rest, so one mapping serves a composition whose
+            rungs need different things.
+
+            **The merge order is a rule, not an implementation detail.**
+            Handles beat the document, because a document cannot write a live
+            object and a key spelled the same in both is the process's;
+            ``entities`` beats handles, because it is this door's one
+            guarantee --- that every rung matches against the ontology the
+            caller handed in --- and a channel able to displace it is a
+            channel able to bypass the door.
+
+            Named ``handles`` rather than typed per rung because this package
+            may not name a type from a package that depends on it. What
+            arrives is whatever the caller holds, and the rung's own factory
+            is what refuses a missing one by name.
 
     Returns:
         An asynchronous resolver over the configured rungs.
 
     Raises:
-        ValidationError: For a ``resolver:`` section this door cannot build
+        ValidationError: For a ``resolver:`` section this door cannot build,
+            including a rung whose handles were not supplied
         ConfigLoadError: For any refusal in reading ``config`` as a document
         OSError: From that same read
     """
@@ -1203,7 +1234,9 @@ async def async_build_resolver(
         read = await asyncio.to_thread(_read_config, config)
     else:
         read = _read_config(config)
-    return AsyncCascadingResolver(_async_rungs(read.resolver, ontology), ontology.entities)
+    return AsyncCascadingResolver(
+        _async_rungs(read.resolver, ontology, handles=handles), ontology.entities
+    )
 
 
 def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...] | None:
@@ -1248,19 +1281,46 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
     and its twin, and the asymmetry is the point rather than an oversight.
     The two pairs are different pairs: :func:`_validated_parts` refuses what
     **neither loader** can own, and this refuses what **one build door**
-    cannot build. :func:`async_build_resolver` must accept the very thing
-    refused here -- that is what the message tells the caller to go and do.
+    cannot build.
+
+    **The remedy is per rung, because one remedy was false for half of
+    them.** This used to send every refused kind to
+    :func:`async_build_resolver`, on the reasoning that the asynchronous door
+    must accept what the synchronous one refuses. That holds for a rung whose
+    asynchrony is its own -- an ``Ontology`` is all it needs, and that door
+    has one. It does not hold for a rung that **reaches for data**: such a
+    rung is constructed over a handle, this function's caller has none, and no
+    body of :func:`async_build_resolver`'s signature could invent one. A
+    caller following the old sentence got a different error rather than a
+    rung, which is what
+    :func:`async_build_resolver`'s own docstring calls *a refusal whose remedy
+    builds nothing*.
+
+    The fact that tells the two apart is already on the mark ---
+    ``needs_io`` --- so this reads it beside the reason rather than carrying a
+    list of kinds that would need editing for every rung anyone adds.
     """
     for spec in _rung_specs(section) or ():
         kind = str(spec.get("kind", ""))
         reason = signal_backends.unavailable_reason(kind)
         if reason is None:
             continue
+        if signal_backends.get_metadata(kind).get("needs_io"):
+            remedy = (
+                "Such a rung is built over a live handle -- an index, a store -- "
+                "which this door has no way to supply. Build it with a door that "
+                "holds one: dataknobs_data.ontology.OntologyRegistry assembles the "
+                "cascade at load from the same `resolver:` section, or pass the "
+                "handles yourself to async_build_resolver(..., handles={...})"
+            )
+        else:
+            remedy = (
+                "Build it with async_build_resolver, over an ontology from "
+                "async_load_ontology, which builds one"
+            )
         raise ValidationError(
             f"rung kind {kind!r} cannot be built by this door: {reason}. "
-            f"Build it with async_build_resolver, over an ontology from "
-            f"async_load_ontology, which builds one. Kinds this door "
-            f"builds: {sorted(signal_backends.list_keys())}",
+            f"{remedy}. Kinds this door builds: {sorted(signal_backends.list_keys())}",
             context={"kind": kind, "reason": reason},
         )
 
@@ -1276,14 +1336,31 @@ def _sync_rungs(section: Mapping[str, Any] | None, ontology: Ontology) -> list[M
 
 
 def _async_rungs(
-    section: Mapping[str, Any] | None, ontology: AsyncOntology
+    section: Mapping[str, Any] | None,
+    ontology: AsyncOntology,
+    *,
+    handles: Mapping[str, Any] | None = None,
 ) -> list[AsyncMatchSignal]:
-    """The asynchronous rungs a section configures, or the default composition."""
+    """The asynchronous rungs a section configures, or the default composition.
+
+    **The one place a ``resolver:`` section becomes rungs in this flavour**,
+    which is what *handles* is for: a caller holding live objects the
+    document cannot name reaches rung construction through here rather than
+    assembling a list of its own beside it. A second builder would be a
+    second implementation of this function, and the one it would drift from
+    is this one.
+
+    *handles* reaches the **configured** path only. The default composition
+    is this package's three rungs over an entity source, none of which takes
+    a handle, so a document that configures nothing has nothing to forward
+    them to.
+    """
     specs = _rung_specs(section)
     if specs is None:
         return _default_async_rungs(ontology)
+    supplied = dict(handles or {})
     return [
-        async_signal_backends.create(config={**spec, "entities": ontology.entities})
+        async_signal_backends.create(config={**spec, **supplied, "entities": ontology.entities})
         for spec in specs
     ]
 

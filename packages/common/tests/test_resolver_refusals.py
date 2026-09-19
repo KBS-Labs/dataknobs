@@ -84,19 +84,47 @@ def restored_registry() -> Iterator[None]:
     into it at import -- so a test that registers must put the declaration
     back or every later test runs against a registry that can build the thing
     they assert is unbuildable.
+
+    **The metadata is restored as well as the reason, and it has to be.**
+    ``declare_unavailable`` with no ``metadata=`` leaves whatever the key
+    already carried, so restoring by reason alone put the *sentence* back and
+    left the *facts* wherever the test moved them. That was invisible while
+    nothing read them: it stopped being invisible when
+    :func:`~dataknobs_common.ontology.loader._refuse_async_only_rungs` began
+    choosing its remedy off ``needs_io``, at which point a test that had set
+    that key decided the message every later test in the process saw.
     """
     reason = signal_backends.unavailable_reason("semantic")
+    metadata = dict(signal_backends.get_metadata("semantic"))
     assert reason is not None, "the declaration under test is absent before the test runs"
     try:
         yield
     finally:
-        signal_backends.declare_unavailable("semantic", reason=reason)
+        signal_backends.declare_unavailable("semantic", reason=reason, metadata=metadata)
 
 
 def test_a_rung_the_sync_flavour_cannot_build_is_refused(
     mammals_path: Path, tmp_path: Path
 ) -> None:
-    """Refused by the **build** door, naming the kind and the way out."""
+    """Refused by the **build** door, naming the kind and the way out.
+
+    **The way out used to be one sentence for every kind, and it was false
+    for half of them.** This assertion pinned ``async_load_ontology``, on the
+    reasoning that whatever the synchronous door refuses the asynchronous one
+    accepts. That holds for a rung whose asynchrony is its own; it does not
+    hold for a rung constructed over a **live handle**, which no door taking a
+    document and a vocabulary can conjure. Following the old sentence for
+    ``semantic`` produced a second error rather than a rung.
+
+    So what is asserted here is the remedy for *this* kind, which the mark's
+    own ``needs_io`` picks out -- and the sibling below asserts that a rung
+    without it still gets the original sentence, because that half was always
+    true and losing it would be the other way to make the message wrong.
+    """
+    assert signal_backends.get_metadata("semantic").get("needs_io") is True, (
+        "the mark's `needs_io` is what picks the remedy, so a test that moved it "
+        "and did not put it back decides this assertion -- see `restored_registry`"
+    )
     path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
     ontology = load_ontology(path)
 
@@ -105,8 +133,40 @@ def test_a_rung_the_sync_flavour_cannot_build_is_refused(
 
     message = str(raised.value)
     assert "semantic" in message
-    assert "async_load_ontology" in message
     assert "no synchronous form" in message
+    assert "OntologyRegistry" in message
+    assert "handles=" in message
+    assert "async_load_ontology" not in message, (
+        "the door that builds an ontology cannot build a rung that needs an index"
+    )
+
+
+def test_a_rung_that_needs_no_handle_is_still_sent_to_the_async_door(
+    mammals_path: Path, tmp_path: Path, restored_registry: None
+) -> None:
+    """The half of the message that was always true, kept.
+
+    A kind declared unavailable **without** ``needs_io`` is a rung this
+    distribution could build in the other flavour, and
+    :func:`~dataknobs_common.ontology.loader.async_build_resolver` really is
+    where such a caller goes. Asserted over a mark stood up for the purpose
+    rather than over ``semantic``, because ``semantic`` is the kind that made
+    the distinction necessary and cannot demonstrate its other side.
+    """
+    signal_backends.declare_unavailable(
+        "semantic",
+        reason="a stand-in rung with no backing to reach",
+        metadata={"flavour": "async", "needs_io": False},
+    )
+    path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
+
+    with pytest.raises(ValidationError) as raised:
+        build_resolver(path, load_ontology(path))
+
+    message = str(raised.value)
+    assert "async_build_resolver" in message
+    assert "async_load_ontology" in message
+    assert "OntologyRegistry" not in message
 
 
 def test_the_refusal_constructs_nothing(mammals_path: Path, tmp_path: Path) -> None:

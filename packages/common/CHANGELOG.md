@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`async_build_resolver` takes `handles=`**, a mapping of live objects a rung
+  is constructed over and a document cannot write -- an index, a store, a
+  client. Forwarded into every rung's spec, so one mapping serves a composition
+  whose rungs need different things and a caller holding such an object reaches
+  rung construction through the published door rather than assembling a list
+  beside it.
+
+  The merge order is part of the contract: handles beat the document, because a
+  document cannot write a live object; `entities` beats handles, because it is
+  the door's one guarantee that every rung matches against the ontology the
+  caller handed in. There is no synchronous twin, and that asymmetry is right
+  rather than tolerated -- the synchronous door builds no rung that needs a
+  handle, because the one rung that does has no synchronous form.
+
+- **The asynchronous rung registry declares `semantic`**, naming the install
+  and the module to import, and the mark is cleared by that import. Asking for
+  the kind now answers where it ships instead of reporting an unknown key and
+  sending a reader to look for a typo in a name they spelled correctly.
+
 - **`IndexItem`, `AsyncIndexSource` and three pure index sources**, in
   `dataknobs_common.index`. A thing that can stream `(id, text, metadata)`
   triples and say which named sets its ids fall in is what "some other data
@@ -123,6 +142,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argued against. A pure algorithm over values; not added to any `__all__`.
 
 ### Changed
+
+- **`build_resolver`'s refusal names a remedy that can build the rung.** It
+  used to send every kind it cannot build to `async_build_resolver`, which is
+  right for a rung whose asynchrony is its own and false for one constructed
+  over a live handle -- a caller following that sentence got a second error
+  rather than a rung. The remedy is now chosen from the fact already on the
+  rung's mark, so a rung that reaches for data is sent to a door that holds
+  what it reaches for.
 
 - **`SourceDescription.declares` is `frozenset[str] | None` and has no
   default.** *Cannot enumerate* and *holds nothing* were one value: a source

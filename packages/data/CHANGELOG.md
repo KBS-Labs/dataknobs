@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SemanticSignal`**, in `dataknobs_data.entity_resolution`, and the
+  `kind: "semantic"` rung a `resolver:` section can now name. It proposes
+  entities whose indexed text sits nearest a query, as `INFERRED` evidence with
+  a `NATIVE` score and **no span** -- a cosine neighbour has no position in the
+  query and one invented for it would be a lie a consumer could not tell from a
+  located match.
+
+  It takes the **vocabulary** as well as the index, and that is the id space:
+  every row an ontology index holds is a qualified id, a cascade's candidates
+  are in the resolver's ontology's space, and the rung localizes on the way out
+  through the one published door. Without that, an entity two rungs both
+  reached comes back twice under two keys and nothing between them can tell
+  they are one entity.
+
+  It **declines a filter**. A scope is rendered as a metadata filter naming an
+  axis key, a store fails a row that is missing the key a filter names, and no
+  row an ontology index writes carries one -- so a rung that forwarded a scope
+  would answer nothing under every scope, which reads downstream as *not in the
+  corpus*. Declining means the cascade rules on what comes back, which is one
+  authority instead of two. It becomes per-axis narrowing when a row carries an
+  axis key.
+
+  Batches go through the index's `search_batch`, so *n* queries reach the
+  embedder as one ask rather than *n*. There is no synchronous form, here or
+  anywhere: every member of a vector store is awaitable, so a rung taking a
+  query *string* cannot be natively synchronous.
+
+  Importing `dataknobs_data.entity_resolution` registers it. A consumer
+  reaching it through `OntologyRegistry` never imports it by hand.
+
+- **`OntologyRegistry.resolver(id)` answers the cascade the document wrote**,
+  where it used to answer `None` for every id. A `resolver:` section is read at
+  load and built beside the index, because a semantic rung is constructed over
+  the index that same load assembled. Absence is still a configuration answer:
+  a document declaring no section answers `None` for good, and an explicit
+  `rungs: []` is a composition somebody chose and resolves nothing.
+
+  The block reads one key, `rungs:`, and **refuses any other** -- sharper than
+  the sibling `index:` check, because a section with no `rungs:` is read one
+  layer down as a composition of *nothing*, so `rung:` would build a cascade
+  that matches nothing and report success. A rung kind nothing registers, and a
+  rung whose handles the document did not declare, are both refused at load as
+  the documents they are, naming what was missing.
+
 - **`SemanticIndex`**, in `dataknobs_data.vector.semantic_index`. Binds a
   text-producing view of some data to a vector store: `build()` embeds
   everything the source streams and writes it, `search()` and `search_batch()`

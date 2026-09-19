@@ -711,7 +711,15 @@ async def test_two_live_sources_are_refused_for_the_same_reason() -> None:
 
 
 async def test_the_index_and_the_resolver_answer_none_rather_than_raising() -> None:
-    """Absence is a configuration answer, not an error -- from either side of it."""
+    """Absence is a configuration answer, not an error -- from either side of it.
+
+    **This still pins the absent-section branch and must.** A document
+    declaring no ``resolver:`` answers ``None`` for good, however many
+    cascades this registry can build --- silence is *use your own
+    composition*, and inventing one would take that choice away. The positive
+    twin is below; after the reader shipped, this test alone covered half the
+    member.
+    """
     registry = OntologyRegistry.from_components(
         config=OntologyConfig(**_document()), database=await _seeded()
     )
@@ -719,6 +727,116 @@ async def test_the_index_and_the_resolver_answer_none_rather_than_raising() -> N
         await registry.load()
         assert registry.index("t") is None
         assert registry.resolver("t") is None
+    finally:
+        await registry.close()
+
+
+async def test_a_resolver_section_builds_the_cascade_the_document_wrote() -> None:
+    """The positive twin, and the composition is asserted rather than the type.
+
+    A member that answered *some* cascade for any document would pass an
+    assertion that one came back --- so what is checked is that the rungs are
+    the ones written, in the order written. The composition **is** the policy,
+    which is why a document is allowed to write it at all.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(
+            **_authored(resolver={"rungs": [{"kind": "alias"}, {"kind": "exact"}]})
+        )
+    )
+    try:
+        await registry.load()
+        resolver = registry.resolver("t")
+        assert resolver is not None
+        assert [rung.name for rung in resolver.rungs] == ["alias", "exact"]
+
+        assert [c.entity_id for c in (await resolver.resolve("Canine", k=5)).candidates] == ["dog"]
+        named = await resolver.resolve("The Hound", k=5)
+        assert [evidence.signal for evidence in named.explain("dog")] == ["exact"]
+    finally:
+        await registry.close()
+
+
+async def test_an_explicitly_empty_composition_is_not_silence() -> None:
+    """``rungs: []`` is a composition somebody chose, and it misses everything.
+
+    The distinction the door one layer down draws and this reader must not
+    collapse: an absent section gets ``None`` from the member above, and an
+    empty list gets a cascade holding no rungs. A consumer who wants to
+    resolve nothing must be able to say so, and the two answers are how they
+    say it.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={"rungs": []}))
+    )
+    try:
+        await registry.load()
+        resolver = registry.resolver("t")
+        assert resolver is not None, "an empty composition is still a composition"
+        assert list(resolver.rungs) == []
+        assert list((await resolver.resolve("The Hound", k=5)).candidates) == []
+    finally:
+        await registry.close()
+
+
+async def test_a_resolver_section_with_a_key_this_block_does_not_read_is_refused() -> None:
+    """A key nothing acts on is worse than inert here, which is why it is refused.
+
+    ``rungs`` absent is read one layer down as *a composition of nothing*, so
+    a section spelling it any other way builds a cascade that matches
+    everything's nothing and reports success --- a document whose author
+    believes they configured three rungs and whose registry resolves to
+    ``UNRESOLVED`` for every query, with nothing anywhere saying why.
+
+    The refusal names the offending key rather than only the section, because
+    the author's next question is *which one*.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={"rung": [{"kind": "exact"}]}))
+    )
+    try:
+        with pytest.raises(ValidationError, match="rung") as refused:
+            await registry.load()
+        assert "this block does not read" in str(refused.value)
+    finally:
+        await registry.close()
+
+
+async def test_a_rung_needing_a_handle_this_document_did_not_declare_is_named() -> None:
+    """A semantic rung over a document with no ``index:`` section.
+
+    The handles a rung is built over are the registry's to supply and the
+    index is one of them, so a composition naming that rung over a document
+    that declared no index is a document missing a section --- not a registry
+    missing a handle, and the message has to say which. Without this the
+    failure is a ``KeyError`` out of a factory the author never named.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={"rungs": [{"kind": "semantic"}]}))
+    )
+    try:
+        with pytest.raises(ValidationError, match="semantic") as refused:
+            await registry.load()
+        assert "index" in str(refused.value)
+    finally:
+        await registry.close()
+
+
+async def test_a_rung_kind_nothing_registers_is_refused_as_a_document_fault() -> None:
+    """A misspelled ``kind:`` is a document to fix, so it is refused as one.
+
+    It reaches this reader as an unknown key from a registry two packages
+    down, whose own answer is the right one for a caller who asked it
+    directly. Through a *document* it is a typo, and a caller catching what
+    this door documents itself as raising caught it under neither name.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={"rungs": [{"kind": "sematnic"}]}))
+    )
+    try:
+        with pytest.raises(ValidationError, match="sematnic") as refused:
+            await registry.load()
+        assert refused.value.context.get("ontology_id") == "t"
     finally:
         await registry.close()
 

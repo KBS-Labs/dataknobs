@@ -718,15 +718,45 @@ across a private event loop on a daemon thread. It is callable from inside a
 running loop without deadlocking, but it still *blocks*: the calling thread
 waits for the whole cascade. From async code, await the resolver directly.
 
-```python
-from dataknobs_common.entity_resolution import BridgedEntityResolver
+<!-- worked-bridge -->
 
+```python
+import asyncio
+from pathlib import Path
+
+from dataknobs_common.entity_resolution import BridgedEntityResolver
+from dataknobs_common.ontology import async_build_resolver, async_load_ontology
+
+
+async def cascade():
+    onto = await async_load_ontology(Path("mammals.yaml"))
+    return await async_build_resolver(Path("mammals.yaml"), onto)
+
+
+async_resolver = asyncio.run(cascade())
+
+# Synchronous from here down, which is the point: no `await`, no loop of your
+# own, and no rewriting the cascade you already have.
 with BridgedEntityResolver(async_resolver) as bridged:
     result = bridged.resolve("beagles", k=5)
+
+assert [c.entity_id for c in result.candidates] == ["beagle"]
+assert [e.signal for e in result.explain("beagle")] == ["exact", "alias", "scan"]
 ```
 
 It costs one daemon thread for the object's lifetime, so build one and keep it
 rather than one per call.
+
+That block runs as written too, against the same `mammals.yaml`, and the same
+workspace test holds it character-identical to the copy it executes. The three
+signals on the one candidate are the default composition the door builds for a
+document that declares no `resolver:` section — exact, then alias, then the
+scan.
+
+**The rungs it wraps need not be this package's.** `BridgedEntityResolver`
+takes any `AsyncEntityResolver`, so a cascade whose rungs read a vector store
+or an authority stack bridges the same way. What the bridge does not change is
+the cost: whatever the rungs reach for, the calling thread waits for all of it.
 
 ## Writing your own rung
 
