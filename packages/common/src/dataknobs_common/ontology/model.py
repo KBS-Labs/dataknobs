@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any, Generic, NamedTuple, Protocol, runtime_ch
 # Re-exported, not used here: this module is a published import path for these
 # three and stayed one when they moved. The redundant-alias spelling of a
 # re-export is what `PLC0414` declines, so the directive names `F401` instead.
+from dataknobs_common.exceptions import ValidationError
+
 from dataknobs_common.entity_resolution.values import (  # noqa: F401
     CompatibilityVerdict,
     ResolutionRef,
@@ -425,6 +427,26 @@ def qualify(ontology_id: str, local_id: str, source_id: str | None = None) -> st
     if source_id is None:
         return f"{ontology_id}:{local_id}"
     return f"{ontology_id}:{source_id}:{local_id}"
+
+
+def _refuse_colon(what: str, value: str) -> None:
+    """``value`` carries no ``:``, or a refusal naming what it was.
+
+    The enforcement of the invariant :func:`split_qualified` documents and
+    :func:`qualify` composes against: *ontology and source ids reject ``:``,
+    so the head of each split is unambiguous*. Written here rather than in
+    either caller because there are two of them and they hold the same
+    invariant at different moments --- the loader over an authored document,
+    and :func:`~dataknobs_common.ontology.tags.read_node_tags` over a value
+    off a row this package did not write. A second copy would be the second
+    place the rule could stop being true.
+    """
+    if ":" in value:
+        raise ValidationError(
+            f"{what} {value!r} contains ':', which separates the parts of a "
+            f"qualified id. Remove it",
+            context={what.replace(" ", "_"): value},
+        )
 
 
 def split_qualified(qualified_id: str, source_ids: Collection[str] = ()) -> QualifiedId:

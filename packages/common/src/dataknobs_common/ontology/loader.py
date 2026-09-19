@@ -62,6 +62,7 @@ from dataknobs_common.ontology.model import (
     SourceRef,
     TaxonomyDefinition,
     Term,
+    _refuse_colon,
 )
 from dataknobs_common.ontology.sources import (
     AssertionSource,
@@ -525,15 +526,6 @@ def _refuse_reserved_id(ontology_id: str) -> None:
             f"built-in pseudo-ontology that {', '.join(('dk:EntityType', 'dk:RelationType'))} "
             f"belong to. Choose another id",
             context={"ontology_id": ontology_id},
-        )
-
-
-def _refuse_colon(what: str, value: str) -> None:
-    if ":" in value:
-        raise ValidationError(
-            f"{what} {value!r} contains ':', which separates the parts of a "
-            f"qualified id. Remove it",
-            context={what.replace(" ", "_"): value},
         )
 
 

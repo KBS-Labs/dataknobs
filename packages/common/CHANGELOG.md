@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reading a content row's tags back: `read_node_tags`, `read_node_tags_many`
+  and the three value types they answer with**, on the `dataknobs_common.ontology`
+  door beside the keys they read. An indexed row written from a vocabulary
+  carries which vocabulary, which axis and which nodes it is about; those keys
+  already shipped, and nothing read them. `read_node_tags` is a pure function
+  over the row's own metadata mapping -- no store, no embedder, no event loop,
+  and no vocabulary either, so it works on rows out of a corpus this package has
+  never seen. A `NodeTag` carries the three strings and composes the one
+  qualified id `Ontology.localize` takes, which is the member that says the
+  family's two keys and `qualify`'s one string are the same thing.
+
+  **A row that touched no vocabulary answers `()` and a half-written one
+  refuses.** Those are different states: most of a corpus is untagged, so an
+  exception there would make every caller wrap the common path in a `try`,
+  while a row carrying some of the three keys and not all is a writer that can
+  be told. The refusal names the keys that are absent. Presence is read off
+  the *value*, so a key whose value is `None` is a key nothing wrote -- the
+  argument is a row as the consumer's own store handed it back, and a
+  relational or columnar store materialises an unwritten column as a null
+  rather than omitting it.
+
+  **A bare string under the node key is one node, and everything else that
+  satisfies *iterate it* is refused** -- any `Buffer` (`bytes`, `bytearray`,
+  `memoryview`, `array`), a `Mapping`, a `set`, and any scalar that is not a
+  string -- naming the key, the type found and every offending position. The
+  buffer exclusion is that property rather than a list of types, because a
+  list is the types somebody thought of: a `memoryview` is what a driver hands
+  back for a binary column and an empty one would otherwise answer `()`. A
+  `:` in the ontology id is refused too, because the qualified id is joined
+  with that character and split on the first one, so a colon there composes an
+  id a *different* vocabulary accepts. This is the last frame that can still
+  see the type or the shape: one call later the value is a rendered string,
+  and at the cursor a writer's mistake is indistinguishable from a stale id. A
+  row with one bad entry refuses whole, so it cannot count as evidence for
+  fewer nodes than it declared; `[]` is not a malformation and answers `()`.
+
+  **Over a hit set, `read_node_tags_many` reports rather than raises.**
+  `TagReading` holds one entry per position in the order asked, and a second
+  field naming every position that was refused -- without which an untagged row
+  and a malformed one would both be spelled `()`. `TagReading.require_readable()`
+  is the refusal, once, naming every one of them, so the stance is visible at
+  the call site rather than buried in a reader.
+
+  A new guide, `content-tags.md`, publishes the worked call site: four hits, of
+  which one is about two nodes, one touched no vocabulary, one names an axis the
+  vocabulary does not declare, and one was written wrong.
+
+- **`read_alias_forms`**, the read of the family's fourth key, on the same
+  door. `ALIAS_FORMS_KEY` says which surface forms a row's entity is known by;
+  it shipped with the other three and, like them, nothing read it. It reads
+  through the same core the node list does, which is the point: the rule that
+  **a bare string is one form rather than its characters** was implemented
+  here the whole time and implemented privately, so the reader that had to
+  apply it wrote it again and got it wrong -- a `"ACME"` became four
+  one-character rows, all under the entity's id, leaving one holding `"E"`.
+  One implementation now serves both keys, and each refusal names the key the
+  writer actually wrote.
+
+  The key is a parameter defaulting to `ALIAS_FORMS_KEY`, because
+  `EntitySourceIndexSource.aliases_key` is a configurable field: a read
+  hard-coded to the constant could not open the rows the writer beside it
+  produces. A row carrying no forms answers `()`; there is no half-written
+  state, because this key describes the entity rather than a placement and has
+  no companion key to be absent against.
+
 - **A reference into a section an ontology document declares must resolve, or
   the document is refused.** Eight of them: an entity type's `isa`, an
   attribute's `entity_type`, a relation type's `domain`, `range` and

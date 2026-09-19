@@ -18,7 +18,7 @@ Three claims, and the first is the measurement that decided the shape:
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -36,24 +36,7 @@ from dataknobs_common.ontology import (
 )
 from dataknobs_common.ontology.sources import MappingAssertionSource, MappingEntitySource
 
-
-@dataclass(frozen=True)
-class Sku:
-    """A consumer's key: hashable, value-equal, and not a string."""
-
-    plant: str
-    line: int
-
-
-class SkuCodec:
-    """``Sku`` in one direction and back. Two functions, both the consumer's."""
-
-    def to_id(self, key: Sku, /) -> str:
-        return f"{key.plant}/{key.line}"
-
-    def from_id(self, rendered: str, /) -> Sku:
-        plant, _, line = rendered.rpartition("/")
-        return Sku(plant=plant, line=int(line))
+from _vocabularies import Sku, SkuCodec
 
 
 def _onto(codec: object) -> Ontology:

@@ -1212,9 +1212,9 @@ def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     """The list that decides scheduling is checked against the tree, not trusted.
 
     A package document belongs to no package's suite by default: 141 of the
-    150 here are read only by the workspace guards, and scheduling their
+    151 here are read only by the workspace guards, and scheduling their
     package for one is what ran two full suites for a link repair. The other
-    nine are read by a test *in* that package, so they do decide whether it
+    ten are read by a test *in* that package, so they do decide whether it
     passes, and they have to keep scheduling and dirtying it.
 
     Which of the two a document is cannot be inferred from its path, so it is
@@ -3638,4 +3638,63 @@ def test_the_declarations_prose_counts_match_the_tree() -> None:
                 f"PACKAGE_TEST_DOC_INPUTS declares {declared} of {total} package "
                 f"documents. The sentence argues the exception is rare, so a "
                 f"stale number there argues from the wrong figure."
+            )
+
+
+#: The transcribed-fence waivers, spelled as the table spells them. Every file
+#: whose text is a published guide fence is named ``worked_<page>_call_site``;
+#: the ones reaching ``per-file-ignores`` are the subset whose fence contains a
+#: statement ruff flags, which is the population the prose above them counts.
+_TRANSCRIBED_FENCE_WAIVER = re.compile(r"^tests/worked_\w+_call_site\.py$")
+
+#: ``_WORDS`` starts at three because the population it serves cannot be
+#: smaller. This claim counts a subset of itself, and the subset is one.
+_SMALL_WORDS = {"one": 1, "two": 2, **_WORDS}
+
+
+def test_the_transcribed_fence_waiver_counts_match_the_table() -> None:
+    """The count in the comment, read out of the table the comment describes.
+
+    A third guard of this shape and a third denominator, for the reason the
+    two above it give: the claim is a number, the tree already knows it, and
+    the sentence carrying it argues that the exception is rare -- so a stale
+    figure argues from the wrong one.
+
+    **This block states the rule and has twice broken it.** Its closing
+    paragraph says a count in a comment *"is corrected in the change that
+    falsifies it rather than left to be noticed"*, and records that the entry
+    taking the count from two to three did not carry the correction. Neither
+    did the entry taking it from three to four, in a change whose author had
+    that paragraph open. Two misses against a written rule is the case a guard
+    exists for; noticing is what this replaces.
+    """
+    table = _load(ROOT / "pyproject.toml")["tool"]["ruff"]["lint"]["per-file-ignores"]
+    waivers = {
+        name: codes for name, codes in table.items() if _TRANSCRIBED_FENCE_WAIVER.match(name)
+    }
+    assert waivers, (
+        "no per-file-ignores entry names a transcribed doc fence any more. "
+        "Either the files were renamed -- in which case update the pattern -- "
+        "or the waivers are gone, and this guard now checks nothing."
+    )
+    expected = {"total": len(waivers), "b015": sum("B015" in codes for codes in waivers.values())}
+
+    for pattern in (
+        r"The (?P<total>\w+) entries below are the only ones here waiving a rule",
+        r"(?P<b015>\w+) of the (?P<total>\w+) also waives B015",
+    ):
+        match = re.search(pattern, (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        assert match is not None, (
+            f"pyproject.toml no longer carries a sentence matching {pattern!r}. "
+            f"Either the prose was rewritten -- in which case update this "
+            f"pattern -- or the claim was deleted, and this guard is now "
+            f"checking one sentence where it used to check two."
+        )
+        for group, claimed in match.groupdict().items():
+            assert _SMALL_WORDS.get(claimed.lower()) == expected[group], (
+                f"pyproject.toml says {claimed!r} where the table holds "
+                f"{expected[group]}: {expected['total']} entries waive a rule "
+                f"over a file whose text is not its own, and {expected['b015']} "
+                f"of them waives B015. The paragraph under those entries rules "
+                f"that this correction belongs to the change that falsifies it."
             )

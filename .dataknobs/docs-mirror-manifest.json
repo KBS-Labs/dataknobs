@@ -78,6 +78,10 @@
           "site": "anchored-view.md"
         },
         {
+          "package": "guides/content-tags.md",
+          "site": "content-tags.md"
+        },
+        {
           "package": "guides/entity-resolution.md",
           "site": "entity-resolution.md"
         },

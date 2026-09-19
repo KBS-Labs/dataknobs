@@ -1,12 +1,19 @@
 """A published input fence and the suite constant beside it are one document.
 
-Four guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
+Five guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
 which a workspace test writes to disk and runs the guide's published call site
-against. For two of them ``_vocabularies.py`` holds the *same* vocabulary as a
+against. For four of them ``_vocabularies.py`` holds the *same* vocabulary as a
 module constant, which this package's fixtures and most of its suites load
-instead. The other two publish documents no constant holds, so each is one copy
+instead. The fifth publishes a document no constant holds, so it is one copy
 rather than two -- see ``UNPAIRED`` below, which is where that is said and
 where it is checked.
+
+**Two of the four pair rows name one constant**, which is the shape to expect
+rather than an anomaly: ``anchored-view.md`` and ``content-tags.md`` publish
+the same vocabulary on purpose, so that two service-free acceptances run
+against one substrate. That is precisely the arrangement this file exists for
+-- two published copies of one document -- so both are compared to the constant
+and thereby to each other.
 
 **Nothing compared the two.** Each copy was guarded by its own suite -- a fence
 that drifts takes its workspace runner red, a constant that drifts takes
@@ -52,12 +59,16 @@ nobody checks against the tree is a list of the pairs somebody remembered.
 
 **Publishing a fence is not the same as adding a pair**, which is the
 distinction that assertion learned the hard way: it read the marker as a proxy
-for "half of a pair" and fired on ``anchored-view.md``, which publishes a whole
-vocabulary of its own and mirrors nothing. A single copy has no sameness to
-guard -- it is guarded by being *executed* -- so it is declared rather than
-tabled, and the declaration is checked against the tree too. What stays total
-is that every published fence is accounted for as one kind or the other, so a
-fourth still fails here until somebody decides which it is.
+for "half of a pair" and fired on a guide publishing a whole vocabulary of its
+own that mirrored nothing. A single copy has no sameness to guard -- it is
+guarded by being *executed* -- so it is declared rather than tabled, and the
+declaration is checked against the tree too. ``hierarchy.md`` is the one such
+guide left; the guide that taught the distinction has since acquired a second
+published copy and become a pair, which is the transition
+``test_a_declared_single_copy_is_still_single`` exists to force rather than to
+trust. What stays total is that every published fence is accounted for as one
+kind or the other, so a new one still fails here until somebody decides which
+it is.
 """
 
 from __future__ import annotations
@@ -68,7 +79,7 @@ import re
 import pytest
 
 import _vocabularies
-from _vocabularies import MAMMALS_DOCUMENT, MAMMALS_V11_DOCUMENT
+from _vocabularies import MAMMALS_DOCUMENT, MAMMALS_GUIDE_DOCUMENT, MAMMALS_V11_DOCUMENT
 
 #: Every guide that could carry a published vocabulary. Globbed rather than
 #: listed, so a guide added tomorrow is inside what the table is checked
@@ -91,6 +102,7 @@ ENTITY_RESOLUTION_GUIDE = (
 )
 ANCHORED_VIEW_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "anchored-view.md"
 HIERARCHY_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "hierarchy.md"
+CONTENT_TAGS_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "content-tags.md"
 
 GUIDES = sorted(ONTOLOGY_GUIDE.parent.glob("*.md"))
 
@@ -162,6 +174,8 @@ def _published_vocabulary(guide: pathlib.Path) -> str:
 PAIRS = [
     (ONTOLOGY_GUIDE, MAMMALS_DOCUMENT, "MAMMALS_DOCUMENT"),
     (ENTITY_RESOLUTION_GUIDE, MAMMALS_V11_DOCUMENT, "MAMMALS_V11_DOCUMENT"),
+    (ANCHORED_VIEW_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
+    (CONTENT_TAGS_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
 ]
 
 #: Guides that publish a vocabulary **no constant mirrors**, and why. Named so
@@ -172,25 +186,13 @@ PAIRS = [
 #: The distinction is not bookkeeping. This file exists because two copies of
 #: one document were each guarded and their *sameness* was guarded by nobody.
 #: A document with one copy has no sameness to guard, and declaring it here says
-#: that in the place somebody adding the fourth fence will read -- where
+#: that in the place somebody adding the next fence will read -- where
 #: omitting it from ``PAIRS`` alone would read as an oversight.
 #:
 #: Checked rather than believed: ``test_a_declared_single_copy_is_still_single``
 #: fails if a constant ever comes to hold one of these, which is the moment the
 #: reason stops being true and a row becomes owed.
 UNPAIRED: dict[pathlib.Path, str] = {
-    ANCHORED_VIEW_GUIDE: (
-        "its only consumer is tests/worked_anchored_view_call_site.py, which "
-        "writes the fence to disk and runs the guide's published call site "
-        "against it -- so the fence is guarded by execution rather than by "
-        "comparison. The vocabulary is its own: nearest is MAMMALS_V11_DOCUMENT, "
-        "which differs substantively (latin_name is not required there, and it "
-        "carries the literal-object assertion this one does not), so it is a "
-        "third document rather than a drifted copy of either. It is declared in "
-        "PACKAGE_TEST_DOC_INPUTS all the same, because the test below reads it "
-        "to check this very claim -- a suite that reads a document has to be "
-        "scheduled by an edit to it."
-    ),
     HIERARCHY_GUIDE: (
         "its only consumer is tests/test_worked_hierarchy_call_site.py, which "
         "writes the fence to disk and runs the guide's published call site "

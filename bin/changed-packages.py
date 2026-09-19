@@ -522,7 +522,7 @@ _LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 141 of the 150 are read only by
+#: Almost no package document is one of these. 141 of the 151 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so
@@ -531,7 +531,7 @@ _LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
 #: repair touching two packages' docs ran two full test suites and no guard that
 #: reads a link.
 #:
-#: The nine below are the exception and they are a real one: each is read by a
+#: The ten below are the exception and they are a real one: each is read by a
 #: test *in* the package, comparing a published table against the code it
 #: describes --- or, for the last of them, checking that no such comparison is
 #: owed --- so the document genuinely decides whether that suite passes. They
@@ -563,19 +563,30 @@ PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     # alone; see test_a_file_can_feed_more_than_one_tier for what is now legal.
     "packages/common/docs/guides/ontology.md": "common",
     "packages/common/docs/guides/entity-resolution.md": "common",
-    # A third `worked-input` fence, and the one that is *not* half of a pair --
-    # no constant holds this vocabulary. The common suite reads it anyway, to
-    # check that claim against the tree rather than take the declaration's word
-    # for it: the day a constant does hold this document, a comparison row is
-    # owed and `UNPAIRED` in test_worked_input_fences.py has gone stale. That
-    # read is what earns the entry; an unread document would not want one.
+    # A third `worked-input` fence, and half of a pair: `MAMMALS_GUIDE_DOCUMENT`
+    # holds this vocabulary, and content-tags.md below publishes it too, so the
+    # common suite reads this one for the comparison. It said the opposite until
+    # recently -- that no constant held it -- and predicted its own expiry in
+    # the saying: the day a constant does hold this document, a comparison row
+    # is owed and `UNPAIRED` in test_worked_input_fences.py has gone stale. That
+    # day was the change that added content-tags.md, which added the row and
+    # corrected `UNPAIRED` and left this sentence claiming what it had just
+    # falsified. That read is what earns the entry; an unread document would
+    # not want one.
     "packages/common/docs/guides/anchored-view.md": "common",
-    # The fourth `worked-input` fence, and the second that is not half of a
+    # The fourth `worked-input` fence, and the only one that is not half of a
     # pair: it publishes the smallest of the four vocabularies and no constant
-    # holds it. Read by the common suite for anchored-view.md's reason -- to
-    # check that claim against the tree rather than take the declaration's
-    # word for it.
+    # holds it. Read by the common suite to check that claim against the tree
+    # rather than take the declaration's word for it -- which is the read
+    # anchored-view.md above earned until a constant came to hold its
+    # vocabulary, and the reason `UNPAIRED` now names this document alone.
     "packages/common/docs/guides/hierarchy.md": "common",
+    # The fifth `worked-input` fence, and the second half of a pair whose first
+    # half used to be a single copy: it publishes the same vocabulary
+    # anchored-view.md does, deliberately, so a second service-free acceptance
+    # runs against one substrate rather than two. Read by the common suite for
+    # the comparison, and by the workspace runner that executes the call site.
+    "packages/common/docs/guides/content-tags.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
     "packages/data/docs/vector-store-capabilities.md": "data",
 }
