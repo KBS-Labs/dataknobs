@@ -91,11 +91,18 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     # typed. The predicate these two call -- which axes to copy -- was briefly
     # published for the third door and is private again now that the door
     # calls the assembly instead, so its two rows are gone from here.
+    #
+    # `structures` is the same reading for a third collaborator: it is keyed by
+    # the *name* an axis is reached under, which is a taxonomy id and so
+    # `schema`-space, and its values are axes over the keys the sources beside
+    # it speak. Both halves are the document's, so `bound` covers the row.
     ("<module>", "assemble_async_ontology", "assertions", "bound"),
     ("<module>", "assemble_async_ontology", "entities", "bound"),
+    ("<module>", "assemble_async_ontology", "structures", "bound"),
     ("<module>", "assemble_async_ontology", "->", "bound"),
     ("<module>", "assemble_ontology", "assertions", "bound"),
     ("<module>", "assemble_ontology", "entities", "bound"),
+    ("<module>", "assemble_ontology", "structures", "bound"),
     ("<module>", "assemble_ontology", "->", "bound"),
     ("<module>", "build_resolver", "config", "payload"),
     ("<module>", "build_resolver", "ontology", "bound"),
@@ -426,7 +433,7 @@ _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 318
+_ROWS = 320
 
 
 def _modules() -> Iterator[ast.Module]:

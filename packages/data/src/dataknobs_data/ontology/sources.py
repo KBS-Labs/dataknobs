@@ -388,6 +388,46 @@ def validate_against_schema(
         ValidationError: When the binding declares no schema, or names a column
             the declared schema does not carry
     """
+    refuse_undeclared_columns(
+        (*projection.entity_columns(), *projection.form_columns()),
+        schema,
+        binding=binding,
+        named_by="the projection",
+    )
+
+
+def refuse_undeclared_columns(
+    columns: Sequence[str],
+    schema: DatabaseSchema | None,
+    *,
+    binding: str,
+    named_by: str,
+) -> None:
+    """The check itself, for every reader of a binding's declared columns.
+
+    :func:`validate_against_schema` is the projection's caller and the axis
+    dispatch in
+    :mod:`~dataknobs_data.ontology.registry` is the other: a ``kind: column``
+    taxonomy names a ``parent_key:``, which is one more column over the same
+    declaration, and a second checker for it would be two copies of one rule a
+    function apart. What each caller supplies is its own columns and its own
+    name for them, because the refusal is only useful if it says which line to
+    go and change.
+
+    **The root segment only**, for the reason above: a dotted path names a
+    value inside a JSON column and ``FieldSchema`` is flat.
+
+    Args:
+        columns: The columns this caller names, dotted paths included
+        schema: The schema the binding declared, or None
+        binding: The source id, so a refusal names what to go and fix
+        named_by: What named these columns, as the refusal should say it --
+            ``"the projection"``, ``"taxonomy 'categories'"``
+
+    Raises:
+        ValidationError: When the binding declares no schema, or one of these
+            columns is not in the declaration
+    """
     if schema is None or not schema.fields:
         raise ValidationError(
             f"binding {binding!r} declares no `schema:`. A by-reference binding "
@@ -397,11 +437,11 @@ def validate_against_schema(
             context={"source_id": binding},
         )
     declared = set(schema.fields)
-    for column in (*projection.entity_columns(), *projection.form_columns()):
+    for column in columns:
         root = column.split(".", 1)[0]
         if root not in declared:
             raise ValidationError(
-                f"binding {binding!r}: the projection names column {column!r}, "
+                f"binding {binding!r}: {named_by} names column {column!r}, "
                 f"which this binding's `schema:` does not declare. Declared: "
                 f"{sorted(declared)}",
                 context={"source_id": binding, "column": column},

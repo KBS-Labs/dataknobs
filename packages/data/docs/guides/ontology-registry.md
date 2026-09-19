@@ -425,6 +425,102 @@ which binding a row belongs to. A `kind: record` binding only ever **reads**,
 so that column is yours to add rather than the registry's to write, and there
 is no form of `table:` that could stand in for one.
 
+## A taxonomy over a parent column
+
+Rows that carry their parent's key are a hierarchy already. A `taxonomies:`
+row declaring `kind: column` binds one, and what comes back is an
+`AsyncTaxonomy` like any other — the walk is the same walk, and only what is
+underneath it differs:
+
+```yaml
+ontology:
+  id: catalog
+  sources:
+    - id: products
+      kind: record
+      # ...as above, and its `schema:` declares `parent_sku`
+  taxonomies:
+    - id: categories
+      kind: column
+      source: products          # a source THIS document declares
+      parent_key: parent_sku    # the column holding the parent's key
+      relation: parent          # required — what these edges MEAN
+```
+
+```python
+onto = registry.get("catalog")
+tax = onto.taxonomy("categories")
+
+await tax.at(onto.localize("catalog:sku-4471")).ancestors()   # the chain, root last
+await tax.structure.roots()                                   # the rows nothing places
+```
+
+`relation:` is required here as everywhere, and a column axis satisfies it by
+naming what its edges *mean* rather than by naming a set of assertions to read.
+Nothing constructs an `Assertion` for a row: the edges are two columns, and the
+axis is a different backing under one taxonomy rather than a second kind of
+taxonomy.
+
+**There is no `child:`.** The child column is the source's own `id:`, which is
+what keeps the axis and the entity source keyed alike by construction — the ids
+a walk answers with are the ids `entity()` takes. A `child:` key would be the
+first place two id spaces could diverge.
+
+**`parent_key:` is checked against the same `schema:` the projection is.** One
+more column over one declaration, checked at load and named on a refusal, for
+the reason every other column name here is: a name from a config file reaches a
+query builder and nothing interpolates it.
+
+### A node is in the axis if an edge names it
+
+Not *every row of the table*. That is the hierarchy protocol's own rule —
+*"a node absent from every edge of this axis is not in this hierarchy at all,
+so `roots()` equals a type's membership only by coincidence"* — and it is what
+makes this axis answer identically to the same tree authored as `parent`
+assertions. A row whose parent column is null **and** that nothing names as a
+parent is not in the axis: `contains()` is `False`, `roots()` omits it, and a
+cursor over it reports `exists()` `False` and `ancestors()` `()`.
+
+An edge is a row with **both** ends, spelled as two `EXISTS` filters, which
+mean *is not null* on every backend here. That has a convenient consequence
+over a shared store: a surface-form row carries the projection's id column and
+no parent column, so it is not an edge and the axis needs no narrowing of its
+own for the arrangement the entity reads do need one for.
+
+Referential integrity is not the axis's subject. A parent column naming a key
+no row carries places a node `entity()` will not find — exactly as an assertion
+may name an entity no `entities:` row declares.
+
+### It reads in one query per level, and opens nothing
+
+`ColumnHierarchy` carries the two optional hierarchy protocols, not just the
+four singular members, and a row-backed axis is the case those protocols were
+written for. A frontier costs one query rather than one per node, and
+`parent_edges()` answers the whole axis in one read — which is what lets
+`materialization.structure: materialized` take a copy that is both one query
+and *complete*. A copy built by descending from the roots cannot reach a cyclic
+component with nothing above it, and would then refuse an anchor the live axis
+accepts. Nothing stops a `parent_id` column from carrying a cycle.
+
+Binding an axis opens **no handle**. It reads the source's table, and a handle
+is built once per resolved block and table, so the axis is handed the one the
+source already holds: `close()`'s cascade is unchanged and the axis cannot
+outlive the source beside it.
+
+### The class is public
+
+```python
+from dataknobs_data.ontology import ColumnHierarchy
+
+axis = ColumnHierarchy(db, "products", "sku", "parent_sku")
+await axis.parent_edges()
+```
+
+Configuration is the ordinary way to get one, and the constructor is there for
+a caller who already holds a handle — the four arguments are the handle, the
+table it addresses, the column holding each row's own key, and the column
+holding its parent's.
+
 ## What it refuses
 
 | Refused | Because |
@@ -435,6 +531,10 @@ is no form of `table:` that could stand in for one.
 | an ontology id already loaded | the registry instance is the unit of sharing; pass `replace=True`, or use a registry per tenant |
 | a second binding over a store another ontology already holds, naming different tables | one handle serves both and no read narrows to a binding's table there, so each would answer with the other's rows |
 | `type:` naming a column | a source over a type column cannot yet report that its declared types are unenumerable, and reporting an empty set instead would read as a complete enumeration |
+| an axis kind nothing binds | computed from the declared kind alone, for the source kinds' reason. An axis over this document's own assertions declares no `kind:` at all |
+| a column axis naming a source the document does not declare | an axis reads one document's table, and a source id is resolved in the document that wrote it |
+| a column axis over an **authored** source | there is no table under it, so there is no column to read — refused rather than downgraded to the assertion read, which would be the silent substitution one step later |
+| a `parent_key:` the binding's `schema:` does not declare | the projection's rule, over one more column of the same declaration |
 
 ## Events
 
@@ -489,16 +589,30 @@ building the set over a live table is a scan on the way out.
 A rebuild carries **three** sets — `gone`, `arrived`, and `renamed`, the last
 being what changed name while keeping its id. A two-set delta reports a rename
 as no change at all, which is why an empty payload here can be read as a
-genuine no-op. The delta is over the *declared* population: a live binding's
-rows change underneath the registry with no reload at all, which is what *live*
-means.
+genuine no-op.
 
 **A topic carries a delta over what that topic is about**, so a rebuild
-publishes at two levels. The ontology's own topic gets the delta over its
-declared entities; each axis topic gets the delta over *that axis's nodes* —
-the ones its relation's asserted edges place. Neither contains the other: an
-entity in no axis at all would be announced nowhere, and an id an assertion
-places that no `entities:` row names is in no ontology-level set.
+publishes at two levels, and the two levels are over different populations
+because they cost different things to enumerate. The ontology's own topic gets
+the delta over its **declared** entities — a live binding's rows change
+underneath the registry with no reload at all, and counting them on the way
+past is a scan per type. Each axis topic gets the delta over *that axis's
+nodes*, whatever backs them, because an axis answers its whole population in
+one query. Neither level contains the other: an entity in no axis at all would
+be announced nowhere, and an id an axis places that no `entities:` row names is
+in no ontology-level set.
+
+An axis's population is read **when the vocabulary is built** and compared
+against the next build's. That is the only comparison a live axis can answer:
+reading the outgoing axis at the rebuild asks the same rows the same question
+twice and reports that nothing changed however much did. The read happens only
+where the registry holds a bus, since the population is a delta's input.
+
+An axis whose backing cannot enumerate itself carries `axis_unenumerable: true`
+in place of the three sets, which tells a subscriber to re-read the axis rather
+than telling them nothing happened. Every axis the registry builds can
+enumerate; one handed to a directly-constructed ontology may not, since the
+enumerable protocol is opt-in.
 
 Every axis either document declares gets an event, in the order the new one
 writes them and then the ones it no longer does. An axis a rebuild **removed**

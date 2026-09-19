@@ -140,6 +140,64 @@ def test_a_live_source_kind_is_refused_naming_id_kind_and_the_loader(
 
 
 @DOORS
+def test_an_axis_kind_this_door_binds_no_backing_for_is_refused(door: Door) -> None:
+    """The source refusal's sibling, for the other half of a document.
+
+    `TaxonomyDefinition` reads six keys and `kind:` is not one of them, so a
+    row asking for a backing this door does not build used to load with all
+    three of its keys discarded -- as an assertion axis over assertions the
+    document never declared, which answers empty for every walk. A dropped key
+    and an unsupported key have to look different.
+
+    The message carries the same three things the source refusal does: which
+    axis, what kind it declared, and what to use instead.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "taxonomies": [
+                    {
+                        "id": "categories",
+                        "kind": "column",
+                        "source": "products",
+                        "parent_key": "parent_sku",
+                        "relation": "parent",
+                    }
+                ],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'categories'" in message
+    assert "'column'" in message
+    assert "OntologyRegistry" in message
+    assert excinfo.value.context == {"taxonomy": "categories", "kind": "column"}
+
+
+@DOORS
+def test_an_axis_declaring_no_kind_is_the_one_this_door_builds(door: Door) -> None:
+    """The negative half: silence is how a row asks for the assertion read.
+
+    Without it the refusal above is satisfied by a door that refuses every
+    `taxonomies:` row there is, which would be a worse failure than the one it
+    replaced.
+    """
+    door(
+        {
+            "id": "x",
+            "entity_types": [{"id": "Breed"}],
+            "entities": [
+                {"id": "beagle", "type": "Breed", "name": "Beagle"},
+                {"id": "dog", "type": "Breed", "name": "Dog"},
+            ],
+            "assertions": [{"subject": "beagle", "relation": "isa", "object": "dog"}],
+            "taxonomies": [{"id": "kinds", "relation": "isa"}],
+        }
+    )
+
+
+@DOORS
 def test_a_duplicate_source_id_is_refused(door: Door) -> None:
     """Source ids are the closed set a qualified id is parsed against."""
     with pytest.raises(ValidationError) as excinfo:

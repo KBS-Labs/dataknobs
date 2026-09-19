@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OntologyParts.taxonomy_specs`**, the `taxonomies:` rows as written.
+  `source_specs`' counterpart, and carried for its reason: a row may name a
+  backing this package binds no implementation of, and the door that does is
+  in another distribution. Without it that door would re-read
+  `config.taxonomies` for itself, which is a second reader of one section.
+
+- **`assemble_ontology` and `assemble_async_ontology` take `structures=`** --
+  the axes the calling door bound, keyed by the name each is reached under. A
+  door holding a live axis over rows hands it over and the assembly files it;
+  where the definition declares `materialization.structure: materialized` the
+  snapshot is taken **of that axis**, rather than of an assertion read over
+  edges the document never declared.
+
 - **`DeclaredSignal.bounded_by_longest_form`**, on both twins, declaring
   whether a rung's enumeration is bounded by the vocabulary's longest declared
   form. `ScanningSignal` and `AsyncScanningSignal` set it; the default is
@@ -264,6 +277,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a per-item error handler while still absorbing an item's own failure.
 
 ### Changed
+
+- **`Ontology.structures` is what a door *bound*, not only what it copied**,
+  and `taxonomy()` hands back whatever is filed there under the name it is
+  filed under. A snapshot is one kind of bound axis; a live backing over rows
+  is another, and only the mode decides what a door must do *before* filing
+  one. The mapping used to be consulted only where the definition declared
+  `materialization.structure: materialized`, so an axis a door had bound over
+  a live backing -- which means `on_demand` -- had no way to be reached at
+  all: the accessor answered with an assertion read over an empty source and
+  the vocabulary reported an empty axis with nothing saying why.
+
+  Every existing path answers exactly as it did. An axis declaring a copy and
+  supplying none is refused on the same condition and with the same message;
+  an axis with no entry is still built per call from the assertion source.
+
+- **A `taxonomies:` row declaring a `kind:` is refused rather than dropped.**
+  `TaxonomyDefinition` reads six keys and `kind:` is not one of them, so a row
+  spelling `kind: column` loaded with that key and every key beside it
+  discarded -- as an assertion axis over assertions the document never
+  declared, answering empty for every walk. Both module-level doors now refuse
+  it, naming the axis, the kind and `OntologyRegistry`, which is
+  `_refuse_live_sources`' sibling for the other half of a document. An axis
+  over this document's own assertions declares no `kind:` at all, which is
+  unchanged and is what the refusal says.
 
 - **`EntitySource.fetch_origins` and its async twin now answer
   `list[Record | None]`**, one slot per ref in the order they were passed,

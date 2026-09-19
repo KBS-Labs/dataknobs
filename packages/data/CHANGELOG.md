@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `taxonomy.rebuilt` payload is a delta over the axis's own nodes,
+  whatever backs them.** The three sets used to be computed from the
+  *declared* assertions on either side of a rebuild, which is empty for every
+  vocabulary a registry binds -- so the payload reported `gone`, `arrived` and
+  `renamed` all empty however much the axis had changed, and "an empty payload
+  means a genuine no-op" was false in the common case. Each axis's population
+  is now read once when the vocabulary is built and compared against the next
+  build's, which is the only comparison a live axis can answer: re-reading the
+  outgoing axis at the rebuild asks the same rows the same question twice.
+
+  The read happens only where the registry holds an event bus, since the
+  population is a delta's input. An axis whose backing cannot enumerate itself
+  carries `axis_unenumerable: true` instead of the three sets -- the shape an
+  unload payload already takes when it cannot carry the departing ids.
+
 - **BREAKING: a backend implements `_vector_search`, not `vector_search`.**
   `vector_search` is now a concrete method on `SyncVectorOperationsMixin` and
   `AsyncVectorOperationsMixin`, over a new abstract `_vector_search` hook that
@@ -559,6 +574,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     route happened to be found first.
 
 ### Added
+
+- **`ColumnHierarchy` --- a taxonomy whose edges are a `parent_id` column.**
+  A `taxonomies:` row declaring `kind: column` names a source and the column
+  holding each row's parent, and the axis it binds walks the way an axis over
+  authored assertions walks: `onto.taxonomy("categories").at(sku).ancestors()`
+  answers the chain, and the taxonomy is an `AsyncTaxonomy` either way.
+
+  ```yaml
+  taxonomies:
+    - id: categories
+      kind: column
+      source: products        # a `kind: record` source THIS document declares
+      parent_key: parent_sku  # the column holding the parent's key
+      relation: parent        # required -- what these edges MEAN
+  ```
+
+  The child column is the source's own `id:`, so a walk answers in the space
+  `entity()` takes. `parent_key:` is checked at load against the same
+  `schema:` the projection is checked against, and the axis reads through the
+  handle the source already holds -- binding one opens nothing and closes
+  nothing.
+
+  It carries the two optional hierarchy protocols rather than the four
+  singular members alone: a frontier costs one query per level, and
+  `parent_edges()` answers the whole axis in one read, which is what lets a
+  `materialization.structure: materialized` copy of it be taken in one query
+  and be complete -- a cyclic component with nothing above it is unreachable
+  by descending from the roots.
+
+  A node is in the axis if an edge names it, which is the hierarchy protocol's
+  own rule: a row whose parent column is null and that nothing names as a
+  parent is not in the axis at all, so `contains()` is False and a cursor over
+  it reports `exists()` False.
+
+- **`ColumnAxisBinding`**, the parsed axis row, exported beside it.
 
 - **`dataknobs_data.ontology` --- an ontology over a table you already have.**
   `OntologyRegistry` loads an ontology document, binds its declared source to a

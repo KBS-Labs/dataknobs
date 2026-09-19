@@ -216,7 +216,7 @@ def _refuse_a_materialized_content_axis(definition: TaxonomyDefinition) -> None:
 def _structure_for(
     name: str, definition: TaxonomyDefinition, structures: Mapping[str, _S], live: _S
 ) -> _S:
-    """The structure axis this definition asks for: the copy, or the live read.
+    """The structure axis for this name: whatever a door bound, else the live read.
 
     Flavour-free, and it is what lets one rule serve both twins: the choice is
     between two objects the caller already holds, so there is nothing here to
@@ -234,31 +234,45 @@ def _structure_for(
     unused one costs an allocation -- and taking a callable instead would make
     the *one* thing this function does conditional on how it was called.
 
-    **A definition asking for a copy that is not here is refused, not
-    downgraded.** A loader door builds one for every such definition, so the
-    gap is reachable only by constructing an ontology directly -- and quietly
+    **The mapping is consulted first, and that is what makes a *bound* axis
+    reachable at all.** ``structures`` holds the axes a **door bound**, of
+    which a snapshot is one kind: a door that read a ``parent_id`` column, or a
+    caller who built an axis of their own, puts it here, and the accessor hands
+    back what it was given under the name it was given it under. The mode is
+    then a question about what a door had to do *first* --
+    ``materialization.structure: materialized`` is what makes a door take a
+    snapshot before filing the axis, and ``on_demand`` is what leaves it live
+    -- rather than a gate on whether this mapping is read at all. A live axis
+    means ``on_demand``, so a gate on the mode had no way to admit one.
+
+    **A definition asking for a copy that is not here is still refused, not
+    downgraded**, and the condition is unchanged: no entry, and a copy asked
+    for. A loader door files one for every such definition, so the gap is
+    reachable only by constructing an ontology directly -- and quietly
     substituting the live axis there would hand back a different object than
     the config asked for, under the name the config used, which is the failure
-    the materialization refusals exist to prevent.
+    the materialization refusals exist to prevent. Handing back the entry the
+    caller *did* supply is the opposite act, and it is what already happened
+    whenever the definition said ``materialized``.
     """
+    bound = structures.get(name)
+    if bound is not None:
+        return bound
     if not definition.materialization.structure_is_copied:
         return live
-    copied = structures.get(name)
-    if copied is None:
-        raise ValidationError(
-            f"taxonomy {name!r} declares `materialization.structure: "
-            f"materialized`, but this ontology carries no copy of that axis. A "
-            f"loader door takes one at load; an ontology built directly must be "
-            f"given it as `structures={{{name!r}: ...}}`, or declare "
-            f"`structure: on_demand` to read the edges through the assertion "
-            f"source",
-            context={
-                "taxonomy": name,
-                "axis": "structure",
-                "mode": InferenceMode.MATERIALIZED.value,
-            },
-        )
-    return copied
+    raise ValidationError(
+        f"taxonomy {name!r} declares `materialization.structure: "
+        f"materialized`, but this ontology carries no copy of that axis. A "
+        f"loader door takes one at load; an ontology built directly must be "
+        f"given it as `structures={{{name!r}: ...}}`, or declare "
+        f"`structure: on_demand` to read the edges through the assertion "
+        f"source",
+        context={
+            "taxonomy": name,
+            "axis": "structure",
+            "mode": InferenceMode.MATERIALIZED.value,
+        },
+    )
 
 
 def _localize(ontology_id: str, qualified_id: str) -> str:
@@ -302,11 +316,11 @@ class OntologyParts:
     """A validated config, mapped onto values, with no source bound yet.
 
     Six of :class:`Ontology`'s eleven fields verbatim, plus the declared rows
-    and the still-unbound ``sources:`` specs. The five it omits are all
-    downstream of binding: the two sources, the descriptions a door derives
-    from them, the structure axes a door copies once they exist, and the codec
-    a door chooses -- ``StrCodec`` for a document, whose ids are the strings
-    its author typed.
+    and the still-unbound ``sources:`` and ``taxonomies:`` specs. The five it
+    omits are all downstream of binding: the two sources, the descriptions a
+    door derives from them, the structure axes a door binds or copies once the
+    backings exist, and the codec a door chooses -- ``StrCodec`` for a
+    document, whose ids are the strings its author typed.
 
     Returning this rather than an ontology is what lets one core serve every
     door: a core that inspected the config to decide which flavour to build
@@ -327,6 +341,16 @@ class OntologyParts:
     declared_entities: Mapping[str, Entity]
     declared_assertions: tuple[Assertion, ...]
     source_specs: tuple[Mapping[str, Any], ...]
+
+    #: The ``taxonomies:`` rows as written, carried for the same reason
+    #: :attr:`source_specs` is: a row may name a backing this door binds no
+    #: implementation of, and the door that does binds it in another
+    #: distribution. Without the field that door would have to re-read
+    #: ``config.taxonomies`` for itself, which is a second reader of one
+    #: section and the first place two readings of it could differ --
+    #: :attr:`taxonomies` above is what the rows *mean*, and these are the
+    #: rows.
+    taxonomy_specs: tuple[Mapping[str, Any], ...]
 
 
 @dataclass(frozen=True, eq=False)
@@ -376,15 +400,21 @@ class Ontology(Generic[K]):
     #: the misbinding is unspellable rather than merely unlikely.
     codec: KeyCodec[K] = field(kw_only=True)
 
-    #: The copied structure axes, keyed by the name the axis is reached
-    #: under -- the key in :attr:`taxonomies`, which an alias may spell
+    #: The structure axes a **door bound**, keyed by the name the axis is
+    #: reached under -- the key in :attr:`taxonomies`, which an alias may spell
     #: differently from ``definition.id``.
     #:
-    #: One entry for every definition declaring ``materialization.structure:
-    #: materialized``, and none for the rest -- an on-demand axis is built per
-    #: call from the assertion source, which is what makes it on-demand. A
-    #: loader door fills this; a caller building an ontology directly may fill
-    #: it with any :class:`~dataknobs_common.hierarchy.Hierarchy`, and is
+    #: *What a door bound*, rather than *what a door copied*: a snapshot is one
+    #: kind of bound axis and a live backing over rows is another, and
+    #: :meth:`taxonomy` hands back whatever is here under the name it is filed
+    #: under. What the definition's ``materialization.structure`` decides is
+    #: what a door must do **before** filing it -- ``materialized`` takes a
+    #: snapshot, ``on_demand`` does not -- and an axis with no entry at all is
+    #: built per call from the assertion source, which is what makes it
+    #: on-demand.
+    #:
+    #: A loader door fills this; a caller building an ontology directly may
+    #: fill it with any :class:`~dataknobs_common.hierarchy.Hierarchy`, and is
     #: refused at :meth:`taxonomy` if they declare a copy and supply none.
     structures: Mapping[str, Hierarchy[K]] = field(default_factory=dict)
 
@@ -436,8 +466,8 @@ class Ontology(Generic[K]):
         the ontology's four relevant fields. The accessor still takes nothing
         but the name, which is what keeps it an accessor.
 
-        The structure is the live read unless the definition asked for a copy,
-        in which case it is the one this ontology is carrying -- see
+        The structure is whatever a door bound under this name, and the live
+        read over the assertions where a door bound nothing -- see
         :func:`_structure_for`. Refuses, naming the axis, a definition whose
         ``materialization`` asks for something this ontology cannot supply --
         see :func:`_refuse_a_materialized_content_axis`.
@@ -587,7 +617,9 @@ class AsyncOntology(Generic[K]):
     #: place the misbinding stayed spellable.
     codec: KeyCodec[K] = field(kw_only=True)
 
-    #: :attr:`Ontology.structures`, in an asynchronous slot.
+    #: :attr:`Ontology.structures`, in an asynchronous slot -- and the slot a
+    #: live backing over rows arrives in, since binding one needs a handle and
+    #: a handle is what the asynchronous flavour exists for.
     structures: Mapping[str, AsyncHierarchy[K]] = field(default_factory=dict)
 
     #: :attr:`Ontology.imports`, unflavoured -- a list of ids awaits nothing.
@@ -616,9 +648,10 @@ class AsyncOntology(Generic[K]):
         A plain ``def`` on this twin, and deliberately: it constructs over
         fields the object is already holding and awaits nothing. Making it
         awaitable would cost every caller an ``await`` for a lookup and three
-        assignments -- and it is the reason a copied axis is taken at the door
-        rather than here, since the asynchronous snapshot *is* a coroutine and
-        there is nowhere in this signature to await it.
+        assignments -- and it is the reason an axis is **bound** at the door
+        rather than here, whether binding it means opening a handle or taking
+        an asynchronous snapshot. Both are coroutines, and there is nowhere in
+        this signature to await one.
         """
         definition = _definition(self.taxonomies, name)
         return AsyncTaxonomy(

@@ -31,15 +31,14 @@ from dataknobs_common.entity_resolution import async_signal_backends
 from dataknobs_common.events import Event, EventType, create_event_bus
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.lifecycle import close_if_owned
+from dataknobs_common.hierarchy import AsyncEnumerableHierarchy
 from dataknobs_common.ontology import (
     AUTHORED_SOURCE_ID,
     AUTHORED_SOURCE_KINDS,
-    AssertionHierarchy,
     AsyncMappingAssertionSource,
     AsyncMappingEntitySource,
     AsyncOntology,
     Entity,
-    MappingAssertionSource,
     OntologyConfig,
     assemble_async_ontology,
     build_ontology,
@@ -53,10 +52,16 @@ from dataknobs_data.backend_selection import normalize_backend
 from dataknobs_data.backends import async_backends
 from dataknobs_data.factory import async_database_factory
 from dataknobs_data.fields import FieldType
+from dataknobs_data.ontology.hierarchy import (
+    COLUMN_AXIS_KIND,
+    ColumnAxisBinding,
+    ColumnHierarchy,
+)
 from dataknobs_data.ontology.sources import (
     RECORD_SOURCE_KIND,
     EntityProjection,
     RecordEntitySource,
+    refuse_undeclared_columns,
     validate_against_schema,
 )
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
@@ -66,7 +71,8 @@ if TYPE_CHECKING:
 
     from dataknobs_common.entity_resolution.protocols import AsyncEntityResolver
     from dataknobs_common.events import EventBus
-    from dataknobs_common.ontology import OntologyParts, RelationRef, SourceDescription
+    from dataknobs_common.hierarchy import AsyncHierarchy
+    from dataknobs_common.ontology import OntologyParts, SourceDescription
 
     from dataknobs_data.database import AsyncDatabase
 
@@ -176,6 +182,16 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     #: ``AUTHORED_SOURCE_KINDS`` is refused by name whether or not some other
     #: package that could bind it happens to be importable.
     LIVE_SOURCE_KINDS: ClassVar[frozenset[str]] = frozenset({RECORD_SOURCE_KIND})
+
+    #: The structure-axis kinds this registry binds.
+    #:
+    #: :attr:`LIVE_SOURCE_KINDS` one section over, for the other half of a
+    #: document. A ``taxonomies:`` row declaring no ``kind:`` asks for the
+    #: assertion read, which ``dataknobs_common`` builds and this registry does
+    #: not re-implement; a row declaring one is asking for a backing, and this
+    #: is the set of backings there are. Computed from the declared kind alone,
+    #: for the source set's reason.
+    LIVE_AXIS_KINDS: ClassVar[frozenset[str]] = frozenset({COLUMN_AXIS_KIND})
 
     #: This registry's own construction settings, as opposed to the
     #: collaborators :attr:`OPTIONAL_COMPONENTS` names.
@@ -287,6 +303,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # handle rather than opening a second connection and leaving the first
         # to a `close()` that may be a long way off.
         self._database_cache: dict[str, AsyncDatabase] = {}
+        # Every loaded ontology's axes and what each held when it was built.
+        # Recorded here rather than re-read at the next load, because a live
+        # axis re-read then would answer with the rows as they are now on both
+        # sides of the comparison -- see `_axis_populations`.
+        self._populations: dict[str, dict[str, frozenset[str] | None]] = {}
         # Which store each loaded ontology's live binding took, and the tables
         # it named there. Read to refuse a second binding over one store; not
         # pruned on `unload`, because a claim is only consulted while its
@@ -485,6 +506,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         del self._ontologies[ontology_id]
         self._parts.pop(ontology_id, None)
         self._documents.pop(ontology_id, None)
+        self._populations.pop(ontology_id, None)
         return True
 
     async def reload(self, ontology_id: str) -> AsyncOntology[str]:
@@ -778,13 +800,16 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             )
         replaced = self._ontologies.get(parts.id)
         before = self._parts.get(parts.id)
-        entities, describes = await self._bind_sources(typed, parts)
+        was_populated = self._populations.get(parts.id, {})
+        bound = await self._bind_sources(typed, parts)
         ontology = await assemble_async_ontology(
             parts,
-            entities=entities,
+            entities=bound.entities,
             assertions=AsyncMappingAssertionSource(parts.declared_assertions),
-            describes=describes,
+            describes=bound.describes,
+            structures=await self._bind_taxonomies(parts, bound.live),
         )
+        now_populated = await self._axis_populations(ontology)
         # Announced before the swap, so a subscriber reading the registry on
         # the departure event still sees what departed -- and in this order,
         # rather than as a third event meaning both, because a subscriber who
@@ -794,22 +819,23 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             await self._publish_departure(replaced)
         self._ontologies[parts.id] = ontology
         self._parts[parts.id] = parts
+        self._populations[parts.id] = now_populated
         await self._publish(
             topic=f"ontology:{parts.id}",
             event_type=EventType.CREATED,
             payload={
                 "ontology_id": parts.id,
                 "version": parts.version,
-                "sources": [description.source_id for description in describes],
+                "sources": [description.source_id for description in bound.describes],
             },
         )
         if before is not None:
-            await self._publish_taxonomy_delta(parts.id, before, parts)
+            await self._publish_taxonomy_delta(
+                parts.id, before, parts, was_populated, now_populated
+            )
         return ontology
 
-    async def _bind_sources(
-        self, config: OntologyConfig, parts: OntologyParts
-    ) -> tuple[Any, tuple[SourceDescription, ...]]:
+    async def _bind_sources(self, config: OntologyConfig, parts: OntologyParts) -> _BoundSources:
         """Dispatch each declared source kind, and refuse the ones nothing binds.
 
         Two refusals compose here, and they answer different questions from the
@@ -817,6 +843,12 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         cannot own a lifecycle* and is correct forever; these are *no binder is
         registered for this kind* and *the construct that would route between
         two sources does not exist yet*.
+
+        **It reports what it bound as well as what it built**, because a
+        ``kind: column`` axis reads the same table through the same handle and
+        must not open a second one. A third member rather than a wider tuple:
+        the caller unpacks three things with three names, and
+        :meth:`_bind_taxonomies` takes exactly one of them.
         """
         live = [
             spec
@@ -837,7 +869,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             authored = AsyncMappingEntitySource(
                 parts.declared_entities, normalizer=self._normalizer
             )
-            return authored, (authored.describe(),)
+            return _BoundSources(authored, (authored.describe(),), {})
         if parts.declared_entities:
             raise ValidationError(
                 f"ontology {parts.id!r} declares both an authored vocabulary and "
@@ -859,18 +891,26 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     "source_ids": [spec.get("id") for spec in live],
                 },
             )
-        source = await self._bind_record_source(config, live[0], ontology_id=parts.id)
-        return source, (source.describe(),)
+        source, binding = await self._bind_record_source(config, live[0], ontology_id=parts.id)
+        return _BoundSources(source, (source.describe(),), {binding.source_id: binding})
 
     async def _bind_record_source(
         self, config: OntologyConfig, spec: Mapping[str, Any], *, ontology_id: str
-    ) -> RecordEntitySource:
+    ) -> tuple[RecordEntitySource, _LiveBinding]:
         """One ``kind: record`` binding, validated before a handle is opened.
 
         ``ontology_id`` is carried because the store this binding takes is
         claimed on the ontology's behalf rather than the binding's: it is
         released when the ontology is unloaded, and a document replacing
         itself must not collide with the copy it replaces.
+
+        **The pair rather than the source alone**, because an axis over the
+        same table needs the three things this method resolved and the source
+        does not publish: the handle it opened, the projection it parsed, and
+        the schema it validated against. Handing them back is what keeps
+        :meth:`_bind_taxonomies` from resolving any of them a second time --
+        and a second resolution of the handle in particular would be a second
+        handle, which is the one thing teardown cannot absorb.
         """
         source_id = str(spec.get("id", ""))
         projection_spec = spec.get("entity_projection")
@@ -883,9 +923,8 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 context={"source_id": source_id},
             )
         projection = EntityProjection.from_mapping(projection_spec, binding=source_id)
-        validate_against_schema(
-            projection, _declared_schema(spec, binding=source_id), binding=source_id
-        )
+        declared_schema = _declared_schema(spec, binding=source_id)
+        validate_against_schema(projection, declared_schema, binding=source_id)
         _refuse_a_form_reading_rung_with_no_lookup(config, projection, binding=source_id)
         _refuse_a_scan_over_a_binding_that_cannot_bound_it(config, projection, binding=source_id)
 
@@ -932,7 +971,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             binding=source_id,
         )
         self._store_claims[ontology_id] = _StoreClaim(database, tables, source_id)
-        return RecordEntitySource(
+        source = RecordEntitySource(
             database,
             projection,
             source_id=source_id,
@@ -940,6 +979,135 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             normalizer=self._normalizer,
             forms_database=forms_database,
         )
+        return source, _LiveBinding(source_id, database, projection, declared_schema)
+
+    async def _bind_taxonomies(
+        self, parts: OntologyParts, live: Mapping[str, _LiveBinding]
+    ) -> dict[str, AsyncHierarchy[str]]:
+        """Bind every ``taxonomies:`` row that names a backing, and refuse the rest.
+
+        :meth:`_bind_sources`' shape one section over, and written to the same
+        rule: **computed from the declared kind alone.** A row declaring no
+        ``kind:`` asks for the assertion read, which
+        :func:`~dataknobs_common.ontology.assemble_async_ontology` builds and
+        nothing here re-implements, so it is passed over rather than bound.
+
+        Three refusals, each naming what to go and fix, and each answering a
+        question the other two do not:
+
+        * the kind names no binder registered **here** -- which is the one of
+          the three that stops being true when a binder is registered, and is
+          therefore the one that belongs on a registry rather than on a door;
+        * ``source:`` names no source **this document declares**, listing the
+          ones it does. An axis reads one document's table and a source id is
+          resolved in the document that wrote it;
+        * ``source:`` names a source this registry bound as an **authored**
+          one. A column axis has a column to read and an authored vocabulary
+          has no table under it, so the answer is a refusal rather than a
+          downgrade to the assertion read -- which would be the silent
+          substitution this whole leg exists to end, arriving one step later.
+
+        **It opens nothing.** The handle is the one :meth:`_bind_record_source`
+        already resolved for the entity table, handed over rather than asked
+        for again -- so ``self._handles`` gains no entry, ``close()``'s cascade
+        is unchanged, and the axis cannot outlive the source it reads beside.
+        """
+        bound: dict[str, AsyncHierarchy[str]] = {}
+        declared_sources = tuple(str(spec.get("id", "")) for spec in parts.source_specs)
+        for spec in parts.taxonomy_specs:
+            if "kind" not in spec:
+                continue
+            kind = str(spec.get("kind", ""))
+            taxonomy_id = str(spec.get("id", ""))
+            if kind not in self.LIVE_AXIS_KINDS:
+                raise ValidationError(
+                    f"taxonomy {taxonomy_id!r} declares kind {kind!r}, which no "
+                    f"axis binder in this registry is registered for. Kinds it "
+                    f"binds: {sorted(self.LIVE_AXIS_KINDS)}; an axis over this "
+                    f"document's own assertions declares no `kind:` at all",
+                    context={"taxonomy": taxonomy_id, "kind": kind},
+                )
+            axis = ColumnAxisBinding.from_mapping(spec, binding=taxonomy_id)
+            if axis.source not in declared_sources:
+                raise ValidationError(
+                    f"taxonomy {taxonomy_id!r} reads column {axis.parent_key!r} of "
+                    f"source {axis.source!r}, which this document does not "
+                    f"declare. Declared: {sorted(declared_sources)}",
+                    context={
+                        "taxonomy": taxonomy_id,
+                        "source_id": axis.source,
+                        "declared": sorted(declared_sources),
+                    },
+                )
+            binding = live.get(axis.source)
+            if binding is None:
+                raise ValidationError(
+                    f"taxonomy {taxonomy_id!r} declares `kind: {COLUMN_AXIS_KIND}` "
+                    f"over source {axis.source!r}, which is an authored source: it "
+                    f"has no table, so there is no {axis.parent_key!r} column to "
+                    f"read. An axis over an authored vocabulary's own edges "
+                    f"declares no `kind:`",
+                    context={"taxonomy": taxonomy_id, "source_id": axis.source},
+                )
+            refuse_undeclared_columns(
+                (axis.parent_key,),
+                binding.schema,
+                binding=binding.source_id,
+                named_by=f"taxonomy {taxonomy_id!r}",
+            )
+            bound[taxonomy_id] = ColumnHierarchy(
+                binding.database,
+                binding.projection.table,
+                binding.projection.id,
+                axis.parent_key,
+            )
+        return bound
+
+    async def _axis_populations(
+        self, ontology: AsyncOntology[str]
+    ) -> dict[str, frozenset[str] | None]:
+        """Every declared axis's node set, as the axis a subscriber reads reports it.
+
+        **Recorded at load, which is the whole mechanism.** A delta between two
+        loads cannot be computed from two reads taken at the second one: a live
+        axis reads the table, so reading the outgoing axis at the moment the
+        incoming one is built asks the same rows the same question twice and
+        answers *nothing changed* however much did. So the population is taken
+        when the vocabulary is built and kept until the next build replaces it.
+
+        Asked of ``taxonomy(name).structure`` rather than derived here, because
+        *which edges count* is the axis's rule -- asserted, of this relation,
+        between entities for one backing; a row with both ends for the other --
+        and a second copy of it is one that can disagree with the axis a
+        subscriber is holding. ``parent_edges`` is the member that answers for
+        the whole axis rather than the part a descent from the roots reaches,
+        and it gives every node an entry including one that is only ever a
+        parent.
+
+        **Only where there is a bus**, because the population is a delta's
+        input and a delta with no bus is computed for nobody. On a live axis
+        the read is a query, which is a cost a registry publishing nothing has
+        no reason to pay.
+
+        ``None`` for an axis whose backing cannot enumerate itself. The two
+        optional hierarchy protocols are opt-in by member presence, so an axis
+        a caller supplied may have only the four singular members -- from which
+        the only enumeration available is a descent from the roots, which
+        misses a cyclic component entirely. A population that is a guess is
+        worse than one that says so, and :meth:`_publish_taxonomy_delta` has a
+        form for saying so.
+        """
+        if self._event_bus is None:
+            return {}
+        populations: dict[str, frozenset[str] | None] = {}
+        for name in ontology.taxonomies:
+            axis = ontology.taxonomy(name).structure
+            populations[name] = (
+                frozenset(await axis.parent_edges())
+                if isinstance(axis, AsyncEnumerableHierarchy)
+                else None
+            )
+        return populations
 
     async def _database_handle(self, block: dict[str, Any], table: str) -> AsyncDatabase:
         """A handle for one table of a resolved ``database:`` block, built once.
@@ -1091,7 +1259,12 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         return {"entity_id_prefix": f"{ontology.id}:"}
 
     async def _publish_taxonomy_delta(
-        self, ontology_id: str, before: OntologyParts, after: OntologyParts
+        self,
+        ontology_id: str,
+        before: OntologyParts,
+        after: OntologyParts,
+        was: Mapping[str, frozenset[str] | None],
+        now: Mapping[str, frozenset[str] | None],
     ) -> None:
         """Announce what a replacement changed -- once for the whole, once per axis.
 
@@ -1100,12 +1273,30 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         *arrived*, so a two-set delta reports a rename as no change at all.
         An empty payload therefore means a genuine no-op.
 
-        **A topic carries a delta over what that topic is about.** The three
-        sets are computed over one population per event: the declared
-        entities for the ontology's own topic, and *that axis's nodes* for an
-        axis topic. One delta published to every axis told a subscriber to
-        ``taxonomy:colours`` about a rename in ``taxonomy:sizes``, which is
-        indistinguishable from a change to the axis they read.
+        **A topic carries a delta over what that topic is about.** The sets are
+        computed over one population per event: the declared entities for the
+        ontology's own topic, and *that axis's nodes* for an axis topic. One
+        delta published to every axis told a subscriber to ``taxonomy:colours``
+        about a rename in ``taxonomy:sizes``, which is indistinguishable from a
+        change to the axis they read.
+
+        **The axis populations are the ones recorded at each load**, and that
+        is what makes an axis over rows answerable at all. Computed here from
+        the two documents, they would be the *declared* assertions either side
+        -- which is ``{}`` for every vocabulary this registry exists to bind,
+        so the three sets were empty whatever had changed and ``D80``'s
+        guarantee that an empty payload means a no-op was false in the common
+        case. Re-reading the outgoing axis here does not fix it either: a live
+        axis reads the table, so both sides would answer with today's rows.
+        See :meth:`_axis_populations`.
+
+        **Two forms, for the axis a registry cannot enumerate.** Where either
+        side's population is unknown the payload carries
+        ``axis_unenumerable: true`` instead of three sets, which tells a
+        subscriber to re-read the axis rather than telling them nothing
+        happened. It is the shape :meth:`_departing` takes for the same reason
+        one method along: a payload that cannot carry the ids says so, rather
+        than carrying an empty list that already means something else.
 
         **Both levels, because neither contains the other.** An entity in no
         axis at all changes nothing on any axis topic and would otherwise be
@@ -1133,19 +1324,29 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             },
         )
         for taxonomy_id in (*after.taxonomies, *departed):
-            was_axis = before.taxonomies.get(taxonomy_id)
-            now_axis = after.taxonomies.get(taxonomy_id)
+            # An axis either side no longer declares held nothing, rather than
+            # holding something unknown: the whole of its population is `gone`,
+            # which is the strongest thing its subscribers can be told.
+            was_nodes = (
+                was.get(taxonomy_id, frozenset())
+                if taxonomy_id in before.taxonomies
+                else frozenset()
+            )
+            now_nodes = (
+                now.get(taxonomy_id, frozenset())
+                if taxonomy_id in after.taxonomies
+                else frozenset()
+            )
             await self._publish(
                 topic=f"taxonomy:{taxonomy_id}",
                 event_type=EventType.UPDATED,
                 payload={
                     "ontology_id": ontology_id,
                     "taxonomy_id": taxonomy_id,
-                    **_three_sets(
-                        before,
-                        after,
-                        _axis_nodes(before, was_axis.relation) if was_axis else set(),
-                        _axis_nodes(after, now_axis.relation) if now_axis else set(),
+                    **(
+                        {"axis_unenumerable": True}
+                        if was_nodes is None or now_nodes is None
+                        else _three_sets(before, after, set(was_nodes), set(now_nodes))
                     ),
                 },
             )
@@ -1215,29 +1416,6 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         await self._connect_or_close(bus)
         self._event_bus = bus
         self._owns_event_bus = True
-
-
-def _axis_nodes(parts: OntologyParts, relation: RelationRef) -> set[str]:
-    """Every node this relation's edges place, as the axis over them reads it.
-
-    Asked of :class:`~dataknobs_common.ontology.AssertionHierarchy` rather
-    than derived here, because *which edges count* is that class's rule --
-    asserted, of this relation, between entities rather than to a literal --
-    and a second copy of it is one that can disagree with the axis a
-    subscriber is holding. ``parent_edges`` is the member that answers for
-    the whole axis rather than the part a descent from the roots reaches,
-    and it gives every node an entry including one that is only ever a
-    parent.
-
-    Synchronous and over declared rows: an axis a *document* wrote is what a
-    delta between two documents is computed over, which is the same
-    population :meth:`_departing` reads and the same reason -- a live
-    binding's rows change underneath the registry with no reload at all.
-    """
-    axis: AssertionHierarchy[str] = AssertionHierarchy(
-        MappingAssertionSource(parts.declared_assertions), relation
-    )
-    return set(axis.parent_edges())
 
 
 def _three_sets(
@@ -1313,6 +1491,37 @@ def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
         return False
     factory = async_backends.get_factory(normalize_backend(declared))
     return _config_class_addresses_one_table(getattr(factory, "CONFIG_CLS", None))
+
+
+class _LiveBinding(NamedTuple):
+    """What a bound live source leaves behind for an axis over the same table.
+
+    Not state: it lives for one load, is handed from :meth:`_bind_sources` to
+    :meth:`_bind_taxonomies`, and is dropped. What it carries is the three
+    things a column axis needs and a :class:`RecordEntitySource` does not
+    publish -- the handle the registry opened for the entity table, the parsed
+    projection whose ``id:`` is the axis's child column, and the schema the
+    ``parent_key:`` is checked against.
+
+    **The handle above all.** ``_database_handle`` is cached per resolved block
+    and table, so an axis naming the source's table would get the same object
+    back from it -- but *getting it back from the cache* and *being handed
+    it* differ where they matter: the first is a code path that could open one,
+    and the second cannot. See :meth:`_bind_taxonomies`.
+    """
+
+    source_id: str
+    database: AsyncDatabase
+    projection: EntityProjection
+    schema: DatabaseSchema | None
+
+
+class _BoundSources(NamedTuple):
+    """What one document's ``sources:`` section came to, in three named parts."""
+
+    entities: Any
+    describes: tuple[SourceDescription, ...]
+    live: Mapping[str, _LiveBinding]
 
 
 class _StoreClaim(NamedTuple):

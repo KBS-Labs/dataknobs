@@ -79,6 +79,7 @@ from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyPa
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
     from dataknobs_common.entity_resolution.protocols import (
         AsyncEntityResolver,
         AsyncMatchSignal,
@@ -169,6 +170,7 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         declared_entities=declared,
         declared_assertions=tuple(assertions),
         source_specs=source_specs,
+        taxonomy_specs=tuple(config.taxonomies),
     )
 
 
@@ -271,6 +273,7 @@ def assemble_ontology(
     entities: EntitySource[str],
     assertions: AssertionSource[str],
     describes: tuple[SourceDescription, ...],
+    structures: Mapping[str, Hierarchy[str]] | None = None,
 ) -> Ontology[str]:
     """The value a door returns, from the parts every door has in common.
 
@@ -302,13 +305,23 @@ def assemble_ontology(
     Args:
         parts: The validated document, as :func:`build_ontology` maps it
         entities: The bound entity source this vocabulary reads through
-        assertions: The bound assertion source, which the copied structure
-            axes are walked over
+        assertions: The bound assertion source, which an axis with no backing
+            of its own is read over
         describes: One description per bound source, in binding order
+        structures: The axes this door bound, keyed by the name each is
+            reached under. ``None`` from a door that binds none, which is
+            every synchronous door there is -- see :func:`_bound_structures`
 
     Returns:
         The vocabulary, with synchronous backings
     """
+    bound = dict(structures or {})
+    copied: dict[str, Hierarchy[str]] = {}
+    for name, definition in _axes_to_copy(parts.taxonomies):
+        axis = bound.pop(name, None)
+        copied[name] = MappingHierarchy.snapshot(
+            AssertionHierarchy(assertions, definition.relation) if axis is None else axis
+        )
     return Ontology(
         id=parts.id,
         version=parts.version,
@@ -319,10 +332,7 @@ def assemble_ontology(
         taxonomies=parts.taxonomies,
         describes=describes,
         codec=StrCodec(),
-        structures={
-            name: MappingHierarchy.snapshot(AssertionHierarchy(assertions, definition.relation))
-            for name, definition in _axes_to_copy(parts.taxonomies)
-        },
+        structures={**bound, **copied},
         imports=parts.imports,
     )
 
@@ -333,6 +343,7 @@ async def assemble_async_ontology(
     entities: AsyncEntitySource[str],
     assertions: AsyncAssertionSource[str],
     describes: tuple[SourceDescription, ...],
+    structures: Mapping[str, AsyncHierarchy[str]] | None = None,
 ) -> AsyncOntology[str]:
     """:func:`assemble_ontology`'s twin, and the one the third door calls.
 
@@ -346,10 +357,21 @@ async def assemble_async_ontology(
         entities: The bound entity source this vocabulary reads through
         assertions: The bound assertion source
         describes: One description per bound source, in binding order
+        structures: The axes this door bound over live backings, keyed by the
+            name each is reached under -- a ``kind: column`` axis over a table
+            is the case, and the door that binds one is in another
+            distribution. ``None`` from a door that binds none
 
     Returns:
         The vocabulary, with asynchronous backings
     """
+    bound = dict(structures or {})
+    copied: dict[str, AsyncHierarchy[str]] = {}
+    for name, definition in _axes_to_copy(parts.taxonomies):
+        axis = bound.pop(name, None)
+        copied[name] = await AsyncMappingHierarchy.snapshot(
+            AsyncAssertionHierarchy(assertions, definition.relation) if axis is None else axis
+        )
     return AsyncOntology(
         id=parts.id,
         version=parts.version,
@@ -360,12 +382,7 @@ async def assemble_async_ontology(
         taxonomies=parts.taxonomies,
         describes=describes,
         codec=StrCodec(),
-        structures={
-            name: await AsyncMappingHierarchy.snapshot(
-                AsyncAssertionHierarchy(assertions, definition.relation)
-            )
-            for name, definition in _axes_to_copy(parts.taxonomies)
-        },
+        structures={**bound, **copied},
         imports=parts.imports,
     )
 
@@ -381,6 +398,14 @@ def _axes_to_copy(
     question :func:`~dataknobs_common.ontology.values._structure_for` asks
     again on the way out. Two spellings of it is how a door and an accessor
     come to disagree about which axes were copied.
+
+    **What each copies is now a second thing they agree on without sharing a
+    line.** A door may arrive holding an axis it *bound* -- a ``kind: column``
+    read over a table is the case -- and where it did, the snapshot is taken of
+    that axis rather than of an assertion read over edges the document never
+    declared. Both assemblers spell that as ``bound.pop(name, None)`` ahead of
+    their own flavour of snapshot, and the reason neither can share the line is
+    the same reason they cannot share this one.
 
     **Private again, and that is the point of the assemblers.** It was briefly
     published, because the third door is in another distribution and had to
@@ -411,7 +436,7 @@ def _axes_to_copy(
 
 def _validated_parts(config: OntologyConfig) -> OntologyParts:
     """The half both doors share: validate the grammar, then refuse what a
-    module-level loader cannot own.
+    module-level loader cannot bind.
 
     Extracted rather than written twice. The two doors already differ in how
     they read and what flavour they bind; letting them also each decide which
@@ -424,6 +449,7 @@ def _validated_parts(config: OntologyConfig) -> OntologyParts:
     """
     parts = build_ontology(config)
     _refuse_live_sources(parts.source_specs)
+    _refuse_unbindable_axes(parts.taxonomy_specs)
     return parts
 
 
@@ -610,6 +636,55 @@ def _refuse_live_sources(specs: tuple[Mapping[str, Any], ...]) -> None:
             )
 
 
+def _refuse_unbindable_axes(specs: tuple[Mapping[str, Any], ...]) -> None:
+    """Refuse a ``taxonomies:`` row naming a backing this door builds none of.
+
+    :func:`_refuse_live_sources`' sibling, and the second half of one rule:
+    *this door binds what it can own, and says so by name for everything else.*
+    The one axis backing here is the assertion read, which a row asks for by
+    naming **no** ``kind:`` at all -- so a ``kind:`` on such a row is a request
+    for a backing another distribution binds, and the message points at the
+    door that does.
+
+    Computed from the declared kind alone, exactly as the source refusal is, so
+    it holds identically whether or not a package that could bind such an axis
+    has been imported. It is therefore correct forever rather than until
+    something is registered: *no backing for this kind is built here* does not
+    stop being true when one is built somewhere else. What that other door then
+    answers -- *no binder in this registry is registered for this kind* -- is a
+    different question with a different lifetime.
+
+    **Refused rather than dropped, which is the whole of why it exists.**
+    ``TaxonomyDefinition`` reads ``id``, ``relation``, ``name``,
+    ``description``, ``metadata`` and ``materialization`` and no others, so a
+    row carrying ``kind: column``, ``source:`` and ``parent_key:`` used to load
+    with all three discarded -- as an assertion axis over assertions the
+    document never declared, which answers empty for every walk. A dropped key
+    and an unsupported key have to look different, or the file says one thing
+    and the vocabulary means another.
+
+    Not :func:`_refuse_a_phase_2_key`'s mechanism, and the difference is the
+    message. That one says *this key arrives in a later version*. A ``kind:``
+    on an axis row does not arrive later; it arrives in a **different
+    distribution**, and a caller reaching this door needs to be told which one.
+    """
+    for spec in specs:
+        if "kind" not in spec:
+            continue
+        kind = str(spec.get("kind", ""))
+        taxonomy_id = str(spec.get("id", ""))
+        raise ValidationError(
+            f"taxonomy {taxonomy_id!r} declares kind {kind!r}, which this loader "
+            f"builds no structure axis for: binding one reads a table, which "
+            f"must be opened and closed again, and a module-level loader owns no "
+            f"lifecycle to do that with. Load this ontology through "
+            f"OntologyRegistry, which does. The axis this loader builds is the "
+            f"assertion read, which a `taxonomies:` row asks for by declaring no "
+            f"`kind:` at all",
+            context={"taxonomy": taxonomy_id, "kind": kind},
+        )
+
+
 def _refuse_undeclared_tree_nodes(
     specs: tuple[Mapping[str, Any], ...], declared: Mapping[str, Entity]
 ) -> None:
@@ -698,6 +773,12 @@ def _row_handle(row: Mapping[str, Any], key: str | None = None) -> str:
 #: exists to end. ``test_the_refusal_cases_are_the_loader_table`` in
 #: ``test_ontology_refusals.py`` is what makes that omission a red test
 #: rather than a silent no-op.
+#:
+#: **``taxonomies:`` does reach a refusal, and it is not this one.** A
+#: ``kind:`` on an axis row is refused by :func:`_refuse_unbindable_axes`,
+#: which is a different message for a different reason: that key does not
+#: arrive in a later version, it arrives in another distribution. The two
+#: mechanisms sit beside each other and neither covers the other's case.
 _PHASE_2_KEYS: Mapping[str, Mapping[str, str]] = {
     "assertions": {"condition": "conditional assertions arrive"},
     "relation_types": {
