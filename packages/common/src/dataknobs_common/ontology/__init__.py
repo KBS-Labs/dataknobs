@@ -61,6 +61,7 @@ from dataknobs_common.ontology.loader import (
     build_ontology,
     build_resolver,
     load_ontology,
+    refuse_unbuildable_rungs,
 )
 from dataknobs_common.ontology.tags import (
     ALIAS_FORMS_KEY,
@@ -195,6 +196,7 @@ __all__ = [
     "edge_criteria",
     "load_ontology",
     "qualify",
+    "refuse_unbuildable_rungs",
     "relation_id",
     "split_qualified",
     "EntitySourceIndexSource",

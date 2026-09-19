@@ -70,6 +70,7 @@ __all__ = [
     "LexicalSignal",
     "ScanningSignal",
     "declared_candidates",
+    "refuse_negative_k",
 ]
 
 #: A declared hit's score. 1.0 by fiat and carrying no information, which is
@@ -164,6 +165,42 @@ def _folded(query: str, normalizer: Callable[[str], str] | None) -> str:
     return query if normalizer is None else normalizer(query)
 
 
+def refuse_negative_k(k: int) -> None:
+    """Refuse a ``k`` a rung cannot answer, for every rung that asks.
+
+    **A function rather than a line inside** :func:`declared_candidates`,
+    because that function's own ``Raises:`` used to claim *refusing it here
+    refuses it for every rung at once* --- and the claim held only for as long
+    as every rung was assembled through it. A rung whose backing is not a
+    dictionary lookup is written against the bare protocol and does its own
+    assembly, which is a shape :class:`DeclaredSignal` explicitly reserves the
+    protocol for; the first such rung to ship measured ``k=-1`` as returning
+    *n-1* candidates while every rung beside it refused the same argument.
+
+    So the check is published where a bare-protocol rung can reach it, and the
+    claim is true again by there being one spelling rather than by care.
+
+    Args:
+        k: How many entities the caller asked for. ``0`` is a real request and
+            answers the empty list; anything negative is not.
+
+    Raises:
+        ValidationError: For a negative ``k``. The cut is a list slice, where
+            a negative counts back from the end -- so ``k=-1`` returned every
+            entity **but the last one** rather than none, which is an answer
+            no caller meant and none could distinguish from a real one.
+            Nothing upstream validates ``k``: a resolver takes it as a keyword
+            and hands it down, so the rungs are where a nonsensical one first
+            becomes visible.
+    """
+    if k < 0:
+        raise ValidationError(
+            f"k must not be negative, got {k}: a rung cannot return fewer than "
+            "no entities, and the cut is a slice that would otherwise read a "
+            "negative as counting back from the end"
+        )
+
+
 def declared_candidates(
     found: Sequence[FormHit[K]],
     k: int,
@@ -252,21 +289,11 @@ def declared_candidates(
         this function produced before it could carry a measurement.
 
     Raises:
-        ValidationError: For a negative ``k``. The cut is a list slice, where
-            a negative counts back from the end -- so ``k=-1`` returned every
-            entity **but the last one** rather than none, which is an answer
-            no caller meant and none could distinguish from a real one.
-            Nothing upstream validates ``k``: a resolver takes it as a keyword
-            and hands it down, so the rungs are where a nonsensical one first
-            becomes visible, and refusing it here refuses it for every rung at
-            once. ``0`` is a real request and answers the empty list.
+        ValidationError: For a negative ``k``, through
+            :func:`refuse_negative_k` --- which is where the reasoning lives
+            and which a rung not assembled here calls for itself.
     """
-    if k < 0:
-        raise ValidationError(
-            f"k must not be negative, got {k}: a rung cannot return fewer than "
-            "no entities, and the cut is a slice that would otherwise read a "
-            "negative as counting back from the end"
-        )
+    refuse_negative_k(k)
     hits: dict[K, list[FormHit[K]]] = {}
     for hit in found:
         if admitted is None or hit.entity_id in admitted:

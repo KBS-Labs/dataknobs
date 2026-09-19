@@ -253,23 +253,64 @@ async_signal_backends.register(
 #
 # Two members, and they are marked for **different** conditions, which is why
 # the reason is a sentence rather than a flag. ``semantic`` is
-# flavour-asymmetric: there is no synchronous form of it to register, in this
-# distribution or any other, so the synchronous registry alone carries it.
-# The asynchronous side carries no mark because it is waiting on a class that
-# does not exist yet rather than on an import -- ``SemanticSignal`` is
-# unwritten, here and everywhere, so asking the asynchronous registry for it
-# today reports an unknown kind. That is the gap this mechanism exists to
-# close, and it closes when the rung ships: the mark belongs beside the class,
-# and inventing one now would name an install that supplies nothing.
-# ``authority`` has both flavours and ships in another distribution, so both
-# registries carry it and both marks are cleared the moment an application
-# imports the module that implements it. A consumer who writes either kind and
-# registers their own clears the mark the same way -- which is the extension
-# point, not a leak.
+# flavour-asymmetric *and* lives elsewhere, so it is the one key whose two
+# marks say different things: the synchronous side says the rung has no such
+# form to install, and the asynchronous side says where the form it does have
+# ships. ``authority`` has both flavours and ships in another distribution, so
+# both registries carry the same sentence. A consumer who writes either kind
+# and registers their own clears the mark the same way -- which is the
+# extension point, not a leak.
+#
+# The asynchronous mark used to be absent, and the comment here recorded the
+# condition for writing it: the key was *waiting on a class that does not
+# exist yet rather than on an import*, so inventing a mark would have named an
+# install that supplied nothing. ``SemanticSignal`` ships, so the mark is
+# written and this paragraph states a fact rather than a plan.
 signal_backends.declare_unavailable(
     "semantic",
     reason="SemanticSignal has no synchronous form",
     metadata={"flavour": "async", "needs_io": True},
+)
+
+# **The metadata declares both derived facts by hand, which no other mark in
+# this module does**, and the asymmetry is the reason rather than an
+# inconsistency. ``data``'s own registration reads them off the class through
+# :func:`declared_signal_metadata`; this one cannot, because the class is not
+# importable here and must not become so. Two refusals in
+# ``dataknobs_data.ontology.registry`` read exactly these keys off this
+# registry at load time, so a mark omitting them would make those refusals
+# answer one way before the implementing module is imported and another way
+# after -- over the same document. Both are ``False``, so nothing changes
+# behaviour either way, which is precisely why it is worth writing now rather
+# than discovering over a rung where they are not.
+_SHIPS_IN_DATA = (
+    "SemanticSignal ships in dataknobs-data; import dataknobs_data.entity_resolution to register it"
+)
+
+#: What the mark above declares, named so it survives being registered over.
+#:
+#: ``register`` **replaces** a key's metadata wholesale, and the module that
+#: registers this kind is imported by the only door that reaches those two
+#: refusals -- so after any import that could exercise the coupling, asking
+#: the registry returns ``data``'s derived mapping and the hand-written one is
+#: gone. A guard comparing the two therefore compared the registration with
+#: itself and passed over any drift, which was measured rather than reasoned:
+#: flipping both derived keys here left it green.
+#:
+#: A name is what makes the comparison possible at all, so the drift this
+#: pairing exists to prevent is caught by something rather than asserted by
+#: this comment.
+SEMANTIC_ASYNC_MARK_METADATA = {
+    "flavour": "async",
+    "needs_io": True,
+    "requires_install": "pip install dataknobs-data",
+    "reads_surface_forms": False,
+    "bounded_by_longest_form": False,
+}
+async_signal_backends.declare_unavailable(
+    "semantic",
+    reason=_SHIPS_IN_DATA,
+    metadata=dict(SEMANTIC_ASYNC_MARK_METADATA),
 )
 
 # The reason names the distribution **and** the import, because they answer

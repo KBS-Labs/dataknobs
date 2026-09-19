@@ -80,6 +80,7 @@ from dataknobs_common.entity_resolution.signals import (
     LexicalSignal,
     ScanningSignal,
     declared_candidates,
+    refuse_negative_k,
 )
 from dataknobs_common.entity_resolution.values import (
     ENTITY_TYPE_KEY,
@@ -146,6 +147,7 @@ __all__ = [
     "declared_signal_metadata",
     "finish",
     "merge_rung",
+    "refuse_negative_k",
     "signal_backends",
     "token_spans",
     "refuse_unknown_axes",

@@ -718,15 +718,45 @@ across a private event loop on a daemon thread. It is callable from inside a
 running loop without deadlocking, but it still *blocks*: the calling thread
 waits for the whole cascade. From async code, await the resolver directly.
 
-```python
-from dataknobs_common.entity_resolution import BridgedEntityResolver
+<!-- worked-bridge -->
 
+```python
+import asyncio
+from pathlib import Path
+
+from dataknobs_common.entity_resolution import AsyncEntityResolver, BridgedEntityResolver
+from dataknobs_common.ontology import async_build_resolver, async_load_ontology
+
+
+async def cascade() -> AsyncEntityResolver:
+    onto = await async_load_ontology(Path("mammals.yaml"))
+    return await async_build_resolver(Path("mammals.yaml"), onto)
+
+
+async_resolver = asyncio.run(cascade())
+
+# Synchronous from here down, which is the point: no `await`, no loop of your
+# own, and no rewriting the cascade you already have.
 with BridgedEntityResolver(async_resolver) as bridged:
     result = bridged.resolve("beagles", k=5)
+
+assert [c.entity_id for c in result.candidates] == ["beagle"]
+assert [e.signal for e in result.explain("beagle")] == ["exact", "alias", "scan"]
 ```
 
 It costs one daemon thread for the object's lifetime, so build one and keep it
 rather than one per call.
+
+That block runs as written too, against the same `mammals.yaml`, and the same
+workspace test holds it character-identical to the copy it executes. The three
+signals on the one candidate are the default composition the door builds for a
+document that declares no `resolver:` section — exact, then alias, then the
+scan.
+
+**The rungs it wraps need not be this package's.** `BridgedEntityResolver`
+takes any `AsyncEntityResolver`, so a cascade whose rungs read a vector store
+or an authority stack bridges the same way. What the bridge does not change is
+the cost: whatever the rungs reach for, the calling thread waits for all of it.
 
 ## Writing your own rung
 
@@ -914,10 +944,24 @@ assert signal_backends.unavailable_reason("semantic") == (
 )
 ```
 
-`load_ontology` reads that fact and composes the refusal, naming the rung, its
-kind and the loader that *can* build it. The refusal is computed from the
-declared kind, so it holds with nothing constructed — and supplying the rung is
-what makes the door accept it.
+`build_resolver` reads that fact and composes the refusal, naming the rung, its
+kind and the way out. The refusal is computed from the declared kind, so it
+holds with nothing constructed — and supplying the rung is what makes the door
+accept it.
+
+**The way out is per rung, and reading it off the mark is what keeps it true.**
+Three marks mean three different things, and one sentence was wrong for two of
+them:
+
+| What the mark says | Where the author goes |
+|---|---|
+| `flavour: "sync"` here | nowhere — import the module the reason names, and *this* door builds it |
+| the other flavour, `needs_io: False` | `async_build_resolver`, over an ontology from `async_load_ontology` |
+| the other flavour, `needs_io: True` | a door holding a live handle: `OntologyRegistry`, or `async_build_resolver(..., handles={...})` |
+
+The first row is the one to read twice: a rung that merely ships elsewhere
+carries the **same** mark in both registries, so sending its author to the
+asynchronous door sends them in a circle.
 
 A rung that ships in **another distribution** is declared the same way, for a
 different reason. `kind: "authority"` reads an authority stack and lives in
@@ -935,6 +979,30 @@ It matches text a vocabulary *describes* — a pattern — as well as text it
 enumerates, and it keeps less overlap than `ScanningSignal` does. Both
 directions are written up at
 <https://kbs-labs.github.io/dataknobs/packages/xization/entity-resolution/>.
+
+### A rung built over something a document cannot write
+
+Both doors take `handles=`: live objects a rung is constructed over and a YAML
+file cannot hold — an index, a store, a client. They are merged into every
+rung's spec, because a factory reads the keys it names and ignores the rest, so
+one mapping serves a composition whose rungs need different things.
+
+```python
+resolver = build_resolver(Path("mammals.yaml"), onto, handles={"gazetteer": live})
+```
+
+The merge order is a rule rather than an implementation detail. A handle beats
+a key the document spelled the same way, because a document cannot write a live
+object; `entities` beats both, because *every rung matches against the ontology
+you handed in* is the one guarantee these doors make, and a channel able to
+displace it is a channel able to bypass the door.
+
+Both doors also refuse a composition they cannot build as a single
+`ValidationError`, naming the offending entry's position — an entry that is not
+a mapping, one naming no `kind:`, a kind nothing registers, and a rung whose
+own factory refused what it was given. `refuse_unbuildable_rungs` is the first
+three on their own, published so a caller that opens resources on its way to
+building a cascade can ask before it opens them.
 
 ## Where this package sits
 

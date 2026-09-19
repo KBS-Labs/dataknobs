@@ -80,6 +80,13 @@ _CARRIES_THE_KEY = "key"
 #: tree by construction, which is the one thing it must not do.
 _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "async_build_resolver", "config", "payload"),
+    # The live objects a rung is constructed over and a document cannot
+    # write. `payload` for `declared_signal_metadata`'s reason one entry
+    # down: the `str` is the name a rung's factory looks a handle up by --
+    # "index", "ontology", or one a consumer coins for their own rung -- and
+    # never an entity id. It is the only channel here that is *not* `bound`,
+    # because what travels through it is not keyed by the vocabulary at all.
+    ("<module>", "async_build_resolver", "handles", "payload"),
     ("<module>", "async_build_resolver", "ontology", "bound"),
     ("<module>", "async_build_resolver", "->", "bound"),
     ("<module>", "async_load_ontology", "normalizer", "text"),
@@ -105,6 +112,10 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "assemble_ontology", "structures", "bound"),
     ("<module>", "assemble_ontology", "->", "bound"),
     ("<module>", "build_resolver", "config", "payload"),
+    # The asynchronous door's channel, on the door that used to lack it. Same
+    # verdict for the same reason, and the pair is now symmetric so a reader
+    # comparing the two rows finds no asymmetry to explain.
+    ("<module>", "build_resolver", "handles", "payload"),
     ("<module>", "build_resolver", "ontology", "bound"),
     ("<module>", "build_resolver", "->", "bound"),
     ("<module>", "declared_candidates", "found", "key"),
@@ -130,6 +141,11 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "qualify", "ontology_id", "schema"),
     ("<module>", "qualify", "source_id", "schema"),
     ("<module>", "qualify", "->", "door"),
+    # The `resolver:` section a door refuses before it builds. `payload` for
+    # `async_build_resolver.config`'s reason: it is a document's own mapping,
+    # whose `str` keys are configuration names -- `rungs`, `kind` -- and
+    # never an id of the vocabulary the composition will match against.
+    ("<module>", "refuse_unbuildable_rungs", "section", "payload"),
     ("<module>", "relation_id", "->", "schema"),
     ("<module>", "split_qualified", "qualified_id", "door"),
     ("<module>", "split_qualified", "source_ids", "schema"),
@@ -446,7 +462,7 @@ _REACHABLE_VALUE_TYPES = 37
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 333
+_ROWS = 336
 
 
 def _modules() -> Iterator[ast.Module]:

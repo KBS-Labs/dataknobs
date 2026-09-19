@@ -846,14 +846,172 @@ Every refusal here raises `ValidationError` — including the two that used to
 escape as bare `ValueError`s, a misspelled `metric:` and a metric the store is
 not serving. What is being refused in each case is a document.
 
+## Resolving against the vocabulary
+
+A `resolver:` section builds the placement cascade, and `registry.resolver(id)`
+hands back what the load built. A `kind: semantic` rung searches the index
+this same document declared — it is the one rung a document cannot configure
+from a value-level door, because it is constructed over a live index rather
+than over the vocabulary alone.
+
+<!-- worked-call-site -->
+```python
+import asyncio
+
+from dataknobs_common.entity_resolution import ResolutionResult
+from dataknobs_common.ontology import OntologyConfig
+from dataknobs_data.ontology import OntologyRegistry
+from dataknobs_data.testing import DeterministicEmbedder
+
+document = {
+    "id": "catalog",
+    "version": "1.0",
+    "entity_types": [{"id": "Product"}, {"id": "Brand"}],
+    "entities": [
+        {
+            "id": "sku-4471",
+            "type": "Product",
+            "name": "Acme Widget",
+            "description": "a widget",
+            "aliases": ["Widget"],
+        },
+        {"id": "sku-8802", "type": "Product", "name": "Bolt", "description": "a threaded fastener"},
+        {
+            "id": "acme",
+            "type": "Brand",
+            "name": "Acme Corp",
+            "description": "the maker of the widget",
+        },
+    ],
+    "index": {
+        "store": {"backend": "memory", "dimensions": 32},
+        "fields": ["name", "description"],
+    },
+    "resolver": {"rungs": [{"kind": "exact"}, {"kind": "semantic"}]},
+}
+
+
+async def main() -> ResolutionResult:
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig.from_dict(document),
+        embedder=DeterministicEmbedder(dimensions=32),
+    )
+    await registry.load()
+    try:
+        # `load()` assembles the index; filling it is yours. Nothing here
+        # re-embeds a vocabulary on every reload behind your back.
+        index = registry.index("catalog")
+        assert index is not None  # `None` where a document declares no `index:`
+        await index.build()
+
+        resolver = registry.resolver("catalog")
+        assert resolver is not None  # and `None` where it declares none
+        result = await resolver.resolve("Acme Widget", k=5)
+
+        best = result.candidates[0]
+        assert best.entity_id == "sku-4471"  # local, not "catalog:sku-4471"
+        assert best.declared  # a form the vocabulary carries
+        assert [e.signal for e in result.explain("sku-4471")] == ["exact", "semantic"]
+
+        tail = result.candidates[-1]
+        assert not tail.declared  # only the embedding proposed it
+        assert [e.signal for e in tail.evidence] == ["semantic"]
+
+        return result
+    finally:
+        await registry.close()
+
+
+result = asyncio.run(main())
+```
+
+**`registry.index(id).build()` is yours to call, and the cascade says so when
+you have not.** A load assembles the index and returns; it does not embed the
+vocabulary. The alternative costs a full re-embed on every `load(replace=True)`
+over a store whose rows survived the reload — and the obvious remedy, building
+only when the store counts zero, is worse: a vocabulary that *changed* would be
+skipped and the rung would answer from stale vectors. Which of those you want
+is a deployment's choice, so it stays the caller's line.
+
+Until you make it the rung is searching an empty store, and every candidate
+comes from the declared rungs alone — an answer that looks ordinary. So the
+rung counts rows the first time it finds nothing and logs once, naming the
+ontology and the call above. It distinguishes two states, because the remedy
+differs: **no rows at all** is the first-run case above, and **rows that are
+all some other vocabulary's** is a store two documents share, where this
+ontology's index was never built into it.
+
+The check runs **once per rung**, whatever it finds. It used to cache only the
+empty verdict, so a populated store was re-counted on every empty answer — and
+`count()` is a `SELECT COUNT(*)` on pgvector, so any threshold a deployment
+sets bought a sequential scan per query.
+
+**The candidates are in the ontology's id space.** Every row the index holds is
+a *qualified* id and a cascade's entities are local ones, so the rung localizes
+on the way out. Without that, one entity two rungs both reached comes back
+twice under two keys, `explain` finds each under a different one, and nothing
+downstream can tell that they are one entity.
+
+**A scoped resolve keeps this rung.** `within=` is rendered as a metadata
+filter, and no row an ontology index writes carries a scope axis — a store
+fails a row that is missing the key a filter names, so a rung that forwarded it
+would answer nothing under every scope, which reads as *not in the corpus*. It
+declares that it does not narrow, the cascade offers it no filter, and the
+cascade rules on what comes back.
+
+**It does send one filter of its own, and that is a different question.** Every
+read this rung makes is scoped to `dk_ontology_id` — the key the index source
+writes on every row, and the one a source's `declares()` is documented as the
+translation target for. Without it a store two documents share answers rows
+this vocabulary never declared, whose ids the ontology then refuses: a rung
+that constructs cleanly and fails on *every* hit it finds. The constructor's
+guard cannot reach that, because asking whether an index holds this ontology's
+ids is a question about membership and this is a question about exclusivity.
+
+Sharing is the easy case to reach, not the exotic one. The registry caches a
+vector store on its resolved `store:` block alone, so two documents both
+writing `{backend: memory, dimensions: 384}` get one store, and a `table:` or a
+collection two deployments name is shared by construction.
+
+### What the `resolver:` block reads
+
+One key, and **a key that is not it is refused** — for the `index:` block's
+reason, sharpened: a section with no `rungs:` is read one layer down as a
+composition of *nothing*, so `rung:` would build a cascade that matches nothing
+and report success.
+
+| Key | What it does |
+|---|---|
+| `rungs:` | The composition, in order. Each is a `{kind: ...}` mapping plus whatever that kind takes. |
+
+Absence and emptiness are different answers, and **the line is drawn at the
+section rather than at the list** — which is where this block differs from
+`index:`, whose empty `{}` means *no index*. No `resolver:` section at all is
+silence, and `registry.resolver(id)` answers `None` — compose your own. An
+explicit `rungs: []` is a composition somebody chose, and it resolves nothing,
+because the composition *is* the policy. An empty `resolver: {}` is read the
+same way as `rungs: []`: the section exists, so `registry.resolver(id)` answers
+a cascade, and that cascade holds no rungs.
+
+Every way a composition can fail to build is refused at load as a
+`ValidationError`, naming the offending entry's position:
+
+| The document writes | What is wrong |
+|---|---|
+| `rungs: [exact]` | an entry that is not a rung's configuration |
+| `rungs: [{threshold: 0.5}]` | an entry naming no `kind:` |
+| `rungs: [{kind: sematnic}]` | a kind nothing registers |
+| `rungs: [{kind: semantic}]`, no `index:` | a rung whose handle this document never declared |
+
+The first three are refused **before** anything is opened, which is the
+`index:` block's own rule applied to its sibling — a document that cannot build
+a cascade must not leave a vector store behind proving it tried, and
+`from_config_async` never returns the object whose `close()` would release one.
+They are refused by `dataknobs_common.ontology.refuse_unbuildable_rungs`, the
+same check both value-level doors run, so the three answers agree by being one
+check rather than by being kept in step.
+
 ## Not yet here
 
-`registry.resolver(id)` is declared and answers `None` for every ontology this
-version builds. Absence is a configuration answer rather than an error — an
-ontology that declared no `resolver:` section answers `None` for good, and a
-registry with no cascade builder answers the same thing from the other side.
-The `resolver:` section *is* read at load, which is where the `surface_forms:`
-refusal above fires.
-
-Write-through is not here either: `RecordEntitySource` declares no write
-capability, which is a property it states rather than a gap it hides.
+Write-through: `RecordEntitySource` declares no write capability, which is a
+property it states rather than a gap it hides.
