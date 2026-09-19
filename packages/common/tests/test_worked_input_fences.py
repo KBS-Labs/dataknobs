@@ -1,10 +1,10 @@
 """A published input fence and the suite constant beside it are one document.
 
-Three guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
+Four guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
 which a workspace test writes to disk and runs the guide's published call site
 against. For two of them ``_vocabularies.py`` holds the *same* vocabulary as a
 module constant, which this package's fixtures and most of its suites load
-instead. The third publishes a document no constant holds, so it is one copy
+instead. The other two publish documents no constant holds, so each is one copy
 rather than two -- see ``UNPAIRED`` below, which is where that is said and
 where it is checked.
 
@@ -90,6 +90,7 @@ ENTITY_RESOLUTION_GUIDE = (
     pathlib.Path(__file__).parents[1] / "docs" / "guides" / "entity-resolution.md"
 )
 ANCHORED_VIEW_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "anchored-view.md"
+HIERARCHY_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "hierarchy.md"
 
 GUIDES = sorted(ONTOLOGY_GUIDE.parent.glob("*.md"))
 
@@ -189,6 +190,18 @@ UNPAIRED: dict[pathlib.Path, str] = {
         "PACKAGE_TEST_DOC_INPUTS all the same, because the test below reads it "
         "to check this very claim -- a suite that reads a document has to be "
         "scheduled by an edit to it."
+    ),
+    HIERARCHY_GUIDE: (
+        "its only consumer is tests/test_worked_hierarchy_call_site.py, which "
+        "writes the fence to disk and runs the guide's published call site "
+        "against it -- so the fence is guarded by execution rather than by "
+        "comparison. The vocabulary is its own and is the smallest of the "
+        "four: nearest is MAMMALS_V11_DOCUMENT, which differs substantively "
+        "(it declares latin_name and akc_group, carries golden_retriever, and "
+        "so walks five nodes where this walks four), so it is a fourth "
+        "document rather than a drifted copy. It is declared in "
+        "PACKAGE_TEST_DOC_INPUTS all the same, for the reason above it: the "
+        "test below reads it to check this very claim."
     ),
 }
 
