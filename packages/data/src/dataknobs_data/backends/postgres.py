@@ -349,7 +349,20 @@ class SyncPostgresDatabase(
         pass
 
     def _detect_vector_support(self) -> None:
-        """Detect and enable vector support if pgvector is available."""
+        """Detect and enable vector support if pgvector is available.
+
+        The ``except Exception`` below is what lets a database genuinely
+        without pgvector answer ``False`` rather than raise. An unconnected one
+        used to take that same branch --- ``self.db`` is ``None``, the probe
+        raised ``AttributeError``, and the handler reported it as "no vector
+        support" for a database whose extensions it never got to read. A
+        missing extension is still ``False``; a missing connection is not, so
+        it is refused ahead of the probe, with the message every other door on
+        this class gives.
+        """
+        if not self.db:
+            raise RuntimeError("Database not connected. Call connect() first.")
+
         from .postgres_vector import check_pgvector_extension_sync, install_pgvector_extension_sync
 
         try:
@@ -381,7 +394,11 @@ class SyncPostgresDatabase(
 
         if not self.auto_create_table:
             exists_sql, params = self.table_manager.get_table_exists_sql()
-            df = self.db.query(exists_sql, params)
+            # get_table_exists_sql returns a positional tuple or a named dict
+            # depending on param_style; this manager is built with
+            # param_style="pyformat" (see __init__), which pins the dict branch
+            # -- the one PostgresDB.query binds.
+            df = self.db.query(exists_sql, cast("dict[str, Any]", params))
             exists = bool(df.iloc[0, 0]) if not df.empty else False
             if not exists:
                 raise RuntimeError(
@@ -1300,12 +1317,9 @@ class AsyncPostgresDatabase(
         present and raises ``RuntimeError`` if it isn't — for consumers
         managing DDL via Alembic / Flyway / Sqitch.
         """
-        if not self._pool:
-            raise RuntimeError("Database not connected. Call connect() first.")
-
         if not self.auto_create_table:
             exists_sql, params = self.table_manager.get_table_exists_sql()
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 exists = await conn.fetchval(exists_sql, *params)
             if not exists:
                 raise RuntimeError(
@@ -1316,14 +1330,21 @@ class AsyncPostgresDatabase(
             return
 
         create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             await conn.execute(create_table_sql)
 
     async def _detect_vector_support(self) -> None:
-        """Detect and enable vector support if pgvector is available."""
+        """Detect and enable vector support if pgvector is available.
+
+        The sync twin wraps its probe in ``except Exception``; this one does
+        not, and does not need to --- ``install_pgvector_extension`` already
+        answers ``False`` for a database that will not take the extension. An
+        unconnected database is refused by :meth:`_require_pool` below, with
+        the message every other door on this class gives.
+        """
         from .postgres_vector import check_pgvector_extension, install_pgvector_extension
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             # Check if pgvector is available
             if await check_pgvector_extension(conn):
                 self._vector_enabled = True
@@ -1355,7 +1376,7 @@ class AsyncPostgresDatabase(
         WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
         """
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             existing = await conn.fetchval(
                 check_sql, self.schema_name, self.table_name, column_name
             )
@@ -1402,6 +1423,33 @@ class AsyncPostgresDatabase(
     def _check_connection(self) -> None:
         """Check if async database is connected."""
         self._check_async_connection()
+
+    def _require_pool(self) -> asyncpg.Pool:
+        """The pool, or the same refusal every other door on this class gives.
+
+        ``_check_async_connection`` does test the pool --- but through
+        ``getattr(self, "_pool", None)``, on a mixin that never declares the
+        attribute, so nothing narrows it here. That is why all twenty-seven
+        ``self._pool.acquire()`` sites read to the type checker as a
+        dereference of ``None`` whether or not their method checked first, and
+        why the one site that genuinely did not check was indistinguishable
+        from the twenty-six that did.
+
+        For a caller that has already passed ``_check_connection()`` the raise
+        is unreachable and the return is the narrowing. For
+        ``_detect_vector_support`` --- reached from the public
+        ``enable_vector_support()``, which checks nothing --- it is the whole
+        fix: that path used to answer ``AttributeError: 'NoneType' object has
+        no attribute 'acquire'``.
+
+        This tests the pool and not ``_connected``, deliberately: ``connect()``
+        runs ``_ensure_table`` and ``_detect_vector_support`` after assigning
+        the pool and before setting the flag, so a flag test would refuse the
+        connect path itself.
+        """
+        if self._pool is None:
+            raise RuntimeError("Database not connected. Call connect() first.")
+        return self._pool
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to a database row (delegates to shared serializer).
@@ -1493,7 +1541,7 @@ class AsyncPostgresDatabase(
         """
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 await conn.execute(sql, *values)
         except asyncpg.exceptions.UniqueViolationError as e:
             raise DuplicateRecordError(id) from e
@@ -1511,7 +1559,7 @@ class AsyncPostgresDatabase(
         WHERE id = $1
         """
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             row = await conn.fetchrow(sql, id)
 
         if not row:
@@ -1533,7 +1581,7 @@ class AsyncPostgresDatabase(
         FROM {self._q_qualified}
         WHERE id = $1
         """
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             version = await conn.fetchval(sql, id)
         return None if version is None else str(version)
 
@@ -1582,7 +1630,7 @@ class AsyncPostgresDatabase(
         {where}
         """
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             result = await conn.execute(sql, *values)
 
         # Returns UPDATE n where n is rows affected
@@ -1619,9 +1667,13 @@ class AsyncPostgresDatabase(
             DELETE FROM {self._q_qualified}
             WHERE id = $1 AND xmin::text = $2
             """
-            async with self._pool.acquire() as conn:
-                result = await conn.execute(sql, id, expected_version)
-            rows_affected = int(result.split()[-1])
+            async with self._require_pool().acquire() as conn:
+                # asyncpg returns the command tag -- "DELETE n" -- as a str.
+                # Saying so once, on this method's first binding of ``result``,
+                # is what types both branches: asyncpg ships no stubs, so
+                # ``conn`` is untyped and the tag arrives as Any otherwise.
+                result: str = await conn.execute(sql, id, expected_version)
+            rows_affected = int(result.rsplit(maxsplit=1)[-1])
             if rows_affected == 0:
                 # The atomic DELETE matched nothing: either the row is gone
                 # (delete of an absent id -> False) or the token is stale
@@ -1638,7 +1690,7 @@ class AsyncPostgresDatabase(
         WHERE id = $1
         """
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             result = await conn.execute(sql, id)
 
         # Returns DELETE n where n is rows affected
@@ -1653,7 +1705,7 @@ class AsyncPostgresDatabase(
         LIMIT 1
         """
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             row = await conn.fetchrow(sql, id)
 
         return row is not None
@@ -1721,7 +1773,7 @@ class AsyncPostgresDatabase(
         SET {", ".join(update_clauses)}
         """
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             await conn.execute(sql, *values)
 
         return id
@@ -1737,7 +1789,7 @@ class AsyncPostgresDatabase(
             sql, params = self.query_builder.build_search_query(query)
 
         # Execute query with asyncpg (already uses positional parameters)
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             rows = await conn.fetch(sql, *params)
 
         # Convert to records
@@ -1758,7 +1810,7 @@ class AsyncPostgresDatabase(
         self._check_connection()
         sql = f"SELECT COUNT(*) as count FROM {self._q_qualified}"
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             row = await conn.fetchrow(sql)
 
         return row["count"] if row else 0
@@ -1772,7 +1824,7 @@ class AsyncPostgresDatabase(
         # Delete all records
         sql = f"TRUNCATE TABLE {self._q_qualified}"
 
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             await conn.execute(sql)
 
         return count
@@ -1791,11 +1843,11 @@ class AsyncPostgresDatabase(
         :meth:`_acquire`) and skip opening a nested transaction, so a multi-kind
         buffered-transaction flush commits (or rolls back) as one unit. Pinning
         the connection is why the batch methods **must** route through the
-        threaded handle: a fall-through to a second ``self._pool.acquire()`` while
+        threaded handle: a fall-through to a second ``_require_pool().acquire()`` while
         this one is held would deadlock a size-1 pool.
         """
         self._check_connection()
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             async with conn.transaction():
                 yield conn
 
@@ -1812,7 +1864,7 @@ class AsyncPostgresDatabase(
         if _tx is not None:
             yield _tx
         else:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 yield conn
 
     async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
@@ -1971,7 +2023,7 @@ class AsyncPostgresDatabase(
         query, params = query_builder.build_batch_update_query(updates)
 
         # Execute the batch update
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             rows = await conn.fetch(query, *params)
 
         # Convert returned rows to set of updated IDs
@@ -2059,7 +2111,7 @@ class AsyncPostgresDatabase(
         """
 
         # Execute query
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             rows = await conn.fetch(sql, *params)
 
         # Convert to VectorSearchResult objects
@@ -2144,7 +2196,7 @@ class AsyncPostgresDatabase(
         if not lists and index_type == "ivfflat":
             # Count vectors to determine optimal lists
             count_sql = get_vector_count_sql(self._q_schema, self._q_table, vector_field)
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 count = await conn.fetchval(count_sql) or 0
                 _, params = get_optimal_index_type(count)
                 lists = params.get("lists", 100)
@@ -2173,7 +2225,7 @@ class AsyncPostgresDatabase(
         # Create the index
         try:
             logger.debug(f"Creating vector index with SQL: {index_sql}")
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 await conn.execute(index_sql)
             return True
         except Exception as e:
@@ -2198,7 +2250,7 @@ class AsyncPostgresDatabase(
         index_name = get_vector_index_name(self.table_name, vector_field, metric)
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 await conn.execute(
                     f"DROP INDEX IF EXISTS {self._q_schema}.{quote_ident(index_name)}"
                 )
@@ -2227,7 +2279,7 @@ class AsyncPostgresDatabase(
         }
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 # Count vectors
                 count_sql = get_vector_count_sql(self._q_schema, self._q_table, vector_field)
                 stats["vector_count"] = await conn.fetchval(count_sql) or 0
@@ -2276,7 +2328,7 @@ class AsyncPostgresDatabase(
         # supports ``async for``; ``await``-ing it returns a ``Cursor``
         # object intended for the explicit-fetch API
         # (``await cur.fetch(n)``) and is NOT an async iterator.
-        async with self._pool.acquire() as conn:
+        async with self._require_pool().acquire() as conn:
             async with conn.transaction():
                 batch = []
                 async for row in conn.cursor(sql, *params):
@@ -2307,15 +2359,14 @@ class AsyncPostgresDatabase(
         self._check_connection()
         config = config or StreamConfig()
 
-        async def insert_batch(b):
-            # _write_batch returns the authoritative ids (minting a uuid where
-            # record.id is absent), so return them directly rather than reading
-            # back r.id, which is None for id-less records.
-            return await self._write_batch(b)
-
         batch_write_func, single_write_func, skip_on_duplicate = resolve_conflict_write(
             config.on_conflict,
-            insert_batch_func=insert_batch,
+            # Passed directly, as the sync twin passes it: _write_batch already
+            # returns the authoritative ids, minting a uuid where record.id is
+            # absent. The wrapper this replaces existed to return
+            # [r.id for r in b] -- None for an id-less record -- and once that
+            # was corrected it forwarded and did nothing else.
+            insert_batch_func=self._write_batch,
             single_create_func=self.create,
             upsert_func=self.upsert,
             upsert_batch_func=self.upsert_batch,
@@ -2355,7 +2406,7 @@ class AsyncPostgresDatabase(
 
         # Use COPY for efficient bulk insert
         try:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 await conn.copy_records_to_table(
                     self.table_name,
                     schema_name=self.schema_name or None,
@@ -2521,7 +2572,7 @@ class AsyncPostgresDatabase(
         params = [query_text, vector_str]
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 rows = await conn.fetch(sql, *params)
         except Exception as e:
             # If full-text search fails, fall back to client-side fusion
@@ -2665,7 +2716,7 @@ class AsyncPostgresDatabase(
         """
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self._require_pool().acquire() as conn:
                 rows = await conn.fetch(sql, query_text)
         except Exception as e:
             # Fall back to LIKE-based search if full-text search fails
