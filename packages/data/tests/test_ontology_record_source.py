@@ -36,6 +36,7 @@ from dataknobs_data.ontology import EntityProjection, OntologyRegistry, RecordEn
 from dataknobs_data.ontology.sources import READ_BATCH_SIZE
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.streaming import StreamConfig
+from dataknobs_data.testing import DeterministicEmbedder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -245,14 +246,31 @@ async def test_an_exact_rung_over_a_binding_with_no_lookup_is_rejected_at_load()
 
 
 async def test_a_binding_with_no_exact_rung_over_it_needs_no_lookup() -> None:
-    """The refusal is about the cascade, not about live sources in general."""
-    registry, ontology = await _bound(
-        await _store({"sku": "sku-1", "title": "Widget"}),
-        resolver={"rungs": [{"kind": "semantic"}]},
+    """The refusal is about the cascade, not about live sources in general.
+
+    ``semantic`` rather than the ``alias`` the parametrized case below uses,
+    because this is the one kind declaring it reads no surface forms that also
+    reaches for something the binding does not hold --- so the document
+    carries an ``index:`` and the cascade is really built. A section the
+    registry cannot construct is refused before this assertion is reached,
+    which is what makes the passing half a load rather than a section nothing
+    read.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(
+            **_document(
+                resolver={"rungs": [{"kind": "semantic"}]},
+                index={"store": {"backend": "memory", "dimensions": 8}},
+            )
+        ),
+        database=await _store({"sku": "sku-1", "title": "Widget"}),
+        embedder=DeterministicEmbedder(dimensions=8),
     )
     try:
+        ontology = await registry.load()
         assert (await ontology.entity("sku-1")) is not None
         assert Capability.SURFACE_FORM_LOOKUP not in ontology.describes[0].capabilities
+        assert registry.resolver("catalog") is not None
     finally:
         await registry.close()
 
