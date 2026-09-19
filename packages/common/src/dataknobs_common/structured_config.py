@@ -1335,7 +1335,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
       narrowly-typed override is never crashed by an undeclared injected
       collaborator. A consumed collaborator should be declared
       keyword-only with a default
-      (``async def _ainit(self, *, knowledge_base=None)``) so the
+      (``async def _ainit(self, *, knowledge_base=None, **_: Any)``) so the
       zero-injection path is safe.
     - When mixing in alongside other bases, list
       ``StructuredConfigConsumer`` **first** so its ``__init__`` is the
@@ -1909,9 +1909,14 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         override receives none (and reads ``self.components`` instead). An
         override that consumes a collaborator should declare it
         keyword-only with a default — e.g.
-        ``async def _ainit(self, *, knowledge_base=None)`` — so the
+        ``async def _ainit(self, *, knowledge_base=None, **_: Any)`` — so the
         zero-injection call is safe; an undeclared collaborator is dropped
-        from delivery rather than crashing the hook. A collaborator param
+        from delivery rather than crashing the hook. Close the parameter
+        list with ``**_: Any``. Delivery tolerates a narrowed signature,
+        but this method's *declared* one is ``**components``, so a type
+        checker reads the narrowing as an override that refuses keywords
+        the base accepts — a finding about the declaration, on a hook
+        whose narrowing is the documented way to use it. A collaborator param
         *without* a default (or a required positional) still breaks the
         zero-injection path and is rejected by
         :func:`dataknobs_common.testing.assert_structured_config_consumer`.
