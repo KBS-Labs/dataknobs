@@ -45,6 +45,11 @@ from dataknobs_data.query import Filter, Operator, Query
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+#: §1's app config is the pair in full again. The `taxonomies:` block was
+#: lifted out while the registry bound no axis -- a row whose `kind:` nothing
+#: read loaded as an assertion axis over no assertions and answered empty, so
+#: leaving it in would have made the fixture assert a vocabulary that was not
+#: there. The binder for it is what puts it back.
 ENVIRONMENTS = {
     # The deployment §1 describes, with the backend a test can actually run.
     # Which backend a logical name reaches is the whole of what `$resource`
@@ -100,7 +105,14 @@ ontology:
         - {name: sku, type: string}
         - {name: title, type: string}
         - {name: alt_names, type: string}
+        - {name: parent_sku, type: string}
         - {name: folded_form, type: string}
+  taxonomies:
+    - id: categories
+      kind: column
+      source: products
+      parent_key: parent_sku
+      relation: parent
   resolver:
     rungs:
       - kind: exact
@@ -154,6 +166,15 @@ async def _seeded() -> AsyncMemoryDatabase:
     """One store holding an entity row and the folded forms that reach it."""
     db = AsyncMemoryDatabase()
     await db.create(Record({"sku": "sku-4471", "title": "Beagle"}))
+    return db
+
+
+async def _catalogue() -> AsyncMemoryDatabase:
+    """§1's catalogue: three rows, two of them placed by the parent column."""
+    db = AsyncMemoryDatabase()
+    await db.create(Record({"sku": "dogs", "title": "Dogs"}))
+    await db.create(Record({"sku": "hounds", "title": "Hounds", "parent_sku": "dogs"}))
+    await db.create(Record({"sku": "sku-4471", "title": "Beagle", "parent_sku": "hounds"}))
     return db
 
 
@@ -330,6 +351,63 @@ async def test_the_shipped_refusal_names_a_class_that_now_loads_the_document() -
         assert entity is not None and entity.type == "Product"
     finally:
         await registry.close()
+
+
+# --------------------------------------------------------------------------
+# The live source binds, and the vocabulary answers from it
+# --------------------------------------------------------------------------
+
+
+async def test_the_live_source_binds_and_the_vocabulary_answers_from_it(
+    deployment: Path,
+) -> None:
+    """What `$resource` bought, and what the store behind it then answers.
+
+    **Two registries and one document, because the two halves cannot be
+    asserted through one door.** What `$resource` buys is *which store*: §1's
+    app config names `backend: postgres` nowhere, it names the logical name
+    `catalog`, and the environment here answers it with `memory`. That is the
+    configured door's half, and it is a claim about the binding rather than
+    about any row.
+
+    The other half needs rows, and a `memory` handle the registry builds for
+    itself cannot be seeded before it exists -- every `AsyncMemoryDatabase` is
+    its own store. So the same document goes through the injected door over a
+    store that *is* seeded, and answers `entity()` with the fields the
+    projection names: `sku` as the id, `title` as the name. Reaching into the
+    registry's handle cache to seed the first one would assert the same thing
+    through a private attribute, which is a test of the cache rather than of
+    the vocabulary.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    section = cfg.resolve_for_build("ontology")
+    configured = await OntologyRegistry.from_config_async(section)
+    injected = OntologyRegistry.from_components(
+        config=OntologyConfig(**dict(section)), database=await _catalogue()
+    )
+    await injected.load()
+    try:
+        bound = configured.get("catalog")
+        assert bound is not None
+        # The `$resource` resolved to what this environment supplies, which is
+        # not what §1's production deployment supplies -- the whole of what a
+        # logical name buys. The environment's own word for it, because the
+        # configured door reports the block it resolved rather than the class
+        # it built.
+        assert bound.describes[0].backend == "memory"
+        assert bound.describes[0].table == "products"
+
+        answering = injected.get("catalog")
+        assert answering is not None
+        entity = await answering.entity("sku-4471")
+        assert entity is not None
+        assert (entity.id, entity.name, entity.type) == ("sku-4471", "Beagle", "Product")
+        # ...and the axis block §1 carries is bound rather than loaded empty.
+        assert sorted(answering.taxonomies) == ["categories"]
+        assert type(answering.taxonomy("categories").structure).__name__ == "ColumnHierarchy"
+    finally:
+        await configured.close()
+        await injected.close()
 
 
 # --------------------------------------------------------------------------
@@ -1603,7 +1681,7 @@ async def test_a_store_that_is_its_own_handle_still_needs_only_one(tmp_path: Pat
 
     ``memory`` declares no ``table``, so one handle *is* the store and both
     kinds of row live in it -- discriminated by the form column, which is what
-    ``_entity_filters`` emits. A projection naming two tables over such a
+    ``entity_filters`` emits. A projection naming two tables over such a
     handle is the shared-store arrangement working, not the defect above, and
     it must keep loading from one injected handle.
     """

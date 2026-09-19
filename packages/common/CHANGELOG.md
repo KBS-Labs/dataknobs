@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Ontology.structure_for` and `AsyncOntology.structure_for`**, the structure
+  axis an ontology answers a name with, without building the rest of the
+  taxonomy around it. `taxonomy()` reads it, and so does anything wanting an
+  axis's *shape* rather than its content -- enumerating its nodes to compare
+  two loads of one document is the case that drove publishing it. Such a caller
+  asking through `taxonomy()` met the refusal of a
+  `materialization.content: materialized` definition, which is about a half of
+  the axis they never touch.
+
+- **`dedupe_ordered`, `nodes_of` and `parent_edges_of`** in
+  `dataknobs_common.hierarchy` --- what a backing's edges reduce to once they
+  are `(child, parent)` pairs, with `None` for a child placed under nothing.
+  Who is above whom, who is here at all, and in what order do not depend on
+  whether an edge arrived as an assertion or as two columns of a row, and two
+  backings had written the rules twice, one of the three copies
+  character-for-character identical to its twin. A backing maps its own edges
+  to pairs; the rules have one home.
+
+- **`TAXONOMY_ROW_KEYS`**, the keys a `taxonomies:` row is read for here.
+  Published because the check over them cannot be finished in this package: a
+  row declaring `kind:` names a backing another distribution binds, and reads
+  keys this one has never heard of.
+
+- **`OntologyParts.taxonomy_specs`**, the `taxonomies:` rows as written.
+  `source_specs`' counterpart, and carried for its reason: a row may name a
+  backing this package binds no implementation of, and the door that does is
+  in another distribution. Without it that door would re-read
+  `config.taxonomies` for itself, which is a second reader of one section.
+
+- **`assemble_ontology` and `assemble_async_ontology` take `structures=`** --
+  the axes the calling door bound, keyed by the name each is reached under. A
+  door holding a live axis over rows hands it over and the assembly files it;
+  where the definition declares `materialization.structure: materialized` the
+  snapshot is taken **of that axis**, rather than of an assertion read over
+  edges the document never declared.
+
 - **`DeclaredSignal.bounded_by_longest_form`**, on both twins, declaring
   whether a rung's enumeration is bounded by the vocabulary's longest declared
   form. `ScanningSignal` and `AsyncScanningSignal` set it; the default is
@@ -264,6 +300,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a per-item error handler while still absorbing an item's own failure.
 
 ### Changed
+
+- **`Ontology.structures` is what a door *bound*, not only what it copied**,
+  and `taxonomy()` hands back whatever is filed there under the name it is
+  filed under. A snapshot is one kind of bound axis; a live backing over rows
+  is another, and only the mode decides what a door must do *before* filing
+  one. The mapping used to be consulted only where the definition declared
+  `materialization.structure: materialized`, so an axis a door had bound over
+  a live backing -- which means `on_demand` -- had no way to be reached at
+  all: the accessor answered with an assertion read over an empty source and
+  the vocabulary reported an empty axis with nothing saying why.
+
+  One existing path answers differently, and it is the one the change is for:
+  a `structures` entry filed under a name whose definition declares
+  `structure: on_demand` is now honoured, where it was previously ignored in
+  favour of the live read. `structures` is a public field a caller building an
+  ontology directly may fill with any `Hierarchy`, so that is a real change for
+  them -- and it is the same act as honouring the entry when the definition
+  said `materialized`, which always happened. An axis declaring a copy and
+  supplying none is refused on the same condition and with the same message; an
+  axis with no entry at all is still built per call from the assertion source.
+
+- **A `taxonomies:` row refuses any key nothing reads**, not only `kind:`.
+  `_build_taxonomies` reads six, and every other key on such a row went on
+  loading and being discarded -- a misspelt `materialisation:` configured
+  nothing and said nothing, which is the failure the rule below is about.
+  A row declaring a `kind:` is passed over here and checked by whichever door
+  binds that backing, since the keys it reads are ones this package has never
+  heard of; the two halves meet at the `kind:` discriminator.
+
+- **A `taxonomies:` row declaring a `kind:` is refused rather than dropped.**
+  `TaxonomyDefinition` reads six keys and `kind:` is not one of them, so a row
+  spelling `kind: column` loaded with that key and every key beside it
+  discarded -- as an assertion axis over assertions the document never
+  declared, answering empty for every walk. Both module-level doors now refuse
+  it, naming the axis, the kind and `OntologyRegistry`, which is
+  `_refuse_live_sources`' sibling for the other half of a document. An axis
+  over this document's own assertions declares no `kind:` at all, which is
+  unchanged and is what the refusal says.
 
 - **`EntitySource.fetch_origins` and its async twin now answer
   `list[Record | None]`**, one slot per ref in the order they were passed,

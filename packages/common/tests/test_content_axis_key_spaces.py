@@ -91,11 +91,18 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     # typed. The predicate these two call -- which axes to copy -- was briefly
     # published for the third door and is private again now that the door
     # calls the assembly instead, so its two rows are gone from here.
+    #
+    # `structures` is the same reading for a third collaborator: it is keyed by
+    # the *name* an axis is reached under, which is a taxonomy id and so
+    # `schema`-space, and its values are axes over the keys the sources beside
+    # it speak. Both halves are the document's, so `bound` covers the row.
     ("<module>", "assemble_async_ontology", "assertions", "bound"),
     ("<module>", "assemble_async_ontology", "entities", "bound"),
+    ("<module>", "assemble_async_ontology", "structures", "bound"),
     ("<module>", "assemble_async_ontology", "->", "bound"),
     ("<module>", "assemble_ontology", "assertions", "bound"),
     ("<module>", "assemble_ontology", "entities", "bound"),
+    ("<module>", "assemble_ontology", "structures", "bound"),
     ("<module>", "assemble_ontology", "->", "bound"),
     ("<module>", "build_resolver", "config", "payload"),
     ("<module>", "build_resolver", "ontology", "bound"),
@@ -241,6 +248,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncOntology", "localize", "qualified_id", "door"),
     ("AsyncOntology", "qualify", "->", "door"),
     ("AsyncOntology", "qualify", "local_id", "key"),
+    ("AsyncOntology", "structure_for", "->", "key"),
+    ("AsyncOntology", "structure_for", "name", "schema"),
     ("AsyncOntology", "taxonomy", "->", "key"),
     ("AsyncOntology", "taxonomy", "name", "schema"),
     ("AsyncTaxonomy", "<field>", "assertions", "key"),
@@ -338,6 +347,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("Ontology", "localize", "qualified_id", "door"),
     ("Ontology", "qualify", "->", "door"),
     ("Ontology", "qualify", "local_id", "key"),
+    ("Ontology", "structure_for", "->", "key"),
+    ("Ontology", "structure_for", "name", "schema"),
     ("Ontology", "taxonomy", "->", "key"),
     ("Ontology", "taxonomy", "name", "schema"),
     ("ParentChoice", "choose", "->", "key"),
@@ -426,7 +437,7 @@ _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 318
+_ROWS = 324
 
 
 def _modules() -> Iterator[ast.Module]:

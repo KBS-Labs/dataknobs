@@ -103,6 +103,56 @@ class TestFilter:
         assert restored.operator == filter.operator
         assert restored.value == filter.value
 
+    def test_a_filter_hashes_including_the_operators_whose_value_is_a_list(self):
+        """A filter describes a condition, so it belongs in a set and a key.
+
+        ``IN``, ``NOT_IN``, ``BETWEEN`` and ``NOT_BETWEEN`` take a *list* of
+        operands, so a hash over the field tuple alone would be one that
+        raises for exactly the operators whose value is most often written as
+        a literal. The hash projects containers onto hashable shapes instead
+        of refusing them, which is what lets a frozen dataclass hold a tuple
+        of filters and still answer the hash its field tuple promises.
+        """
+        scalar = Filter("age", Operator.GT, 25)
+        listed = Filter("status", Operator.IN, ["active", "pending"])
+        ranged = Filter("age", Operator.BETWEEN, [20, 40])
+        nested = Filter("meta", Operator.EQ, {"tags": ["a", "b"]})
+        bare = Filter("form", Operator.NOT_EXISTS)
+
+        assert len({scalar, listed, ranged, nested, bare}) == 5
+
+        # Equal filters hash equal -- the invariant a hand-written __hash__
+        # owes, and the one a set relies on to deduplicate at all.
+        twin = Filter("status", Operator.IN, ["active", "pending"])
+        assert twin == listed
+        assert hash(twin) == hash(listed)
+        assert len({listed, twin}) == 1
+
+        # The invariant holds for values that are equal without being identical
+        # in type, which is the case a projection is most likely to break: it
+        # survives here because a hashable value is passed through untouched
+        # rather than rewritten into some canonical spelling of itself.
+        assert Filter("n", Operator.EQ, 1) == Filter("n", Operator.EQ, 1.0)
+        assert hash(Filter("n", Operator.EQ, 1)) == hash(Filter("n", Operator.EQ, 1.0))
+        assert hash(Filter("n", Operator.IN, [1, 2])) == hash(Filter("n", Operator.IN, [1.0, 2.0]))
+
+    def test_hashing_a_filter_does_not_rewrite_the_value_it_holds(self):
+        """The projection is for the hash; the value is what the backends read.
+
+        Normalising ``value`` at construction -- list to tuple -- would make
+        the field tuple hashable at two costs paid everywhere else:
+        ``Filter("tags", EQ, ["a"])`` would stop matching the list a JSON
+        column hands back, and ``to_dict()`` would answer in a shape its own
+        ``from_dict`` never produces.
+        """
+        listed = Filter("status", Operator.IN, ["active", "pending"])
+        hash(listed)
+
+        assert listed.value == ["active", "pending"]
+        assert isinstance(listed.value, list)
+        assert listed.to_dict()["value"] == ["active", "pending"]
+        assert listed.matches("active") is True
+
 
 class TestSortSpec:
     """Test SortSpec class."""
@@ -126,6 +176,23 @@ class TestSortSpec:
         restored = SortSpec.from_dict(dict_repr)
         assert restored.field == sort.field
         assert restored.order == sort.order
+
+    def test_a_sort_spec_hashes_for_the_reason_a_filter_does(self):
+        """The two specs in this module are one kind of thing and answer alike.
+
+        A sort spec describes part of a query exactly as a filter does, is held
+        in the same `Query`, and carries the same `to_dict`/`from_dict` pair.
+        Leaving one hashable and the other not would be a difference a caller
+        meets rather than one this module means: both its fields are already
+        hashable, so the generated hash is correct here without the projection
+        `Filter` needs.
+        """
+        ascending = SortSpec("name", SortOrder.ASC)
+        descending = SortSpec("name", SortOrder.DESC)
+
+        assert len({ascending, descending}) == 2
+        assert hash(ascending) == hash(SortSpec("name", SortOrder.ASC))
+        assert len({ascending, SortSpec("name")}) == 1, "ASC is the default, so these are one"
 
 
 class TestQuery:

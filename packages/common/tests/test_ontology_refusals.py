@@ -140,6 +140,99 @@ def test_a_live_source_kind_is_refused_naming_id_kind_and_the_loader(
 
 
 @DOORS
+def test_an_axis_kind_this_door_binds_no_backing_for_is_refused(door: Door) -> None:
+    """The source refusal's sibling, for the other half of a document.
+
+    `TaxonomyDefinition` reads six keys and `kind:` is not one of them, so a
+    row asking for a backing this door does not build used to load with all
+    three of its keys discarded -- as an assertion axis over assertions the
+    document never declared, which answers empty for every walk. A dropped key
+    and an unsupported key have to look different.
+
+    The message carries the same three things the source refusal does: which
+    axis, what kind it declared, and what to use instead.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "taxonomies": [
+                    {
+                        "id": "categories",
+                        "kind": "column",
+                        "source": "products",
+                        "parent_key": "parent_sku",
+                        "relation": "parent",
+                    }
+                ],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'categories'" in message
+    assert "'column'" in message
+    assert "OntologyRegistry" in message
+    assert excinfo.value.context == {"taxonomy": "categories", "kind": "column"}
+
+
+@DOORS
+def test_an_axis_declaring_no_kind_is_the_one_this_door_builds(door: Door) -> None:
+    """The negative half: silence is how a row asks for the assertion read.
+
+    Without it the refusal above is satisfied by a door that refuses every
+    `taxonomies:` row there is, which would be a worse failure than the one it
+    replaced.
+    """
+    door(
+        {
+            "id": "x",
+            "entity_types": [{"id": "Breed"}],
+            "entities": [
+                {"id": "beagle", "type": "Breed", "name": "Beagle"},
+                {"id": "dog", "type": "Breed", "name": "Dog"},
+            ],
+            "assertions": [{"subject": "beagle", "relation": "isa", "object": "dog"}],
+            "taxonomies": [{"id": "kinds", "relation": "isa"}],
+        }
+    )
+
+
+@DOORS
+def test_a_taxonomy_row_refuses_a_key_this_loader_does_not_read(door: Door) -> None:
+    """The rule `kind:` is refused under, applied to the rest of the row.
+
+    `_build_taxonomies` reads six keys. Every other key on a `taxonomies:` row
+    loaded and was discarded -- which from the author's chair is
+    indistinguishable from being honoured, and is the exact failure the
+    `kind:` refusal was added to end. A misspelt `materialisation:` configured
+    nothing and said nothing.
+
+    **A row declaring a `kind:` is not this door's to check**, and is refused
+    before reaching here anyway: the keys such a row carries belong to
+    whichever door binds that backing, and a closed set here would refuse the
+    `source:` and `parent_key:` a registry reads. The two halves of the check
+    meet at the `kind:` discriminator.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [{"id": "Breed"}],
+                "entities": [{"id": "dog", "type": "Breed", "name": "Dog"}],
+                "taxonomies": [
+                    {"id": "kinds", "relation": "isa", "materialisation": {"structure": "copied"}}
+                ],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'kinds'" in message
+    assert "materialisation" in message
+    assert "materialization" in message, "the message lists the keys this door does read"
+    assert excinfo.value.context["taxonomy"] == "kinds"
+
+
+@DOORS
 def test_a_duplicate_source_id_is_refused(door: Door) -> None:
     """Source ids are the closed set a qualified id is parsed against."""
     with pytest.raises(ValidationError) as excinfo:

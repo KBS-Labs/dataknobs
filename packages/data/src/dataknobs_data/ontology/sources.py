@@ -388,6 +388,46 @@ def validate_against_schema(
         ValidationError: When the binding declares no schema, or names a column
             the declared schema does not carry
     """
+    refuse_undeclared_columns(
+        (*projection.entity_columns(), *projection.form_columns()),
+        schema,
+        binding=binding,
+        named_by="the projection",
+    )
+
+
+def refuse_undeclared_columns(
+    columns: Sequence[str],
+    schema: DatabaseSchema | None,
+    *,
+    binding: str,
+    named_by: str,
+) -> None:
+    """The check itself, for every reader of a binding's declared columns.
+
+    :func:`validate_against_schema` is the projection's caller and the axis
+    dispatch in
+    :mod:`~dataknobs_data.ontology.registry` is the other: a ``kind: column``
+    taxonomy names a ``parent_key:``, which is one more column over the same
+    declaration, and a second checker for it would be two copies of one rule a
+    function apart. What each caller supplies is its own columns and its own
+    name for them, because the refusal is only useful if it says which line to
+    go and change.
+
+    **The root segment only**, for the reason above: a dotted path names a
+    value inside a JSON column and ``FieldSchema`` is flat.
+
+    Args:
+        columns: The columns this caller names, dotted paths included
+        schema: The schema the binding declared, or None
+        binding: The source id, so a refusal names what to go and fix
+        named_by: What named these columns, as the refusal should say it --
+            ``"the projection"``, ``"taxonomy 'categories'"``
+
+    Raises:
+        ValidationError: When the binding declares no schema, or one of these
+            columns is not in the declaration
+    """
     if schema is None or not schema.fields:
         raise ValidationError(
             f"binding {binding!r} declares no `schema:`. A by-reference binding "
@@ -397,11 +437,11 @@ def validate_against_schema(
             context={"source_id": binding},
         )
     declared = set(schema.fields)
-    for column in (*projection.entity_columns(), *projection.form_columns()):
+    for column in columns:
         root = column.split(".", 1)[0]
         if root not in declared:
             raise ValidationError(
-                f"binding {binding!r}: the projection names column {column!r}, "
+                f"binding {binding!r}: {named_by} names column {column!r}, "
                 f"which this binding's `schema:` does not declare. Declared: "
                 f"{sorted(declared)}",
                 context={"source_id": binding, "column": column},
@@ -438,7 +478,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
             Defaults to ``database``, which is what an injected handle means:
             one store holding rows of both kinds. That arrangement is
             supported rather than merely tolerated, and
-            :meth:`_entity_filters` is what makes the entity side of it
+            :meth:`entity_filters` is what makes the entity side of it
             answer with entity rows
     """
 
@@ -483,8 +523,18 @@ class RecordEntitySource(DynamicCapabilityMixin):
         """The map this source projects with -- configuration, and read-only."""
         return self._projection
 
-    def _entity_filters(self) -> list[Filter]:
+    def entity_filters(self) -> list[Filter]:
         """What narrows a read to the **entity** table, on this pair of handles.
+
+        **Published, because this source is not the only reader of these rows.**
+        A ``kind: column`` taxonomy over the same table reads the same store
+        through the same handle, and a discriminator that lives inside one
+        reader is one the other has to re-derive -- which it did, from a
+        different invariant (*a form row carries no parent column*) that
+        nothing declares and nothing enforces. A denormalised side table then
+        put edges into the axis over rows this source refuses to project. The
+        narrowing is a property of the **binding**, so both readers take it
+        from here.
 
         Empty where the two tables have handles of their own: the three SQL
         backends declare a ``table`` on their config, so the registry opens
@@ -517,7 +567,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
             Query(
                 filters=[
                     Filter(self._projection.id, Operator.EQ, entity_id),
-                    *self._entity_filters(),
+                    *self.entity_filters(),
                 ]
             ).limit(1)
         )
@@ -549,7 +599,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
             Query(
                 filters=[
                     Filter(self._projection.id, Operator.EQ, local_id),
-                    *self._entity_filters(),
+                    *self.entity_filters(),
                 ]
             ).limit(1)
         )
@@ -624,7 +674,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
                     Query(
                         filters=[
                             Filter(self._projection.id, Operator.IN, list(chunk)),
-                            *self._entity_filters(),
+                            *self.entity_filters(),
                         ]
                     )
                 )
@@ -750,7 +800,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
         used to take ``search``, because ``stream_read`` and ``search`` are
         separate implementations on every backend and they did not agree:
         Postgres's ``stream_read`` open-coded its WHERE clause and *silently
-        dropped* non-EQ filters, which is exactly what :meth:`_entity_filters`
+        dropped* non-EQ filters, which is exactly what :meth:`entity_filters`
         emits -- ``NOT_EXISTS`` on the form column. Streaming the narrowed
         branch would have answered with form rows projected as entities, on
         one backend, with no error.
@@ -777,7 +827,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
         """
         if type_id != self._projection.const_type:
             return frozenset()
-        narrowing = self._entity_filters()
+        narrowing = self.entity_filters()
         query = Query(filters=narrowing) if narrowing else None
         return frozenset(
             {
@@ -854,5 +904,6 @@ __all__ = [
     "EntityProjection",
     "RecordEntitySource",
     "SurfaceFormLookup",
+    "refuse_undeclared_columns",
     "validate_against_schema",
 ]

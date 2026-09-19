@@ -31,6 +31,11 @@ database connections has to be released on the other one too. Calling
 ``close()`` yourself stays supported -- it is what the block does.
 """
 
+from dataknobs_data.ontology.hierarchy import (
+    COLUMN_AXIS_KIND,
+    ColumnAxisBinding,
+    ColumnHierarchy,
+)
 from dataknobs_data.ontology.registry import OntologyRegistry
 from dataknobs_data.ontology.sources import (
     RECORD_SOURCE_KIND,
@@ -40,7 +45,10 @@ from dataknobs_data.ontology.sources import (
 )
 
 __all__ = [
+    "COLUMN_AXIS_KIND",
     "RECORD_SOURCE_KIND",
+    "ColumnAxisBinding",
+    "ColumnHierarchy",
     "EntityProjection",
     "OntologyRegistry",
     "RecordEntitySource",

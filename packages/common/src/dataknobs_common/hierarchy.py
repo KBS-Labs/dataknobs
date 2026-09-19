@@ -50,7 +50,7 @@ at all can bind ``K`` to its own node type and share the same traversals.
 from __future__ import annotations
 
 import sys
-from collections.abc import Generator, Hashable, Mapping, Sequence
+from collections.abc import Generator, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -126,11 +126,14 @@ __all__ = [
     "async_paths_to_root",
     "children_at_depth",
     "deepest_common_ancestor",
+    "dedupe_ordered",
     "descendants",
     "descendants_to_depth",
     "drive",
     "flatten",
     "leaves",
+    "nodes_of",
+    "parent_edges_of",
     "paths_to_root",
 ]
 
@@ -1273,6 +1276,99 @@ class AsyncHierarchyView(Generic[K]):
     def _wrap(self, node_ids: Sequence[K]) -> tuple[AsyncHierarchyView[K], ...]:
         """One cursor per key, over this same structure."""
         return tuple(AsyncHierarchyView(self.structure, node_id) for node_id in node_ids)
+
+
+# --------------------------------------------------------------------------
+# Edge lists -- what a backing reduces its own edges to
+# --------------------------------------------------------------------------
+#
+# A concrete hierarchy holds edges in whatever shape its backing gives it: an
+# assertion between two entities, two columns of one row, a line of a file.
+# What it then has to answer -- who is above whom, who is here at all, in what
+# order -- does not depend on that shape, and the three functions below are
+# those answers over the one shape every backing can reduce to.
+#
+# Here rather than beside either concrete, because two of them arrived as
+# copies. ``dataknobs_common.ontology.hierarchy`` wrote them over assertions
+# and ``dataknobs_data.ontology.hierarchy`` wrote them again over ``(child,
+# parent)`` pairs, one of the three character-for-character identical to its
+# twin; a third backing would have written them a third time. A backing maps
+# its own edges to pairs -- one comprehension -- and the rules themselves have
+# one home.
+
+
+def dedupe_ordered(node_ids: Iterable[K]) -> tuple[K, ...]:
+    """Deduplicate in first-appearance order.
+
+    A DAG node is reachable by several paths, so a repeated id changes no
+    membership answer and does change a count someone is reporting.
+
+    First-appearance rather than sorted, because the order a backing reads in
+    is the only order it has to offer and sorting would make :meth:`roots`
+    report an order nothing chose -- a hand-edited file's declaration order, a
+    table's read order.
+
+    Args:
+        node_ids: The ids, in the order the backing produced them
+
+    Returns:
+        Those ids, each once, in first-appearance order
+    """
+    return tuple(dict.fromkeys(node_ids))
+
+
+def parent_edges_of(edges: Iterable[tuple[K, K | None]]) -> dict[K, tuple[K, ...]]:
+    """Every node these edges mention, and what each is directly under.
+
+    The **extent** :meth:`Hierarchy.roots` is not, which is what lets a
+    snapshot of an axis be the whole of it rather than the part a descent from
+    the roots reaches: a cyclic component with nothing above it has no root to
+    be found from, and nothing constrains a backing against carrying one.
+
+    Every node gets an entry, including one that only ever appears as a
+    parent; its entry is empty, which is the same thing :meth:`Hierarchy.roots`
+    reports about it. An edge whose parent is ``None`` contributes a node and
+    no edge -- an assertion to a literal, a row whose parent column is null --
+    which is a value rather than a place in a structure.
+
+    Args:
+        edges: ``(child, parent)`` pairs, the parent ``None`` where the edge
+            places its child under nothing
+
+    Returns:
+        One entry per node mentioned, in first-appearance order, each holding
+        that node's direct parents deduplicated in the order they were read
+    """
+    above: dict[K, list[K]] = {}
+    for child, parent in edges:
+        above.setdefault(child, [])
+        if parent is None:
+            continue
+        above.setdefault(parent, [])
+        if parent not in above[child]:
+            above[child].append(parent)
+    return {node_id: tuple(parents) for node_id, parents in above.items()}
+
+
+def nodes_of(edges: Iterable[tuple[K, K | None]]) -> tuple[K, ...]:
+    """Every node these edges mention, deduplicated in first-appearance order.
+
+    :func:`parent_edges_of`'s membership half on its own, for the caller that
+    wants the nodes rather than what is above them --
+    :meth:`Hierarchy.roots` subtracts the placed ones from this.
+
+    Args:
+        edges: ``(child, parent)`` pairs, as :func:`parent_edges_of` takes them
+
+    Returns:
+        Each node once, in the order it was first read
+    """
+    nodes: list[K] = []
+    for child, parent in edges:
+        nodes.append(child)
+        if parent is not None:
+            nodes.append(parent)
+    return dedupe_ordered(nodes)
 
 
 # --------------------------------------------------------------------------
