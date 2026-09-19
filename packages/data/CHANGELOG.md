@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`enable_vector_support()` on both Postgres backends says the database is
+  not connected, instead of answering as though it had looked.** Every other
+  public method on these classes refuses an unconnected database with
+  `RuntimeError: Database not connected. Call connect() first.` This one
+  reached `_detect_vector_support()` without a check on either side, and each
+  twin then failed in its own way. The async twin dereferenced the absent pool
+  — `AttributeError: 'NoneType' object has no attribute 'acquire'`, naming
+  neither the class nor the missing `connect()`. The sync twin caught that same
+  dereference in the `except Exception` that exists so a database genuinely
+  lacking pgvector can answer `False`, logged it as "Could not install pgvector
+  extension", and returned `False` — reporting no vector support for a database
+  whose extensions it never read. A missing extension is still `False`; a
+  missing connection now raises on both.
+
+  Every acquire in `AsyncPostgresDatabase` reaches the pool through one
+  accessor, `_require_pool()`, which is what makes that invariant checkable:
+  `_check_async_connection` tests the pool through `getattr(self, "_pool",
+  None)` on a mixin that never declares it, so no narrowing reached the use
+  sites and a site that checked was indistinguishable from one that did not.
+
 - **`stream_read` on both Postgres backends accepts the nested field names
   `search` accepts.** Each twin pre-flighted its filter fields against
   `validate_field_name`, which reads a field as one SQL identifier and so
