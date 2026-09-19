@@ -1000,3 +1000,33 @@ async def test_a_narrowed_axis_answers_the_hash_its_field_tuple_promises() -> No
     assert twin == discriminated
     assert hash(twin) == hash(discriminated)
     assert len({plain, discriminated, listed, twin}) == 3
+
+
+async def test_an_attribute_on_the_entity_type_does_not_refuse_the_axis() -> None:
+    """A column axis's `relation:` is a label, and an attribute is not what decides.
+
+    The reference checks resolve a `relation:` against `relation_types:` union
+    the declared attribute names. Measured over that union, the guard that
+    exempts a document declaring no relation vocabulary turns on whether *any*
+    entity type declares *any* attribute -- so this document, which the
+    registry guide publishes as valid, is refused the moment `Product` grows
+    one. Every fixture in this file declares `entity_types: [{"id":
+    "Product"}]` with no attributes, so the suite sat one key away from red
+    while asserting the axis worked.
+
+    `sku` is the column the projection already reads, so declaring it as an
+    attribute is the ordinary next edit rather than a contrivance.
+    """
+    document = _document(
+        entity_types=[{"id": "Product", "attributes": [{"name": "sku", "type": "string"}]}]
+    )
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=await _store()
+    )
+    try:
+        onto = await registry.load()
+        axis = onto.taxonomy("categories")
+
+        assert [view.node for view in await axis.at("leaf").ancestors()] == ["mid", "root"]
+    finally:
+        await registry.close()

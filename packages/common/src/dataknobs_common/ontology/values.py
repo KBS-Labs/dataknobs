@@ -494,6 +494,20 @@ class Ontology(Generic[K]):
         :func:`_structure_for`. Refuses, naming the axis, a definition whose
         ``materialization`` asks for something this ontology cannot supply --
         see :func:`_refuse_a_materialized_content_axis`.
+
+        Raises:
+            NotFoundError: Naming an axis this ontology does not declare. The
+                message lists the ones it does, because a caller that got the
+                name wrong is usually one edit away from the right one.
+            ValidationError: On a declared axis whose ``materialization`` asks
+                for a copy of every entity on it, which needs a store this
+                ontology was not given -- see
+                :func:`_refuse_a_materialized_content_axis`; and on one
+                declaring ``materialization.structure: materialized`` that
+                this ontology carries no copy of, which escapes through
+                :meth:`structure_for` -- see :func:`_structure_for`. A loader
+                door files a copy for every definition that asks for one, so
+                the second is reached by building the vocabulary directly.
         """
         return Taxonomy(
             definition=_definition(self.taxonomies, name),
@@ -704,6 +718,20 @@ class AsyncOntology(Generic[K]):
         rather than here, whether binding it means opening a handle or taking
         an asynchronous snapshot. Both are coroutines, and there is nowhere in
         this signature to await one.
+
+        Restating rather than pointing, so the clauses are restated too: the
+        unit is the contract, not the flavour.
+
+        Raises:
+            NotFoundError: Naming an axis this ontology does not declare.
+            ValidationError: On a declared axis whose ``materialization`` asks
+                for a copy of every entity on it, which needs a store this
+                ontology was not given; and on one declaring
+                ``materialization.structure: materialized`` that this ontology
+                carries no copy of, which escapes through
+                :meth:`structure_for`. A loader door files a copy for every
+                definition that asks for one, so the second is reached by
+                building the vocabulary directly.
         """
         return AsyncTaxonomy(
             definition=_definition(self.taxonomies, name),

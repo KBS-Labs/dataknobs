@@ -165,6 +165,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A record binding's `entity_projection.type: {const: ...}` must name an
+  entity type the document declares.** It is the ninth member of the
+  reference family `build_ontology` refuses eight of, and the one that cannot
+  live beside them: `entity_projection:` is this package's schema and
+  `dataknobs_common` has no notion of it, so the rule travels and the reading
+  stays here. It is also the member with the worst consequence -- an
+  `entities:` row whose `type:` names nothing mistypes one entity, while a
+  projection's `const:` types **every row of the table**, so an index
+  enumerating the vocabulary by type silently finds none of them. The refusal
+  names the binding, the type it declared, and what the document does
+  declare. The guard the other eight carry applies here too: an empty
+  `entity_types:` is no schema rather than an empty one, and a document
+  declaring `imports:` is exempt as it is from the other eight, so a document
+  binding a live table while leaving its type vocabulary elsewhere is
+  unaffected.
+
 - **A vector store now accepts every distance-metric spelling the enum
   publishes.** `VectorStore._setup` parsed a configured metric with
   `DistanceMetric(...)`, which knows member values only, so six of the twelve

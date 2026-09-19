@@ -17,7 +17,7 @@ the only place a shared implementation can actually live.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Container, Mapping
+from collections.abc import Collection, Container, Mapping, Sequence
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -131,8 +131,20 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
             across two of them; on two tree nodes minting one id; on an unknown
             inference mode or polarity; on a key only a later version reads --
             ``condition:``, ``cardinality:``, ``constraints:`` -- which is
-            refused rather than dropped; or on an ``isa`` naming a type the
-            document does not declare. Every message names the offending value
+            refused rather than dropped; on a scalar ``domain:`` or ``range:``,
+            which is one type name rather than a list of one; or on a
+            reference into a section this document declares -- ``isa``, an
+            attribute's ``entity_type``, a relation type's ``domain``,
+            ``range`` or ``inverse_of``, an entity's ``type``, an assertion's
+            or a taxonomy's ``relation`` -- that names nothing the section
+            holds. Every message names the offending value.
+
+            A ``relation:`` resolves against ``relation_types:`` union the
+            declared attribute names, and is checked only where
+            ``relation_types:`` is non-empty; a ``kind:``-bearing taxonomy row
+            declares a label rather than a reference and is exempt. See
+            :func:`_declared_relations` and
+            :func:`_refuse_undeclared_taxonomy_relations`
     """
     _refuse_reserved_id(config.id)
     _refuse_colon("ontology id", config.id)
@@ -145,9 +157,38 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
     declared = _build_entities(config.entities)
 
     _refuse_duplicates(entity_types, relation_types, declared)
-    _refuse_undeclared_isa(config.entity_types, entity_types)
 
+    # Six of the eight references into sections this document owns in full,
+    # over the raw rows and against the built maps. The two `relation:` ones
+    # follow their sections' builders, below. Before the mint, deliberately:
+    # what `_mint_nested` produces takes BOTH its `type` and its assertions'
+    # `relation` from `sources:` -- the node type it derives and
+    # `DEFAULT_NESTED_RELATION` -- rather than from a row an author wrote.
+    # That is a different question and not yet a ruled one. Both are named
+    # here so the next reader does not have to re-derive that the second was
+    # considered; `test_a_minted_type_is_not_a_reference_the_loader_checks`
+    # pins the ordering this comment describes.
+    #
+    # `imports:` switches all eight off, because it is the document saying
+    # the premise they rest on does not hold -- see `_owns_its_sections`.
+    if _owns_its_sections(config):
+        _refuse_undeclared_isa(config.entity_types, entity_types)
+        _refuse_undeclared_attribute_types(config.entity_types, entity_types)
+        _refuse_undeclared_relation_endpoints(config.relation_types, entity_types, relation_types)
+        _refuse_undeclared_entity_types(config.entities, entity_types)
+
+    # After the required reads of both sections, as in `relation_types`: a row
+    # has to be well formed before it is worth telling its author which of its
+    # keys resolves. Run first, these two reported `assertion on subject
+    # 'None'` for a row that had simply omitted `subject:`, and carried that
+    # `'None'` into the context as the row's id.
     assertions = list(_build_assertions(config.assertions))
+    taxonomies = _build_taxonomies(config.taxonomies)
+
+    if _owns_its_sections(config):
+        relations = _declared_relations(entity_types, relation_types)
+        _refuse_undeclared_assertion_relations(config.assertions, relations)
+        _refuse_undeclared_taxonomy_relations(config.taxonomies, relations)
 
     # Declared wins wherever it exists. Minting into a file that already names
     # its entities would give one node two ids, and every authored assertion
@@ -166,7 +207,7 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         version=config.version,
         entity_types=entity_types,
         relation_types=relation_types,
-        taxonomies=_build_taxonomies(config.taxonomies),
+        taxonomies=taxonomies,
         imports=tuple(config.imports),
         declared_entities=declared,
         declared_assertions=tuple(assertions),
@@ -603,18 +644,330 @@ def _refuse_duplicates(
             seen[declared_id] = section
 
 
+def _owns_its_sections(config: OntologyConfig) -> bool:
+    """Whether this document declares the sections a reference points into.
+
+    Every one of the eight reference checks reads *a reference into a section
+    this document declares in full*, and there are two ways a document says
+    that premise does not hold. The first is a section left empty, which
+    :func:`_refuse_an_unresolved_reference` reads per reference. The second is
+    ``imports:``, which is global to the document and so is read here.
+
+    **An import is carried and never followed.** Resolving across one needs a
+    second vocabulary in scope, which a door loading one file does not have
+    -- so a name this document does not declare may be one the import
+    declares, and this loader cannot tell that from a typo. Refusing would
+    refuse the composition ``imports:`` exists for.
+
+    Without this, the checks are shape-dependent in the way the union was:
+    an importing document that declares **no** local ``entity_types:`` is
+    exempt by the per-section guard and one that declares a single local type
+    is refused for every entity the import types -- which is the local half
+    deciding a question about the imported half. The cost is that a typo in
+    an importing document is not caught here; the component that holds both
+    vocabularies is where that check can be right.
+    """
+    return not config.imports
+
+
+def _refuse_an_unresolved_reference(
+    value: Any,
+    declared: Collection[str],
+    *,
+    referrer: str,
+    field: str,
+    noun: str,
+    context: Mapping[str, Any],
+) -> None:
+    """Refuse a reference into a section this document owns in full.
+
+    Layer 1 asks whether a name resolves; layer 2 asks whether a statement is
+    true of the graph. This is layer 1, and it is the whole of it. A
+    ``subject:`` or an ``object:`` is layer 2 -- a claim a live source may
+    complete -- and is not checked here or anywhere.
+
+    ``declared`` empty is NO schema rather than an empty one, so the check does
+    not fire -- the regime :func:`build_ontology` already names in a comment of
+    its own, and the one :func:`_refuse_undeclared_tree_nodes` already fires
+    inside. It matters for five of the eight references and cannot fire for the
+    other three, which are written in the very section they point at.
+
+    **Seven callers carry the uniform context ``{section, id, field, value}``
+    and one does not.** ``isa`` predates this function and was converted into
+    a caller of it on the claim that the conversion could not change a
+    verdict; its context is the two keys that refusal already carried,
+    ``{entity_type, isa}``, and changing them to match the other seven would
+    be exactly the verdict change the conversion promised not to make. The
+    price is that a programmatic consumer cannot read all eight the same way.
+    Unifying them is a deliberate break of a published context, not a tidy-up
+    -- and ``test_an_isa_naming_an_undeclared_type_is_refused`` pins the
+    current pair so that it fails rather than drifts.
+
+    Args:
+        value: The name the referring row declared
+        declared: The ids the target section declares
+        referrer: The row, named the way its section names one
+        field: The key the reference was declared under
+        noun: What the target section holds, singular
+        context: What the refusal carries, in its section's own vocabulary
+    """
+    if not declared:
+        return
+    if str(value) in declared:
+        return
+    raise ValidationError(
+        f"{referrer} declares `{field}: {value!r}`, which no {noun} in this "
+        f"document declares. Declared: {sorted(declared)}",
+        context=dict(context),
+    )
+
+
 def _refuse_undeclared_isa(
     rows: list[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
 ) -> None:
+    """A lattice edge has to name a type the same document declares.
+
+    The first of the eight, and the one that predates the rule: it is a caller
+    of the shared refusal rather than a second spelling of a check it already
+    performs. The guard cannot suppress it -- a row declaring ``isa:`` is
+    itself in ``entity_types:``, so the target section is non-empty by the
+    existence of the referrer.
+    """
     for row in rows:
         parent = row.get("isa")
-        if parent is not None and str(parent) not in entity_types:
-            raise ValidationError(
-                f"entity type {str(row.get('id'))!r} declares `isa: {parent!r}`, "
-                f"which no entity type in this document declares. Declared: "
-                f"{sorted(entity_types)}",
-                context={"entity_type": row.get("id"), "isa": parent},
+        if parent is None:
+            continue
+        _refuse_an_unresolved_reference(
+            parent,
+            entity_types,
+            referrer=f"entity type {str(row.get('id'))!r}",
+            field="isa",
+            noun="entity type",
+            context={"entity_type": row.get("id"), "isa": parent},
+        )
+
+
+def _refuse_undeclared_attribute_types(
+    rows: list[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
+) -> None:
+    """An ``entity:``-typed attribute names the type its values point at.
+
+    Written inside ``entity_types:`` and pointing at it, so the guard is inert
+    here for the same reason it is inert for ``isa``.
+    """
+    for row in rows:
+        type_id = str(row.get("id"))
+        for attribute in row.get("attributes", []):
+            target = attribute.get("entity_type")
+            if target is None:
+                continue
+            name = str(attribute.get("name"))
+            _refuse_an_unresolved_reference(
+                target,
+                entity_types,
+                referrer=f"attribute {name!r} of entity type {type_id!r}",
+                field="entity_type",
+                noun="entity type",
+                context={
+                    "section": "entity_types.attributes",
+                    "id": name,
+                    "field": "entity_type",
+                    "value": str(target),
+                },
             )
+
+
+def _refuse_undeclared_relation_endpoints(
+    rows: list[Mapping[str, Any]],
+    entity_types: Mapping[str, EntityType],
+    relation_types: Mapping[str, RelationType],
+) -> None:
+    """The three references a ``relation_types:`` row carries.
+
+    ``domain`` and ``range`` point at ``entity_types:`` -- a different section,
+    so the guard is load-bearing for both: a document that declares relation
+    types and leaves its type vocabulary to a live source constrains nothing it
+    can check. ``inverse_of`` points at the section the row is written in, so
+    for that one it is inert.
+    """
+    for row in rows:
+        relation_id = str(row.get("id"))
+        referrer = f"relation type {relation_id!r}"
+        for field in ("domain", "range"):
+            for target in row.get(field, ()):
+                _refuse_an_unresolved_reference(
+                    target,
+                    entity_types,
+                    referrer=referrer,
+                    field=field,
+                    noun="entity type",
+                    context={
+                        "section": "relation_types",
+                        "id": relation_id,
+                        "field": field,
+                        "value": str(target),
+                    },
+                )
+        inverse = row.get("inverse_of")
+        if inverse is None:
+            continue
+        _refuse_an_unresolved_reference(
+            inverse,
+            relation_types,
+            referrer=referrer,
+            field="inverse_of",
+            noun="relation type",
+            context={
+                "section": "relation_types",
+                "id": relation_id,
+                "field": "inverse_of",
+                "value": str(inverse),
+            },
+        )
+
+
+def _refuse_undeclared_entity_types(
+    rows: list[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
+) -> None:
+    """An ``entities:`` row names the type it is an instance of.
+
+    The guard is load-bearing: a document may declare instances and leave the
+    type vocabulary to an ontology it imports, and such a document is not
+    making a claim this loader can check.
+    """
+    for row in rows:
+        entity_id = str(row.get("id"))
+        declared_type = row.get("type")
+        if declared_type is None:
+            continue
+        _refuse_an_unresolved_reference(
+            declared_type,
+            entity_types,
+            referrer=f"entity {entity_id!r}",
+            field="type",
+            noun="entity type",
+            context={
+                "section": "entities",
+                "id": entity_id,
+                "field": "type",
+                "value": str(declared_type),
+            },
+        )
+
+
+#: What both ``relation:`` refusals call the set they resolve against.
+#:
+#: One spelling, because the two refusals are about one set: a drift here
+#: would have the assertion door and the axis door describe the same union
+#: differently in their messages.
+_RELATION_NOUN = "relation type or declared attribute"
+
+
+def _declared_relations(
+    entity_types: Mapping[str, EntityType], relation_types: Mapping[str, RelationType]
+) -> set[str]:
+    """What a ``relation:`` may name: a relation type, or a declared attribute.
+
+    An attribute-valued assertion names an attribute, and an attribute is
+    declared *inside* an ``entity_types:`` row -- the section label
+    :func:`_build_attribute` reads under, ``entity_types.attributes``. There is
+    no top-level ``attributes:`` section, so a reading that looked for one
+    would compute an empty half and refuse every attribute-valued assertion in
+    the vocabulary.
+
+    **``relation_types:`` alone decides whether the reference is checked, and
+    the union only decides what resolves.** This is the one reference of the
+    eight whose target is a union, so it is the one where *the section is
+    empty* and *this document declares no vocabulary here* are not the same
+    sentence: a union is non-empty the moment any entity type declares any
+    attribute. Measured over the union, an attribute with nothing to do with
+    the reference decides the guard -- ``relation_types:`` becomes
+    conditionally mandatory, the same typo is caught in one document and
+    missed in the next, and a ``kind: column`` axis in a vocabulary that
+    declares one attribute is refused for a ``relation:`` its own guide
+    publishes as a label. Returning the empty set here restores the rule the
+    other seven follow: one declared section decides, and
+    :func:`_refuse_an_unresolved_reference`'s guard reads it.
+    """
+    if not relation_types:
+        return set()
+    return set(relation_types) | {
+        attribute.name for declared in entity_types.values() for attribute in declared.attributes
+    }
+
+
+def _refuse_undeclared_assertion_relations(
+    rows: list[Mapping[str, Any]], relations: Collection[str]
+) -> None:
+    """An assertion's ``relation:`` names an edge this document declares.
+
+    Runs after :func:`_build_assertions`, so every row reaching it carries
+    both keys and ``subject`` is the string that section's own refusal would
+    have named.
+    """
+    for row in rows:
+        relation = row.get("relation")
+        if relation is None:
+            continue
+        subject = str(row.get("subject"))
+        _refuse_an_unresolved_reference(
+            relation,
+            relations,
+            referrer=f"assertion on subject {subject!r}",
+            field="relation",
+            noun=_RELATION_NOUN,
+            context={
+                "section": "assertions",
+                "id": subject,
+                "field": "relation",
+                "value": str(relation),
+            },
+        )
+
+
+def _refuse_undeclared_taxonomy_relations(
+    rows: list[Mapping[str, Any]], relations: Collection[str]
+) -> None:
+    """An axis walks one relation, and it has to be one the document declares.
+
+    The failure this refuses is silence rather than an error: an axis over a
+    relation nothing declares answers empty for every walk, which reads as a
+    vocabulary with nothing in it rather than as a misspelt key.
+
+    **A ``kind:``-bearing row is exempt, because its ``relation:`` is a label
+    rather than a reference.** That failure is the assertion axis's: the walk
+    reads the assertions carrying this relation, so naming one nothing
+    declares walks an empty graph. A column axis reads two columns and
+    constructs no ``Assertion`` at all, so its ``relation:`` names what its
+    edges *mean* -- which is what the registry guide publishes it as, and
+    checking it against ``relation_types:`` would refuse a document that guide
+    calls valid. Both module doors refuse a ``kind:`` outright
+    (:func:`_refuse_unbindable_axes`), so the exemption is reachable only from
+    the registry, which is the door such a row is written for.
+
+    Runs after :func:`_build_taxonomies`, so every row reaching it carries
+    both ``id`` and ``relation``.
+    """
+    for row in rows:
+        if "kind" in row:
+            continue
+        relation = row.get("relation")
+        if relation is None:
+            continue
+        taxonomy_id = str(row.get("id"))
+        _refuse_an_unresolved_reference(
+            relation,
+            relations,
+            referrer=f"taxonomy {taxonomy_id!r}",
+            field="relation",
+            noun=_RELATION_NOUN,
+            context={
+                "section": "taxonomies",
+                "id": taxonomy_id,
+                "field": "relation",
+                "value": str(relation),
+            },
+        )
 
 
 def _refuse_live_sources(specs: tuple[Mapping[str, Any], ...]) -> None:
@@ -865,6 +1218,47 @@ def _field_type(declared: Any) -> FieldType | None:
         return None
 
 
+def _endpoints(row: Mapping[str, Any], field: str, relation_id: str) -> frozenset[str]:
+    """The entity types a relation's ``domain:`` or ``range:`` permits.
+
+    **A bare string is one type name, not its characters.** ``domain: Person``
+    is what a hand-edited file carries, and ``frozenset("Person")`` is six
+    one-character type names: the reference check downstream then reported
+    ``domain: 'P'`` against a declared list holding the exact word the author
+    wrote.
+
+    **Refused rather than coerced**, which is where the two precedents for
+    this shape part and why the louder one is followed.
+    :data:`~dataknobs_common.ontology.tags.NODE_ID_KEY` has a *reader* take a
+    bare string as one node, because a row is data arriving from a source and
+    refusing it at read time helps nobody. This is an authored document key,
+    and the sibling door refuses: ``index.fields`` takes a list, and a scalar
+    there is refused as *one name spelled as its characters rather than a list
+    of one*. An author can fix what a refusal names, and coercing would make
+    the one form that cannot be right into the one silently accepted.
+
+    Coerced to ``str`` per element for the reason ``entity_types:`` is keyed
+    by ``str(id)``: an endpoint left uncoerced passed the reference check by
+    ``str(value)`` and was then stored as the raw value, so ``domain`` held
+    ``1`` against a map keyed ``'1'`` -- resolved at load, matching nothing
+    after it.
+    """
+    value = row.get(field, ())
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValidationError(
+            f"relation type {relation_id!r} declares `{field}: {value!r}`; it takes a "
+            f"list of entity type names, and a bare string is one name spelled as its "
+            f"characters rather than a list of one",
+            context={
+                "section": "relation_types",
+                "id": relation_id,
+                "field": field,
+                "value": value,
+            },
+        )
+    return frozenset(str(target) for target in value)
+
+
 def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationType]:
     built: dict[str, RelationType] = {}
     for row in rows:
@@ -878,8 +1272,8 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
             description=row.get("description"),
             aliases=list(row.get("aliases", [])),
             metadata=dict(row.get("metadata", {})),
-            domain=frozenset(row.get("domain", ())),
-            range=frozenset(row.get("range", ())),
+            domain=_endpoints(row, "domain", relation_id),
+            range=_endpoints(row, "range", relation_id),
             inverse_of=row.get("inverse_of"),
             symmetric=bool(row.get("symmetric", False)),
             transitive=bool(row.get("transitive", False)),
