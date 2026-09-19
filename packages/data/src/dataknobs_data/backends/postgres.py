@@ -1105,6 +1105,8 @@ class SyncPostgresDatabase(
         param_dict = {f"p{i}": param for i, param in enumerate(params)}
         df = self.db.query(sql, param_dict)
 
+        # See the async twin: a ``VectorField`` object stored without its
+        # ``value`` key passes the presence predicate and yields no distance.
         return [
             VectorSearchResult(
                 record=self._row_to_record(self._frame_row_to_dict(row)),
@@ -1113,13 +1115,14 @@ class SyncPostgresDatabase(
                 metadata={"distance": float(row["distance"]), "metric": metric.value},
             )
             for _, row in df.iterrows()
+            if row["distance"] is not None
         ]
 
     def create_vector_index(
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
         index_type: str = "ivfflat",
         lists: int | None = None,
     ) -> bool:
@@ -1173,7 +1176,7 @@ class SyncPostgresDatabase(
             q_schema_name=self._q_schema,
             column_name=build_vector_value_expression(vector_field, dimensions),
             dimensions=dimensions,
-            metric=metric,
+            metric=resolve_metric(self, metric),
             index_type=index_type,
             index_params={"lists": lists} if lists else None,
             field_name=vector_field,
@@ -1189,7 +1192,7 @@ class SyncPostgresDatabase(
             return False
 
     def drop_vector_index(
-        self, vector_field: str = "embedding", metric: DistanceMetric | str = DistanceMetric.COSINE
+        self, vector_field: str = "embedding", metric: DistanceMetric | str | None = None
     ) -> bool:
         """Drop a vector index.
 
@@ -1205,7 +1208,7 @@ class SyncPostgresDatabase(
         self._check_connection()
 
         index_name = get_vector_index_name(
-            self.table_name, vector_field, DistanceMetric.resolve(metric).canonical().value
+            self.table_name, vector_field, resolve_metric(self, metric).value
         )
 
         try:
@@ -1245,7 +1248,13 @@ class SyncPostgresDatabase(
             index_df = self.db.query(index_sql, {f"p{i}": value for i, value in enumerate(params)})
             stats["indexed"] = bool(index_df.iloc[0]["has_index"]) if not index_df.empty else False
         except Exception as e:
+            # Reported rather than only logged. The defaults above are a
+            # truthful answer to "no index, no vectors" and an untruthful one
+            # to "the query failed", and a caller reading the returned dict
+            # could not tell which it had --- the two differ by a log line it
+            # is not looking at.
             logger.warning(f"Failed to get vector index stats: {e}")
+            stats["error"] = str(e)
 
         return stats
 
@@ -2093,17 +2102,19 @@ class AsyncPostgresDatabase(
         values = _query_vector_values(query_vector)
         params: list[Any] = [format_vector_for_postgres(values), vector_field]
 
-        # The query builder emits ``%s``; asyncpg wants ``$N``. Rewritten one
-        # placeholder at a time so the numbering follows the parameter order,
-        # which starts at $3 because the vector and the field name hold $1/$2.
+        # This class builds its query builder without a ``param_style``, which
+        # defaults to ``"numeric"`` --- so the clause already carries ``$3``,
+        # ``$4``, ... and needs no rewriting. It was being rewritten anyway,
+        # by a loop replacing ``%s`` in a string that has never contained one,
+        # under a comment asserting the opposite. The numbering is the
+        # builder's, from the start index passed here: $1 and $2 are the
+        # vector and the field name.
         filter_clause = ""
         if filter:
             filter_clause, filter_params = self.query_builder.build_where_clause(
                 filter, len(params) + 1
             )
-            for param in filter_params:
-                filter_clause = filter_clause.replace("%s", f"${len(params) + 1}", 1)
-                params.append(param)
+            params.extend(filter_params)
 
         sql = build_vector_search_sql(
             q_qualified=self._q_qualified,
@@ -2122,6 +2133,11 @@ class AsyncPostgresDatabase(
         async with self._require_pool().acquire() as conn:
             rows = await conn.fetch(sql, *params)
 
+        # A ``NULL`` distance survives the presence predicate in one shape:
+        # a ``VectorField`` object stored without its ``value`` key, where
+        # ``->>'value'`` yields NULL and the cast carries it through. Dropping
+        # the row is the graceful answer; ``float(None)`` would fail the whole
+        # search over one malformed record.
         return [
             VectorSearchResult(
                 record=self._row_to_record(row),
@@ -2130,6 +2146,7 @@ class AsyncPostgresDatabase(
                 metadata={"distance": float(row["distance"]), "metric": metric.value},
             )
             for row in rows
+            if row["distance"] is not None
         ]
 
     async def enable_vector_support(self) -> bool:
@@ -2156,7 +2173,7 @@ class AsyncPostgresDatabase(
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric | str = "cosine",
+        metric: DistanceMetric | str | None = None,
         index_type: str = "ivfflat",
         lists: int | None = None,
     ) -> bool:
@@ -2232,7 +2249,7 @@ class AsyncPostgresDatabase(
             return False
 
     async def drop_vector_index(
-        self, vector_field: str = "embedding", metric: DistanceMetric | str = DistanceMetric.COSINE
+        self, vector_field: str = "embedding", metric: DistanceMetric | str | None = None
     ) -> bool:
         """Drop a vector index.
 
@@ -2248,7 +2265,7 @@ class AsyncPostgresDatabase(
         self._check_connection()
 
         index_name = get_vector_index_name(
-            self.table_name, vector_field, DistanceMetric.resolve(metric).canonical().value
+            self.table_name, vector_field, resolve_metric(self, metric).value
         )
 
         try:
@@ -2274,7 +2291,7 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        stats = {
+        stats: dict[str, Any] = {
             "field": vector_field,
             "indexed": False,
             "vector_count": 0,
@@ -2295,7 +2312,10 @@ class AsyncPostgresDatabase(
                 )
                 stats["indexed"] = await conn.fetchval(index_sql, *params) or False
         except Exception as e:
+            # See the sync twin: the defaults are indistinguishable from a
+            # successful "nothing here" without this.
             logger.warning(f"Failed to get vector index stats: {e}")
+            stats["error"] = str(e)
 
         return stats
 
@@ -2447,7 +2467,7 @@ class AsyncPostgresDatabase(
         k: int = 10,
         config: Any = None,  # HybridSearchConfig
         filter: Query | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
     ) -> list[Any]:  # list[HybridSearchResult]
         """Perform hybrid search using PostgreSQL full-text search and pgvector.
 
@@ -2473,11 +2493,7 @@ class AsyncPostgresDatabase(
             HybridSearchResult,
             reciprocal_rank_fusion,
         )
-        from .postgres_vector import (
-            build_vector_value_expression,
-            distance_to_score,
-            get_vector_operator,
-        )
+        from .postgres_vector import build_hybrid_search_sql, distance_to_score
 
         self._check_connection()
 
@@ -2515,65 +2531,40 @@ class AsyncPostgresDatabase(
         vector_str = format_vector_for_postgres(query_vector)
 
         resolved = resolve_metric(self, metric)
-        operator = get_vector_operator(resolved)
+
+        params: list[Any] = [query_text, vector_str, vector_field]
+
+        # Applied to both arms, or to neither. ``filter`` was declared, bound
+        # into nothing, and never consulted: the parameter list was built as
+        # the three above and stopped, so a filtered hybrid search read the
+        # whole table and said nothing. Fusing a filtered ranking with an
+        # unfiltered one would be a second way to get the same wrong answer,
+        # which is why the clause goes in both.
+        filter_clause = ""
+        if filter:
+            filter_clause, filter_params = self.query_builder.build_where_clause(
+                filter, len(params) + 1
+            )
+            params.extend(filter_params)
 
         # The JSON ``data`` column, as both ``_vector_search`` twins now read
         # --- this CTE read the ``vector_<field>`` column, so a hybrid search
         # over a batch-written or sync-written corpus contributed no vector
-        # half at all and silently degraded to a text search.
-        vector_expr = build_vector_value_expression(vector_field, len(query_vector))
-
-        # Build combined query using CTE for efficient hybrid search
-        # This performs both searches in a single query
-        sql = f"""
-        WITH text_search AS (
-            SELECT
-                id,
-                data,
-                metadata,
-                ts_rank_cd(
-                    to_tsvector('english', {self._build_text_field_concat(search_text_fields)}),
-                    plainto_tsquery('english', $1)
-                ) as text_score,
-                ROW_NUMBER() OVER (
-                    ORDER BY ts_rank_cd(
-                        to_tsvector('english', {self._build_text_field_concat(search_text_fields)}),
-                        plainto_tsquery('english', $1)
-                    ) DESC
-                ) as text_rank
-            FROM {self._q_qualified}
-            WHERE to_tsvector('english', {self._build_text_field_concat(search_text_fields)}) @@ plainto_tsquery('english', $1)
-            LIMIT {fetch_k}
-        ),
-        vector_search AS (
-            SELECT
-                id,
-                data,
-                metadata,
-                {vector_expr} {operator} $2::vector({len(query_vector)}) as vector_distance,
-                ROW_NUMBER() OVER (
-                    ORDER BY {vector_expr} {operator} $2::vector({len(query_vector)})
-                ) as vector_rank
-            FROM {self._q_qualified}
-            WHERE data ? $3
-            LIMIT {fetch_k}
-        ),
-        combined AS (
-            SELECT
-                COALESCE(t.id, v.id) as id,
-                COALESCE(t.data, v.data) as data,
-                COALESCE(t.metadata, v.metadata) as metadata,
-                t.text_score,
-                t.text_rank,
-                v.vector_distance,
-                v.vector_rank
-            FROM text_search t
-            FULL OUTER JOIN vector_search v ON t.id = v.id
+        # half at all and silently degraded to a text search. Built by the
+        # same function rather than restated here, which is what stops it
+        # drifting away from them again.
+        sql = build_hybrid_search_sql(
+            q_qualified=self._q_qualified,
+            text_concat=self._build_text_field_concat(search_text_fields),
+            vector_field=vector_field,
+            dimensions=len(query_vector),
+            metric=resolved,
+            fetch_k=fetch_k,
+            text_placeholder="$1",
+            vector_placeholder="$2",
+            field_placeholder="$3",
+            filter_clause=filter_clause,
         )
-        SELECT * FROM combined
-        """
-
-        params = [query_text, vector_str, vector_field]
 
         try:
             async with self._require_pool().acquire() as conn:

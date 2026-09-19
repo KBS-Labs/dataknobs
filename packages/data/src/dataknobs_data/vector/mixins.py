@@ -270,13 +270,25 @@ def resolve_metric(database: object, metric: DistanceMetric | str | None) -> Dis
     raised on every other backend. The enum resolves them now, so the reason
     to decline is gone and there is one vocabulary instead of two.
 
+    **The answer is canonical**, which is the half that makes every table
+    below this safe. Resolving ``"l2"`` to ``L2`` settles the *spelling* and
+    leaves the *aliasing* for each table to restate --- which is the
+    divergence :meth:`DistanceMetric.canonical` exists to end, and restating
+    it is what the tables were found doing. Two of them still are, one raising
+    ``Unsupported metric: DistanceMetric.L2`` on every Python-path search and
+    one answering an explicit ``l2`` with a cosine Elasticsearch mapping.
+    Canonicalising once here covers all twelve backends and every table any of
+    them reaches, including the ones a backend adds later.
+
     Args:
         database: The database whose configured metric ``None`` means.
         metric: A :class:`DistanceMetric`, a member value, or any published
             alias --- or ``None`` for the database's own setting.
 
     Returns:
-        The metric to search under.
+        The canonical member for the metric to search under: one of
+        ``COSINE``, ``EUCLIDEAN``, ``DOT_PRODUCT`` or ``L1``, never
+        ``L2`` or ``INNER_PRODUCT``.
 
     Raises:
         ValueError: If ``metric`` is a string naming no metric, from
@@ -284,8 +296,10 @@ def resolve_metric(database: object, metric: DistanceMetric | str | None) -> Dis
     """
     if metric is None:
         configured = getattr(database, "vector_metric", None)
-        return configured if isinstance(configured, DistanceMetric) else DistanceMetric.COSINE
-    return DistanceMetric.resolve(metric)
+        if isinstance(configured, DistanceMetric):
+            return configured.canonical()
+        return DistanceMetric.COSINE
+    return DistanceMetric.resolve(metric).canonical()
 
 
 def finish_vector_search(
@@ -367,11 +381,29 @@ class SyncVectorOperationsMixin(ABC):
         than ``k`` results.** That is the defined behaviour rather than an
         artefact: it is what the Elasticsearch implementation always did, and
         over-fetching to refill ``k`` is a different promise that should not
-        be adopted silently. Pushing the threshold into the query itself
-        (``min_score`` on Elasticsearch, a ``WHERE`` on pgvector) is strictly
-        better where available and is *additive* --- a backend may override
-        this method to do so, and the post-filter below then finds nothing
-        left to drop.
+        be adopted silently.
+
+        Pushing the threshold into the query itself (``min_score`` on
+        Elasticsearch, a ``WHERE`` on pgvector) is strictly better where
+        available, and **no backend may reach it by overriding this method**
+        --- ``test_no_backend_carries_its_own_vector_search`` forbids exactly
+        that, because an override is how the twelve answers happened. An
+        earlier draft of this paragraph offered the override as the way to do
+        it, which the guard has never permitted. The hook does not see the
+        threshold either, so push-down is not available today; adding it
+        means giving ``_vector_search`` an explicit hint parameter here, on
+        the mixin, with this post-filter still owning the contract and
+        finding nothing left to drop.
+
+        **The score's scale is the backend's**, and the threshold is compared
+        against it unconverted. The ten Python-path and Postgres backends
+        report a raw similarity; Elasticsearch reports its own ``_score``,
+        which for a ``cosine`` mapping is ``(1 + cos) / 2``. So one threshold
+        constant does not cut at the same place on every backend. Making it
+        would mean converting Elasticsearch's score, and that needs the
+        *mapping's* similarity rather than the requested metric --- see
+        :meth:`SyncElasticsearchDatabase._vector_search` for why those are not
+        the same thing.
 
         **``include_source`` does not decide whether the record comes back.**
         The record always does; :class:`VectorSearchResult` declares it
@@ -422,8 +454,10 @@ class SyncVectorOperationsMixin(ABC):
         so that twelve backends cannot answer them thirteen ways again. A
         backend implements this and inherits the rest.
 
-        ``metric`` arrives resolved --- never ``None``, never a string ---
-        so an implementation may read ``metric.value`` without checking.
+        ``metric`` arrives resolved and **canonical** --- never ``None``,
+        never a string, and never one of the two alias members --- so an
+        implementation may key a table on it with four entries rather than
+        six, and cannot miss a spelling by writing the shorter table.
 
         Args:
             query_vector: The vector to search for
@@ -507,7 +541,7 @@ class SyncVectorOperationsMixin(ABC):
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
         index_type: str = "auto",
     ) -> bool:
         """Create an index for vector similarity search.
@@ -518,10 +552,18 @@ class SyncVectorOperationsMixin(ABC):
         and went no further. A backend parameter belongs on that backend, as
         ``AsyncPostgresDatabase``'s ``lists`` already is.
 
+        ``metric`` defaults to ``None`` --- the database's configured metric
+        --- for the same reason :meth:`vector_search`'s does, and it was the
+        last method on this surface still hardcoding cosine. An index built
+        under a metric the searches do not use is an index the planner
+        declines, so a database configured for euclidean was building one it
+        could never read.
+
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions (if known)
-            metric: Distance metric for the index
+            metric: Distance metric for the index. ``None`` means the metric
+                this database was configured with, falling back to cosine.
             index_type: Type of index to create
 
         Returns:
@@ -560,7 +602,7 @@ class SyncVectorOperationsMixin(ABC):
         k: int = 10,
         config: HybridSearchConfig | None = None,
         filter: Query | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
     ) -> list[HybridSearchResult]:
         """Perform hybrid search combining text and vector similarity.
 
@@ -579,7 +621,10 @@ class SyncVectorOperationsMixin(ABC):
             config: Hybrid search configuration (weights, fusion strategy)
             filter: Optional additional filters to apply
             metric: Distance metric for vector search, resolved by
-                :meth:`vector_search`, which is all this does with it
+                :meth:`vector_search`, which is all this does with it.
+                ``None`` means the database's configured metric --- the same
+                answer its own ``vector_search`` gives, which is what stops
+                one object searching under two metrics.
 
         Returns:
             List of HybridSearchResult ordered by combined score (descending)
@@ -676,11 +721,29 @@ class AsyncVectorOperationsMixin(ABC):
         than ``k`` results.** That is the defined behaviour rather than an
         artefact: it is what the Elasticsearch implementation always did, and
         over-fetching to refill ``k`` is a different promise that should not
-        be adopted silently. Pushing the threshold into the query itself
-        (``min_score`` on Elasticsearch, a ``WHERE`` on pgvector) is strictly
-        better where available and is *additive* --- a backend may override
-        this method to do so, and the post-filter below then finds nothing
-        left to drop.
+        be adopted silently.
+
+        Pushing the threshold into the query itself (``min_score`` on
+        Elasticsearch, a ``WHERE`` on pgvector) is strictly better where
+        available, and **no backend may reach it by overriding this method**
+        --- ``test_no_backend_carries_its_own_vector_search`` forbids exactly
+        that, because an override is how the twelve answers happened. An
+        earlier draft of this paragraph offered the override as the way to do
+        it, which the guard has never permitted. The hook does not see the
+        threshold either, so push-down is not available today; adding it
+        means giving ``_vector_search`` an explicit hint parameter here, on
+        the mixin, with this post-filter still owning the contract and
+        finding nothing left to drop.
+
+        **The score's scale is the backend's**, and the threshold is compared
+        against it unconverted. The ten Python-path and Postgres backends
+        report a raw similarity; Elasticsearch reports its own ``_score``,
+        which for a ``cosine`` mapping is ``(1 + cos) / 2``. So one threshold
+        constant does not cut at the same place on every backend. Making it
+        would mean converting Elasticsearch's score, and that needs the
+        *mapping's* similarity rather than the requested metric --- see
+        :meth:`SyncElasticsearchDatabase._vector_search` for why those are not
+        the same thing.
 
         **``include_source`` does not decide whether the record comes back.**
         The record always does; :class:`VectorSearchResult` declares it
@@ -731,8 +794,10 @@ class AsyncVectorOperationsMixin(ABC):
         so that twelve backends cannot answer them thirteen ways again. A
         backend implements this and inherits the rest.
 
-        ``metric`` arrives resolved --- never ``None``, never a string ---
-        so an implementation may read ``metric.value`` without checking.
+        ``metric`` arrives resolved and **canonical** --- never ``None``,
+        never a string, and never one of the two alias members --- so an
+        implementation may key a table on it with four entries rather than
+        six, and cannot miss a spelling by writing the shorter table.
 
         Args:
             query_vector: The vector to search for
@@ -823,7 +888,7 @@ class AsyncVectorOperationsMixin(ABC):
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
         index_type: str = "auto",
     ) -> bool:
         """Create an index for vector similarity search.
@@ -834,10 +899,18 @@ class AsyncVectorOperationsMixin(ABC):
         and went no further. A backend parameter belongs on that backend, as
         ``AsyncPostgresDatabase``'s ``lists`` already is.
 
+        ``metric`` defaults to ``None`` --- the database's configured metric
+        --- for the same reason :meth:`vector_search`'s does, and it was the
+        last method on this surface still hardcoding cosine. An index built
+        under a metric the searches do not use is an index the planner
+        declines, so a database configured for euclidean was building one it
+        could never read.
+
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions (if known)
-            metric: Distance metric for the index
+            metric: Distance metric for the index. ``None`` means the metric
+                this database was configured with, falling back to cosine.
             index_type: Type of index to create
 
         Returns:
@@ -876,7 +949,7 @@ class AsyncVectorOperationsMixin(ABC):
         k: int = 10,
         config: HybridSearchConfig | None = None,
         filter: Query | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
     ) -> list[HybridSearchResult]:
         """Perform hybrid search combining text and vector similarity.
 
@@ -895,7 +968,10 @@ class AsyncVectorOperationsMixin(ABC):
             config: Hybrid search configuration (weights, fusion strategy)
             filter: Optional additional filters to apply
             metric: Distance metric for vector search, resolved by
-                :meth:`vector_search`, which is all this does with it
+                :meth:`vector_search`, which is all this does with it.
+                ``None`` means the database's configured metric --- the same
+                answer its own ``vector_search`` gives, which is what stops
+                one object searching under two metrics.
 
         Returns:
             List of HybridSearchResult ordered by combined score (descending)

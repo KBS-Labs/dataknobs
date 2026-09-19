@@ -342,3 +342,104 @@ class TestTheIndexServesTheQueryThatAsksForIt:
 
         assert "Index Scan" in plan, f"the index is unreachable for this query:\n{plan}"
         assert "embedding" in plan
+
+
+@pytest.mark.asyncio
+class TestARowThatCannotHoldAVectorIsNotSearched:
+    """``data ? 'embedding'`` is a key-presence test, and a key can hold null.
+
+    The async twin's predicate used to be ``WHERE vector_<field> IS NOT
+    NULL``, which a column type makes true or false with nothing in between.
+    Moving both twins onto the JSON ``data`` column replaced that with a test
+    the JSON document passes while holding ``null`` --- and
+    ``record_to_json`` writes exactly ``{"embedding": null}`` for a record
+    whose vector field carries ``None``.
+
+    Such a row produces ``distance = NULL``. ``ORDER BY distance`` sorts it
+    last, so it is invisible until the corpus holds fewer than ``k`` real
+    vectors; then ``float(None)`` raises ``TypeError`` and the entire search
+    fails rather than the one row. A non-vector string under the key is worse
+    --- the cast raises inside Postgres and nothing comes back at all.
+    """
+
+    async def test_a_null_vector_neither_ranks_nor_breaks_the_search(self, twins):
+        sync_db, async_db = twins
+        sync_db.create(_record("real", [1.0, 0.0]))
+        sync_db.create(Record({"name": "null-vector", "embedding": None}, id="null-vector"))
+
+        # k above the corpus size, so a surviving null row cannot hide behind
+        # the ORDER BY that sorts it last.
+        assert _names(sync_db.vector_search(QUERY, k=10)) == ["real"]
+        assert _names(await async_db.vector_search(QUERY, k=10)) == ["real"]
+
+    async def test_a_non_vector_value_does_not_fail_the_whole_query(self, twins):
+        """The cast is what raises, so one bad row used to cost every row."""
+        sync_db, async_db = twins
+        sync_db.create(_record("real", [1.0, 0.0]))
+        sync_db.create(Record({"name": "text", "embedding": "not a vector"}, id="text"))
+
+        assert _names(sync_db.vector_search(QUERY, k=10)) == ["real"]
+        assert _names(await async_db.vector_search(QUERY, k=10)) == ["real"]
+
+
+@pytest.mark.asyncio
+class TestTheNativeHybridSearchHonoursItsArguments:
+    """``filter`` was declared, bound into nothing, and never consulted.
+
+    The native path built its parameter list as ``[text, vector, field]`` and
+    stopped, so a filtered hybrid search read the whole table and reported no
+    error. The fallback path one branch above it *did* apply the filter, so
+    the same call answered differently depending on a fusion strategy the
+    caller may not have set.
+    """
+
+    async def _corpus(self, sync_db):
+        for i in range(6):
+            record = Record(
+                {
+                    "name": f"doc{i}",
+                    "content": "widget gadget",
+                    "tenant": "a" if i < 3 else "b",
+                    "embedding": VectorField(value=np.array([1.0, i / 100.0], dtype=np.float32)),
+                }
+            )
+            record.id = f"doc{i}"
+            sync_db.create(record)
+
+    async def test_a_filter_reaches_the_native_path(self, twins):
+        from dataknobs_data.query import Filter, Operator, Query
+
+        sync_db, async_db = twins
+        await self._corpus(sync_db)
+
+        results = await async_db.hybrid_search(
+            query_text="widget",
+            query_vector=QUERY,
+            text_fields=["content"],
+            vector_field="embedding",
+            k=10,
+            filter=Query(filters=[Filter(field="tenant", operator=Operator.EQ, value="a")]),
+        )
+
+        assert sorted(r.record.get_value("name") for r in results) == ["doc0", "doc1", "doc2"]
+
+    async def test_both_arms_rank_before_they_truncate(self, twins):
+        """Each arm's ``LIMIT`` used to take an arbitrary ``fetch_k``.
+
+        With ``k=1`` the arms fetch three rows each from a corpus of six, so
+        an unordered ``LIMIT`` is free to hand the fusion the three *worst*
+        vector matches. The nearest neighbour is the one row that cannot be
+        missing from a correctly ordered arm.
+        """
+        sync_db, async_db = twins
+        await self._corpus(sync_db)
+
+        results = await async_db.hybrid_search(
+            query_text="nothing matches this text",
+            query_vector=QUERY,
+            text_fields=["content"],
+            vector_field="embedding",
+            k=1,
+        )
+
+        assert [r.record.get_value("name") for r in results] == ["doc0"]

@@ -85,6 +85,17 @@ class SyncElasticsearchDatabase(
     Mixing the two in is what lets the one ``vector_search`` reach this
     class; that the other eight arrive with it is the twin-parity gap
     closing, not a side effect to be undone.
+
+    **The gap closes on presence, and not yet on behaviour.** The async twin
+    overrides ``hybrid_search``, ``_supports_native_hybrid`` and
+    ``_text_search_for_hybrid`` to use Elasticsearch's own RRF in a single
+    request; this class takes the mixin's implementations, so it answers
+    ``False`` to native support and fuses two rankings client-side --- a
+    ``LIKE`` text arm through the shared filter translation, then the same
+    ``fuse_hybrid_results`` the other eight backends use. That is a correct
+    hybrid search rather than a stub, and it is slower and worse at text than
+    what the twin does. Porting the native path is a capability gap, recorded
+    here rather than left for a reader to infer from three absent methods.
     """
 
     CONFIG_CLS: ClassVar[type[SyncElasticsearchDatabaseConfig]] = SyncElasticsearchDatabaseConfig
@@ -898,11 +909,28 @@ class SyncElasticsearchDatabase(
         :func:`build_knn_query` does not take one, so the similarity
         Elasticsearch computes is whatever the field's mapping declares.
 
+        **The ``metric`` argument does not choose the ranking here.**
+        Elasticsearch's kNN ranks by the ``similarity`` in the field's
+        *mapping*, fixed when the index was created, and
+        :func:`~dataknobs_data.vector.elasticsearch_utils.build_knn_query`
+        carries no metric at all. So what arrives resolved is recorded in each
+        hit's metadata and changes nothing about the order. On a field whose
+        mapping was built under a different metric, that record is the metric
+        the caller *asked for*, not the one that ran.
+
+        Honouring an arbitrary per-query metric would mean either a
+        ``script_score`` query, which gives up the approximate-nearest-
+        neighbour index, or reading the mapping back to convert --- a round
+        trip, a cache, and an answer for a field that has no mapping yet.
+        That is its own design pass; the falsehood worth removing now is the
+        silent one, which is this paragraph's absence.
+
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
             k: Maximum number of results to return
-            metric: Distance metric, already resolved by the mixin
+            metric: Distance metric, already resolved by the mixin and
+                recorded on each hit --- see above, it does not rank
             filter: Optional query filter to apply before vector search
 
         Returns:
@@ -941,6 +969,14 @@ class SyncElasticsearchDatabase(
                 # is required, so the loop below had nothing to build a hit
                 # from and returned an empty list. The record is not that
                 # knob's subject; the assembly is.
+                #
+                # ``source``, which is what ``Elasticsearch.search`` declares.
+                # The async twin spelled it ``_source``; both reach the
+                # transport, because elasticsearch-py rewrites body-field
+                # aliases before dispatch, so nothing at runtime could tell
+                # them apart. The type checker can: ``_source`` is a
+                # ``call-arg`` error against the published signature, and the
+                # twin's copy escaped only because its client is not typed.
                 source=True,
             )
         except Exception as e:
@@ -973,7 +1009,7 @@ class SyncElasticsearchDatabase(
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
         index_type: str = "auto",
     ) -> bool:
         """Create or update index mapping for vector field.
@@ -981,9 +1017,12 @@ class SyncElasticsearchDatabase(
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions
-            metric: Distance metric for the index
+            metric: Distance metric for the index. ``None`` means the metric
+                this database was configured with, falling back to cosine.
+                Unlike on :meth:`_vector_search`, this one decides: the
+                mapping it writes is what every later search over the field
+                ranks by.
             index_type: Type of index (ignored for ES, always uses HNSW)
-            **kwargs: Additional index parameters
 
         Returns:
             True if index was created/updated successfully

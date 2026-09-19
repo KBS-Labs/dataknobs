@@ -111,7 +111,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_metric` rather than re-implementing it, so they accept everything
   the rest of the package accepts.
 
+- **BREAKING: `hybrid_search`, `create_vector_index` and `drop_vector_index`
+  default `metric` to `None` too.** `vector_search` was the only method on
+  this surface that deferred to the database's configuration; its neighbours
+  kept the hardcoded `DistanceMetric.COSINE` that this release removes
+  everywhere else. So a database built with `vector_metric="euclidean"`
+  searched under euclidean, built a **cosine** index by default, and ran its
+  hybrid search's vector arm under cosine — and an index under a metric the
+  searches do not use is one the planner declines. A caller who passed the
+  metric explicitly is unaffected; one who relied on the cosine default now
+  gets the database's metric, which for `drop_vector_index` means it drops
+  the index `create_vector_index` would have built.
+
+- **BREAKING: `resolve_metric` returns the canonical member.** `"l2"` used to
+  arrive at a backend as `DistanceMetric.L2` and now arrives as `EUCLIDEAN`;
+  `"inner_product"` arrives as `DOT_PRODUCT`. A table keyed on the member had
+  to restate the aliasing, which is the divergence `canonical()` exists to
+  end, and two tables were still restating it — see *Fixed*. Visible in
+  `VectorSearchResult.metadata["metric"]`, which now reports the family rather
+  than the spelling the caller used.
+
+- **BREAKING: `get_similarity_for_metric` refuses a metric Elasticsearch
+  cannot serve.** It ended in `mapping.get(metric, "cosine")`, so
+  `DistanceMetric.L1` — which Elasticsearch has no `dense_vector` similarity
+  for — produced a cosine mapping and reported success. It now raises
+  `ValueError` naming what Elasticsearch does offer. `l1` remains a valid
+  `vector_metric` for every other backend — and on Postgres it needs pgvector
+  0.7.0+, which is where `<+>` and `vector_l1_ops` arrived. An L1 request used
+  to be answered in cosine distances on any server; it now errors on an older
+  one. Which backend serves which metric is tabulated in the API reference.
+
+- **BREAKING: `get_index_check_sql` matches the index names this class
+  builds.** It matched `indexname LIKE '%<field>%'`, which also matches
+  `idx_<table>_"vector_<field>"_cosine` — the index the removed
+  `_ensure_vector_column` built over the `vector_<field>` column. On a table
+  written by an earlier release, `get_vector_index_stats` therefore reported
+  `indexed: True` for a field whose searches now run a sequential scan. It
+  also claimed `embedding_v2`'s index when asked about `embedding`. The
+  parameter is now the list of names `get_vector_index_name` produces, one per
+  metric family. That orphaned index can be dropped by hand; nothing reads it.
+
+- **`get_vector_index_stats` reports a failed lookup.** Its body is wrapped in
+  `except Exception`, so a query that failed returned the same
+  `{"indexed": False, "vector_count": 0}` as a field with no index and no
+  vectors. A failure now also sets `error`.
+
+- **Elasticsearch's `metric` does not choose its ranking, and both twins now
+  say so.** Elasticsearch ranks k-NN by the `similarity` in the field's
+  *mapping*, fixed at index creation, and `build_knn_query` carries no metric
+  at all — so the resolved metric is recorded on each hit and changes nothing
+  about the order. On a field whose mapping was built under another metric,
+  that record is what the caller asked for rather than what ran. Honouring a
+  per-query metric needs either a `script_score` query, which gives up the
+  approximate-nearest-neighbour index, or a mapping round trip; the falsehood
+  worth removing now is the silent one.
+
+- **`score_threshold` is compared against the backend's own scale.** The ten
+  Python-path and Postgres backends report a raw similarity; Elasticsearch
+  reports its `_score`, which for a `cosine` mapping is `(1 + cos) / 2`. One
+  threshold constant therefore does not cut at the same place everywhere.
+  `distance_to_score` used to claim its scores were comparable "across
+  backends"; that was one backend too many, and both it and `vector_search`
+  now say which.
+
 ### Fixed
+
+- **A vector field name no longer reaches SQL unvalidated.**
+  `get_vector_count_sql` interpolated it straight into a SQL *string literal*
+  — `WHERE data ? '{field_name}'` — where `quote_ident` does not apply and
+  `validate_field_name` is the check that does. It had one caller; this
+  release gave it two more on `SyncPostgresDatabase`, and in
+  `get_vector_index_stats` nothing else validates and the whole body is
+  wrapped in `except Exception`, so a statement that ran and a statement that
+  failed were reported identically. Both it and `get_index_check_sql` — whose
+  arguments are bound, so it was never exposed — validate now.
+
+- **A record whose vector field holds `null` no longer breaks the search.**
+  `WHERE data ? 'embedding'` is a key-*presence* test and `record_to_json`
+  writes `{"embedding": null}` for a record carrying `None`. The async twin's
+  predicate used to be `WHERE vector_<field> IS NOT NULL`, which a column type
+  makes total; moving both twins onto the `data` column lost that. Such a row
+  yields `distance = NULL`, sorts last, and so surfaces only when the corpus
+  holds fewer than `k` real vectors — at which point `float(None)` fails the
+  whole search rather than the one row. A non-vector string under the key
+  failed it inside Postgres instead. Both searches and both hybrid arms now
+  require `jsonb_typeof` to be `array` or `object`.
+
+- **Each arm of the native Postgres hybrid search orders itself before it
+  truncates.** Both CTEs computed a `ROW_NUMBER()` over the whole set and then
+  took a bare `LIMIT fetch_k`, so the ranks were right and the rows they were
+  attached to were an arbitrary sample. It was masked while the vector arm
+  read the `vector_<field>` column only three of fourteen write paths filled —
+  usually fewer rows than `fetch_k`, so the `LIMIT` never bound. Reading the
+  column every write path fills is what made it reachable.
+
+- **`hybrid_search`'s `filter` reaches the native path.** It was declared,
+  never consulted, and the parameter list was built as `[text, vector, field]`
+  and stopped — so a filtered hybrid search read the whole table and reported
+  no error, while the client-side fallback one branch above it applied the
+  filter correctly. The same call answered differently depending on a fusion
+  strategy the caller may not have set. It is applied to both arms.
+
+- **`_compute_similarity` scores every metric.** It branched on the member
+  rather than the family, so `DistanceMetric.L2` and `INNER_PRODUCT` fell into
+  its `else` and raised `Unsupported metric` — and it is what
+  `PythonVectorSearchMixin` calls for all eight backends with no native k-NN,
+  on every search. A database configured `vector_metric="l2"`, a member value
+  the config parser accepts without a warning, could not run a search at all.
+  `L1` is computed rather than refused; only the absence of a branch made the
+  Manhattan distance unavailable.
+
+- **A configured metric accepts every spelling the enum publishes.**
+  `_apply_vector_config` used `DistanceMetric(name.lower())`, which knows only
+  member values, so six of the eight names `get_aliases()` publishes reached
+  its fallback and were configured as cosine under a warning calling them
+  invalid — `vector_metric: "manhattan"` was a documented setting that
+  silently did something else.
+
+- **`include_source` no longer reports text the vector was not made from.**
+  `derive_source_text` reproduced the assembly from the record's *current*
+  field values, which is the embedded text only while nothing has edited the
+  record since. Updating a title without re-embedding returned a `source_text`
+  that provably was not embedded, with no signal — the one failure the
+  parameter exists to prevent, since the id round-trip it replaced would have
+  read the same current values. `content_hash_metadata` writes the digest of
+  the embedded text onto the same dict as the field list, so the check costs
+  no query; a record that has moved on now yields `None`, which is what the
+  function already returned for "the record does not say". A vector carrying
+  no digest is still assembled, so nothing written before the digest existed
+  loses the feature.
+
+- **`_vector_search` on `AsyncPostgresDatabase` no longer rewrites
+  placeholders it does not have.** The class builds its query builder without
+  a `param_style`, which defaults to numeric, so the filter clause already
+  carried `$3`, `$4`, … and a loop replacing `%s` was a no-op — under a
+  comment asserting the opposite.
+
+- **Both Elasticsearch twins ask for the source the same way.** One passed
+  `source=True` and the other `_source=True`. Both reach the transport,
+  because elasticsearch-py rewrites body-field aliases before dispatch, so no
+  runtime check could tell them apart — but only `source` is a parameter of
+  `search`, and `_source` is a `call-arg` error wherever the client is typed.
 
 - **A search asking for dot product or L1 is no longer answered in cosine
   distances.** `get_vector_operator` mapped five spellings and returned the

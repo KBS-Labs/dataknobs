@@ -15,24 +15,49 @@ from .types import DistanceMetric
 logger = logging.getLogger(__name__)
 
 
-def get_similarity_for_metric(metric: DistanceMetric) -> str:
-    """Get Elasticsearch similarity function for a distance metric.
+#: The ``dense_vector`` similarities Elasticsearch offers, keyed on the
+#: canonical member so the table has one entry per metric rather than one per
+#: spelling. ``L1`` is absent because Elasticsearch has no Manhattan
+#: similarity --- not because the table forgot it.
+_SIMILARITIES: dict[DistanceMetric, str] = {
+    DistanceMetric.COSINE: "cosine",
+    DistanceMetric.DOT_PRODUCT: "dot_product",
+    DistanceMetric.EUCLIDEAN: "l2_norm",
+}
+
+
+def get_similarity_for_metric(metric: DistanceMetric | str) -> str:
+    """The Elasticsearch ``dense_vector`` similarity for a distance metric.
+
+    Keyed on :meth:`DistanceMetric.canonical` and refusing what it cannot
+    serve. It was keyed on the member and ended in ``.get(metric, "cosine")``,
+    which is the pgvector defect in another file: ``L2`` and ``INNER_PRODUCT``
+    are spellings the table did not list, so an explicit
+    ``create_vector_index(metric="l2")`` built a mapping with
+    ``similarity: cosine`` and reported success. Every vector written into
+    that field was then ranked under a metric nobody asked for, and the only
+    way to notice was to read the mapping back.
 
     Args:
-        metric: Distance metric
+        metric: A member, member value, or published alias.
 
     Returns:
-        Elasticsearch similarity function name
-    """
-    mapping = {
-        DistanceMetric.COSINE: "cosine",
-        DistanceMetric.DOT_PRODUCT: "dot_product",
-        DistanceMetric.EUCLIDEAN: "l2_norm",
-        DistanceMetric.INNER_PRODUCT: "dot_product",
-    }
+        The similarity name for the field mapping.
 
-    similarity = mapping.get(metric, "cosine")
-    logger.debug(f"Using similarity '{similarity}' for metric {metric}")
+    Raises:
+        ValueError: If the name is not an accepted spelling, or names a
+            metric Elasticsearch has no similarity for.
+    """
+    canonical = DistanceMetric.resolve(metric).canonical()
+    try:
+        similarity = _SIMILARITIES[canonical]
+    except KeyError:
+        offered = ", ".join(sorted(m.value for m in _SIMILARITIES))
+        raise ValueError(
+            f"Elasticsearch has no dense_vector similarity for {canonical.value!r}; "
+            f"it offers: {offered}"
+        ) from None
+    logger.debug("Using similarity '%s' for metric %s", similarity, canonical)
     return similarity
 
 
@@ -63,8 +88,10 @@ def build_knn_query(
     if num_candidates is None:
         num_candidates = max(k * 10, 100)
 
-    # Build the KNN query
-    knn_query = {
+    # Build the KNN query. Annotated because ``filter`` below puts a nested
+    # query object in, which the inferred value type from the four scalars
+    # does not admit.
+    knn_query: dict[str, Any] = {
         "field": f"data.{field_name}",
         "query_vector": query_vector,
         "k": k,

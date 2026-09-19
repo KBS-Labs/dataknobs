@@ -222,27 +222,58 @@ def derive_source_text(record: Record, vector_field: str) -> str | None:
     - it says nothing, which is every vector written before descriptions
       existed. ``None``, gracefully.
 
+    **Past tense, and it is checked.** Reproducing the assembly from the
+    record's *current* values gives the text the vector was made from only
+    while nothing has edited the record since --- and the vector field already
+    carries the answer to that, because :func:`content_hash_metadata` writes
+    the digest of the embedded text onto the same dict, in the same call, as
+    the field list and the separator. Without the check, updating a title and
+    not re-embedding returned a ``source_text`` that provably was not
+    embedded, with no signal: a consumer citing it, reranking on it or showing
+    it as a snippet is handed text that does not correspond to the vector that
+    retrieved it, which is the one failure the parameter exists to prevent.
+    The staleness answer is ``None``, which is what this function already
+    returns for "the record does not say" --- and a record that has moved on
+    since it was embedded does not say.
+
+    A vector carrying no digest is still assembled. Absence of a digest is
+    not evidence of staleness, and refusing there would withdraw the
+    parameter from every corpus written before the digest existed.
+
     Args:
         record: The search hit's record.
         vector_field: The field the vector lives on.
 
     Returns:
-        The assembled source text, or ``None`` where the record does not say.
+        The text the vector was made from, or ``None`` where the record does
+        not say --- including where it says the text has changed since.
     """
     vector = record.fields.get(vector_field)
     if vector is None:
         return None
 
-    source_fields, separator = stored_assembly(getattr(vector, "metadata", None))
+    metadata = getattr(vector, "metadata", None)
+    source_fields, separator = stored_assembly(metadata)
     if source_fields:
         # `separator or DEFAULT` would be wrong here: an empty string is a
         # legitimate separator and only absence may fall back, which is the
         # distinction `stored_assembly` reports by returning `None`.
-        return assemble_source_text(
+        text = assemble_source_text(
             record,
             source_fields,
             DEFAULT_FIELD_SEPARATOR if separator is None else separator,
         )
+        stored_hash = (metadata or {}).get(CONTENT_HASH_KEY)
+        if isinstance(stored_hash, str) and compute_content_hash(text) != stored_hash:
+            logger.debug(
+                "Not deriving source text for %r on record %s: the assembled text "
+                "no longer digests to the stored hash, so the vector was made "
+                "from something else",
+                vector_field,
+                record.id,
+            )
+            return None
+        return text
 
     source_field = getattr(vector, "source_field", None)
     if source_field and source_field in record.fields:

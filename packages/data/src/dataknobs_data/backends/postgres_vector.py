@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..vector.types import DistanceMetric
-from .sql_base import SQLRecordSerializer
+from .sql_base import SQLRecordSerializer, validate_field_name
 
 if TYPE_CHECKING:
     import asyncpg
@@ -183,8 +183,12 @@ def distance_to_score(metric: DistanceMetric | str, distance: float) -> float:
         distance: What the pgvector operator returned.
 
     Returns:
-        A score that rises as the neighbour gets nearer, comparable across
-        backends for the same metric.
+        A score that rises as the neighbour gets nearer, on the same scale as
+        the ten Python-path backends' for the same metric --- which is why
+        both Postgres twins and all of those can be given one
+        ``score_threshold``. Not Elasticsearch, whose hits carry its own
+        ``_score``; the claim used to say "across backends" and that was one
+        backend too many.
 
     Raises:
         ValueError: If the name is not an accepted spelling.
@@ -231,6 +235,39 @@ def build_vector_value_expression(field_name: str, dimensions: int | None = None
     return f"(({inner})::vector({dimensions}))"
 
 
+def build_vector_presence_predicate(field_name: str, field_placeholder: str) -> str:
+    """The rows whose ``field_name`` can actually be cast to a vector.
+
+    ``data ? 'f'`` is a *key presence* test, and a key can hold ``null``:
+    ``record_to_json`` writes ``{"embedding": null}`` for a record whose
+    vector field carries ``None``, and that row passes. It then yields
+    ``distance = NULL``, which ``ORDER BY distance`` sorts last --- so it
+    escapes only when the corpus holds fewer than ``k`` real vectors, at
+    which point ``float(row["distance"])`` raises ``TypeError`` and the whole
+    search fails rather than the one row. A non-vector *string* under the key
+    is worse: the cast raises inside Postgres and no row comes back at all.
+
+    The async twin used to ask ``WHERE vector_<field> IS NOT NULL``, which is
+    structurally immune --- a column either holds a vector or does not. Moving
+    both twins onto the JSON ``data`` column is what made this reachable, so
+    the predicate has to carry what the column type used to.
+
+    Both halves are kept. ``jsonb_typeof`` subsumes the presence test, but
+    ``data ? <placeholder>`` binds the field name and is the form a GIN index
+    on ``data`` can serve.
+
+    Args:
+        field_name: The record field holding the vector, already validated.
+        field_placeholder: The driver's placeholder for the bound field name.
+
+    Returns:
+        A SQL boolean expression.
+    """
+    return (
+        f"data ? {field_placeholder} AND jsonb_typeof(data->'{field_name}') IN ('array', 'object')"
+    )
+
+
 def build_vector_search_sql(
     *,
     q_qualified: str,
@@ -272,6 +309,7 @@ def build_vector_search_sql(
     """
     expression = build_vector_value_expression(vector_field, dimensions)
     operator = get_vector_operator(metric)
+    presence = build_vector_presence_predicate(vector_field, field_placeholder)
     return f"""
         SELECT
             id,
@@ -279,10 +317,105 @@ def build_vector_search_sql(
             metadata,
             {expression} {operator} {vector_placeholder}::vector({dimensions}) AS distance
         FROM {q_qualified}
-        WHERE data ? {field_placeholder}
+        WHERE {presence}
         {filter_clause}
         ORDER BY distance
         {limit_clause}
+    """
+
+
+def build_hybrid_search_sql(
+    *,
+    q_qualified: str,
+    text_concat: str,
+    vector_field: str,
+    dimensions: int,
+    metric: DistanceMetric | str,
+    fetch_k: int,
+    text_placeholder: str,
+    vector_placeholder: str,
+    field_placeholder: str,
+    filter_clause: str = "",
+) -> str:
+    """Build the one-statement hybrid query, beside the k-NN one it half-repeats.
+
+    Lifted out of ``AsyncPostgresDatabase.hybrid_search`` for the reason
+    :func:`build_vector_search_sql` was lifted out of the two searches: it
+    restated the vector half by hand, and a statement nothing can build
+    without a live server is a statement nothing checks. It pointed at the
+    ``vector_<field>`` column until this pass, which is precisely the kind of
+    drift an inline f-string hides.
+
+    Each arm orders itself before its ``LIMIT``. The ``ROW_NUMBER()`` window
+    ranks the whole set correctly and a bare ``LIMIT`` then keeps whichever
+    rows the executor produced first, so the fusion could be handed a
+    corpus's worst matches carrying correct ranks. It was masked while the
+    vector arm read the ``vector_<field>`` column only three of fourteen
+    write paths filled --- usually fewer rows than ``fetch_k``, so the
+    ``LIMIT`` never bound. Reading the column every write path fills is what
+    made it reachable.
+
+    Args:
+        q_qualified: The pre-quoted ``"schema"."table"``.
+        text_concat: The pre-built, field-validated text concatenation.
+        vector_field: The record field holding the vector.
+        dimensions: Width of the query vector.
+        metric: The metric to rank the vector arm under.
+        fetch_k: How many rows each arm contributes to the fusion.
+        text_placeholder: The driver's placeholder for the query text.
+        vector_placeholder: The driver's placeholder for the query vector.
+        field_placeholder: The driver's placeholder for the field name.
+        filter_clause: An optional ``AND ...`` fragment applied to both arms.
+
+    Returns:
+        The full ``WITH`` statement, yielding ``id``, ``data``, ``metadata``,
+        ``text_score``, ``text_rank``, ``vector_distance`` and ``vector_rank``.
+    """
+    expression = build_vector_value_expression(vector_field, dimensions)
+    operator = get_vector_operator(metric)
+    presence = build_vector_presence_predicate(vector_field, field_placeholder)
+    rank = f"ts_rank_cd(to_tsvector('english', {text_concat}), plainto_tsquery('english', {text_placeholder}))"
+    distance = f"{expression} {operator} {vector_placeholder}::vector({dimensions})"
+    return f"""
+        WITH text_search AS (
+            SELECT
+                id,
+                data,
+                metadata,
+                {rank} AS text_score,
+                ROW_NUMBER() OVER (ORDER BY {rank} DESC) AS text_rank
+            FROM {q_qualified}
+            WHERE to_tsvector('english', {text_concat}) @@ plainto_tsquery('english', {text_placeholder})
+            {filter_clause}
+            ORDER BY text_score DESC
+            LIMIT {int(fetch_k)}
+        ),
+        vector_search AS (
+            SELECT
+                id,
+                data,
+                metadata,
+                {distance} AS vector_distance,
+                ROW_NUMBER() OVER (ORDER BY {distance}) AS vector_rank
+            FROM {q_qualified}
+            WHERE {presence}
+            {filter_clause}
+            ORDER BY vector_distance
+            LIMIT {int(fetch_k)}
+        ),
+        combined AS (
+            SELECT
+                COALESCE(t.id, v.id) AS id,
+                COALESCE(t.data, v.data) AS data,
+                COALESCE(t.metadata, v.metadata) AS metadata,
+                t.text_score,
+                t.text_rank,
+                v.vector_distance,
+                v.vector_rank
+            FROM text_search t
+            FULL OUTER JOIN vector_search v ON t.id = v.id
+        )
+        SELECT * FROM combined
     """
 
 
@@ -463,14 +596,27 @@ def get_vector_index_name(table_name: str, field_name: str, metric: str = "cosin
 def get_vector_count_sql(q_schema_name: str, q_table_name: str, field_name: str) -> str:
     """Get SQL to count vectors in a field.
 
+    The field name lands in a SQL **string literal** --- ``data ? 'name'`` ---
+    where ``quote_ident`` does not apply and nothing else in the statement can
+    contain it. That is the position :func:`validate_field_name` exists for,
+    and the position this function interpolated into raw. It had one caller;
+    it now has three, two of them on the sync twin where nothing else
+    validates and one of those wrapped in ``except Exception``, so a statement
+    that ran and a statement that failed would be reported identically.
+
     Args:
         q_schema_name: Pre-quoted schema name (e.g. ``'"public"'``)
         q_table_name: Pre-quoted table name (e.g. ``'"MyTable"'``)
-        field_name: Vector field name
+        field_name: Vector field name, validated against the JSONB-key
+            grammar before interpolation.
 
     Returns:
         SQL query string
+
+    Raises:
+        ValueError: If ``field_name`` is not a safe JSONB key.
     """
+    validate_field_name(field_name)
     return f"""
     SELECT COUNT(*) as count
     FROM {q_schema_name}.{q_table_name}
@@ -483,23 +629,46 @@ def get_index_check_sql(
 ) -> tuple[str, list[Any]]:
     """Get SQL to check if vector index exists.
 
+    Every argument here is *bound*, so this one was never exposed. It
+    validates anyway: it is called from the same method, on the same
+    argument, one line from :func:`get_vector_count_sql`, and a reader who
+    finds one of the pair validated and the other not has to work out which
+    position each occupies before trusting either.
+
     Args:
         schema_name: Database schema
         table_name: Table name
         field_name: Vector field name
 
     Returns:
-        Tuple of (SQL query, parameters)
+        Tuple of (SQL query, parameters), the last being the list of index
+        names this class builds for the field --- one per metric family.
+
+    Raises:
+        ValueError: If ``field_name`` is not a safe JSONB key.
     """
+    validate_field_name(field_name)
     sql = """
     SELECT COUNT(*) > 0 as has_index
     FROM pg_indexes
     WHERE schemaname = $1
     AND tablename = $2
-    AND indexname LIKE $3
+    AND indexname = ANY($3)
     """
-    index_pattern = f"%{field_name}%"
-    return sql, [schema_name, table_name, index_pattern]
+    # The names this class can build, enumerated, rather than
+    # ``LIKE '%field%'``. That pattern also matched
+    # ``idx_<table>_"vector_<field>"_cosine`` --- the index the removed
+    # ``_ensure_vector_column`` built over the ``vector_<field>`` column ---
+    # so on every table written by an earlier release the stats call reported
+    # an index for a field whose searches now sequentially scan. It also
+    # matched ``embedding_v2``'s index when asked about ``embedding``, and a
+    # prefix pattern still would: ``_`` is a LIKE wildcard and the names are
+    # full of them. An exact set has neither problem and needs no escaping.
+    names = [
+        get_vector_index_name(table_name, field_name, metric.value)
+        for metric in dict.fromkeys(m.canonical() for m in DistanceMetric)
+    ]
+    return sql, [schema_name, table_name, names]
 
 
 def format_vector_for_postgres(vector: np.ndarray | list[float]) -> str:

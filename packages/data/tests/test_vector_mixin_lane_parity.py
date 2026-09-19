@@ -59,8 +59,17 @@ BACKEND_MODULES = (
 # Every method of the vector surface whose laneness a caller depends on ---
 # the two abstract ones, the ones the mixin implements, and the two private
 # helpers ``hybrid_search`` awaits, which have to agree with it or it breaks.
+#
+# ``_vector_search`` is here because ``vector_search`` no longer is, in the
+# sense this sweep means: every backend now inherits the mixin's template, so
+# the cell for it resolves to the same function fourteen times and checks no
+# backend-authored body at all. The laneness question moved to the hook with
+# the code, and a ``def _vector_search`` on an async backend fails only at the
+# ``await`` inside the template it is called from --- one frame away from the
+# file that would have to be edited.
 LANE_METHODS = (
     "vector_search",
+    "_vector_search",
     "bulk_embed_and_store",
     "update_vector",
     "delete_from_index",
@@ -144,9 +153,10 @@ class TestEveryBackendsVectorMethodsMatchItsLane:
         """
         live = sum(1 for cls, method in _cases() if getattr(cls, method, None) is not None)
 
-        assert live == len(_cases()) - 20, (
+        absent = 2 * len(LANE_METHODS)  # both DuckDB classes, every method
+        assert live == len(_cases()) - absent, (
             f"{live} of {len(_cases())} cells are live; the only absences "
-            f"should be the two DuckDB classes' ten each"
+            f"should be the two DuckDB classes' {len(LANE_METHODS)} each"
         )
 
     @pytest.mark.parametrize(
@@ -537,8 +547,16 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
         Every other backend takes the mixin's implementation unchanged, so
         it cannot disagree with a declaration it does not restate --- which
         is the whole argument for ``vector_search`` moving up here too.
+
+        Plus the twelve ``_vector_search`` hooks: the hook is declared
+        abstract on the mixin and implemented by every backend with a vector
+        surface, so each one is an override this sweep can compare against
+        its declaration. ``TestOneSearchOverTwelveHooks`` pins the hook's
+        exact keyword set; this reaches it from the generic direction, which
+        is what keeps the next method added to the mixin covered without an
+        edit here.
         """
-        assert len(_override_cases()) == 14, sorted(
+        assert len(_override_cases()) == 26, sorted(
             (cls.__name__, method) for cls, method in _override_cases()
         )
 
@@ -652,4 +670,86 @@ class TestTheSwallowIsGoneOneFrameDownToo:
         assert (
             await PythonVectorSearchMixin.python_vector_search_async(db, [1.0, 0.0], metric="cos")
             == []
+        )
+
+
+class TestTheTwinsSpellTheSameMethodTheSameWay:
+    """Twin parity is not only laneness --- it is also the defaults.
+
+    The sweep above compares the *names* a caller may pass and the lane the
+    method runs in. Two twins can agree on both and still answer differently,
+    because a default is part of what a call means: ``create_vector_index()``
+    with no metric read the database's configuration on the async Postgres
+    twin and did not on the sync one, and ``metric=None`` --- which the mixin
+    declares --- worked on one and raised ``Unknown distance metric 'none'``
+    on the other.
+
+    The two were written in the same pass, one screen apart, and diverged in
+    three separate ways: the default's spelling (``DistanceMetric.COSINE``
+    against ``"cosine"``), whether the argument is resolved before use, and
+    therefore what ``None`` means.
+    """
+
+    TWINS = (
+        ("SyncPostgresDatabase", "AsyncPostgresDatabase", "postgres"),
+        ("SyncElasticsearchDatabase", "AsyncElasticsearchDatabase", None),
+    )
+
+    def _pair(self, sync_name: str, async_name: str, module: str | None) -> tuple[type, type]:
+        if module:
+            found = importlib.import_module(f"dataknobs_data.backends.{module}")
+            return getattr(found, sync_name), getattr(found, async_name)
+        return (
+            getattr(importlib.import_module("dataknobs_data.backends.elasticsearch"), sync_name),
+            getattr(
+                importlib.import_module("dataknobs_data.backends.elasticsearch_async"),
+                async_name,
+            ),
+        )
+
+    @pytest.mark.parametrize(("sync_name", "async_name", "module"), TWINS)
+    @pytest.mark.parametrize("method", ["create_vector_index", "drop_vector_index"])
+    def test_the_twins_agree_on_every_default(
+        self, sync_name: str, async_name: str, module: str | None, method: str
+    ) -> None:
+        sync_cls, async_cls = self._pair(sync_name, async_name, module)
+        if method not in sync_cls.__dict__ and method not in async_cls.__dict__:
+            pytest.skip(f"neither twin overrides {method}")
+
+        sync_defaults = {
+            name: parameter.default
+            for name, parameter in _named_parameters(getattr(sync_cls, method)).items()
+        }
+        async_defaults = {
+            name: parameter.default
+            for name, parameter in _named_parameters(getattr(async_cls, method)).items()
+        }
+
+        assert sync_defaults == async_defaults, (
+            f"{sync_name}.{method} and {async_name}.{method} declare different "
+            f"defaults, so the same call means different things on the two twins"
+        )
+
+    @pytest.mark.parametrize("lane", ["sync", "async"])
+    def test_both_elasticsearch_twins_ask_for_the_source_the_same_way(self, lane: str) -> None:
+        """One twin passed ``source=True`` and the other ``_source=True``.
+
+        Both reach the transport --- elasticsearch-py rewrites body-field
+        aliases before dispatch --- so no runtime check could tell them
+        apart, which is why two spellings survived on two lines that do the
+        same thing. Only one is a parameter of ``search`` though, and mypy
+        says so: ``_source`` is a ``call-arg`` error wherever the client is
+        typed. On the async twin it is not typed, which is the whole reason
+        the wrong spelling was the one that looked established.
+        """
+        module = "elasticsearch" if lane == "sync" else "elasticsearch_async"
+        source = inspect.getsource(
+            getattr(
+                importlib.import_module(f"dataknobs_data.backends.{module}"),
+                "SyncElasticsearchDatabase" if lane == "sync" else "AsyncElasticsearchDatabase",
+            )._vector_search
+        )
+        assert "source=True" in source and "_source=True" not in source, (
+            "both twins pass `source=`, the spelling `search` declares; "
+            "`_source=` works only because the client rewrites the alias"
         )

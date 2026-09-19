@@ -298,3 +298,101 @@ class TestIncludeSourceDerivesTheText:
         )
 
         assert _ids(with_source) == _ids(without)
+
+
+class TestSourceTextIsTheTextTheVectorWasMadeFrom:
+    """Past tense, and it has to be earned.
+
+    ``derive_source_text``'s first line says *"the text a record's vector was
+    made from"*, and it assembled the record's **current** field values. Those
+    are the same string only while nothing has edited the record since it was
+    embedded --- which is exactly the condition the vector field already
+    carries an answer to. ``content_hash_metadata`` writes the digest of the
+    embedded text beside the field list and the separator, on the same dict,
+    in the same call.
+
+    So a record whose title is updated without re-embedding returned a
+    ``source_text`` that provably was not embedded, with no signal. A consumer
+    using it for a citation, a reranker input or a snippet is handed text that
+    does not correspond to the vector that retrieved it --- the one failure
+    mode ``include_source`` exists to prevent, since the alternative it
+    replaced was an id round-trip that would have read the same current
+    values.
+
+    ``None`` is what the function already returns for "the record does not
+    say", and a record that has moved on since it was embedded does not say.
+    """
+
+    @pytest.fixture
+    def embedded(self) -> Iterator[SyncMemoryDatabase]:
+        database = SyncMemoryDatabase(config={"vector_enabled": True})
+        database.connect()
+        database.bulk_embed_and_store(
+            [Record(data={"id": "doc", "title": "Widget", "body": "A widget for widgeting."})],
+            text_field=["title", "body"],
+            embedding_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        )
+        try:
+            yield database
+        finally:
+            database.close()
+
+    def _source_text(self, database: SyncMemoryDatabase) -> str | None:
+        results = database.vector_search(QUERY, vector_field="embedding", k=10)
+        return next(r for r in results if r.record.id == "doc").source_text
+
+    def test_an_unedited_record_still_yields_its_text(self, embedded) -> None:
+        """The fix must not cost the case it was written for."""
+        assert self._source_text(embedded) == "Widget A widget for widgeting."
+
+    def test_a_record_edited_since_it_was_embedded_yields_none(self, embedded) -> None:
+        record = embedded.read("doc")
+        record.set_value("title", "Gadget")
+        embedded.update("doc", record)
+
+        assert self._source_text(embedded) is None, (
+            "the vector encodes 'Widget ...' and the record now reads "
+            "'Gadget ...'; returning the latter as source_text asserts "
+            "something about the vector that is false"
+        )
+
+    def test_re_embedding_restores_it(self, embedded) -> None:
+        """``None`` reports staleness, and is not a one-way door."""
+        record = embedded.read("doc")
+        record.set_value("title", "Gadget")
+        embedded.update("doc", record)
+        embedded.bulk_embed_and_store(
+            [embedded.read("doc")],
+            text_field=["title", "body"],
+            embedding_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        )
+
+        assert self._source_text(embedded) == "Gadget A widget for widgeting."
+
+    def test_a_vector_that_carries_no_digest_is_still_assembled(self) -> None:
+        """Absence of a digest is not evidence of staleness.
+
+        A vector written before the digest existed describes its fields and
+        its separator but nothing to check them against. Refusing there would
+        withdraw the feature from every corpus written before this release,
+        which is the opposite of the graceful degradation the surrounding
+        cells describe.
+        """
+        from dataknobs_data.vector.content import (
+            FIELD_SEPARATOR_KEY,
+            SOURCE_FIELDS_KEY,
+            derive_source_text,
+        )
+        from dataknobs_data.fields import VectorField
+
+        record = Record(data={"id": "old", "title": "Widget", "body": "Described."})
+        record.fields["embedding"] = VectorField(
+            np.array([1.0, 0.0]),
+            name="embedding",
+            metadata={
+                SOURCE_FIELDS_KEY: ["title", "body"],
+                FIELD_SEPARATOR_KEY: " ",
+            },
+        )
+
+        assert derive_source_text(record, "embedding") == "Widget Described."
