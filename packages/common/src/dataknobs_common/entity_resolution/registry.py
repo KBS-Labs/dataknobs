@@ -286,16 +286,31 @@ signal_backends.declare_unavailable(
 _SHIPS_IN_DATA = (
     "SemanticSignal ships in dataknobs-data; import dataknobs_data.entity_resolution to register it"
 )
+
+#: What the mark above declares, named so it survives being registered over.
+#:
+#: ``register`` **replaces** a key's metadata wholesale, and the module that
+#: registers this kind is imported by the only door that reaches those two
+#: refusals -- so after any import that could exercise the coupling, asking
+#: the registry returns ``data``'s derived mapping and the hand-written one is
+#: gone. A guard comparing the two therefore compared the registration with
+#: itself and passed over any drift, which was measured rather than reasoned:
+#: flipping both derived keys here left it green.
+#:
+#: A name is what makes the comparison possible at all, so the drift this
+#: pairing exists to prevent is caught by something rather than asserted by
+#: this comment.
+SEMANTIC_ASYNC_MARK_METADATA = {
+    "flavour": "async",
+    "needs_io": True,
+    "requires_install": "pip install dataknobs-data",
+    "reads_surface_forms": False,
+    "bounded_by_longest_form": False,
+}
 async_signal_backends.declare_unavailable(
     "semantic",
     reason=_SHIPS_IN_DATA,
-    metadata={
-        "flavour": "async",
-        "needs_io": True,
-        "requires_install": "pip install dataknobs-data",
-        "reads_surface_forms": False,
-        "bounded_by_longest_form": False,
-    },
+    metadata=dict(SEMANTIC_ASYNC_MARK_METADATA),
 )
 
 # The reason names the distribution **and** the import, because they answer

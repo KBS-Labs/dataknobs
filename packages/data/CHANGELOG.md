@@ -23,13 +23,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached comes back twice under two keys and nothing between them can tell
   they are one entity.
 
-  It **declines a filter**. A scope is rendered as a metadata filter naming an
-  axis key, a store fails a row that is missing the key a filter names, and no
-  row an ontology index writes carries one -- so a rung that forwarded a scope
-  would answer nothing under every scope, which reads downstream as *not in the
-  corpus*. Declining means the cascade rules on what comes back, which is one
-  authority instead of two. It becomes per-axis narrowing when a row carries an
-  axis key.
+  It **declines a scope and sends one filter of its own**, which are different
+  questions over different keys. A scope is rendered as a metadata filter
+  naming an axis key, a store fails a row that is missing the key a filter
+  names, and no row an ontology index writes carries one -- so a rung that
+  forwarded a scope would answer nothing under every scope, which reads
+  downstream as *not in the corpus*. Declining means the cascade rules on what
+  comes back, which is one authority instead of two. It becomes per-axis
+  narrowing when a row carries an axis key.
+
+  What it always sends is `dk_ontology_id`, the key the index source writes on
+  every row and the one `declares()` is documented as the translation target
+  for. A vector store is cached on its resolved `store:` block alone, so two
+  documents writing the same block share one, and a table or collection two
+  deployments name is shared by construction -- an unscoped read over such a
+  store answers rows this vocabulary never declared, whose ids the ontology
+  then refuses. The constructor's guard cannot reach that: it asks whether the
+  index holds this ontology's ids, which is membership, and this is
+  exclusivity.
+
+  A `k` below zero is refused, as it is by every rung assembled through
+  `declared_candidates`.
 
   Batches go through the index's `search_batch`, so *n* queries reach the
   embedder as one ask rather than *n*. There is no synchronous form, here or
@@ -44,7 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load and built beside the index, because a semantic rung is constructed over
   the index that same load assembled. Absence is still a configuration answer:
   a document declaring no section answers `None` for good, and an explicit
-  `rungs: []` is a composition somebody chose and resolves nothing.
+  `rungs: []` is a composition somebody chose and resolves nothing. An empty
+  `resolver: {}` is read as `rungs: []` rather than as absence, which is where
+  this block differs from `index:`, whose empty `{}` means *no index*.
+
+  Every refusal that needs no index runs **before** the store is opened, which
+  is the `index:` block's own rule: a document that cannot build a cascade must
+  not leave a vector store behind proving it tried, and `from_config_async`
+  never returns the object whose `close()` would release one.
+
+- **The empty-index report tells two states apart.** A rung that finds nothing
+  counts rows once per instance and says either *nothing is indexed* -- the
+  first-run case, where `build()` has not been called -- or *this store holds
+  rows and none of them are yours*, which is a store two documents share and
+  this vocabulary's index was never built into it. The count is cached whatever
+  it finds, so a populated store is not re-counted on every empty answer.
 
   The block reads one key, `rungs:`, and **refuses any other** -- sharper than
   the sibling `index:` check, because a section with no `rungs:` is read one

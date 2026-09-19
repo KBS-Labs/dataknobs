@@ -935,8 +935,16 @@ is a deployment's choice, so it stays the caller's line.
 
 Until you make it the rung is searching an empty store, and every candidate
 comes from the declared rungs alone — an answer that looks ordinary. So the
-rung checks the row count the first time it finds nothing and logs once, naming
-the ontology and the call above.
+rung counts rows the first time it finds nothing and logs once, naming the
+ontology and the call above. It distinguishes two states, because the remedy
+differs: **no rows at all** is the first-run case above, and **rows that are
+all some other vocabulary's** is a store two documents share, where this
+ontology's index was never built into it.
+
+The check runs **once per rung**, whatever it finds. It used to cache only the
+empty verdict, so a populated store was re-counted on every empty answer — and
+`count()` is a `SELECT COUNT(*)` on pgvector, so any threshold a deployment
+sets bought a sequential scan per query.
 
 **The candidates are in the ontology's id space.** Every row the index holds is
 a *qualified* id and a cascade's entities are local ones, so the rung localizes
@@ -951,6 +959,20 @@ would answer nothing under every scope, which reads as *not in the corpus*. It
 declares that it does not narrow, the cascade offers it no filter, and the
 cascade rules on what comes back.
 
+**It does send one filter of its own, and that is a different question.** Every
+read this rung makes is scoped to `dk_ontology_id` — the key the index source
+writes on every row, and the one a source's `declares()` is documented as the
+translation target for. Without it a store two documents share answers rows
+this vocabulary never declared, whose ids the ontology then refuses: a rung
+that constructs cleanly and fails on *every* hit it finds. The constructor's
+guard cannot reach that, because asking whether an index holds this ontology's
+ids is a question about membership and this is a question about exclusivity.
+
+Sharing is the easy case to reach, not the exotic one. The registry caches a
+vector store on its resolved `store:` block alone, so two documents both
+writing `{backend: memory, dimensions: 384}` get one store, and a `table:` or a
+collection two deployments name is shared by construction.
+
 ### What the `resolver:` block reads
 
 One key, and **a key that is not it is refused** — for the `index:` block's
@@ -962,14 +984,32 @@ and report success.
 |---|---|
 | `rungs:` | The composition, in order. Each is a `{kind: ...}` mapping plus whatever that kind takes. |
 
-Absence and emptiness are different answers. No `resolver:` section at all is
+Absence and emptiness are different answers, and **the line is drawn at the
+section rather than at the list** — which is where this block differs from
+`index:`, whose empty `{}` means *no index*. No `resolver:` section at all is
 silence, and `registry.resolver(id)` answers `None` — compose your own. An
 explicit `rungs: []` is a composition somebody chose, and it resolves nothing,
-because the composition *is* the policy.
+because the composition *is* the policy. An empty `resolver: {}` is read the
+same way as `rungs: []`: the section exists, so `registry.resolver(id)` answers
+a cascade, and that cascade holds no rungs.
 
-A `kind: semantic` rung over a document that declared no `index:` section is
-refused at load, naming the handle that was missing. So is a rung kind nothing
-registers — both are documents to fix, and both raise `ValidationError`.
+Every way a composition can fail to build is refused at load as a
+`ValidationError`, naming the offending entry's position:
+
+| The document writes | What is wrong |
+|---|---|
+| `rungs: [exact]` | an entry that is not a rung's configuration |
+| `rungs: [{threshold: 0.5}]` | an entry naming no `kind:` |
+| `rungs: [{kind: sematnic}]` | a kind nothing registers |
+| `rungs: [{kind: semantic}]`, no `index:` | a rung whose handle this document never declared |
+
+The first three are refused **before** anything is opened, which is the
+`index:` block's own rule applied to its sibling — a document that cannot build
+a cascade must not leave a vector store behind proving it tried, and
+`from_config_async` never returns the object whose `close()` would release one.
+They are refused by `dataknobs_common.ontology.refuse_unbuildable_rungs`, the
+same check both value-level doors run, so the three answers agree by being one
+check rather than by being kept in step.
 
 ## Not yet here
 

@@ -944,10 +944,24 @@ assert signal_backends.unavailable_reason("semantic") == (
 )
 ```
 
-`load_ontology` reads that fact and composes the refusal, naming the rung, its
-kind and the loader that *can* build it. The refusal is computed from the
-declared kind, so it holds with nothing constructed — and supplying the rung is
-what makes the door accept it.
+`build_resolver` reads that fact and composes the refusal, naming the rung, its
+kind and the way out. The refusal is computed from the declared kind, so it
+holds with nothing constructed — and supplying the rung is what makes the door
+accept it.
+
+**The way out is per rung, and reading it off the mark is what keeps it true.**
+Three marks mean three different things, and one sentence was wrong for two of
+them:
+
+| What the mark says | Where the author goes |
+|---|---|
+| `flavour: "sync"` here | nowhere — import the module the reason names, and *this* door builds it |
+| the other flavour, `needs_io: False` | `async_build_resolver`, over an ontology from `async_load_ontology` |
+| the other flavour, `needs_io: True` | a door holding a live handle: `OntologyRegistry`, or `async_build_resolver(..., handles={...})` |
+
+The first row is the one to read twice: a rung that merely ships elsewhere
+carries the **same** mark in both registries, so sending its author to the
+asynchronous door sends them in a circle.
 
 A rung that ships in **another distribution** is declared the same way, for a
 different reason. `kind: "authority"` reads an authority stack and lives in
@@ -965,6 +979,30 @@ It matches text a vocabulary *describes* — a pattern — as well as text it
 enumerates, and it keeps less overlap than `ScanningSignal` does. Both
 directions are written up at
 <https://kbs-labs.github.io/dataknobs/packages/xization/entity-resolution/>.
+
+### A rung built over something a document cannot write
+
+Both doors take `handles=`: live objects a rung is constructed over and a YAML
+file cannot hold — an index, a store, a client. They are merged into every
+rung's spec, because a factory reads the keys it names and ignores the rest, so
+one mapping serves a composition whose rungs need different things.
+
+```python
+resolver = build_resolver(Path("mammals.yaml"), onto, handles={"gazetteer": live})
+```
+
+The merge order is a rule rather than an implementation detail. A handle beats
+a key the document spelled the same way, because a document cannot write a live
+object; `entities` beats both, because *every rung matches against the ontology
+you handed in* is the one guarantee these doors make, and a channel able to
+displace it is a channel able to bypass the door.
+
+Both doors also refuse a composition they cannot build as a single
+`ValidationError`, naming the offending entry's position — an entry that is not
+a mapping, one naming no `kind:`, a kind nothing registers, and a rung whose
+own factory refused what it was given. `refuse_unbuildable_rungs` is the first
+three on their own, published so a caller that opens resources on its way to
+building a cascade can ask before it opens them.
 
 ## Where this package sits
 

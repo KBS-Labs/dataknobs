@@ -9,19 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`async_build_resolver` takes `handles=`**, a mapping of live objects a rung
-  is constructed over and a document cannot write -- an index, a store, a
-  client. Forwarded into every rung's spec, so one mapping serves a composition
-  whose rungs need different things and a caller holding such an object reaches
-  rung construction through the published door rather than assembling a list
-  beside it.
+- **Both resolver doors take `handles=`**, a mapping of live objects a rung is
+  constructed over and a document cannot write -- an index, a store, a client.
+  Forwarded into every rung's spec, so one mapping serves a composition whose
+  rungs need different things and a caller holding such an object reaches rung
+  construction through the published door rather than assembling a list beside
+  it.
 
   The merge order is part of the contract: handles beat the document, because a
   document cannot write a live object; `entities` beats handles, because it is
   the door's one guarantee that every rung matches against the ontology the
-  caller handed in. There is no synchronous twin, and that asymmetry is right
-  rather than tolerated -- the synchronous door builds no rung that needs a
-  handle, because the one rung that does has no synchronous form.
+  caller handed in. `build_resolver` carries the channel although this
+  distribution ships no synchronous rung that needs one: the rung registry is a
+  published extension point, so the rung with a synchronous form and a live
+  backing is a consumer's to write, and a channel they cannot reach is one they
+  reimplement.
+
+- **`refuse_unbuildable_rungs`**, which refuses a `resolver:` composition a
+  registry cannot build while constructing nothing -- an entry that is not a
+  mapping, one naming no `kind:`, a kind nothing registers. Both doors run it
+  before they build; it is published for the caller that opens resources on its
+  way to building a cascade and needs to ask before it opens them.
+
+- **`refuse_negative_k`**, the `k` check `declared_candidates` runs, published
+  so a rung doing its own assembly refuses the same argument its siblings do.
+  A negative `k` is a slice counting back from the end, so `k=-1` returns every
+  entity but the last one rather than none.
 
 - **The asynchronous rung registry declares `semantic`**, naming the install
   and the module to import, and the mark is cleared by that import. Asking for
@@ -143,13 +156,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`build_resolver`'s refusal names a remedy that can build the rung.** It
-  used to send every kind it cannot build to `async_build_resolver`, which is
-  right for a rung whose asynchrony is its own and false for one constructed
-  over a live handle -- a caller following that sentence got a second error
-  rather than a rung. The remedy is now chosen from the fact already on the
-  rung's mark, so a rung that reaches for data is sent to a door that holds
-  what it reaches for.
+- **`build_resolver`'s refusal names a remedy that can build the rung.** The
+  remedy is chosen from the rung's own mark, and there are three: a kind whose
+  mark here declares `flavour: "sync"` is a rung this door builds as soon as
+  the module the reason names is imported; a kind belonging to the other
+  flavour goes to `async_build_resolver`; one that also reaches for data goes
+  to a door holding a live handle. One sentence for all three sent two of them
+  to a door carrying the identical mark.
+
+- **Both resolver doors raise `ValidationError` for every way a composition can
+  fail to build**, which is what their `Raises:` sections always said. A rung
+  entry that is not a mapping, one naming no `kind:`, a `kind:` nothing
+  registers and a factory's own refusal reached callers as `TypeError`,
+  `ValueError`, `NotFoundError` and `OperationError` respectively. Each names
+  the offending entry's position, and an authored `ValidationError` from a rung
+  factory is read back out of the registry's bounded wrapper -- the diagnosis
+  that says which handle was missing.
 
 - **`SourceDescription.declares` is `frozenset[str] | None` and has no
   default.** *Cannot enumerate* and *holds nothing* were one value: a source

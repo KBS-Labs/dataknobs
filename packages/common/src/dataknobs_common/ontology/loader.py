@@ -40,7 +40,7 @@ from dataknobs_common.entity_resolution.signals import (
     ExactNormalizedSignal,
     ScanningSignal,
 )
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import NotFoundError, OperationError, ValidationError
 from dataknobs_common.fields import FieldType
 from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy
 from dataknobs_common.ontology.config import OntologyConfig
@@ -86,6 +86,7 @@ if TYPE_CHECKING:
         EntityResolver,
         MatchSignal,
     )
+    from dataknobs_common.registry import PluginRegistry
 
 #: Whichever enum a document is declaring a member of. Bound to ``Enum``
 #: because :func:`_declared_enum` calls the type and iterates its members, and
@@ -1126,6 +1127,8 @@ def _mint_nested(
 def build_resolver(
     config: Path | Mapping[str, Any],
     ontology: Ontology[str],
+    *,
+    handles: Mapping[str, Any] | None = None,
 ) -> EntityResolver[str]:
     """Build the placement cascade a document configures.
 
@@ -1154,19 +1157,36 @@ def build_resolver(
         config: A path to a YAML or JSON document, or the document itself --
             the same argument :func:`load_ontology` takes.
         ontology: The loaded vocabulary the rungs match against.
+        handles: Live objects a rung is constructed over and a document
+            cannot write. :func:`async_build_resolver` documents the channel
+            and the merge order, which are the same here.
+
+            **Symmetric even though this distribution ships no synchronous
+            rung that needs one**, which is the whole argument for it: the
+            registry these doors read is a published extension point, so the
+            rung that needs a handle and has a synchronous form is a
+            consumer's to write and this is the door they would reach for.
+            Withholding the channel would leave them assembling a
+            ``CascadingResolver`` beside this function -- a second
+            implementation of it, which is the thing
+            :func:`_configured_rungs` exists to prevent. The asymmetry was
+            argued from the shipped rungs, and the shipped rungs are not who
+            an extension point is for.
 
     Returns:
         A synchronous resolver over the configured rungs.
 
     Raises:
         ValidationError: For a ``resolver:`` section naming a rung this
-            flavour cannot build
+            flavour cannot build, a malformed rung entry, an unknown
+            ``kind:``, or a rung whose own factory refused the configuration
         ConfigLoadError: For any refusal in reading ``config`` as a document
         OSError: From that same read
     """
     section = _read_config(config).resolver
     _refuse_async_only_rungs(section)
-    return CascadingResolver(_sync_rungs(section, ontology), ontology.entities)
+    refuse_unbuildable_rungs(section, registry=signal_backends)
+    return CascadingResolver(_sync_rungs(section, ontology, handles=handles), ontology.entities)
 
 
 async def async_build_resolver(
@@ -1195,9 +1215,13 @@ async def async_build_resolver(
     what is built as much as the callability of the builder -- both are true
     here.
 
-    **No synchronous twin takes this parameter**, and the asymmetry is right
-    rather than merely tolerated: the synchronous door builds no rung that
-    needs a handle, because the one rung that does has no synchronous form.
+    **The synchronous twin takes it too.** It did not, and the asymmetry was
+    argued from the shipped rungs -- *the synchronous door builds no rung that
+    needs a handle, because the one rung that does has no synchronous form*.
+    That is true and is not the question: the registry both doors read is a
+    published extension point, so the rung with a synchronous form and a
+    handle to be constructed over is a consumer's, and a channel they cannot
+    reach is one they reimplement. Both doors carry it, on one body.
 
     Args:
         config: A path to a YAML or JSON document, or the document itself.
@@ -1225,8 +1249,12 @@ async def async_build_resolver(
         An asynchronous resolver over the configured rungs.
 
     Raises:
-        ValidationError: For a ``resolver:`` section this door cannot build,
-            including a rung whose handles were not supplied
+        ValidationError: For a ``resolver:`` section this door cannot build --
+            a malformed rung entry, an entry naming no ``kind:``, a ``kind:``
+            nothing registers, or a rung whose own factory refused the
+            configuration, handles included. **One type for all of them**,
+            which is what this line has always said and what
+            :func:`_configured_rungs` now makes true
         ConfigLoadError: For any refusal in reading ``config`` as a document
         OSError: From that same read
     """
@@ -1234,6 +1262,7 @@ async def async_build_resolver(
         read = await asyncio.to_thread(_read_config, config)
     else:
         read = _read_config(config)
+    refuse_unbuildable_rungs(read.resolver, registry=async_signal_backends)
     return AsyncCascadingResolver(
         _async_rungs(read.resolver, ontology, handles=handles), ontology.entities
     )
@@ -1283,7 +1312,7 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
     **neither loader** can own, and this refuses what **one build door**
     cannot build.
 
-    **The remedy is per rung, because one remedy was false for half of
+    **The remedy is per rung, because one remedy was false for two thirds of
     them.** This used to send every refused kind to
     :func:`async_build_resolver`, on the reasoning that the asynchronous door
     must accept what the synchronous one refuses. That holds for a rung whose
@@ -1296,16 +1325,43 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
     :func:`async_build_resolver`'s own docstring calls *a refusal whose remedy
     builds nothing*.
 
-    The fact that tells the two apart is already on the mark ---
-    ``needs_io`` --- so this reads it beside the reason rather than carrying a
-    list of kinds that would need editing for every rung anyone adds.
+    **Nor does it hold for a rung that is simply not here yet**, which is the
+    third case and the one the two-way split got wrong. A mark says one of two
+    things: *this flavour of the rung does not exist* --- and then the other
+    door is where it lives --- or *the rung exists in this flavour and ships
+    somewhere else*, and then **this** door builds it as soon as the module
+    that registers it is imported. Sending the second case to
+    :func:`async_build_resolver` names a door carrying the identical mark, so
+    the caller follows the sentence and gets the same refusal back. Measured:
+    ``authority`` was the only kind that could reach the old ``else`` at all,
+    and the sentence it got was wrong for it.
+
+    The fact that tells the three apart is already on the mark, and it is
+    ``flavour`` rather than ``needs_io``: the flavour a mark declares is the
+    flavour the rung *has*, so a mark in this registry declaring ``"sync"``
+    says the synchronous form exists and is unregistered. ``needs_io`` then
+    separates the remaining two. Both are read off the mark rather than
+    matched against a list of kinds, so a rung anyone adds is covered without
+    an edit here.
     """
-    for spec in _rung_specs(section) or ():
-        kind = str(spec.get("kind", ""))
+    for at, spec in enumerate(_rung_specs(section) or ()):
+        # Through the shared reader rather than `spec.get`, which is what this
+        # loop used and which raised ``AttributeError`` on a `rungs:` entry
+        # that is not a mapping -- the same latent defect as the one
+        # :func:`_rung_kind` was written for, one function earlier in the call
+        # order, found by reading the neighbours of the first.
+        kind = _rung_kind(spec, at)
         reason = signal_backends.unavailable_reason(kind)
         if reason is None:
             continue
-        if signal_backends.get_metadata(kind).get("needs_io"):
+        metadata = signal_backends.get_metadata(kind)
+        if metadata.get("flavour") == "sync":
+            remedy = (
+                "A synchronous form of this rung exists and is not registered in "
+                "this process, which is what the reason above says how to fix -- "
+                "import the module that registers it and this door builds the kind"
+            )
+        elif metadata.get("needs_io"):
             remedy = (
                 "Such a rung is built over a live handle -- an index, a store -- "
                 "which this door has no way to supply. Build it with a door that "
@@ -1325,14 +1381,202 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
         )
 
 
-def _sync_rungs(section: Mapping[str, Any] | None, ontology: Ontology) -> list[MatchSignal]:
+def _rung_kind(spec: Any, at: int) -> str:
+    """The ``kind:`` one rung entry names, or a refusal naming the entry.
+
+    **Two shapes reached the registry un-refused and surfaced as stdlib
+    types**, which is the failure the doors' ``Raises:`` sections exist to
+    rule out: a ``rungs:`` list holding a bare string produced ``TypeError:
+    'str' object is not a mapping`` from the spec merge, and an entry with no
+    ``kind:`` produced ``ValueError: config must contain 'kind'`` from inside
+    :meth:`~dataknobs_common.registry.PluginRegistry.create`'s key
+    resolution --- raised *before* that method's own wrapper, so nothing
+    downstream could convert it either.
+
+    Both are documents to fix, and the position is what makes the message
+    actionable: a composition of six rungs gives a reader one index rather
+    than six candidates.
+    """
+    if not isinstance(spec, Mapping):
+        raise ValidationError(
+            f"`resolver.rungs[{at}]` is {type(spec).__name__}, not a mapping. Each "
+            f"entry is a rung's own configuration and names its `kind:` -- "
+            f"`- kind: exact` rather than `- exact`",
+            context={"at": at, "rung": spec},
+        )
+    kind = spec.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise ValidationError(
+            f"`resolver.rungs[{at}]` names no `kind:`, so there is nothing to build "
+            f"it from. Every rung entry names the kind it is; the rest of the entry "
+            f"is that kind's own configuration",
+            context={"at": at, "rung": dict(spec)},
+        )
+    return kind
+
+
+def _rung_fault(exc: Exception) -> str:
+    """What to say about a rung a registry could not build.
+
+    :meth:`~dataknobs_common.registry.PluginRegistry.create` bounds its own
+    message **on purpose** --- a plugin factory builds a backend from
+    deployment configuration, so the exception it wraps can be a driver's text
+    carrying a connection URL, and the registry's answer names the key and
+    keeps the rest on ``__cause__``. That reasoning is right and this does not
+    defeat it.
+
+    What it does is read one exception type back out: a ``ValidationError``
+    from a rung factory describes a **document**, and it is the one that says
+    which handle was missing or which value was written where a handle
+    belongs. Losing it would leave a document author holding "failed to create
+    plugin" for a fault they can fix in one line.
+
+    **The claim is about intent, not about provenance.** Every rung factory in
+    this distribution raises ``ValidationError`` only for a document fault, so
+    for those the unwrapping is exact. A consumer's own factory is theirs, and
+    one raising ``ValidationError`` over a connection it could not open would
+    have that text read back out here. The trade is deliberate: the alternative
+    withholds the diagnosis from every document fault to bound a message no
+    in-tree factory writes, and a consumer who wants the bound keeps their own
+    failures under a type that is not this one.
+    """
+    cause = exc.__cause__
+    if isinstance(exc, OperationError) and isinstance(cause, ValidationError):
+        return str(cause)
+    return str(exc)
+
+
+def _configured_rungs(
+    specs: tuple[Any, ...],
+    registry: PluginRegistry[Any],
+    *,
+    entities: Any,
+    handles: Mapping[str, Any] | None = None,
+) -> list[Any]:
+    """Every rung a composition declares, built through one registry.
+
+    **One body for both flavours**, because the two differ in which registry
+    they ask and in nothing else --- and because everything *around* the ask
+    is what the two kept getting differently. A second copy is where the
+    refusal shapes drift, which is exactly what happened: the asynchronous
+    side grew a *handles* channel and the refusals were normalized one
+    registry at a time.
+
+    **The refusal type is the doors' documented one, for every way a rung can
+    fail to build.** Both doors' ``Raises:`` promise ``ValidationError`` for a
+    ``resolver:`` section they cannot build; what actually escaped was a
+    ``NotFoundError`` for a misspelled ``kind:``, an ``OperationError`` around
+    a factory's refusal, and two stdlib types for a malformed entry. A caller
+    catching what the docstring named caught none of them, and the one
+    consumer that noticed wrote the conversion on its own side --- where it
+    served that consumer and no other caller of these doors.
+
+    Args:
+        specs: The rung entries, in the order the document writes them.
+        registry: The signal registry of this flavour.
+        entities: The vocabulary's entity source, which every rung matches
+            against and which no document may displace.
+        handles: Live objects a rung is constructed over --- see
+            :func:`async_build_resolver`, which documents the merge order this
+            implements.
+
+    Returns:
+        One rung per spec, in order.
+
+    Raises:
+        ValidationError: For any entry this registry cannot turn into a rung,
+            naming the entry's position and its kind.
+    """
+    supplied = dict(handles or {})
+    if "kind" in supplied:
+        # The one key a handle may not carry. Every refusal that runs before
+        # construction reads `kind:` off the *document*, and the registry
+        # resolves it off the *merged* config -- so a handle spelled this way
+        # would have the composition checked as one kind and built as another,
+        # silently. `entities` needs no such guard: it is overwritten below
+        # rather than read, which is the door's published guarantee.
+        raise ValidationError(
+            "`handles` may not carry 'kind': it is what names the rung, so a handle "
+            "spelled this way would redirect every rung in the composition to one "
+            "factory while the document still reads as naming several. Handles are "
+            "for the objects a rung is constructed over, not for what it is",
+            context={"handles": sorted(supplied)},
+        )
+    built: list[Any] = []
+    for at, spec in enumerate(specs):
+        kind = _rung_kind(spec, at)
+        try:
+            built.append(registry.create(config={**spec, **supplied, "entities": entities}))
+        except (NotFoundError, OperationError, ValueError, TypeError) as exc:
+            raise ValidationError(
+                f"`resolver.rungs[{at}]` names kind {kind!r}, which this door could "
+                f"not build: {_rung_fault(exc)}",
+                context={"at": at, "kind": kind},
+            ) from exc
+    return built
+
+
+def refuse_unbuildable_rungs(
+    section: Mapping[str, Any] | None, *, registry: PluginRegistry[Any]
+) -> None:
+    """Refuse a ``resolver:`` composition a registry cannot build, constructing nothing.
+
+    :func:`_refuse_async_only_rungs`'s property, over the other two ways a
+    composition can be unbuildable: an entry that is not a rung's
+    configuration at all, and a ``kind:`` nothing registers. Computed from the
+    document and the registry alone, so it holds before anything is
+    constructed and identically whichever caller asks.
+
+    **Published because the moment matters to a caller that is not a door.**
+    :class:`~dataknobs_data.ontology.OntologyRegistry` opens a vector store on
+    its way to building a cascade, and its ``index:`` reader is explicit that
+    a document which cannot build must not *"leave a handle behind proving it
+    tried"*. Its ``resolver:`` reader ran after that store was open, so a
+    misspelled ``kind:`` stranded one --- with no registry object yet returned
+    for the caller to ``close()``. The refusal it needed is this one, and a
+    second copy on that side is a second thing to keep in step with the door.
+
+    Args:
+        section: The ``resolver:`` section, or ``None`` for a document that
+            declared none --- which is silence and refuses nothing.
+        registry: The signal registry of the flavour about to build. The
+            answer is per flavour: a kind registered in one and marked in the
+            other is buildable by exactly one of these doors.
+
+    Raises:
+        ValidationError: For an entry that is not a mapping, one naming no
+            ``kind:``, or one naming a kind this registry cannot build ---
+            carrying the mark's own reason where there is one, because *the
+            kind is unknown* and *the kind ships elsewhere* are different
+            faults with different remedies.
+    """
+    for at, spec in enumerate(_rung_specs(section) or ()):
+        kind = _rung_kind(spec, at)
+        if registry.is_registered(kind):
+            continue
+        reason = registry.unavailable_reason(kind)
+        raise ValidationError(
+            f"`resolver.rungs[{at}]` names kind {kind!r}, which this flavour does not "
+            f"build: {reason or 'no such rung kind is registered'}. Kinds it builds: "
+            f"{sorted(registry.list_keys())}",
+            context={"at": at, "kind": kind, "reason": reason},
+        )
+
+
+def _sync_rungs(
+    section: Mapping[str, Any] | None,
+    ontology: Ontology,
+    *,
+    handles: Mapping[str, Any] | None = None,
+) -> list[MatchSignal]:
     """The synchronous rungs a section configures, or the default composition."""
     specs = _rung_specs(section)
     if specs is None:
         return _default_sync_rungs(ontology)
-    return [
-        signal_backends.create(config={**spec, "entities": ontology.entities}) for spec in specs
-    ]
+    rungs: list[MatchSignal] = _configured_rungs(
+        specs, signal_backends, entities=ontology.entities, handles=handles
+    )
+    return rungs
 
 
 def _async_rungs(
@@ -1358,11 +1602,10 @@ def _async_rungs(
     specs = _rung_specs(section)
     if specs is None:
         return _default_async_rungs(ontology)
-    supplied = dict(handles or {})
-    return [
-        async_signal_backends.create(config={**spec, **supplied, "entities": ontology.entities})
-        for spec in specs
-    ]
+    rungs: list[AsyncMatchSignal] = _configured_rungs(
+        specs, async_signal_backends, entities=ontology.entities, handles=handles
+    )
+    return rungs
 
 
 def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:

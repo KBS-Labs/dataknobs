@@ -41,6 +41,8 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.factory import async_database_factory
 from dataknobs_data.ontology import OntologyRegistry
 from dataknobs_data.query import Filter, Operator, Query
+from dataknobs_data.testing import DeterministicEmbedder
+from dataknobs_data.vector.stores.factory import VectorStoreFactory
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if TYPE_CHECKING:
@@ -817,7 +819,16 @@ async def test_a_rung_needing_a_handle_this_document_did_not_declare_is_named() 
     try:
         with pytest.raises(ValidationError, match="semantic") as refused:
             await registry.load()
-        assert "index" in str(refused.value)
+        # The substring `index` was satisfied by the words *a live index* in
+        # the sentence explaining what a handle is, so the assertion passed
+        # over a message that never told this author what to do. The reader
+        # here is overwhelmingly one who *is* loading through this registry --
+        # they wrote `kind: semantic` and no `index:` -- and the actionable
+        # half is the section they are missing.
+        assert "`index:` section" in str(refused.value), (
+            "the refusal must name the section to add, not only the handle it wanted"
+        )
+        assert "OntologyRegistry" in str(refused.value)
     finally:
         await registry.close()
 
@@ -837,6 +848,100 @@ async def test_a_rung_kind_nothing_registers_is_refused_as_a_document_fault() ->
         with pytest.raises(ValidationError, match="sematnic") as refused:
             await registry.load()
         assert refused.value.context.get("ontology_id") == "t"
+    finally:
+        await registry.close()
+
+
+async def test_a_rung_entry_that_is_not_a_mapping_is_refused_as_a_document() -> None:
+    """``rungs: [exact]`` is a shape the registry never got to judge.
+
+    The spec merge does ``{**spec, ...}``, so a bare string reached it and
+    surfaced as ``TypeError: 'str' object is not a mapping`` --- a stdlib type
+    from a frame naming nothing a document author wrote, and one this door's
+    own ``Raises:`` does not list. The remedy is one character of YAML, so the
+    message spells the entry both ways.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={"rungs": ["exact"]}))
+    )
+    try:
+        with pytest.raises(ValidationError, match="rungs\\[0\\]") as refused:
+            await registry.load()
+        assert "not a mapping" in str(refused.value)
+        assert refused.value.context.get("ontology_id") == "t"
+    finally:
+        await registry.close()
+
+
+async def test_a_rung_entry_naming_no_kind_is_refused_as_a_document() -> None:
+    """An entry with options and no ``kind:`` never reached a factory either.
+
+    ``PluginRegistry.create`` resolves the key *before* the ``try`` that wraps
+    a factory's failure, so this came out as ``ValueError: config must contain
+    'kind' (no default configured)`` --- naming the registry's own parameter
+    rather than the document's, and outside every type either door documents.
+
+    The position is what makes it actionable: a composition of six rungs gives
+    the author one index instead of six candidates.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={"rungs": [{"threshold": 0.5}]}))
+    )
+    try:
+        with pytest.raises(ValidationError, match="rungs\\[0\\]") as refused:
+            await registry.load()
+        # The sentence, not the substring `kind`: an entry whose kind defaults
+        # to the empty string is refused too, as *kind \'\' is not registered*,
+        # which names the wrong fault and passes a looser assertion. What this
+        # author did is omit the key.
+        assert "names no `kind:`" in str(refused.value)
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize(
+    ("section", "why"),
+    [
+        ({"rung": [{"kind": "exact"}]}, "a key this block does not read"),
+        ({"rungs": [{"kind": "sematnic"}]}, "a kind nothing registers"),
+        ({"rungs": ["exact"]}, "an entry that is not a rung"),
+    ],
+)
+async def test_a_resolver_refusal_opens_no_store_to_strand(
+    section: dict[str, Any], why: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordering rule the ``index:`` reader states, applied to its sibling.
+
+    That reader is explicit: *refused before the store is opened, so a
+    document that cannot build an index does not leave a handle behind proving
+    it tried*. The ``resolver:`` reader ran **after** it, and every refusal
+    listed here needs no index to reach --- so a misspelled ``kind:`` opened a
+    vector store and then failed the load. Inside ``load()`` the caller still
+    holds a registry to ``close()``; inside ``from_config_async`` the object is
+    never returned and the handle is stranded rather than leaked to somebody.
+
+    Asserted by counting stores built, because *when* is the whole claim and
+    the message is identical either way.
+    """
+    built = 0
+    make = VectorStoreFactory.create
+
+    def counting(self: VectorStoreFactory, **block: Any) -> Any:
+        nonlocal built
+        built += 1
+        return make(self, **block)
+
+    monkeypatch.setattr(VectorStoreFactory, "create", counting)
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(
+            **_authored(index={"store": {"backend": "memory", "dimensions": 8}}, resolver=section)
+        ),
+        embedder=DeterministicEmbedder(dimensions=8),
+    )
+    try:
+        with pytest.raises(ValidationError):
+            await registry.load()
+        assert built == 0, f"{why} opened a store before the document was refused"
     finally:
         await registry.close()
 

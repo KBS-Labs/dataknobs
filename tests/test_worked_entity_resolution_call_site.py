@@ -50,6 +50,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from dataknobs_common.entity_resolution import BridgedEntityResolver
+
 from tests._workspace import ROOT, door_imports, executed_source, published_fence
 
 if TYPE_CHECKING:
@@ -63,6 +65,12 @@ CALL_SITE_MARKER = "worked-call-site"
 BRIDGE_MARKER = "worked-bridge"
 
 BRIDGE_EXECUTED = ROOT / "tests" / "worked_entity_resolution_bridge.py"
+
+#: The daemon thread the published block allocates, named off the wrapper that
+#: allocates it rather than off the bridge's default. Read from the class so a
+#: rename there moves the watch set with it, and shared by the leak assertion
+#: and its positive control so the two cannot come to watch different things.
+BRIDGE_THREADS = (BridgedEntityResolver.BRIDGE_THREAD_NAME,)
 
 #: The sentence the block resolves, and the two forms it carries.
 QUERY = "my golden retriever has been limping"
@@ -398,10 +406,52 @@ def test_the_bridge_block_asserts_what_it_teaches(bridged: dict[str, Any]) -> No
     # a daemon thread per resolver rather than failing. Asserted through the
     # published reader rather than the object's private flag, because what a
     # reader copying this block can go and check for themselves is the thread.
-    from dataknobs_common.testing import DK_SYNC_BRIDGE_THREAD, live_dk_daemon_threads
+    from dataknobs_common.testing import live_dk_daemon_threads
 
-    assert live_dk_daemon_threads([DK_SYNC_BRIDGE_THREAD]) == [], (
+    assert live_dk_daemon_threads(BRIDGE_THREADS) == [], (
         "the block leaves the bridge's daemon thread running, which is what the `with` is for"
+    )
+
+
+def test_the_watch_set_sees_the_thread_this_block_allocates(bridged: dict[str, Any]) -> None:
+    """The positive control, without which the assertion above cannot fail correctly.
+
+    ``live_dk_daemon_threads`` is scoped by the names handed to it, so an
+    assertion naming a thread the block never allocates is empty for the wrong
+    reason --- it passes over a leak and can only ever fail spuriously, when
+    something unrelated leaves a differently-named bridge alive.
+
+    That is not hypothetical. This watch set was
+    :data:`~dataknobs_common.testing.DK_SYNC_BRIDGE_THREAD`, which is
+    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge`'s **default** name,
+    while every :class:`~dataknobs_common.sync_bridge.SyncBridgeAdapter`
+    subclass is required to name its own --- ``BridgedEntityResolver`` names
+    ``dk-sync-resolver``. ``DK_DAEMON_THREAD_NAMES``'s own docstring states the
+    hazard in those words: *a bridge that is watched only under its default
+    name is one that is not watched at all*.
+
+    So this constructs the leak the sibling assertion exists to catch and
+    requires the watch set to see it, over the same constant the sibling uses.
+    A watch set that stops covering this wrapper fails here rather than going
+    quiet there.
+    """
+    from dataknobs_common.entity_resolution import BridgedEntityResolver
+    from dataknobs_common.testing import live_dk_daemon_threads
+
+    leaked = BridgedEntityResolver(bridged["async_resolver"])
+    try:
+        leaked.resolve("beagles", k=5)
+        assert live_dk_daemon_threads(BRIDGE_THREADS), (
+            "the watch set does not cover the thread this wrapper allocates, so the "
+            "assertion it scopes is empty whether or not the `with` is there"
+        )
+    finally:
+        leaked.close()
+
+    assert live_dk_daemon_threads(BRIDGE_THREADS) == [], (
+        "and the same watch set reports the thread gone once it is closed, which is "
+        "the other half of a control: a set that always answers non-empty would pass "
+        "the assertion above and fail the block's"
     )
 
 

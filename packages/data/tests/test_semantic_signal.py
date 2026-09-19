@@ -32,7 +32,11 @@ from dataknobs_common.entity_resolution import (
 )
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.index import MappingSource
-from dataknobs_common.ontology import EntitySourceIndexSource, OntologyConfig
+from dataknobs_common.ontology import (
+    ONTOLOGY_ID_KEY,
+    EntitySourceIndexSource,
+    OntologyConfig,
+)
 from dataknobs_common.records import Record
 
 from dataknobs_data.entity_resolution import SemanticSignal
@@ -479,8 +483,6 @@ async def test_a_hit_with_no_record_id_is_refused_rather_than_placed(
     ``AttributeError`` out of the id parser.
     """
     mammals = registry.get("mammals")
-    store = MemoryVectorStore({"dimensions": DIMENSIONS})
-    await store.initialize()
 
     class _Idless(MemoryVectorStore):
         async def search_similar_records(
@@ -501,7 +503,6 @@ async def test_a_hit_with_no_record_id_is_refused_rather_than_placed(
             await rung.candidates("Beagle", 5)
     finally:
         await idless.close()
-        await store.close()
 
 
 async def test_a_threshold_a_document_wrote_is_the_rungs_own(
@@ -529,32 +530,271 @@ async def test_a_threshold_a_document_wrote_is_the_rungs_own(
     assert len(cut) < len(everything)
 
 
-def test_the_two_registries_answer_the_same_facts_before_and_after_the_import() -> None:
-    """The mark and the registration declare one thing, so both must say it.
+async def test_a_negative_k_is_refused_as_it_is_for_every_rung_beside_this_one(
+    registry: OntologyRegistry,
+) -> None:
+    """The cut is a slice, and a negative one counts back from the end.
+
+    ``k=-1`` measured as *n-1* candidates here while every declared rung
+    refused the same argument, because those rungs are assembled by
+    :func:`~dataknobs_common.entity_resolution.declared_candidates` and this
+    one does its own assembly --- the shape
+    :class:`~dataknobs_common.entity_resolution.DeclaredSignal` reserves the
+    bare protocol for. That function's own ``Raises:`` claimed *refusing it
+    here refuses it for every rung at once*, which held only while it was the
+    only assembler.
+
+    Asserted against a declared rung in the same breath, because the claim is
+    agreement rather than refusal: a criterion satisfied by this rung alone
+    would pass over the two drifting apart again.
+    """
+    index = registry.index("mammals")
+    assert index is not None
+    mammals = registry.get("mammals")
+    rung = SemanticSignal(index, mammals)
+
+    with pytest.raises(ValidationError, match="k must not be negative"):
+        await rung.candidates("Beagle", -1)
+    with pytest.raises(ValidationError, match="k must not be negative"):
+        await rung.candidates_many(["Beagle"], -1)
+    with pytest.raises(ValidationError, match="k must not be negative"):
+        await AsyncExactNormalizedSignal(mammals.entities).candidates("Beagle", -1)
+
+    assert await rung.candidates("Beagle", 0) == [], "zero is a real request"
+
+
+async def test_the_row_count_is_probed_once_per_rung_and_not_once_per_empty_answer(
+    registry: OntologyRegistry,
+) -> None:
+    """A populated store was re-counted on every empty answer, forever.
+
+    The flag was set on the *zero* branch alone, so a store with rows cached
+    nothing and the next empty answer probed again. Any threshold a real
+    deployment sets produces empty answers routinely --- and ``count()`` is a
+    ``SELECT COUNT(*)`` on pgvector and a metadata walk on the others wherever
+    a filter applies, so this was a sequential scan per query for the life of
+    the process.
+
+    Counted rather than timed, because the cost is the call and a timing
+    assertion over an in-memory store would measure nothing.
+    """
+    index = registry.index("mammals")
+    assert index is not None
+    probes = 0
+    counting = index.store.count
+
+    async def count(*args: Any, **kwargs: Any) -> int:
+        nonlocal probes
+        probes += 1
+        return await counting(*args, **kwargs)
+
+    index.store.count = count  # type: ignore[method-assign]
+    rung = SemanticSignal(index, registry.get("mammals"), threshold=0.999)
+
+    for _ in range(4):
+        assert await rung.candidates("nothing this vocabulary is near", 5) == [], (
+            "the threshold must cut everything, or no empty answer asks for a probe"
+        )
+
+    assert probes <= 2, (
+        f"{probes} probes over four empty answers: the check is once per rung "
+        f"instance, at most one unfiltered count and one scoped one"
+    )
+
+
+async def test_a_store_two_vocabularies_share_answers_only_this_ontologys_rows() -> None:
+    """A rung reads a store it does not own, so it scopes every read to its own.
+
+    **The constructor's guard is membership, not exclusivity.** It asks the
+    index's source which named sets its ids fall in and refuses one that does
+    not name this ontology --- which says nothing about rows *another*
+    vocabulary wrote into the same store. And sharing is the easy case to
+    reach, not the exotic one: a registry caches a vector store on its
+    resolved ``store:`` block alone, so two documents writing
+    ``{backend: memory, dimensions: N}`` get one store, and a ``table:`` two
+    deployments name is shared by construction.
+
+    Unscoped, the first foreign hit reached
+    :meth:`~dataknobs_common.ontology.AsyncOntology.localize` and raised ---
+    so every resolve failed, which is exactly the *"constructs cleanly and
+    fails on every hit it finds"* outcome the constructor's own docstring
+    says it exists to prevent.
+
+    The filter is the key the source writes. ``declares()`` is documented as
+    *the set a scope filter is translated against*, and
+    :class:`~dataknobs_common.ontology.EntitySourceIndexSource` states the
+    declaration and the stored ``ONTOLOGY_ID_KEY`` as one fact.
+    """
+    shared = {"backend": "memory", "dimensions": DIMENSIONS}
+    live = OntologyRegistry.from_components(
+        config=OntologyConfig(**{**INDEXED_AND_RESOLVED, "index": {"store": dict(shared)}}),
+        embedder=DeterministicEmbedder(dimensions=DIMENSIONS),
+    )
+    await live.load()
+    try:
+        await live.load(
+            OntologyConfig(
+                **{
+                    **MAMMALS,
+                    "id": "hardware",
+                    "entities": [
+                        {
+                            "id": "bolt",
+                            "type": "Species",
+                            "name": "Bolt",
+                            "description": "a burrowing rodent with cheek pouches",
+                        }
+                    ],
+                    "index": {"store": dict(shared)},
+                }
+            )
+        )
+        mammals_index = live.index("mammals")
+        hardware_index = live.index("hardware")
+        assert mammals_index is not None and hardware_index is not None
+        assert mammals_index.store is hardware_index.store, (
+            "the two documents must share a store, or this test asserts nothing"
+        )
+        await mammals_index.build()
+        await hardware_index.build()
+        assert await mammals_index.store.count() > len(MAMMALS["entities"]), (
+            "both vocabularies must be in the one store"
+        )
+
+        rung = SemanticSignal(mammals_index, live.get("mammals"))
+        # `k` wider than the whole shared store, deliberately: at `k=5` over
+        # six rows the foreign one can simply rank last and fall off the end,
+        # and a test that passes because of where an embedding happened to put
+        # it is not a test of the scope. Measured -- at `k=5` this assertion
+        # survived the filter being removed.
+        everything = len(MAMMALS["entities"]) + 5
+        found = await rung.candidates("a burrowing rodent with cheek pouches", k=everything)
+
+        assert len(found) == len(MAMMALS["entities"]), (
+            "the scoped read answers this vocabulary's rows and only those -- "
+            "unscoped, `k` this wide reaches every row in the shared store"
+        )
+        assert {candidate.entity_id for candidate in found} == {
+            str(entity["id"]) for entity in MAMMALS["entities"]
+        }, "a row another vocabulary wrote reached this rung's answer"
+    finally:
+        await live.close()
+
+
+async def test_a_store_holding_only_another_vocabularys_rows_is_reported_as_shared(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The second empty state, which the scope makes reachable and silent.
+
+    Scoping the read is what stops a foreign row becoming a refusal, and it
+    turns *this vocabulary was never built into this store* from a loud
+    ``localize`` failure into an empty list --- indistinguishable, without
+    this, from a corpus nobody filled. The unfiltered count says the store has
+    rows; the scoped one says none are ours; between them they name the
+    shared-store case rather than the first-run one.
+    """
+    shared = {"backend": "memory", "dimensions": DIMENSIONS}
+    live = OntologyRegistry.from_components(
+        config=OntologyConfig(**{**INDEXED_AND_RESOLVED, "index": {"store": dict(shared)}}),
+        embedder=DeterministicEmbedder(dimensions=DIMENSIONS),
+    )
+    await live.load()
+    try:
+        await live.load(
+            OntologyConfig(**{**MAMMALS, "id": "hardware", "index": {"store": dict(shared)}})
+        )
+        hardware_index = live.index("hardware")
+        assert hardware_index is not None
+        await hardware_index.build()
+
+        mammals_index = live.index("mammals")
+        assert mammals_index is not None
+        assert await mammals_index.store.count() > 0, "the store must hold the other's rows"
+
+        rung = SemanticSignal(mammals_index, live.get("mammals"))
+        with caplog.at_level(logging.WARNING, logger="dataknobs_data.entity_resolution"):
+            assert await rung.candidates("Beagle", k=5) == []
+
+        [reported] = [record for record in caplog.records if "shared" in record.message]
+        message = reported.getMessage()
+        assert "mammals" in message
+        assert ONTOLOGY_ID_KEY in message
+        assert "holds no rows" not in message, (
+            "the store is not empty, and saying so would name the wrong remedy"
+        )
+    finally:
+        await live.close()
+
+
+async def test_a_document_writing_a_handles_key_itself_is_refused_as_a_document(
+    registry: OntologyRegistry,
+) -> None:
+    """Handles and document keys share one namespace after the door merges them.
+
+    The published rule is that a handle beats a document key spelled the same
+    --- which decides nothing for a key **no** handle was supplied for. A
+    document writing ``index: my-index`` therefore reached the factory
+    untouched and built a rung over the string, and the failure was an
+    ``AttributeError`` from ``"my-index".source``: the same shape as the
+    missing-record-id defect one layer over, and a bounded
+    ``Failed to create plugin`` by the time a caller saw it.
+
+    Presence was the check and had to become type, because these two keys are
+    not a document's to write at all.
+    """
+    from dataknobs_common.ontology import async_build_resolver
+
+    with pytest.raises(ValidationError, match="live handle") as refused:
+        await async_build_resolver(
+            {
+                "id": "mammals",
+                "resolver": {
+                    "rungs": [{"kind": "semantic", "index": "my-index", "ontology": "mammals"}]
+                },
+            },
+            registry.get("mammals"),
+        )
+
+    assert "index=str" in str(refused.value)
+    assert "ontology=str" in str(refused.value)
+
+
+def test_the_mark_and_the_registration_declare_the_same_facts() -> None:
+    """Two spellings of one fact, compared where both are still readable.
 
     ``common``'s mark writes ``reads_surface_forms`` and
     ``bounded_by_longest_form`` by hand because the class is not importable
-    there; ``data``'s registration derives them from the class. Two spellings
-    of one fact drift, and the drift would be silent in the worst place: two
-    load-time refusals read exactly these keys, so a mark that disagreed would
-    make them answer differently over one document depending on what had been
-    imported.
+    there; ``data``'s registration derives them from the class. Two load-time
+    refusals read exactly those keys off the registry, so a mark that
+    disagreed would answer differently over one document depending on what had
+    been imported.
 
-    Asserted as equality of the whole mapping rather than key by key, so a
-    fact added to one side and not the other fails here rather than later.
+    **The obvious guard cannot see that.** ``register`` replaces a key's
+    metadata wholesale and
+    :mod:`dataknobs_data.ontology.registry` imports the registering module, so
+    asking the registry after import returns the registration under both
+    names --- a comparison of the registration with itself, which stays green
+    over any drift. Measured: flipping both derived keys on the mark left the
+    earlier version of this test passing.
+
+    So the mark is read from the constant it is declared as, which is what
+    makes this an assertion about two things rather than one.
     """
     from dataknobs_common.entity_resolution.registry import (
+        SEMANTIC_ASYNC_MARK_METADATA,
         async_signal_backends,
         signal_backends,
     )
 
-    assert async_signal_backends.get_metadata("semantic") == {
-        "flavour": "async",
-        "needs_io": True,
-        "requires_install": "pip install dataknobs-data",
-        "reads_surface_forms": False,
-        "bounded_by_longest_form": False,
-    }
+    from dataknobs_data.entity_resolution import _SEMANTIC_METADATA
+
+    assert SEMANTIC_ASYNC_MARK_METADATA == _SEMANTIC_METADATA, (
+        "the mark `dataknobs_common` writes by hand and the registration "
+        "`dataknobs_data` derives from the class declare different facts"
+    )
+    assert async_signal_backends.get_metadata("semantic") == _SEMANTIC_METADATA, (
+        "and the registration is what the registry answers once this package is imported"
+    )
     assert signal_backends.unavailable_reason("semantic") == (
         "SemanticSignal has no synchronous form"
     )

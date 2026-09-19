@@ -41,6 +41,7 @@ from dataknobs_common.entity_resolution.registry import (
     async_signal_backends,
     declared_signal_metadata,
 )
+from dataknobs_common.entity_resolution.signals import refuse_negative_k
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
     EvidenceKind,
@@ -48,14 +49,15 @@ from dataknobs_common.entity_resolution.values import (
     Scoring,
 )
 from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.ontology import ONTOLOGY_ID_KEY, AsyncOntology
+
+from dataknobs_data.vector import SemanticIndex
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from dataknobs_common.entity_resolution.protocols import AsyncMatchSignal
-    from dataknobs_common.ontology import AsyncOntology
 
-    from dataknobs_data.vector import SemanticIndex
     from dataknobs_data.vector.stores.base import VectorSearchResult
 
 __all__ = ["SemanticSignal"]
@@ -105,6 +107,13 @@ class SemanticSignal:
     and nothing else: re-spelling the parse here would be a second spelling of
     a rule that is already published, and wrong besides for a consumer key
     with a codec.
+
+    **It scopes every read to its own vocabulary**, and that is a separate
+    guarantee from the localization above rather than a restatement of it.
+    Localizing fixes the id space a hit is *answered* in; the scope fixes
+    which rows are searched at all, because a store may hold more than one
+    vocabulary's and nothing about holding an index makes it exclusively
+    this ontology's. See :meth:`_search`.
 
     **It opens nothing and closes nothing.** The index is the caller's --- in
     the configured path, the registry's, released by
@@ -174,11 +183,18 @@ class SemanticSignal:
                 measured at construction off the source's own ``declares()``,
                 because the alternative is a rung that constructs cleanly and
                 fails on every hit it finds.
+
+                **Membership, which is not exclusivity.** This settles that
+                the index holds *these* ids and says nothing about rows some
+                other vocabulary wrote into the same store --- a question no
+                constructor can answer, because the answer changes with every
+                write. That one is settled per read, by the scope
+                :meth:`_search` sends.
         """
         self._index = index
         self._ontology = ontology
         self._threshold = threshold
-        self._reported_empty = False
+        self._rows_checked = False
 
         # Refused here rather than left to `localize`, which would raise on
         # the first hit and name an id rather than the mismatch. The member
@@ -206,6 +222,14 @@ class SemanticSignal:
     def narrows(self) -> bool:
         """False: no row this index holds carries a scope axis.
 
+        **This is about the cascade's scope and not about filtering at all.**
+        The rung does send the store a filter --- its own vocabulary's tag,
+        see :meth:`_search` --- and the two are different questions over
+        different keys. What is declined here is the *scope* a caller names,
+        which is rendered as ``{entity_type: [...]}``; what is always sent is
+        ``ONTOLOGY_ID_KEY``, which every row carries because the source that
+        wrote them declares it.
+
         **Not a property of vector search, and not permanent.** A store's
         metadata filter is key-equality with a documented rule --- *a missing
         metadata key fails the filter* --- and a scope is rendered as
@@ -214,7 +238,8 @@ class SemanticSignal:
         carry the ontology id and the alias forms and nothing else, so a
         filter naming ``entity_type`` matches **every backend's nothing**: a
         rung that forwarded it would answer the empty list under every scope
-        and read as *not in the corpus*.
+        and read as *not in the corpus*. That is the same rule the ontology
+        tag *passes*, and why one is sent and the other is not.
 
         Answering ``False`` costs this rung its ``k`` slots on candidates the
         cascade may drop, and buys that the cascade rules rather than the
@@ -233,10 +258,12 @@ class SemanticSignal:
     ) -> list[EntityCandidate[str]]:
         """At most ``k`` entities whose indexed text sits nearest ``query``.
 
-        ``filter`` is accepted for the protocol's shape and is **not
-        forwarded**, which :meth:`narrows` is the published statement of: a
-        rung answering ``False`` is never offered one by a cascade, and a
-        filter forwarded to this index's store would match nothing.
+        A *caller-supplied* ``filter`` is accepted for the protocol's shape
+        and is **not forwarded**, which :meth:`narrows` is the published
+        statement of: a rung answering ``False`` is never offered one by a
+        cascade, and the scope a cascade would name matches no row this index
+        holds. The rung's own vocabulary filter is a different key and is
+        always sent --- see :meth:`_search`.
         """
         [found] = await self._search([query], k)
         return found
@@ -251,6 +278,10 @@ class SemanticSignal:
         with ``search``'s keywords, so a batch embeds every query in one call
         instead of one call each --- which is the whole of what a batch
         resolve over a corpus buys.
+
+        ``filter`` is read exactly as :meth:`candidates` reads it, because
+        both are wrappers over one search: a caller's is not forwarded, and
+        this rung's own vocabulary scope always is.
         """
         return await self._search(list(queries), k)
 
@@ -259,16 +290,54 @@ class SemanticSignal:
 
         Written once because the two differ in arity and in nothing else,
         which is :meth:`~dataknobs_data.vector.SemanticIndex._search_many`'s
-        argument one layer up.
+        argument one layer up --- and because the two things this method does
+        *besides* searching are exactly the two that must not differ between
+        them.
+
+        **The read is scoped to this rung's own vocabulary, always.** A store
+        is not this rung's, and nothing makes it this ontology's either: the
+        registry caches a vector store on its resolved ``store:`` block alone,
+        so two documents writing the same block share one store, and a
+        ``table:`` or a collection two deployments name is shared by
+        construction. An unscoped read over such a store answers rows the
+        cascade's ontology never declared, whose ids
+        :meth:`~dataknobs_common.ontology.AsyncOntology.localize` then refuses
+        --- so the rung that *constructed* cleanly failed on every hit it
+        found, which is the outcome the constructor's own guard names and
+        cannot prevent by itself: membership is not exclusivity, and
+        ``declares()`` answers the first question.
+
+        The key is the one the source writes.
+        :meth:`~dataknobs_common.ontology.EntitySourceIndexSource.declares`
+        states the two as one fact --- *an ontology id declared, and
+        ``ONTOLOGY_ID_KEY`` stored on the row, one for a scope filter to
+        translate against and one to match it* --- and the protocol's own
+        ``declares()`` says a named set is *what a scope filter is translated
+        against*. This is that translation, and it is the first one in the
+        tree.
+
+        ``k`` is refused here rather than at each public member, and through
+        the published check rather than a fourth spelling of it: every rung
+        assembled by
+        :func:`~dataknobs_common.entity_resolution.declared_candidates` calls
+        the same function, and this rung does its own assembly.
         """
-        batches = await self._index.search_batch(queries, k=k, threshold=self._threshold)
+        refuse_negative_k(k)
+        batches = await self._index.search_batch(
+            queries, k=k, threshold=self._threshold, filter=self._scope
+        )
         found = [
             [self._candidate(hit, query) for hit in hits]
             for query, hits in zip(queries, batches, strict=True)
         ]
         if queries and not any(found):
-            await self._report_an_index_with_no_rows()
+            await self._report_an_empty_answer()
         return found
+
+    @property
+    def _scope(self) -> dict[str, str]:
+        """The filter every read of this rung carries: its own vocabulary's tag."""
+        return {ONTOLOGY_ID_KEY: self._ontology.id}
 
     def _candidate(self, hit: VectorSearchResult, query: str) -> EntityCandidate[str]:
         """One hit, in the ontology's id space, with this rung's reason for it.
@@ -319,21 +388,38 @@ class SemanticSignal:
             ),
         )
 
-    async def _report_an_index_with_no_rows(self) -> None:
-        """Say so when this rung answered nothing because nothing was indexed.
+    async def _report_an_empty_answer(self) -> None:
+        """Say so when this rung answered nothing because nothing was there to find.
 
-        **The distinction the count makes, and nothing else does.** An
+        **The count is what separates the cases, and nothing else does.** An
         unthresholded search answers the *k* nearest rows whatever the query,
         so a rung returning nothing over a populated store is already
         anomalous --- but a rung carrying a ``threshold`` may legitimately
-        answer nothing over a full one. Only the row count separates *the
-        corpus is empty* from *nothing was near enough*.
+        answer nothing over a full one. Two states are worth a sentence and
+        neither is visible from the answer:
 
-        **Asked only when there is nothing to report**, so the probe never
-        runs on the path where hits exist; and it is
-        :meth:`~dataknobs_data.vector.stores.base.VectorStore.count` with no
-        filter, which is O(1) on every backend --- a length for memory, a
-        native count for the rest.
+        * **the store holds no rows at all** --- ``load()`` assembles an index
+          and returns, and filling it is the caller's line, so a cascade
+          resolving before that call is the ordinary first-run mistake;
+        * **the store holds rows and none of them are this vocabulary's** ---
+          which is the shared-store case :meth:`_search` scopes against. The
+          scope is doing its job and the answer is correct; what it means is
+          that *this* ontology's index was never built, into a store where
+          another one's was. Without this the two are one silent empty list.
+
+        **Probed once per rung instance, and the flag is set whatever the
+        answer is.** It used to be set only on the empty branch, so a store
+        with rows was re-counted on every empty answer for the life of the
+        process --- and a ``count()`` is a ``SELECT COUNT(*)`` on pgvector and
+        a metadata walk on the others whenever a filter applies, which is a
+        per-query sequential scan under any threshold a real deployment sets.
+        Nothing here is O(1): the earlier claim that it was named the memory
+        backend's unfiltered length and generalised it, and neither half
+        survives a ``domain_id`` or a real database.
+
+        Racy in the harmless direction: two concurrent resolves can both find
+        the flag unset and both probe, which costs a second count and cannot
+        produce a second report of a different thing.
 
         **Why this is a log and not a refusal.** The index a registry hands a
         rung has never been built: ``load()`` assembles it and returns, and
@@ -341,21 +427,34 @@ class SemanticSignal:
         every first load. The earliest moment this state is distinguishable
         from the ordinary one is the first resolve that finds nothing, which
         is here.
-
-        Once per rung instance, because a cascade resolving a corpus would
-        otherwise say it per query.
         """
-        if self._reported_empty or await self._index.store.count() != 0:
+        if self._rows_checked:
             return
-        self._reported_empty = True
-        logger.warning(
-            "the %r rung over ontology %r found nothing and its index holds no rows: "
-            "an index is built by its caller, not by load() -- call "
-            "`await registry.index(%r).build()` once before resolving",
-            self.key,
-            self._ontology.id,
-            self._ontology.id,
-        )
+        self._rows_checked = True
+        if await self._index.store.count() == 0:
+            logger.warning(
+                "the %r rung over ontology %r found nothing and its index holds no rows: "
+                "an index is built by its caller, not by load() -- call "
+                "`await registry.index(%r).build()` once before resolving",
+                self.key,
+                self._ontology.id,
+                self._ontology.id,
+            )
+            return
+        if await self._index.store.count(self._scope) == 0:
+            logger.warning(
+                "the %r rung over ontology %r found nothing and its store holds no row "
+                "tagged %s=%r, though it holds rows for something else: this store is "
+                "shared -- two documents naming one `store:` block, or one table -- and "
+                "this vocabulary's index was never built into it. Call "
+                "`await registry.index(%r).build()`, or give this ontology a store of "
+                "its own",
+                self.key,
+                self._ontology.id,
+                ONTOLOGY_ID_KEY,
+                self._ontology.id,
+                self._ontology.id,
+            )
 
 
 def _make_semantic(config: dict[str, Any]) -> AsyncMatchSignal[str]:
@@ -368,20 +467,49 @@ def _make_semantic(config: dict[str, Any]) -> AsyncMatchSignal[str]:
     forwards whatever its caller hands it; the caller that has both is
     :class:`~dataknobs_data.ontology.OntologyRegistry`.
 
+    **Presence is not the check, and it used to be.** Handles and document
+    keys share one namespace after that door merges them --- handles win where
+    both spell a key, which is the published rule --- so a key a document
+    wrote under a handle's name reaches this factory untouched whenever no
+    handle was supplied for it. ``index: my-index`` in a document then built a
+    rung over the *string*, and the failure was an ``AttributeError`` from
+    ``"my-index".source``, wrapped as ``Failed to create plugin 'semantic'``:
+    the same shape as the missing-id defect one layer over, and the same
+    remedy. So each handle is checked for what it has to be, and the refusal
+    says which one arrived as what.
+
     Raises:
-        ValidationError: When either handle is missing, naming both and the
-            door that supplies them. Without this the failure is a
-            ``KeyError`` out of a factory the caller never named.
+        ValidationError: When either handle is missing or is not the type it
+            has to be, naming both and the door that supplies them. Without
+            this the failure is a ``KeyError`` or an ``AttributeError`` out of
+            a factory the caller never named.
     """
-    missing = sorted(handle for handle in ("index", "ontology") if config.get(handle) is None)
+    required: tuple[tuple[str, type], ...] = (("index", SemanticIndex), ("ontology", AsyncOntology))
+    missing = sorted(handle for handle, _ in required if config.get(handle) is None)
     if missing:
         raise ValidationError(
             f"rung kind {_KEY!r} needs {missing} and the configuration supplied "
             f"neither a value nor a handle for it. A document cannot write a live "
             f"index or a loaded vocabulary, so these arrive from the door that holds "
-            f"both: load the ontology through OntologyRegistry, whose `resolver:` "
-            f"reader forwards them, or pass `handles=` to async_build_resolver",
+            f"both. Loading through OntologyRegistry? The handle it forwards is the "
+            f"index your own document declares, so declare one: add an `index:` "
+            f"section beside the `resolver:` section. Calling async_build_resolver "
+            f"directly? Pass `handles={{'index': ..., 'ontology': ...}}`",
             context={"kind": _KEY, "missing": missing},
+        )
+    wrong = sorted(
+        f"{handle}={type(config[handle]).__name__}"
+        for handle, expected in required
+        if not isinstance(config[handle], expected)
+    )
+    if wrong:
+        raise ValidationError(
+            f"rung kind {_KEY!r} was given {wrong} where a live handle belongs. These "
+            f"two keys are not a document's to write -- a YAML file cannot hold an "
+            f"index or a vocabulary -- so a value here is a document naming a key the "
+            f"door was going to supply. Drop it from the `resolver:` section and let "
+            f"OntologyRegistry forward the real one, or pass it through `handles=`",
+            context={"kind": _KEY, "wrong": wrong},
         )
     return SemanticSignal(
         config["index"],
