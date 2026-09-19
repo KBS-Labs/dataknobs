@@ -654,6 +654,7 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
         embedder: TextEmbedder | None = None,
         model_name: str | None = None,
         model_version: str | None = None,
+        source_field: str | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
 
@@ -692,6 +693,21 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
                 there.
             model_version: Recorded the same way. Not defaulted from
                 *embedder*, which carries an identity and no version.
+            source_field: Where each text came from, recorded under the key
+                :meth:`add_records` writes and
+                :meth:`search_similar_records` reads back as a hit's
+                ``vector_field``. **This is what makes the pair whole at this
+                door.** The two keys are documented as written together or
+                not at all, by the store -- and this method wrote
+                ``source_text`` unconditionally and ``source_field`` never,
+                so the one caller who needed the pair had to write half of it
+                into the ``metadata`` dict itself and the rule gained a
+                silent exception at the site that most needed it to hold.
+                One name for the whole batch, because this door is handed
+                texts rather than records; a caller with a field per row puts
+                it in *metadata*, which wins (see the ``setdefault`` below).
+                ``None`` writes nothing, which is what every existing caller
+                gets.
 
         Returns:
             List of IDs for added vectors
@@ -750,6 +766,13 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
                     batch_metadata[j].setdefault(MODEL_NAME_KEY, model_name)
                 if model_version is not None:
                     batch_metadata[j].setdefault("model_version", model_version)
+                # `setdefault` for `model_name`'s reason and not
+                # `source_text`'s: this method derives the text from `texts`
+                # and so knows better than the caller, but it is *told* the
+                # source field and a per-row entry in `metadata` is the more
+                # specific of the two answers.
+                if source_field is not None:
+                    batch_metadata[j].setdefault("source_field", source_field)
 
             # Store vectors
             stored_ids = await self.add_vectors(embeddings, ids=batch_ids, metadata=batch_metadata)

@@ -23,6 +23,7 @@ from .cluster_index import (
 )
 from .cluster_index import VectorQueryFn as ClusterVectorQueryFn
 from .database import DatabaseSource
+from .semantic_index_source import SemanticIndexSource
 from .topic_index import (
     DEFAULT_HEADING_EXCLUDE_PATTERNS,
     DEFAULT_HEADING_STOPWORDS,
@@ -92,4 +93,5 @@ __all__ = [
     "extract_query_words",
     "find_heading_regions",
     "inject_embedder",
+    "SemanticIndexSource",
 ]

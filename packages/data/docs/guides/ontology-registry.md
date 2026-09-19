@@ -688,14 +688,107 @@ await registry.unload("catalog")   # the events, and the id leaves this registry
 await registry.close()             # the handles
 ```
 
+## A semantic index over the vocabulary
+
+An `index:` section binds the vocabulary to a vector store, and
+`registry.index(id)` hands back what the load built.
+
+```yaml
+ontology:
+  id: catalog
+  version: "1.0"
+
+  entity_types:
+    - id: Product
+    - id: Brand
+
+  entities:
+    - {id: sku-4471, type: Product, name: Acme Widget, description: a widget,
+       aliases: [Widget, "ACME widget"]}
+    - {id: acme, type: Brand, name: Acme Corp}
+
+  index:
+    store:
+      $resource: catalog_index
+      type: vector_stores
+```
+
+```python
+registry = OntologyRegistry.from_components(
+    config=OntologyConfig(**document), embedder=embedder
+)
+await registry.load()
+
+index = registry.index("catalog")
+written = await index.build()          # every entity, one row each
+hits = await index.search("acme widget", k=5)
+
+hits[0].record.id                      # 'catalog:sku-4471' -- qualified
+hits[0].metadata["dk_ontology_id"]     # 'catalog'
+registry.get("catalog").localize(hits[0].record.id)   # 'sku-4471'
+```
+
+**The enumeration is the vocabulary, not the schema.** Every entity the bound
+source holds gets a row, under every type it actually holds — so a type
+`entity_types:` declares and nothing is filed under contributes nothing and
+raises nothing, and an entity whose type the schema never declared is *not*
+silently dropped.
+
+**Every row carries a qualified id.** Qualification happens in the source; the
+index stores what it is given and returns what it stored, and never rewrites an
+id or infers a namespace. `localize` reads each one back.
+
+### The embedder is injected, and a configured one is refused
+
+The store the registry opens itself — `store:` resolves through the same
+`$resource` mechanism a `database:` block uses, and the handle is released by
+`close()` like any other. **The embedder it cannot open.** An `embedder:` block
+resolves to a provider-and-model pair, and the only construct that accepts one
+lives in `dataknobs-llm`, which depends on this package — so the edge runs the
+wrong way for this package to build one. An embedder also has no `close()` at
+all; the socket is one level below it, on the provider it holds, so a registry
+that built one would claim a responsibility it could not discharge.
+
+So it is handed in:
+
+```python
+from dataknobs_llm.llm.embedding import create_text_embedder
+
+registry = await OntologyRegistry.from_config_async(
+    resolved, embedder=create_text_embedder(...)
+)
+```
+
+and a document declaring an `embedder:` block with nothing injected is
+**refused at load**, naming what to pass. Refused rather than dropped: a
+section parsed into a field and discarded leaves a registry reporting success
+while holding no store, no embedder and no index, and no error anywhere.
+
+### What `index()` answers, and what `unload()` does to it
+
+`registry.index(id)` **returns** what `load()` built and is not a second way to
+build one — a caller who loaded no `index:` section gets `None` however many
+stores they hold. `unload()` drops the index with the vocabulary's other
+per-id state and releases no handle, for the reason it releases none of the
+others; `reload()` rebuilds it by the path that built it, reusing the store
+where the resolved block has not changed. `close()` is what releases the store.
+
+**The metric is a claim, not a setting.** `index:` may name one, and it is
+checked against the store's own rather than applied to it — the store resolves
+its metric at construction and its search takes no such argument. Two spellings
+of one metric agree (`l2` and `euclidean` are one family); a real disagreement
+is refused at load. Naming none checks nothing, which is the only safe default:
+defaulting to cosine would refuse every euclidean store somebody configured on
+purpose.
+
 ## Not yet here
 
-`registry.index(id)` and `registry.resolver(id)` are declared and answer `None`
-for every ontology this version builds. Absence is a configuration answer rather
-than an error — an ontology that declared no `index:` section answers `None` for
-good, and a registry with no index builder answers the same thing from the other
-side. The `resolver:` section *is* read at load, which is where the
-`surface_forms:` refusal above fires.
+`registry.resolver(id)` is declared and answers `None` for every ontology this
+version builds. Absence is a configuration answer rather than an error — an
+ontology that declared no `resolver:` section answers `None` for good, and a
+registry with no cascade builder answers the same thing from the other side.
+The `resolver:` section *is* read at load, which is where the `surface_forms:`
+refusal above fires.
 
 Write-through is not here either: `RecordEntitySource` declares no write
 capability, which is a property it states rather than a gap it hides.

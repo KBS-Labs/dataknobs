@@ -112,7 +112,23 @@ class SourceDescription:
     table: str | None
     projection: Mapping[str, Any]
     capabilities: frozenset[Capability]
-    declares: frozenset[str] = frozenset()
+
+    #: The entity types this source holds, or ``None`` where it cannot say.
+    #:
+    #: **Three states, and the third is why there is no default.** A set of
+    #: names is an enumeration a reader may act on; ``frozenset()`` is the
+    #: same kind of claim with nothing in it -- *this source holds no types*,
+    #: complete and closed; and ``None`` is *I cannot enumerate*, which is
+    #: not a claim about contents at all. A live binding over a table nobody
+    #: declared a schema for is in the third state, and it is the state a
+    #: consumer must branch on rather than treat as an empty vocabulary.
+    #:
+    #: The field defaulted to ``frozenset()``, which collapsed the second and
+    #: third into one value: a source that simply omitted the field was read
+    #: as asserting emptiness. Removing the default is what makes the
+    #: distinction something a source has to write down rather than something
+    #: a reader has to guess, and it is why every construction names it.
+    declares: frozenset[str] | None
 
 
 @runtime_checkable

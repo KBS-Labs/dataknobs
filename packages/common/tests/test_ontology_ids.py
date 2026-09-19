@@ -204,8 +204,8 @@ def test_localize_keeps_the_source_segment_for_a_multi_source_ontology() -> None
     onto = replace(
         _retail(),
         describes=(
-            SourceDescription("catalog", "memory", None, {}, frozenset()),
-            SourceDescription("warehouse", "memory", None, {}, frozenset()),
+            SourceDescription("catalog", "memory", None, {}, frozenset(), frozenset()),
+            SourceDescription("warehouse", "memory", None, {}, frozenset(), frozenset()),
         ),
     )
 

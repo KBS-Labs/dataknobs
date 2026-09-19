@@ -42,6 +42,7 @@ from dataknobs_common.entity_resolution.values import (
     Scoring,
 )
 from dataknobs_common.ontology.config import OntologyConfig
+from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
@@ -60,6 +61,12 @@ from dataknobs_common.ontology.loader import (
     build_ontology,
     build_resolver,
     load_ontology,
+)
+from dataknobs_common.ontology.tags import (
+    ALIAS_FORMS_KEY,
+    NODE_ID_KEY,
+    ONTOLOGY_ID_KEY,
+    TAXONOMY_ID_KEY,
 )
 from dataknobs_common.ontology.model import (
     DK_ENTITY_TYPE,
@@ -190,4 +197,9 @@ __all__ = [
     "qualify",
     "relation_id",
     "split_qualified",
+    "EntitySourceIndexSource",
+    "ALIAS_FORMS_KEY",
+    "NODE_ID_KEY",
+    "ONTOLOGY_ID_KEY",
+    "TAXONOMY_ID_KEY",
 ]

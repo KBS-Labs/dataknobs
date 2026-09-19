@@ -45,6 +45,8 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
+from dataknobs_common.testing import requires_chromadb
+
 from dataknobs_data.backends.postgres_vector import (
     distance_to_score,
     get_vector_operator,
@@ -512,3 +514,103 @@ class TestTheConfiguredMetricReachesEverySurface:
             )
         finally:
             database.close()
+
+
+class TestTheStoreLaneReadsTheSameVocabulary:
+    """``vector/stores/`` is the lane the first audit did not reach.
+
+    That audit's ``code_paths`` name ``backends/sqlite_mixins.py``,
+    ``backends/vector_config_mixin.py``, ``vector/elasticsearch_utils.py``
+    and ``vector/mixins.py`` --- the **database** vector lane and the shared
+    mixin. The ``VectorStore`` family is the other half, and both of the
+    shapes that audit fixed were still present in it one directory over:
+
+    * ``_setup`` parsed a configured metric with ``DistanceMetric(cfg.metric)``,
+      which knows member values only --- so six of the twelve published
+      spellings were refused at this door and accepted at every other one;
+    * ``ChromaVectorStore`` ended its metric map in ``.get(self.metric,
+      "cosine")`` over a five-key dict with no ``L1`` entry, so a store
+      configured for Manhattan distance built and queried a **cosine**
+      ``hnsw:space`` with no error and no log line.
+
+    The second contradicted a decision the first audit took deliberately:
+    ``get_similarity_for_metric`` refuses ``L1`` rather than answering cosine,
+    *"a BREAKING change in the direction of an error"*. Chroma answered
+    cosine for the same member, so the two doors disagreed about what an
+    unservable metric does --- and the disagreement was introduced by the fix
+    rather than surviving it. **They stop disagreeing because both refuse.**
+
+    Which is also why this class imports ``dataknobs_data.vector.stores`` at
+    all: the first guard's whole import surface is the audited lane, so it
+    reported green over the one that still held the defect.
+    """
+
+    PUBLISHED: ClassVar[list[str]] = sorted(
+        {member.value for member in DistanceMetric}
+        | {alias for member in DistanceMetric for alias in member.get_aliases()}
+    )
+
+    def test_the_published_vocabulary_is_twelve_spellings(self):
+        """A count, so a thirteenth arriving is a visible change here."""
+        assert len(self.PUBLISHED) == 12
+
+    @pytest.mark.parametrize("spelling", PUBLISHED)
+    def test_a_configured_store_accepts_every_published_spelling(self, spelling):
+        """Six of these raised ``ValueError`` at this door and nowhere else.
+
+        The six that worked were member values rather than anything the alias
+        table achieved --- which is ``resolve``'s own docstring about the
+        table it replaced, reproduced one directory over.
+        """
+        from dataknobs_data.vector.stores.memory import MemoryVectorStore
+
+        store = MemoryVectorStore({"dimensions": 4, "metric": spelling})
+        assert store.metric is DistanceMetric.resolve(spelling).canonical()
+
+    def test_an_unknown_metric_is_refused_and_the_message_lists_what_is_accepted(self):
+        """Refusing is the point: the table this replaces answered cosine."""
+        from dataknobs_data.vector.stores.memory import MemoryVectorStore
+
+        with pytest.raises(ValueError, match="Unknown distance metric"):
+            MemoryVectorStore({"dimensions": 4, "metric": "nearest-ish"})
+
+    @requires_chromadb
+    @pytest.mark.parametrize(
+        ("spelling", "space"),
+        [
+            ("cosine", "cosine"),
+            ("cos", "cosine"),
+            ("cosine_similarity", "cosine"),
+            ("euclidean", "l2"),
+            ("l2", "l2"),
+            ("euclidean_distance", "l2"),
+        ],
+    )
+    def test_chroma_maps_each_servable_family_to_its_own_space(self, spelling, space):
+        """Keyed on the family, so no spelling can be missed --- there are four keys."""
+        from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+
+        store = ChromaVectorStore({"dimensions": 4, "metric": spelling})
+        assert store.chroma_metric == space
+
+    @requires_chromadb
+    @pytest.mark.parametrize("spelling", ["dot_product", "inner_product", "ip"])
+    def test_chroma_maps_the_inner_product_family_to_ip(self, spelling):
+        from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+
+        assert ChromaVectorStore({"dimensions": 4, "metric": spelling}).chroma_metric == "ip"
+
+    @requires_chromadb
+    @pytest.mark.parametrize("spelling", ["l1", "manhattan", "l1_distance"])
+    def test_chroma_refuses_a_metric_it_cannot_serve(self, spelling):
+        """Chromadb validates ``hnsw:space`` against ``^(l2|cosine|ip)$``.
+
+        So there is no ``L1`` arm to add and the fix at this site is a
+        refusal, which is what the sibling door already does. A store
+        configured for Manhattan distance must fail at construction rather
+        than build a cosine index.
+        """
+        from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+
+        with pytest.raises(ValueError, match="l1"):
+            ChromaVectorStore({"dimensions": 4, "metric": spelling})

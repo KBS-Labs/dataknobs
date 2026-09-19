@@ -64,7 +64,11 @@ class OntologyConfig(StructuredConfig):
         sources: Unbound source specs, discriminated by ``kind:``
         overlay: A default rather than a binding
         taxonomies: Axis definitions -- the definition, never the built axis
-        index: The semantic index's configuration, raw
+        index: The semantic index's configuration, raw. Two blocks: a
+            ``store:`` the reader resolves and opens itself, and an
+            ``embedder:`` it refuses rather than builds --- the construct that
+            accepts one lives in a package that depends on the reader's, so
+            the edge runs the wrong way and the embedder is injected
         resolver: The placement cascade's configuration, raw, because its
             ``rungs`` are themselves discriminated by ``kind:``
         event_bus: The bus a registry announces this vocabulary's arrival and

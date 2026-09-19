@@ -41,6 +41,7 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.factory import async_database_factory
 from dataknobs_data.ontology import OntologyRegistry
 from dataknobs_data.query import Filter, Operator, Query
+from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1188,6 +1189,98 @@ async def test_a_bus_whose_connect_fails_is_closed_rather_than_leaked() -> None:
         event_bus_backends.unregister("unconnectable-probe")
 
 
+class _UninitialisableStore(MemoryVectorStore):
+    """A store whose ``initialize()`` fails, as a backend with a bad path would."""
+
+    def __init__(self) -> None:
+        super().__init__({"dimensions": 4})
+        self.closed = False
+
+    async def initialize(self) -> None:
+        raise OperationError("the probe store cannot open its index")
+
+    async def close(self) -> None:
+        self.closed = True
+        await super().close()
+
+
+async def test_the_open_reaches_a_store_that_spells_the_step_initialize() -> None:
+    """The second resource family opens under a different name, and the helper probes.
+
+    ``_connect_or_close`` called ``resource.connect()`` outright, which is the
+    only spelling the two collaborators it was written for have. A
+    ``VectorStore`` -- the third collaborator, and the one an ``index:`` block
+    names -- carries ``initialize()`` among its nine abstract members and no
+    ``connect`` at all, so the helper raised ``AttributeError`` on the first
+    store it was handed.
+
+    The generalisation the helper was written under is still right: what it
+    exists for is the window between *built* and *recorded*, and a
+    ``FaissVectorStore`` or a ``ChromaVectorStore`` acquires an index or a
+    client in its constructor exactly as a database does. It generalised over
+    the hazard and not over the spelling, and no second spelling existed when
+    it was written.
+
+    **The probe never has to choose.** Of the 698 public classes in the three
+    packages, none resolves both members.
+    """
+    registry = OntologyRegistry.from_components(config=OntologyConfig(**_authored()))
+    store = MemoryVectorStore({"dimensions": 4})
+    assert not hasattr(store, "connect")
+
+    await registry._connect_or_close(store)
+
+    assert store._initialized is True
+    await store.close()
+    await registry.close()
+
+
+async def test_a_store_whose_initialize_fails_is_closed_rather_than_leaked() -> None:
+    """The bus's case one collaborator over, and it is why the probe is in this helper.
+
+    A second helper beside ``_connect_or_close`` would be a second spelling of
+    a remedy whose whole argument is that two spellings is how one of them
+    gets fixed alone. So the store inherits the close-on-failure the bus and
+    the handle already have, rather than being given its own copy of it.
+    """
+    registry = OntologyRegistry.from_components(config=OntologyConfig(**_authored()))
+    unopenable = _UninitialisableStore()
+
+    with pytest.raises(OperationError, match="cannot open its index"):
+        await registry._connect_or_close(unopenable)
+
+    assert unopenable.closed is True
+    await registry.close()
+
+
+def test_no_collaborator_carries_both_spellings_of_the_open() -> None:
+    """The probe's falsifier, run rather than quoted.
+
+    ``getattr`` sees inherited members, so the question is properly asked of
+    *resolved* attributes over every public class rather than of definition
+    sites. A collaborator carrying both would be one the probe has to choose
+    for, and choosing is a ruling this one does not make.
+    """
+    import importlib
+    import pkgutil
+
+    both: list[str] = []
+    for package in ("dataknobs_common", "dataknobs_data"):
+        root = importlib.import_module(package)
+        for info in pkgutil.walk_packages(root.__path__, prefix=f"{package}."):
+            try:
+                module = importlib.import_module(info.name)
+            except Exception:
+                continue
+            for name, obj in vars(module).items():
+                if name.startswith("_") or not isinstance(obj, type):
+                    continue
+                if hasattr(obj, "connect") and hasattr(obj, "initialize"):
+                    both.append(f"{info.name}.{name}")
+
+    assert both == [], f"the probe would have to choose for: {sorted(set(both))}"
+
+
 # --------------------------------------------------------------------------
 # One handle per block, decided on the loop
 # --------------------------------------------------------------------------
@@ -1550,11 +1643,17 @@ async def test_a_configured_registry_is_not_missing_the_collaborators_it_resolve
 async def test_what_the_registry_may_be_handed_is_still_advertised() -> None:
     """Removing the false positive must not remove the answer tooling wanted.
 
-    The two names are real injection points -- ``from_components`` takes them
-    -- so a caller asking what this class accepts still has to be told. They
-    move to the field that says *may*, and the union is readable in one call.
+    The names are real injection points -- ``from_components`` takes them --
+    so a caller asking what this class accepts still has to be told. They sit
+    on the field that says *may*, and the union is readable in one call.
+
+    ``embedder`` is the one of them the configured door cannot resolve for
+    itself: the construct that builds one lives in a package that depends on
+    this one, so the edge runs the wrong way. It is declared here for that
+    reason rather than left undeclared, because a collaborator a caller must
+    supply and cannot discover is worse than one they merely may supply.
     """
-    accepted = frozenset({"database", "event_bus", "forms_database"})
+    accepted = frozenset({"database", "embedder", "event_bus", "forms_database"})
     assert OntologyRegistry.expected_components() == frozenset()
     assert OntologyRegistry.optional_components() == accepted
     assert OntologyRegistry.accepted_components() == accepted

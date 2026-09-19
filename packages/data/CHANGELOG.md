@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`SemanticIndex`**, in `dataknobs_data.vector.semantic_index`. Binds a
+  text-producing view of some data to a vector store: `build()` embeds
+  everything the source streams and writes it, `search()` and `search_batch()`
+  read it back. It holds no storage of its own and is filed away from
+  `stores/` deliberately -- a class under `stores/` invites a caller to reach
+  for the store handle, and the whole value of this one is not having to know
+  which backend is underneath.
+
+  The build streams and writes in batches rather than collecting the source
+  first, and it passes the source's ids to the store: without that every
+  backend mints a uuid per row and the id the source took care to emit is
+  discarded one call below the decision to emit it.
+
+  `metric=` is a **claim about the store, not a setting on it** -- the store
+  resolves its own metric at construction and its search takes no such
+  argument. Naming one refuses a store that is serving a different family,
+  compared in canonical form so two spellings of one metric agree. No default:
+  cosine would refuse every euclidean store somebody configured on purpose.
+
+- **`RecordFieldSource` and `MultiFieldSource`**, index sources over a database
+  table -- one text per row from one field, or composed from several. They emit
+  **local** ids, which is correct for a table read on its own terms and is a
+  boundary rather than an oversight.
+
+- **`SemanticIndexSource`**, a `GroundedSource` over a `SemanticIndex`. An
+  adapter rather than a base class, so the index stays usable without the
+  retrieval stack. Results are merged across query phrasings by id, keeping the
+  best score.
+
+- **`OntologyRegistry` reads an `index:` section.** `registry.index(id)` now
+  returns the `SemanticIndex` the load built, or `None` where the document
+  declared no section -- absence is still a configuration answer rather than an
+  error. The store is opened from its `$resource` block off the event loop,
+  cached on the resolved block, and released by `close()`; the index is dropped
+  by `unload()` with the vocabulary's other per-id state and rebuilt by
+  `reload()`.
+
+  **The embedder is injected and a configured one is refused.** An `embedder:`
+  block resolves to a provider-and-model pair whose only builder lives in a
+  package that depends on this one, and an embedder holds no closeable resource
+  of its own -- so a registry that built one would claim a responsibility it
+  could not discharge. `embedder` joins the collaborators a caller may inject,
+  and a document naming an `embedder:` block with nothing injected is refused
+  at load, naming what to pass. Refused rather than dropped: a section parsed
+  into a field and discarded leaves a registry reporting success while holding
+  no store, no embedder and no index.
+
+- **`bulk_embed_and_store` takes a keyword-only `source_field=`**, so the store
+  writes the source-field pair its own contract says is written together or not
+  at all. It wrote `source_text` unconditionally and `source_field` never, so a
+  caller needing both had to write half of it into the metadata dict by hand.
+  Default `None` writes nothing, which is what every existing caller gets.
+
+### Fixed
+
+- **A vector store now accepts every distance-metric spelling the enum
+  publishes.** `VectorStore._setup` parsed a configured metric with
+  `DistanceMetric(...)`, which knows member values only, so six of the twelve
+  published spellings -- `cos`, `manhattan`, `euclidean_distance`,
+  `cosine_similarity`, `l1_distance`, `ip` -- raised at this door while being
+  accepted at every other one. It resolves through the enum and settles on the
+  canonical member, which is what the database vector lane already did.
+
+- **`ChromaVectorStore` refuses a metric chromadb cannot serve instead of
+  answering cosine.** Its metric map ended in a cosine default over a table
+  with no `L1` entry, so a store configured for Manhattan distance reported
+  `DistanceMetric.L1` and built and queried a **cosine** `hnsw:space`, with no
+  error and no log line. chromadb validates `hnsw:space` against
+  `l2|cosine|ip`, so there is no arm to add: the fix is a refusal at
+  construction, which is what the sibling Elasticsearch door already does.
+
+- **`OntologyRegistry` can open a vector store.** Its connect-or-close helper
+  called `resource.connect()` outright, and a `VectorStore` spells that step
+  `initialize()` and has no `connect` at all -- so the helper raised
+  `AttributeError` on the first store it was handed. It probes by member
+  presence now, as the matching close helper already did.
+
 ### Changed
 
 - **`Filter` is frozen, and hashes.** It describes a condition rather than
