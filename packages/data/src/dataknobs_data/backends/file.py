@@ -850,20 +850,20 @@ class AsyncFileDatabase(
         # Use the default implementation from mixin
         return await self._default_stream_write(records, config)
 
-    async def vector_search(
+    async def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str | None = None,
-        **kwargs: Any,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python calculations.
+        """Raw k-NN over every record, in Python.
 
-        Note: This implementation reads all records from disk to perform
-        the search locally. For better performance with large datasets,
-        consider using SQLite or a dedicated vector database.
+        Note: this reads all records from disk to search locally. For better
+        performance with large datasets, consider SQLite or a dedicated
+        vector database.
         """
         return await self.python_vector_search_async(
             query_vector=query_vector,
@@ -871,7 +871,6 @@ class AsyncFileDatabase(
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )
 
     async def close(self) -> None:
@@ -1241,20 +1240,20 @@ class SyncFileDatabase(
             config=config,
         )
 
-    def vector_search(
+    def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str | None = None,
-        **kwargs: Any,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python calculations.
+        """Raw k-NN over every record, in Python.
 
-        Note: This implementation reads all records from disk to perform
-        the search locally. For better performance with large datasets,
-        consider using SQLite or a dedicated vector database.
+        Note: this reads all records from disk to search locally. For better
+        performance with large datasets, consider SQLite or a dedicated
+        vector database.
         """
         return self.python_vector_search_sync(
             query_vector=query_vector,
@@ -1262,7 +1261,6 @@ class SyncFileDatabase(
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )
 
     def close(self) -> None:

@@ -698,23 +698,22 @@ class AsyncS3Database(
 
         return ids
 
-    async def vector_search(
+    async def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str | None = None,
-        **kwargs: Any,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python calculations.
+        """Raw k-NN over every record, in Python.
 
-        WARNING: This implementation downloads all records from S3 to perform
-        the search locally. This is inefficient for large datasets. Consider
-        using a vector-enabled backend like PostgreSQL or Elasticsearch for
-        production use with large datasets.
+        WARNING: this downloads all records from S3 to search locally, which
+        is inefficient for large datasets. Consider a vector-enabled backend
+        such as PostgreSQL or Elasticsearch for production use at scale.
 
-        Future optimization: Override this method to use AWS OpenSearch or
+        Future optimization: override this hook to use AWS OpenSearch or a
         similar vector-enabled service when available.
         """
         return await self.python_vector_search_async(
@@ -723,5 +722,4 @@ class AsyncS3Database(
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )

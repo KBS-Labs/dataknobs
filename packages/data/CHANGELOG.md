@@ -7,7 +7,339 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: a backend implements `_vector_search`, not `vector_search`.**
+  `vector_search` is now a concrete method on `SyncVectorOperationsMixin` and
+  `AsyncVectorOperationsMixin`, over a new abstract `_vector_search` hook that
+  carries the raw k-nearest-neighbour search and nothing else. An out-of-tree
+  backend migrates by renaming its method to `_vector_search`, making
+  everything after `query_vector` keyword-only, and deleting `include_source`,
+  `score_threshold` and any `**kwargs` from the signature — the mixin owns
+  those now.
+
+- **BREAKING: everything after `query_vector` is keyword-only, on every
+  backend.** The mixin has declared it so since the twelve implementations were
+  found to disagree about positional order — most spelled it `(..., k, filter,
+  metric)` where the declaration says `(..., k, metric, filter)`, so a fourth
+  positional argument meant the metric on some backends and the filter on
+  others. That declaration was not enforced, because each backend redeclared
+  the signature. Now there is one signature, and it refuses the form that was
+  never portable: `db.vector_search(q, "embedding", 5)` becomes a `TypeError`,
+  and `db.vector_search(q, vector_field="embedding", k=5)` is what it always
+  should have been.
+
+- **BREAKING: `vector_search` no longer swallows an unrecognised keyword.**
+  Eight of the twelve backends declared `**kwargs: Any` and forwarded it to a
+  helper that reads it nowhere, so a misspelled or unsupported keyword bound at
+  the signature and vanished. It is now a `TypeError`, which is what the two
+  Postgres backends always did.
+
+- **BREAKING: `create_vector_index` no longer takes `**kwargs`.** It was
+  declared for "backend-specific index parameters" on both mixins and both
+  Elasticsearch backends and read in none of the four. A backend-specific
+  parameter is a named parameter on that backend, as
+  `AsyncPostgresDatabase`'s `lists` already is.
+
+- **`metric` is settled once, above all twelve backends.** Eight of them
+  defaulted it to `None` and resolved that against the database's configured
+  `vector_metric`; the four with native vector support — both Postgres and
+  both Elasticsearch backends — defaulted it to cosine and never consulted the
+  configuration at all. So a database built with `vector_metric="euclidean"`
+  searched under euclidean on memory, file, SQLite and S3, and under cosine on
+  the four backends that could actually have used it. `vector_search` now
+  accepts a `DistanceMetric`, its string value, any alias
+  `DistanceMetric.get_aliases()` publishes, or `None` — and `None`, which is
+  the new default, means the metric the database was configured with.
+
+- **`SyncElasticsearchDatabase` has the vector surface its async twin has.**
+  It inherited neither vector mixin and defined `vector_search` and
+  `create_vector_index` from nowhere, so the other eight members of that
+  surface were absent: `bulk_embed_and_store`, `update_vector`,
+  `delete_from_index`, `drop_vector_index`, `get_vector_index_stats` and
+  `hybrid_search` raised `AttributeError` there and answered on
+  `AsyncElasticsearchDatabase`, along with the two private helpers
+  `hybrid_search` calls. It now mixes in `SyncVectorOperationsMixin` and
+  `BulkEmbedMixin`; all eight arrive with the one `vector_search` that
+  occasioned the change.
+
+- **`DistanceMetric` owns its own vocabulary.** Two new members: `canonical()`
+  returns the member standing for a metric's family, so `INNER_PRODUCT`
+  canonicalises to `DOT_PRODUCT` and `L2` to `EUCLIDEAN` — a fact that was
+  written in a trailing comment on each member and nowhere a program could
+  read; and `resolve()` settles a member, a member value or any published
+  alias into a member, case-insensitively, and raises `ValueError` naming the
+  accepted vocabulary for anything else. Every metric lookup in the package
+  now goes through them.
+
+- **`get_vector_operator` takes a metric and raises on one it does not know.**
+  It took a `str` and returned the cosine operator for anything unrecognised.
+  It now accepts a `DistanceMetric` or any name `resolve()` accepts, and
+  raises `ValueError` otherwise. Two new siblings keep the pgvector
+  vocabularies in one place: `get_vector_opclass` (the index operator class,
+  previously an inline table in `build_vector_index_sql` and another in
+  `PgVectorStore`) and `distance_to_score` (the distance-to-similarity
+  conversion, previously four inline copies). `build_vector_index_sql` and
+  `drop_vector_index` canonicalise the metric before naming an index, so the
+  two spellings of one metric no longer produce two index names.
+
+- **BREAKING: `build_vector_column_expression` is replaced by
+  `build_vector_value_expression(field, dimensions=None)`.** The old function
+  took a `for_index` flag whose two branches returned the same string, and
+  produced an expression neither Postgres search used. The new one produces
+  the expression both searches and index creation use, which is what makes an
+  index reachable for a query.
+
+- **BREAKING: `AsyncPostgresDatabase` no longer maintains a `vector_<field>`
+  column.** `_ensure_vector_column`, `_collect_vector_inserts` and
+  `_build_vector_params` are gone, and `create`/`update`/`upsert` no longer
+  issue `ALTER TABLE` on the write path. Vectors live in the JSON `data`
+  column, where every write path on both twins has always put them. An
+  existing table keeps its `vector_<field>` column; nothing reads or writes it
+  any more, and it can be dropped.
+
+- **`SyncPostgresDatabase` implements the three index methods.** It inherited
+  the mixin's defaults for `create_vector_index`, `drop_vector_index` and
+  `get_vector_index_stats`, which return `True`, `True` and an empty report —
+  so it said it had built an index and built nothing. All three now do the
+  work its async twin does.
+
+- **BREAKING: `python_vector_search_sync` / `python_vector_search_async` take
+  keyword arguments after `query_vector`, and no `**kwargs`.** Both declared a
+  `**kwargs` neither body read — the same silent bind removed from the twelve
+  backend signatures, one frame down. They also resolve `metric` through
+  `resolve_metric` rather than re-implementing it, so they accept everything
+  the rest of the package accepts.
+
+- **BREAKING: `hybrid_search`, `create_vector_index` and `drop_vector_index`
+  default `metric` to `None` too.** `vector_search` was the only method on
+  this surface that deferred to the database's configuration; its neighbours
+  kept the hardcoded `DistanceMetric.COSINE` that this release removes
+  everywhere else. So a database built with `vector_metric="euclidean"`
+  searched under euclidean, built a **cosine** index by default, and ran its
+  hybrid search's vector arm under cosine — and an index under a metric the
+  searches do not use is one the planner declines. A caller who passed the
+  metric explicitly is unaffected; one who relied on the cosine default now
+  gets the database's metric, which for `drop_vector_index` means it drops
+  the index `create_vector_index` would have built.
+
+- **BREAKING: `resolve_metric` returns the canonical member.** `"l2"` used to
+  arrive at a backend as `DistanceMetric.L2` and now arrives as `EUCLIDEAN`;
+  `"inner_product"` arrives as `DOT_PRODUCT`. A table keyed on the member had
+  to restate the aliasing, which is the divergence `canonical()` exists to
+  end, and two tables were still restating it — see *Fixed*. Visible in
+  `VectorSearchResult.metadata["metric"]`, which now reports the family rather
+  than the spelling the caller used.
+
+- **BREAKING: `get_similarity_for_metric` refuses a metric Elasticsearch
+  cannot serve.** It ended in `mapping.get(metric, "cosine")`, so
+  `DistanceMetric.L1` — which Elasticsearch has no `dense_vector` similarity
+  for — produced a cosine mapping and reported success. It now raises
+  `ValueError` naming what Elasticsearch does offer. `l1` remains a valid
+  `vector_metric` for every other backend — and on Postgres it needs pgvector
+  0.7.0+, which is where `<+>` and `vector_l1_ops` arrived. An L1 request used
+  to be answered in cosine distances on any server; it now errors on an older
+  one. Which backend serves which metric is tabulated in the API reference.
+
+- **BREAKING: `get_index_check_sql` matches the index names this class
+  builds.** It matched `indexname LIKE '%<field>%'`, which also matches
+  `idx_<table>_"vector_<field>"_cosine` — the index the removed
+  `_ensure_vector_column` built over the `vector_<field>` column. On a table
+  written by an earlier release, `get_vector_index_stats` therefore reported
+  `indexed: True` for a field whose searches now run a sequential scan. It
+  also claimed `embedding_v2`'s index when asked about `embedding`. The
+  parameter is now the list of names `get_vector_index_name` produces, one per
+  metric family. That orphaned index can be dropped by hand; nothing reads it.
+
+- **`get_vector_index_stats` reports a failed lookup.** Its body is wrapped in
+  `except Exception`, so a query that failed returned the same
+  `{"indexed": False, "vector_count": 0}` as a field with no index and no
+  vectors. A failure now also sets `error`.
+
+- **Elasticsearch's `metric` does not choose its ranking, and both twins now
+  say so.** Elasticsearch ranks k-NN by the `similarity` in the field's
+  *mapping*, fixed at index creation, and `build_knn_query` carries no metric
+  at all — so the resolved metric is recorded on each hit and changes nothing
+  about the order. On a field whose mapping was built under another metric,
+  that record is what the caller asked for rather than what ran. Honouring a
+  per-query metric needs either a `script_score` query, which gives up the
+  approximate-nearest-neighbour index, or a mapping round trip; the falsehood
+  worth removing now is the silent one.
+
+- **`score_threshold` is compared against the backend's own scale.** The ten
+  Python-path and Postgres backends report a raw similarity; Elasticsearch
+  reports its `_score`, which for a `cosine` mapping is `(1 + cos) / 2`. One
+  threshold constant therefore does not cut at the same place everywhere.
+  `distance_to_score` used to claim its scores were comparable "across
+  backends"; that was one backend too many, and both it and `vector_search`
+  now say which.
+
 ### Fixed
+
+- **A vector field name no longer reaches SQL unvalidated.**
+  `get_vector_count_sql` interpolated it straight into a SQL *string literal*
+  — `WHERE data ? '{field_name}'` — where `quote_ident` does not apply and
+  `validate_field_name` is the check that does. It had one caller; this
+  release gave it two more on `SyncPostgresDatabase`, and in
+  `get_vector_index_stats` nothing else validates and the whole body is
+  wrapped in `except Exception`, so a statement that ran and a statement that
+  failed were reported identically. Both it and `get_index_check_sql` — whose
+  arguments are bound, so it was never exposed — validate now.
+
+- **A record whose vector field holds `null` no longer breaks the search.**
+  `WHERE data ? 'embedding'` is a key-*presence* test and `record_to_json`
+  writes `{"embedding": null}` for a record carrying `None`. The async twin's
+  predicate used to be `WHERE vector_<field> IS NOT NULL`, which a column type
+  makes total; moving both twins onto the `data` column lost that. Such a row
+  yields `distance = NULL`, sorts last, and so surfaces only when the corpus
+  holds fewer than `k` real vectors — at which point `float(None)` fails the
+  whole search rather than the one row. A non-vector string under the key
+  failed it inside Postgres instead. Both searches and both hybrid arms now
+  require `jsonb_typeof` to be `array` or `object`.
+
+- **Each arm of the native Postgres hybrid search orders itself before it
+  truncates.** Both CTEs computed a `ROW_NUMBER()` over the whole set and then
+  took a bare `LIMIT fetch_k`, so the ranks were right and the rows they were
+  attached to were an arbitrary sample. It was masked while the vector arm
+  read the `vector_<field>` column only three of fourteen write paths filled —
+  usually fewer rows than `fetch_k`, so the `LIMIT` never bound. Reading the
+  column every write path fills is what made it reachable.
+
+- **`hybrid_search`'s `filter` reaches the native path.** It was declared,
+  never consulted, and the parameter list was built as `[text, vector, field]`
+  and stopped — so a filtered hybrid search read the whole table and reported
+  no error, while the client-side fallback one branch above it applied the
+  filter correctly. The same call answered differently depending on a fusion
+  strategy the caller may not have set. It is applied to both arms.
+
+- **`_compute_similarity` scores every metric.** It branched on the member
+  rather than the family, so `DistanceMetric.L2` and `INNER_PRODUCT` fell into
+  its `else` and raised `Unsupported metric` — and it is what
+  `PythonVectorSearchMixin` calls for all eight backends with no native k-NN,
+  on every search. A database configured `vector_metric="l2"`, a member value
+  the config parser accepts without a warning, could not run a search at all.
+  `L1` is computed rather than refused; only the absence of a branch made the
+  Manhattan distance unavailable.
+
+- **A configured metric accepts every spelling the enum publishes.**
+  `_apply_vector_config` used `DistanceMetric(name.lower())`, which knows only
+  member values, so six of the eight names `get_aliases()` publishes reached
+  its fallback and were configured as cosine under a warning calling them
+  invalid — `vector_metric: "manhattan"` was a documented setting that
+  silently did something else.
+
+- **`include_source` no longer reports text the vector was not made from.**
+  `derive_source_text` reproduced the assembly from the record's *current*
+  field values, which is the embedded text only while nothing has edited the
+  record since. Updating a title without re-embedding returned a `source_text`
+  that provably was not embedded, with no signal — the one failure the
+  parameter exists to prevent, since the id round-trip it replaced would have
+  read the same current values. `content_hash_metadata` writes the digest of
+  the embedded text onto the same dict as the field list, so the check costs
+  no query; a record that has moved on now yields `None`, which is what the
+  function already returned for "the record does not say". A vector carrying
+  no digest is still assembled, so nothing written before the digest existed
+  loses the feature.
+
+- **`_vector_search` on `AsyncPostgresDatabase` no longer rewrites
+  placeholders it does not have.** The class builds its query builder without
+  a `param_style`, which defaults to numeric, so the filter clause already
+  carried `$3`, `$4`, … and a loop replacing `%s` was a no-op — under a
+  comment asserting the opposite.
+
+- **Both Elasticsearch twins ask for the source the same way.** One passed
+  `source=True` and the other `_source=True`. Both reach the transport,
+  because elasticsearch-py rewrites body-field aliases before dispatch, so no
+  runtime check could tell them apart — but only `source` is a parameter of
+  `search`, and `_source` is a `call-arg` error wherever the client is typed.
+
+- **A search asking for dot product or L1 is no longer answered in cosine
+  distances.** `get_vector_operator` mapped five spellings and returned the
+  cosine operator for everything else, and `DistanceMetric.DOT_PRODUCT` and
+  `DistanceMetric.L1` were not among the five — so both were silently ranked
+  by cosine, with no error and no log line. `INNER_PRODUCT` *was* mapped, so
+  the two spellings of one metric answered differently, and the same method
+  contradicted itself: its score conversion twenty lines below knew
+  `dot_product` names the inner-product metric. `PgVectorStore` carried the
+  same fallback twice more, in its operator-class and distance-operator
+  chains, so `DistanceMetric.L1` was cosine there too. Eight sites read a
+  metric across the package — two choosing an operator, two an index operator
+  class, four converting a distance to a score — and none knew all six
+  members. They are now three functions keyed on `canonical()`, which has
+  four keys and covers all six.
+
+- **The two Postgres backends store and search vectors in the same place, and
+  every write path is visible to both.** The async twin searched a dedicated
+  `vector_<field>` pgvector column; the sync twin extracted the vector from
+  the JSON `data` column. Each was internally consistent, so the divergence
+  only showed when one wrote and the other read. The column was the narrower
+  of the two: it was filled by three of the fourteen write paths across the two
+  classes — `create`, `update` and `upsert` on the async twin — so
+  `create_batch` and `upsert_batch` produced records **that twin's own
+  `vector_search` could not find**, and a corpus written by the sync twin was
+  invisible to the async one entirely: `UndefinedColumnError` where no async
+  single-write had ever created the column, and an empty result list with no
+  error where one had. Both twins read `data` now, which every write path
+  fills, so no backfill is needed and no row is orphaned.
+
+- **The index `create_vector_index` builds is one the search can use.** It
+  built its index over `(data->'embedding'->>'value')::vector(n)` while both
+  searches asked a `CASE` expression that also tolerates a bare array. A
+  pgvector expression index serves only a query whose expression matches
+  exactly, so the one implementation of index creation produced an index no
+  query could reach — measured with `EXPLAIN` and sequential scans disabled,
+  the planner fell back to a sequential scan rather than use it. Both now come
+  from `build_vector_value_expression`.
+
+- **Both Postgres twins score a hit the same way.** Each carried its own
+  distance-to-score conversion and they disagreed: for cosine the sync twin
+  returned `1 - distance` — the cosine similarity, and the number the ten
+  Python-path backends return — and the async twin returned
+  `1 - min(distance, 2) / 2`. Two numbers for one corpus and one query, which
+  nothing compared until `score_threshold` arrived to compare either against a
+  constant. `distance_to_score` is now the only conversion.
+
+- **`AsyncPostgresDatabase.hybrid_search` contributes a vector half for every
+  record.** Its native-strategy CTE read the same `vector_<field>` column, so
+  a batch-written or sync-written corpus matched nothing there and the search
+  silently degraded to its text half. It also hardcoded `1.0 - distance` as
+  the vector score — the cosine formula, applied whichever metric the caller
+  asked for.
+
+- **`score_threshold` drops the hits it says it drops.** It was declared on
+  both vector mixins and implemented on two of the twelve backends. Eight
+  swallowed it into `**kwargs` and two raised `TypeError`. On
+  `AsyncMemoryDatabase`, three records scoring 1.0, 0.994 and 0.0 all came
+  back from `vector_search(q, k=10, score_threshold=0.99)` — the same three,
+  in the same order, as the call with no threshold. It is now applied once,
+  in the mixin, for every backend. It is a **post-filter**: a call carrying a
+  threshold may return fewer than `k` results, which is what the Elasticsearch
+  implementation always did and is now the stated contract. Pushing the
+  threshold into the query itself remains available to a backend and needs no
+  further break.
+
+- **`include_source` populates `VectorSearchResult.source_text`, and both
+  Elasticsearch backends stop returning an empty list when it is `False`.**
+  The parameter had no working implementation anywhere. `record` is a required
+  field, so a hit without one cannot be constructed — which is why both
+  Elasticsearch twins forwarded `include_source` straight into the client's
+  source parameter (spelled `source` on one twin and `_source` on the other),
+  found `_doc_to_record` had nothing to read, and skipped every hit.
+  The knob never decided whether the record comes back; it decides whether the
+  text the vector was made from is assembled onto the result. That assembly
+  needs no query and no id round-trip: the vector field already stores its
+  ordered source-field list and separator, and `derive_source_text` reads them
+  back. A vector written before those descriptions existed yields `None`.
+
+- **Three index methods on `AsyncPostgresDatabase` accept the call the mixin
+  declares.** `drop_vector_index()` and `get_vector_index_stats()` made
+  `vector_field` required where the mixin defaults it, and
+  `create_vector_index()` made both `vector_field` and `dimensions` required —
+  so a call written against the mixin raised `TypeError` on Postgres and
+  answered everywhere else. pgvector does still need the dimensions to build
+  an index; that is now a `ValueError` naming the reason rather than a
+  signature that turns the caller away.
+
 
 - **`enable_vector_support()` on both Postgres backends says the database is
   not connected, instead of answering as though it had looked.** Every other

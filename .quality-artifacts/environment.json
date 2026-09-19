@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-19T12:12:08Z",
+  "timestamp": "2026-09-19T14:08:38Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/what-every-pool-deref-assumed",
-  "git_commit": "0cde7116a05692d6c90620bd32447835fa4f2b3e",
+  "git_branch": "sbk/one-search-twelve-backends",
+  "git_commit": "ba6b8f54e1bfbb523e1a3dd19ddbe207bd899838",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

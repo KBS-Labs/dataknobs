@@ -336,23 +336,26 @@ class AsyncMemoryDatabase(
         # Use the default implementation from mixin
         return await self._default_stream_write(records, config)
 
-    async def vector_search(
+    async def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str | None = None,
-        **kwargs: Any,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python calculations."""
+        """Raw k-NN over every record, in Python.
+
+        The threshold and the source assembly are the mixin's; this is the
+        part that knows where the records are.
+        """
         return await self.python_vector_search_async(
             query_vector=query_vector,
             vector_field=vector_field,
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )
 
 
@@ -653,21 +656,24 @@ class SyncMemoryDatabase(
         # Use the default implementation from mixin
         return self._default_stream_write(records, config)
 
-    def vector_search(
+    def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str | None = None,
-        **kwargs: Any,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python calculations."""
+        """Raw k-NN over every record, in Python.
+
+        The threshold and the source assembly are the mixin's; this is the
+        part that knows where the records are.
+        """
         return self.python_vector_search_sync(
             query_vector=query_vector,
             vector_field=vector_field,
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import numpy as np
 
@@ -24,10 +25,10 @@ logger = logging.getLogger(__name__)
 class SQLiteVectorSupport:
     """Vector support for SQLite using JSON storage and Python-based similarity."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize vector support tracking."""
-        self._vector_dimensions = {}
-        self._vector_fields = {}
+        self._vector_dimensions: dict[str, int] = {}
+        self._vector_fields: dict[str, Any] = {}
 
     def _has_vector_fields(self, record: Record) -> bool:
         """Check if record has vector fields.
@@ -118,13 +119,30 @@ class SQLiteVectorSupport:
     ) -> float:
         """Compute similarity between two vectors.
 
+        The scoring table for every backend with no native k-NN ---
+        ``PythonVectorSearchMixin._score_and_rank`` calls this for all eight,
+        on every search. It branched on the *member*, so two of the six fell
+        into its ``else`` and raised ``Unsupported metric``: a database
+        configured ``vector_metric="l2"`` --- a legitimate member value, which
+        the config parser accepts without a warning, and which the published
+        settings table names --- could not run a search at all.
+
+        Keyed on :meth:`DistanceMetric.canonical` now, so the table has four
+        entries and covers all six. ``L1`` is computed rather than refused:
+        it is the Manhattan distance, the enum has always named it, and only
+        the absence of a branch here made it unavailable.
+
         Args:
             vec1: First vector
             vec2: Second vector
-            metric: Distance metric to use
+            metric: Distance metric to use, in any accepted spelling
 
         Returns:
             Similarity score (higher is more similar)
+
+        Raises:
+            ValueError: If the vectors differ in shape, or the metric is not
+                an accepted spelling.
         """
         if vec1 is None or vec2 is None:
             return 0.0
@@ -139,7 +157,9 @@ class SQLiteVectorSupport:
         if vec1.shape != vec2.shape:
             raise ValueError(f"Vector dimensions don't match: {vec1.shape} vs {vec2.shape}")
 
-        if metric == DistanceMetric.COSINE:
+        canonical = DistanceMetric.resolve(metric).canonical()
+
+        if canonical is DistanceMetric.COSINE:
             # Cosine similarity
             norm1 = np.linalg.norm(vec1)
             norm2 = np.linalg.norm(vec2)
@@ -147,14 +167,17 @@ class SQLiteVectorSupport:
                 return 0.0
             return float(np.dot(vec1, vec2) / (norm1 * norm2))
 
-        elif metric == DistanceMetric.EUCLIDEAN:
+        if canonical is DistanceMetric.EUCLIDEAN:
             # Convert Euclidean distance to similarity (inverse)
             distance = float(np.linalg.norm(vec1 - vec2))
             return 1.0 / (1.0 + distance)
 
-        elif metric == DistanceMetric.DOT_PRODUCT:
+        if canonical is DistanceMetric.DOT_PRODUCT:
             # Dot product similarity
             return float(np.dot(vec1, vec2))
 
-        else:
-            raise ValueError(f"Unsupported metric: {metric}")
+        # L1 (Manhattan). Unbounded above like Euclidean, so mapped to (0, 1]
+        # the same way --- which is also how ``distance_to_score`` maps both,
+        # so a corpus scores alike on a Python-path backend and on pgvector.
+        distance = float(np.abs(vec1 - vec2).sum())
+        return 1.0 / (1.0 + distance)

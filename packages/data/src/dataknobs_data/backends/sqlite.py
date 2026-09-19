@@ -679,40 +679,28 @@ class SyncSQLiteDatabase(
         self.vector_enabled = True
         return True
 
-    def vector_search(
+    def _vector_search(
         self,
-        query_vector: np.ndarray,
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | None = None,
-        **kwargs,
+        query_vector: np.ndarray | list[float],
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python-based calculations.
+        """Raw k-NN over every record, in Python.
 
-        Delegates to PythonVectorSearchMixin for the implementation.
-
-        Args:
-            query_vector: Query vector
-            vector_field: Name of the vector field to search
-            k: Number of results to return
-            filter: Optional filter conditions
-            metric: Distance metric (uses instance default if not specified)
-            **kwargs: Additional arguments for compatibility
-
-        Returns:
-            List of search results with scores
+        SQLite has no vector operators, so the similarity is computed here
+        rather than in the query.
         """
         self._check_connection()
 
-        # Delegate to the mixin's implementation
         return self.python_vector_search_sync(
             query_vector=query_vector,
             vector_field=vector_field,
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )
 
     def add_vectors(

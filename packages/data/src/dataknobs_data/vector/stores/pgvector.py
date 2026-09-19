@@ -14,6 +14,11 @@ from dataknobs_common.capabilities import Capability
 from dataknobs_common.exceptions import ConfigurationError, ResourceError
 from dataknobs_utils.sql_utils import quote_ident
 
+from ...backends.postgres_vector import (
+    distance_to_score,
+    get_vector_opclass,
+    get_vector_operator,
+)
 from ..types import DistanceMetric
 from .base import VectorStore
 from .config import PgVectorStoreConfig
@@ -426,15 +431,18 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
         )
 
     def _get_operator_class(self) -> str:
-        """Get the pgvector operator class for the configured metric."""
-        if self.metric == DistanceMetric.COSINE:
-            return "vector_cosine_ops"
-        elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-            return "vector_l2_ops"
-        elif self.metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
-            return "vector_ip_ops"
-        else:
-            return "vector_cosine_ops"  # Default
+        """Get the pgvector operator class for the configured metric.
+
+        Asks the shared table rather than restating the metric families in a
+        fourth ``if``/``elif`` chain. The chain this replaces named three of
+        the four and ended in ``return "vector_cosine_ops"  # Default``, so a
+        store configured for ``DistanceMetric.L1`` indexed and searched in
+        cosine distances without saying so.
+
+        Returns:
+            The pgvector operator class name.
+        """
+        return get_vector_opclass(self.metric)
 
     def _require_pool(self) -> asyncpg.Pool:
         """The pool, for a caller that has already established it exists.
@@ -1186,21 +1194,13 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
                 f"{col_updated_at} as _ts_updated"
             )
 
-        # Build distance operator based on metric
-        if self.metric == DistanceMetric.COSINE:
-            distance_op = "<=>"  # Cosine distance
-            # Convert to similarity
-            score_expr = f"1 - ({col_embedding} <=> $1::vector)"
-        elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-            distance_op = "<->"  # L2 distance
-            score_expr = f"1.0 / (1.0 + ({col_embedding} <-> $1::vector))"
-        elif self.metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
-            distance_op = "<#>"  # Negative inner product
-            # Negate to get actual inner product
-            score_expr = f"-({col_embedding} <#> $1::vector)"
-        else:
-            distance_op = "<=>"
-            score_expr = f"1 - ({col_embedding} <=> $1::vector)"
+        # The distance is selected raw and converted in Python by the one
+        # conversion every pgvector-backed search shares. Three formulas
+        # spelled in SQL here, with a fourth branch repeating the cosine one
+        # for "any other metric", is how ``L1`` came to be scored as cosine ---
+        # and the same three, spelled slightly differently, are what the two
+        # Postgres database twins each carried a copy of.
+        distance_op = get_vector_operator(self.metric)
 
         # Build WHERE clause for filters
         where_clauses = []
@@ -1232,7 +1232,7 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
                 f"""
                 SELECT
                     {col_id}::text as id,
-                    {score_expr} as score,
+                    {col_embedding} {distance_op} $1::vector as distance,
                     {col_metadata} as metadata,
                     {col_content} as content{ts_select}
                 FROM {self._q_qualified}
@@ -1262,7 +1262,9 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
                     created=row["_ts_created"],
                     updated=row["_ts_updated"],
                 )
-            results.append((row["id"], float(row["score"]), meta))
+            results.append(
+                (row["id"], distance_to_score(self.metric, float(row["distance"])), meta)
+            )
 
         return results
 
