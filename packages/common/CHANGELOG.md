@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reading a content row's tags back: `read_node_tags`, `read_node_tags_many`
+  and the three value types they answer with**, on the `dataknobs_common.ontology`
+  door beside the keys they read. An indexed row written from a vocabulary
+  carries which vocabulary, which axis and which nodes it is about; those keys
+  already shipped, and nothing read them. `read_node_tags` is a pure function
+  over the row's own metadata mapping -- no store, no embedder, no event loop,
+  and no vocabulary either, so it works on rows out of a corpus this package has
+  never seen. A `NodeTag` carries the three strings and composes the one
+  qualified id `Ontology.localize` takes, which is the member that says the
+  family's two keys and `qualify`'s one string are the same thing.
+
+  **A row that touched no vocabulary answers `()` and a half-written one
+  refuses.** Those are different states: most of a corpus is untagged, so an
+  exception there would make every caller wrap the common path in a `try`,
+  while a row carrying some of the three keys and not all is a writer that can
+  be told. The refusal names the keys that are absent.
+
+  **A bare string under the node key is one node, and everything else that
+  satisfies *iterate it* is refused** -- `bytes`, `bytearray`, a `Mapping`, a
+  `set`, and any scalar that is not a string -- naming the key, the type found
+  and every offending position. This is the last frame that can still see a
+  type: one call later the value is a rendered string, and at the cursor a
+  writer's mistake is indistinguishable from a stale id. A row with one bad
+  entry refuses whole, so it cannot count as evidence for fewer nodes than it
+  declared; `[]` is not a malformation and answers `()`.
+
+  **Over a hit set, `read_node_tags_many` reports rather than raises.**
+  `TagReading` holds one entry per position in the order asked, and a second
+  field naming every position that was refused -- without which an untagged row
+  and a malformed one would both be spelled `()`. `TagReading.require_readable()`
+  is the refusal, once, naming every one of them, so the stance is visible at
+  the call site rather than buried in a reader.
+
+  A new guide, `content-tags.md`, publishes the worked call site: four hits, of
+  which one is about two nodes, one touched no vocabulary, one names an axis the
+  vocabulary does not declare, and one was written wrong.
+
 - **A reference into a section an ontology document declares must resolve, or
   the document is refused.** Eight of them: an entity type's `isa`, an
   attribute's `entity_type`, a relation type's `domain`, `range` and

@@ -1212,9 +1212,9 @@ def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     """The list that decides scheduling is checked against the tree, not trusted.
 
     A package document belongs to no package's suite by default: 141 of the
-    150 here are read only by the workspace guards, and scheduling their
+    151 here are read only by the workspace guards, and scheduling their
     package for one is what ran two full suites for a link repair. The other
-    nine are read by a test *in* that package, so they do decide whether it
+    ten are read by a test *in* that package, so they do decide whether it
     passes, and they have to keep scheduling and dirtying it.
 
     Which of the two a document is cannot be inferred from its path, so it is

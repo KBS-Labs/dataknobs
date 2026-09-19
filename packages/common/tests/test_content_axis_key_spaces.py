@@ -141,6 +141,19 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "qualify", "ontology_id", "schema"),
     ("<module>", "qualify", "source_id", "schema"),
     ("<module>", "qualify", "->", "door"),
+    # A content row's metadata, as a consumer's own store handed it back. The
+    # `str` is the *mapping's key* -- `dk_ontology_id` and its two siblings,
+    # beside whatever else the writer put there -- so it is an open label in a
+    # blob this package neither owns nor can enumerate, which is `payload` for
+    # `declared_signal_metadata.base`'s reason.
+    #
+    # The ids a tagged row carries are **values** under those keys, and they
+    # are rendered rather than keys: turning one back into a `K` is
+    # `Ontology.localize`, whose parameter is the `door` row it has to be. So
+    # the read answers `str` on both sides and widens nothing, which is why no
+    # row here is `key`.
+    ("<module>", "read_node_tags", "metadata", "payload"),
+    ("<module>", "read_node_tags_many", "metadatas", "payload"),
     # The `resolver:` section a door refuses before it builds. `payload` for
     # `async_build_resolver.config`'s reason: it is a document's own mapping,
     # whose `str` keys are configuration names -- `rungs`, `kind` -- and
@@ -462,7 +475,7 @@ _REACHABLE_VALUE_TYPES = 37
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 336
+_ROWS = 338
 
 
 def _modules() -> Iterator[ast.Module]:

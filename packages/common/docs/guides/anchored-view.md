@@ -42,7 +42,7 @@ the relation those edges are made of:
 <!-- worked-input -->
 
 ```yaml
-# mammals.yaml — one hand-edited file. No tooling, no second file.
+# mammals.yaml
 ontology:
   id: mammals
   version: "1.1"

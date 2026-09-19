@@ -522,7 +522,7 @@ _LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 141 of the 150 are read only by
+#: Almost no package document is one of these. 141 of the 151 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so
@@ -531,7 +531,7 @@ _LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
 #: repair touching two packages' docs ran two full test suites and no guard that
 #: reads a link.
 #:
-#: The nine below are the exception and they are a real one: each is read by a
+#: The ten below are the exception and they are a real one: each is read by a
 #: test *in* the package, comparing a published table against the code it
 #: describes --- or, for the last of them, checking that no such comparison is
 #: owed --- so the document genuinely decides whether that suite passes. They
@@ -576,6 +576,12 @@ PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     # check that claim against the tree rather than take the declaration's
     # word for it.
     "packages/common/docs/guides/hierarchy.md": "common",
+    # The fifth `worked-input` fence, and the second half of a pair whose first
+    # half used to be a single copy: it publishes the same vocabulary
+    # anchored-view.md does, deliberately, so a second service-free acceptance
+    # runs against one substrate rather than two. Read by the common suite for
+    # the comparison, and by the workspace runner that executes the call site.
+    "packages/common/docs/guides/content-tags.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
     "packages/data/docs/vector-store-capabilities.md": "data",
 }

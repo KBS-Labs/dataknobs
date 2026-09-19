@@ -17,9 +17,17 @@ import resolves to the repository root's ``conftest.py`` instead and raises.
 
 The documents live here rather than in ``conftest.py`` because both a fixture
 and a guard need them; the *fixtures* stay there, where pytest looks for them.
+
+**Not only documents.** :class:`Sku` and :class:`SkuCodec` are here for the
+same reason the documents are: two suites need the one vocabulary whose keys
+are not strings, and a second spelling of a two-field key and its codec is two
+fixtures drifting under suites that each believe they are testing the same
+thing.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 MAMMALS_DOCUMENT = """\
 ontology:
@@ -122,6 +130,62 @@ agreeing on offsets that no longer describe one document.
 """
 
 
+MAMMALS_GUIDE_DOCUMENT = """\
+ontology:
+  id: mammals
+  version: "1.1"
+
+  entity_types:
+    - id: Species
+      attributes:
+        - {name: latin_name, type: string}
+        - {name: lifespan_years, type: number, field_type: float}
+    - id: Breed
+      isa: Species                      # the TYPE lattice
+      attributes:
+        - {name: akc_group, type: string}
+
+  relation_types:
+    - id: isa
+      transitive: true
+
+  entities:
+    - {id: mammal, type: Species, name: Mammal,
+       description: "Warm-blooded, milk-producing vertebrates."}
+    - {id: dog, type: Species, name: Dog, aliases: [Canine, "Domestic dog"],
+       description: "A domesticated carnivoran."}
+    - {id: retriever, type: Breed, name: Retriever}
+    - {id: golden_retriever, type: Breed, name: Golden Retriever, aliases: [Goldie]}
+    - {id: beagle, type: Breed, name: Beagle, aliases: [Beagles],
+       source: {source_id: clinic_db, table: species, key: "sp-2291"}}
+
+  assertions:
+    - {subject: dog, relation: isa, object: mammal}
+    - {subject: retriever, relation: isa, object: dog}
+    - {subject: golden_retriever, relation: isa, object: retriever}
+    - {subject: beagle, relation: isa, object: dog}
+
+  taxonomies:
+    - {id: species, name: Species, relation: isa}
+"""
+"""The v1.1 vocabulary as the *guides* publish it, which is a third document.
+
+Nearest is :data:`MAMMALS_V11_DOCUMENT`, and the two differ substantively:
+``latin_name`` is not required here, and the literal-object assertion
+(``lifespan_years``) that one carries is absent. So this is not a drifted copy
+of either other constant --- it is the document a reader of a published guide
+copies to disk and runs the page against.
+
+**It was a single published copy until a second page published it**, and that
+is why it is here at all. ``anchored-view.md`` published it alone, guarded by
+being *executed* rather than by being compared; ``content-tags.md`` publishes
+the same vocabulary deliberately, so that a fourth service-free acceptance is a
+property of the substrate rather than a coincidence. Two copies of one document
+with nothing comparing them is the defect ``test_worked_input_fences.py`` was
+written for, so the two fences are held to this constant and to each other.
+"""
+
+
 def _with_materialization(axis: str) -> str:
     """:data:`MAMMALS_V11_DOCUMENT` with one axis of the block flipped.
 
@@ -149,3 +213,36 @@ MATERIALIZED_CONTENT_DOCUMENT = _with_materialization("content")
 
 MATERIALIZED_STRUCTURE_DOCUMENT = _with_materialization("structure")
 """The v1.1 vocabulary whose axis asks for a snapshot nothing here builds."""
+
+
+@dataclass(frozen=True)
+class Sku:
+    """A consumer's key: hashable, value-equal, and not a string.
+
+    The smallest thing that is not a ``str`` and is still a legitimate entity
+    key --- two fields, frozen, so it hashes and compares by value the way a
+    node id must. Everything a non-``str`` vocabulary is needed to demonstrate
+    is demonstrable over this: that ``qualify`` renders it, that ``localize``
+    parses it back, and that a tag's ``node_id`` is a string while what a
+    cursor takes is not.
+    """
+
+    plant: str
+    line: int
+
+
+class SkuCodec:
+    """``Sku`` in one direction and back. Two functions, both the consumer's.
+
+    Deliberately not a subclass of anything: the codec is a structural
+    protocol, so a consumer satisfies it by having the two methods rather than
+    by importing a base. A test fixture that inherited one would be asserting
+    a requirement that does not exist.
+    """
+
+    def to_id(self, key: Sku, /) -> str:
+        return f"{key.plant}/{key.line}"
+
+    def from_id(self, rendered: str, /) -> Sku:
+        plant, _, line = rendered.rpartition("/")
+        return Sku(plant=plant, line=int(line))
