@@ -971,17 +971,6 @@ class DeclaredSignal:
     #: did not spell sets :attr:`~EvidenceKind.INFERRED`.
     kind = EvidenceKind.DECLARED
 
-    #: What kind of number this rung's score is -- **overridable**. The
-    #: default marks it as carrying none, which is the truth for a rung whose
-    #: hits carry no
-    #: :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`.
-    #:
-    #: Separate from :attr:`kind` because the two are independent. A rung that
-    #: infers may still have nothing to measure, and a rung that measures
-    #: decides for itself whether its number is comparable with another
-    #: rung's -- which is what
-    #: :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
-    #: and :attr:`~Scoring.NATIVE` declines.
     #: Whether this rung reads
     #: :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
     #: -- **overridable**, and the fact a composition can be refused against
@@ -997,6 +986,38 @@ class DeclaredSignal:
     #: first query, and a wrong one blocks a composition that works.
     reads_surface_forms = False
 
+    #: Whether this rung's enumeration is bounded by the vocabulary's longest
+    #: declared form -- **overridable**, and the second fact a composition can
+    #: be refused against before anything is built.
+    #:
+    #: A rung setting this True probes every window of a query and asks the
+    #: source, through
+    #: :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`,
+    #: how wide a window can be. A source answering ``None`` cannot bound it,
+    #: and the enumeration is then *n(n+1)/2* probes for *n* tokens -- which
+    #: over an in-memory source is a dictionary lookup per probe and over one
+    #: that reaches for data is a round trip per probe. The two cases differ by
+    #: orders of magnitude and not by anything readable from this flag, so what
+    #: it enables is a *door's* refusal rather than a rule here: a door binding
+    #: a source that round-trips can ask which of a declared composition's
+    #: rungs depend on a number that source cannot supply.
+    #:
+    #: The default is False, matching :attr:`reads_surface_forms`' safe
+    #: direction: a rung nobody classified is not refused, and a wrong True
+    #: blocks a composition that works.
+    bounded_by_longest_form = False
+
+    #: What kind of number this rung's score is -- **overridable**. The
+    #: default marks it as carrying none, which is the truth for a rung whose
+    #: hits carry no
+    #: :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`.
+    #:
+    #: Separate from :attr:`kind` because the two are independent. A rung that
+    #: infers may still have nothing to measure, and a rung that measures
+    #: decides for itself whether its number is comparable with another
+    #: rung's -- which is what
+    #: :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
+    #: and :attr:`~Scoring.NATIVE` declines.
     scoring = Scoring.DECLARED
 
     def __init__(
@@ -1228,6 +1249,7 @@ class ScanningSignal(DeclaredSignal):
 
     key = "scan"
     reads_surface_forms = True
+    bounded_by_longest_form = True
 
     def __init__(
         self,
@@ -1491,17 +1513,6 @@ class AsyncDeclaredSignal:
     #: did not spell sets :attr:`~EvidenceKind.INFERRED`.
     kind = EvidenceKind.DECLARED
 
-    #: What kind of number this rung's score is -- **overridable**. The
-    #: default marks it as carrying none, which is the truth for a rung whose
-    #: hits carry no
-    #: :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`.
-    #:
-    #: Separate from :attr:`kind` because the two are independent. A rung that
-    #: infers may still have nothing to measure, and a rung that measures
-    #: decides for itself whether its number is comparable with another
-    #: rung's -- which is what
-    #: :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
-    #: and :attr:`~Scoring.NATIVE` declines.
     #: Whether this rung reads
     #: :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
     #: -- **overridable**, and the fact a composition can be refused against
@@ -1517,6 +1528,38 @@ class AsyncDeclaredSignal:
     #: first query, and a wrong one blocks a composition that works.
     reads_surface_forms = False
 
+    #: Whether this rung's enumeration is bounded by the vocabulary's longest
+    #: declared form -- **overridable**, and the second fact a composition can
+    #: be refused against before anything is built.
+    #:
+    #: A rung setting this True probes every window of a query and asks the
+    #: source, through
+    #: :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`,
+    #: how wide a window can be. A source answering ``None`` cannot bound it,
+    #: and the enumeration is then *n(n+1)/2* probes for *n* tokens -- which
+    #: over an in-memory source is a dictionary lookup per probe and over one
+    #: that reaches for data is a round trip per probe. The two cases differ by
+    #: orders of magnitude and not by anything readable from this flag, so what
+    #: it enables is a *door's* refusal rather than a rule here: a door binding
+    #: a source that round-trips can ask which of a declared composition's
+    #: rungs depend on a number that source cannot supply.
+    #:
+    #: The default is False, matching :attr:`reads_surface_forms`' safe
+    #: direction: a rung nobody classified is not refused, and a wrong True
+    #: blocks a composition that works.
+    bounded_by_longest_form = False
+
+    #: What kind of number this rung's score is -- **overridable**. The
+    #: default marks it as carrying none, which is the truth for a rung whose
+    #: hits carry no
+    #: :attr:`~dataknobs_common.entity_resolution.values.FormHit.score`.
+    #:
+    #: Separate from :attr:`kind` because the two are independent. A rung that
+    #: infers may still have nothing to measure, and a rung that measures
+    #: decides for itself whether its number is comparable with another
+    #: rung's -- which is what
+    #: :data:`~dataknobs_common.entity_resolution.values._NORMALIZING` admits
+    #: and :attr:`~Scoring.NATIVE` declines.
     scoring = Scoring.DECLARED
 
     def __init__(
@@ -1647,6 +1690,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
 
     key = "scan"
     reads_surface_forms = True
+    bounded_by_longest_form = True
 
     def __init__(
         self,

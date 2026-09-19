@@ -1476,9 +1476,10 @@ async def test_what_the_registry_may_be_handed_is_still_advertised() -> None:
     -- so a caller asking what this class accepts still has to be told. They
     move to the field that says *may*, and the union is readable in one call.
     """
+    accepted = frozenset({"database", "event_bus", "forms_database"})
     assert OntologyRegistry.expected_components() == frozenset()
-    assert OntologyRegistry.optional_components() == frozenset({"database", "event_bus"})
-    assert OntologyRegistry.accepted_components() == frozenset({"database", "event_bus"})
+    assert OntologyRegistry.optional_components() == accepted
+    assert OntologyRegistry.accepted_components() == accepted
 
 
 async def test_an_injected_collaborator_lands_where_from_components_can_see_it() -> None:
@@ -1493,5 +1494,224 @@ async def test_an_injected_collaborator_lands_where_from_components_can_see_it()
     try:
         assert registry.components["database"] is database
         assert registry.missing_components() == frozenset()
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# The injected door, asked the question the configured one is asked
+# --------------------------------------------------------------------------
+
+
+def _two_table_document() -> dict[str, Any]:
+    """A binding whose entity rows and form rows live in different tables."""
+    return _document(
+        sources=[
+            {
+                "id": "products",
+                "kind": "record",
+                "entity_projection": {
+                    "table": "products",
+                    "id": "sku",
+                    "name": "title",
+                    "type": {"const": "Product"},
+                    "surface_forms": {
+                        "table": "product_forms",
+                        "form": "folded_form",
+                        "entity": "sku",
+                    },
+                },
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                    {"name": "folded_form", "type": "string"},
+                ],
+            }
+        ]
+    )
+
+
+@requires_package("aiosqlite")
+async def test_one_injected_handle_cannot_answer_a_bindings_two_tables(tmp_path: Path) -> None:
+    """A handle that reaches one table is refused a projection naming two.
+
+    The configured door asks the backend whether a handle is one table's and
+    opens a second when it is. The injected door used to ask nothing: it set
+    both to the handle it was given, so a SQLite handle bound to ``products``
+    was asked for ``product_forms`` rows and found none -- and *none* is the
+    contract's spelling of **ran and matched nothing**, so
+    ``by_surface_form`` answered ``frozenset()`` while ``describe()``
+    advertised ``SURFACE_FORM_LOOKUP`` and every guard passed.
+
+    That is the failure the capability apparatus exists to prevent, reached
+    through the one door that skipped it, which is why the refusal is here
+    rather than a note in the guide.
+    """
+    database = async_database_factory.create(
+        backend="sqlite", path=str(tmp_path / "catalog.db"), table="products"
+    )
+    await database.connect()
+    try:
+        registry = OntologyRegistry.from_components(
+            config=OntologyConfig(**_two_table_document()), database=database
+        )
+        with pytest.raises(ValidationError, match="product_forms"):
+            await registry.load()
+        await registry.close()
+    finally:
+        await database.close()
+
+
+@requires_package("aiosqlite")
+async def test_a_second_injected_handle_answers_the_bindings_other_table(tmp_path: Path) -> None:
+    """The refusal above has a door out, and it is the one the source already had.
+
+    ``RecordEntitySource`` has taken ``forms_database=`` since it shipped; the
+    registry simply never offered it. Declaring it means the injected door can
+    express what the configured door can, rather than sending a caller who
+    holds two real handles back to a ``database:`` block they may not have.
+    """
+    path = str(tmp_path / "catalog.db")
+    entities = async_database_factory.create(backend="sqlite", path=path, table="products")
+    forms = async_database_factory.create(backend="sqlite", path=path, table="product_forms")
+    await entities.connect()
+    await forms.connect()
+    try:
+        await entities.create(Record({"sku": "sku-4471", "title": "Beagle"}))
+        await forms.create(Record({"folded_form": "beagle", "sku": "sku-4471"}))
+        registry = OntologyRegistry.from_components(
+            config=OntologyConfig(**_two_table_document()),
+            database=entities,
+            forms_database=forms,
+        )
+        try:
+            ontology = await registry.load()
+            entity = await ontology.entity("sku-4471")
+            assert entity is not None and entity.name == "Beagle"
+            assert await ontology.by_surface_form("Beagle") == frozenset({"sku-4471"})
+            assert not any(owned for _, owned in registry._handles), "injected handles are not ours"
+        finally:
+            await registry.close()
+        assert await entities.search(Query(filters=[Filter("sku", Operator.EQ, "sku-4471")]))
+    finally:
+        await entities.close()
+        await forms.close()
+
+
+async def test_a_store_that_is_its_own_handle_still_needs_only_one(tmp_path: Path) -> None:
+    """The refusal is the backend's answer, not a rule about two table names.
+
+    ``memory`` declares no ``table``, so one handle *is* the store and both
+    kinds of row live in it -- discriminated by the form column, which is what
+    ``_entity_filters`` emits. A projection naming two tables over such a
+    handle is the shared-store arrangement working, not the defect above, and
+    it must keep loading from one injected handle.
+    """
+    database = AsyncMemoryDatabase()
+    await database.create(Record({"sku": "sku-1", "title": "Beagle"}))
+    await database.create(Record({"folded_form": "beagle", "sku": "sku-1"}))
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_two_table_document()), database=database
+    )
+    try:
+        ontology = await registry.load()
+        assert await ontology.by_surface_form("Beagle") == frozenset({"sku-1"})
+    finally:
+        await registry.close()
+
+
+async def test_forms_database_is_declared_as_a_collaborator_a_caller_may_inject() -> None:
+    """A door tooling cannot see is a door a consumer does not find."""
+    assert "forms_database" in OntologyRegistry.optional_components()
+    assert "forms_database" in OntologyRegistry.accepted_components()
+    assert OntologyRegistry.expected_components() == frozenset()
+
+
+# --------------------------------------------------------------------------
+# A scan declared over a table nothing can bound
+# --------------------------------------------------------------------------
+
+
+def _scanning_document(**lookup: Any) -> dict[str, Any]:
+    """A record binding with a declared ``scan`` rung over it."""
+    return _document(
+        resolver={"rungs": [{"kind": "scan"}]},
+        sources=[
+            {
+                "id": "products",
+                "kind": "record",
+                "entity_projection": {
+                    "table": "products",
+                    "id": "sku",
+                    "name": "title",
+                    "type": {"const": "Product"},
+                    "surface_forms": {
+                        "table": "product_forms",
+                        "form": "folded_form",
+                        "entity": "sku",
+                        **lookup,
+                    },
+                },
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                    {"name": "folded_form", "type": "string"},
+                ],
+            }
+        ],
+    )
+
+
+async def test_a_declared_scan_over_a_binding_that_cannot_bound_it_is_refused() -> None:
+    """The combination that is quadratic in a caller's input, refused at load.
+
+    A scanning rung probes every window of a query and takes its bound from
+    the vocabulary's longest declared form. An authored index counts its own
+    keys; a live table cannot be counted, so the source answers ``None`` and
+    the rung enumerates in full -- *n(n+1)/2* probes, each a database round
+    trip on this source. Fifty tokens is 1,275 of them.
+
+    Refused here rather than survived, and the refusal names the key that
+    fixes it: the number is one a consumer knows about their own vocabulary
+    and nothing else can supply.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_scanning_document()), database=AsyncMemoryDatabase()
+    )
+    try:
+        with pytest.raises(ValidationError, match="longest_form_tokens"):
+            await registry.load()
+    finally:
+        await registry.close()
+
+
+async def test_a_declared_scan_loads_where_the_binding_declares_its_bound() -> None:
+    """The refusal's door out is the key it names."""
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_scanning_document(longest_form_tokens=4)),
+        database=AsyncMemoryDatabase(),
+    )
+    try:
+        ontology = await registry.load()
+        assert ontology.entities.longest_form_tokens() == 4
+    finally:
+        await registry.close()
+
+
+async def test_a_composition_with_no_scan_needs_no_bound() -> None:
+    """Only the rung whose cost depends on the number is asked for it.
+
+    ``exact`` reads folded forms too, but it compares the whole query once --
+    its cost does not depend on how long the longest declared form is, so a
+    binding it reads needs no bound and must keep loading without one.
+    """
+    document = _scanning_document()
+    document["resolver"] = {"rungs": [{"kind": "exact"}, {"kind": "alias"}]}
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=AsyncMemoryDatabase()
+    )
+    try:
+        ontology = await registry.load()
+        assert ontology.entities.longest_form_tokens() is None
     finally:
         await registry.close()

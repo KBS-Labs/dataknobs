@@ -151,12 +151,21 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
 
     CONFIG_CLS: ClassVar[type[OntologyConfig]] = OntologyConfig
 
-    #: The collaborators a caller may inject, neither of which is required:
+    #: The collaborators a caller may inject, none of which is required:
     #: a configured registry resolves its own database from ``$resource`` and
     #: publishes nothing when no bus is wired. Declared here rather than under
     #: ``EXPECTED_COMPONENTS`` so that :meth:`missing_components` answers
     #: about this registry rather than about the field's other reading.
-    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"database", "event_bus"})
+    #:
+    #: ``forms_database`` is the second handle a binding needs when its
+    #: projection's ``surface_forms:`` names a different table *and* the
+    #: backend addresses one table at a time. The configured door opens that
+    #: handle itself; the injected door cannot, so it is offered here rather
+    #: than leaving ``from_components`` unable to express a document
+    #: ``from_config_async`` accepts.
+    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset(
+        {"database", "event_bus", "forms_database"}
+    )
 
     #: The live source kinds this registry binds.
     #:
@@ -282,6 +291,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # thread the open is offloaded to -- see `_database_handle`.
         self._handle_lock = asyncio.Lock()
         self._injected_database: AsyncDatabase | None = None
+        self._injected_forms_database: AsyncDatabase | None = None
         self._event_bus: EventBus | None = None
         self._owns_event_bus = False
         # A registry may hold no document at all -- `OntologyRegistry()` then
@@ -330,6 +340,10 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         if database is not None:
             self._injected_database = database
             self._handles.append((database, False))
+        forms_database = self.components.get("forms_database")
+        if forms_database is not None:
+            self._injected_forms_database = forms_database
+            self._handles.append((forms_database, False))
         event_bus = self.components.get("event_bus")
         if event_bus is not None:
             self._event_bus = event_bus
@@ -849,6 +863,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             projection, _declared_schema(spec, binding=source_id), binding=source_id
         )
         _refuse_a_form_reading_rung_with_no_lookup(config, projection, binding=source_id)
+        _refuse_a_scan_over_a_binding_that_cannot_bound_it(config, projection, binding=source_id)
 
         database_block = spec.get("database")
         if self._injected_database is not None:
@@ -859,7 +874,9 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     source_id,
                 )
             database = self._injected_database
-            forms_database = self._injected_database
+            forms_database = self._injected_forms_database or self._injected_database
+            if forms_database is database:
+                _refuse_one_handle_for_two_tables(database, projection, binding=source_id)
             backend = type(database).__name__
         else:
             if not isinstance(database_block, Mapping):
@@ -1207,10 +1224,78 @@ def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
     if not declared:
         return False
     factory = async_backends.get_factory(normalize_backend(declared))
-    config_cls = getattr(factory, "CONFIG_CLS", None)
+    return _config_class_addresses_one_table(getattr(factory, "CONFIG_CLS", None))
+
+
+def _refuse_one_handle_for_two_tables(
+    database: AsyncDatabase, projection: EntityProjection, *, binding: str
+) -> None:
+    """Refuse an injected handle that cannot reach both of a projection's tables.
+
+    The configured door asks
+    :func:`_backend_addresses_one_table` and opens a second handle when the
+    answer is yes. The injected door has no block to ask about, so it asks the
+    handle -- and where one handle addresses one table and the projection names
+    two, there is no arrangement of it that reads them both.
+
+    **Why this is a refusal rather than a miss.** Nothing downstream can
+    notice. ``_shared_store`` is true because the two handles are one object,
+    so ``_entity_filters`` emits the form-column discriminator and the entity
+    reads are correct; ``describe()`` advertises ``SURFACE_FORM_LOOKUP``
+    because the projection declares a lookup; and ``by_surface_form`` filters
+    the form column against a table that does not carry it, finding nothing.
+    ``frozenset()`` is the contract's spelling of *ran and matched nothing*,
+    so the caller is told the vocabulary has no such form rather than that the
+    binding cannot be served.
+    """
+    lookup = projection.surface_forms
+    if lookup is None or lookup.table == projection.table:
+        return
+    if not _handle_addresses_one_table(database):
+        return
+    raise ValidationError(
+        f"binding {binding!r} projects entity rows from {projection.table!r} and "
+        f"surface forms from {lookup.table!r}, but the injected handle "
+        f"({type(database).__name__}) addresses one table. Inject the second "
+        f"handle as `forms_database=`, or bind through a `database:` block and "
+        f"let the registry open both",
+        context={
+            "source_id": binding,
+            "table": projection.table,
+            "surface_forms_table": lookup.table,
+            "handle": type(database).__name__,
+        },
+    )
+
+
+def _config_class_addresses_one_table(config_cls: Any) -> bool:
+    """Whether a backend's config dataclass declares a ``table``.
+
+    The shared half of :func:`_backend_addresses_one_table`, which asks it of
+    a name in a ``database:`` block, and
+    :func:`_handle_addresses_one_table`, which asks it of a handle already
+    built. One question, two ways of reaching the class that answers it -- and
+    a second copy of the ``dataclasses.fields`` walk would be a second answer
+    to drift from, which is what the configured and injected doors disagreeing
+    about a shared store cost the first time.
+    """
     if config_cls is None or not dataclasses.is_dataclass(config_cls):
         return False
     return any(field.name == "table" for field in dataclasses.fields(config_cls))
+
+
+def _handle_addresses_one_table(database: AsyncDatabase) -> bool:
+    """Whether this handle reaches one table, asked of the handle's own class.
+
+    Every backend in this package carries its config dataclass as a
+    ``CONFIG_CLS`` class attribute, so a handle answers the same question a
+    ``database:`` block does without the registry keeping a list. A handle
+    whose class declares none -- a consumer's own ``AsyncDatabase``
+    implementation, or a test double -- answers False, which is the reading
+    that refuses nothing: it says *this handle is the store*, which is what an
+    implementation with no table concept is.
+    """
+    return _config_class_addresses_one_table(getattr(type(database), "CONFIG_CLS", None))
 
 
 def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema | None:
@@ -1257,6 +1342,67 @@ def _field_type(declared: Any, *, binding: str) -> FieldType:
             f"{sorted(member.value for member in FieldType)}",
             context={"source_id": binding, "type": declared},
         ) from exc
+
+
+def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
+    config: OntologyConfig, projection: EntityProjection, *, binding: str
+) -> None:
+    """Refuse a **declared** scanning rung over a binding declaring no bound.
+
+    :func:`_refuse_a_form_reading_rung_with_no_lookup`'s shape for the second
+    number a live binding cannot supply, and refused for the same reason: it
+    is a property of the vocabulary that no ``Database`` in this package can
+    be asked about.
+
+    **What the bound is for.** A scanning rung probes every contiguous window
+    of a query and takes its width from the vocabulary's longest declared form
+    -- see
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`.
+    An authored index counts its own keys and answers. A live table cannot,
+    so the source answers ``None``, the rung enumerates in full, and the cost
+    is *n(n+1)/2* probes for *n* tokens: 1,275 for a fifty-token utterance,
+    20,100 for a two-hundred-token paste. Over an in-memory source those are
+    dictionary lookups and the quadratic is affordable -- which is why the
+    refusal is *here*, where the source is known to reach for data, rather
+    than in the rung, which is also composed over sources where it is fine.
+
+    **Which rungs those are is asked, not listed**, exactly as the sibling
+    refusal asks which rungs read folded forms. Each kind declares
+    ``bounded_by_longest_form`` on its class and the signal registry derives
+    it, so a rung added to ``dataknobs-common`` and a consumer's own are both
+    covered without an edit here.
+
+    **Declared rungs only**, which is the sibling's scope and for its reason:
+    a document with no ``resolver:`` section gets the default composition,
+    whose scan nothing in the document names. That case belongs where the rung
+    is constructed, by the door holding both the composition and the source --
+    a door this registry does not have yet, since :meth:`OntologyRegistry.resolver`
+    builds nothing. What this function does is make the key exist for that
+    door to check, and refuse the case a document *does* state.
+    """
+    lookup = projection.surface_forms
+    if lookup is None or lookup.longest_form_tokens is not None:
+        return
+    declared = _declared_rung_kinds(config)
+    scanning = sorted(
+        kind
+        for kind in declared
+        if async_signal_backends.get_metadata(kind).get("bounded_by_longest_form")
+    )
+    if not scanning:
+        return
+    raise ValidationError(
+        f"binding {binding!r} is read by {scanning}, which probes every window "
+        f"of a query and bounds that enumeration by the vocabulary's longest "
+        f"declared form. A live table cannot be counted, so the binding must "
+        f"declare `surface_forms.longest_form_tokens:` -- without it the scan "
+        f"spends n(n+1)/2 reads per query, each one a round trip",
+        context={
+            "source_id": binding,
+            "rungs": scanning,
+            "surface_forms_table": lookup.table,
+        },
+    )
 
 
 def _refuse_a_form_reading_rung_with_no_lookup(

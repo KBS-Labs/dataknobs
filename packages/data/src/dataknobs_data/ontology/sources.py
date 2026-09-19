@@ -20,6 +20,7 @@ interpolated into SQL: :class:`~dataknobs_data.query.Filter` is the only path.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from itertools import batched
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -50,6 +51,52 @@ if TYPE_CHECKING:
 #: means the same thing whether or not this package has been imported.
 RECORD_SOURCE_KIND = "record"
 
+#: How many ids one bulk read asks about at once.
+#:
+#: A bulk member sends one ``IN`` filter because a round trip per id is the
+#: cost it exists to avoid -- but one filter is one read, and a read is a
+#: thing a backend bounds. Two bounds are in reach and neither is this
+#: package's to set: ``AsyncElasticsearchDatabase.search`` answers an
+#: unbounded query with ``size=10000``, and the SQL backends bind one
+#: parameter per element of an ``IN`` list against a server ceiling --
+#: 65535 on Postgres, and 999 on a SQLite built before 3.32. So a batch
+#: larger than this is split, and each read stays under both.
+#:
+#: 1000 because it is already this package's answer to *how many rows per
+#: read*: :attr:`~dataknobs_data.streaming.StreamConfig.batch_size` has
+#: carried that default since streaming shipped, and a second number here
+#: would be a second answer to one question.
+READ_BATCH_SIZE = 1000
+
+
+def _optional_positive_int(
+    row: Mapping[str, Any], key: str, *, binding: str, section: str
+) -> int | None:
+    """An optional whole number of at least one, or None where the key is absent.
+
+    Below one is refused rather than clamped, for the reason
+    ``_checked_max_window`` refuses it one package along: a bound of zero
+    builds a scan that probes nothing and reports the empty set for every
+    query, which is indistinguishable from a vocabulary that matches nothing.
+    """
+    value = row.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(
+            f"binding {binding!r}: `{section}.{key}:` must be a whole number, "
+            f"got {type(value).__name__}",
+            context={"source_id": binding, "key": key, "value": value},
+        )
+    if value < 1:
+        raise ValidationError(
+            f"binding {binding!r}: `{section}.{key}:` must be at least 1, got "
+            f"{value}. A bound of zero probes no window and reports nothing for "
+            f"every query, which is what a vocabulary matching nothing looks like",
+            context={"source_id": binding, "key": key, "value": value},
+        )
+    return value
+
 
 @dataclass(frozen=True)
 class SurfaceFormLookup:
@@ -68,11 +115,19 @@ class SurfaceFormLookup:
             applied when the row was written
         entity: The column holding the entity id, in the space the
             projection's ``id:`` names
+        longest_form_tokens: How many tokens the longest form in this table
+            occupies, or None where the binding declares no bound. Declared
+            rather than measured: an authored index counts its own keys, and a
+            live table cannot be counted without reading it -- a count taken at
+            load is stale as soon as a row is written. A scanning rung needs
+            this number to stay linear in the caller's input, and is refused at
+            load over a binding that declares none
     """
 
     table: str
     form: str
     entity: str
+    longest_form_tokens: int | None = None
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any], *, binding: str) -> SurfaceFormLookup:
@@ -81,6 +136,9 @@ class SurfaceFormLookup:
             table=str(_required(row, "table", binding=binding, section="surface_forms")),
             form=str(_required(row, "form", binding=binding, section="surface_forms")),
             entity=str(_required(row, "entity", binding=binding, section="surface_forms")),
+            longest_form_tokens=_optional_positive_int(
+                row, "longest_form_tokens", binding=binding, section="surface_forms"
+            ),
         )
 
 
@@ -473,14 +531,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
         """
         if not entity_ids:
             return {}
-        found = await self._db.search(
-            Query(
-                filters=[
-                    Filter(self._projection.id, Operator.IN, list(entity_ids)),
-                    *self._entity_filters(),
-                ]
-            )
-        )
+        found = await self._read_ids(list(entity_ids))
         projected = (self._projected(record) for record in found)
         return {entity.id: entity for entity in projected}
 
@@ -545,16 +596,40 @@ class RecordEntitySource(DynamicCapabilityMixin):
         distinct = {key for key in wanted if key is not None}
         if not distinct:
             return [None] * len(refs)
-        found = await self._db.search(
-            Query(
-                filters=[
-                    Filter(self._projection.id, Operator.IN, sorted(distinct, key=str)),
-                    *self._entity_filters(),
-                ]
-            )
-        )
+        found = await self._read_ids(sorted(distinct, key=str))
         by_key = {record.get_value(self._projection.id): record for record in found}
         return [None if key is None else by_key.get(key) for key in wanted]
+
+    async def _read_ids(self, keys: Sequence[Any]) -> list[Record]:
+        """Every entity row whose id is one of these, in reads a backend answers.
+
+        The shared half of :meth:`get_many` and :meth:`fetch_origins`, for the
+        reason :meth:`_origin_key` is the shared half of the origin pair: the
+        two build the same query over the same two filters, and a difference
+        between them would be a bulk read answering rows the other declines.
+
+        **One ``IN`` per batch rather than one for the whole list.** The single
+        filter is what makes a bulk member worth having, but one filter is one
+        read, and a read is a thing a backend bounds -- by result size on
+        Elasticsearch, by bind parameters on the SQL backends. Splitting at
+        :data:`READ_BATCH_SIZE` keeps each read under both, and the caller
+        cannot tell: the rows are concatenated and both callers index them by
+        the projection's id column afterwards, so order across batches carries
+        nothing.
+        """
+        found: list[Record] = []
+        for chunk in batched(keys, READ_BATCH_SIZE):
+            found.extend(
+                await self._db.search(
+                    Query(
+                        filters=[
+                            Filter(self._projection.id, Operator.IN, list(chunk)),
+                            *self._entity_filters(),
+                        ]
+                    )
+                )
+            )
+        return found
 
     def _origin_key(self, ref: SourceRef) -> Any:
         """The local id this ref names, or ``None`` when it names none of ours.
@@ -664,58 +739,74 @@ class RecordEntitySource(DynamicCapabilityMixin):
         **It costs one pass over the table, every call.** The answer is every
         id, so nothing bounds what the *caller* receives -- on a million-row
         binding this returns a million-element set and there is no ``limit:``
-        that would make it something else. What the whole-table read below
-        does bound is the peak in between: a ``Record`` carries the whole row,
-        and ``stream_read`` keeps one batch of them alive rather than all of
-        them, which on the backends that page for real -- Postgres by cursor,
-        DuckDB, SQLite and Elasticsearch by batch -- is the difference between
-        a bounded read and one whose footprint is the table's.
+        that would make it something else. What ``stream_read`` bounds is the
+        peak in between: a ``Record`` carries the whole row, and streaming
+        keeps one batch of them alive rather than all of them, which on the
+        backends that page for real -- Postgres by cursor, DuckDB, SQLite and
+        Elasticsearch by batch -- is the difference between a bounded read and
+        one whose footprint is the table's.
 
-        **The narrowed read stays on ``search``, and the asymmetry is load-
-        bearing rather than an oversight.** ``stream_read`` and ``search`` are
-        separate implementations on every backend and they do not agree
-        everywhere: Postgres's ``stream_read`` open-codes its WHERE clause and
-        *silently drops* non-EQ filters, which is exactly what
-        :meth:`_entity_filters` emits -- ``NOT_EXISTS`` on the form column.
-        Routing that through streaming would answer with form rows projected
-        as entities, on one backend, with no error.
+        **Both branches stream, and the narrowed one could not always.** It
+        used to take ``search``, because ``stream_read`` and ``search`` are
+        separate implementations on every backend and they did not agree:
+        Postgres's ``stream_read`` open-coded its WHERE clause and *silently
+        dropped* non-EQ filters, which is exactly what :meth:`_entity_filters`
+        emits -- ``NOT_EXISTS`` on the form column. Streaming the narrowed
+        branch would have answered with form rows projected as entities, on
+        one backend, with no error.
 
-        It is tempting to argue the two cases cannot meet, because a filter is
-        emitted only for a shared store and Postgres declares a ``table`` so
-        the registry gives it one handle per table. **That argument is false
-        and was checked rather than assumed**: a projection whose
-        ``surface_forms:`` names the *same* table as the entity rows keys to
-        one handle on any backend, so ``_shared_store`` is true and the filter
-        is emitted -- a configuration this package accepts today. So the
-        narrowed branch keeps the member whose filter semantics are correct
-        everywhere, and takes the materialising cost with it. That cost is
-        bounded by the same filter: it reads the entity rows, not the table.
+        That is fixed: the async Postgres ``stream_read`` now builds its WHERE
+        clause through the same ``SQLQueryBuilder`` its ``search`` uses, so
+        every async backend's streaming door honours the full operator set --
+        memory and file delegate to ``search``, SQLite and DuckDB page it,
+        Postgres shares the builder, and Elasticsearch shares the translator.
+        The asymmetry was a workaround for that defect and went with it.
+
+        **Keeping it would now lose rows rather than save them.** An unbounded
+        ``search`` is the read a backend is free to cap, and one does:
+        ``AsyncElasticsearchDatabase`` answers a query carrying no ``limit``
+        with ``size=10000``. Elasticsearch declares ``index`` rather than
+        ``table``, so the registry gives a binding one handle, so the store is
+        shared, so a declared ``surface_forms:`` put the narrowed branch on
+        exactly that read -- and a binding of more rows than the cap answered
+        with the cap's worth and reported nothing. ``stream_read`` goes through
+        the scroll API there, which the cap does not reach. Paging ``search``
+        would not have served: past ``index.max_result_window`` a ``from``/
+        ``size`` page *errors* rather than truncating, which is why that
+        backend's streaming door does not use one.
         """
         if type_id != self._projection.const_type:
             return frozenset()
         narrowing = self._entity_filters()
-        if narrowing:
-            return frozenset(
-                str(local_id)
-                for record in await self._db.search(Query(filters=narrowing))
-                if (local_id := record.get_value(self._projection.id)) is not None
-            )
+        query = Query(filters=narrowing) if narrowing else None
         return frozenset(
             {
                 str(local_id)
-                async for record in self._db.stream_read()
+                async for record in self._db.stream_read(query)
                 if (local_id := record.get_value(self._projection.id)) is not None
             }
         )
 
     def longest_form_tokens(self) -> int | None:
-        """Always None -- a live table's longest form needs a scan to know.
+        """What the binding declared, or None where it declared nothing.
 
-        Honest rather than lazy. ``None`` is this member's published spelling
-        of *I cannot bound this*, and a rung told nothing enumerates every
-        window, which costs the scan its linearity and costs it no answers.
+        **Declared rather than measured, because nothing here can measure
+        it.** An authored index counts its own keys at build time. A live
+        table's longest form needs a read to know, and a number taken at load
+        is stale the moment a row is written -- so a count would be a bound
+        that silently stops finding a form added after it, which trades a cost
+        problem for a correctness one.
+
+        ``None`` remains this member's published spelling of *I cannot bound
+        this*, and a rung told nothing enumerates every window: *n(n+1)/2*
+        probes for *n* tokens, each one a round trip on this source. That is
+        why the combination is refused where the composition is read rather
+        than survived here -- see the registry's refusal, which names the key
+        above. A binding no scanning rung is declared over needs no bound and
+        keeps answering None.
         """
-        return None
+        lookup = self._projection.surface_forms
+        return None if lookup is None else lookup.longest_form_tokens
 
     def _projected(self, record: Record) -> Entity[str]:
         """One row to one entity -- the single place a column name is spent."""

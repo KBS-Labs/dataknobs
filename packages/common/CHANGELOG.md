@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DeclaredSignal.bounded_by_longest_form`**, on both twins, declaring
+  whether a rung's enumeration is bounded by the vocabulary's longest declared
+  form. `ScanningSignal` and `AsyncScanningSignal` set it; the default is
+  False, matching `reads_surface_forms`' safe direction. Derived into the
+  signal registries' metadata by the same `_declared()` helper, so a door
+  holding a declared composition and no instances can ask which of its rungs
+  depend on a number the source it is about to bind cannot supply — and refuse
+  before anything is built.
+
 - **`OPTIONAL_COMPONENTS` on `StructuredConfigConsumer`**, with
   `optional_components()` and `accepted_components()` beside the existing
   `expected_components()`. `EXPECTED_COMPONENTS` means *must be supplied* and

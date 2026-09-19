@@ -85,6 +85,28 @@ onto = await registry.load()          # the document it was constructed with
 An injected handle is used for every source in the document, and its
 `database:` block is not resolved: a handle already built needs no name.
 
+Where a projection's `surface_forms:` names a **different table** than its
+entity rows, one handle may not be enough — and whether it is enough is the
+backend's answer, not the registry's. On `memory`, `file`, `s3` and
+`elasticsearch` a handle *is* the store, so both kinds of row live in it and
+one handle serves; on `sqlite`, `postgres` and `duckdb` a handle addresses one
+table, and the second one is injected beside the first:
+
+```python
+registry = OntologyRegistry.from_components(
+    config=OntologyConfig(id="catalog", sources=[...]),
+    database=entities_handle,             # the projection's `table:`
+    forms_database=forms_handle,          # its `surface_forms.table:`
+)
+```
+
+Omitting it where it is needed is **refused at load**, naming both tables and
+the handle's class. That refusal is there because nothing downstream could
+notice: the entity reads would be correct, `describe()` would still advertise
+`SURFACE_FORM_LOOKUP`, and `by_surface_form` would answer `frozenset()` — which
+means *ran and matched nothing*, not *could not be served*. The configured door
+opens both handles itself and needs no equivalent.
+
 ### The registry's own settings travel on any door
 
 `environment`, `strict_resources`, `config_key` and `normalizer` are
@@ -225,6 +247,34 @@ read the member, so a cascade built over such a binding is refused when the
 rungs are constructed rather than here. A binding loaded only to read entities
 from is never refused for a cascade nobody builds.
 
+### A `scan` rung needs a bound the table cannot supply
+
+A scanning rung probes every contiguous window of a query, and takes how wide a
+window may be from the vocabulary's longest declared form. An authored index
+counts its own keys and answers. A live table cannot be counted — and a count
+taken at load is stale the moment a row is written — so the binding declares it:
+
+```yaml
+surface_forms:
+  table: product_forms
+  form: folded_form
+  entity: sku
+  longest_form_tokens: 4      # the longest form in this table is four tokens
+```
+
+Without it, the scan enumerates every window: *n(n+1)/2* probes for *n* tokens,
+and on a live binding each probe is a database round trip — 1,275 reads for a
+fifty-token utterance, 20,100 for a two-hundred-token paste. So a document
+declaring a `scan` rung over a binding that declares no bound is **rejected at
+load**, naming the key.
+
+The number is not invented for you. A default would make a form longer than it
+silently unfindable, which trades a cost problem for a correctness one; over an
+in-memory vocabulary the same enumeration is a dictionary lookup per probe and
+is left alone, which is why the refusal is here rather than on the rung. Which
+kinds are bounded this way is read from what each kind declares about itself, as
+with the lookup rule above.
+
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:
 
@@ -269,13 +319,21 @@ population, so a caller with a million-row binding gets a million-element set;
 if that is the wrong shape, the fix is a type column on the table, which is also
 what would let `declares` say it cannot enumerate.
 
-Over a **shared** store the scan narrows to the entity rows, and that read stays
-on `search()` rather than streaming. `stream_read` and `search` are separate
-implementations on every backend and they do not agree everywhere — Postgres's
-`stream_read` silently drops non-EQ filters, which is what this narrowing is —
-so the branch that carries a filter keeps the member whose filter semantics hold
-everywhere. Its cost is bounded by that same filter: it reads the entity rows,
+Over a **shared** store the scan narrows to the entity rows, and that read
+streams too. Its cost is bounded by the same filter: it reads the entity rows,
 not the table.
+
+That branch used to take `search()` instead, because `stream_read` and `search`
+are separate implementations on every backend and they did not agree —
+Postgres's `stream_read` open-coded its WHERE clause and silently dropped non-EQ
+filters, which is what this narrowing is. With that fixed, keeping the branch on
+`search()` would now *lose rows* rather than protect them: an unbounded `search`
+is the read a backend is free to cap, and Elasticsearch caps one at
+`size=10000`. Because Elasticsearch declares `index` rather than `table` it is
+always a shared store, so a binding of more than ten thousand rows with a
+declared `surface_forms:` was answering with ten thousand ids and reporting
+nothing. Its streaming door goes through the scroll API, which no such cap
+reaches.
 
 ### One handle per table, opened and connected by the registry
 

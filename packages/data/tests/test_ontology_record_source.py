@@ -25,12 +25,14 @@ from dataknobs_common.capabilities import (
     require_capability,
     supports_capability,
 )
+from dataknobs_common.entity_resolution.signals import AsyncScanningSignal
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import OntologyConfig, SourceRef
 from dataknobs_common.records import Record
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.ontology import EntityProjection, OntologyRegistry, RecordEntitySource
+from dataknobs_data.ontology.sources import READ_BATCH_SIZE
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.streaming import StreamConfig
 
@@ -826,15 +828,13 @@ class _ReadDoorProbe(AsyncMemoryDatabase):
 
 
 @pytest.mark.parametrize(
-    ("projection", "rows", "expected", "door", "refused"),
+    ("projection", "rows", "expected"),
     [
         pytest.param(
             PROJECTION,
             [{"sku": "sku-1", "title": "Widget"}, {"sku": "sku-2", "title": "Gadget"}],
             frozenset({"sku-1", "sku-2"}),
-            "stream_read",
-            "all",
-            id="whole-table-streams",
+            id="whole-table",
         ),
         pytest.param(
             dict(PROJECTION, surface_forms=FOLDED_LOOKUP),
@@ -843,32 +843,39 @@ class _ReadDoorProbe(AsyncMemoryDatabase):
                 {"folded_form": "widget", "sku": "sku-1"},
             ],
             frozenset({"sku-1"}),
-            "search",
-            "stream_read",
-            id="narrowed-does-not",
+            id="narrowed",
         ),
     ],
 )
-async def test_the_type_scan_streams_the_read_that_has_no_filter_to_lose(
+async def test_the_type_scan_streams_whichever_branch_it_takes(
     projection: dict[str, Any],
     rows: list[dict[str, Any]],
     expected: frozenset[str],
-    door: str,
-    refused: str,
 ) -> None:
-    """The whole-table read streams; the narrowed one keeps ``search``, deliberately.
+    """Both branches stream, and the narrowed one could not always.
 
-    The asymmetry is the subject. ``stream_read`` bounds what a scan holds,
-    which is worth having on the branch that reads the table -- but the two
-    members are separate implementations per backend and do not agree
-    everywhere: Postgres's ``stream_read`` silently drops non-EQ filters, and
-    ``NOT_EXISTS`` on the form column is exactly what the narrowed branch
-    sends. Streaming that branch would answer with form rows projected as
-    entities, on one backend, with no error.
+    The asymmetry this test used to pin was a workaround: ``stream_read`` and
+    ``search`` are separate implementations per backend, and Postgres's
+    streaming door open-coded its WHERE clause and silently dropped the
+    ``NOT_EXISTS`` the narrowed branch sends. That is fixed -- the async
+    Postgres ``stream_read`` builds its clause through the same
+    ``SQLQueryBuilder`` its ``search`` uses -- so the workaround went with the
+    defect it was for.
 
-    ``test_a_sql_backend_can_share_one_store_which_is_why_the_filter_stays_on_search``
-    is the other half: it pins that the two cases *can* meet, so this
-    asymmetry cannot be argued away later.
+    What it is replaced with is stronger than symmetry for its own sake. An
+    unbounded ``search`` is the read a backend is free to cap, and
+    ``AsyncElasticsearchDatabase`` caps one at ``size=10000``; the narrowed
+    branch was the branch that took it.
+
+    **The door asserted is the first one, and the qualifier is not a hedge.**
+    A ``search`` can still be recorded after it, because ``stream_read`` is
+    each backend's own implementation and the memory backend's delegates to
+    its own ``search`` for the filtered case. That is the backend's business,
+    not a read this source issued, and it is precisely why the caps question
+    cannot be settled on this probe: the backend that actually caps answers
+    its streaming door through the scroll API and never re-enters ``search``.
+    ``test_the_narrowed_type_scan_is_not_truncated_by_a_capping_backend`` is
+    that half, over a store that caps for real.
     """
     database = _ReadDoorProbe()
     for row in rows:
@@ -880,22 +887,30 @@ async def test_the_type_scan_streams_the_read_that_has_no_filter_to_lose(
     finally:
         await registry.close()
 
-    assert database.doors[0] == door, f"the scan took {database.doors[0]!r}"
-    assert refused not in database.doors
+    assert database.doors[0] == "stream_read", f"the scan took {database.doors[0]!r}"
+    assert "all" not in database.doors, "the scan read the table rather than a query"
 
 
-async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_stays_on_search(
+async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_must_survive_streaming(
     tmp_path: Path,
 ) -> None:
-    """The argument that would license streaming the narrowed branch is false.
+    """A shared store is reachable on a table-declaring backend, so the filter is too.
 
-    It goes: a filter is emitted only for a shared store, and a shared store
-    is only the backends declaring no ``table``, so Postgres -- the one whose
-    ``stream_read`` drops non-EQ filters -- is never reached with one. The
-    second step does not hold. A projection whose ``surface_forms:`` names the
-    *same* table as its entity rows keys to one handle on **any** backend,
-    including one that declares a ``table``, so the store is shared and the
-    filter is emitted.
+    This used to pin the opposite conclusion -- that the narrowed branch had
+    to stay on ``search``, because Postgres's ``stream_read`` dropped non-EQ
+    filters and a shared store could reach Postgres. The premise it argued
+    against was: a filter is emitted only for a shared store, and a shared
+    store is only the backends declaring no ``table``, so the one backend that
+    dropped filters is never reached with one.
+
+    **That premise is still false, and that is still the point.** A projection
+    whose ``surface_forms:`` names the *same* table as its entity rows keys to
+    one handle on **any** backend, including one that declares a ``table``, so
+    the store is shared and the filter is emitted. What changed is the remedy:
+    rather than routing around a streaming door that lost the filter, the door
+    was fixed to carry it. This test is what makes that a requirement rather
+    than a nicety -- it is the configuration that puts a ``NOT_EXISTS`` filter
+    through a SQL backend's ``stream_read``.
 
     SQLite stands in for Postgres here because it is the SQL backend a test
     can run; what is being pinned is the *configuration* reaching the filtered
@@ -921,3 +936,188 @@ async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_stays_o
         assert [f.operator for f in source._entity_filters()] == [Operator.NOT_EXISTS]
     finally:
         await registry.close()
+
+
+# --------------------------------------------------------------------------
+# A backend that caps an unbounded read, and the two doors that must not lose
+# rows to it
+# --------------------------------------------------------------------------
+
+
+class _CappedSearchProbe(AsyncMemoryDatabase):
+    """A real store whose ``search`` caps a query carrying no ``limit``.
+
+    This is ``AsyncElasticsearchDatabase``'s contract, at a size a test can
+    hold. That backend reads ``size = query.limit_value if query.limit_value
+    is not None else 10000``, so an unbounded ``search`` comes back truncated
+    -- silently, because a short list is what a matching read of a small table
+    looks like. ``stream_read`` there goes through the scroll API, which the
+    cap does not reach, and this probe splits the same way.
+
+    A subclass rather than a mock: both doors run the memory backend's own
+    matching code and the rows come back for real. The cap is the only thing
+    added, and it is applied to the *parent's* result so the override cannot
+    be re-entered by a door that delegates.
+    """
+
+    def __init__(self, cap: int) -> None:
+        super().__init__()
+        self.cap = cap
+
+    async def search(self, query: Any) -> list[Record]:
+        found = await AsyncMemoryDatabase.search(self, query)
+        return found if query.limit_value is not None else found[: self.cap]
+
+    def stream_read(
+        self, query: Query | None = None, config: StreamConfig | None = None
+    ) -> AsyncIterator[Record]:
+        return self._scroll(query)
+
+    async def _scroll(self, query: Query | None) -> AsyncIterator[Record]:
+        """The door the cap does not reach, as the scroll API is for ES."""
+        for record in await AsyncMemoryDatabase.search(self, query or Query()):
+            yield record
+
+
+async def test_the_narrowed_type_scan_is_not_truncated_by_a_capping_backend() -> None:
+    """``by_type`` answers every id, including where ``search`` would cap.
+
+    The narrowed branch used to take ``search`` with no ``limit``, so on
+    Elasticsearch -- which declares ``index`` rather than ``table``, and is
+    therefore always a shared store -- a binding of more rows than the cap
+    answered with the cap's worth and reported nothing. The docstring two
+    paragraphs above the read claims "on a million-row binding this returns a
+    million-element set"; this is that claim, asserted.
+    """
+    database = _CappedSearchProbe(cap=5)
+    for index in range(12):
+        await database.create(Record({"sku": f"sku-{index:02d}", "title": f"Widget {index}"}))
+        await database.create(Record({"folded_form": f"widget {index}", "sku": f"sku-{index:02d}"}))
+    registry, ontology = await _bound(
+        database, projection=dict(PROJECTION, surface_forms=FOLDED_LOOKUP)
+    )
+    try:
+        found = await ontology.entities.by_type("Product")
+    finally:
+        await registry.close()
+
+    assert len(found) == 12, "the narrowed scan answered the backend's cap, not the table"
+    assert found == frozenset(f"sku-{index:02d}" for index in range(12))
+
+
+async def test_get_many_over_more_ids_than_a_backend_will_answer_at_once() -> None:
+    """A bulk read of more ids than the cap answers all of them.
+
+    One ``IN`` filter is the member's whole reason to exist, but one ``IN``
+    filter is also one read, and a read is what a backend caps. The batch is
+    split so that no single read asks for more rows than a backend will
+    answer -- which is the same bound that keeps a bind-parameter ceiling out
+    of reach on the SQL backends.
+    """
+    database = _CappedSearchProbe(cap=READ_BATCH_SIZE)
+    ids = [f"sku-{index:05d}" for index in range(READ_BATCH_SIZE + 500)]
+    for entity_id in ids:
+        await database.create(Record({"sku": entity_id, "title": f"Widget {entity_id}"}))
+    registry, ontology = await _bound(database)
+    try:
+        found = await ontology.entities.get_many(ids)
+    finally:
+        await registry.close()
+
+    assert len(found) == len(ids), "the bulk read answered one read's worth"
+    assert set(found) == set(ids)
+
+
+async def test_fetch_origins_over_more_refs_than_a_backend_will_answer_at_once() -> None:
+    """Same bound, same reason -- and one slot per ref however many reads it took."""
+    database = _CappedSearchProbe(cap=READ_BATCH_SIZE)
+    ids = [f"sku-{index:05d}" for index in range(READ_BATCH_SIZE + 500)]
+    for entity_id in ids:
+        await database.create(Record({"sku": entity_id, "title": f"Widget {entity_id}"}))
+    registry, ontology = await _bound(database)
+    refs = [
+        SourceRef(source_id="products", kind="record", locator={"sku": entity_id})
+        for entity_id in ids
+    ]
+    try:
+        origins = await ontology.entities.fetch_origins(refs)
+    finally:
+        await registry.close()
+
+    assert len(origins) == len(refs), "a slot per ref survives the split"
+    assert all(origin is not None for origin in origins), "a chunked read lost rows"
+
+
+# --------------------------------------------------------------------------
+# What a scan over a live table costs, and the number that bounds it
+# --------------------------------------------------------------------------
+
+
+async def test_a_declared_bound_is_what_the_source_reports() -> None:
+    """``longest_form_tokens`` is configuration here, because nothing can measure it.
+
+    An authored index counts its own keys. A live table cannot be counted
+    without reading it, and a count taken at load is stale as soon as a row is
+    written -- so the number a scanning rung needs is declared beside the
+    lookup it describes, by the consumer who knows their own vocabulary.
+    """
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, surface_forms=dict(FOLDED_LOOKUP, longest_form_tokens=4)),
+        binding="products",
+    )
+    assert projection.surface_forms is not None
+    assert projection.surface_forms.longest_form_tokens == 4
+    source = RecordEntitySource(AsyncMemoryDatabase(), projection, source_id="products")
+    assert source.longest_form_tokens() == 4
+
+
+async def test_no_declared_bound_is_still_none_rather_than_a_guess() -> None:
+    """The honest answer where none is declared, unchanged.
+
+    ``None`` is this member's published spelling of *I cannot bound this*, and
+    inventing a default would make a form longer than it silently unfindable
+    -- a cost problem traded for a correctness one. What changes is that the
+    combination is refused at load rather than reaching a resolve.
+    """
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, surface_forms=FOLDED_LOOKUP), binding="products"
+    )
+    source = RecordEntitySource(AsyncMemoryDatabase(), projection, source_id="products")
+    assert source.longest_form_tokens() is None
+
+
+async def test_a_declared_bound_makes_the_scan_linear_in_the_query() -> None:
+    """The bound's whole purpose, counted rather than argued.
+
+    Unbounded, a scan spends *n(n+1)/2* probes for *n* tokens, and over a live
+    binding each probe is a database round trip -- 1,275 of them for a
+    fifty-token utterance. Bounded at *L*, it spends at most *n x L*.
+    """
+    database = _CountingSearchProbe()
+    await database.create(Record({"sku": "sku-1", "title": "Beagle"}))
+    await database.create(Record({"folded_form": "beagle", "sku": "sku-1"}))
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, surface_forms=dict(FOLDED_LOOKUP, longest_form_tokens=3)),
+        binding="products",
+    )
+    source = RecordEntitySource(database, projection, source_id="products")
+    rung = AsyncScanningSignal(source)
+
+    query = " ".join(f"word{index}" for index in range(50))
+    database.searches = 0
+    await rung.candidates(query, 10)
+
+    assert database.searches <= 50 * 3, f"{database.searches} probes is not linear"
+    assert database.searches == sum(50 - length + 1 for length in range(1, 4))
+
+
+class _CountingSearchProbe(AsyncMemoryDatabase):
+    """A real store that counts the reads a rung drives through it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.searches = 0
+
+    async def search(self, query: Any) -> list[Record]:
+        self.searches += 1
+        return await super().search(query)

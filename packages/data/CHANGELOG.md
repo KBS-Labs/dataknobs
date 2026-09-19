@@ -41,196 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OntologyRegistry._database_handle` already does with the same resolution.
   A refusal for an unrecognised backend still surfaces unchanged.
 
-- **A database handle `OntologyRegistry` opens is connected.** Every backend
-  but `memory` and `file` — the three SQL ones, `s3` and `elasticsearch` —
-  raises *Database not connected* on its first query, so a `$resource`
-  naming one produced a source that loaded clean and failed on its first
-  read. Only the two that answer either way were covered, which is why
-  nothing reported it. A handle injected through `from_components` is still
-  connected by whoever handed it over.
-
-- **Two concurrent loads over one resolved `database:` block open one
-  handle.** The cache lookup that decides ran inside the worker thread the
-  open was offloaded to, so two loads naming one block each found the cache
-  empty and each opened a connection. The bookkeeping is now on the event
-  loop under a lock and only the blocking calls are offloaded. `close()`
-  also swaps its list before its first `await`, so a handle a load in flight
-  appends is the next `close()`'s rather than nobody's.
-
-- **A collaborator whose `connect()` fails is closed rather than leaked.**
-  Both the configured event bus and a database handle recorded ownership
-  *after* connecting, so one that raised mid-connect was discarded still
-  holding whatever its constructor had acquired, with nothing left able to
-  release it.
-
-- **`OntologyRegistry.close()` is idempotent.** It emptied the handle list
-  but left the two fields recording the bus, so a second `close()` closed an
-  owned bus twice and an `unload()` after a close published a departure to a
-  bus the registry had already torn down. What it owned is now closed and
-  forgotten; what it was handed is untouched and still recorded, so a
-  post-close `unload()` over an injected bus still announces.
-
-- **A rebuild's delta is over the population its topic is about.** The three
-  sets were computed across the whole declared vocabulary and then published
-  once per axis, so a subscriber to `taxonomy:colours` was told about a
-  rename in `taxonomy:sizes` — indistinguishable from a change to the axis
-  they read. Each axis topic now carries the delta over that axis's own
-  nodes, the ontology's topic carries the whole-population one as
-  `ontology:{id}` / `UPDATED`, and an axis a rebuild *removes* reports its
-  population `gone` instead of being announced nowhere.
-
-- **`reload()` names the condition it refuses on.** Only `load()` stores a
-  portable document, so a vocabulary loaded through `from_config_async` —
-  which takes the already-resolved form — was reported as *No ontology
-  loaded with id 'x'* for an id `list_ids()` lists. It says what is actually
-  true: the vocabulary is loaded and there is nothing to re-resolve, and
-  names the call that does resolve.
-
-- **`OntologyRegistry.load()` refuses with the type it documents.** It
-  declares `ValidationError` and raised a bare `ValueError` for a call with
-  no argument over a registry constructed with no document, and a
-  `TypeError` for a config of the wrong type. Both are refusals of a
-  document, which is what the rest of the module spells one way — with a
-  `context` naming what to fix.
-
-### Added
-
-- **`RecordEntitySource.fetch_origins` answers, in one read.** N refs, one
-  `search` with a single `IN` filter over the collected ids alongside the
-  same narrowing `fetch_origin` applies --- so a shared store still cannot
-  answer with a surface-form row, and a caller pays one round trip where a
-  loop over `fetch_origin` pays N. The rows are identical either way; the
-  read count is the whole of the difference.
-
-  It previously refused. Its declared answer was `dict[SourceRef, Record]`
-  and `SourceRef` is deliberately unhashable, so no non-empty value of that
-  type existed to return; this was the first source able to reach an origin
-  at all and so the first to find the declaration unbuildable. The
-  declaration was the half that was wrong --- see `dataknobs-common`, where
-  the protocol now answers `list[Record | None]`. A ref belonging to another
-  source, carrying no id, or naming a row that is gone is a `None` in its own
-  slot, and a binding with `expose_origin: false` answers all-`None`.
-
-  `describe()` still declares `Capability.ORIGIN_FETCH`, and that is now
-  true of both members rather than one: `require_capability(source,
-  ORIGIN_FETCH)` followed by `fetch_origins(refs)` is a sequence that works.
-
-- **`OntologyRegistry` is an async context manager.** `async with registry:`
-  is `close()` on the way out, including the way out an exception takes,
-  which is the path a `finally` gets forgotten on. Entry builds nothing and
-  hands back the registry — a handle connects on entry to `AsyncDatabase`'s
-  block because a handle is the thing being opened, and a registry opens
-  handles at `load()`. Writing `await registry.close()` yourself is
-  unchanged and equally supported.
-
-### Changed
-
-- **`OntologyRegistry` declares its two collaborators as optional rather
-  than expected.** `database` and `event_bus` are real injection points that
-  `from_components` takes, and neither is required: a configured registry
-  resolves its own database from `$resource` and publishes nothing when no
-  bus is wired. Declared under `EXPECTED_COMPONENTS` --- the only field there
-  was --- a fully loaded registry with nothing wrong with it answered
-  `{"database", "event_bus"}` to `missing_components()` and raised from
-  `require_components()`. They now sit in `OPTIONAL_COMPONENTS` (new in
-  `dataknobs-common`), so the diffs answer about this registry and
-  `accepted_components()` still advertises both.
-
-- **`RecordEntitySource.by_type` streams its whole-table read.** The scan is
-  the projection's shape rather than the implementation's — a constant `type:`
-  means every row — but it read through `all()`, holding every `Record` at
-  once. It now reads through `stream_read`, so one batch is alive at a time;
-  on the backends that page for real (Postgres by cursor; DuckDB, SQLite and
-  Elasticsearch by batch) that bounds a read whose footprint was the table's.
-
-  The *narrowed* read — the one a shared store needs, filtering out form rows
-  — deliberately stays on `search()`. `stream_read` and `search` are separate
-  implementations per backend and do not agree everywhere: Postgres's
-  `stream_read` silently drops non-EQ filters, and `NOT_EXISTS` on the form
-  column is exactly what that branch sends, so streaming it would answer with
-  form rows projected as entities on one backend with no error. The ids
-  returned are unchanged on both branches.
-
-- **`RecordEntitySource` answers the capability contract** rather than
-  hand-rolling one member of it. It gains `SUPPORTED_CAPABILITIES` — what a
-  `kind: record` binding *can* declare, answerable without an instance — and
-  takes `supports()`, `instance_capabilities()` and
-  `supported_capabilities()` from `DynamicCapabilityMixin`, which is the
-  construct in `dataknobs-common` for capabilities computed from
-  construction arguments. `supports()` behaved identically before; what did
-  not exist were the other three, so a caller enumerating capabilities
-  through `CapabilityContract` saw a source that was not a contract host.
-
-- **`OntologyRegistry`'s own settings reach it through every published
-  door.** `environment`, `strict_resources`, `config_key` and the new
-  `normalizer` are keyword-only parameters of the constructor, and every
-  published door has the shape `(config, **components)` — so a setting
-  written on one of them landed in the collaborator channel, where nothing
-  read it, and the registry went on resolving against no environment at its
-  default strictness. `from_config_async(resolved, environment="production")`
-  now sets the environment. The four are declared once, as
-  `CONSTRUCTION_SETTINGS`, and lifted out of the channel in `__init__` — the
-  one place all four doors funnel through — so they never reach a child
-  consumer through `forwardable_components()` either.
-
-- **`OntologyRegistry` takes a `normalizer=`, and it reaches both kinds of
-  source.** `RecordEntitySource` has taken the fold since it shipped and its
-  documentation presents it as how a consumer who folded their
-  `surface_forms:` table with their own callable keeps both halves in step —
-  but the registry, which is the door that *builds* that source, had no way
-  to supply one. The authored branch had the same gap against the
-  module-level door, which has taken `normalizer=` all along: the same
-  document folded differently depending on which door loaded it.
-
-- **An `event_bus:` block reaches the configured door.** The block was read
-  off the raw mapping handed to the constructor, and all three published
-  doors coerce to `OntologyConfig` first — so what the constructor read was
-  always `None`, and
-  `from_config_async(cfg.resolve_for_build("ontology"))`, the door the guide
-  leads with, could not configure a bus at all. `event_bus:` is now a
-  declared field on `OntologyConfig`, read in one place after resolution, so
-  both doors agree about where the block lives and both expand a `${VAR}` in
-  it before building.
-
-- **The bus a document configures is built off the event loop.** Every
-  backend factory imports its driver — `asyncpg`, `redis`, `aioboto3` —
-  inside the factory call, so that a base install pulls none of them; that
-  import is disk I/O, and it ran on the caller's loop. Same stall, and the
-  same offload, as opening a database handle. A backend whose *construction*
-  is asynchronous is built by its owner and injected, which is the
-  `event_bus` collaborator the registry already accepted.
-
-- **A `RecordEntitySource` sharing one handle between its two tables no longer
-  reads surface-form rows as entities.** On `memory`, `file`, `s3` and
-  `elasticsearch` the handle *is* the store, so a binding declaring
-  `surface_forms:` puts both kinds of row in one — and a form row carries the
-  projection's `id:` column, because `surface_forms.entity` names that same
-  space. An id filter therefore reached both kinds, and which one a read
-  answered with was decided by insertion order: `get` took the first row and
-  `get_many` kept the last, so either could return a form row projected as the
-  entity — an empty name, no aliases, no description — and report nothing
-  wrong. `fetch_origin` could return the form row as the origin, and `by_type`
-  scanned both kinds, inventing an entity for every stale form row whose
-  entity was gone. The three SQL backends were unaffected: they declare a
-  `table` on their config, so each table already had a handle of its own.
-
-  The entity-side reads now exclude the form column, which is the same
-  invariant the lookup direction already rested on — `by_surface_form` filters
-  *on* that column and reaches only form rows because an entity row does not
-  carry it. A binding declaring no `surface_forms:`, or one whose two tables
-  have handles of their own, queries exactly as it did.
-
-- **A rung reading folded surface forms is refused over a binding that
-  declares none, whichever rung it is.** The load-time refusal named `exact`,
-  and `scan` and `lexical` reach the same member — so a document declaring
-  either of those loaded clean and raised `CapabilityNotSupportedError` on the
-  first resolve. Which kinds read the member is now asked of the registry each
-  is registered under rather than listed here, so a rung added to
-  `dataknobs-common`, or one a consumer registers, is covered without an edit
-  to this package. A document declaring no `resolver:` section still loads
-  unchanged, and the default composition it implies is refused where its rungs
-  are constructed; see the `dataknobs-common` entry.
-
 - **A failed batch insert is no longer reported as a success when
   `error_handling="raise"`.** `BatchOperations.bulk_insert_dataframe` retries a
   failed `create_batch` one row at a time — which is what identifies *which*
@@ -400,8 +210,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projection naming a column that declaration lacks is rejected naming the
   column. Nothing here interpolates a name into a query.
 
-  A binding read by an `exact` rung also declares **where its folded surface
-  forms live**, and is rejected at load without that:
+  A binding read by a rung that *reads folded forms* also declares **where
+  those forms live**, and is rejected at load without that. Which rungs those
+  are is read from what each kind declares about itself --- `exact`, `scan`
+  and `lexical` today, and a rung a consumer registers without an edit here:
 
   ```yaml
   entity_projection:
@@ -415,6 +227,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       entity: sku
   ```
 
+  A `scan` rung additionally needs `surface_forms.longest_form_tokens:`, and a
+  document declaring one over a binding without it is rejected at load. A
+  scanning rung probes every window of a query and bounds that enumeration by
+  the vocabulary's longest declared form; an authored index counts its own
+  keys, and a live table cannot be counted --- a count taken at load is stale
+  as soon as a row is written. Unbounded the scan spends *n(n+1)/2* reads per
+  query, each one a round trip. No default is invented, because a bound
+  shorter than a real form makes that form silently unfindable.
+
   The fold a surface-form lookup compares by is `str.casefold`, and no engine
   performs it at query time --- so the fold happens before the row is written
   or it does not happen at all. A source with no declared lookup **refuses**
@@ -424,10 +245,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both halves: `normalizer=` is the parameter the in-memory source already
   carries.
 
+  **How many handles a binding needs is the backend's answer.** `sqlite`,
+  `postgres` and `duckdb` declare a `table` on their config, so a projection
+  naming two tables gets a handle each. On `memory`, `file`, `s3` and
+  `elasticsearch` the handle *is* the store: both kinds of row live in one, the
+  form column tells them apart, and an entity row must therefore not carry it.
+  Through `from_components` the handles are injected rather than opened, and a
+  binding needing two takes `forms_database=` beside `database=` --- a handle
+  that addresses one table, handed a projection naming two, is refused at load
+  rather than answering `frozenset()` from the wrong table.
+
+  `get()` is a query rather than a read, because the projection's `id:` is not
+  the storage id. `get_many` and `fetch_origins` are one `IN` filter rather
+  than a round trip per id, split into batches so no single read exceeds what a
+  backend will answer or how many parameters it will bind. `fetch_origins`
+  answers one slot per ref, in order, so a miss is read in the slot it was
+  asked about. `by_type` streams. The registry is an async context manager, so
+  `async with registry:` closes what it opened.
+
   Loading, unloading and rebuilding are announced on an injected or configured
   `EventBus` as a topic and a type, with nothing added to `EventType`. A
   rebuild carries three sets --- gone, arrived, and *changed name while keeping
-  its id* --- because a two-set delta reports a rename as no change at all.
+  its id* --- because a two-set delta reports a rename as no change at all, and
+  each axis topic carries the delta over *its own* nodes so a subscriber to
+  `taxonomy:colours` is not told about a rename in `taxonomy:sizes`. The
+  whole-population delta is the ontology's own topic.
   `close()` releases every handle the registry opened and leaves every handle
   it was handed; it does not unload, and `unload()` does not close, because the
   vocabulary `get()` hands back is a value that outlives its entry.

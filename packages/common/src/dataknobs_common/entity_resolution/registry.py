@@ -147,11 +147,18 @@ def _declared(rung: type[Any], base: dict[str, Any]) -> dict[str, Any]:
     loader binding a live source refuses the document before anything is
     built, and a registry is the one place it can ask.
 
-    Derived rather than restated, because two spellings of one fact drift and
-    the drift is silent: a rung marked here and not on the class refuses
-    nothing, and a rung marked on the class and not here is not refused early.
+    ``bounded_by_longest_form`` is here for the same reason and answers a
+    different door's question: whether this rung's cost depends on a number
+    the source may not be able to supply. Both are derived rather than
+    restated, because two spellings of one fact drift and the drift is
+    silent: a rung marked here and not on the class refuses nothing, and a
+    rung marked on the class and not here is not refused early.
     """
-    return dict(base, reads_surface_forms=rung.reads_surface_forms)
+    return dict(
+        base,
+        reads_surface_forms=rung.reads_surface_forms,
+        bounded_by_longest_form=rung.bounded_by_longest_form,
+    )
 
 
 signal_backends.register(
