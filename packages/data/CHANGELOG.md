@@ -7,7 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING: a backend implements `_vector_search`, not `vector_search`.**
+  `vector_search` is now a concrete method on `SyncVectorOperationsMixin` and
+  `AsyncVectorOperationsMixin`, over a new abstract `_vector_search` hook that
+  carries the raw k-nearest-neighbour search and nothing else. An out-of-tree
+  backend migrates by renaming its method to `_vector_search`, making
+  everything after `query_vector` keyword-only, and deleting `include_source`,
+  `score_threshold` and any `**kwargs` from the signature — the mixin owns
+  those now.
+
+- **BREAKING: everything after `query_vector` is keyword-only, on every
+  backend.** The mixin has declared it so since the twelve implementations were
+  found to disagree about positional order — most spelled it `(..., k, filter,
+  metric)` where the declaration says `(..., k, metric, filter)`, so a fourth
+  positional argument meant the metric on some backends and the filter on
+  others. That declaration was not enforced, because each backend redeclared
+  the signature. Now there is one signature, and it refuses the form that was
+  never portable: `db.vector_search(q, "embedding", 5)` becomes a `TypeError`,
+  and `db.vector_search(q, vector_field="embedding", k=5)` is what it always
+  should have been.
+
+- **BREAKING: `vector_search` no longer swallows an unrecognised keyword.**
+  Eight of the twelve backends declared `**kwargs: Any` and forwarded it to a
+  helper that reads it nowhere, so a misspelled or unsupported keyword bound at
+  the signature and vanished. It is now a `TypeError`, which is what the two
+  Postgres backends always did.
+
+- **BREAKING: `create_vector_index` no longer takes `**kwargs`.** It was
+  declared for "backend-specific index parameters" on both mixins and both
+  Elasticsearch backends and read in none of the four. A backend-specific
+  parameter is a named parameter on that backend, as
+  `AsyncPostgresDatabase`'s `lists` already is.
+
+- **`metric` is settled once, above all twelve backends.** Eight of them
+  defaulted it to `None` and resolved that against the database's configured
+  `vector_metric`; the four with native vector support — both Postgres and
+  both Elasticsearch backends — defaulted it to cosine and never consulted the
+  configuration at all. So a database built with `vector_metric="euclidean"`
+  searched under euclidean on memory, file, SQLite and S3, and under cosine on
+  the four backends that could actually have used it. `vector_search` now
+  accepts a `DistanceMetric`, its string value, or `None` — and `None`, which
+  is the new default, means the metric the database was configured with. The
+  aliases `DistanceMetric.get_aliases()` lists are still not accepted, because
+  nothing in the library resolves them.
+
+- **`SyncElasticsearchDatabase` has the vector surface its async twin has.**
+  It inherited neither vector mixin and defined `vector_search` and
+  `create_vector_index` from nowhere, so the other eight members of that
+  surface were absent: `bulk_embed_and_store`, `update_vector`,
+  `delete_from_index`, `drop_vector_index`, `get_vector_index_stats` and
+  `hybrid_search` raised `AttributeError` there and answered on
+  `AsyncElasticsearchDatabase`, along with the two private helpers
+  `hybrid_search` calls. It now mixes in `SyncVectorOperationsMixin` and
+  `BulkEmbedMixin`; all eight arrive with the one `vector_search` that
+  occasioned the change.
+
 ### Fixed
+
+- **`score_threshold` drops the hits it says it drops.** It was declared on
+  both vector mixins and implemented on two of the twelve backends. Eight
+  swallowed it into `**kwargs` and two raised `TypeError`. On
+  `AsyncMemoryDatabase`, three records scoring 1.0, 0.994 and 0.0 all came
+  back from `vector_search(q, k=10, score_threshold=0.99)` — the same three,
+  in the same order, as the call with no threshold. It is now applied once,
+  in the mixin, for every backend. It is a **post-filter**: a call carrying a
+  threshold may return fewer than `k` results, which is what the Elasticsearch
+  implementation always did and is now the stated contract. Pushing the
+  threshold into the query itself remains available to a backend and needs no
+  further break.
+
+- **`include_source` populates `VectorSearchResult.source_text`, and both
+  Elasticsearch backends stop returning an empty list when it is `False`.**
+  The parameter had no working implementation anywhere. `record` is a required
+  field, so a hit without one cannot be constructed — which is why both
+  Elasticsearch twins forwarded `include_source` straight into the client's
+  source parameter (spelled `source` on one twin and `_source` on the other),
+  found `_doc_to_record` had nothing to read, and skipped every hit.
+  The knob never decided whether the record comes back; it decides whether the
+  text the vector was made from is assembled onto the result. That assembly
+  needs no query and no id round-trip: the vector field already stores its
+  ordered source-field list and separator, and `derive_source_text` reads them
+  back. A vector written before those descriptions existed yields `None`.
+
+- **Three index methods on `AsyncPostgresDatabase` accept the call the mixin
+  declares.** `drop_vector_index()` and `get_vector_index_stats()` made
+  `vector_field` required where the mixin defaults it, and
+  `create_vector_index()` made both `vector_field` and `dimensions` required —
+  so a call written against the mixin raised `TypeError` on Postgres and
+  answered everywhere else. pgvector does still need the dimensions to build
+  an index; that is now a `ValueError` naming the reason rather than a
+  signature that turns the caller away.
+
 
 - **`enable_vector_support()` on both Postgres backends says the database is
   not connected, instead of answering as though it had looked.** Every other

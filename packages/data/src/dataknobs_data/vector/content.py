@@ -202,6 +202,56 @@ def stored_assembly(
     return source_fields, separator
 
 
+def derive_source_text(record: Record, vector_field: str) -> str | None:
+    """The text a record's vector was made from, read off the record itself.
+
+    What ``include_source`` always meant. The original design spells it
+    *"automatic source retrieval"* --- not records-versus-ids, since the
+    record is returned either way, but whether the search result carries the
+    text beside the score. No query and no id round-trip is needed: the
+    vector field already describes its own assembly, which is the purpose
+    :func:`content_hash_metadata` was written for.
+
+    Three answers, in order of how much the record says about itself:
+
+    - it names its fields and separator, so the text is reproduced exactly;
+    - it names only the legacy scalar ``source_field``, which is a single
+      field name when one was embedded and a comma-joined list when several
+      were --- so the lookup succeeds for the first and correctly misses for
+      the second, rather than reading a field called ``"title,body"``;
+    - it says nothing, which is every vector written before descriptions
+      existed. ``None``, gracefully.
+
+    Args:
+        record: The search hit's record.
+        vector_field: The field the vector lives on.
+
+    Returns:
+        The assembled source text, or ``None`` where the record does not say.
+    """
+    vector = record.fields.get(vector_field)
+    if vector is None:
+        return None
+
+    source_fields, separator = stored_assembly(getattr(vector, "metadata", None))
+    if source_fields:
+        # `separator or DEFAULT` would be wrong here: an empty string is a
+        # legitimate separator and only absence may fall back, which is the
+        # distinction `stored_assembly` reports by returning `None`.
+        return assemble_source_text(
+            record,
+            source_fields,
+            DEFAULT_FIELD_SEPARATOR if separator is None else separator,
+        )
+
+    source_field = getattr(vector, "source_field", None)
+    if source_field and source_field in record.fields:
+        value = record.get_value(source_field)
+        return None if value is None else str(value)
+
+    return None
+
+
 def describes_its_assembly(metadata: dict[str, Any] | None) -> bool:
     """Whether a reader can reproduce this vector's text without being told.
 

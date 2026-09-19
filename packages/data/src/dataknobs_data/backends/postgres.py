@@ -31,7 +31,11 @@ from ..streaming import (
     run_stream_write,
 )
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
-from ..vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
+from ..vector.mixins import (
+    AsyncVectorOperationsMixin,
+    SyncVectorOperationsMixin,
+    resolve_metric,
+)
 from .config import PostgresDatabaseConfig
 from .postgres_mixins import (
     PostgresBaseConfig,
@@ -998,22 +1002,34 @@ class SyncPostgresDatabase(
             raise constraint_violation_error() from e
         return ids
 
-    def vector_search(
+    def _vector_search(
         self,
         query_vector: np.ndarray | list[float] | VectorField,
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str = "cosine",
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Search for similar vectors using PostgreSQL pgvector.
+        """Raw k-NN through pgvector's distance operators.
+
+        The threshold and the source assembly are the mixin's; this is the
+        part that knows how to ask pgvector.
+
+        **This twin reads the vector out of the JSON ``data`` column** ---
+        ``(data->'<field>'->>'value')::vector`` --- where
+        :meth:`AsyncPostgresDatabase._vector_search` reads a dedicated
+        ``vector_<field>`` column. The two therefore search different
+        storage on the same table, which no shared code here decides and
+        which this pass does not change.
 
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
-            vector_field: Name of vector field to search (must be in data JSON)
-            limit: Maximum number of results
-            filters: Optional filters to apply
-            metric: Distance metric to use (cosine, euclidean, l2, inner_product)
+            vector_field: Name of the vector field to search, read out of the
+                JSON ``data`` column
+            k: Maximum number of results to return
+            metric: Distance metric, already resolved by the mixin
+            filter: Optional query filter to apply before vector search
 
         Returns:
             List of VectorSearchResult objects ordered by similarity
@@ -1024,7 +1040,7 @@ class SyncPostgresDatabase(
         self._check_connection()
 
         from ..fields import VectorField
-        from ..vector.types import DistanceMetric, VectorSearchResult
+        from ..vector.types import VectorSearchResult
         from .postgres_vector import format_vector_for_postgres, get_vector_operator
 
         # Convert query vector to proper format
@@ -1033,12 +1049,7 @@ class SyncPostgresDatabase(
         else:
             vector_str = format_vector_for_postgres(query_vector)
 
-        # Get the appropriate operator
-        if isinstance(metric, DistanceMetric):
-            metric_str = metric.value
-        else:
-            metric_str = str(metric).lower()
-
+        metric_str = metric.value
         operator = get_vector_operator(metric_str)
 
         # Build the query - vectors are stored in JSON data field
@@ -2036,25 +2047,36 @@ class AsyncPostgresDatabase(
 
         return results
 
-    async def vector_search(
+    async def _vector_search(
         self,
         query_vector: np.ndarray | list[float] | VectorField,
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str = "cosine",
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Search for similar vectors using PostgreSQL pgvector.
+        """Raw k-NN through pgvector's distance operators.
+
+        The threshold and the source assembly are the mixin's; this is the
+        part that knows how to ask pgvector.
+
+        **This twin reads a dedicated ``vector_<field>`` column** where
+        :meth:`SyncPostgresDatabase._vector_search` extracts the vector from
+        the JSON ``data`` column. The two therefore search different storage
+        on the same table, which no shared code here decides and which this
+        pass does not change.
 
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
-            vector_field: Name of vector field to search
-            limit: Maximum number of results
-            filters: Optional filters to apply
-            metric: Distance metric to use
+            vector_field: Name of the vector field to search, read from the
+                ``vector_<field>`` column
+            k: Maximum number of results to return
+            metric: Distance metric, already resolved by the mixin
+            filter: Optional query filter to apply before vector search
 
         Returns:
-            List of VectorSearchResult objects
+            List of VectorSearchResult objects ordered by similarity
         """
         if not self._vector_enabled:
             raise RuntimeError("Vector search not available - pgvector not installed")
@@ -2062,7 +2084,7 @@ class AsyncPostgresDatabase(
         self._check_connection()
 
         from ..fields import VectorField
-        from ..vector.types import DistanceMetric, VectorSearchResult
+        from ..vector.types import VectorSearchResult
         from .postgres_vector import format_vector_for_postgres, get_vector_operator
 
         # Convert query vector to proper format
@@ -2071,11 +2093,7 @@ class AsyncPostgresDatabase(
         else:
             vector_str = format_vector_for_postgres(query_vector)
 
-        # Get the appropriate operator
-        if isinstance(metric, DistanceMetric):
-            metric_str = metric.value
-        else:
-            metric_str = str(metric).lower()
+        metric_str = metric.value
         operator = get_vector_operator(metric_str)
 
         vector_column = f"vector_{vector_field}"
@@ -2162,17 +2180,26 @@ class AsyncPostgresDatabase(
 
     async def create_vector_index(
         self,
-        vector_field: str,
-        dimensions: int,
+        vector_field: str = "embedding",
+        dimensions: int | None = None,
         metric: DistanceMetric | str = "cosine",
         index_type: str = "ivfflat",
         lists: int | None = None,
     ) -> bool:
         """Create a vector index for efficient similarity search.
 
+        ``dimensions`` is declared optional because the mixin declares it so,
+        and is then refused when absent because pgvector cannot index a
+        column of unfixed width --- the cast this builds is what gives the
+        expression a width at all. Stating that as a refusal rather than as a
+        required argument is what lets a caller written against the mixin
+        reach this method and be told why, instead of being turned away by
+        the signature on every backend at once.
+
         Args:
             vector_field: Name of the vector field to index
-            dimensions: Number of dimensions in the vectors
+            dimensions: Number of dimensions in the vectors. Required here,
+                unlike on the backends that ignore it.
             metric: Distance metric for the index
             index_type: Type of index (ivfflat, hnsw)
             lists: Number of lists for IVFFlat index
@@ -2192,6 +2219,13 @@ class AsyncPostgresDatabase(
         if not self._vector_enabled:
             return False
 
+        if dimensions is None:
+            raise ValueError(
+                "dimensions is required to build a pgvector index: the index "
+                "expression casts to ``vector(n)`` and pgvector will not index "
+                "a column whose width is not fixed."
+            )
+
         # Determine optimal parameters if not provided
         if not lists and index_type == "ivfflat":
             # Count vectors to determine optimal lists
@@ -2201,11 +2235,7 @@ class AsyncPostgresDatabase(
                 _, params = get_optimal_index_type(count)
                 lists = params.get("lists", 100)
 
-        # Convert metric enum to string if needed
-        if hasattr(metric, "value"):
-            metric_str = metric.value
-        else:
-            metric_str = str(metric).lower()
+        metric_str = resolve_metric(self, metric).value
 
         # Build vector column expression for index
         column_expr = build_vector_column_expression(vector_field, dimensions, for_index=True)
@@ -2233,7 +2263,9 @@ class AsyncPostgresDatabase(
             logger.debug(f"Index SQL was: {index_sql}")
             return False
 
-    async def drop_vector_index(self, vector_field: str, metric: str = "cosine") -> bool:
+    async def drop_vector_index(
+        self, vector_field: str = "embedding", metric: str = "cosine"
+    ) -> bool:
         """Drop a vector index.
 
         Args:
@@ -2259,7 +2291,7 @@ class AsyncPostgresDatabase(
             logger.warning(f"Failed to drop vector index: {e}")
             return False
 
-    async def get_vector_index_stats(self, vector_field: str) -> dict[str, Any]:
+    async def get_vector_index_stats(self, vector_field: str = "embedding") -> dict[str, Any]:
         """Get statistics about a vector field and its index.
 
         Args:
@@ -2508,11 +2540,7 @@ class AsyncPostgresDatabase(
 
         vector_str = format_vector_for_postgres(query_vector)
 
-        # Get metric operator
-        if isinstance(metric, str):
-            metric_str = metric.lower()
-        else:
-            metric_str = metric.value
+        metric_str = resolve_metric(self, metric).value
         operator = get_vector_operator(metric_str)
 
         vector_column = f"vector_{vector_field}"

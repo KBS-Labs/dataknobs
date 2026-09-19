@@ -20,6 +20,9 @@ from ..exceptions import DatabaseError, DuplicateRecordError
 from ..query import Query, SortOrder, is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
+from ..vector import SyncVectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.mixins import resolve_metric
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import SyncElasticsearchDatabaseConfig
 from .elasticsearch_mixins import (
@@ -52,6 +55,8 @@ class SyncElasticsearchDatabase(
     SyncDatabase,
     StreamingMixin,
     VectorConfigMixin,
+    BulkEmbedMixin,
+    SyncVectorOperationsMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
     ElasticsearchVectorSupport,
@@ -65,6 +70,21 @@ class SyncElasticsearchDatabase(
     documented config key is a typed field on that dataclass, so
     ``self.config`` is the typed config (not a dict) and the
     ``from_config`` / factory paths share one construction route.
+
+    **It carried no vector mixin at all** until ``vector_search`` moved onto
+    one. Its async twin has had :class:`AsyncVectorOperationsMixin` and
+    :class:`AsyncBulkEmbedMixin` throughout; this class defined
+    ``vector_search`` and ``create_vector_index`` from nowhere and had none
+    of the other eight members of that surface. ``bulk_embed_and_store``,
+    ``update_vector``, ``delete_from_index``, ``drop_vector_index``,
+    ``get_vector_index_stats`` and ``hybrid_search`` raised
+    ``AttributeError`` here and answered on the twin, and the two private
+    helpers ``hybrid_search`` calls --- ``_text_search_for_hybrid`` and
+    ``_supports_native_hybrid`` --- were missing with it.
+
+    Mixing the two in is what lets the one ``vector_search`` reach this
+    class; that the other eight arrive with it is the twin-parity gap
+    closing, not a side effect to be undone.
     """
 
     CONFIG_CLS: ClassVar[type[SyncElasticsearchDatabaseConfig]] = SyncElasticsearchDatabaseConfig
@@ -860,29 +880,30 @@ class SyncElasticsearchDatabase(
             config=config,
         )
 
-    def vector_search(
+    def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        metric: DistanceMetric = DistanceMetric.COSINE,
-        filter: Query | None = None,
-        include_source: bool = True,
-        score_threshold: float | None = None,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Search for similar vectors using Elasticsearch KNN.
+        """Raw k-NN through Elasticsearch's ``knn`` clause.
 
-        Note: This is a synchronous wrapper around the async implementation.
-        For production use, consider using the async version for better performance.
+        The threshold and the source assembly are the mixin's; this is the
+        part that knows how to ask Elasticsearch.
+
+        ``metric`` reaches the result metadata and nothing else ---
+        :func:`build_knn_query` does not take one, so the similarity
+        Elasticsearch computes is whatever the field's mapping declares.
 
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
-            k: Number of results to return
-            metric: Distance metric to use
+            k: Maximum number of results to return
+            metric: Distance metric, already resolved by the mixin
             filter: Optional query filter to apply before vector search
-            include_source: Whether to include source document in results
-            score_threshold: Optional minimum similarity score
 
         Returns:
             List of search results ordered by similarity
@@ -913,7 +934,14 @@ class SyncElasticsearchDatabase(
                 index=self.index_name,
                 **query,
                 size=k,
-                source=include_source,
+                # Always, now that ``include_source`` no longer reaches
+                # here. It used to be forwarded straight into this
+                # parameter, so ``include_source=False`` told Elasticsearch
+                # to omit ``_source`` --- and ``VectorSearchResult.record``
+                # is required, so the loop below had nothing to build a hit
+                # from and returned an empty list. The record is not that
+                # knob's subject; the assembly is.
+                source=True,
             )
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
@@ -922,28 +950,14 @@ class SyncElasticsearchDatabase(
         # Process results
         results = []
         for hit in response.get("hits", {}).get("hits", []):
-            score = hit.get("_score", 0.0)
-
-            # Apply score threshold if specified
-            if score_threshold is not None and score < score_threshold:
-                continue
-
-            # Convert document to record if source included
-            record = None
-            if include_source:
-                record = self._doc_to_record(hit)
-                # Set the storage ID on the record if we have one
-                if not record.has_storage_id():
-                    record.storage_id = hit["_id"]
-
-            # Skip if no record (shouldn't happen if include_source is True)
-            if record is None:
-                continue
+            record = self._doc_to_record(hit)
+            if not record.has_storage_id():
+                record.storage_id = hit["_id"]
 
             results.append(
                 VectorSearchResult(
                     record=record,
-                    score=score,
+                    score=hit.get("_score", 0.0),
                     vector_field=vector_field,
                     metadata={
                         "index": self.index_name,
@@ -959,9 +973,8 @@ class SyncElasticsearchDatabase(
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
         index_type: str = "auto",
-        **kwargs: Any,
     ) -> bool:
         """Create or update index mapping for vector field.
 
@@ -989,7 +1002,9 @@ class SyncElasticsearchDatabase(
         )
 
         # Get similarity function for metric
-        similarity = get_similarity_for_metric(metric)
+        # Through the one resolver, so that a caller spelling the metric
+        # as a string reaches the same mapping `vector_search` does.
+        similarity = get_similarity_for_metric(resolve_metric(self, metric))
 
         # Build mapping for the vector field
         mapping = get_vector_mapping(dimensions, similarity)

@@ -29,6 +29,7 @@ from ..streaming import (
 )
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.mixins import AsyncVectorOperationsMixin
+from ..vector.mixins import resolve_metric
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import AsyncElasticsearchDatabaseConfig
 from .elasticsearch_mixins import (
@@ -794,26 +795,30 @@ class AsyncElasticsearchDatabase(
             config=config,
         )
 
-    async def vector_search(
+    async def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        metric: DistanceMetric = DistanceMetric.COSINE,
-        filter: Query | None = None,
-        include_source: bool = True,
-        score_threshold: float | None = None,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Search for similar vectors using Elasticsearch KNN.
+        """Raw k-NN through Elasticsearch's ``knn`` clause.
+
+        The threshold and the source assembly are the mixin's; this is the
+        part that knows how to ask Elasticsearch.
+
+        ``metric`` reaches the result metadata and nothing else ---
+        :func:`build_knn_query` does not take one, so the similarity
+        Elasticsearch computes is whatever the field's mapping declares.
 
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
-            k: Number of results to return
-            metric: Distance metric to use
+            k: Maximum number of results to return
+            metric: Distance metric, already resolved by the mixin
             filter: Optional query filter to apply before vector search
-            include_source: Whether to include source document in results
-            score_threshold: Optional minimum similarity score
 
         Returns:
             List of search results ordered by similarity
@@ -842,7 +847,14 @@ class AsyncElasticsearchDatabase(
                 index=self.index_name,
                 **query,  # Unpack the query dict directly
                 size=k,
-                _source=include_source,
+                # Always, now that ``include_source`` no longer reaches
+                # here. It used to be forwarded straight into this
+                # parameter, so ``include_source=False`` told Elasticsearch
+                # to omit ``_source`` --- and ``VectorSearchResult.record``
+                # is required, so the loop below had nothing to build a hit
+                # from and returned an empty list. The record is not that
+                # knob's subject; the assembly is.
+                _source=True,
             )
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
@@ -851,29 +863,14 @@ class AsyncElasticsearchDatabase(
         # Process results
         results = []
         for hit in response.get("hits", {}).get("hits", []):
-            score = hit.get("_score", 0.0)
-
-            # Apply score threshold if specified
-            if score_threshold is not None and score < score_threshold:
-                continue
-
-            # Convert document to record if source included
-            record = None
-            if include_source:
-                record = self._doc_to_record(hit)
-
-            # Set the storage ID on the record if we have one
-            if record and not record.has_storage_id():
+            record = self._doc_to_record(hit)
+            if not record.has_storage_id():
                 record.storage_id = hit["_id"]
-
-            # Skip if no record (shouldn't happen if include_source is True)
-            if record is None:
-                continue
 
             results.append(
                 VectorSearchResult(
                     record=record,
-                    score=score,
+                    score=hit.get("_score", 0.0),
                     vector_field=vector_field,
                     metadata={
                         "index": self.index_name,
@@ -889,9 +886,8 @@ class AsyncElasticsearchDatabase(
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
         index_type: str = "auto",
-        **kwargs: Any,
     ) -> bool:
         """Create or update index mapping for vector field.
 
@@ -919,7 +915,9 @@ class AsyncElasticsearchDatabase(
         )
 
         # Get similarity function for metric
-        similarity = get_similarity_for_metric(metric)
+        # Through the one resolver, so that a caller spelling the metric
+        # as a string reaches the same mapping `vector_search` does.
+        similarity = get_similarity_for_metric(resolve_metric(self, metric))
 
         # Build mapping for the vector field
         mapping = get_vector_mapping(dimensions, similarity)
@@ -962,7 +960,7 @@ class AsyncElasticsearchDatabase(
         k: int = 10,
         config: Any = None,  # HybridSearchConfig
         filter: Query | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
     ) -> list[Any]:  # list[HybridSearchResult]
         """Perform native Elasticsearch hybrid search using RRF.
 

@@ -15,6 +15,7 @@ from .content import (
     DEFAULT_FIELD_SEPARATOR,
     assemble_source_text,
     current_content_hash,
+    derive_source_text,
     stored_assembly,
 )
 from .embedding import default_model_name, embed_texts, require_embedding_source
@@ -249,6 +250,79 @@ def fuse_hybrid_results(
     return results
 
 
+def resolve_metric(database: object, metric: DistanceMetric | str | None) -> DistanceMetric:
+    """Settle what metric a search runs under, once, before any backend sees it.
+
+    Eight of the twelve implementations defaulted ``metric`` to ``None`` and
+    resolved that against ``self.vector_metric``; the four with native vector
+    support --- both Postgres and both Elasticsearch backends --- defaulted it
+    to cosine and never consulted the database's configuration at all. So a
+    database built with ``vector_metric="euclidean"`` searched under euclidean
+    on memory, file, SQLite and S3 and under cosine on the four that could
+    have used it. That is the same divergence as the two parameters this pass
+    is about, and it closes the same way --- by deciding it above all twelve.
+
+    Args:
+        database: The database whose configured metric ``None`` means.
+        metric: A :class:`DistanceMetric`, its value as a string, or ``None``.
+
+    Returns:
+        The metric to search under.
+
+    Raises:
+        ValueError: If ``metric`` is a string naming no metric. The aliases
+            :meth:`DistanceMetric.get_aliases` lists are *not* accepted,
+            because nothing in the library resolves them: ``"ip"`` happened to
+            reach a pgvector operator table that knew it, and raised on every
+            other backend --- ``ValueError`` where the string was fed to
+            ``DistanceMetric(...)``, ``AttributeError`` where ``.value`` was
+            read off it. Declining it here is one answer in place of three.
+    """
+    if metric is None:
+        configured = getattr(database, "vector_metric", None)
+        return configured if isinstance(configured, DistanceMetric) else DistanceMetric.COSINE
+    if isinstance(metric, str):
+        return DistanceMetric(metric)
+    return metric
+
+
+def finish_vector_search(
+    hits: list[VectorSearchResult],
+    *,
+    vector_field: str,
+    include_source: bool,
+    score_threshold: float | None,
+) -> list[VectorSearchResult]:
+    """Apply the two parameters the hook does not see.
+
+    Shared by both lanes rather than written twice: the sync and async
+    templates differ only in awaiting the hook, and everything after that
+    ``await`` is identical. A twin pair that each implemented this would be
+    the shape the twelve backends were already in.
+
+    Args:
+        hits: What the backend's k-nearest-neighbour search returned.
+        vector_field: The field searched, which is where a hit's source
+            description lives.
+        include_source: Whether to derive ``source_text`` where it is absent.
+        score_threshold: Drop hits scoring below this, if given.
+
+    Returns:
+        The hits that survive the threshold, in the order the backend gave.
+    """
+    results = []
+    for hit in hits:
+        if score_threshold is not None and hit.score < score_threshold:
+            continue
+        # Not overwritten: a backend that already knows the source text ---
+        # one whose store holds it beside the vector --- has said something
+        # the record cannot be re-read for.
+        if include_source and hit.source_text is None:
+            hit.source_text = derive_source_text(hit.record, vector_field)
+        results.append(hit)
+    return results
+
+
 class SyncVectorOperationsMixin(ABC):
     """Vector operations for **synchronous** database backends.
 
@@ -267,14 +341,13 @@ class SyncVectorOperationsMixin(ABC):
     which nothing but a type checker reported.
     """
 
-    @abstractmethod
     def vector_search(
         self,
         query_vector: np.ndarray | list[float],
         *,
         vector_field: str = "embedding",
         k: int = 10,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
         filter: Query | None = None,
         include_source: bool = True,
         score_threshold: float | None = None,
@@ -282,25 +355,83 @@ class SyncVectorOperationsMixin(ABC):
         """Search for similar vectors.
 
         Everything after ``query_vector`` is keyword-only, and that is a
-        refusal rather than a restriction. The twelve implementations do not
-        agree on positional order --- most spell it ``(..., k, filter,
+        refusal rather than a restriction. The twelve implementations did not
+        agree on positional order --- most spelled it ``(..., k, filter,
         metric)`` where this declares ``(..., k, metric, filter)`` --- so a
-        fourth positional argument already means the metric on some backends
-        and the filter on others. No concrete signature changes; what changes
-        is that a call written against this declaration can no longer be
-        written in the one form that was never portable.
+        fourth positional argument meant the metric on some backends and the
+        filter on others.
+
+        **``score_threshold`` is a post-filter, so a call may return fewer
+        than ``k`` results.** That is the defined behaviour rather than an
+        artefact: it is what the Elasticsearch implementation always did, and
+        over-fetching to refill ``k`` is a different promise that should not
+        be adopted silently. Pushing the threshold into the query itself
+        (``min_score`` on Elasticsearch, a ``WHERE`` on pgvector) is strictly
+        better where available and is *additive* --- a backend may override
+        this method to do so, and the post-filter below then finds nothing
+        left to drop.
+
+        **``include_source`` does not decide whether the record comes back.**
+        The record always does; :class:`VectorSearchResult` declares it
+        required. What the knob decides is whether
+        :func:`~dataknobs_data.vector.content.derive_source_text` runs ---
+        cheap, but defensible to skip at large ``k`` over big text fields.
 
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
             k: Number of results to return
-            metric: Distance metric to use
+            metric: Distance metric, as a :class:`DistanceMetric` or its
+                value. ``None`` means the metric this database was configured
+                with, falling back to cosine.
             filter: Optional query filter to apply before vector search
-            include_source: Whether to include source text in results
-            score_threshold: Optional minimum similarity score
+            include_source: Whether to derive ``source_text`` onto each hit
+            score_threshold: Drop hits scoring below this
 
         Returns:
             List of search results ordered by similarity
+        """
+        return finish_vector_search(
+            self._vector_search(
+                query_vector,
+                vector_field=vector_field,
+                k=k,
+                metric=resolve_metric(self, metric),
+                filter=filter,
+            ),
+            vector_field=vector_field,
+            include_source=include_source,
+            score_threshold=score_threshold,
+        )
+
+    @abstractmethod
+    def _vector_search(
+        self,
+        query_vector: np.ndarray | list[float],
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
+    ) -> list[VectorSearchResult]:
+        """Raw k-nearest-neighbour search --- the part only a backend knows.
+
+        No threshold and no source assembly: :meth:`vector_search` owns both,
+        so that twelve backends cannot answer them thirteen ways again. A
+        backend implements this and inherits the rest.
+
+        ``metric`` arrives resolved --- never ``None``, never a string ---
+        so an implementation may read ``metric.value`` without checking.
+
+        Args:
+            query_vector: The vector to search for
+            vector_field: Name of the vector field to search
+            k: Maximum number of results to return
+            metric: Distance metric to use
+            filter: Optional query filter to apply before vector search
+
+        Returns:
+            Search results ordered by similarity, at most ``k`` of them
         """
 
     @abstractmethod
@@ -374,18 +505,22 @@ class SyncVectorOperationsMixin(ABC):
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
         index_type: str = "auto",
-        **kwargs: Any,
     ) -> bool:
         """Create an index for vector similarity search.
+
+        Took ``**kwargs: Any`` for "backend-specific index parameters" and
+        read it nowhere, which is the swallow removed from
+        :meth:`vector_search` wearing a different name: a keyword bound here
+        and went no further. A backend parameter belongs on that backend, as
+        ``AsyncPostgresDatabase``'s ``lists`` already is.
 
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions (if known)
             metric: Distance metric for the index
             index_type: Type of index to create
-            **kwargs: Backend-specific index parameters
 
         Returns:
             True if index was created successfully
@@ -423,7 +558,7 @@ class SyncVectorOperationsMixin(ABC):
         k: int = 10,
         config: HybridSearchConfig | None = None,
         filter: Query | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
     ) -> list[HybridSearchResult]:
         """Perform hybrid search combining text and vector similarity.
 
@@ -441,7 +576,8 @@ class SyncVectorOperationsMixin(ABC):
             k: Number of results to return
             config: Hybrid search configuration (weights, fusion strategy)
             filter: Optional additional filters to apply
-            metric: Distance metric for vector search
+            metric: Distance metric for vector search, resolved by
+                :meth:`vector_search`, which is all this does with it
 
         Returns:
             List of HybridSearchResult ordered by combined score (descending)
@@ -514,14 +650,13 @@ class AsyncVectorOperationsMixin(ABC):
     still resolves here.
     """
 
-    @abstractmethod
     async def vector_search(
         self,
         query_vector: np.ndarray | list[float],
         *,
         vector_field: str = "embedding",
         k: int = 10,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str | None = None,
         filter: Query | None = None,
         include_source: bool = True,
         score_threshold: float | None = None,
@@ -529,25 +664,83 @@ class AsyncVectorOperationsMixin(ABC):
         """Search for similar vectors.
 
         Everything after ``query_vector`` is keyword-only, and that is a
-        refusal rather than a restriction. The twelve implementations do not
-        agree on positional order --- most spell it ``(..., k, filter,
+        refusal rather than a restriction. The twelve implementations did not
+        agree on positional order --- most spelled it ``(..., k, filter,
         metric)`` where this declares ``(..., k, metric, filter)`` --- so a
-        fourth positional argument already means the metric on some backends
-        and the filter on others. No concrete signature changes; what changes
-        is that a call written against this declaration can no longer be
-        written in the one form that was never portable.
+        fourth positional argument meant the metric on some backends and the
+        filter on others.
+
+        **``score_threshold`` is a post-filter, so a call may return fewer
+        than ``k`` results.** That is the defined behaviour rather than an
+        artefact: it is what the Elasticsearch implementation always did, and
+        over-fetching to refill ``k`` is a different promise that should not
+        be adopted silently. Pushing the threshold into the query itself
+        (``min_score`` on Elasticsearch, a ``WHERE`` on pgvector) is strictly
+        better where available and is *additive* --- a backend may override
+        this method to do so, and the post-filter below then finds nothing
+        left to drop.
+
+        **``include_source`` does not decide whether the record comes back.**
+        The record always does; :class:`VectorSearchResult` declares it
+        required. What the knob decides is whether
+        :func:`~dataknobs_data.vector.content.derive_source_text` runs ---
+        cheap, but defensible to skip at large ``k`` over big text fields.
 
         Args:
             query_vector: The vector to search for
             vector_field: Name of the vector field to search
             k: Number of results to return
-            metric: Distance metric to use
+            metric: Distance metric, as a :class:`DistanceMetric` or its
+                value. ``None`` means the metric this database was configured
+                with, falling back to cosine.
             filter: Optional query filter to apply before vector search
-            include_source: Whether to include source text in results
-            score_threshold: Optional minimum similarity score
+            include_source: Whether to derive ``source_text`` onto each hit
+            score_threshold: Drop hits scoring below this
 
         Returns:
             List of search results ordered by similarity
+        """
+        return finish_vector_search(
+            await self._vector_search(
+                query_vector,
+                vector_field=vector_field,
+                k=k,
+                metric=resolve_metric(self, metric),
+                filter=filter,
+            ),
+            vector_field=vector_field,
+            include_source=include_source,
+            score_threshold=score_threshold,
+        )
+
+    @abstractmethod
+    async def _vector_search(
+        self,
+        query_vector: np.ndarray | list[float],
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
+    ) -> list[VectorSearchResult]:
+        """Raw k-nearest-neighbour search --- the part only a backend knows.
+
+        No threshold and no source assembly: :meth:`vector_search` owns both,
+        so that twelve backends cannot answer them thirteen ways again. A
+        backend implements this and inherits the rest.
+
+        ``metric`` arrives resolved --- never ``None``, never a string ---
+        so an implementation may read ``metric.value`` without checking.
+
+        Args:
+            query_vector: The vector to search for
+            vector_field: Name of the vector field to search
+            k: Maximum number of results to return
+            metric: Distance metric to use
+            filter: Optional query filter to apply before vector search
+
+        Returns:
+            Search results ordered by similarity, at most ``k`` of them
         """
 
     @abstractmethod
@@ -628,18 +821,22 @@ class AsyncVectorOperationsMixin(ABC):
         self,
         vector_field: str = "embedding",
         dimensions: int | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
         index_type: str = "auto",
-        **kwargs: Any,
     ) -> bool:
         """Create an index for vector similarity search.
+
+        Took ``**kwargs: Any`` for "backend-specific index parameters" and
+        read it nowhere, which is the swallow removed from
+        :meth:`vector_search` wearing a different name: a keyword bound here
+        and went no further. A backend parameter belongs on that backend, as
+        ``AsyncPostgresDatabase``'s ``lists`` already is.
 
         Args:
             vector_field: Name of the vector field to index
             dimensions: Number of dimensions (if known)
             metric: Distance metric for the index
             index_type: Type of index to create
-            **kwargs: Backend-specific index parameters
 
         Returns:
             True if index was created successfully
@@ -677,7 +874,7 @@ class AsyncVectorOperationsMixin(ABC):
         k: int = 10,
         config: HybridSearchConfig | None = None,
         filter: Query | None = None,
-        metric: DistanceMetric = DistanceMetric.COSINE,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
     ) -> list[HybridSearchResult]:
         """Perform hybrid search combining text and vector similarity.
 
@@ -695,7 +892,8 @@ class AsyncVectorOperationsMixin(ABC):
             k: Number of results to return
             config: Hybrid search configuration (weights, fusion strategy)
             filter: Optional additional filters to apply
-            metric: Distance metric for vector search
+            metric: Distance metric for vector search, resolved by
+                :meth:`vector_search`, which is all this does with it
 
         Returns:
             List of HybridSearchResult ordered by combined score (descending)
