@@ -52,7 +52,7 @@ await store.close()
 | `connection_string` | str | env fallback | PostgreSQL connection URL |
 | `host` / `port` / `database` / `user` / `password` | various | env fallback | Individual connection keys (any subset) |
 | `dimensions` | int | Required | Vector dimensions |
-| `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `inner_product` |
+| `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot_product`, `l1`. Alternative spellings (`inner_product`, `l2`) and the aliases `DistanceMetric.get_aliases()` publishes (`cos`, `ip`, `manhattan`, …) resolve to the same four. |
 | `schema` | str | `"public"` | Database schema |
 | `table_name` | str | `"knowledge_embeddings"` | Table name |
 | `pool_min_size` | int | 2 | Min connection pool size |

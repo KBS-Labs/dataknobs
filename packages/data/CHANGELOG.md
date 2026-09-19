@@ -48,10 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration at all. So a database built with `vector_metric="euclidean"`
   searched under euclidean on memory, file, SQLite and S3, and under cosine on
   the four backends that could actually have used it. `vector_search` now
-  accepts a `DistanceMetric`, its string value, or `None` — and `None`, which
-  is the new default, means the metric the database was configured with. The
-  aliases `DistanceMetric.get_aliases()` lists are still not accepted, because
-  nothing in the library resolves them.
+  accepts a `DistanceMetric`, its string value, any alias
+  `DistanceMetric.get_aliases()` publishes, or `None` — and `None`, which is
+  the new default, means the metric the database was configured with.
 
 - **`SyncElasticsearchDatabase` has the vector surface its async twin has.**
   It inherited neither vector mixin and defined `vector_search` and
@@ -64,7 +63,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BulkEmbedMixin`; all eight arrive with the one `vector_search` that
   occasioned the change.
 
+- **`DistanceMetric` owns its own vocabulary.** Two new members: `canonical()`
+  returns the member standing for a metric's family, so `INNER_PRODUCT`
+  canonicalises to `DOT_PRODUCT` and `L2` to `EUCLIDEAN` — a fact that was
+  written in a trailing comment on each member and nowhere a program could
+  read; and `resolve()` settles a member, a member value or any published
+  alias into a member, case-insensitively, and raises `ValueError` naming the
+  accepted vocabulary for anything else. Every metric lookup in the package
+  now goes through them.
+
+- **`get_vector_operator` takes a metric and raises on one it does not know.**
+  It took a `str` and returned the cosine operator for anything unrecognised.
+  It now accepts a `DistanceMetric` or any name `resolve()` accepts, and
+  raises `ValueError` otherwise. Two new siblings keep the pgvector
+  vocabularies in one place: `get_vector_opclass` (the index operator class,
+  previously an inline table in `build_vector_index_sql` and another in
+  `PgVectorStore`) and `distance_to_score` (the distance-to-similarity
+  conversion, previously four inline copies). `build_vector_index_sql` and
+  `drop_vector_index` canonicalise the metric before naming an index, so the
+  two spellings of one metric no longer produce two index names.
+
+- **BREAKING: `build_vector_column_expression` is replaced by
+  `build_vector_value_expression(field, dimensions=None)`.** The old function
+  took a `for_index` flag whose two branches returned the same string, and
+  produced an expression neither Postgres search used. The new one produces
+  the expression both searches and index creation use, which is what makes an
+  index reachable for a query.
+
+- **BREAKING: `AsyncPostgresDatabase` no longer maintains a `vector_<field>`
+  column.** `_ensure_vector_column`, `_collect_vector_inserts` and
+  `_build_vector_params` are gone, and `create`/`update`/`upsert` no longer
+  issue `ALTER TABLE` on the write path. Vectors live in the JSON `data`
+  column, where every write path on both twins has always put them. An
+  existing table keeps its `vector_<field>` column; nothing reads or writes it
+  any more, and it can be dropped.
+
+- **`SyncPostgresDatabase` implements the three index methods.** It inherited
+  the mixin's defaults for `create_vector_index`, `drop_vector_index` and
+  `get_vector_index_stats`, which return `True`, `True` and an empty report —
+  so it said it had built an index and built nothing. All three now do the
+  work its async twin does.
+
+- **BREAKING: `python_vector_search_sync` / `python_vector_search_async` take
+  keyword arguments after `query_vector`, and no `**kwargs`.** Both declared a
+  `**kwargs` neither body read — the same silent bind removed from the twelve
+  backend signatures, one frame down. They also resolve `metric` through
+  `resolve_metric` rather than re-implementing it, so they accept everything
+  the rest of the package accepts.
+
 ### Fixed
+
+- **A search asking for dot product or L1 is no longer answered in cosine
+  distances.** `get_vector_operator` mapped five spellings and returned the
+  cosine operator for everything else, and `DistanceMetric.DOT_PRODUCT` and
+  `DistanceMetric.L1` were not among the five — so both were silently ranked
+  by cosine, with no error and no log line. `INNER_PRODUCT` *was* mapped, so
+  the two spellings of one metric answered differently, and the same method
+  contradicted itself: its score conversion twenty lines below knew
+  `dot_product` names the inner-product metric. `PgVectorStore` carried the
+  same fallback twice more, in its operator-class and distance-operator
+  chains, so `DistanceMetric.L1` was cosine there too. Eight sites read a
+  metric across the package — two choosing an operator, two an index operator
+  class, four converting a distance to a score — and none knew all six
+  members. They are now three functions keyed on `canonical()`, which has
+  four keys and covers all six.
+
+- **The two Postgres backends store and search vectors in the same place, and
+  every write path is visible to both.** The async twin searched a dedicated
+  `vector_<field>` pgvector column; the sync twin extracted the vector from
+  the JSON `data` column. Each was internally consistent, so the divergence
+  only showed when one wrote and the other read. The column was the narrower
+  of the two: it was filled by three of the fourteen write paths across the two
+  classes — `create`, `update` and `upsert` on the async twin — so
+  `create_batch` and `upsert_batch` produced records **that twin's own
+  `vector_search` could not find**, and a corpus written by the sync twin was
+  invisible to the async one entirely: `UndefinedColumnError` where no async
+  single-write had ever created the column, and an empty result list with no
+  error where one had. Both twins read `data` now, which every write path
+  fills, so no backfill is needed and no row is orphaned.
+
+- **The index `create_vector_index` builds is one the search can use.** It
+  built its index over `(data->'embedding'->>'value')::vector(n)` while both
+  searches asked a `CASE` expression that also tolerates a bare array. A
+  pgvector expression index serves only a query whose expression matches
+  exactly, so the one implementation of index creation produced an index no
+  query could reach — measured with `EXPLAIN` and sequential scans disabled,
+  the planner fell back to a sequential scan rather than use it. Both now come
+  from `build_vector_value_expression`.
+
+- **Both Postgres twins score a hit the same way.** Each carried its own
+  distance-to-score conversion and they disagreed: for cosine the sync twin
+  returned `1 - distance` — the cosine similarity, and the number the ten
+  Python-path backends return — and the async twin returned
+  `1 - min(distance, 2) / 2`. Two numbers for one corpus and one query, which
+  nothing compared until `score_threshold` arrived to compare either against a
+  constant. `distance_to_score` is now the only conversion.
+
+- **`AsyncPostgresDatabase.hybrid_search` contributes a vector half for every
+  record.** Its native-strategy CTE read the same `vector_<field>` column, so
+  a batch-written or sync-written corpus matched nothing there and the search
+  silently degraded to its text half. It also hardcoded `1.0 - distance` as
+  the vector score — the cosine formula, applied whichever metric the caller
+  asked for.
 
 - **`score_threshold` drops the hits it says it drops.** It was declared on
   both vector mixins and implemented on two of the twelve backends. Eight

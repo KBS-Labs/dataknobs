@@ -904,7 +904,7 @@ db = factory.create(
     path="/data/vector.db",
     table="records",
     vector_enabled=True,
-    vector_metric="cosine"  # Options: cosine, euclidean, dot_product
+    vector_metric="cosine"  # cosine, euclidean, dot_product, l1 (aliases accepted)
 )
 db.connect()
 ```

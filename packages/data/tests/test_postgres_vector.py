@@ -231,14 +231,26 @@ class TestPostgresVectorUtilities:
         assert result == []
 
     def test_get_vector_operator(self):
-        """Test getting correct PostgreSQL operators."""
+        """Test getting correct PostgreSQL operators.
+
+        The last assertion used to be ``get_vector_operator("unknown") ==
+        "<=>"  # Default``, which pinned the defect: the fallback answered
+        every unrecognised name --- including ``dot_product`` and ``l1``,
+        two real ``DistanceMetric`` members the table had missed --- with
+        cosine distances. Exhaustiveness over the enum is in
+        ``test_distance_metric_vocabulary.py``; this cell keeps the spot
+        check and the refusal.
+        """
         from dataknobs_data.backends.postgres_vector import get_vector_operator
 
         assert get_vector_operator("cosine") == "<=>"
         assert get_vector_operator("euclidean") == "<->"
         assert get_vector_operator("inner_product") == "<#>"
+        assert get_vector_operator("dot_product") == "<#>"
         assert get_vector_operator("l2") == "<->"
-        assert get_vector_operator("unknown") == "<=>"  # Default
+        assert get_vector_operator("l1") == "<+>"
+        with pytest.raises(ValueError, match="unknown"):
+            get_vector_operator("unknown")
 
     def test_get_optimal_index_type(self):
         """Test optimal index selection based on dataset size."""

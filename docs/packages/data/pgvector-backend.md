@@ -76,7 +76,7 @@ await store.close()
 | `connection_string` | str | env fallback | PostgreSQL connection URL |
 | `host` / `port` / `database` / `user` / `password` | various | env fallback | Individual connection keys (any subset) |
 | `dimensions` | int | Required | Vector dimensions (e.g., 768 for sentence-transformers) |
-| `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `inner_product` |
+| `metric` | str | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot_product`, `l1`. Alternative spellings (`inner_product`, `l2`) and the aliases `DistanceMetric.get_aliases()` publishes (`cos`, `ip`, `manhattan`, …) resolve to the same four. |
 | `schema` | str | `"public"` | Database schema name |
 | `table_name` | str | `"knowledge_embeddings"` | Table name for vectors |
 
@@ -431,17 +431,25 @@ finally:
 
 ## Distance Metrics
 
-| Metric | Operator | Use Case |
-|--------|----------|----------|
-| `cosine` | `<=>` | Normalized embeddings, semantic similarity |
-| `euclidean` | `<->` | Spatial data, when magnitude matters |
-| `inner_product` | `<#>` | Dot product similarity (MaxSim) |
+Four metrics, six spellings. `inner_product` and `dot_product` name one
+metric, as do `l2` and `euclidean`; `DistanceMetric.resolve()` settles any
+spelling, including the aliases `get_aliases()` publishes, and refuses
+anything else rather than falling back to cosine.
 
-The score returned by `search()` is converted to a similarity score:
+| Metric | Also spelled | Operator | Use Case |
+|--------|--------------|----------|----------|
+| `cosine` | `cosine_similarity`, `cos` | `<=>` | Normalized embeddings, semantic similarity |
+| `euclidean` | `l2`, `euclidean_distance` | `<->` | Spatial data, when magnitude matters |
+| `dot_product` | `inner_product`, `ip` | `<#>` | Dot product similarity (MaxSim) |
+| `l1` | `manhattan`, `l1_distance` | `<+>` | Taxicab distance; requires pgvector 0.7.0+ |
 
-- **Cosine**: `1 - distance` (0 = different, 1 = identical)
-- **Euclidean**: `1 / (1 + distance)` (0 = far, 1 = close)
-- **Inner Product**: Raw inner product value
+The score returned by `search()` is converted from the distance by
+`distance_to_score()`, the one conversion every pgvector-backed search in
+this package shares:
+
+- **Cosine**: `1 - distance` (−1 = opposed, 0 = orthogonal, 1 = identical)
+- **Euclidean** and **L1**: `1 / (1 + distance)` (0 = far, 1 = close)
+- **Dot product**: `-distance`, since `<#>` returns the negative inner product
 
 ## Performance Optimization
 

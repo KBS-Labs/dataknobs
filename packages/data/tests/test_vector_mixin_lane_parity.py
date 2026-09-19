@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import ClassVar
 
@@ -40,6 +40,8 @@ from dataknobs_data.backends.file import SyncFileDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
+from dataknobs_data.vector.python_vector_search import PythonVectorSearchMixin
+from dataknobs_data.vector.types import DistanceMetric
 
 BACKEND_MODULES = (
     "memory",
@@ -523,13 +525,20 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
     """
 
     def test_the_sweep_found_overrides(self) -> None:
-        """Eleven: the two backends with native index and hybrid support.
+        """Fourteen: the backends with native index and hybrid support.
+
+        It was eleven while ``SyncPostgresDatabase`` took the mixin's
+        ``create_vector_index``, ``drop_vector_index`` and
+        ``get_vector_index_stats`` --- which return ``True``, ``True`` and an
+        empty dict, so it reported that it had built an index and built
+        nothing. Its three now restate the declaration and are swept with the
+        rest.
 
         Every other backend takes the mixin's implementation unchanged, so
         it cannot disagree with a declaration it does not restate --- which
         is the whole argument for ``vector_search`` moving up here too.
         """
-        assert len(_override_cases()) == 11, sorted(
+        assert len(_override_cases()) == 14, sorted(
             (cls.__name__, method) for cls, method in _override_cases()
         )
 
@@ -579,4 +588,68 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
 
         assert promoted == [], (
             f"{cls.__name__}.{method} requires {promoted}, which the mixin defaults"
+        )
+
+
+def _python_search_helpers() -> list[Callable[..., object]]:
+    """The two helpers the eight forwarding backends land in."""
+    return [
+        PythonVectorSearchMixin.python_vector_search_sync,
+        PythonVectorSearchMixin.python_vector_search_async,
+    ]
+
+
+class TestTheSwallowIsGoneOneFrameDownToo:
+    """The eight hooks stopped swallowing; what they call still did.
+
+    ``python_vector_search_sync`` and its async twin each carried
+    ``**kwargs`` that no line of either body read --- the same silent bind
+    the hooks lost, one call deep, and unreachable from in-tree code only for
+    as long as no caller adds a keyword. A keyword that lands here is dropped
+    exactly as ``score_threshold`` was, and the backend above it now has a
+    signature that promises it cannot happen.
+    """
+
+    @pytest.mark.parametrize("helper", _python_search_helpers(), ids=lambda f: f.__name__)
+    def test_the_helper_swallows_nothing(self, helper: Callable[..., object]) -> None:
+        kinds = inspect.signature(helper).parameters.values()
+
+        assert not any(p.kind is p.VAR_KEYWORD for p in kinds), (
+            f"{helper.__name__} still swallows unrecognised keywords"
+        )
+
+    @pytest.mark.parametrize("helper", _python_search_helpers(), ids=lambda f: f.__name__)
+    def test_the_helper_refuses_a_keyword_it_does_not_declare(
+        self, helper: Callable[..., object]
+    ) -> None:
+        """Pinned from the outside as well, because a signature is only half
+        the claim: a body that re-collected keywords would satisfy the check
+        above and swallow all the same.
+        """
+        db = SyncMemoryDatabase() if helper.__name__.endswith("_sync") else AsyncMemoryDatabase()
+
+        with pytest.raises(TypeError, match="score_threshold"):
+            helper(db, [1.0, 0.0], metric=DistanceMetric.COSINE, score_threshold=0.99)
+
+    def test_the_sync_helper_resolves_its_metric_the_one_way(self) -> None:
+        """Both bodies re-implemented ``resolve_metric`` inline.
+
+        The ``None`` fallback to ``self.vector_metric`` and the ``str``
+        coercion through ``DistanceMetric(...)``, copied into each twin ---
+        so a name the one resolver accepts was refused here, which is a
+        second answer to a question already settled one frame up. Asked by
+        passing a name only the resolver knows, rather than by reading the
+        source, because what matters is that the two vocabularies agree.
+        """
+        db = SyncMemoryDatabase()
+
+        assert PythonVectorSearchMixin.python_vector_search_sync(db, [1.0, 0.0], metric="cos") == []
+
+    @pytest.mark.asyncio
+    async def test_the_async_helper_resolves_its_metric_the_one_way(self) -> None:
+        db = AsyncMemoryDatabase()
+
+        assert (
+            await PythonVectorSearchMixin.python_vector_search_async(db, [1.0, 0.0], metric="cos")
+            == []
         )

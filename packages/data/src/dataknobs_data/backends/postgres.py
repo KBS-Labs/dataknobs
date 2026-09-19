@@ -37,6 +37,7 @@ from ..vector.mixins import (
     resolve_metric,
 )
 from .config import PostgresDatabaseConfig
+from .postgres_vector import format_vector_for_postgres
 from .postgres_mixins import (
     PostgresBaseConfig,
     PostgresConnectionValidator,
@@ -53,6 +54,37 @@ from .sql_base import (
     validate_field_path,
 )
 from ..vector.types import DistanceMetric
+
+
+# Raised by both twins' ``create_vector_index``. The mixin declares
+# ``dimensions`` optional because most backends ignore it; pgvector cannot
+# index an expression whose width is not fixed, and saying so as a refusal
+# rather than as a required argument is what lets a caller written against the
+# mixin reach this method and be told why.
+_DIMENSIONS_REQUIRED = (
+    "dimensions is required to build a pgvector index: the index expression "
+    "casts to ``vector(n)`` and pgvector will not index a column whose width "
+    "is not fixed."
+)
+
+
+def _query_vector_values(query_vector: np.ndarray | list[float] | VectorField) -> Any:
+    """Unwrap whatever the caller handed us down to the numbers.
+
+    The width of what comes back is the width of the stored vectors too ---
+    pgvector refuses to compare vectors of different widths --- which is how
+    the search learns the ``dimensions`` an index was built for without being
+    told.
+
+    Args:
+        query_vector: A ``VectorField``, a numpy array, or a sequence.
+
+    Returns:
+        The underlying sequence of numbers.
+    """
+    from ..fields import VectorField as _VectorField
+
+    return query_vector.value if isinstance(query_vector, _VectorField) else query_vector
 
 
 class _ConnConfig(TypedDict):
@@ -1016,12 +1048,14 @@ class SyncPostgresDatabase(
         The threshold and the source assembly are the mixin's; this is the
         part that knows how to ask pgvector.
 
-        **This twin reads the vector out of the JSON ``data`` column** ---
-        ``(data->'<field>'->>'value')::vector`` --- where
-        :meth:`AsyncPostgresDatabase._vector_search` reads a dedicated
-        ``vector_<field>`` column. The two therefore search different
-        storage on the same table, which no shared code here decides and
-        which this pass does not change.
+        Reads the vector out of the JSON ``data`` column, which is where
+        every write path on both twins puts it. :meth:`AsyncPostgresDatabase.
+        _vector_search` used to read a dedicated ``vector_<field>`` column
+        instead --- a location three of the fourteen write paths across the two
+        classes filled --- so the two twins searched different storage on the
+        same table and a corpus written by one was invisible to the other.
+        Both ask the same question of the same column now, through
+        :func:`build_vector_search_sql`.
 
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
@@ -1039,80 +1073,181 @@ class SyncPostgresDatabase(
 
         self._check_connection()
 
-        from ..fields import VectorField
         from ..vector.types import VectorSearchResult
-        from .postgres_vector import format_vector_for_postgres, get_vector_operator
+        from .postgres_vector import build_vector_search_sql, distance_to_score
 
-        # Convert query vector to proper format
-        if isinstance(query_vector, VectorField):
-            vector_str = format_vector_for_postgres(query_vector.value)
-        else:
-            vector_str = format_vector_for_postgres(query_vector)
-
-        metric_str = metric.value
-        operator = get_vector_operator(metric_str)
-
-        # Build the query - vectors are stored in JSON data field
-        # Use centralized vector extraction logic
-        vector_expr = self.get_vector_extraction_sql(vector_field, dialect="postgres")
-
-        # Build the base SQL with pyformat placeholders
-        sql = f"""
-        SELECT
-            id,
-            data,
-            metadata,
-            {vector_expr} {operator} %(p0)s::vector AS distance
-        FROM {self._q_qualified}
-        WHERE data ? %(p1)s  -- Check field exists
-        """
+        values = _query_vector_values(query_vector)
+        vector_str = format_vector_for_postgres(values)
 
         params: list[Any] = [vector_str, vector_field]
 
-        # Add filters if provided using the query builder
+        # Add filters if provided using the query builder. The builder emits
+        # pyformat placeholders because this class configures it that way.
+        filter_clause = ""
         if filter:
-            # Query builder will generate pyformat placeholders since we configured it that way
-            where_clause, filter_params = self.query_builder.build_where_clause(
+            filter_clause, filter_params = self.query_builder.build_where_clause(
                 filter, len(params) + 1
             )
-            if where_clause:
-                sql += where_clause
-                params.extend(filter_params)
+            params.extend(filter_params)
 
-        # Order by distance and limit
-        next_param = len(params)
-        sql += f" ORDER BY distance LIMIT %(p{next_param})s"
+        sql = build_vector_search_sql(
+            q_qualified=self._q_qualified,
+            vector_field=vector_field,
+            dimensions=len(values),
+            metric=metric,
+            vector_placeholder="%(p0)s",
+            field_placeholder="%(p1)s",
+            limit_clause=f"LIMIT %(p{len(params)})s",
+            filter_clause=filter_clause,
+        )
         params.append(k)
 
-        # Build param dict for psycopg2
-        param_dict = {}
-        for i, param in enumerate(params):
-            param_dict[f"p{i}"] = param
-
+        param_dict = {f"p{i}": param for i, param in enumerate(params)}
         df = self.db.query(sql, param_dict)
 
-        # Convert results
-        results = []
-        for _, row in df.iterrows():
-            record = self._row_to_record(self._frame_row_to_dict(row))
-
-            # Calculate similarity score from distance
-            distance = row["distance"]
-            if metric_str in ["cosine", "cosine_similarity"]:
-                score = 1.0 - distance  # Cosine distance to similarity
-            elif metric_str in ["euclidean", "l2"]:
-                score = 1.0 / (1.0 + distance)  # Convert distance to similarity
-            elif metric_str in ["inner_product", "dot_product"]:
-                score = -distance  # Negative because pgvector uses negative for descending
-            else:
-                score = -distance  # Default: lower distance = better
-
-            result = VectorSearchResult(
-                record=record, score=float(score), vector_field=vector_field
+        return [
+            VectorSearchResult(
+                record=self._row_to_record(self._frame_row_to_dict(row)),
+                score=distance_to_score(metric, float(row["distance"])),
+                vector_field=vector_field,
+                metadata={"distance": float(row["distance"]), "metric": metric.value},
             )
-            results.append(result)
+            for _, row in df.iterrows()
+        ]
 
-        return results
+    def create_vector_index(
+        self,
+        vector_field: str = "embedding",
+        dimensions: int | None = None,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
+        index_type: str = "ivfflat",
+        lists: int | None = None,
+    ) -> bool:
+        """Create a vector index for efficient similarity search.
+
+        The twin's implementation, so that the backend that can build an
+        index is not the only one that cannot use it. This class inherited
+        the mixin's ``return True`` no-op, which reported success and created
+        nothing.
+
+        ``dimensions`` is declared optional because the mixin declares it so,
+        and refused when absent because pgvector cannot index an expression
+        of unfixed width.
+
+        Args:
+            vector_field: Name of the vector field to index
+            dimensions: Number of dimensions in the vectors. Required here,
+                unlike on the backends that ignore it.
+            metric: Distance metric for the index
+            index_type: Type of index (ivfflat, hnsw)
+            lists: Number of lists for IVFFlat index
+
+        Returns:
+            True if index was created successfully
+        """
+        from .postgres_vector import (
+            build_vector_index_sql,
+            build_vector_value_expression,
+            get_optimal_index_type,
+            get_vector_count_sql,
+        )
+
+        self._check_connection()
+
+        if not self._vector_enabled:
+            return False
+
+        if dimensions is None:
+            raise ValueError(_DIMENSIONS_REQUIRED)
+
+        if not lists and index_type == "ivfflat":
+            count_df = self.db.query(
+                get_vector_count_sql(self._q_schema, self._q_table, vector_field)
+            )
+            count = int(count_df.iloc[0]["count"]) if not count_df.empty else 0
+            _, params = get_optimal_index_type(count)
+            lists = params.get("lists", 100)
+
+        index_sql = build_vector_index_sql(
+            q_table_name=self._q_table,
+            q_schema_name=self._q_schema,
+            column_name=build_vector_value_expression(vector_field, dimensions),
+            dimensions=dimensions,
+            metric=metric,
+            index_type=index_type,
+            index_params={"lists": lists} if lists else None,
+            field_name=vector_field,
+        )
+
+        try:
+            logger.debug(f"Creating vector index with SQL: {index_sql}")
+            self.db.execute(index_sql)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to create vector index: {e}")
+            logger.debug(f"Index SQL was: {index_sql}")
+            return False
+
+    def drop_vector_index(
+        self, vector_field: str = "embedding", metric: DistanceMetric | str = DistanceMetric.COSINE
+    ) -> bool:
+        """Drop a vector index.
+
+        Args:
+            vector_field: Name of the vector field
+            metric: Distance metric used in the index
+
+        Returns:
+            True if index was dropped successfully
+        """
+        from .postgres_vector import get_vector_index_name
+
+        self._check_connection()
+
+        index_name = get_vector_index_name(
+            self.table_name, vector_field, DistanceMetric.resolve(metric).canonical().value
+        )
+
+        try:
+            self.db.execute(f"DROP INDEX IF EXISTS {self._q_schema}.{quote_ident(index_name)}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to drop vector index: {e}")
+            return False
+
+    def get_vector_index_stats(self, vector_field: str = "embedding") -> dict[str, Any]:
+        """Get statistics about a vector field and its index.
+
+        Args:
+            vector_field: Name of the vector field
+
+        Returns:
+            Dictionary with index statistics
+        """
+        from .postgres_vector import get_index_check_sql, get_vector_count_sql
+
+        self._check_connection()
+
+        stats: dict[str, Any] = {"field": vector_field, "indexed": False, "vector_count": 0}
+
+        try:
+            count_df = self.db.query(
+                get_vector_count_sql(self._q_schema, self._q_table, vector_field)
+            )
+            stats["vector_count"] = int(count_df.iloc[0]["count"]) if not count_df.empty else 0
+
+            # Raw (unquoted) names are correct here: the catalog query binds
+            # them as text against pg_indexes columns, not as identifiers.
+            index_sql, params = get_index_check_sql(self.schema_name, self.table_name, vector_field)
+            # asyncpg's $N numbering, rewritten for psycopg2's pyformat.
+            for i in range(len(params), 0, -1):
+                index_sql = index_sql.replace(f"${i}", f"%(p{i - 1})s")
+            index_df = self.db.query(index_sql, {f"p{i}": value for i, value in enumerate(params)})
+            stats["indexed"] = bool(index_df.iloc[0]["has_index"]) if not index_df.empty else False
+        except Exception as e:
+            logger.warning(f"Failed to get vector index stats: {e}")
+
+        return stats
 
     def has_vector_support(self) -> bool:
         """Check if this database has vector support enabled.
@@ -1368,69 +1503,6 @@ class AsyncPostgresDatabase(
                 else:
                     logger.debug("pgvector extension not available")
 
-    async def _ensure_vector_column(self, field_name: str, dimensions: int) -> None:
-        """Ensure a vector column exists for the given field.
-
-        Args:
-            field_name: Name of the vector field
-            dimensions: Number of dimensions
-        """
-        if not self._vector_enabled:
-            return
-
-        column_name = f"vector_{field_name}"
-        q_column_name = quote_ident(column_name)
-
-        # Check if column already exists
-        check_sql = """
-        SELECT column_name FROM information_schema.columns
-        WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
-        """
-
-        async with self._require_pool().acquire() as conn:
-            existing = await conn.fetchval(
-                check_sql, self.schema_name, self.table_name, column_name
-            )
-
-            if not existing:
-                # Add vector column
-                alter_sql = f"""
-                ALTER TABLE {self._q_qualified}
-                ADD COLUMN IF NOT EXISTS {q_column_name} vector({dimensions})
-                """
-                try:
-                    await conn.execute(alter_sql)
-                    self._vector_dimensions[field_name] = dimensions
-                    logger.info(f"Added vector column {column_name} with {dimensions} dimensions")
-
-                    # Create index for the vector column
-                    from .postgres_vector import build_vector_index_sql, get_optimal_index_type
-
-                    # Get row count for optimal index selection
-                    count_sql = f"SELECT COUNT(*) FROM {self._q_qualified}"
-                    count = await conn.fetchval(count_sql)
-
-                    index_type, index_params = get_optimal_index_type(count)
-                    index_sql = build_vector_index_sql(
-                        self._q_table,
-                        self._q_schema,
-                        q_column_name,
-                        dimensions,
-                        metric="cosine",
-                        index_type=index_type,
-                        index_params=index_params,
-                    )
-
-                    # Note: IVFFlat requires table to have data before creating index
-                    if count > 0 or index_type != "ivfflat":
-                        await conn.execute(index_sql)
-                        logger.info(f"Created {index_type} index for {column_name}")
-
-                except Exception as e:
-                    logger.warning(f"Could not create vector column {column_name}: {e}")
-            else:
-                self._vector_dimensions[field_name] = dimensions
-
     def _check_connection(self) -> None:
         """Check if async database is connected."""
         self._check_async_connection()
@@ -1489,66 +1561,17 @@ class AsyncPostgresDatabase(
         """
         return SQLRecordSerializer.row_to_record(dict(row))
 
-    @staticmethod
-    def _build_vector_params(
-        vector_inserts: list[tuple[str, str]],
-        start_param: int,
-    ) -> tuple[list[str], list[str], list[str]]:
-        """Return (columns, placeholders, values) lists for vector fields.
-
-        vector_inserts: [(quoted_col_name, formatted_vec_str), ...]
-        start_param: $N index for the first vector parameter.
-        Placeholders include the ``::vector`` cast required by asyncpg.
-        """
-        columns: list[str] = []
-        placeholders: list[str] = []
-        values: list[str] = []
-        for i, (q_col, vec_str) in enumerate(vector_inserts):
-            columns.append(q_col)
-            placeholders.append(f"${start_param + i}::vector")
-            values.append(vec_str)
-        return columns, placeholders, values
-
-    async def _collect_vector_inserts(self, record: Record) -> list[tuple[str, str]]:
-        """Return [(quoted_col_name, formatted_vec_str)] for every VectorField.
-
-        Also calls _ensure_vector_column so the pgvector column is guaranteed
-        to exist before any INSERT/UPDATE that uses the returned data.
-        """
-        from ..fields import VectorField
-        from .postgres_vector import format_vector_for_postgres
-
-        result: list[tuple[str, str]] = []
-        for field_name, field_obj in record.fields.items():
-            if isinstance(field_obj, VectorField) and self._vector_enabled:
-                await self._ensure_vector_column(field_name, field_obj.dimensions)
-                q_col = quote_ident(f"vector_{field_name}")
-                result.append((q_col, format_vector_for_postgres(field_obj.value)))
-        return result
-
     async def create(self, record: Record) -> str:
         """Create a new record with vector support."""
         self._check_connection()
 
-        vector_inserts = await self._collect_vector_inserts(record)
-
         id = record.id if record.id else self._generate_id()
         row = self._record_to_row(record, id)
-
-        columns = ["id", "data", "metadata"]
         values: list[Any] = [row["id"], row["data"], row["metadata"]]
-        placeholders = ["$1", "$2", "$3"]
-
-        vec_cols, vec_placeholders, vec_values = self._build_vector_params(
-            vector_inserts, start_param=4
-        )
-        columns.extend(vec_cols)
-        placeholders.extend(vec_placeholders)
-        values.extend(vec_values)
 
         sql = f"""
-        INSERT INTO {self._q_qualified} ({", ".join(columns)})
-        VALUES ({", ".join(placeholders)})
+        INSERT INTO {self._q_qualified} (id, data, metadata)
+        VALUES ($1, $2, $3)
         """
 
         try:
@@ -1617,18 +1640,10 @@ class AsyncPostgresDatabase(
         """
         self._check_connection()
 
-        vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)
 
         set_clauses = ["data = $2", "metadata = $3", "updated_at = CURRENT_TIMESTAMP"]
         values: list[Any] = [id, row["data"], row["metadata"]]
-
-        vec_cols, vec_placeholders, vec_values = self._build_vector_params(
-            vector_inserts, start_param=4
-        )
-        for q_col, placeholder in zip(vec_cols, vec_placeholders, strict=True):
-            set_clauses.append(f"{q_col} = {placeholder}")
-        values.extend(vec_values)
 
         where = "WHERE id = $1"
         if expected_version is not None:
@@ -1756,30 +1771,17 @@ class AsyncPostgresDatabase(
                 return id
             raise version_conflict_error(id, expected_version, None)
 
-        vector_inserts = await self._collect_vector_inserts(record)
         row = self._record_to_row(record, id)
-
-        columns = ["id", "data", "metadata"]
         values: list[Any] = [row["id"], row["data"], row["metadata"]]
-        placeholders = ["$1", "$2", "$3"]
         update_clauses = [
             "data = EXCLUDED.data",
             "metadata = EXCLUDED.metadata",
             "updated_at = CURRENT_TIMESTAMP",
         ]
 
-        vec_cols, vec_placeholders, vec_values = self._build_vector_params(
-            vector_inserts, start_param=4
-        )
-        columns.extend(vec_cols)
-        placeholders.extend(vec_placeholders)
-        values.extend(vec_values)
-        for q_col in vec_cols:
-            update_clauses.append(f"{q_col} = EXCLUDED.{q_col}")
-
         sql = f"""
-        INSERT INTO {self._q_qualified} ({", ".join(columns)})
-        VALUES ({", ".join(placeholders)})
+        INSERT INTO {self._q_qualified} (id, data, metadata)
+        VALUES ($1, $2, $3)
         ON CONFLICT (id) DO UPDATE
         SET {", ".join(update_clauses)}
         """
@@ -2061,16 +2063,18 @@ class AsyncPostgresDatabase(
         The threshold and the source assembly are the mixin's; this is the
         part that knows how to ask pgvector.
 
-        **This twin reads a dedicated ``vector_<field>`` column** where
-        :meth:`SyncPostgresDatabase._vector_search` extracts the vector from
-        the JSON ``data`` column. The two therefore search different storage
-        on the same table, which no shared code here decides and which this
-        pass does not change.
+        Reads the vector out of the JSON ``data`` column, the same storage
+        :meth:`SyncPostgresDatabase._vector_search` reads and the same
+        storage every write path on both twins fills. This method used to
+        read a dedicated ``vector_<field>`` column that only ``create``,
+        ``update`` and ``upsert`` on this class ever wrote --- so its own
+        ``create_batch`` produced records it could not find, and a
+        sync-written corpus was invisible to it entirely.
 
         Args:
             query_vector: Query vector (numpy array, list, or VectorField)
-            vector_field: Name of the vector field to search, read from the
-                ``vector_<field>`` column
+            vector_field: Name of the vector field to search, read out of the
+                JSON ``data`` column
             k: Maximum number of results to return
             metric: Distance metric, already resolved by the mixin
             filter: Optional query filter to apply before vector search
@@ -2083,80 +2087,50 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        from ..fields import VectorField
         from ..vector.types import VectorSearchResult
-        from .postgres_vector import format_vector_for_postgres, get_vector_operator
+        from .postgres_vector import build_vector_search_sql, distance_to_score
 
-        # Convert query vector to proper format
-        if isinstance(query_vector, VectorField):
-            vector_str = format_vector_for_postgres(query_vector.value)
-        else:
-            vector_str = format_vector_for_postgres(query_vector)
+        values = _query_vector_values(query_vector)
+        params: list[Any] = [format_vector_for_postgres(values), vector_field]
 
-        metric_str = metric.value
-        operator = get_vector_operator(metric_str)
-
-        vector_column = f"vector_{vector_field}"
-        q_vector_column = quote_ident(vector_column)
-
-        # Build query
-        sql = f"""
-        SELECT id, data, metadata, {q_vector_column},
-               {q_vector_column} {operator} $1::vector AS distance
-        FROM {self._q_qualified}
-        WHERE {q_vector_column} IS NOT NULL
-        """
-
-        params = [vector_str]
-        param_num = 2
-
-        # Add filters if provided using the query builder
+        # The query builder emits ``%s``; asyncpg wants ``$N``. Rewritten one
+        # placeholder at a time so the numbering follows the parameter order,
+        # which starts at $3 because the vector and the field name hold $1/$2.
+        filter_clause = ""
         if filter:
-            # First get the where clause from query builder
-            where_clause, filter_params = self.query_builder.build_where_clause(filter, param_num)
-            if where_clause:
-                # Convert %s placeholders to $N for asyncpg
-                for param in filter_params:
-                    where_clause = where_clause.replace("%s", f"${param_num}", 1)
-                    params.append(param)
-                    param_num += 1
-                sql += where_clause
+            filter_clause, filter_params = self.query_builder.build_where_clause(
+                filter, len(params) + 1
+            )
+            for param in filter_params:
+                filter_clause = filter_clause.replace("%s", f"${len(params) + 1}", 1)
+                params.append(param)
 
-        # Order by distance and limit
-        sql += f"""
-        ORDER BY distance
-        LIMIT {k}
-        """
+        sql = build_vector_search_sql(
+            q_qualified=self._q_qualified,
+            vector_field=vector_field,
+            dimensions=len(values),
+            metric=metric,
+            vector_placeholder="$1",
+            field_placeholder="$2",
+            # Interpolated rather than bound: this is the one integer in the
+            # statement and binding it would renumber every filter parameter
+            # behind it. ``k`` reaches here from the mixin's declared ``int``.
+            limit_clause=f"LIMIT {int(k)}",
+            filter_clause=filter_clause,
+        )
 
-        # Execute query
         async with self._require_pool().acquire() as conn:
             rows = await conn.fetch(sql, *params)
 
-        # Convert to VectorSearchResult objects
-        results = []
-        for row in rows:
-            record = self._row_to_record(row)
-
-            # Convert distance to similarity score (1 - normalized_distance for cosine)
-            distance = float(row["distance"])
-            if metric_str == "cosine":
-                score = (
-                    1.0 - min(distance, 2.0) / 2.0
-                )  # Normalize cosine distance [0,2] to similarity [0,1]
-            elif metric_str in ["euclidean", "l2"]:
-                score = 1.0 / (1.0 + distance)  # Convert distance to similarity
-            else:
-                score = 1.0 - distance  # Generic conversion
-
-            result = VectorSearchResult(
-                record=record,
-                score=score,
+        return [
+            VectorSearchResult(
+                record=self._row_to_record(row),
+                score=distance_to_score(metric, float(row["distance"])),
                 vector_field=vector_field,
-                metadata={"distance": distance, "metric": metric_str},
+                metadata={"distance": float(row["distance"]), "metric": metric.value},
             )
-            results.append(result)
-
-        return results
+            for row in rows
+        ]
 
     async def enable_vector_support(self) -> bool:
         """Enable vector support for this database.
@@ -2208,8 +2182,8 @@ class AsyncPostgresDatabase(
             True if index was created successfully
         """
         from .postgres_vector import (
-            build_vector_column_expression,
             build_vector_index_sql,
+            build_vector_value_expression,
             get_optimal_index_type,
             get_vector_count_sql,
         )
@@ -2220,11 +2194,7 @@ class AsyncPostgresDatabase(
             return False
 
         if dimensions is None:
-            raise ValueError(
-                "dimensions is required to build a pgvector index: the index "
-                "expression casts to ``vector(n)`` and pgvector will not index "
-                "a column whose width is not fixed."
-            )
+            raise ValueError(_DIMENSIONS_REQUIRED)
 
         # Determine optimal parameters if not provided
         if not lists and index_type == "ivfflat":
@@ -2235,18 +2205,16 @@ class AsyncPostgresDatabase(
                 _, params = get_optimal_index_type(count)
                 lists = params.get("lists", 100)
 
-        metric_str = resolve_metric(self, metric).value
-
-        # Build vector column expression for index
-        column_expr = build_vector_column_expression(vector_field, dimensions, for_index=True)
-
-        # Build index SQL - pass field_name for proper index naming
+        # The expression the searches use, so the planner sees one expression
+        # rather than two. This built ``(data->'f'->>'value')::vector(n)``
+        # while both searches asked a ``CASE`` that also tolerates a bare
+        # array, which no query could match.
         index_sql = build_vector_index_sql(
             q_table_name=self._q_table,
             q_schema_name=self._q_schema,
-            column_name=column_expr,
+            column_name=build_vector_value_expression(vector_field, dimensions),
             dimensions=dimensions,
-            metric=metric_str,
+            metric=resolve_metric(self, metric),
             index_type=index_type,
             index_params={"lists": lists} if lists else None,
             field_name=vector_field,
@@ -2264,7 +2232,7 @@ class AsyncPostgresDatabase(
             return False
 
     async def drop_vector_index(
-        self, vector_field: str = "embedding", metric: str = "cosine"
+        self, vector_field: str = "embedding", metric: DistanceMetric | str = DistanceMetric.COSINE
     ) -> bool:
         """Drop a vector index.
 
@@ -2279,7 +2247,9 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        index_name = get_vector_index_name(self.table_name, vector_field, metric)
+        index_name = get_vector_index_name(
+            self.table_name, vector_field, DistanceMetric.resolve(metric).canonical().value
+        )
 
         try:
             async with self._require_pool().acquire() as conn:
@@ -2503,7 +2473,11 @@ class AsyncPostgresDatabase(
             HybridSearchResult,
             reciprocal_rank_fusion,
         )
-        from .postgres_vector import format_vector_for_postgres, get_vector_operator
+        from .postgres_vector import (
+            build_vector_value_expression,
+            distance_to_score,
+            get_vector_operator,
+        )
 
         self._check_connection()
 
@@ -2540,11 +2514,14 @@ class AsyncPostgresDatabase(
 
         vector_str = format_vector_for_postgres(query_vector)
 
-        metric_str = resolve_metric(self, metric).value
-        operator = get_vector_operator(metric_str)
+        resolved = resolve_metric(self, metric)
+        operator = get_vector_operator(resolved)
 
-        vector_column = f"vector_{vector_field}"
-        q_vector_column = quote_ident(vector_column)
+        # The JSON ``data`` column, as both ``_vector_search`` twins now read
+        # --- this CTE read the ``vector_<field>`` column, so a hybrid search
+        # over a batch-written or sync-written corpus contributed no vector
+        # half at all and silently degraded to a text search.
+        vector_expr = build_vector_value_expression(vector_field, len(query_vector))
 
         # Build combined query using CTE for efficient hybrid search
         # This performs both searches in a single query
@@ -2573,13 +2550,12 @@ class AsyncPostgresDatabase(
                 id,
                 data,
                 metadata,
-                {q_vector_column},
-                1.0 - ({q_vector_column} {operator} $2::vector) as vector_score,
+                {vector_expr} {operator} $2::vector({len(query_vector)}) as vector_distance,
                 ROW_NUMBER() OVER (
-                    ORDER BY {q_vector_column} {operator} $2::vector
+                    ORDER BY {vector_expr} {operator} $2::vector({len(query_vector)})
                 ) as vector_rank
             FROM {self._q_qualified}
-            WHERE {q_vector_column} IS NOT NULL
+            WHERE data ? $3
             LIMIT {fetch_k}
         ),
         combined AS (
@@ -2589,7 +2565,7 @@ class AsyncPostgresDatabase(
                 COALESCE(t.metadata, v.metadata) as metadata,
                 t.text_score,
                 t.text_rank,
-                v.vector_score,
+                v.vector_distance,
                 v.vector_rank
             FROM text_search t
             FULL OUTER JOIN vector_search v ON t.id = v.id
@@ -2597,7 +2573,7 @@ class AsyncPostgresDatabase(
         SELECT * FROM combined
         """
 
-        params = [query_text, vector_str]
+        params = [query_text, vector_str, vector_field]
 
         try:
             async with self._require_pool().acquire() as conn:
@@ -2639,8 +2615,13 @@ class AsyncPostgresDatabase(
 
             if row["text_score"] is not None:
                 text_scores.append((record_id, float(row["text_score"])))
-            if row["vector_score"] is not None:
-                vector_scores.append((record_id, float(row["vector_score"])))
+            if row["vector_distance"] is not None:
+                # Converted here rather than in SQL, where it was a hardcoded
+                # ``1.0 - distance`` that is the cosine formula applied to
+                # whichever metric the caller asked for.
+                vector_scores.append(
+                    (record_id, distance_to_score(resolved, float(row["vector_distance"])))
+                )
 
         # Sort by score for rank-based fusion
         text_scores.sort(key=lambda x: x[1], reverse=True)

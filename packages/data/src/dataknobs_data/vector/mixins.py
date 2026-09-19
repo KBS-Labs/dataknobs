@@ -262,28 +262,30 @@ def resolve_metric(database: object, metric: DistanceMetric | str | None) -> Dis
     have used it. That is the same divergence as the two parameters this pass
     is about, and it closes the same way --- by deciding it above all twelve.
 
+    What a *name* means is :meth:`DistanceMetric.resolve`'s question, and this
+    asks it rather than answering it again. The two were briefly different
+    answers: the aliases :meth:`DistanceMetric.get_aliases` published were
+    declined here, because at the time nothing in the library resolved them
+    --- ``"ip"`` happened to reach a pgvector operator table that knew it and
+    raised on every other backend. The enum resolves them now, so the reason
+    to decline is gone and there is one vocabulary instead of two.
+
     Args:
         database: The database whose configured metric ``None`` means.
-        metric: A :class:`DistanceMetric`, its value as a string, or ``None``.
+        metric: A :class:`DistanceMetric`, a member value, or any published
+            alias --- or ``None`` for the database's own setting.
 
     Returns:
         The metric to search under.
 
     Raises:
-        ValueError: If ``metric`` is a string naming no metric. The aliases
-            :meth:`DistanceMetric.get_aliases` lists are *not* accepted,
-            because nothing in the library resolves them: ``"ip"`` happened to
-            reach a pgvector operator table that knew it, and raised on every
-            other backend --- ``ValueError`` where the string was fed to
-            ``DistanceMetric(...)``, ``AttributeError`` where ``.value`` was
-            read off it. Declining it here is one answer in place of three.
+        ValueError: If ``metric`` is a string naming no metric, from
+            :meth:`DistanceMetric.resolve`.
     """
     if metric is None:
         configured = getattr(database, "vector_metric", None)
         return configured if isinstance(configured, DistanceMetric) else DistanceMetric.COSINE
-    if isinstance(metric, str):
-        return DistanceMetric(metric)
-    return metric
+    return DistanceMetric.resolve(metric)
 
 
 def finish_vector_search(

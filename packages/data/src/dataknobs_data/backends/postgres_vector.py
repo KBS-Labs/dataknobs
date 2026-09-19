@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_utils.sql_utils import quote_ident
 
+from ..vector.types import DistanceMetric
+from .sql_base import SQLRecordSerializer
+
 if TYPE_CHECKING:
     import asyncpg
     import numpy as np
@@ -103,23 +106,184 @@ async def install_pgvector_extension(conn: asyncpg.Connection) -> bool:
         return False
 
 
-def get_vector_operator(metric: str) -> str:
-    """Get PostgreSQL vector operator for distance metric.
+# Keyed on ``DistanceMetric.canonical()``, so there are four keys and all six
+# members reach one. The table this replaces was keyed on the spelling and had
+# five entries, two of which were aliases; ``DOT_PRODUCT`` and ``L1`` fell
+# through its ``.get(metric, "<=>")`` default and were answered in cosine
+# distances. A missing key here is a ``KeyError`` at the lookup, not a wrong
+# answer downstream --- and the exhaustiveness test in
+# ``test_distance_metric_vocabulary.py`` reaches it before a caller does.
+_OPERATORS: dict[DistanceMetric, str] = {
+    DistanceMetric.COSINE: "<=>",  # cosine distance
+    DistanceMetric.EUCLIDEAN: "<->",  # L2 distance
+    DistanceMetric.DOT_PRODUCT: "<#>",  # negative inner product
+    DistanceMetric.L1: "<+>",  # taxicab distance; pgvector 0.7.0+
+}
+
+_OPCLASSES: dict[DistanceMetric, str] = {
+    DistanceMetric.COSINE: "vector_cosine_ops",
+    DistanceMetric.EUCLIDEAN: "vector_l2_ops",
+    DistanceMetric.DOT_PRODUCT: "vector_ip_ops",
+    DistanceMetric.L1: "vector_l1_ops",
+}
+
+
+def get_vector_operator(metric: DistanceMetric | str) -> str:
+    """The pgvector distance operator for a metric.
 
     Args:
-        metric: Distance metric (cosine, euclidean, inner_product)
+        metric: A member, member value, or published alias --- whatever
+            :meth:`DistanceMetric.resolve` accepts.
 
     Returns:
-        PostgreSQL operator string
+        The pgvector operator, one of ``<=>``, ``<->``, ``<#>``, ``<+>``.
+
+    Raises:
+        ValueError: If the name is not an accepted spelling. The table this
+            replaces answered an unrecognised name --- and two recognised
+            members --- with the cosine operator, so a search asking for dot
+            product was silently ranked by cosine distance.
     """
-    operators = {
-        "cosine": "<=>",  # Cosine distance
-        "euclidean": "<->",  # L2 distance
-        "inner_product": "<#>",  # Negative inner product
-        "l2": "<->",  # Alias for euclidean
-        "ip": "<#>",  # Alias for inner product
-    }
-    return operators.get(metric.lower(), "<=>")  # Default to cosine
+    return _OPERATORS[DistanceMetric.resolve(metric).canonical()]
+
+
+def get_vector_opclass(metric: DistanceMetric | str) -> str:
+    """The pgvector index operator class for a metric.
+
+    Separate from :func:`get_vector_operator` because they are different
+    pgvector vocabularies, but derived from the same canonical member so the
+    two cannot disagree about a spelling again --- which they did, the
+    operator table knowing ``inner_product`` and the operator-class table
+    knowing ``dot_product`` as well.
+
+    Args:
+        metric: A member, member value, or published alias.
+
+    Returns:
+        The operator class name, e.g. ``vector_cosine_ops``.
+
+    Raises:
+        ValueError: If the name is not an accepted spelling.
+    """
+    return _OPCLASSES[DistanceMetric.resolve(metric).canonical()]
+
+
+def distance_to_score(metric: DistanceMetric | str, distance: float) -> float:
+    """Convert a pgvector distance into a similarity score.
+
+    One conversion, because there were two and they disagreed. Each Postgres
+    twin carried its own copy: for cosine the sync twin returned ``1 - d``
+    (the cosine similarity, which is also what the ten Python-path backends
+    return) and the async twin returned ``1 - min(d, 2) / 2``, a different
+    number for the same corpus and the same query. Nothing compared the two
+    until ``score_threshold`` arrived to compare either against a constant.
+
+    Args:
+        metric: The metric the distance was measured under.
+        distance: What the pgvector operator returned.
+
+    Returns:
+        A score that rises as the neighbour gets nearer, comparable across
+        backends for the same metric.
+
+    Raises:
+        ValueError: If the name is not an accepted spelling.
+    """
+    canonical = DistanceMetric.resolve(metric).canonical()
+    if canonical is DistanceMetric.COSINE:
+        # pgvector's cosine distance is ``1 - cosine_similarity`` over [0, 2],
+        # so this is the similarity itself rather than a rescaling of it.
+        return 1.0 - distance
+    if canonical is DistanceMetric.DOT_PRODUCT:
+        # ``<#>`` is the *negative* inner product, so negating recovers it.
+        return -distance
+    # Euclidean and L1 are unbounded above; map to (0, 1] preserving order.
+    return 1.0 / (1.0 + distance)
+
+
+def build_vector_value_expression(field_name: str, dimensions: int | None = None) -> str:
+    """The one SQL expression for the vector stored in ``field_name``.
+
+    Used by both twins' searches and by index creation, because an expression
+    index serves only a query whose expression matches exactly and these were
+    three different expressions. The search spelled it
+    ``SQLRecordSerializer.get_vector_extraction_sql`` --- a ``CASE`` tolerating
+    both the ``VectorField`` object form and a bare array --- while index
+    creation spelled it ``(data->'f'->>'value')::vector(n)``, only the object
+    form and with a width. No query could use that index, and the twin that
+    would have wanted it could not create one.
+
+    Args:
+        field_name: The record field holding the vector. Validated against the
+            JSONB-key grammar by the serializer, since it lands in a SQL
+            string literal where ``quote_ident`` does not apply.
+        dimensions: When given, the expression is cast to ``vector(n)``.
+            pgvector will not index an expression of unfixed width, and the
+            query must carry the same cast or the planner sees two different
+            expressions.
+
+    Returns:
+        A parenthesised SQL expression yielding a ``vector``.
+    """
+    inner = SQLRecordSerializer.get_vector_extraction_sql(field_name, dialect="postgres")
+    if dimensions is None:
+        return f"({inner})"
+    return f"(({inner})::vector({dimensions}))"
+
+
+def build_vector_search_sql(
+    *,
+    q_qualified: str,
+    vector_field: str,
+    dimensions: int,
+    metric: DistanceMetric | str,
+    vector_placeholder: str,
+    field_placeholder: str,
+    limit_clause: str,
+    filter_clause: str = "",
+) -> str:
+    """Build the k-NN query both Postgres twins run.
+
+    Written once because the two twins hand-built nearly this same statement
+    and, in doing so, pointed them at different storage: one at the JSON
+    ``data`` column every write path fills, the other at a ``vector_<field>``
+    column that three of fourteen write paths filled. They differ now only in
+    how their driver spells a placeholder, which is what the three placeholder
+    arguments carry.
+
+    Args:
+        q_qualified: The pre-quoted ``"schema"."table"``.
+        vector_field: The record field holding the vector.
+        dimensions: Width of the query vector, which is necessarily the width
+            of the stored ones --- pgvector refuses to compare across widths.
+            Passing it lets the expression match an index built for that width.
+        metric: The metric to rank under.
+        vector_placeholder: The driver's placeholder for the query vector,
+            e.g. ``%(p0)s`` or ``$1``.
+        field_placeholder: The driver's placeholder for the field name, used
+            by the ``data ? <field>`` existence test.
+        limit_clause: A complete ``LIMIT ...`` clause, since asyncpg and
+            psycopg2 differ on whether ``k`` may be bound.
+        filter_clause: An optional ``AND ...`` fragment from the query builder.
+
+    Returns:
+        The SELECT statement, yielding ``id``, ``data``, ``metadata`` and
+        ``distance``.
+    """
+    expression = build_vector_value_expression(vector_field, dimensions)
+    operator = get_vector_operator(metric)
+    return f"""
+        SELECT
+            id,
+            data,
+            metadata,
+            {expression} {operator} {vector_placeholder}::vector({dimensions}) AS distance
+        FROM {q_qualified}
+        WHERE data ? {field_placeholder}
+        {filter_clause}
+        ORDER BY distance
+        {limit_clause}
+    """
 
 
 def get_optimal_index_type(num_vectors: int) -> tuple[str, dict[str, Any]]:
@@ -149,7 +313,7 @@ def build_vector_index_sql(
     q_schema_name: str,
     column_name: str,
     dimensions: int,
-    metric: str = "cosine",
+    metric: DistanceMetric | str = DistanceMetric.COSINE,
     index_type: str = "ivfflat",
     index_params: dict[str, Any] | None = None,
     field_name: str | None = None,
@@ -183,22 +347,18 @@ def build_vector_index_sql(
         if q_table_name.startswith('"') and q_table_name.endswith('"')
         else q_table_name
     )
-    index_name = get_vector_index_name(raw_table_name, field_name, metric)
+    # Canonicalised, so the two spellings of one metric name one index.
+    # ``drop_vector_index`` rebuilds the name from its own ``metric`` argument
+    # and would otherwise miss an index created under the other spelling.
+    metric_name = DistanceMetric.resolve(metric).canonical().value
+    index_name = get_vector_index_name(raw_table_name, field_name, metric_name)
     # Quote the index name so it is consistent with drop_vector_index, which
     # already calls quote_ident(index_name).  Without quoting, PostgreSQL folds
     # the name to lowercase in the catalog; the quoted DROP then silently finds
     # nothing, leaving an orphaned index that cannot be dropped programmatically.
     q_index_name = quote_ident(index_name)
 
-    # Determine operator class based on metric
-    op_class = {
-        "cosine": "vector_cosine_ops",
-        "euclidean": "vector_l2_ops",
-        "l2": "vector_l2_ops",
-        "inner_product": "vector_ip_ops",
-        "ip": "vector_ip_ops",
-        "dot_product": "vector_ip_ops",
-    }.get(metric.lower(), "vector_cosine_ops")
+    op_class = get_vector_opclass(metric)
 
     if index_type == "ivfflat":
         lists = index_params.get("lists", 100)
@@ -298,30 +458,6 @@ def get_vector_index_name(table_name: str, field_name: str, metric: str = "cosin
     clean_metric = sanitize_identifier(metric)
 
     return f"idx_{clean_table}_{clean_field}_{clean_metric}"
-
-
-def build_vector_column_expression(
-    field_name: str, dimensions: int | None = None, for_index: bool = False
-) -> str:
-    """Build SQL expression for vector column from JSON field.
-
-    Args:
-        field_name: Name of the vector field in JSON
-        dimensions: Optional dimensions for casting
-        for_index: Whether this is for index creation (needs special handling)
-
-    Returns:
-        SQL expression for vector column
-    """
-    dim_cast = f"({dimensions})" if dimensions else ""
-
-    if for_index:
-        # For indexes, we need a simpler expression
-        # Since we're storing VectorFields as objects with 'value' key, index on that
-        return f"(data->'{field_name}'->>'value')::vector{dim_cast}"
-    else:
-        # For queries, we can use the same expression
-        return f"(data->'{field_name}'->>'value')::vector{dim_cast}"
 
 
 def get_vector_count_sql(q_schema_name: str, q_table_name: str, field_name: str) -> str:
