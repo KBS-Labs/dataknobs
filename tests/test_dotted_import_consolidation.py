@@ -21,8 +21,8 @@ from tests._workspace import ROOT
 
 #: Sites deliberately left resolving their own dotted paths, each with the
 #: reason. What remains is not a backlog: the three same-shape copies in
-#: ``config``, ``fsm`` and ``xization`` have been adopted, and neither of these
-#: two resolves a dotted path from configuration at all. They import
+#: ``config``, ``fsm`` and ``xization`` have been adopted, and none of these
+#: three resolves a dotted path from configuration at all. They import
 #: dynamically, which is all the scan can see.
 #:
 #: Recorded here rather than remembered, because ``allow=`` fails on an entry
@@ -38,6 +38,15 @@ DEFERRED = {
     # Inside `_cli_main`, `# pragma: no cover`: parses a CLI argument and
     # exits. Not config-driven resolution at all.
     "llm/src/dataknobs_llm/prompts/syntax.py:494",
+    # `DataclassSweep._walk`: imports each module `pkgutil.walk_packages`
+    # enumerated over a package's own `__path__`. Nothing here is a dotted
+    # path a consumer wrote, so none of the four decisions the canonical
+    # resolver settles arises -- there is no separator to choose, no
+    # attribute to look up, and a typo is impossible because nothing typed
+    # the name. The exception handling is the construct's subject rather
+    # than an oversight: a module that will not import is recorded as a
+    # hole in the sweep, because one silently skipped reads as a clean tree.
+    "common/src/dataknobs_common/testing/dataclass_sweep.py:184",
 }
 
 

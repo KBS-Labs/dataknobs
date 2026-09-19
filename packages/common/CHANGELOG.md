@@ -80,6 +80,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DataclassSweep`**, in `dataknobs_common.testing` -- every dataclass a
+  package defines, with a value built for each from its own declared field
+  types, so a guard about a *class* of types can find the class rather than the
+  instances somebody thought to list. `Supplied` and `UnbuildableError` come
+  with it.
+
+  It existed as a test-directory helper here and named `dataknobs_common` in
+  four places, so the second package that needed it could only get it by
+  copying -- which is how a sweep acquires two spellings and then two answers.
+  It takes its root as an argument now. `dataknobs-data` is the first other
+  caller, and what it found on arrival is the reason: two index sources in
+  exactly the shape the hashable-contract census is about, in a family whose
+  three other members had already been ruled the other way in this package.
+  The guard that would have caught them swept a tree they were not in.
+
+  Its `TYPE_CHECKING` replay now seeds the module's own import context, so a
+  **relative** import in such a block resolves. `exec` against a bare namespace
+  has no `__package__`, so `from .vector.types import DistanceMetric` was
+  skipped and the names it would have bound stayed missing -- surfacing later
+  as a `NameError` from `get_type_hints` that reads as an unconstructible type
+  rather than as a hole in the replay. This package writes most of these
+  absolutely and barely noticed; a package that writes them relatively loses
+  every one.
+
 - **A live binding covering fewer types than the schema declares is logged at
   construction.** The undeclared-type refusal only ran one way -- a source
   declaring a type the schema does not -- and the other direction is the one

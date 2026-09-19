@@ -90,6 +90,11 @@ from dataknobs_common.testing.blocking import (
     no_blocking,
     requires_blockbuster,
 )
+from dataknobs_common.testing.dataclass_sweep import (
+    DataclassSweep,
+    Supplied,
+    UnbuildableError,
+)
 from dataknobs_common.testing.dotted_imports import (
     CANONICAL_MODULE,
     AdHocImportFinding,
@@ -150,6 +155,9 @@ __all__ = [
     "DK_SYNC_BRIDGE_THREAD",
     "AdHocImportFinding",
     "BroadExceptFinding",
+    "DataclassSweep",
+    "Supplied",
+    "UnbuildableError",
     "assert_config_attribute_access_matches_dataclass",
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",

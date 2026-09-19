@@ -80,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller needing both had to write half of it into the metadata dict by hand.
   Default `None` writes nothing, which is what every existing caller gets.
 
+- **A hashable-contract census**, in `packages/data/tests`, over every
+  dataclass this package defines. A type that answers `Hashable` and raises at
+  the call is worse than one that never claimed the capability, because the
+  check is how a caller is supposed to ask -- and this package had no census,
+  so the two index sources fixed above reached a review rather than a guard.
+  Twenty types are recorded as open, seventeen of them one defect inherited
+  seventeen times: `DatabaseConfig` is frozen with equality on and carries a
+  `DatabaseSchema`, which is a plain dataclass. Recorded rather than fixed:
+  each is a ruling about a published type, and the census exists so the
+  twenty-first is visible without waiting for the twenty.
+
 ### Fixed
 
 - **A vector store now accepts every distance-metric spelling the enum

@@ -30,15 +30,17 @@ either direction. That makes a new instance of the shape distinguishable from
 the ones already known, which is the part that does not need the ruling and
 should not wait for it.
 
-The sweep itself lives in ``_dataclass_sweep``, beside the reasons it builds a
-value rather than reading an annotation.
+The sweep itself is ``DataclassSweep`` in ``dataknobs_common.testing``, beside
+the reasons it builds a value rather than reading an annotation;
+``_dataclass_sweep`` here is the one-line binding that points it at this
+package, so this suite and the relation-spelling one share a walk.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from _dataclass_sweep import every_dataclass, import_failures, probe_hashability
+from _dataclass_sweep import SWEEP
 
 #: Types that claim ``Hashable`` and raise on a constructed instance.
 #:
@@ -98,8 +100,8 @@ UNCONSTRUCTIBLE: frozenset[str] = frozenset(
 def swept() -> dict[str, tuple[str, str]]:
     """Every dataclass this package defines whose type claims to be hashable."""
     return {
-        name: probe_hashability(cls)
-        for name, cls in sorted(every_dataclass().items())
+        name: SWEEP.probe_hashability(cls)
+        for name, cls in sorted(SWEEP.every_dataclass().items())
         if cls.__hash__ is not None
     }
 
@@ -149,7 +151,9 @@ def test_the_sweep_reaches_every_type_it_claims_to(
     above could shrink to nothing one unconstructible type at a time and stay
     green the whole way down.
     """
-    assert import_failures() == [], f"modules the sweep could not import: {import_failures()}"
+    assert SWEEP.import_failures() == [], (
+        f"modules the sweep could not import: {SWEEP.import_failures()}"
+    )
     unreached = {name for name, (verdict, _) in swept.items() if verdict == "unconstructible"}
     assert unreached - UNCONSTRUCTIBLE == set(), (
         "type(s) the builder can no longer construct, so the contract is "

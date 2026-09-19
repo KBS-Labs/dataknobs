@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from _dataclass_sweep import every_dataclass
+from _dataclass_sweep import SWEEP
 from dataknobs_common.ontology import (
     Assertion,
     AsyncMappingAssertionSource,
@@ -100,7 +100,7 @@ def _fields_declaring(matches: Callable[[str], bool]) -> set[str]:
     """
     return {
         name
-        for name, cls in every_dataclass().items()
+        for name, cls in SWEEP.every_dataclass().items()
         if any(
             isinstance(field.type, str) and matches(field.type) for field in dataclasses.fields(cls)
         )
