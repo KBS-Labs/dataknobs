@@ -1221,8 +1221,9 @@ async def test_the_open_reaches_a_store_that_spells_the_step_initialize() -> Non
     the hazard and not over the spelling, and no second spelling existed when
     it was written.
 
-    **The probe never has to choose.** Of the 698 public classes in the three
-    packages, none resolves both members.
+    **The probe never has to choose.** Of the 536 distinct public classes the
+    falsifier below reaches across the two packages --- 1,753 name bindings,
+    since a re-export binds one class twice --- none resolves both members.
     """
     registry = OntologyRegistry.from_components(config=OntologyConfig(**_authored()))
     store = MemoryVectorStore({"dimensions": 4})
