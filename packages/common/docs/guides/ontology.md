@@ -79,7 +79,7 @@ below runs against the file above, exactly as written.
 ```python
 from pathlib import Path
 
-from dataknobs_common import ancestors
+from dataknobs_common import Capability, ancestors
 from dataknobs_common.ontology import (
     AssertionHierarchy,
     build_resolver,
@@ -104,8 +104,10 @@ onto.assertions.find(subject="beagle", relation="isa")  # -> [Assertion(...)]
 
 # (4) leave with something spendable on your own data
 beagle.source  # SourceRef(clinic_db, ...)
-onto.entities.describe().capabilities  # frozenset() -- no ORIGIN_FETCH, so the
-# reference is yours to spend and not ours to dereference
+capabilities = onto.entities.describe().capabilities
+Capability.ORIGIN_FETCH in capabilities  # False -- the reference is yours to
+# spend and not ours to dereference
+Capability.SURFACE_FORM_LOOKUP in capabilities  # True -- step (1) is this one
 
 # (5) the same placement, ranked and with its reasons
 resolver = build_resolver(Path("mammals.yaml"), onto)
@@ -142,6 +144,31 @@ before any source is constructed over it. Reach for those two when you want the
 parse without the assembly; `load_ontology` is the whole path and is what most
 callers want.
 
+### Writing a door of your own
+
+A door is `build_ontology` for the parse, sources of your own over the result,
+and `assemble_ontology` (or `assemble_async_ontology`) to turn the two back
+into a vocabulary:
+
+```python
+from dataknobs_common.ontology import assemble_async_ontology, build_ontology
+
+parts = build_ontology(config)
+entities = MySource(parts.declared_entities)
+onto = await assemble_async_ontology(
+    parts,
+    entities=entities,
+    assertions=MyAssertions(parts.declared_assertions),
+    describes=(entities.describe(),),
+)
+```
+
+The assembler is published because the third door in this workspace is in
+another distribution — `OntologyRegistry`, in `dataknobs-data`, which binds
+live sources and owns their lifecycle. Everything a vocabulary carries that is
+not a bound source is the same for every door, so it is written once: a field
+added to `Ontology` reaches all three without anyone threading it three times.
+
 ## What one holds
 
 Ten fields, and the ones you read most are sources rather than containers:
@@ -150,7 +177,7 @@ Ten fields, and the ones you read most are sources rather than containers:
 |---|---|
 | `id`, `version` | the vocabulary's own identity |
 | `entity_types`, `relation_types` | the declared kinds, as `EntityType` and `RelationType` |
-| `entities` | an `EntitySource` — `get`, `get_many`, `by_surface_form`, `by_type`, `fetch_origin`, `describe` |
+| `entities` | an `EntitySource` — `get`, `get_many`, `by_surface_form`, `by_type`, `fetch_origin`, `fetch_origins`, `describe` |
 | `assertions` | an `AssertionSource` — `get`, `find`, `find_many` |
 | `taxonomies` | `TaxonomyDefinition` per declared axis, keyed by its own id |
 | `structures` | a materialized structure per axis, where one was asked for |
@@ -306,6 +333,30 @@ not there. An authored vocabulary carrying references into your production
 table is the ordinary case, not a broken one: the reference is yours to spend
 and not ours to dereference.
 
+`fetch_origins` asks the same question for a sequence of refs, and answers
+**positionally**: one slot per ref, in the order they were passed, with
+`len(result) == len(refs)`. A ref that reached no row is a `None` in its own
+slot.
+
+The obvious signature — `dict[SourceRef, Record]` — is not one any
+implementation can satisfy. `SourceRef` is compared field-wise, so that two
+references naming one row are one reference, and its `locator` is a mapping;
+a type that answers `Hashable` and then raises at the call is not a shape this
+package ships. A positional answer loses nothing by comparison: the caller
+already holds `refs`, so it can build any pairing it wants, while the misses a
+mapping would have dropped are in the result where they happened.
+
+```python
+origins = await onto.entities.fetch_origins([first.source, second.source])
+# [Record(...), None]  -- the second ref reached no row
+```
+
+The member exists for the round trips, not the rows: a live source answers N
+refs in one read where a loop over `fetch_origin` pays N. A source that cannot
+reach an origin at all answers all-`None` and withholds
+`Capability.ORIGIN_FETCH`, which is the same thing `fetch_origin` says one ref
+at a time.
+
 A `Provenance` records the other direction: where an assertion came from, who
 asserted it and when.
 
@@ -320,6 +371,38 @@ Two capabilities a source may have and need not, across three protocols:
 
 A source that implements one is used through it; a source that does not is
 used without it, and nothing degrades silently.
+
+### The one member that is partial
+
+`by_surface_form` is on the protocol rather than beside it, and is the one
+member a conforming source may decline. The fold is the **source's** —
+a caller hands the query as it was typed — and a source reading a live table
+holds the form as it was written, with no engine primitive folding at query
+time the way `str.casefold` does. Such a source withholds
+`Capability.SURFACE_FORM_LOOKUP` from `describe()` and raises
+`CapabilityNotSupportedError` when asked anyway, because `frozenset()` already
+means *ran and matched nothing* and a cascade falls through to a guessing rung
+on exactly that reading.
+
+An authored vocabulary declares the capability: its index folds every entity's
+id, name and aliases when it is built, which is what the member answers over.
+
+A rung reading the member declares `reads_surface_forms`, and refuses **at
+construction** over a source that withholds it rather than carrying a call that
+can only fail. `exact`, `scan` and `lexical` do; `alias` does not, because it
+reads `by_alias_form` and a vocabulary genuinely may declare no aliases.
+
+Both sources here answer the **capability contract**, so either question
+reaches the same answer — the probe on the description, and the guard the
+capability surface tells you to call:
+
+```python
+from dataknobs_common.capabilities import Capability, require_capability
+
+require_capability(onto.entities, Capability.SURFACE_FORM_LOOKUP)
+onto.entities.supported_capabilities()   # what this kind of source can do
+onto.entities.instance_capabilities()    # what this one does — describe()'s set
+```
 
 ## Taxonomies and how a tree is projected
 

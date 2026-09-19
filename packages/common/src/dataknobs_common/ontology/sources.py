@@ -17,9 +17,9 @@ twice; the flavour classes hold only the difference, which is the ``async``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
-from dataknobs_common.capabilities import Capability
+from dataknobs_common.capabilities import Capability, CapabilityLike, CapabilityMixin
 from dataknobs_common.hierarchy import K
 from dataknobs_common.ontology.model import (
     Assertion,
@@ -51,6 +51,21 @@ if TYPE_CHECKING:
 #: what kind of thing this is rather than that the field was not filled in.
 AUTHORED_SOURCE_ID = "authored"
 
+#: What an authored vocabulary can do, as one fact with one spelling.
+#:
+#: Read by the index that builds the description **and** declared by both
+#: twins as their ``SUPPORTED_CAPABILITIES``, because those are the two
+#: questions a consumer may ask -- ``describe().capabilities`` and
+#: :func:`~dataknobs_common.capabilities.require_capability` -- and two
+#: spellings of one answer drift in the direction that hurts: a guard saying
+#: no about a member that works sends every guarded caller down a fallback.
+#:
+#: :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP` and
+#: not ``ORIGIN_FETCH``: the index folds every entity's id, name and aliases
+#: when it is built, which is what the member answers over, and an authored
+#: file has no database behind it to reach an origin in.
+_AUTHORED_CAPABILITIES: frozenset[Capability] = frozenset({Capability.SURFACE_FORM_LOOKUP})
+
 
 @dataclass(eq=True, frozen=False)
 class SourceDescription:
@@ -66,7 +81,34 @@ class SourceDescription:
     """
 
     source_id: str
+
+    #: What is behind this source, in **whichever vocabulary the door that
+    #: built it had**. Three of them, and a caller reading this must not
+    #: assume one:
+    #:
+    #: * :data:`AUTHORED_SOURCE_ID` -- ``"authored"`` -- for a vocabulary a
+    #:   document declared, which has no backend to name;
+    #: * a **backend key** (``"memory"``, ``"sqlite"``) where a binding named
+    #:   one in a ``database:`` block, which is the string a consumer wrote;
+    #: * a **class name** (``"AsyncMemoryDatabase"``) where a handle was
+    #:   injected, because that door is handed an object and never a name.
+    #:
+    #: The third is not a spelling this could normalise into the second. A
+    #: handle carries no key of its own -- ``CONFIG_CLS`` is the nearest thing
+    #: and it names a config class, not a registered kind -- so the only route
+    #: from an object back to a key is a reverse lookup over the backend
+    #: registry, and resolving a key there *imports the module implementing
+    #: it*. Normalising one field would import every backend a process had not
+    #: already loaded, which is the cost the door that does resolve a key pays
+    #: deliberately, once, in a worker thread. The class name is the most
+    #: specific true thing available without it.
+    #:
+    #: So this is for a person to read and for a log line to carry. Switching
+    #: on it means pinning the door as well as the value, which is what the
+    #: one in-tree comparison does: it tests for ``AUTHORED_SOURCE_ID``, the
+    #: only value no backend and no class can produce.
     backend: str
+
     table: str | None
     projection: Mapping[str, Any]
     capabilities: frozenset[Capability]
@@ -128,11 +170,66 @@ class EntitySource(Protocol[K]):
 
     def fetch_origin(self, ref: SourceRef) -> Record | None: ...
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]: ...
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """:meth:`fetch_origin` over a sequence: one slot per ref, in order.
+
+        **Positional, because the obvious keying cannot be built.**
+        ``dict[SourceRef, Record]`` is what this member wants to say and is
+        not a type any implementation can return: :class:`SourceRef` is
+        compared field-wise so that two references naming one row are one
+        reference, its ``locator`` is a mapping, and a type that answers
+        :class:`~collections.abc.Hashable` and then raises at the call is the
+        shape this package refuses to ship. Both halves are right on their
+        own, so the mapping is the half that goes.
+
+        A positional answer is not the consolation prize. The caller already
+        holds ``refs``, so it can rebuild any pairing it wants; what a mapping
+        would have *lost* is in here instead -- a ref that reached no row is a
+        ``None`` in its own slot rather than an absent key, and two refs
+        naming one row stay two slots. ``len(result) == len(refs)``, always.
+
+        The element type is :meth:`fetch_origin`'s return type because that is
+        what this member is: the same question asked N times, answered in as
+        few reads as the backing allows. An implementation that cannot beat N
+        reads should still answer here rather than refuse -- the member is
+        about the caller's round trips, not the store's.
+
+        A source that cannot reach an origin at all withholds
+        :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH` from
+        :meth:`describe` and answers all-``None`` here, which is the same
+        thing :meth:`fetch_origin` says one ref at a time.
+        """
+        ...
 
     def describe(self) -> SourceDescription: ...
 
-    def by_surface_form(self, form: str) -> frozenset[K]: ...
+    def by_surface_form(self, form: str) -> frozenset[K]:
+        """The ids of entities carrying this form, **folded by the source**.
+
+        The fold is the source's own and is not the caller's to apply: a
+        rung hands this member the query as the person typed it, and the
+        source folds both sides with the normalizer it was built with --
+        :func:`~dataknobs_common.text.default_normalizer` unless one was
+        supplied. Folding in the caller instead would put the vocabulary's
+        own answer in the matcher's hands, and two matchers would fold two
+        ways over one vocabulary.
+
+        ``frozenset()`` means **ran and matched nothing**, which is what
+        every cascade reads it as before falling through to a guessing
+        rung. A source that cannot fold must not answer it: it withholds
+        :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP`
+        from :meth:`describe` and raises
+        :class:`~dataknobs_common.capabilities.CapabilityNotSupportedError`
+        when asked anyway, because an unfolded answer is indistinguishable
+        from a genuine miss and the caller takes its fallback for the wrong
+        reason.
+
+        Stated here rather than left to each implementation, and stated
+        once this protocol had a second implementor: a silent protocol is
+        how two packages came to answer one question two ways before
+        anyone noticed.
+        """
+        ...
 
     def by_type(self, type_id: str) -> frozenset[K]: ...
 
@@ -166,11 +263,42 @@ class AsyncEntitySource(Protocol[K]):
 
     async def fetch_origin(self, ref: SourceRef) -> Record | None: ...
 
-    async def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]: ...
+    async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """The synchronous twin's contract, unchanged by the ``await``.
+
+        One slot per ref, in order; ``len(result) == len(refs)``; a ref
+        that reached no row is a ``None`` in its own slot. See
+        :meth:`EntitySource.fetch_origins` for why the answer is positional
+        rather than the mapping it obviously wants to be.
+
+        This is the twin where the member earns its place. A live store
+        answers N refs in one round trip and a loop over
+        :meth:`fetch_origin` pays N, which is the whole difference between
+        the two members -- the answers are identical.
+        """
+        ...
 
     def describe(self) -> SourceDescription: ...
 
-    async def by_surface_form(self, form: str) -> frozenset[K]: ...
+    async def by_surface_form(self, form: str) -> frozenset[K]:
+        """The ids of entities carrying this form, **folded by the source**.
+
+        The synchronous twin's contract, unchanged by the ``await``:
+        the source folds with its own normalizer, ``frozenset()`` means
+        *ran and matched nothing*, and a source that cannot fold withholds
+        :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP`
+        and raises
+        :class:`~dataknobs_common.capabilities.CapabilityNotSupportedError`
+        rather than answering over an unfolded column. See
+        :meth:`EntitySource.by_surface_form`.
+
+        This twin is where the contract costs something to keep. A live
+        table holds the form as it was written and no engine folds the way
+        :meth:`str.casefold` does at query time, so a source over one
+        reads a lookup whose rows were folded when they were written, or
+        it declines.
+        """
+        ...
 
     async def by_type(self, type_id: str) -> frozenset[K]: ...
 
@@ -392,19 +520,39 @@ class _EntityIndex:
             # `SourceRef` still travels out intact: we cannot reach the row,
             # the caller can, and saying so costs one capability rather than
             # a caller's failed round trip.
-            capabilities=frozenset(),
+            #
+            # SURFACE_FORM_LOOKUP is present, and is what this index *is*:
+            # the `by_form` map folds every entity's id, name and aliases
+            # with the normalizer it was built with, so the member answers
+            # over forms already folded. Declared rather than left implicit
+            # because a probe on this field is what the capability's contract
+            # instructs a caller to guard with -- a source answering the
+            # member while reporting that it cannot sends every guarded
+            # caller down a fallback path, and a rung reading the field
+            # refuses to build over it.
+            capabilities=_AUTHORED_CAPABILITIES,
             declares=frozenset(self.by_type),
         )
 
 
-class MappingEntitySource:
+class MappingEntitySource(CapabilityMixin):
     """An :class:`EntitySource` over entities already in memory.
 
     Backs a hand-edited vocabulary. ``fetch_origin`` always answers ``None``
     and ``describe()`` says so, which is the honest arrangement: an authored
     file has no database behind it, and an entity's ``source:`` is a reference
     the *consumer* can spend on their own data even though we cannot.
+
+    **A capability contract host**, which is the other half of saying so.
+    ``describe().capabilities`` is where the protocol puts the answer, and
+    :func:`~dataknobs_common.capabilities.require_capability` is the guard
+    the capability surface tells a consumer to use -- and that guard reads
+    ``supports``, which an object without it answers ``False`` to for
+    everything. The source that always folds was refusing the guard for the
+    member it is built around.
     """
+
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = _AUTHORED_CAPABILITIES
 
     def __init__(
         self,
@@ -426,9 +574,22 @@ class MappingEntitySource:
         """Always None -- see the class docstring, and ``describe()``."""
         return None
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
-        """Always empty, for ``fetch_origin``'s reason."""
-        return {}
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """All ``None``, for ``fetch_origin``'s reason -- one per ref.
+
+        An authored vocabulary carries references into a table it cannot
+        reach, so every slot is the same answer :meth:`fetch_origin` gives
+        one at a time, and :meth:`describe` withholds
+        :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH` so a
+        caller need not make the call to find out.
+
+        The length is the part worth having. This member used to answer
+        ``{}`` and satisfied its declared type only because the value was
+        empty -- the one value of ``dict[SourceRef, Record]`` that could be
+        built. An all-``None`` list of the right length is a claim about the
+        refs that were passed, so it is a thing a test can be wrong about.
+        """
+        return [None] * len(refs)
 
     def describe(self) -> SourceDescription:
         """What this source is, including that its origins are unfetchable.
@@ -520,14 +681,19 @@ class MappingEntitySource:
         return self._index.longest_form_tokens()
 
 
-class AsyncMappingEntitySource:
+class AsyncMappingEntitySource(CapabilityMixin):
     """:class:`MappingEntitySource` with ``async`` on the members that read.
 
     Nothing here awaits anything -- the data is already in memory. The class
     exists so an ``AsyncOntology`` over an authored file satisfies the same
     protocol as one over a database, which is what lets a consumer swap the
     backing without rewriting the calls.
+
+    Its twin's capability contract too, and from the same constant: a
+    capability that differs by flavour is a bug in one of the two.
     """
+
+    SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = _AUTHORED_CAPABILITIES
 
     def __init__(
         self,
@@ -549,9 +715,13 @@ class AsyncMappingEntitySource:
         """Always None -- see :class:`MappingEntitySource`."""
         return None
 
-    async def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
-        """Always empty, for ``fetch_origin``'s reason."""
-        return {}
+    async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """All ``None``, for ``fetch_origin``'s reason -- one per ref.
+
+        See :meth:`MappingEntitySource.fetch_origins`; the ``await`` changes
+        nothing, because the answer never depended on reaching anything.
+        """
+        return [None] * len(refs)
 
     def describe(self) -> SourceDescription:
         """Synchronous on both twins -- it answers from configuration."""

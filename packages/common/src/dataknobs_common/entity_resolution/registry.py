@@ -26,7 +26,8 @@ beside the protocol is reachable from both.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from typing import Any
 
 from dataknobs_common.entity_resolution.protocols import AsyncMatchSignal, MatchSignal
 from dataknobs_common.entity_resolution.signals import (
@@ -41,10 +42,7 @@ from dataknobs_common.entity_resolution.signals import (
 )
 from dataknobs_common.registry import PluginRegistry
 
-if TYPE_CHECKING:
-    from typing import Any
-
-__all__ = ["async_signal_backends", "signal_backends"]
+__all__ = ["async_signal_backends", "declared_signal_metadata", "signal_backends"]
 
 
 #: Rungs a synchronous cascade can be built from.
@@ -139,14 +137,94 @@ def _make_async_lexical(config: dict[str, Any]) -> AsyncMatchSignal:
 _DECLARED_METADATA = {"flavour": "sync", "needs_io": False}
 _ASYNC_DECLARED_METADATA = {"flavour": "async", "needs_io": False}
 
-signal_backends.register("exact", _make_exact, metadata=_DECLARED_METADATA)
-signal_backends.register("alias", _make_alias, metadata=_DECLARED_METADATA)
-signal_backends.register("scan", _make_scan, metadata=_DECLARED_METADATA)
-signal_backends.register("lexical", _make_lexical, metadata=_DECLARED_METADATA)
-async_signal_backends.register("exact", _make_async_exact, metadata=_ASYNC_DECLARED_METADATA)
-async_signal_backends.register("alias", _make_async_alias, metadata=_ASYNC_DECLARED_METADATA)
-async_signal_backends.register("scan", _make_async_scan, metadata=_ASYNC_DECLARED_METADATA)
-async_signal_backends.register("lexical", _make_async_lexical, metadata=_ASYNC_DECLARED_METADATA)
+
+def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[str, Any]:
+    """This rung's registered metadata, with the facts read off the class.
+
+    ``reads_surface_forms`` is a property of the rung and is enforced by the
+    rung -- it refuses at construction over a source that withholds the
+    capability. It is *also* the fact a caller holding a composition and no
+    instances needs, which is the only reason it appears here as well: a
+    loader binding a live source refuses the document before anything is
+    built, and a registry is the one place it can ask.
+
+    ``bounded_by_longest_form`` is here for the same reason and answers a
+    different door's question: whether this rung's cost depends on a number
+    the source may not be able to supply. Both are derived rather than
+    restated, because two spellings of one fact drift and the drift is
+    silent: a rung marked here and not on the class refuses nothing, and a
+    rung marked on the class and not here is not refused early.
+
+    **Published because the drift it prevents is a property of the extension
+    point, not of this module.** A consumer registering their own rung writes
+    the same ``register(key, factory, metadata=...)`` call the four below
+    write, and a fact they restate by hand is one they can restate wrongly --
+    at which point the class-level guard still fires when the rung is
+    constructed, loudly, while every *load-time* refusal reading this registry
+    misses them. That is the exact asymmetry the derivation exists to close,
+    so it is reachable from wherever a rung is registered rather than from
+    here only.
+
+    **Read with a default rather than as an attribute**, because a rung need
+    not inherit :class:`~dataknobs_common.entity_resolution.DeclaredSignal` to
+    be registered -- ``AuthoritySignal`` is written against the bare protocol,
+    for the reason its own docstring gives, and an attribute access would make
+    this helper unusable by exactly the registrations that most need it. The
+    class attribute is the one spelling either way: a base supplies it to its
+    subclasses, a bare-protocol rung sets it itself, and a rung that declares
+    nothing gets the reading that refuses nothing.
+
+    Args:
+        rung: The class whose declarations are read. Not the factory -- a
+            factory may be a plain callable, which declares nothing
+        base: What this registration carries regardless of the rung, such as
+            its ``flavour`` and whether it ``needs_io``. Copied, not mutated,
+            so one base can serve both flavours
+
+    Returns:
+        A new dict: ``base``, plus each fact read off ``rung``.
+    """
+    return dict(
+        base,
+        reads_surface_forms=getattr(rung, "reads_surface_forms", False),
+        bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
+    )
+
+
+signal_backends.register(
+    "exact",
+    _make_exact,
+    metadata=declared_signal_metadata(ExactNormalizedSignal, _DECLARED_METADATA),
+)
+signal_backends.register(
+    "alias", _make_alias, metadata=declared_signal_metadata(AliasSignal, _DECLARED_METADATA)
+)
+signal_backends.register(
+    "scan", _make_scan, metadata=declared_signal_metadata(ScanningSignal, _DECLARED_METADATA)
+)
+signal_backends.register(
+    "lexical", _make_lexical, metadata=declared_signal_metadata(LexicalSignal, _DECLARED_METADATA)
+)
+async_signal_backends.register(
+    "exact",
+    _make_async_exact,
+    metadata=declared_signal_metadata(AsyncExactNormalizedSignal, _ASYNC_DECLARED_METADATA),
+)
+async_signal_backends.register(
+    "alias",
+    _make_async_alias,
+    metadata=declared_signal_metadata(AsyncAliasSignal, _ASYNC_DECLARED_METADATA),
+)
+async_signal_backends.register(
+    "scan",
+    _make_async_scan,
+    metadata=declared_signal_metadata(AsyncScanningSignal, _ASYNC_DECLARED_METADATA),
+)
+async_signal_backends.register(
+    "lexical",
+    _make_async_lexical,
+    metadata=declared_signal_metadata(AsyncLexicalSignal, _ASYNC_DECLARED_METADATA),
+)
 
 
 # A rung that exists in one flavour only is *declared* in the other with a

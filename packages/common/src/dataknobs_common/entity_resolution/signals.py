@@ -31,6 +31,7 @@ from math import ceil
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from dataknobs_common.callbacks import is_async_callable
+from dataknobs_common.capabilities import Capability
 
 from dataknobs_common.entity_resolution.protocols import (
     AliasFormSource,
@@ -569,6 +570,59 @@ def _refuse_catalogue(entities: object, protocol: str) -> NoReturn:
     )
 
 
+def _refuse_unfolded(entities: object, rung: str) -> None:
+    """Refuse a source that declines to fold, for a rung that reads its folds.
+
+    :func:`_refuse_catalogue`'s argument against the member one layer over:
+    ``by_surface_form`` answers ``frozenset()`` for *ran and matched nothing*,
+    a cascade falls through to a guessing rung on exactly that reading, and a
+    source that cannot fold has no way to produce any other answer. So it
+    withholds
+    :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP` and
+    raises when asked anyway -- and a rung that would do the asking refuses to
+    be built over it rather than carrying a call that can only fail.
+
+    **At construction**, which is where every other refusal in this module
+    happens and is what makes this one reach the composition nobody wrote: a
+    document declaring no ``resolver:`` gets the default rungs, so no
+    inspection of the document can see that two of them read the member. The
+    door that builds them holds both halves.
+
+    **Asked of** :meth:`~dataknobs_common.ontology.sources.EntitySource.describe`,
+    which is where the contract says the answer lives. A source that publishes
+    no ``describe`` is not asked and not refused: the check reads a published
+    answer rather than inferring one from a missing member, and an object
+    without that member does not satisfy the protocol this rung declares
+    anyway.
+
+    Args:
+        entities: The source the rung would read.
+        rung: The rung's registered key, so the message names what to remove
+            from the composition as well as what to fix in the binding.
+
+    Raises:
+        ValidationError: For a source whose ``describe()`` withholds the
+            capability.
+    """
+    describe = getattr(entities, "describe", None)
+    if describe is None:
+        return
+    if Capability.SURFACE_FORM_LOOKUP in describe().capabilities:
+        return
+    raise ValidationError(
+        f"{type(entities).__name__} withholds {Capability.SURFACE_FORM_LOOKUP.value}, "
+        f"so the {rung!r} rung has nothing it may fold a query against. That "
+        f"source holds its forms as they were written and no engine folds at "
+        f"query time the way str.casefold does, so by_surface_form would raise "
+        f"rather than answer -- and an empty answer, which is what this rung "
+        f"would otherwise have to report, already means the vocabulary was "
+        f"asked and matched nothing. Give the source a folded lookup to read, "
+        f"or compose a cascade without the rungs that read one -- each kind "
+        f"declares whether it does, as `reads_surface_forms` on the rung and "
+        f"in the registry it is registered under."
+    )
+
+
 def _window_chars(forms: Sequence[str], threshold: float) -> int:
     """The widest window, **in characters**, that could still clear ``threshold``.
 
@@ -917,6 +971,42 @@ class DeclaredSignal:
     #: did not spell sets :attr:`~EvidenceKind.INFERRED`.
     kind = EvidenceKind.DECLARED
 
+    #: Whether this rung reads
+    #: :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
+    #: -- **overridable**, and the fact a composition can be refused against
+    #: before anything is built. That member is *partial*: a source holding
+    #: its forms as they were written withholds
+    #: :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP`
+    #: and raises rather than answering over an unfolded column. A rung
+    #: setting this True is refused at construction over such a source
+    #: instead of carrying a call that can only fail -- so a consumer's own
+    #: rung reading the member declares the same thing and gets the same
+    #: guard. The default is False, which is the safe direction for a rung
+    #: nobody classified: a missed refusal surfaces as a loud error at the
+    #: first query, and a wrong one blocks a composition that works.
+    reads_surface_forms = False
+
+    #: Whether this rung's enumeration is bounded by the vocabulary's longest
+    #: declared form -- **overridable**, and the second fact a composition can
+    #: be refused against before anything is built.
+    #:
+    #: A rung setting this True probes every window of a query and asks the
+    #: source, through
+    #: :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`,
+    #: how wide a window can be. A source answering ``None`` cannot bound it,
+    #: and the enumeration is then *n(n+1)/2* probes for *n* tokens -- which
+    #: over an in-memory source is a dictionary lookup per probe and over one
+    #: that reaches for data is a round trip per probe. The two cases differ by
+    #: orders of magnitude and not by anything readable from this flag, so what
+    #: it enables is a *door's* refusal rather than a rule here: a door binding
+    #: a source that round-trips can ask which of a declared composition's
+    #: rungs depend on a number that source cannot supply.
+    #:
+    #: The default is False, matching :attr:`reads_surface_forms`' safe
+    #: direction: a rung nobody classified is not refused, and a wrong True
+    #: blocks a composition that works.
+    bounded_by_longest_form = False
+
     #: What kind of number this rung's score is -- **overridable**. The
     #: default marks it as carrying none, which is the truth for a rung whose
     #: hits carry no
@@ -944,6 +1034,8 @@ class DeclaredSignal:
             a second default fold could not be right. Handing one is how a
             caller matches differently from the way the index was built.
         """
+        if self.reads_surface_forms:
+            _refuse_unfolded(entities, self.key)
         self._entities = entities
         self._normalizer = _checked_callable(normalizer, "normalizer")
 
@@ -1058,6 +1150,7 @@ class ExactNormalizedSignal(DeclaredSignal):
     """Match a folded query against any form the vocabulary carries."""
 
     key = "exact"
+    reads_surface_forms = True
 
     def _hits(self, query: str) -> frozenset[str]:
         return self._entities.by_surface_form(query)
@@ -1155,6 +1248,8 @@ class ScanningSignal(DeclaredSignal):
     """
 
     key = "scan"
+    reads_surface_forms = True
+    bounded_by_longest_form = True
 
     def __init__(
         self,
@@ -1260,6 +1355,7 @@ class LexicalSignal(DeclaredSignal):
     """
 
     key = "lexical"
+    reads_surface_forms = True
 
     kind = EvidenceKind.INFERRED
     scoring = Scoring.NATIVE
@@ -1417,6 +1513,42 @@ class AsyncDeclaredSignal:
     #: did not spell sets :attr:`~EvidenceKind.INFERRED`.
     kind = EvidenceKind.DECLARED
 
+    #: Whether this rung reads
+    #: :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
+    #: -- **overridable**, and the fact a composition can be refused against
+    #: before anything is built. That member is *partial*: a source holding
+    #: its forms as they were written withholds
+    #: :attr:`~dataknobs_common.capabilities.Capability.SURFACE_FORM_LOOKUP`
+    #: and raises rather than answering over an unfolded column. A rung
+    #: setting this True is refused at construction over such a source
+    #: instead of carrying a call that can only fail -- so a consumer's own
+    #: rung reading the member declares the same thing and gets the same
+    #: guard. The default is False, which is the safe direction for a rung
+    #: nobody classified: a missed refusal surfaces as a loud error at the
+    #: first query, and a wrong one blocks a composition that works.
+    reads_surface_forms = False
+
+    #: Whether this rung's enumeration is bounded by the vocabulary's longest
+    #: declared form -- **overridable**, and the second fact a composition can
+    #: be refused against before anything is built.
+    #:
+    #: A rung setting this True probes every window of a query and asks the
+    #: source, through
+    #: :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`,
+    #: how wide a window can be. A source answering ``None`` cannot bound it,
+    #: and the enumeration is then *n(n+1)/2* probes for *n* tokens -- which
+    #: over an in-memory source is a dictionary lookup per probe and over one
+    #: that reaches for data is a round trip per probe. The two cases differ by
+    #: orders of magnitude and not by anything readable from this flag, so what
+    #: it enables is a *door's* refusal rather than a rule here: a door binding
+    #: a source that round-trips can ask which of a declared composition's
+    #: rungs depend on a number that source cannot supply.
+    #:
+    #: The default is False, matching :attr:`reads_surface_forms`' safe
+    #: direction: a rung nobody classified is not refused, and a wrong True
+    #: blocks a composition that works.
+    bounded_by_longest_form = False
+
     #: What kind of number this rung's score is -- **overridable**. The
     #: default marks it as carrying none, which is the truth for a rung whose
     #: hits carry no
@@ -1441,6 +1573,8 @@ class AsyncDeclaredSignal:
         normalizer: An **extra** fold, applied before the source's own.
             ``None``, the default, means the source's fold is the only one.
         """
+        if self.reads_surface_forms:
+            _refuse_unfolded(entities, self.key)
         self._entities = entities
         self._normalizer = _checked_callable(normalizer, "normalizer")
 
@@ -1497,6 +1631,7 @@ class AsyncExactNormalizedSignal(AsyncDeclaredSignal):
     """:class:`ExactNormalizedSignal` over an asynchronous source."""
 
     key = "exact"
+    reads_surface_forms = True
 
     async def _hits(self, query: str) -> frozenset[str]:
         return await self._entities.by_surface_form(query)
@@ -1554,6 +1689,8 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
     """
 
     key = "scan"
+    reads_surface_forms = True
+    bounded_by_longest_form = True
 
     def __init__(
         self,
@@ -1606,6 +1743,7 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
     """
 
     key = "lexical"
+    reads_surface_forms = True
 
     kind = EvidenceKind.INFERRED
     scoring = Scoring.NATIVE

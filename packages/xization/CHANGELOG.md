@@ -27,7 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Importing `dataknobs_xization` registers both flavours under
   `kind: "authority"`, which is also what clears the mark `dataknobs_common`
-  leaves for the key it declares and cannot implement.
+  leaves for the key it declares and cannot implement. The metadata that
+  registration carries is built by `declared_signal_metadata()` rather than
+  written out here, so `reads_surface_forms` and `bounded_by_longest_form` are
+  the rung's own answer — both False, because an authority stack holds no
+  folded form table and enumerates no window — and a door refusing a
+  composition before it builds anything gets an answer rather than a missing
+  key.
 
   **The evidence is `DECLARED` at 1.0**, like every rung over forms a
   vocabulary carries, and the entity id is the authority's own value id ---

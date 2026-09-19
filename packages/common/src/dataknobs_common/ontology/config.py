@@ -8,6 +8,17 @@ discriminated by a ``kind:`` their entries carry, and the set of kinds is a
 registry read rather than a list this module could close over -- so typing them
 here would mean naming, in ``dataknobs-common``, kinds that other packages
 register. The loader validates what it needs and hands the rest on.
+
+``index:`` and ``event_bus:`` are raw for a different reason, and it is worth
+saying which. ``index:``'s blocks are ``$resource`` references into binding
+categories -- ``vector_stores``, ``embedders`` -- whose concrete types belong
+to ``dataknobs-data`` and ``dataknobs-llm``, and ``event_bus:`` names a backend
+whose drivers are optional installs. There is no discriminator to leave open in
+either; there is a package boundary. The reader that resolves both is
+``dataknobs_data.ontology.OntologyRegistry``, which is also the only door that
+binds a live source, for the same reason: it owns a lifecycle and a
+module-level loader does not -- so a module-level loader reads neither section
+and ignores both.
 """
 
 from __future__ import annotations
@@ -56,6 +67,13 @@ class OntologyConfig(StructuredConfig):
         index: The semantic index's configuration, raw
         resolver: The placement cascade's configuration, raw, because its
             ``rungs`` are themselves discriminated by ``kind:``
+        event_bus: The bus a registry announces this vocabulary's arrival and
+            departure on, raw, for ``index:``'s reason. A field rather than a
+            key read off the mapping beside it: every published construction
+            door coerces its argument to this class before a consumer sees it,
+            so a section that is not declared here does not survive the trip
+            and a door reading one off the raw document disagrees with a door
+            that cannot
     """
 
     id: str
@@ -70,6 +88,7 @@ class OntologyConfig(StructuredConfig):
     taxonomies: list[Mapping[str, Any]] = field(default_factory=list)
     index: Mapping[str, Any] | None = None
     resolver: Mapping[str, Any] | None = None
+    event_bus: Mapping[str, Any] | None = None
 
     # Declared unhashable, because every field above but two is a list or a
     # mapping. See the class docstring for why this spelling and not

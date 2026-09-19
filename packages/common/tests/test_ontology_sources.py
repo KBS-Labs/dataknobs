@@ -121,7 +121,8 @@ def test_a_source_ref_travels_out_intact_while_the_origin_does_not(
         locator={"table": "species", "key": "sp-2291"},
     )
     assert onto.entities.fetch_origin(beagle.source) is None
-    assert onto.entities.fetch_origins([beagle.source]) == {}
+    assert onto.entities.fetch_origins([beagle.source]) == [None]
+    assert onto.entities.fetch_origins([beagle.source, beagle.source]) == [None, None]
 
 
 def test_describe_says_the_origins_are_unfetchable(mammals_path: Path) -> None:

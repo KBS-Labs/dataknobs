@@ -10,6 +10,7 @@ different backend database implementations.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import hashlib
 import json
@@ -1328,22 +1329,37 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         from .backend_selection import build_backend, select_backend
         from .backends import async_backends
 
-        # Through the same resolution the factories use. Written inline
-        # here, this was the one path left saying "Unknown backend" for a
-        # correctly spelled backend whose driver is absent, and listing
-        # every alias where the factories list one name per backend.
-        backend_class, backend_type, options = select_backend(
-            {**(config or {}), "backend": backend},
-            async_backends,
-            kind="async database",
-        )
-        # Annotated because ``build_backend`` narrows a registry's
-        # ``type[T] | Callable[..., T]`` union and returns ``Any``; the
-        # registry is parameterised by the backend class rather than by an
-        # instance of it, so the instance type is asserted here.
-        instance: AsyncDatabase = build_backend(
-            backend_class, options, kind="async database", backend_type=backend_type
-        )
+        def _resolve_and_build() -> AsyncDatabase:
+            """Name to instance, all of it synchronous, none of it on the loop.
+
+            Through the same resolution the factories use. Written inline
+            here, this was the one path left saying "Unknown backend" for a
+            correctly spelled backend whose driver is absent, and listing
+            every alias where the factories list one name per backend.
+            """
+            backend_class, backend_type, options = select_backend(
+                {**(config or {}), "backend": backend},
+                async_backends,
+                kind="async database",
+            )
+            # Annotated because ``build_backend`` narrows a registry's
+            # ``type[T] | Callable[..., T]`` union and returns ``Any``; the
+            # registry is parameterised by the backend class rather than by an
+            # instance of it, so the instance type is asserted here.
+            built: AsyncDatabase = build_backend(
+                backend_class, options, kind="async database", backend_type=backend_type
+            )
+            return built
+
+        # Offloaded because both halves block. Resolving the name imports the
+        # backend implementation through ``PluginRegistry``'s
+        # ``on_first_access`` hook, which reads the module off disk, and a
+        # file backend's config normalizes a path while it is built. Neither
+        # is I/O this method can avoid doing; both are I/O it can avoid doing
+        # on the caller's loop, where a multi-tenant server would stall every
+        # other task for the duration. ``OntologyRegistry._database_handle``
+        # offloads the same resolution for the same reason.
+        instance = await asyncio.to_thread(_resolve_and_build)
         await instance.connect()
         return instance
 

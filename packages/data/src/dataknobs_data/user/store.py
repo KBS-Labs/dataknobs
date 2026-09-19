@@ -49,6 +49,7 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Callable, Mapping
@@ -879,8 +880,16 @@ class AsyncUserStateStore(
             options: dict[str, Any] = {}
             if self.config.backend is not None:
                 options["backend"] = self.config.backend
-            self._db = async_database_factory.create(**options)
+            # Built in a worker thread because the factory's first access to a
+            # backend imports its module off disk, which would otherwise run on
+            # the caller's loop.
+            self._db = await asyncio.to_thread(async_database_factory.create, **options)
             self._owns_db = True
+            # Opened because it is ours to open. ``close()`` releases exactly
+            # the handles this branch built (``close_if_owned``), and a close
+            # with no matching open left the store usable only with the one
+            # backend that needs no connection.
+            await self._db.connect()
 
     def _adopt_components(
         self,
@@ -1433,6 +1442,9 @@ class UserStateStore(
                 options["backend"] = self.config.backend
             self._db = database_factory.create(**options)
             self._owns_db = True
+            # Opened because it is ours to open -- see the async twin; the
+            # ``close_if_owned_sync`` in ``close()`` is the other half.
+            self._db.connect()
 
     def _adopt_components(
         self,

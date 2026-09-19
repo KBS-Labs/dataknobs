@@ -9,6 +9,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DeclaredSignal.bounded_by_longest_form`**, on both twins, declaring
+  whether a rung's enumeration is bounded by the vocabulary's longest declared
+  form. `ScanningSignal` and `AsyncScanningSignal` set it; the default is
+  False, matching `reads_surface_forms`' safe direction. Derived into the
+  signal registries' metadata by `declared_signal_metadata()`, so a door
+  holding a declared composition and no instances can ask which of its rungs
+  depend on a number the source it is about to bind cannot supply — and refuse
+  before anything is built.
+
+- **`declared_signal_metadata(rung, base)`**, exported from
+  `dataknobs_common.entity_resolution`: the registered metadata for a rung,
+  with `reads_surface_forms` and `bounded_by_longest_form` read off the class
+  rather than restated beside it. Registering a rung is the extension point,
+  and both keys are read at *load* time by doors that hold a composition and
+  no instances — so a registration that omits one is not refused, it is never
+  asked about, while the rung's own construction-time guard still fires. The
+  facts are read with a default, so a rung written against the bare
+  `MatchSignal` protocol rather than against `DeclaredSignal` can use it too;
+  the class attribute is the single spelling in either case.
+
+- **`OPTIONAL_COMPONENTS` on `StructuredConfigConsumer`**, with
+  `optional_components()` and `accepted_components()` beside the existing
+  `expected_components()`. `EXPECTED_COMPONENTS` means *must be supplied* and
+  feeds `missing_components()` / `require_components()`; there was no spelling
+  for a collaborator a consumer genuinely accepts and genuinely does not
+  require. Declared in the only field there was, such a collaborator makes a
+  correctly built consumer report itself under-wired --- the diff names it and
+  the loud check raises, on an object with nothing wrong with it.
+
+  The new field is read by `accepted_components()` alone. `missing_components()`,
+  `missing_from()` and `require_components()` still read
+  `EXPECTED_COMPONENTS` only, because an optional collaborator can never be
+  missing and a second field feeding those diffs would be the first field
+  again under a new name. A caller writing a `from_components(...)` call reads
+  the union; a composing parent checking what it must satisfy reads the
+  required half.
+
+- **`Capability.SURFACE_FORM_LOOKUP`**, and the contract it declares. An
+  `EntitySource` answers `by_surface_form` from forms **it** folded, with
+  `default_normalizer` unless it was built with another --- and `frozenset()`
+  means *ran and matched nothing*, which is what every cascade reads it as
+  before falling through to a guessing rung. A source that cannot fold now has
+  a way to say so: it withholds this capability from `describe()` and raises
+  `CapabilityNotSupportedError` when asked, rather than answering over
+  unfolded values. Both protocol twins state it; it had lived only in the
+  in-memory implementation's private index, which is one implementation away
+  from two packages answering the same question two ways.
+
+  The contract has a **reader** as well as a writer. `MappingEntitySource` and
+  its async twin declare the capability --- the index folds every entity's id,
+  name and aliases when it is built, which is exactly what the member answers
+  over --- and a rung that reads the member refuses at construction over a
+  source that withholds it, rather than carrying a call that can only fail.
+  Each rung kind declares whether it reads folded forms, as
+  `reads_surface_forms` on the class and in the registry it is registered
+  under; `exact`, `scan` and `lexical` do, `alias` does not. A consumer's own
+  rung declares the same thing and gets the same guard.
+
+  This reaches the composition **nobody wrote**, which is the one that needed
+  it: a document declaring no `resolver:` section gets the default rungs, two
+  of whose three read the member, and no inspection of the document can see
+  that. The refusal is where the rungs are constructed, which is the one place
+  holding both the composition and the source.
+
+- **`assemble_ontology` / `assemble_async_ontology`**, exported from
+  `dataknobs_common.ontology`. Everything a vocabulary carries that is not a
+  bound source --- the id, the version, the two type tables, the taxonomy
+  definitions, the imports, the codec, and which structure axes are copied at
+  load --- comes off an `OntologyParts` and is the same for every door, so it
+  is written once and the doors pass only what differs:
+
+  ```python
+  parts = build_ontology(config)
+  entities = MySource(parts.declared_entities)
+  onto = await assemble_async_ontology(
+      parts,
+      entities=entities,
+      assertions=MyAssertions(parts.declared_assertions),
+      describes=(entities.describe(),),
+  )
+  ```
+
+  Published because the third door is in another distribution:
+  `OntologyRegistry` (`dataknobs-data`) binds live sources and owns their
+  lifecycle, and assembled a vocabulary of its own. A field added to
+  `Ontology` now reaches all three doors rather than needing to be threaded
+  three times, across a package boundary, with nothing checking.
+
+- **`event_bus:` on `OntologyConfig`**, raw, beside `index:` and `resolver:`
+  and for their reason: a section whose backends belong to other packages,
+  which a module-level loader ignores and a registry reads. It is a declared
+  field rather than a key read off the mapping beside it because every
+  published construction door coerces its argument to this class first, so a
+  section this class does not declare does not survive the trip.
+
 - **`LexicalSignal` / `AsyncLexicalSignal` --- a rung for the query that does
   not spell the form.** Every other rung here answers a lookup, so a query
   carrying a typo reaches none of them. This one compares each window of the
@@ -170,6 +265,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`EntitySource.fetch_origins` and its async twin now answer
+  `list[Record | None]`**, one slot per ref in the order they were passed,
+  rather than `dict[SourceRef, Record]`. The mapping was not a type any
+  implementation could return: `SourceRef` is compared field-wise so that two
+  references naming one row are one reference, its `locator` is a mapping, and
+  a type that answers `Hashable` and then raises at the call is not a shape
+  this package ships. Every implementation that existed answered `{}` and
+  satisfied the declaration only by being empty --- the single value of that
+  type anything could build.
+
+  A positional answer loses nothing to the mapping and reports what it would
+  have dropped: the caller already holds `refs`, so any pairing it wants is
+  reconstructible, while a ref that reached no row is a `None` in its own slot
+  instead of an absent key, and two refs naming one row stay two slots.
+  `len(result) == len(refs)`, always. `MappingEntitySource` and its async twin
+  answer all-`None` of the right length, which is a claim about the refs
+  passed rather than a value that was correct only because it was empty.
+
 - **`Coverage` counts `DECLARED` evidence spans**, where it counted every
   span that was not `None`. No shipped composition changes: until
   `LexicalSignal` there was no rung whose evidence was `INFERRED` *and*
@@ -205,6 +318,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where it did not; a candidate's is the best of its hits'.
 
 ### Fixed
+
+- **The authored entity sources answer the guard their description
+  declares.** `MappingEntitySource` and its async twin report
+  `Capability.SURFACE_FORM_LOOKUP` from `describe()` and had no `supports`
+  member at all --- and `require_capability` / `supports_capability`, the
+  pre-call guards this surface tells a consumer to use, duck-type on that
+  member and read its absence as *no*. So the guard refused the one source
+  that always folds, for the capability it is built around. Both twins take
+  the contract from `CapabilityMixin` now, over a single constant that the
+  index building the description also reads, so the two answers cannot
+  drift.
+
+- **`supports_capability` is in `dataknobs_common.capabilities.__all__`**
+  alongside `require_capability`. It was reachable by name and absent from
+  the export list, so the non-raising half of a documented pair was missing
+  from `import *` and from anything reading the module's declared surface.
 
 - **A source publishing an index member in the wrong flavour is refused by
   name.** `AliasSignal` checks `isinstance(..., AliasFormSource)` before asking

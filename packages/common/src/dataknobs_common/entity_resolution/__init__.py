@@ -65,6 +65,7 @@ from dataknobs_common.entity_resolution.protocols import (
 )
 from dataknobs_common.entity_resolution.registry import (
     async_signal_backends,
+    declared_signal_metadata,
     signal_backends,
 )
 from dataknobs_common.entity_resolution.signals import (
@@ -142,6 +143,7 @@ __all__ = [
     "async_signal_backends",
     "content_span",
     "declared_candidates",
+    "declared_signal_metadata",
     "finish",
     "merge_rung",
     "signal_backends",

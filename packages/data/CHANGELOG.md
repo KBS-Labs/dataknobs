@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`stream_read` on both Postgres backends applies the filters it was
+  given.** Each twin open-coded its own WHERE construction and emitted a
+  clause only for `Operator.EQ`, so every other operator was dropped in
+  silence and a caller who swapped `search` for `stream_read` to bound
+  memory got back rows it had filtered out. The async twin carried a second,
+  louder half: its placeholder counter advanced once per *filter* while its
+  argument list grew only for EQ, so one non-EQ filter ahead of an EQ one
+  shifted every later placeholder past its argument and the SQL named a `$N`
+  nothing had bound.
+
+  Both now route through `SQLQueryBuilder.build_where_clause` — the builder
+  each class already held and `search` already used, which is why the two
+  doors disagreed at all. `search` and `stream_read` over one `Query` now
+  return the same rows. Verified against a real server.
+
+- **The user-state store connects the database it builds.** `close()`
+  released the backing handle when the store owned it; nothing opened it.
+  Every existing test names `backend: "memory"`, where `connect()` is a
+  no-op — so the gap cost nothing there and every backend that *has* a
+  connection raised *Database not connected* on first use. Both twins now
+  open what they own, and both still leave an injected handle alone, which
+  is the boundary the teardown half already respected.
+
+- **`AsyncDatabase.from_backend` resolves and builds off the event loop.**
+  Resolving a backend name imports its implementation through
+  `PluginRegistry`'s `on_first_access` hook, which reads the module off
+  disk, and a file backend's config normalizes a path as it is built — both
+  ran on the caller's loop, stalling every other task on it. The
+  synchronous work moves into `asyncio.to_thread`, which is what
+  `OntologyRegistry._database_handle` already does with the same resolution.
+  A refusal for an unrecognised backend still surfaces unchanged.
+
 - **A failed batch insert is no longer reported as a success when
   `error_handling="raise"`.** `BatchOperations.bulk_insert_dataframe` retries a
   failed `create_batch` one row at a time — which is what identifies *which*
@@ -136,6 +168,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     route happened to be found first.
 
 ### Added
+
+- **`dataknobs_data.ontology` --- an ontology over a table you already have.**
+  `OntologyRegistry` loads an ontology document, binds its declared source to a
+  configured database, and closes what it opened. It is the object the
+  `dataknobs-common` loaders point at when they refuse a live source: binding
+  one creates something that must be closed, and a module-level function owns
+  no lifecycle to do that with.
+
+  ```python
+  from dataknobs_config import EnvironmentAwareConfig
+  from dataknobs_data.ontology import OntologyRegistry
+
+  cfg = EnvironmentAwareConfig.load_app("catalog")
+  registry = await OntologyRegistry.from_config_async(
+      cfg.resolve_for_build("ontology")
+  )
+  onto = registry.get("catalog")
+  entity = await onto.entity(onto.localize("catalog:sku-4471"))
+  entity.name                                     # "Beagle"
+  await registry.close()
+  ```
+
+  Two doors, and which config form each takes is the distinction between them:
+  `from_config_async` takes the **resolved** form, `load()` takes the
+  **portable** one --- `$resource` references intact and `${VAR}` unexpanded,
+  which is the form a deployment stores --- and resolves it through the
+  registry's own `environment=` and `strict_resources=`. `from_components`
+  takes handles already built, for a caller with no environment and no file.
+  A `$resource` this environment does not define **raises** by default:
+  the reference block carries no inline defaults to degrade to, so leniency
+  over it produces an entity source built over an empty config rather than one
+  reading the wrong catalogue. Pass `strict_resources=None` to hand the level
+  back to the environment's own setting.
+
+  `RecordEntitySource` projects rows through an `EntityProjection` that is
+  **configuration, not a callable** --- which is what keeps the mapping
+  invertible. Every bare scalar names a column and may be a dotted path into a
+  JSON value; the braced forms are the ones that do something else. A binding
+  declares the columns it projects and is rejected at load without them, and a
+  projection naming a column that declaration lacks is rejected naming the
+  column. Nothing here interpolates a name into a query.
+
+  A binding read by a rung that *reads folded forms* also declares **where
+  those forms live**, and is rejected at load without that. Which rungs those
+  are is read from what each kind declares about itself --- `exact`, `scan`
+  and `lexical` today, and a rung a consumer registers without an edit here:
+
+  ```yaml
+  entity_projection:
+    table: products
+    id: sku
+    name: title
+    aliases: {column: alt_names, split: ","}
+    surface_forms:                # one row per (folded form, entity)
+      table: product_forms
+      form: folded_form           # holds normalizer(form)
+      entity: sku
+  ```
+
+  A `scan` rung additionally needs `surface_forms.longest_form_tokens:`, and a
+  document declaring one over a binding without it is rejected at load. A
+  scanning rung probes every window of a query and bounds that enumeration by
+  the vocabulary's longest declared form; an authored index counts its own
+  keys, and a live table cannot be counted --- a count taken at load is stale
+  as soon as a row is written. Unbounded the scan spends *n(n+1)/2* reads per
+  query, each one a round trip. No default is invented, because a bound
+  shorter than a real form makes that form silently unfindable.
+
+  The fold a surface-form lookup compares by is `str.casefold`, and no engine
+  performs it at query time --- so the fold happens before the row is written
+  or it does not happen at all. A source with no declared lookup **refuses**
+  `by_surface_form` rather than answering over the unfolded column, because an
+  unfolded answer is indistinguishable from a genuine miss and a cascade falls
+  through to a guessing rung on exactly that reading. The same callable folds
+  both halves: `normalizer=` is the parameter the in-memory source already
+  carries.
+
+  **How many handles a binding needs is the backend's answer.** `sqlite`,
+  `postgres` and `duckdb` declare a `table` on their config, so a projection
+  naming two tables gets a handle each. On `memory`, `file`, `s3` and
+  `elasticsearch` the handle *is* the store: both kinds of row live in one, the
+  form column tells them apart, and an entity row must therefore not carry it.
+  Through `from_components` the handles are injected rather than opened, and a
+  binding needing two takes `forms_database=` beside `database=` --- a handle
+  that addresses one table, handed a projection naming two, is refused at load
+  rather than answering `frozenset()` from the wrong table.
+
+  **Two bindings may not share a store they cannot be told apart in.** Because
+  `table:` decides whether a second handle is opened rather than narrowing any
+  read, two ontologies in one registry binding one `$resource` on those four
+  backends and projecting different tables would get one store and no
+  separation --- `by_type` answering with the other binding's ids, `get()`
+  answering with its row under the wrong type, `by_surface_form` matching its
+  form rows, none of it an error. The second load is refused instead, naming
+  both bindings and the ontology already holding the store. Two bindings
+  declaring the *same* tables are left alone, since reading one table two ways
+  is a decision. The question is asked of the handle rather than of the backend,
+  which is what also covers the injected door: one handle serves every document
+  loaded through `from_components`, and where that handle is itself
+  table-addressed it is fixed on the one table it was built for.
+
+  `get()` is a query rather than a read, because the projection's `id:` is not
+  the storage id. `get_many` and `fetch_origins` are one `IN` filter rather
+  than a round trip per id, split into batches so no single read exceeds what a
+  backend will answer or how many parameters it will bind. `fetch_origins`
+  answers one slot per ref, in order, so a miss is read in the slot it was
+  asked about. `by_type` streams. The registry is an async context manager, so
+  `async with registry:` closes what it opened.
+
+  Loading, unloading and rebuilding are announced on an injected or configured
+  `EventBus` as a topic and a type, with nothing added to `EventType`. A
+  rebuild carries three sets --- gone, arrived, and *changed name while keeping
+  its id* --- because a two-set delta reports a rename as no change at all, and
+  each axis topic carries the delta over *its own* nodes so a subscriber to
+  `taxonomy:colours` is not told about a rename in `taxonomy:sizes`. The
+  whole-population delta is the ontology's own topic. A registry holds **one**
+  bus for every vocabulary it loads, so the first one wins --- an injected bus
+  over a configured block, and the first configured block over a later one ---
+  and a document whose `event_bus:` is passed over is reported at `INFO`
+  naming which kind of bus is already held, rather than left to read as a bus
+  that never publishes.
+  `close()` releases every handle the registry opened and leaves every handle
+  it was handed; it does not unload, and `unload()` does not close, because the
+  vocabulary `get()` hands back is a value that outlives its entry.
 
 - **`known_backend_classes`**, on `dataknobs_data.backend_selection` with
   `KnownBackend`, for a caller that wants to read something off every backend

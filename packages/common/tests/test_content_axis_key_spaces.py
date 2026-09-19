@@ -85,6 +85,18 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "async_load_ontology", "normalizer", "text"),
     ("<module>", "async_load_ontology", "source", "payload"),
     ("<module>", "async_load_ontology", "->", "bound"),
+    # The assembly the three doors share. `bound` throughout, for the doors'
+    # reason and by the same route: the sources handed in are the ones a door
+    # bound over a document, and a document's ids are the strings its author
+    # typed. The predicate these two call -- which axes to copy -- was briefly
+    # published for the third door and is private again now that the door
+    # calls the assembly instead, so its two rows are gone from here.
+    ("<module>", "assemble_async_ontology", "assertions", "bound"),
+    ("<module>", "assemble_async_ontology", "entities", "bound"),
+    ("<module>", "assemble_async_ontology", "->", "bound"),
+    ("<module>", "assemble_ontology", "assertions", "bound"),
+    ("<module>", "assemble_ontology", "entities", "bound"),
+    ("<module>", "assemble_ontology", "->", "bound"),
     ("<module>", "build_resolver", "config", "payload"),
     ("<module>", "build_resolver", "ontology", "bound"),
     ("<module>", "build_resolver", "->", "bound"),
@@ -93,6 +105,12 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "declared_candidates", "query", "text"),
     ("<module>", "declared_candidates", "admitted", "key"),
     ("<module>", "declared_candidates", "->", "key"),
+    # A registration's metadata: the `str` is the key a door looks a fact up
+    # by -- "flavour", "needs_io", "reads_surface_forms", or one a consumer
+    # coins for their own rung. An open label, which is what every other
+    # `metadata` row here is classified as.
+    ("<module>", "declared_signal_metadata", "base", "payload"),
+    ("<module>", "declared_signal_metadata", "->", "payload"),
     ("<module>", "finish", "->", "bound"),
     ("<module>", "load_ontology", "normalizer", "text"),
     ("<module>", "load_ontology", "source", "payload"),
@@ -408,7 +426,7 @@ _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 310
+_ROWS = 318
 
 
 def _modules() -> Iterator[ast.Module]:

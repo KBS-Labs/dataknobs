@@ -957,6 +957,44 @@ children opaquely via `forwardable_components()` and does **not** yet
 auto-enforce a child's declared `EXPECTED_COMPONENTS` — enforcement is the
 consumer's own opt-in call.
 
+#### Declaring optional collaborators: `OPTIONAL_COMPONENTS`
+
+Not every injection point is a requirement. A consumer that *accepts* a
+collaborator but resolves its own when none arrives declares it in
+`OPTIONAL_COMPONENTS` instead:
+
+```python
+class Registry(StructuredConfigConsumer[RegistryConfig]):
+    CONFIG_CLS: ClassVar[type[RegistryConfig]] = RegistryConfig
+    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"database", "event_bus"})
+```
+
+A name belongs here when both halves hold: `from_components` really takes
+it and the object behaves differently when it arrives, **and** the object is
+complete without it. Declared under `EXPECTED_COMPONENTS` instead, such a
+name makes a correctly built consumer report itself under-wired —
+`missing_components()` names it and `require_components()` raises, on an
+object with nothing wrong with it. That reading is what `OntologyRegistry` in
+`dataknobs-data` ran into, and this field is what it produced — which is why
+the two halves above are a rule rather than a preference.
+
+`OPTIONAL_COMPONENTS` is read by **one** helper, and deliberately not by the
+diffs:
+
+```python
+Registry.expected_components()   # frozenset()                      — what it requires
+Registry.optional_components()   # {"database", "event_bus"}        — what it accepts
+Registry.accepted_components()   # {"database", "event_bus"}        — the union
+
+Registry.from_config({...}).missing_components()   # frozenset() — nothing is required
+```
+
+`missing_components()`, `missing_from()` and `require_components()` read
+`EXPECTED_COMPONENTS` only: an optional collaborator can never be *missing*,
+and a second field feeding those diffs would be the first field again under a
+new name. Write a `from_components(...)` call against `accepted_components()`;
+check whether you can satisfy a child against `expected_components()`.
+
 #### Async registry dispatch: `create_async`
 
 When a registry dispatches polymorphic, asynchronously-constructed

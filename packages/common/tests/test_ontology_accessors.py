@@ -65,7 +65,7 @@ class _RecordingEntitySource:
     def fetch_origin(self, ref: SourceRef) -> Record | None:
         return self._inner.fetch_origin(ref)
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
         return self._inner.fetch_origins(refs)
 
     def describe(self) -> SourceDescription:

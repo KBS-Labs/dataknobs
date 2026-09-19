@@ -24,7 +24,7 @@ because ``get`` returns ``Entity | None`` and the page should say so.
 
 from pathlib import Path
 
-from dataknobs_common import ancestors
+from dataknobs_common import Capability, ancestors
 from dataknobs_common.ontology import (
     AssertionHierarchy,
     build_resolver,
@@ -49,8 +49,10 @@ onto.assertions.find(subject="beagle", relation="isa")  # -> [Assertion(...)]
 
 # (4) leave with something spendable on your own data
 beagle.source  # SourceRef(clinic_db, ...)
-onto.entities.describe().capabilities  # frozenset() -- no ORIGIN_FETCH, so the
-# reference is yours to spend and not ours to dereference
+capabilities = onto.entities.describe().capabilities
+Capability.ORIGIN_FETCH in capabilities  # False -- the reference is yours to
+# spend and not ours to dereference
+Capability.SURFACE_FORM_LOOKUP in capabilities  # True -- step (1) is this one
 
 # (5) the same placement, ranked and with its reasons
 resolver = build_resolver(Path("mammals.yaml"), onto)
