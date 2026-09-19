@@ -22,6 +22,16 @@ So one class over a bare table emits local ids, and the same class bound
 inside a vocabulary emits qualified ones --- one class, two configurations,
 and the difference visible at construction rather than inferred from what
 comes out.
+
+**The sources compare and hash by identity; the item does not.** A source is
+a configured behaviour, not a value --- two of them over one mapping are
+interchangeable, and nothing asks whether they are equal. Frozen with equality
+left on, each would instead claim ``Hashable`` and raise at the call the moment
+it held a ``dict`` or a caller passed a list where a ``Sequence`` was declared,
+which is the one combination that guards a caller against nothing. So the
+sources take ``eq=False`` and hash by identity, and :class:`IndexItem` --- a
+record two of which really can be equal, and which tests compare --- stays
+unfrozen with equality on, where the check answers False honestly.
 """
 
 from __future__ import annotations
@@ -107,7 +117,7 @@ class AsyncIndexSource(Protocol):
         ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MappingSource:
     """Every entry of an in-memory mapping, as one item each.
 
@@ -140,7 +150,7 @@ class MappingSource:
             yield IndexItem(id=key, text=self.items[key])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class CallableSource:
     """Whatever a callable produces, as items --- the escape hatch.
 
@@ -189,7 +199,7 @@ class CallableSource:
             yield item
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AliasSource:
     """One entity, many surface forms, one id --- a decorator over any source.
 

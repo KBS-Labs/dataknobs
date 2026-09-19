@@ -57,7 +57,11 @@ STREAM_BATCH_SIZE = 1000
 TEXT_FIELDS = ("name", "description")
 
 
-@dataclass(frozen=True)
+# `eq=False` for the reason the pure sources carry: `fields` is declared a
+# `Sequence[str]`, so a caller passing a list gives a frozen instance that
+# answers `Hashable` and raises at `hash()`. Identity is the honest answer
+# for a source, and it is what `AsyncOntology` beside it already says.
+@dataclass(frozen=True, eq=False)
 class EntitySourceIndexSource(Generic[K]):
     """Every entity an ontology holds, as one indexable item each.
 
