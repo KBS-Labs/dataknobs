@@ -97,7 +97,7 @@ class UnfoldedSource:
     def fetch_origin(self, ref: SourceRef) -> Record | None:
         return self._inner.fetch_origin(ref)
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
         return self._inner.fetch_origins(refs)
 
     def describe(self) -> SourceDescription:
@@ -142,10 +142,8 @@ class AsyncUnfoldedSource(UnfoldedSource):
     async def fetch_origin(self, ref: SourceRef) -> Record | None:  # type: ignore[override]
         return None
 
-    async def fetch_origins(  # type: ignore[override]
-        self, refs: Sequence[SourceRef]
-    ) -> dict[SourceRef, Record]:
-        return {}
+    async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        return [None] * len(refs)
 
     async def by_surface_form(self, form: str) -> frozenset[str]:  # type: ignore[override]
         raise CapabilityNotSupportedError(Capability.SURFACE_FORM_LOOKUP, self)

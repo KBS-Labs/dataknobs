@@ -177,7 +177,7 @@ Ten fields, and the ones you read most are sources rather than containers:
 |---|---|
 | `id`, `version` | the vocabulary's own identity |
 | `entity_types`, `relation_types` | the declared kinds, as `EntityType` and `RelationType` |
-| `entities` | an `EntitySource` — `get`, `get_many`, `by_surface_form`, `by_type`, `fetch_origin`, `describe` |
+| `entities` | an `EntitySource` — `get`, `get_many`, `by_surface_form`, `by_type`, `fetch_origin`, `fetch_origins`, `describe` |
 | `assertions` | an `AssertionSource` — `get`, `find`, `find_many` |
 | `taxonomies` | `TaxonomyDefinition` per declared axis, keyed by its own id |
 | `structures` | a materialized structure per axis, where one was asked for |
@@ -332,6 +332,30 @@ it — so the question worth asking is not *what does `fetch_origin` return?* bu
 not there. An authored vocabulary carrying references into your production
 table is the ordinary case, not a broken one: the reference is yours to spend
 and not ours to dereference.
+
+`fetch_origins` asks the same question for a sequence of refs, and answers
+**positionally**: one slot per ref, in the order they were passed, with
+`len(result) == len(refs)`. A ref that reached no row is a `None` in its own
+slot.
+
+The obvious signature — `dict[SourceRef, Record]` — is not one any
+implementation can satisfy. `SourceRef` is compared field-wise, so that two
+references naming one row are one reference, and its `locator` is a mapping;
+a type that answers `Hashable` and then raises at the call is not a shape this
+package ships. A positional answer loses nothing by comparison: the caller
+already holds `refs`, so it can build any pairing it wants, while the misses a
+mapping would have dropped are in the result where they happened.
+
+```python
+origins = await onto.entities.fetch_origins([first.source, second.source])
+# [Record(...), None]  -- the second ref reached no row
+```
+
+The member exists for the round trips, not the rows: a live source answers N
+refs in one read where a loop over `fetch_origin` pays N. A source that cannot
+reach an origin at all answers all-`None` and withholds
+`Capability.ORIGIN_FETCH`, which is the same thing `fetch_origin` says one ref
+at a time.
 
 A `Provenance` records the other direction: where an assertion came from, who
 asserted it and when.

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`stream_read` on both Postgres backends applies the filters it was
+  given.** Each twin open-coded its own WHERE construction and emitted a
+  clause only for `Operator.EQ`, so every other operator was dropped in
+  silence and a caller who swapped `search` for `stream_read` to bound
+  memory got back rows it had filtered out. The async twin carried a second,
+  louder half: its placeholder counter advanced once per *filter* while its
+  argument list grew only for EQ, so one non-EQ filter ahead of an EQ one
+  shifted every later placeholder past its argument and the SQL named a `$N`
+  nothing had bound.
+
+  Both now route through `SQLQueryBuilder.build_where_clause` — the builder
+  each class already held and `search` already used, which is why the two
+  doors disagreed at all. `search` and `stream_read` over one `Query` now
+  return the same rows. Verified against a real server.
+
+- **The user-state store connects the database it builds.** `close()`
+  released the backing handle when the store owned it; nothing opened it.
+  Every existing test names `backend: "memory"`, where `connect()` is a
+  no-op — so the gap cost nothing there and every backend that *has* a
+  connection raised *Database not connected* on first use. Both twins now
+  open what they own, and both still leave an injected handle alone, which
+  is the boundary the teardown half already respected.
+
+- **`AsyncDatabase.from_backend` resolves and builds off the event loop.**
+  Resolving a backend name imports its implementation through
+  `PluginRegistry`'s `on_first_access` hook, which reads the module off
+  disk, and a file backend's config normalizes a path as it is built — both
+  ran on the caller's loop, stalling every other task on it. The
+  synchronous work moves into `asyncio.to_thread`, which is what
+  `OntologyRegistry._database_handle` already does with the same resolution.
+  A refusal for an unrecognised backend still surfaces unchanged.
+
 - **A database handle `OntologyRegistry` opens is connected.** Every backend
   but `memory` and `file` — the three SQL ones, `s3` and `elasticsearch` —
   raises *Database not connected* on its first query, so a `$resource`
@@ -63,6 +95,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`RecordEntitySource.fetch_origins` answers, in one read.** N refs, one
+  `search` with a single `IN` filter over the collected ids alongside the
+  same narrowing `fetch_origin` applies --- so a shared store still cannot
+  answer with a surface-form row, and a caller pays one round trip where a
+  loop over `fetch_origin` pays N. The rows are identical either way; the
+  read count is the whole of the difference.
+
+  It previously refused. Its declared answer was `dict[SourceRef, Record]`
+  and `SourceRef` is deliberately unhashable, so no non-empty value of that
+  type existed to return; this was the first source able to reach an origin
+  at all and so the first to find the declaration unbuildable. The
+  declaration was the half that was wrong --- see `dataknobs-common`, where
+  the protocol now answers `list[Record | None]`. A ref belonging to another
+  source, carrying no id, or naming a row that is gone is a `None` in its own
+  slot, and a binding with `expose_origin: false` answers all-`None`.
+
+  `describe()` still declares `Capability.ORIGIN_FETCH`, and that is now
+  true of both members rather than one: `require_capability(source,
+  ORIGIN_FETCH)` followed by `fetch_origins(refs)` is a sequence that works.
+
 - **`OntologyRegistry` is an async context manager.** `async with registry:`
   is `close()` on the way out, including the way out an exception takes,
   which is the path a `finally` gets forgotten on. Entry builds nothing and
@@ -72,6 +124,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged and equally supported.
 
 ### Changed
+
+- **`OntologyRegistry` declares its two collaborators as optional rather
+  than expected.** `database` and `event_bus` are real injection points that
+  `from_components` takes, and neither is required: a configured registry
+  resolves its own database from `$resource` and publishes nothing when no
+  bus is wired. Declared under `EXPECTED_COMPONENTS` --- the only field there
+  was --- a fully loaded registry with nothing wrong with it answered
+  `{"database", "event_bus"}` to `missing_components()` and raised from
+  `require_components()`. They now sit in `OPTIONAL_COMPONENTS` (new in
+  `dataknobs-common`), so the diffs answer about this registry and
+  `accepted_components()` still advertises both.
 
 - **`RecordEntitySource.by_type` streams its whole-table read.** The scan is
   the projection's shape rather than the implementation's — a constant `type:`

@@ -21,7 +21,7 @@ from ..database import AsyncDatabase, SyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
 from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate_asyncpg_pool
-from ..query import Operator, Query
+from ..query import Query
 from ..query_logic import ComplexQuery
 from ..streaming import (
     StreamConfig,
@@ -872,28 +872,19 @@ class SyncPostgresDatabase(
         sql = f"SELECT id, data, metadata FROM {self._q_qualified}"
         params = {}
 
-        if query and query.filters:
-            # KNOWN DEFECT, shared with AsyncPostgresDatabase.stream_read (see the
-            # longer note there). Only the EQ branch appends a clause, so every
-            # non-EQ filter is dropped silently and a caller that filtered gets
-            # back rows it filtered out -- while search() over the same Query
-            # applies them. This twin does NOT have the placeholder-shift half of
-            # that defect: parameters are keyed by name here, so a skipped filter
-            # leaves a gap in the numbering rather than a misalignment. The root
-            # cause is the same: this loop open-codes SQLQueryBuilder's WHERE
-            # construction instead of using it, and one change closes both.
-            # Recorded in the project work tracker with the reproductions attached.
-            where_clauses = []
-            for i, filter in enumerate(query.filters):
-                field_path = f"data->>'{filter.field}'"
-                param_name = f"param_{i}"
-
-                if filter.operator == Operator.EQ:
-                    where_clauses.append(f"{field_path} = %({param_name})s")
-                    params[param_name] = str(filter.value)
-
-            if where_clauses:
-                sql += " WHERE " + " AND ".join(where_clauses)
+        # Through the same builder ``search`` uses, so the two doors apply one
+        # Query the same way. Open-coded here, this loop emitted a clause only
+        # for ``Operator.EQ`` and dropped every other operator in silence, so a
+        # caller who swapped ``search`` for ``stream_read`` to bound memory got
+        # back rows it had filtered out.
+        where_clause, filter_params = self.query_builder.build_where_clause(query)
+        if where_clause:
+            # ``build_where_clause`` is written to extend a predicate that is
+            # already there and so opens with " AND ". ``WHERE TRUE`` gives it
+            # the one it expects, which is cheaper to read than slicing the
+            # prefix back off and cannot go wrong when the clause changes shape.
+            sql += " WHERE TRUE" + where_clause
+            params.update({f"p{i}": value for i, value in enumerate(filter_params)})
 
         # Use cursor for streaming
         # Note: PostgresDB may need modification to support cursors
@@ -2260,32 +2251,16 @@ class AsyncPostgresDatabase(
         sql = f"SELECT id, data, metadata FROM {self._q_qualified}"
         params = []
 
-        if query and query.filters:
-            # KNOWN DEFECT, preserved deliberately by the enumerate() below rather
-            # than fixed here. The counter advances per filter while `params` is
-            # appended to only for EQ, so one non-EQ filter shifts every later
-            # placeholder past its argument and the SQL names a $N that was never
-            # bound; non-EQ filters are also dropped silently, so a caller that
-            # filtered gets back rows it filtered out. The root cause is that this
-            # loop open-codes SQLQueryBuilder.build_where_clause, which this class
-            # already holds and uses correctly in _vector_search above. Swapping to
-            # it changes query semantics and needs a live Postgres to verify, which
-            # is a different change from making this loop idiomatic.
-            #
-            # Recorded in the project work tracker with the reproductions attached,
-            # including the measured EQ-semantics change a swap would cause. The
-            # sync twin below carries the matching note for the half they share.
-            where_clauses = []
-
-            for param_count, filter in enumerate(query.filters, 1):
-                field_path = f"data->>'{filter.field}'"
-
-                if filter.operator == Operator.EQ:
-                    where_clauses.append(f"{field_path} = ${param_count}")
-                    params.append(str(filter.value))
-
-            if where_clauses:
-                sql += " WHERE " + " AND ".join(where_clauses)
+        # Through the same builder ``search`` uses -- see the sync twin for the
+        # half they shared. This one also had a louder half of its own: the
+        # placeholder counter advanced once per *filter* while ``params`` grew
+        # only for EQ, so one non-EQ filter ahead of an EQ one shifted every
+        # later placeholder past its argument and the SQL named a ``$N``
+        # nothing had bound.
+        where_clause, filter_params = self.query_builder.build_where_clause(query)
+        if where_clause:
+            sql += " WHERE TRUE" + where_clause
+            params.extend(filter_params)
 
         # Use cursor for efficient streaming. asyncpg's
         # ``conn.cursor(sql, *args)`` returns a ``CursorFactory`` that

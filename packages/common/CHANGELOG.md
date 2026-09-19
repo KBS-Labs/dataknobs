@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OPTIONAL_COMPONENTS` on `StructuredConfigConsumer`**, with
+  `optional_components()` and `accepted_components()` beside the existing
+  `expected_components()`. `EXPECTED_COMPONENTS` means *must be supplied* and
+  feeds `missing_components()` / `require_components()`; there was no spelling
+  for a collaborator a consumer genuinely accepts and genuinely does not
+  require. Declared in the only field there was, such a collaborator makes a
+  correctly built consumer report itself under-wired --- the diff names it and
+  the loud check raises, on an object with nothing wrong with it.
+
+  The new field is read by `accepted_components()` alone. `missing_components()`,
+  `missing_from()` and `require_components()` still read
+  `EXPECTED_COMPONENTS` only, because an optional collaborator can never be
+  missing and a second field feeding those diffs would be the first field
+  again under a new name. A caller writing a `from_components(...)` call reads
+  the union; a composing parent checking what it must satisfy reads the
+  required half.
+
 - **`Capability.SURFACE_FORM_LOOKUP`**, and the contract it declares. An
   `EntitySource` answers `by_surface_form` from forms **it** folded, with
   `default_normalizer` unless it was built with another --- and `frozenset()`
@@ -227,6 +244,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a per-item error handler while still absorbing an item's own failure.
 
 ### Changed
+
+- **`EntitySource.fetch_origins` and its async twin now answer
+  `list[Record | None]`**, one slot per ref in the order they were passed,
+  rather than `dict[SourceRef, Record]`. The mapping was not a type any
+  implementation could return: `SourceRef` is compared field-wise so that two
+  references naming one row are one reference, its `locator` is a mapping, and
+  a type that answers `Hashable` and then raises at the call is not a shape
+  this package ships. Every implementation that existed answered `{}` and
+  satisfied the declaration only by being empty --- the single value of that
+  type anything could build.
+
+  A positional answer loses nothing to the mapping and reports what it would
+  have dropped: the caller already holds `refs`, so any pairing it wants is
+  reconstructible, while a ref that reached no row is a `None` in its own slot
+  instead of an absent key, and two refs naming one row stay two slots.
+  `len(result) == len(refs)`, always. `MappingEntitySource` and its async twin
+  answer all-`None` of the right length, which is a claim about the refs
+  passed rather than a value that was correct only because it was empty.
 
 - **`Coverage` counts `DECLARED` evidence spans**, where it counted every
   span that was not `None`. No shipped composition changes: until

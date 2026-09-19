@@ -143,7 +143,36 @@ class EntitySource(Protocol[K]):
 
     def fetch_origin(self, ref: SourceRef) -> Record | None: ...
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]: ...
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """:meth:`fetch_origin` over a sequence: one slot per ref, in order.
+
+        **Positional, because the obvious keying cannot be built.**
+        ``dict[SourceRef, Record]`` is what this member wants to say and is
+        not a type any implementation can return: :class:`SourceRef` is
+        compared field-wise so that two references naming one row are one
+        reference, its ``locator`` is a mapping, and a type that answers
+        :class:`~collections.abc.Hashable` and then raises at the call is the
+        shape this package refuses to ship. Both halves are right on their
+        own, so the mapping is the half that goes.
+
+        A positional answer is not the consolation prize. The caller already
+        holds ``refs``, so it can rebuild any pairing it wants; what a mapping
+        would have *lost* is in here instead -- a ref that reached no row is a
+        ``None`` in its own slot rather than an absent key, and two refs
+        naming one row stay two slots. ``len(result) == len(refs)``, always.
+
+        The element type is :meth:`fetch_origin`'s return type because that is
+        what this member is: the same question asked N times, answered in as
+        few reads as the backing allows. An implementation that cannot beat N
+        reads should still answer here rather than refuse -- the member is
+        about the caller's round trips, not the store's.
+
+        A source that cannot reach an origin at all withholds
+        :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH` from
+        :meth:`describe` and answers all-``None`` here, which is the same
+        thing :meth:`fetch_origin` says one ref at a time.
+        """
+        ...
 
     def describe(self) -> SourceDescription: ...
 
@@ -207,7 +236,20 @@ class AsyncEntitySource(Protocol[K]):
 
     async def fetch_origin(self, ref: SourceRef) -> Record | None: ...
 
-    async def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]: ...
+    async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """The synchronous twin's contract, unchanged by the ``await``.
+
+        One slot per ref, in order; ``len(result) == len(refs)``; a ref
+        that reached no row is a ``None`` in its own slot. See
+        :meth:`EntitySource.fetch_origins` for why the answer is positional
+        rather than the mapping it obviously wants to be.
+
+        This is the twin where the member earns its place. A live store
+        answers N refs in one round trip and a loop over
+        :meth:`fetch_origin` pays N, which is the whole difference between
+        the two members -- the answers are identical.
+        """
+        ...
 
     def describe(self) -> SourceDescription: ...
 
@@ -505,9 +547,22 @@ class MappingEntitySource(CapabilityMixin):
         """Always None -- see the class docstring, and ``describe()``."""
         return None
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
-        """Always empty, for ``fetch_origin``'s reason."""
-        return {}
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """All ``None``, for ``fetch_origin``'s reason -- one per ref.
+
+        An authored vocabulary carries references into a table it cannot
+        reach, so every slot is the same answer :meth:`fetch_origin` gives
+        one at a time, and :meth:`describe` withholds
+        :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH` so a
+        caller need not make the call to find out.
+
+        The length is the part worth having. This member used to answer
+        ``{}`` and satisfied its declared type only because the value was
+        empty -- the one value of ``dict[SourceRef, Record]`` that could be
+        built. An all-``None`` list of the right length is a claim about the
+        refs that were passed, so it is a thing a test can be wrong about.
+        """
+        return [None] * len(refs)
 
     def describe(self) -> SourceDescription:
         """What this source is, including that its origins are unfetchable.
@@ -633,9 +688,13 @@ class AsyncMappingEntitySource(CapabilityMixin):
         """Always None -- see :class:`MappingEntitySource`."""
         return None
 
-    async def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
-        """Always empty, for ``fetch_origin``'s reason."""
-        return {}
+    async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """All ``None``, for ``fetch_origin``'s reason -- one per ref.
+
+        See :meth:`MappingEntitySource.fetch_origins`; the ``await`` changes
+        nothing, because the answer never depended on reaching anything.
+        """
+        return [None] * len(refs)
 
     def describe(self) -> SourceDescription:
         """Synchronous on both twins -- it answers from configuration."""

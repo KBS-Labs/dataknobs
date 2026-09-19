@@ -625,3 +625,62 @@ class TestExpectedComponents:
             )
 
         assert _SubUnion.expected_components() == frozenset({"dep", "other"})
+
+
+# --------------------------------------------------------------------------
+# What a consumer MAY be handed, as opposed to what it must be
+# --------------------------------------------------------------------------
+
+
+class _BuildsItsOwn(StructuredConfigConsumer[_Cfg]):
+    """A consumer that accepts two collaborators and requires neither.
+
+    The shape ``EXPECTED_COMPONENTS`` had no spelling for: both names are real
+    injection points -- ``from_components`` takes them and the object behaves
+    differently when they arrive -- and the object is complete without either,
+    because it resolves one from its own config and publishes nothing when the
+    other is absent.
+    """
+
+    CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"database", "event_bus"})
+
+
+def test_a_collaborator_a_consumer_may_be_handed_is_not_one_it_is_missing() -> None:
+    """The false positive this second spelling exists to remove.
+
+    Declared under ``EXPECTED_COMPONENTS``, the two names below make a
+    correctly built consumer report itself under-wired: ``missing_components()``
+    names both and ``require_components()`` raises, on an object with nothing
+    wrong with it. Tooling reading that field gets an answer it cannot act on.
+    """
+    consumer = _BuildsItsOwn.from_config(_Cfg())
+
+    assert consumer.missing_components() == frozenset()
+    consumer.require_components()
+
+
+def test_both_spellings_are_readable_before_the_consumer_exists() -> None:
+    """The advertise surface keeps its whole answer, split into its two claims.
+
+    ``accepted_components()`` is what a caller writing a ``from_components``
+    call wants -- everything this class takes. ``expected_components()`` is
+    what a composing parent must satisfy. Conflating them is what cost the
+    first adopter a truthful ``missing_components()``.
+    """
+    assert _BuildsItsOwn.optional_components() == frozenset({"database", "event_bus"})
+    assert _BuildsItsOwn.expected_components() == frozenset()
+    assert _BuildsItsOwn.accepted_components() == frozenset({"database", "event_bus"})
+
+
+def test_the_two_sets_are_independent_and_both_reach_the_union() -> None:
+    """A class may declare both, and neither reading swallows the other."""
+
+    class _Both(StructuredConfigConsumer[_Cfg]):
+        CONFIG_CLS: ClassVar[type[_Cfg]] = _Cfg
+        EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"required"})
+        OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"handy"})
+
+    assert _Both.accepted_components() == frozenset({"required", "handy"})
+    assert _Both.missing_from(frozenset({"handy"})) == frozenset({"required"})
+    assert _Both.missing_from(frozenset({"required"})) == frozenset()

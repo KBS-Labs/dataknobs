@@ -25,8 +25,8 @@ from dataknobs_common.capabilities import (
     require_capability,
     supports_capability,
 )
-from dataknobs_common.exceptions import OperationError, ValidationError
-from dataknobs_common.ontology import OntologyConfig
+from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.ontology import OntologyConfig, SourceRef
 from dataknobs_common.records import Record
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
@@ -383,24 +383,134 @@ async def test_fetch_origin_returns_the_whole_row_where_origins_are_exposed() ->
         await registry.close()
 
 
-async def test_the_bulk_origin_member_refuses_because_its_answer_cannot_be_built() -> None:
-    """A source that cannot run says so -- including when the reason is the protocol.
+async def test_the_bulk_origin_member_answers_one_slot_per_ref() -> None:
+    """One slot per ref, in the order they were asked -- the singular member, lifted.
 
-    ``fetch_origins`` is declared ``dict[SourceRef, Record]`` and ``SourceRef``
-    is deliberately unhashable, so no non-empty answer exists to return. Every
-    implementation before this one answered ``{}`` because it could not reach
-    an origin at all; this is the first that can, and answering ``{}`` here
-    would be indistinguishable from *these refs reached no rows*.
+    ``fetch_origins`` is ``fetch_origin`` over a sequence, so its element type
+    is that member's return type and the answer is positional. A caller holds
+    the refs it passed, so a positional answer carries strictly more than a
+    mapping would: the misses are in it, and two refs naming one row stay two
+    slots rather than collapsing into one key.
+    """
+    registry, ontology = await _bound(
+        await _store(
+            {"sku": "sku-1", "title": "Beagle", "unprojected": "first"},
+            {"sku": "sku-2", "title": "Corgi", "unprojected": "second"},
+        )
+    )
+    try:
+        first = await ontology.entity("sku-1")
+        second = await ontology.entity("sku-2")
+        assert first is not None and first.source is not None
+        assert second is not None and second.source is not None
+
+        origins = await ontology.entities.fetch_origins([first.source, second.source])
+
+        assert len(origins) == 2
+        assert [o.get_value("unprojected") for o in origins if o is not None] == [
+            "first",
+            "second",
+        ]
+    finally:
+        await registry.close()
+
+
+async def test_a_ref_that_reaches_no_row_is_a_none_in_its_own_slot() -> None:
+    """A miss is reported where it happened, which a mapping could not have said.
+
+    Three ways to miss, asserted together because the positional answer is what
+    makes them distinguishable at all: a ref naming a row that is not there, a
+    ref belonging to another source, and a ref carrying no id. A mapping keyed
+    by ref would have answered all three by omission, and a caller could not
+    tell which of its refs the omission was about.
     """
     registry, ontology = await _bound(await _store({"sku": "sku-1", "title": "Beagle"}))
     try:
         entity = await ontology.entity("sku-1")
         assert entity is not None and entity.source is not None
-        assert await ontology.entities.fetch_origins([]) == {}
-        with pytest.raises(OperationError) as excinfo:
-            await ontology.entities.fetch_origins([entity.source])
-        assert "fetch_origin" in str(excinfo.value)
-        assert excinfo.value.context["source_id"] == "products"
+        mine = entity.source
+        absent = SourceRef(source_id=mine.source_id, kind=mine.kind, locator={"sku": "sku-404"})
+        foreign = SourceRef(source_id="somebody-else", kind=mine.kind, locator={"sku": "sku-1"})
+
+        origins = await ontology.entities.fetch_origins([absent, mine, foreign])
+
+        assert len(origins) == 3
+        assert origins[0] is None
+        assert origins[1] is not None and origins[1].get_value("title") == "Beagle"
+        assert origins[2] is None
+    finally:
+        await registry.close()
+
+
+async def test_the_bulk_member_is_one_read_rather_than_one_per_ref() -> None:
+    """What the member is *for*: N refs, one round trip.
+
+    Asserted on the door rather than on the answer, because the answer is the
+    same either way -- a loop calling ``fetch_origin`` N times returns exactly
+    these rows and is exactly the thing this member exists to avoid. Only the
+    read count tells the two apart.
+    """
+    database = _ReadDoorProbe()
+    for row in (
+        {"sku": "sku-1", "title": "A"},
+        {"sku": "sku-2", "title": "B"},
+        {"sku": "sku-3", "title": "C"},
+    ):
+        await database.create(Record(dict(row)))
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=database
+    )
+    ontology = await registry.load()
+    try:
+        refs = []
+        for sku in ("sku-1", "sku-2", "sku-3"):
+            entity = await ontology.entity(sku)
+            assert entity is not None and entity.source is not None
+            refs.append(entity.source)
+
+        database.doors.clear()
+        origins = await ontology.entities.fetch_origins(refs)
+
+        assert [o.get_value("title") for o in origins if o is not None] == ["A", "B", "C"]
+        assert database.doors.count("search") == 1
+    finally:
+        await registry.close()
+
+
+async def test_the_capability_it_declares_is_the_one_a_caller_can_spend() -> None:
+    """``require_capability`` then call -- the recommended sequence, end to end.
+
+    The guard answering yes and the call raising is the shape this package
+    refuses elsewhere, and it is the whole reason the declared return type had
+    to change rather than the declaration.
+    """
+    registry, ontology = await _bound(await _store({"sku": "sku-1", "title": "Beagle"}))
+    try:
+        source = ontology.entities
+        entity = await ontology.entity("sku-1")
+        assert entity is not None and entity.source is not None
+
+        require_capability(source, Capability.ORIGIN_FETCH)
+        origins = await source.fetch_origins([entity.source])
+
+        assert len(origins) == 1
+        assert origins[0] is not None
+    finally:
+        await registry.close()
+
+
+async def test_no_refs_is_no_slots_and_no_read() -> None:
+    """The empty case answers ``[]`` without reaching the store."""
+    database = _ReadDoorProbe()
+    await database.create(Record({"sku": "sku-1", "title": "Beagle"}))
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=database
+    )
+    await registry.load()
+    try:
+        database.doors.clear()
+        assert await registry.get("catalog").entities.fetch_origins([]) == []
+        assert database.doors == []
     finally:
         await registry.close()
 

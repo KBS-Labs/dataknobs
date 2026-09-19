@@ -88,9 +88,14 @@ store = AsyncUserStateStore.from_components(
 )
 ```
 
-Ownership follows the standard dataknobs convention: a config-built database is
-owned and closed by `close()`; an injected one is caller-owned and left open, so
-several coordinators can share one backend and each close independently.
+Ownership follows the standard dataknobs convention, and it runs in both
+directions: a config-built database is **connected** by the store and closed by
+`close()`; an injected one is caller-owned, so the store neither connects it nor
+closes it and several coordinators can share one backend and each close
+independently.
+
+Inject a handle that is already connected. The store will not open it for you,
+for the same reason it will not close it.
 
 ## Document sections
 

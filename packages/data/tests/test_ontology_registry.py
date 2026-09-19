@@ -1447,3 +1447,51 @@ async def test_an_injected_handle_survives_the_block_that_the_registry_did_not_o
         await registry.load()
 
     assert await handed_over.search(Query(filters=[Filter("sku", Operator.EQ, "sku-4471")]))
+
+
+async def test_a_configured_registry_is_not_missing_the_collaborators_it_resolves() -> None:
+    """A registry that built everything it needs does not report itself under-wired.
+
+    ``EXPECTED_COMPONENTS`` means *must be supplied*, and this class declared
+    its two injection points there because there was no other field to declare
+    them in. The cost was a live one rather than a documentation one: a fully
+    loaded registry with nothing wrong with it answered
+    ``{"database", "event_bus"}`` to ``missing_components()`` and raised from
+    ``require_components()``, so any tooling reading either got a false
+    positive on a correct object.
+    """
+    registry = await OntologyRegistry.from_config_async(_authored())
+    try:
+        assert registry.list_ids() == ["t"]
+        assert registry.missing_components() == frozenset()
+        registry.require_components()
+    finally:
+        await registry.close()
+
+
+async def test_what_the_registry_may_be_handed_is_still_advertised() -> None:
+    """Removing the false positive must not remove the answer tooling wanted.
+
+    The two names are real injection points -- ``from_components`` takes them
+    -- so a caller asking what this class accepts still has to be told. They
+    move to the field that says *may*, and the union is readable in one call.
+    """
+    assert OntologyRegistry.expected_components() == frozenset()
+    assert OntologyRegistry.optional_components() == frozenset({"database", "event_bus"})
+    assert OntologyRegistry.accepted_components() == frozenset({"database", "event_bus"})
+
+
+async def test_an_injected_collaborator_lands_where_from_components_can_see_it() -> None:
+    """The *may* declaration is not a claim that nothing arrives.
+
+    Guards the direction the first test could hide: a registry that really was
+    handed a database has it on ``components``, so the diff answering empty
+    above is "nothing is required", not "nothing is ever there".
+    """
+    database = AsyncMemoryDatabase()
+    registry = OntologyRegistry.from_components(config=OntologyConfig(id=""), database=database)
+    try:
+        assert registry.components["database"] is database
+        assert registry.missing_components() == frozenset()
+    finally:
+        await registry.close()

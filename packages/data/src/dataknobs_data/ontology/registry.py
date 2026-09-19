@@ -125,16 +125,21 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     resolved one reference and was handed another has two handles with two
     different owners and a single flag cannot say that.
 
-    **``EXPECTED_COMPONENTS`` is an advertise surface here, and that is worth
-    stating.** The mixin documents the field as *what a consumer must supply*
-    and pairs it with :meth:`require_components`. Neither collaborator named
-    below is required: a configured registry resolves its own database from
-    ``$resource`` and publishes nothing when no bus is wired. So this class
-    declares the two a caller *may* inject -- which is what ``from_components``
-    accepts and what tooling reading ``expected_components()`` wants to know --
-    and never calls ``require_components()``, whose answer would be wrong for
-    the configured door. This is the field's first adopter in the tree; if the
-    two readings need separating, this is the class that found it.
+    **The collaborators here are ones a caller *may* inject, and the mixin
+    has a field for that.** Neither is required: a configured registry
+    resolves its own database from ``$resource`` and publishes nothing when
+    no bus is wired. Both are nonetheless real injection points that
+    ``from_components`` takes, so tooling asking what this class accepts has
+    to be told about them -- which is
+    :attr:`~dataknobs_common.structured_config.StructuredConfigConsumer.OPTIONAL_COMPONENTS`,
+    read by ``accepted_components()``.
+
+    They were declared under ``EXPECTED_COMPONENTS`` first, because that was
+    the only field there was, and the cost was not a documentation one: a
+    fully loaded registry with nothing wrong with it answered
+    ``{"database", "event_bus"}`` to ``missing_components()`` and raised from
+    ``require_components()``. This class was that field's first adopter in the
+    tree and is the reason the second spelling exists.
 
     **Settings are not collaborators, and both arrive through one channel.**
     Every door has the shape ``(config, **components)``, so a caller writing
@@ -146,9 +151,12 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
 
     CONFIG_CLS: ClassVar[type[OntologyConfig]] = OntologyConfig
 
-    #: The collaborators a caller may inject. See the class docstring for why
-    #: this is read as *may* rather than *must*, and what that costs.
-    EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"database", "event_bus"})
+    #: The collaborators a caller may inject, neither of which is required:
+    #: a configured registry resolves its own database from ``$resource`` and
+    #: publishes nothing when no bus is wired. Declared here rather than under
+    #: ``EXPECTED_COMPONENTS`` so that :meth:`missing_components` answers
+    #: about this registry rather than about the field's other reading.
+    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"database", "event_bus"})
 
     #: The live source kinds this registry binds.
     #:
@@ -160,7 +168,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     LIVE_SOURCE_KINDS: ClassVar[frozenset[str]] = frozenset({RECORD_SOURCE_KIND})
 
     #: This registry's own construction settings, as opposed to the
-    #: collaborators :attr:`EXPECTED_COMPONENTS` names.
+    #: collaborators :attr:`OPTIONAL_COMPONENTS` names.
     #:
     #: **Why the distinction needs a name.** Every published door has the
     #: shape ``(config, **components)`` and puts everything that is not the
@@ -1115,7 +1123,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         synchronous, so the door taken here is the one the extension point
         describes. A consumer whose bus really is built asynchronously builds
         it themselves and hands it over: that is the ``event_bus``
-        collaborator :attr:`EXPECTED_COMPONENTS` names, and an injected bus
+        collaborator :attr:`OPTIONAL_COMPONENTS` names, and an injected bus
         wins over a configured one at the line above.
         """
         if self._event_bus is not None:

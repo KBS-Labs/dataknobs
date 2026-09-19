@@ -91,7 +91,9 @@ backends share one `FileDatabaseConfig`.
 - `search(query: Query) -> List[Record]`: Search for records
 - `count(query: Query | None) -> int`: Count matching records
 - `clear() -> int`: Delete all records
-- `stream_read(query, config) -> Iterator[Record]`: Stream records
+- `stream_read(query, config) -> Iterator[Record]`: Stream records, applying the
+  same `query` filters `search` applies — the two doors over one `Query` return
+  the same rows, and differ only in how much is resident at once
 - `stream_write(records, config) -> StreamResult`: Stream write records
 
 #### Create semantics (atomic create-if-absent)

@@ -29,7 +29,7 @@ from dataknobs_common.capabilities import (
     CapabilityNotSupportedError,
     DynamicCapabilityMixin,
 )
-from dataknobs_common.exceptions import OperationError, ValidationError
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import Entity, SourceDescription, SourceRef
 from dataknobs_common.text import default_normalizer
 
@@ -491,9 +491,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
         :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH` so a
         caller learns that without making the call.
         """
-        if not self._projection.expose_origin or ref.source_id != self._source_id:
-            return None
-        local_id = ref.locator.get(self._projection.id)
+        local_id = self._origin_key(ref)
         if local_id is None:
             return None
         found = await self._db.search(
@@ -506,46 +504,70 @@ class RecordEntitySource(DynamicCapabilityMixin):
         )
         return found[0] if found else None
 
-    async def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
-        """Refuses, and says why -- this member's declared answer cannot be built.
+    async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
+        """Every ref's backing row, in one read -- one slot per ref, in order.
 
-        ``dict[SourceRef, Record]`` needs a hashable key, and
+        **This is the member the protocol change bought.** It used to refuse,
+        because its declared answer was ``dict[SourceRef, Record]`` and
         :class:`~dataknobs_common.ontology.SourceRef` is deliberately
-        unhashable: it is compared field-wise so that two references naming one
-        row are one reference, and a type that answers
-        :class:`~collections.abc.Hashable` and raises at the call is the shape
-        that package refuses to ship. Both halves are right on their own and
-        they cannot both hold here.
+        unhashable, so no non-empty value of that type could be built. Every
+        implementation that existed answered ``{}`` and satisfied the type
+        only by being empty; this was the first source that could actually
+        reach an origin, so it was the first that had to build the value and
+        the first to find that nothing could. The declaration was the half
+        that was wrong -- see
+        :meth:`~dataknobs_common.ontology.sources.EntitySource.fetch_origins`.
 
-        Nothing had met the wall before, because every implementation that
-        existed answers ``{}`` -- an authored vocabulary cannot reach an origin
-        at all, and says so by withholding
-        :attr:`~dataknobs_common.capabilities.Capability.ORIGIN_FETCH`. This is
-        the first source that *can* reach one, so it is the first that has to
-        build the value.
+        **One ``search`` for the whole batch**, which is the only thing that
+        distinguishes this member from a loop over :meth:`fetch_origin`: the
+        rows it returns are the same rows. The ids are collected, deduplicated
+        and sent as a single ``IN`` filter alongside the same narrowing
+        :meth:`fetch_origin` applies, so a shared store still cannot answer
+        with a surface-form row.
 
-        **It refuses rather than answering empty**, which is this subsystem's
-        own rule applied to itself: a source that cannot run says so, because
-        an empty answer is indistinguishable from *these refs reached no rows*
-        and a caller would take their fallback for the wrong reason.
-        ``describe()`` still declares ``ORIGIN_FETCH``, because origins are
-        reachable -- through :meth:`fetch_origin`, one ref at a time, which is
-        the remedy the message names.
+        ``IN`` rather than a per-ref ``EQ`` disjunction because every backend
+        in this package applies it: :class:`~dataknobs_data.query.Filter`
+        evaluates it directly for the in-process stores, ``sql_base`` compiles
+        it, and the Elasticsearch builder maps it to ``terms``. It goes
+        through ``search`` for the reason
+        :meth:`~dataknobs_data.ontology.sources.RecordEntitySource.by_type`
+        keeps its narrowed read there.
 
-        Raises:
-            OperationError: For any non-empty ``refs``
+        Refs are answered ``None`` in place -- one that belongs to another
+        source, one carrying no id under the projection's id column, one whose
+        row is gone, and every ref when the binding sets ``expose_origin:
+        false``. A caller reads the miss in the slot it asked about, which a
+        mapping keyed by ref could not have told it.
         """
         if not refs:
-            return {}
-        raise OperationError(
-            "fetch_origins cannot answer: its declared return type is "
-            "dict[SourceRef, Record], and SourceRef is deliberately unhashable "
-            "so that two references naming one row compare equal. Fetch them one "
-            "at a time with fetch_origin, which this source answers -- the bulk "
-            "member needs a key type the protocol can actually build a mapping "
-            "from before it can do better than N reads",
-            context={"source_id": self._source_id, "refs": len(refs)},
+            return []
+        wanted: list[Any] = [self._origin_key(ref) for ref in refs]
+        distinct = {key for key in wanted if key is not None}
+        if not distinct:
+            return [None] * len(refs)
+        found = await self._db.search(
+            Query(
+                filters=[
+                    Filter(self._projection.id, Operator.IN, sorted(distinct, key=str)),
+                    *self._entity_filters(),
+                ]
+            )
         )
+        by_key = {record.get_value(self._projection.id): record for record in found}
+        return [None if key is None else by_key.get(key) for key in wanted]
+
+    def _origin_key(self, ref: SourceRef) -> Any:
+        """The local id this ref names, or ``None`` when it names none of ours.
+
+        The shared half of :meth:`fetch_origin` and :meth:`fetch_origins`, so
+        the two cannot drift on what counts as a ref this source will answer
+        -- a difference there would be a bulk read that returns rows the
+        singular member declines, which is the kind of divergence only a
+        consumer finds.
+        """
+        if not self._projection.expose_origin or ref.source_id != self._source_id:
+            return None
+        return ref.locator.get(self._projection.id)
 
     def describe(self) -> SourceDescription:
         """What this source is, without touching the backend.
