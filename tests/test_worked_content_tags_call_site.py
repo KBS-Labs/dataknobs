@@ -111,6 +111,17 @@ def test_the_call_site_imports_only_through_the_doors() -> None:
     so that the page runs to the end --- and every guide in this package imports
     an error from that module. The names *this* page introduces all arrive
     through ``dataknobs_common.ontology``, which is what the guard is about.
+
+    **Three is the norm here rather than a widening**, which is worth saying
+    because the number is the thing a reader checks: the ontology, anchored-view
+    and entity-resolution call sites each admit three too, and only ``hierarchy``
+    admits two. The subset test means nothing already caught stops being caught.
+
+    **And the third door is earned rather than merely permitted.** The
+    justification above is a refusal the fence catches, so
+    ``test_both_refusals_the_page_catches_actually_fired`` asserts that both of
+    them fire. Until it did, the page would have run to the end --- and this
+    test would have passed --- against a reader that had stopped refusing.
     """
     doors = {
         "dataknobs_common",
@@ -161,6 +172,35 @@ def test_the_batch_reads_every_position_and_names_the_one_it_refused(
     assert [len(row) for row in reading.tags] == [2, 0, 1, 0]
     assert [bad.row for bad in reading.malformed] == [3]
     assert "dk_taxonomy_id" in reading.malformed[0].reason
+
+
+def test_both_refusals_the_page_catches_actually_fired(ran: dict[str, Any]) -> None:
+    """The two ``except`` blocks, asserted rather than merely executed.
+
+    The page catches a refusal twice --- ``require_readable()`` over a batch
+    holding a half-written row, and ``localize`` over an id another vocabulary
+    qualified --- and a ``try`` whose body stops raising runs to the end in
+    silence. Both blocks discarded the message as a bare expression, so **the
+    page would have run to completion, and every other test in this file
+    would have passed, against a reader that had stopped refusing at all.**
+
+    That is not hypothetical bookkeeping: ``exceptions`` is admitted as a
+    third door on this page *because* these two refusals are half of what it
+    publishes, and until the messages were bound, nothing held them. Binding
+    them is also the better published line --- a reader sees that the message
+    is a thing you keep.
+
+    Asserted on content rather than on truthiness. ``ran[...]`` raising
+    ``KeyError`` is itself the failure when a block did not run.
+    """
+    assert "row 3" in ran["refused"], (
+        "require_readable() did not refuse the half-written row the page ships"
+    )
+    assert "dk_taxonomy_id" in ran["refused"]
+
+    assert "procedures" in ran["foreign"] and "mammals" in ran["foreign"], (
+        "localize() did not refuse an id qualified by another vocabulary"
+    )
 
 
 def test_the_caller_filters_and_the_drifted_axis_is_dropped(ran: dict[str, Any]) -> None:

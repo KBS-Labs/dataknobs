@@ -24,16 +24,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses.** Those are different states: most of a corpus is untagged, so an
   exception there would make every caller wrap the common path in a `try`,
   while a row carrying some of the three keys and not all is a writer that can
-  be told. The refusal names the keys that are absent.
+  be told. The refusal names the keys that are absent. Presence is read off
+  the *value*, so a key whose value is `None` is a key nothing wrote -- the
+  argument is a row as the consumer's own store handed it back, and a
+  relational or columnar store materialises an unwritten column as a null
+  rather than omitting it.
 
   **A bare string under the node key is one node, and everything else that
-  satisfies *iterate it* is refused** -- `bytes`, `bytearray`, a `Mapping`, a
-  `set`, and any scalar that is not a string -- naming the key, the type found
-  and every offending position. This is the last frame that can still see a
-  type: one call later the value is a rendered string, and at the cursor a
-  writer's mistake is indistinguishable from a stale id. A row with one bad
-  entry refuses whole, so it cannot count as evidence for fewer nodes than it
-  declared; `[]` is not a malformation and answers `()`.
+  satisfies *iterate it* is refused** -- any `Buffer` (`bytes`, `bytearray`,
+  `memoryview`, `array`), a `Mapping`, a `set`, and any scalar that is not a
+  string -- naming the key, the type found and every offending position. The
+  buffer exclusion is that property rather than a list of types, because a
+  list is the types somebody thought of: a `memoryview` is what a driver hands
+  back for a binary column and an empty one would otherwise answer `()`. A
+  `:` in the ontology id is refused too, because the qualified id is joined
+  with that character and split on the first one, so a colon there composes an
+  id a *different* vocabulary accepts. This is the last frame that can still
+  see the type or the shape: one call later the value is a rendered string,
+  and at the cursor a writer's mistake is indistinguishable from a stale id. A
+  row with one bad entry refuses whole, so it cannot count as evidence for
+  fewer nodes than it declared; `[]` is not a malformation and answers `()`.
 
   **Over a hit set, `read_node_tags_many` reports rather than raises.**
   `TagReading` holds one entry per position in the order asked, and a second
@@ -45,6 +55,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A new guide, `content-tags.md`, publishes the worked call site: four hits, of
   which one is about two nodes, one touched no vocabulary, one names an axis the
   vocabulary does not declare, and one was written wrong.
+
+- **`read_alias_forms`**, the read of the family's fourth key, on the same
+  door. `ALIAS_FORMS_KEY` says which surface forms a row's entity is known by;
+  it shipped with the other three and, like them, nothing read it. It reads
+  through the same core the node list does, which is the point: the rule that
+  **a bare string is one form rather than its characters** was implemented
+  here the whole time and implemented privately, so the reader that had to
+  apply it wrote it again and got it wrong -- a `"ACME"` became four
+  one-character rows, all under the entity's id, leaving one holding `"E"`.
+  One implementation now serves both keys, and each refusal names the key the
+  writer actually wrote.
+
+  The key is a parameter defaulting to `ALIAS_FORMS_KEY`, because
+  `EntitySourceIndexSource.aliases_key` is a configurable field: a read
+  hard-coded to the constant could not open the rows the writer beside it
+  produces. A row carrying no forms answers `()`; there is no half-written
+  state, because this key describes the entity rather than a placement and has
+  no companion key to be absent against.
 
 - **A reference into a section an ontology document declares must resolve, or
   the document is refused.** Eight of them: an entity type's `isa`, an

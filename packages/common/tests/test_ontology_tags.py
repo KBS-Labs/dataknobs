@@ -21,6 +21,7 @@ cannot fail for the one reason that test exists.
 
 from __future__ import annotations
 
+import array
 import ast
 import inspect
 import sys
@@ -40,13 +41,16 @@ from dataknobs_common.ontology import (
     qualify,
 )
 from dataknobs_common.ontology import tags
+from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.tags import (
+    ALIAS_FORMS_KEY,
     NODE_ID_KEY,
     ONTOLOGY_ID_KEY,
     TAXONOMY_ID_KEY,
     MalformedRow,
     NodeTag,
     TagReading,
+    read_alias_forms,
     read_node_tags,
     read_node_tags_many,
 )
@@ -158,10 +162,19 @@ def test_the_module_publishes_every_name_it_defines_and_nothing_more() -> None:
     over the door cannot see either, because a name missing from ``__all__``
     is missing from both.
 
-    Imported names are excluded by where they were defined rather than by a
-    list of exemptions: the module has imports now, and an exemption list would
-    have to grow with them, which makes the guard weaker every time it is
-    edited.
+    **Imported names are excluded by reading the module's own imports**, not
+    by a list of exemptions and not by ``__module__``. An exemption list would
+    have to grow with every import, which makes the guard weaker every time it
+    is edited; but filtering on where a name was *defined* exempts every
+    imported binding, and a re-export is a public name this module offers. A
+    later ``make_id = qualify`` at module scope would be public, absent from
+    ``__all__``, and invisible --- the exact failure this half exists to
+    catch, arriving through the fix for the other one.
+
+    So the subtraction is the set of names the source *binds by importing*,
+    read off the AST. A name that is imported and then published anyway still
+    has to appear in ``__all__``, because it is then bound twice and the
+    second binding is the module's own.
     """
     assert set(tags.__all__) == {
         "ALIAS_FORMS_KEY",
@@ -171,15 +184,36 @@ def test_the_module_publishes_every_name_it_defines_and_nothing_more() -> None:
         "MalformedRow",
         "NodeTag",
         "TagReading",
+        "read_alias_forms",
         "read_node_tags",
         "read_node_tags_many",
     }
-    public = {
-        name
-        for name, value in vars(tags).items()
-        if not name.startswith("_") and getattr(value, "__module__", tags.__name__) == tags.__name__
+    source = ast.parse(Path(tags.__file__).read_text(encoding="utf-8"))
+    imported = {
+        (alias.asname or alias.name).split(".")[0]
+        for node in ast.walk(source)
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        for alias in node.names
     }
-    assert public == set(tags.__all__)
+    published = {
+        node.targets[0].id
+        for node in source.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    } | {
+        node.name
+        for node in source.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    }
+
+    public = {name for name in vars(tags) if not name.startswith("_")}
+
+    assert public - imported == set(tags.__all__)
+    assert set(tags.__all__) <= published | imported, (
+        f"{sorted(set(tags.__all__) - published - imported)} is published but not "
+        f"bound anywhere in this module"
+    )
 
 
 def test_the_two_halves_of_the_key_family_name_each_other() -> None:
@@ -288,16 +322,76 @@ def test_a_bare_string_is_one_node_and_a_bytes_and_a_mapping_are_neither() -> No
         assert type(written).__name__ in str(refusal.value)
 
 
-def test_a_scalar_that_is_not_a_string_raises_the_documented_class() -> None:
-    """Asserted on the **class**, because what it replaces already raised.
+def test_a_buffer_under_the_node_key_is_refused_like_the_bytes_it_is() -> None:
+    """The same door as ``bytes``, reached by three more types that are not it.
 
-    ``list(None)`` is a ``TypeError``, and a caller holding this function's
-    documented ``Raises:`` catches nothing at all for the commonest
-    serialization accident there is. So ``pytest.raises(ValidationError)`` and
-    never ``Exception``: the point is not that something goes wrong, it is
-    that what goes wrong is the class this contract names.
+    ``bytes`` and ``bytearray`` were carved out **by name**, and a carve-out
+    spelled as a list of types is a list of the ones somebody thought of.
+    ``memoryview`` and ``array.array`` are registered on ``Sequence`` too and
+    were in neither list, so a binary blob arrived at the entry loop: a
+    non-empty one was refused for the *wrong reason*, naming its integers
+    rather than its type, and an **empty** one answered ``()`` --- which is
+    the one statement ``[]`` is reserved for, made about a value that says
+    nothing of the kind.
+
+    ``memoryview`` is not hypothetical: it is what ``psycopg2`` hands back for
+    a ``bytea`` column, so a writer who put the node list in a binary column
+    and read the row back reaches exactly the failure the bare-string rule
+    forecloses, through a third door.
+
+    So the test is a *property* and the fix is too --- ``Buffer``, which is
+    what these four have in common and what ``list`` and ``str`` do not.
+    Asserted empty-first, because the empty case is the silent one.
     """
-    for written in (None, 42, 3.5, True):
+    for written in (memoryview(b""), array.array("b", []), bytearray(), b""):
+        with pytest.raises(ValidationError) as refusal:
+            read_node_tags(_row(written))
+        assert type(written).__name__ in str(refusal.value), (
+            f"an empty {type(written).__name__} answered rather than refusing, "
+            f"which spells 'this row is about no node' over a binary value"
+        )
+
+    for written in (memoryview(b"beagle"), array.array("b", [1, 2])):
+        with pytest.raises(ValidationError) as refusal:
+            read_node_tags(_row(written))
+        assert type(written).__name__ in str(refusal.value)
+        assert "entries" not in str(refusal.value), (
+            "a buffer was diagnosed by its integers rather than by its type"
+        )
+
+
+def test_a_list_and_a_tuple_still_read_beside_the_buffers_they_are_not() -> None:
+    """The other half of the property, without which the fix could be ``str``-only.
+
+    A predicate that refused every ``Sequence`` but ``str`` would pass every
+    assertion in the test above and lose the key's whole reason for being
+    list-valued. So the two shapes a writer actually uses are asserted here,
+    against the same read.
+    """
+    assert read_node_tags(_row(["beagle", "dog"])) == (
+        NodeTag("mammals", "species", "beagle"),
+        NodeTag("mammals", "species", "dog"),
+    )
+    assert read_node_tags(_row(("beagle",))) == (NodeTag("mammals", "species", "beagle"),)
+
+
+def test_a_scalar_that_is_not_a_string_raises_the_documented_class() -> None:
+    """Asserted on the **class**, because the obvious implementation raises another.
+
+    ``list(42)`` is a ``TypeError``, so a read that simply iterated the value
+    would hand a caller holding this function's documented ``Raises:``
+    nothing to catch, for the commonest serialization accident there is. So
+    ``pytest.raises(ValidationError)`` and never ``Exception``: the point is
+    not that something goes wrong, it is that what goes wrong is the class
+    this contract names.
+
+    ``None`` is deliberately **not** in this loop. A null under a key is a
+    key the writer did not write rather than a value of the wrong type ---
+    see
+    ``test_a_null_under_a_key_reads_as_absent_rather_than_as_a_type_to_refuse``,
+    which is where the store that materialises one is the subject.
+    """
+    for written in (42, 3.5, True):
         with pytest.raises(ValidationError) as refusal:
             read_node_tags(_row(written))
         assert NODE_ID_KEY in str(refusal.value)
@@ -305,6 +399,42 @@ def test_a_scalar_that_is_not_a_string_raises_the_documented_class() -> None:
 
     with pytest.raises(ValidationError):
         read_node_tags({**_row(["beagle"]), ONTOLOGY_ID_KEY: 42})
+
+
+def test_a_null_under_a_key_reads_as_absent_rather_than_as_a_type_to_refuse() -> None:
+    """The store that materialises what nothing wrote, which most stores do.
+
+    This module opens by saying *a key nothing wrote reads as absent, which
+    every reader treats as unknown, assume current* --- and that was true only
+    of a store that **omits**. A relational or columnar row hands back a
+    column nothing wrote as ``None``, and the contract's own framing is *as
+    the consumer's own store handed it back*, so both shapes arrive here.
+
+    Keying presence on ``in`` rather than on the value made an untagged row
+    out of such a store refuse. Through the batch reader that inverts the
+    distinction the two fields exist to draw: an untagged corpus reads as
+    **wholly malformed** and ``require_readable()`` refuses all of it.
+
+    The half-written row still refuses, and with the better of the two
+    messages --- *declares no ``dk_node_id``* rather than *``dk_node_id`` is
+    NoneType* --- because a null under a key is a key the writer did not
+    write. Both clauses are here because either alone would pass against a
+    read that had simply stopped refusing.
+    """
+    nulled = {ONTOLOGY_ID_KEY: None, TAXONOMY_ID_KEY: None, NODE_ID_KEY: None, "text": "invoice"}
+
+    assert read_node_tags(nulled) == ()
+
+    reading = read_node_tags_many([nulled, _row(["beagle"])])
+
+    assert reading.malformed == ()
+    assert reading.require_readable() == ((), (NodeTag("mammals", "species", "beagle"),))
+
+    with pytest.raises(ValidationError) as refusal:
+        read_node_tags({**TAGGED, NODE_ID_KEY: None})
+
+    assert NODE_ID_KEY in str(refusal.value)
+    assert "declares no" in str(refusal.value)
 
 
 def test_one_bad_entry_refuses_the_row_whole_and_three_are_all_named() -> None:
@@ -330,6 +460,70 @@ def test_one_bad_entry_refuses_the_row_whole_and_three_are_all_named() -> None:
     assert "3 of 4" in str(three.value)
     for position in ("0 is NoneType", "2 is int", "3 is bytes"):
         assert position in str(three.value)
+
+
+def test_a_bare_alias_form_is_one_form_and_not_its_characters() -> None:
+    """The failure this key's docstring cites, asserted against a published read.
+
+    A consumer-written ``"ACME"`` became four one-character rows, all under the
+    entity's id, leaving one row holding ``"E"``. The rule that prevents it is
+    the one :data:`NODE_ID_KEY` already states and ``_strings_under`` already
+    implements --- and until this function shipped it was implemented
+    **privately**, so the reader that had the bug was a reader writing the rule
+    itself. That is the whole argument for publishing it: the rule exists, and
+    the consumer this key is addressed to could not reach it.
+
+    Asserted with the list form beside the bare one, because a read that
+    answered ``("ACME",)`` by refusing every sequence would pass the first
+    line alone.
+    """
+    assert read_alias_forms({ALIAS_FORMS_KEY: "ACME"}) == ("ACME",)
+    assert read_alias_forms({ALIAS_FORMS_KEY: ["ACME", "ACME widget"]}) == (
+        "ACME",
+        "ACME widget",
+    )
+    assert read_alias_forms({ALIAS_FORMS_KEY: []}) == ()
+
+
+def test_an_unaliased_row_answers_empty_and_a_malformed_one_refuses() -> None:
+    """The two answers, on the row reader's own terms one key over.
+
+    A row with no forms is the ordinary case and answers ``()`` --- there is
+    no second key here to be half-written against, because this key describes
+    the *entity* rather than a placement, so a row carrying it alone is an
+    ordinary alias row. A value that is not a string or a sequence of them is
+    the same writer's bug the node key refuses, and refuses the same way:
+    naming the key, the type, and every offending position.
+    """
+    assert read_alias_forms({}) == ()
+    assert read_alias_forms({"invoice_id": "2291"}) == ()
+    assert read_alias_forms({ALIAS_FORMS_KEY: None}) == ()
+
+    for written in (42, b"ACME", memoryview(b"ACME"), {"ACME": 1}, {"ACME"}):
+        with pytest.raises(ValidationError) as refusal:
+            read_alias_forms({ALIAS_FORMS_KEY: written})
+        assert ALIAS_FORMS_KEY in str(refusal.value)
+        assert type(written).__name__ in str(refusal.value)
+
+    with pytest.raises(ValidationError) as entries:
+        read_alias_forms({ALIAS_FORMS_KEY: ["ACME", None, 42]})
+
+    assert "2 of 3" in str(entries.value)
+
+
+def test_the_alias_read_takes_the_key_because_the_writer_of_it_does() -> None:
+    """``key`` is a parameter rather than the constant, and that is forced.
+
+    ``EntitySourceIndexSource.aliases_key`` is a **field** with
+    :data:`ALIAS_FORMS_KEY` as its default, so a consumer who configured a key
+    of their own writes rows this read must still be able to open. A reader
+    hard-coded to the constant would be a reader that could not read the rows
+    the writer beside it produces --- which is the one-key-two-ends failure the
+    whole family exists to prevent, arriving at the read end.
+    """
+    assert EntitySourceIndexSource.__dataclass_fields__["aliases_key"].default == (ALIAS_FORMS_KEY)
+    assert read_alias_forms({"forms": ["ACME"]}, key="forms") == ("ACME",)
+    assert read_alias_forms({"forms": ["ACME"]}) == ()
 
 
 def test_the_read_imports_nothing_outside_this_package_and_the_standard_library() -> None:
@@ -418,6 +612,22 @@ def test_an_empty_node_list_is_untagged_rather_than_malformed() -> None:
     assert read_node_tags(_row([])) == ()
 
 
+def test_the_batch_over_an_empty_sequence_is_empty_in_both_fields() -> None:
+    """The ``Returns:`` clause that no assertion held.
+
+    *Empty in both fields for an empty input* is a documented answer, and a
+    reading that raised on it --- or that answered a one-entry ``tags`` --- is
+    what a caller folding over a filtered hit set would meet first, on the
+    day the filter matched nothing. The guide publishes the line; this is what
+    makes it a claim.
+    """
+    reading = read_node_tags_many([])
+
+    assert reading.tags == ()
+    assert reading.malformed == ()
+    assert reading.require_readable() == ()
+
+
 def test_require_readable_returns_the_tags_over_a_clean_reading_and_refuses_over_any() -> None:
     """Both clauses in one test, on the empty-answer precedent above.
 
@@ -502,6 +712,43 @@ def test_a_tags_id_round_trips_into_a_key_and_a_foreign_one_is_refused(
         lines.localize(qualify("procedures", "spay"))
 
     assert "procedures" in str(refusal.value) and "acme" in str(refusal.value)
+
+
+def test_an_ontology_id_carrying_a_colon_is_refused_before_it_composes_one(
+    mammals: Ontology,
+) -> None:
+    """The shape half of *the last frame that can still see a type*.
+
+    ``qualified_id`` joins the pair with ``:``, and ``localize`` splits on the
+    **first** one --- so an ontology id that already carries a colon composes
+    an id whose head is only the segment before it. Measured against the read
+    before this guard: a row declaring ontology ``mammals:evil`` produced
+    ``mammals:evil:beagle``, which ``mammals`` accepted and localized to
+    ``evil:beagle``. A row belonging to one vocabulary resolved against
+    another, with nothing raising.
+
+    The loader refuses a colon in an ontology id for exactly this reason, so
+    every id this package mints is colon-free; a value off a foreign row is
+    the one door where the invariant is not already held. This frame can see
+    it and the next one cannot, which is the same argument the type bar is
+    made with.
+
+    **The silent failure is asserted beside the refusal**, and it is what
+    makes the refusal load-bearing rather than belt-and-braces: ``localize``
+    splits on the first colon, so it does *not* refuse the composed id --- it
+    accepts it and hands back ``evil:beagle``, a local id nobody wrote. A
+    reader that expected the door to catch this would be expecting the wrong
+    frame. It also keeps this test from passing against a read that refused
+    every ontology id.
+    """
+    with pytest.raises(ValidationError) as refusal:
+        read_node_tags({**_row(["beagle"]), ONTOLOGY_ID_KEY: "mammals:evil"})
+
+    assert ONTOLOGY_ID_KEY in str(refusal.value)
+    assert ":" in str(refusal.value)
+
+    assert mammals.localize(qualify("mammals", "beagle")) == "beagle"
+    assert mammals.localize(qualify("mammals:evil", "beagle")) == "evil:beagle"
 
 
 def test_a_tags_node_id_is_a_string_even_where_the_axis_keys_are_not(

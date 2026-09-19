@@ -186,7 +186,7 @@ PAIRS = [
 #: The distinction is not bookkeeping. This file exists because two copies of
 #: one document were each guarded and their *sameness* was guarded by nobody.
 #: A document with one copy has no sameness to guard, and declaring it here says
-#: that in the place somebody adding the fourth fence will read -- where
+#: that in the place somebody adding the next fence will read -- where
 #: omitting it from ``PAIRS`` alone would read as an oversight.
 #:
 #: Checked rather than believed: ``test_a_declared_single_copy_is_still_single``

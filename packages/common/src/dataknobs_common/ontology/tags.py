@@ -41,12 +41,12 @@ a published family exists to prevent. Each value is its constant's name less
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Buffer, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from dataknobs_common.exceptions import ValidationError
-from dataknobs_common.ontology.model import qualify
+from dataknobs_common.ontology.model import _refuse_colon, qualify
 
 __all__ = [
     "ALIAS_FORMS_KEY",
@@ -56,6 +56,7 @@ __all__ = [
     "MalformedRow",
     "NodeTag",
     "TagReading",
+    "read_alias_forms",
     "read_node_tags",
     "read_node_tags_many",
 ]
@@ -135,7 +136,7 @@ class NodeTag:
         Composed through the free
         :func:`~dataknobs_common.ontology.model.qualify` and never with an
         f-string, for that function's own stated reason: *"a malformed id is
-        unfixable once it is written into stored data."* The two spellings of
+        unfixable once written into stored data."* The two spellings of
         a namespaced id --- this family's two keys, and ``qualify``'s one
         string --- meet here and nowhere else, so this is the member that says
         they are the same thing.
@@ -154,6 +155,15 @@ def read_node_tags(metadata: Mapping[str, Any]) -> tuple[NodeTag, ...]:
     caller that has to tell an exception from an answer on the common path
     wraps every call in a ``try``.
 
+    **A key whose value is ``None`` is a key nothing wrote.** Presence is read
+    off the value rather than off the mapping, because the argument is a row
+    *as the consumer's own store handed it back* and a relational or columnar
+    one materialises what nothing wrote as a null rather than omitting it.
+    Reading such a row as half-written would refuse an untagged corpus
+    wholesale --- the opposite of the distinction the two answers exist to
+    draw --- and a null under one key of three still refuses, with the more
+    accurate of the two messages.
+
     **Refuses a row carrying some of them and not all.** That is not an
     operational state the way a stale id is --- it is a writer that got the
     contract wrong, and silence lets it scale to a whole corpus before anyone
@@ -162,12 +172,21 @@ def read_node_tags(metadata: Mapping[str, Any]) -> tuple[NodeTag, ...]:
 
     A bare ``str`` under :data:`NODE_ID_KEY` is one node, not its characters.
 
-    **Refuses a value that is not a string.** A ``bytes`` is a sequence of
-    integers and reaches the failure the line above forecloses; a ``Mapping``
-    reads as its keys and would otherwise succeed; a scalar that is not a
-    ``str`` raised ``TypeError``, which is not the class this contract
-    documents. ``[]`` is not a malformation: it is a row about no node of this
-    axis, and it answers ``()``.
+    **Refuses a value that is not a string.** A ``bytes`` --- or any other
+    ``Buffer``: a ``memoryview`` off a binary column, an ``array`` --- is a
+    sequence of integers and reaches the failure the line above forecloses; a
+    ``Mapping`` reads as its keys and would otherwise succeed; and a scalar
+    that is not a ``str`` would reach ``TypeError`` from the iteration rather
+    than the class this contract documents, which is why the type is tested
+    before anything is iterated. ``[]`` is not a malformation: it is a row
+    about no node of this axis, and it answers ``()``.
+
+    **Refuses a ``:`` in :data:`ONTOLOGY_ID_KEY`**, which the loader already
+    refuses in an id it mints. :attr:`NodeTag.qualified_id` joins the pair
+    with that character and ``Ontology.localize`` splits on the first one, so
+    an ontology id carrying one composes an id that a *different* vocabulary
+    accepts and localizes to a local id nobody wrote. This is the last frame
+    that can see the shape, exactly as it is the last that can see the type.
 
     Args:
         metadata: A content row's metadata mapping, as the consumer's own
@@ -179,18 +198,20 @@ def read_node_tags(metadata: Mapping[str, Any]) -> tuple[NodeTag, ...]:
 
     Raises:
         ValidationError: Where the row carries some of the three keys and not
-            all three, naming the ones that are missing; or where
-            :data:`ONTOLOGY_ID_KEY` or :data:`TAXONOMY_ID_KEY` is not a
-            ``str``, or :data:`NODE_ID_KEY` is neither a ``str`` nor a
+            all three --- counting a ``None`` as none --- naming the ones that
+            are missing; where :data:`ONTOLOGY_ID_KEY` or
+            :data:`TAXONOMY_ID_KEY` is not a ``str``, or
+            :data:`NODE_ID_KEY` is neither a ``str`` nor a non-``Buffer``
             ``Sequence`` of them --- naming the key, the type found, and every
-            offending position. The row refuses whole; one bad entry does not
-            yield the readable ones.
+            offending position; or where :data:`ONTOLOGY_ID_KEY` carries a
+            ``:``. The row refuses whole; one bad entry does not yield the
+            readable ones.
     """
-    written = [key for key in _TAG_KEYS if key in metadata]
+    written = [key for key in _TAG_KEYS if metadata.get(key) is not None]
     if not written:
         return ()
     if len(written) != len(_TAG_KEYS):
-        absent = [key for key in _TAG_KEYS if key not in metadata]
+        absent = [key for key in _TAG_KEYS if metadata.get(key) is None]
         raise ValidationError(
             f"a content row carrying {_named(written)} declares no {_named(absent)}: "
             f"a row carrying any of the three tag keys carries all three",
@@ -201,10 +222,53 @@ def read_node_tags(metadata: Mapping[str, Any]) -> tuple[NodeTag, ...]:
     taxonomy_id = metadata[TAXONOMY_ID_KEY]
     _refuse_a_value_that_is_not_a_key(ONTOLOGY_ID_KEY, ontology_id)
     _refuse_a_value_that_is_not_a_key(TAXONOMY_ID_KEY, taxonomy_id)
+    _refuse_colon(ONTOLOGY_ID_KEY, ontology_id)
     return tuple(
         NodeTag(ontology_id=ontology_id, taxonomy_id=taxonomy_id, node_id=node_id)
-        for node_id in _node_ids(metadata[NODE_ID_KEY])
+        for node_id in _strings_under(NODE_ID_KEY, metadata[NODE_ID_KEY])
     )
+
+
+def read_alias_forms(metadata: Mapping[str, Any], key: str = ALIAS_FORMS_KEY) -> tuple[str, ...]:
+    """The surface forms this row's entity is known by.
+
+    The read of :data:`ALIAS_FORMS_KEY`, over the same core
+    :func:`read_node_tags` reads its node list with --- which is the point of
+    publishing it. The rule is that **a bare ``str`` is one form, not its
+    characters**, and this key's docstring exists because the reader that had
+    to apply it did not: a consumer-written ``"ACME"`` became four
+    one-character rows. A rule implemented privately is a rule the consumer
+    who needs it has to write again.
+
+    **Standalone, unlike the three tag keys.** This key describes the *entity*
+    a row stands for rather than which node the row is placed on, so a row
+    carrying it and nothing else is an ordinary alias row and not a
+    half-written tag. There is no companion key for it to be absent against,
+    and so no half-written state: a row without it answers ``()``.
+
+    Args:
+        metadata: A content row's metadata mapping, as the consumer's own
+            store handed it back.
+        key: Where the forms were written. A parameter rather than the
+            constant because
+            :attr:`~dataknobs_common.ontology.index_source.EntitySourceIndexSource.aliases_key`
+            is a configurable field defaulting to it --- a read hard-coded to
+            the constant could not open the rows the writer beside it
+            produces.
+
+    Returns:
+        One form per entry, in the order the row wrote them. Empty where the
+        row carries no forms, including where it carries ``None``.
+
+    Raises:
+        ValidationError: Where the value is neither a ``str`` nor a
+            non-``Buffer`` ``Sequence`` of them --- naming the key, the type
+            found, and every offending position. The row refuses whole.
+    """
+    written = metadata.get(key)
+    if written is None:
+        return ()
+    return tuple(_strings_under(key, written))
 
 
 @dataclass(frozen=True)
@@ -248,6 +312,15 @@ class TagReading:
     an empty sequence rather than being dropped, because the reply is
     positional."* Which of the two a given ``()`` is, is :attr:`malformed`'s
     answer and is the reason that field exists.
+
+    **A third source is not separated, deliberately.** A fully tagged row
+    whose node list is empty also holds ``()``, and :attr:`malformed` does not
+    distinguish it from an untagged one --- both are *this row is about no
+    node*, one said by omission and one said explicitly, and neither is a
+    fault anybody can act on. A caller who needs the difference has the row:
+    it is whether :data:`~dataknobs_common.ontology.tags.NODE_ID_KEY` is in
+    it. The field separates the answers that differ in *who can fix them*,
+    which is the only distinction a reader of a corpus can act on.
     """
 
     malformed: tuple[MalformedRow, ...] = ()
@@ -349,15 +422,29 @@ def _refuse_a_value_that_is_not_a_key(key: str, value: Any) -> None:
     )
 
 
-def _node_ids(value: Any) -> list[str]:
-    """:data:`NODE_ID_KEY`'s entries, or a refusal naming every offending position.
+def _strings_under(key: str, value: Any) -> list[str]:
+    """``key``'s entries, or a refusal naming every offending position.
 
-    A bare ``str`` is one node. A ``Sequence`` is its entries, **except**
-    ``bytes`` and ``bytearray``, which are sequences of integers and are the
-    foreclosed failure arriving through a second door. A ``Mapping``, a ``set``
-    and an iterator are not sequences: the first reads as its keys, the second
-    cannot satisfy this function's documented order, and the third is consumed
-    by being read once.
+    **The key is a parameter because two keys carry this rule.**
+    :data:`NODE_ID_KEY` and :data:`ALIAS_FORMS_KEY` are both list-valued, both
+    take a bare ``str`` as one entry, and both refuse the same shapes for the
+    same reasons --- and the second one's docstring exists because a reader
+    that had written the rule itself got it wrong. One implementation is what
+    keeps the two from drifting; the key is what lets each refusal name the
+    one the writer actually wrote.
+
+    A bare ``str`` is one node. A ``Sequence`` is its entries, **except** a
+    ``Buffer`` --- ``bytes``, ``bytearray``, ``memoryview``, ``array.array``
+    --- which are sequences of integers and are the foreclosed failure
+    arriving through a second door. **The exclusion is that property and not a
+    list of types**, because a list is the types somebody thought of:
+    ``memoryview`` is what a driver hands back for a binary column, it is
+    registered on ``Sequence``, and an empty one would otherwise answer *this
+    row is about no node* over a value that says nothing of the kind.
+
+    A ``Mapping``, a ``set`` and an iterator are not sequences: the first
+    reads as its keys, the second cannot satisfy this function's documented
+    order, and the third is consumed by being read once.
 
     **Every offending position is named, not the first**, because the extent of
     a tagger's bug should be learnable in one read.
@@ -369,24 +456,23 @@ def _node_ids(value: Any) -> list[str]:
     """
     if isinstance(value, str):
         return [value]
-    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
+    if isinstance(value, Sequence) and not isinstance(value, Buffer):
         offending = [
             (position, entry) for position, entry in enumerate(value) if not isinstance(entry, str)
         ]
         if offending:
             named = ", ".join(f"{position} is {type(e).__name__}" for position, e in offending)
             raise ValidationError(
-                f"{NODE_ID_KEY!r} has {len(offending)} of {len(value)} entries that are "
+                f"{key!r} has {len(offending)} of {len(value)} entries that are "
                 f"not strings: {named}",
                 context={
-                    "key": NODE_ID_KEY,
+                    "key": key,
                     "entries": len(value),
                     "offending": [position for position, _ in offending],
                 },
             )
         return list(value)
     raise ValidationError(
-        f"{NODE_ID_KEY!r} is {type(value).__name__}, and a {NODE_ID_KEY!r} is a string or a "
-        f"sequence of strings",
-        context={"key": NODE_ID_KEY, "type": type(value).__name__},
+        f"{key!r} is {type(value).__name__}, and a {key!r} is a string or a sequence of strings",
+        context={"key": key, "type": type(value).__name__},
     )

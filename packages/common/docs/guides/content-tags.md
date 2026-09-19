@@ -36,12 +36,14 @@ from dataknobs_common.ontology import (
 )
 ```
 
-`ALIAS_FORMS_KEY` is the fourth key of the same family and is on the same door.
-It says which surface forms a row's entity is known by, which is a different
-question from which node the row is placed on, so it is not one of the three
-this read wants. A fifth — the model that produced the vector — lives in
-`dataknobs_data.vector.content`, because it is about an embedder rather than
-about identity.
+`ALIAS_FORMS_KEY` and `read_alias_forms` are the fourth key of the same family
+and its read, on the same door. It says which surface forms a row's entity is
+known by, which is a different question from which node the row is placed on,
+so it is not one of the three `read_node_tags` wants — but the rule for reading
+it is the same one, and [it reads through the same
+core](#the-fourth-key-reads-the-same-way). A fifth — the model that produced
+the vector — lives in `dataknobs_data.vector.content`, because it is about an
+embedder rather than about identity.
 
 ## The whole input
 
@@ -172,7 +174,7 @@ reading.malformed[0].reason
 try:
     reading.require_readable()
 except ValidationError as refusal:
-    str(refusal)  # names EVERY malformed position, once
+    refused = str(refusal)  # names EVERY malformed position, once
 
 # (3) name the vocabulary, and keep the tags it is about. The filter is yours: a
 #     name off a row is not a name you typed.
@@ -201,7 +203,7 @@ here.ancestors()  # retriever, dog, mammal
 try:
     onto.localize(qualify("procedures", "spay"))
 except ValidationError as refusal:
-    str(refusal)  # names both ontologies
+    foreign = str(refusal)  # names both ontologies
 ```
 
 That block is executed as written by a workspace test, and the test asserts it
@@ -244,9 +246,17 @@ and not all raises:
 
 ```python
 from dataknobs_common.exceptions import ValidationError
-from dataknobs_common.ontology import NODE_ID_KEY, read_node_tags
+from dataknobs_common.ontology import (
+    NODE_ID_KEY,
+    ONTOLOGY_ID_KEY,
+    TAXONOMY_ID_KEY,
+    read_node_tags,
+)
 
 assert read_node_tags({"invoice_id": "2291"}) == ()
+
+# A store that materialises what nothing wrote is saying the same thing.
+assert read_node_tags({ONTOLOGY_ID_KEY: None, TAXONOMY_ID_KEY: None, NODE_ID_KEY: None}) == ()
 
 try:
     read_node_tags({NODE_ID_KEY: ["beagle"]})
@@ -267,6 +277,14 @@ there lets one mistake scale to a whole corpus before anybody reads a row back.
 So it refuses, and the refusal names the keys that are absent, because the
 writer it is addressed to has not read this page.
 
+**A `None` under a key is a key nothing wrote.** The argument is a row *as
+your own store handed it back*, and only some stores omit — a relational or
+columnar one hands back a column nobody wrote as a null. Reading that as a
+half-written tag would refuse an untagged corpus in its entirety, which is the
+opposite of the distinction above; so presence is read off the value. A null
+under *one* key of three still refuses, and with the more useful of the two
+messages: *declares no `dk_node_id`* rather than *`dk_node_id` is NoneType*.
+
 ## A bare string is one node
 
 ```python
@@ -285,7 +303,7 @@ assert read_node_tags({**row, NODE_ID_KEY: []}) == ()
 
 The key is list-valued because a row may be about several nodes at once, and a
 bare string satisfies *iterate it* — which is what makes the first line worth
-asserting. Without it, `"beagle"` reads as seven nodes named `b`, `e`, `a`, `g`,
+asserting. Without it, `"beagle"` reads as six nodes named `b`, `e`, `a`, `g`,
 `l`, `e`, and the symptom is an empty `ancestors()` three calls later, with
 nothing having raised.
 
@@ -309,24 +327,44 @@ from dataknobs_common.ontology import (
 
 row = {ONTOLOGY_ID_KEY: "mammals", TAXONOMY_ID_KEY: "species"}
 
-for written in (None, 42, b"beagle", {"beagle": 1}, {"beagle"}):
+for written in (42, b"beagle", memoryview(b"beagle"), {"beagle": 1}, {"beagle"}):
     try:
         read_node_tags({**row, NODE_ID_KEY: written})
     except ValidationError as refusal:
         assert "dk_node_id" in str(refusal)
+        assert type(written).__name__ in str(refusal)
 
 try:
     read_node_tags({**row, NODE_ID_KEY: ["golden_retriever", None, "beagle"]})
 except ValidationError as refusal:
     assert "1 of 3 entries" in str(refusal)
+
+# The pair is joined with `:`, so a `:` in the ontology id would compose an id
+# a DIFFERENT vocabulary accepts. This is the last frame that can see that.
+try:
+    read_node_tags({**row, ONTOLOGY_ID_KEY: "mammals:evil", NODE_ID_KEY: ["beagle"]})
+except ValidationError as refusal:
+    assert "dk_ontology_id" in str(refusal)
 ```
 
 A `bytes` is a sequence of integers, so it reaches the six-tags-for-six-letters
-failure through a second door. A `Mapping` reads as its keys and would
+failure through a second door — and **the exclusion is the buffer property, not
+a list of types**. A list is the types somebody thought of: `memoryview` is what
+a driver hands back for a binary column, it is registered on `Sequence` too, and
+an empty one would otherwise answer `()` — *this row is about no node* — over a
+value that says nothing of the kind. A `Mapping` reads as its keys and would
 otherwise *succeed*, silently, on a shape nobody meant. A scalar that is not a
-string used to raise `TypeError`, which is not the class this contract
-documents, so a caller holding its `Raises:` caught nothing at all for the
-commonest serialization accident there is.
+string would reach `TypeError` from the iteration rather than the class this
+contract documents, so the type is tested before anything is iterated: a caller
+holding the `Raises:` should not have to catch two classes for the commonest
+serialization accident there is.
+
+**A `:` in the ontology id is refused for the same reason one frame further
+on.** `qualified_id` joins the pair with that character and `localize` splits on
+the first one, so `mammals:evil` would compose `mammals:evil:beagle` — which the
+vocabulary `mammals` *accepts*, localizing it to `evil:beagle`. The loader
+already refuses a colon in an id it mints; a value off a foreign row is the one
+door where that invariant is not already held.
 
 **This is the last frame that can still see a type.** One call later the value
 has been rendered into a string, one call after that it is a well-formed
@@ -339,6 +377,42 @@ position rather than the first. A row declaring three nodes of which one is
 wrong would otherwise count as evidence for two, and a caller reading that has
 been told something false about what the row is about. The extent of a tagger's
 bug should be learnable in one read.
+
+## The fourth key reads the same way
+
+`dk_alias_forms` is not one of the three. It says which surface forms the
+row's *entity* is known by rather than which node the row is placed on, so a
+row carrying it and nothing else is an ordinary alias row and not a
+half-written tag — there is no companion key for it to be absent against:
+
+```python
+from dataknobs_common.ontology import ALIAS_FORMS_KEY, read_alias_forms
+
+assert read_alias_forms({ALIAS_FORMS_KEY: ["ACME", "ACME widget"]}) == (
+    "ACME",
+    "ACME widget",
+)
+assert read_alias_forms({ALIAS_FORMS_KEY: "ACME"}) == ("ACME",)
+assert read_alias_forms({"invoice_id": "2291"}) == ()
+
+# `aliases_key` on the writer is configurable, so the reader takes it too.
+assert read_alias_forms({"forms": ["ACME"]}, key="forms") == ("ACME",)
+```
+
+**The second line is the whole reason this is published.** A bare `"ACME"` is
+one form, not four one-character ones — the same rule the node key states, and
+the one its reader had not applied: a consumer-written `"ACME"` became four
+rows, all under the entity's id, leaving one holding `"E"`. The rule was
+implemented here the whole time and implemented *privately*, so the reader that
+had the bug was a reader writing the rule again. Both keys now read through one
+function, which is what keeps them from drifting apart a second time.
+
+**`key` is a parameter, not the constant.**
+`EntitySourceIndexSource.aliases_key` is a field defaulting to
+`ALIAS_FORMS_KEY`, so a consumer who configured their own key writes rows this
+read still has to open. A reader hard-coded to the constant would be the
+one-key-two-ends failure this family exists to prevent, arriving at the read
+end.
 
 ## Over a corpus, the report is the answer
 
@@ -375,6 +449,13 @@ spelled both the same way — and *touched no vocabulary* and *was written wrong
 are opposite facts about a corpus. `malformed` is what tells them apart, and
 `MalformedRow` carries the row reader's own message verbatim rather than a
 re-composed one, so the batch caller is told no less than the per-row caller.
+
+**A row with an empty node list also holds `()`, and `malformed` does not
+separate that one.** It is the same fact as the untagged row — *this row is
+about no node* — said explicitly rather than by omission, and neither is
+something anybody can be told about. The field separates the answers that
+differ in *who can fix them*. If you need the other distinction you have the
+row: it is whether `dk_node_id` is in it.
 
 **Raising would have been the quieter option, not the louder one.** Over ten
 thousand rows with one bad row in the middle, a loop that lets the refusal out

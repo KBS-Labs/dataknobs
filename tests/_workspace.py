@@ -549,12 +549,14 @@ def published_fence(path: Path, marker: str) -> str:
     equal -- a guard reporting green because it read nothing, over the one page
     it exists to read.
 
-    Shared by the worked-call-site guards rather than copied into each. There
-    are three of them now, one per guide, and the failure mode above is exactly
-    the kind a second copy loses silently: a guard that stopped refusing still
-    passes every test written for the guard that did. :func:`door_imports` is
-    shared by the same three for the same reason, and its docstring records
-    what the copies had already lost.
+    Shared by the worked-call-site guards rather than copied into each --- one
+    per guide that publishes a call site, so the population grows with the
+    guides and is deliberately not counted here; a count in this docstring
+    went stale the first time a sixth guide shipped. The failure mode above is
+    exactly the kind a second copy loses silently: a guard that stopped
+    refusing still passes every test written for the guard that did.
+    :func:`door_imports` is shared by the same set for the same reason, and
+    its docstring records what the copies had already lost.
     """
     fences = [f for f in code_fences(path) if f.marker == marker]
     if len(fences) != 1:
@@ -573,8 +575,9 @@ def door_imports(fence: str, package: str = "dataknobs_common") -> set[str]:
     """Every module of ``package`` that ``fence`` imports, however it spells it.
 
     Shared by the worked-call-site guards for :func:`published_fence`'s reason
-    at one remove. Each of the three carried its own copy of this, differing
-    only in the ``doors`` set it compared against -- and the copies read
+    at one remove. Each of the three that existed when this was extracted
+    carried its own copy, differing only in the ``doors`` set it compared
+    against -- and the copies read
     ``line.startswith("from ...")``, which is a prefix scan over source text
     rather than a reading of it.
 

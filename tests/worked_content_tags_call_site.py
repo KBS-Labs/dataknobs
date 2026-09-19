@@ -93,7 +93,7 @@ reading.malformed[0].reason
 try:
     reading.require_readable()
 except ValidationError as refusal:
-    str(refusal)  # names EVERY malformed position, once
+    refused = str(refusal)  # names EVERY malformed position, once
 
 # (3) name the vocabulary, and keep the tags it is about. The filter is yours: a
 #     name off a row is not a name you typed.
@@ -122,4 +122,4 @@ here.ancestors()  # retriever, dog, mammal
 try:
     onto.localize(qualify("procedures", "spay"))
 except ValidationError as refusal:
-    str(refusal)  # names both ontologies
+    foreign = str(refusal)  # names both ontologies

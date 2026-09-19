@@ -154,6 +154,18 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     # row here is `key`.
     ("<module>", "read_node_tags", "metadata", "payload"),
     ("<module>", "read_node_tags_many", "metadatas", "payload"),
+    # The fourth key's read. `metadata` is `payload` for the reason above, and
+    # so is `key`: it *names* a key in that blob, which is the same open label
+    # `EntitySourceIndexSource.aliases_key` is declared as at the writing end
+    # -- the two are one configurable key with a reader and a writer.
+    #
+    # The return is `text` rather than `key`, which is what `Entity.aliases`
+    # already says one row over: a surface form is what somebody typed or
+    # wrote in a document, not an id in anybody's key space. Reading them back
+    # out of a row does not change what they are.
+    ("<module>", "read_alias_forms", "metadata", "payload"),
+    ("<module>", "read_alias_forms", "key", "payload"),
+    ("<module>", "read_alias_forms", "->", "text"),
     # The `resolver:` section a door refuses before it builds. `payload` for
     # `async_build_resolver.config`'s reason: it is a document's own mapping,
     # whose `str` keys are configuration names -- `rungs`, `kind` -- and
@@ -475,7 +487,7 @@ _REACHABLE_VALUE_TYPES = 37
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 338
+_ROWS = 341
 
 
 def _modules() -> Iterator[ast.Module]:
@@ -568,6 +580,16 @@ def _module_rows() -> list[tuple[str, str, str]]:
     export from their package door, so which module a function is written in is
     not a fact a caller knows, and keying on it would make a row move when a
     function did.
+
+    **What this half still does not reach, stated so the table is not read as
+    total.** The frontier is seeded from protocols and from classes declaring
+    a key parameter, and this half adds module-level *functions*. A published
+    **value type** that declares no key parameter is in neither:
+    ``NodeTag.node_id`` is a rendered key --- the space the ``door`` verdict
+    was invented for --- and no row here classifies it, so a later widening of
+    it to ``K`` would be invisible to all three tests in this file. That is a
+    gap in the population rather than an omission in the table, and closing it
+    is a change to :func:`_population`, not a row.
     """
     rows: list[tuple[str, str, str]] = []
     for module in _modules():

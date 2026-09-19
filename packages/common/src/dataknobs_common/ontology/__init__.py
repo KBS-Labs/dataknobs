@@ -71,6 +71,7 @@ from dataknobs_common.ontology.tags import (
     MalformedRow,
     NodeTag,
     TagReading,
+    read_alias_forms,
     read_node_tags,
     read_node_tags_many,
 )
@@ -204,6 +205,7 @@ __all__ = [
     "edge_criteria",
     "load_ontology",
     "qualify",
+    "read_alias_forms",
     "read_node_tags",
     "read_node_tags_many",
     "refuse_unbuildable_rungs",
