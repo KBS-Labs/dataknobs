@@ -121,13 +121,13 @@ async def test_what_the_text_was_composed_from_travels_to_the_store(
     await store.initialize()
     try:
         source = MultiFieldSource(catalogue, ["title", "summary"])
-        assert source.source_field == "title — summary"
+        assert source.source_field == "title,summary"
 
         index = SemanticIndex(source, DeterministicEmbedder(dimensions=DIMENSIONS), store)
         assert await index.build() == 3
 
         [hit] = [h for h in await index.search("Acme Widget", k=10) if h.record.id == "sku-4471"]
-        assert hit.vector_field == "title — summary"
+        assert hit.vector_field == "title,summary"
         assert hit.source_text == "Acme Widget — a widget"
     finally:
         await store.close()
@@ -215,5 +215,109 @@ async def test_an_intent_carrying_no_text_asks_the_store_nothing(
         await index.build()
 
         assert await SemanticIndexSource(index).query(RetrievalIntent()) == []
+    finally:
+        await store.close()
+
+
+async def test_the_composed_source_field_is_spelled_the_way_its_reader_parses_it(
+    catalogue: AsyncMemoryDatabase,
+) -> None:
+    """One key, one grammar --- and this source was writing a second one.
+
+    ``source_field`` is a published key with an established spelling for the
+    multi-field case: ``_attach_embedding`` writes ``",".join(text_fields)``
+    and the staleness reader parses it back with ``legacy.split(",")``. The
+    store lane reads the same key as a **record field name**
+    (``vector_obj.source_field in record.fields``). This source composed it
+    with the *display* join instead, so ``"title — summary"`` went into a key
+    that is parsed on commas and looked up as a field name, and was neither.
+
+    Asserted as a round trip through the reader's own grammar rather than
+    against a literal, so the two cannot drift apart again.
+    """
+    source = MultiFieldSource(catalogue, ["title", "summary"])
+
+    assert source.source_field.split(",") == ["title", "summary"]
+
+    # The display separator and the key's grammar are now independent, which
+    # is the other half: changing how the text reads must not change how the
+    # key parses.
+    restyled = MultiFieldSource(catalogue, ["title", "summary"], join=" / ")
+    assert restyled.source_field == source.source_field
+
+    # One field stays a bare name, which is what the store lane looks up.
+    assert RecordFieldSource(catalogue, "title").source_field == "title"
+
+
+async def test_a_source_that_claims_hashable_can_actually_be_hashed(
+    catalogue: AsyncMemoryDatabase,
+) -> None:
+    """The ruling the three sources one package over already carry.
+
+    ``MappingSource``, ``CallableSource`` and ``AliasSource`` are
+    ``frozen=True, eq=False`` --- identity, because a source is a configured
+    behaviour and not a value, and because frozen with equality left on gets a
+    generated ``__hash__`` over the field tuple. These two are the same family
+    and did not get the same answer: ``MultiFieldSource`` declares
+    ``fields: Sequence[str]``, so a caller passing a list --- which every
+    example in the docstring does --- gets an instance answering ``Hashable``
+    and raising ``TypeError`` at the call. A caller guarding with the check is
+    guarded against nothing and finds out at the first ``set.add``.
+
+    ``RecordFieldSource`` has the same shape one field along: ``Query`` holds
+    ``filters: list[Filter]``.
+    """
+    from collections.abc import Hashable
+
+    multi = MultiFieldSource(catalogue, ["title", "summary"])
+    assert isinstance(multi, Hashable)
+    hash(multi)
+
+    narrowed = RecordFieldSource(
+        catalogue, "title", query=Query(filters=[Filter("kind", Operator.EQ, "tool")])
+    )
+    assert isinstance(narrowed, Hashable)
+    hash(narrowed)
+
+    # Identity, not field-wise: two sources over one table are interchangeable
+    # and nothing asks whether they are equal.
+    assert MultiFieldSource(catalogue, ["title"]) != MultiFieldSource(catalogue, ["title"])
+
+
+async def test_the_documented_default_threshold_is_applied_rather_than_discarded() -> None:
+    """``score_threshold or None`` made the base signature's default mean its opposite.
+
+    The parameter is documented as *"minimum relevance score to include"* and
+    defaults to ``0.0``. Cosine similarity runs to ``-1``, so ``0.0`` is a
+    meaningful cut --- *drop anything pointing the wrong way* --- and it is
+    the one a caller gets by saying nothing. Written with ``or``, the one
+    value that is both the default and a real threshold was the one value
+    that turned the filter off.
+
+    Asserted against negative-scoring hits rather than against the call,
+    because what the caller cares about is which rows come back.
+    """
+    from dataknobs_common.index import MappingSource
+
+    store = MemoryVectorStore({"dimensions": DIMENSIONS})
+    await store.initialize()
+    try:
+        index = SemanticIndex(
+            MappingSource({f"k{i}": f"text number {i}" for i in range(12)}),
+            DeterministicEmbedder(dimensions=DIMENSIONS),
+            store,
+        )
+        await index.build()
+
+        unfiltered = await index.search("zebra", k=12)
+        assert any(hit.score < 0 for hit in unfiltered), (
+            "the corpus produced no negative scores, so this would pass vacuously"
+        )
+
+        source = SemanticIndexSource(index)
+        results = await source.query(RetrievalIntent(text_queries=["zebra"]), top_k=12)
+
+        assert results, "the cut is at zero, not above every hit"
+        assert all(result.relevance >= 0.0 for result in results)
     finally:
         await store.close()

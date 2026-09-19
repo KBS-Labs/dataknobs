@@ -56,6 +56,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a field and discarded leaves a registry reporting success while holding
   no store, no embedder and no index.
 
+- **The `index:` section configures its source.** `fields:` names which entity
+  fields compose the embedded text, `join:` what goes between two of them, and
+  `aliases: true` wraps the source so each surface form is indexed as its own
+  item. The block built `EntitySourceIndexSource(ontology)` with its default
+  single field and nothing else, so `AliasSource` -- a published class -- was
+  reachable only from Python, and a document could not ask for `description` in
+  the text it embeds. See the guide's warning before setting `aliases:`: the
+  forms collide in a store keyed on id.
+
+  **A key the block does not read is now refused**, which is the same
+  silent-drop failure the `embedder:` refusal exists for: `metirc: l2` used to
+  build an index with no metric check and report success. A malformed value is
+  refused too, and as a `ValidationError` like every other refusal in the block:
+  `fields: name` is what YAML gives a bare scalar, and `tuple("name")` is four
+  one-character field names, so the error named `'a', 'e', 'm', 'n'` rather than
+  the mistake. `aliases:` is checked for being a boolean rather than for
+  truthiness, since `aliases: "no"` is truthy.
+
 - **`bulk_embed_and_store` takes a keyword-only `source_field=`**, so the store
   writes the source-field pair its own contract says is written together or not
   at all. It wrote `source_text` unconditionally and `source_field` never, so a
@@ -86,7 +104,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AttributeError` on the first store it was handed. It probes by member
   presence now, as the matching close helper already did.
 
+- **`FaissVectorStore` refuses a metric FAISS cannot serve here instead of
+  building an L2 index and calling it something else.** `_faiss_metric` ended
+  in a bare `return faiss.METRIC_L2`, so a store configured for `l1` built an
+  `IndexFlatL2` while `store.metric` reported `L1` -- the chroma defect, in the
+  same directory, in the lane the metric sweep declared it was covering.
+  `_score_from_raw` compounded it: with no `L1` arm the raw L2 **distance** came
+  back as the similarity score, so lower was better while every reader above a
+  store, and every `threshold` filter, reads higher as better. FAISS defines
+  `METRIC_L1`, but the index builder branches only inner-product against
+  `IndexFlatL2`, so a refusal at construction is the honest fix rather than a
+  table entry nothing would honour. Widened reach made it worse: the metric
+  door now accepts `manhattan` and `l1_distance` as well as `l1`.
+
+- **`build_script_score_query` is keyed on the metric family and refuses `L1`.**
+  The mapping door (`get_similarity_for_metric`) was fixed to do this and its
+  query-side twin was not, so it still branched on the **member** and ended in
+  `else: # Default to cosine`. `DistanceMetric.L2` -- which is what a consumer
+  configuring `metric="l2"` holds -- built an `l2_norm` mapping at one door and
+  was queried with `cosineSimilarity` at the other, with nothing reporting that
+  the pair disagreed about the same field. It also accepts any published
+  spelling now, as its twin does.
+
+- **`MultiFieldSource.source_field` is spelled the way its reader parses it.**
+  The key has an established grammar -- written `",".join(text_fields)` and read
+  back with `.split(",")`, and used in the store lane as a record field name --
+  and this composed it with the *display* separator, so `"title — summary"` went
+  into a key that is neither. It also tied the key's encoding to a cosmetic
+  choice: restyling the text rewrote it. Comma-joined now, independent of
+  `join`. The same fix landed on the ontology adapter's `source_field`.
+
+- **`RecordFieldSource` and `MultiFieldSource` hash by identity.** Frozen with
+  equality left on, both claimed `Hashable` and raised at the call --
+  `MultiFieldSource` declares `fields: Sequence[str]` and every example passes a
+  list, and `RecordFieldSource` has the same shape through `Query`, which holds
+  `filters: list[Filter]`. That is the one combination worse than never claiming
+  the capability, because the check is how a caller is supposed to ask. The
+  three pure sources in `dataknobs-common` already carried `eq=False`; these are
+  the half of the family that did not get it.
+
+- **`SemanticIndexSource` applies the `score_threshold` it documents.** Written
+  `score_threshold or None`, the parameter turned the filter **off** for exactly
+  one value -- `0.0`, which is both the documented default and a meaningful cut,
+  since cosine similarity runs to `-1` and zero means *drop anything pointing
+  the wrong way*. A caller who said nothing got the opposite of what the
+  signature says they asked for.
+
+- **A `SemanticIndex.build()` that fails partway says how far it got.** The
+  docstring promised an all-or-nothing build -- *"what the source streams now is
+  what the store holds after"* -- and batches are written as they fill, so a
+  raise from the embedder or the store left earlier batches committed with the
+  count in a local and nothing on the exception. A caller could not tell a store
+  holding nothing from one holding most of the corpus, and the two want opposite
+  responses. It now raises `OperationError` with `context["written"]`, chaining
+  the original failure, and the docstring states the partial-write semantics.
+  `build()`'s return is documented as items handed to the store rather than rows
+  written, which a decorator that emits several items per id makes observable.
+
+- **A declared `embedder:` beside an injected one is refused.** The block read
+  `block["embedder"]` only when nothing was injected, so with an embedder in
+  hand the document's section was never read, compared or logged -- a YAML
+  naming one model and a process injecting another indexed under the injected
+  one, recorded it on every row, and left the staleness contract
+  self-consistent while the document was untrue.
+
+- **Nothing that can be refused before the store opens is refused after it.**
+  The comment above the embedder refusal promises that a document which cannot
+  build an index leaves no opened store behind, and two refusals ran after the
+  open: the source the document configures and the spelling of `metric:`. Both
+  moved ahead of it. The one check that cannot move is the metric *claim*, which
+  is a comparison against the store's own metric.
+
+- **Every `index:` refusal raises `ValidationError`.** A misspelled `metric:`
+  reached `DistanceMetric.resolve` and a disagreeing one reached the index's own
+  claim check, and both escaped as bare `ValueError`s past a docstring naming
+  only `ValidationError` -- so a caller catching what was documented caught
+  neither. What is being refused in each case is a document.
+
 ### Changed
+
+- **A vector store reports its metric's canonical member.** The spelling fix
+  above settles a configured metric onto the family member, so `store.metric`,
+  `get_stats()["metric"]` and `__repr__` answer `euclidean` where `l2` was
+  configured and `dot_product` where `inner_product` was. Observable on a
+  released surface, and listed here rather than only under Fixed for that
+  reason: the two spellings were always one metric, but a consumer asserting on
+  the string they configured will see the other one.
 
 - **`Filter` is frozen, and hashes.** It describes a condition rather than
   accumulating one, and nothing here has ever assigned to a field of one after

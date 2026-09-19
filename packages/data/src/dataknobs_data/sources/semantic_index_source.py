@@ -90,6 +90,14 @@ class SemanticIndexSource(GroundedSource):
             score_threshold: Minimum relevance to include. The index applies
                 it per query as well, so a hit below it never reaches here.
 
+                **Passed through as given, including ``0.0``.** Written
+                ``score_threshold or None`` this argument turned the filter
+                off for exactly one value --- the documented default, and a
+                meaningful cut rather than an absent one, since cosine
+                similarity runs to ``-1`` and zero is *drop anything pointing
+                the wrong way*. A caller who said nothing got the opposite of
+                what the signature says they asked for.
+
         Returns:
             Results sorted by relevance, descending, at most *top_k* of them.
         """
@@ -98,9 +106,7 @@ class SemanticIndexSource(GroundedSource):
             return []
 
         best: dict[str, SourceResult] = {}
-        batches = await self._index.search_batch(
-            queries, k=top_k, threshold=score_threshold or None
-        )
+        batches = await self._index.search_batch(queries, k=top_k, threshold=score_threshold)
         for hits in batches:
             for hit in hits:
                 result = SourceResult(

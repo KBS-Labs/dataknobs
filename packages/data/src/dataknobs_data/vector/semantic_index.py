@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.exceptions import OperationError
+
 from dataknobs_data.vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -130,6 +132,19 @@ class SemanticIndex:
         materialised the stream first would take that property away from every
         source at the one call site that consumes them all.
 
+        **So it is not atomic, and a failure says how far it got.** Batching
+        and all-or-nothing are incompatible without a transaction no vector
+        store offers, and streaming is the property worth keeping. What that
+        costs is that a raise partway through leaves earlier batches
+        committed --- so the count travels on the exception rather than
+        dying in a local. Without it a caller cannot tell a store holding
+        nothing from one holding most of the corpus, and the two want
+        opposite responses: retry from scratch is free over the first and
+        wasteful over the second, while reporting the index unbuilt is true
+        of the first and a lie about the second. The store cannot answer this
+        --- it never saw the stream --- which is what makes it this method's
+        to report.
+
         The ids go to the store explicitly. Without that every backend mints a
         ``uuid4`` per row, identically, and the id the source took care to
         emit would be discarded one call below the decision to emit it ---
@@ -150,9 +165,19 @@ class SemanticIndex:
         cannot tell an index hit from anything else in the same store.
 
         Returns:
-            How many items were written. ``0`` over an empty source is a
-            legitimate answer and not an error: a vocabulary that holds
-            nothing is a vocabulary.
+            How many items were **handed to the store**. ``0`` over an empty
+            source is a legitimate answer and not an error: a vocabulary that
+            holds nothing is a vocabulary.
+
+            Not a row count, and the difference is observable: a decorator
+            that emits several items under one id leaves one row, so a build
+            answering ``3`` over a store holding ``1`` is the documented
+            behaviour of that composition rather than a discrepancy.
+
+        Raises:
+            OperationError: When the source, the embedder or the store fails
+                partway. ``context["written"]`` is how many items had already
+                reached the store, and the original failure is the cause.
         """
         source_field = getattr(self.source, "source_field", None)
         written = 0
@@ -176,13 +201,32 @@ class SemanticIndex:
             metadata.clear()
             return count
 
-        async for item in self.source.stream_items():
-            ids.append(item.id)
-            texts.append(item.text)
-            metadata.append(dict(item.metadata))
-            if len(texts) >= BUILD_BATCH_SIZE:
-                written += await flush()
-        written += await flush()
+        try:
+            async for item in self.source.stream_items():
+                ids.append(item.id)
+                texts.append(item.text)
+                metadata.append(dict(item.metadata))
+                if len(texts) >= BUILD_BATCH_SIZE:
+                    written += await flush()
+            written += await flush()
+        except Exception as exc:
+            # `written` is the last completed flush, so it is exactly what the
+            # store holds from this build -- the partial batch in hand was
+            # never sent. Logged as well as raised: the raise reaches the
+            # caller, and the log reaches whoever is reading the process's
+            # output when the caller swallows it.
+            logger.warning(
+                "semantic index build failed after %d item(s) were written; the store "
+                "holds a partial build",
+                written,
+                exc_info=exc,
+            )
+            raise OperationError(
+                f"semantic index build failed after it wrote {written} item(s); the "
+                f"store holds a partial build. Rebuild, or resume from what is there -- "
+                f"the ids are the source's, so a rebuild overwrites rather than duplicates",
+                context={"written": written},
+            ) from exc
 
         if written == 0:
             logger.info("semantic index build over an empty source; nothing written")

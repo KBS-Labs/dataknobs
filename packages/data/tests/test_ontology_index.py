@@ -20,12 +20,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.index import AliasSource, AsyncIndexSource, CallableSource, IndexItem
 from dataknobs_common.ontology import (
     ALIAS_FORMS_KEY,
     ONTOLOGY_ID_KEY,
-    EntitySourceIndexSource,
     OntologyConfig,
 )
 from dataknobs_common.testing import requires_chromadb, requires_faiss
@@ -510,8 +509,6 @@ async def test_a_decorator_forwards_identity_and_scope_and_decorates_only_text()
     translated, and two translation sites start disagreeing; one that rewrites
     an id breaks the only guarantee a hit carries.
     """
-    inner = EntitySourceIndexSource
-    assert inner  # the leaf this decorator is pointed at in production
 
     async def one() -> AsyncIterator[IndexItem]:
         yield IndexItem(
@@ -572,3 +569,212 @@ async def test_the_forms_collide_in_a_store_keyed_on_id() -> None:
         assert await store.count() == 1
     finally:
         await store.close()
+
+
+# --------------------------------------------------------------------------
+# What the `index:` block reads, and what it refuses
+# --------------------------------------------------------------------------
+
+
+async def test_a_declared_embedder_beside_an_injected_one_is_refused() -> None:
+    """The refusal's other configuration, which was not refused at all.
+
+    ``block["embedder"]`` was read only inside ``and self._injected_embedder
+    is None``, so with an embedder injected the document's ``embedder:``
+    section was never read, never compared and never logged. The comment two
+    lines above names that exact failure --- *"a section parsed into a field
+    and quietly dropped is the failure that produces a registry reporting
+    success while holding no store, no embedder and no index"* --- and the
+    block did it in the other branch.
+
+    What makes it invisible rather than merely wrong: every row written
+    records the **injected** model under ``MODEL_NAME_KEY``, so the staleness
+    contract stays self-consistent while the document, the runbook and every
+    reader of the configuration name a different model.
+    """
+    document = _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "embedder": {"embedding": {"provider": "ollama", "model": "nomic-embed-text"}},
+        }
+    )
+
+    with pytest.raises(ValidationError, match="embedder") as refused:
+        await _registry(document)
+
+    assert "injected" in str(refused.value)
+
+
+async def test_a_key_the_index_block_does_not_declare_is_refused() -> None:
+    """A typo built an index with no metric check and reported nothing.
+
+    The same silent drop the ``embedder:`` refusal exists for, one key along:
+    ``_index_from`` read three names off the block and ignored the rest, so
+    ``metirc:`` was configuration a consumer wrote, the registry accepted, and
+    nothing acted on.
+    """
+    document = _document(
+        index={"store": {"backend": "memory", "dimensions": DIMENSIONS}, "metirc": "l2"}
+    )
+
+    with pytest.raises(ValidationError, match="metirc"):
+        await _registry(document)
+
+
+async def test_the_index_block_configures_the_source_it_builds() -> None:
+    """``AliasSource`` shipped reachable only from Python, which is half a feature.
+
+    The block hard-coded ``EntitySourceIndexSource(ontology)`` with its
+    default single field, so a document could not ask for ``description`` in
+    the embedded text, could not set the separator, and could not reach the
+    surface-form decorator at all --- the headline of the layer above it.
+    """
+    document = _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "fields": ["name", "description"],
+            "join": " / ",
+            "aliases": True,
+        }
+    )
+    registry = await _registry(document)
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+
+        # Collected as a list per id rather than a mapping: the decorator
+        # yields several items under one id by design, and a dict keeps
+        # whichever came last -- which is the collision this composition is
+        # documented to have, not something to assert around by accident.
+        widget = [
+            item.text async for item in index.source.stream_items() if item.id == "catalog:sku-4471"
+        ]
+
+        # `fields:` and `join:` both reached the leaf, and the canonical text
+        # is first, which is the decorator's own ordering guarantee.
+        assert widget[0] == "Acme Widget / a widget"
+        # `aliases: true` reached the decorator, so the forms are items of
+        # their own rather than sitting unread in metadata.
+        assert widget[1:] == ["Widget", "ACME widget"]
+    finally:
+        await registry.close()
+
+
+async def test_a_document_that_cannot_build_an_index_leaves_no_store_open() -> None:
+    """The comment promises this; two of the three refusals happened after the open.
+
+    ``_vector_store_handle`` ran before ``EntitySourceIndexSource(ontology)``
+    and before the metric was parsed, so a document failing either left a
+    built, connected, cached store behind proving it tried --- which is what
+    the comment above the embedder refusal says must not happen.
+
+    The cache is the only surface that can answer this: nothing public reports
+    what a failed load opened, which is itself why the ordering has to be
+    right rather than merely tidy.
+    """
+    document = _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "fields": ["latin_name"],
+        }
+    )
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document),
+        embedder=DeterministicEmbedder(dimensions=DIMENSIONS),
+    )
+
+    with pytest.raises(ValidationError, match="latin_name"):
+        await registry.load()
+
+    assert registry._vector_store_cache == {}
+
+
+async def test_a_metric_the_document_misspells_is_refused_as_a_validation_error() -> None:
+    """The block's ``Raises:`` names one exception; a bad spelling raised another.
+
+    Every sibling refusal in this block is a ``ValidationError`` --- it is a
+    document being validated --- and a malformed ``metric:`` reached
+    ``DistanceMetric.resolve`` and came back as a bare ``ValueError``, so a
+    caller catching what the docstring named did not catch this.
+    """
+    document = _document(
+        index={"store": {"backend": "memory", "dimensions": DIMENSIONS}, "metric": "nearest-ish"}
+    )
+
+    with pytest.raises(ValidationError, match="nearest-ish"):
+        await _registry(document)
+
+
+async def test_a_build_that_fails_partway_says_how_far_it_got() -> None:
+    """The docstring promised an all-or-nothing build and the method is not one.
+
+    *"A full build, not an update: what the source streams now is what the
+    store holds after"* --- but batches are written as they fill, so a raise
+    from the embedder or the store leaves batches 1..n-1 committed. The count
+    lived in a local and the exception carried nothing, so a caller saw a
+    failure, read the docstring, and could not tell a store holding nothing
+    from one holding seven thousand rows. Both retrying from scratch and
+    reporting the index unbuilt are wrong over the second.
+
+    The number is this layer's to report: no store can say how much of one
+    build reached it, because the store never saw the stream.
+    """
+    from dataknobs_data.vector import semantic_index as module
+
+    async def two_then_trouble() -> AsyncIterator[IndexItem]:
+        yield IndexItem(id="a", text="alpha")
+        yield IndexItem(id="b", text="beta")
+        raise OperationError("the source's backend went away mid-stream")
+
+    store = await _store()
+    original = module.BUILD_BATCH_SIZE
+    module.BUILD_BATCH_SIZE = 1
+    try:
+        index = SemanticIndex(
+            CallableSource(two_then_trouble),
+            DeterministicEmbedder(dimensions=DIMENSIONS),
+            store,
+        )
+        with pytest.raises(OperationError, match="wrote 2") as failed:
+            await index.build()
+
+        assert failed.value.context["written"] == 2
+        assert isinstance(failed.value.__cause__, OperationError)
+        assert "went away" in str(failed.value.__cause__)
+
+        # Partial rather than nothing, which is the fact the count is for.
+        assert await store.count() == 2
+    finally:
+        module.BUILD_BATCH_SIZE = original
+        await store.close()
+
+
+@pytest.mark.parametrize(
+    ("block", "match"),
+    [
+        ({"fields": "name"}, "fields"),
+        ({"fields": 5}, "fields"),
+        ({"join": 5}, "join"),
+        ({"aliases": "yes"}, "aliases"),
+    ],
+)
+async def test_a_malformed_source_key_is_refused_as_a_validation_error(
+    block: dict[str, Any], match: str
+) -> None:
+    """The block's guarantee is that every refusal in it names a document.
+
+    Which was true of the keys it read and not of the ones it had just gained.
+    ``fields: name`` is the shape a consumer writes by hand --- YAML makes a
+    bare scalar a string --- and ``tuple("name")`` is four one-character field
+    names, so the refusal that follows names ``'a', 'e', 'm', 'n'`` rather than
+    the mistake. ``fields: 5`` and ``join: 5`` raised ``TypeError`` and
+    ``AttributeError`` instead, the second of them not until the first read.
+
+    ``aliases:`` is checked for being a boolean rather than for truthiness:
+    ``aliases: "no"`` is truthy, so the value that most obviously means *off*
+    turned it on.
+    """
+    document = _document(index={"store": {"backend": "memory", "dimensions": DIMENSIONS}, **block})
+
+    with pytest.raises(ValidationError, match=match):
+        await _registry(document)

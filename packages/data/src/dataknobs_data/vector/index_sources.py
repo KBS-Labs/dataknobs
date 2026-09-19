@@ -24,9 +24,9 @@ holds a store, the adapter holds a vocabulary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from dataknobs_common.index import IndexItem
+from dataknobs_common.index import IndexItem, join_non_empty
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -43,28 +43,16 @@ __all__ = ["MultiFieldSource", "RecordFieldSource"]
 DEFAULT_JOIN = " — "
 
 
-def join_non_empty(values: Sequence[Any], join: str) -> str:
-    """The non-empty values, joined --- and no dangling separator over one.
-
-    One helper and two callers rather than two spellings, because the property
-    it carries is the one that is easy to get wrong in the same way twice: a
-    row with a name and no description must produce the name, not the name
-    followed by a separator. Dropping before the join is what makes that true
-    by construction rather than by a strip afterwards.
-
-    Args:
-        values: The values to join, in order. ``None`` and empty strings are
-            dropped; everything else is rendered with ``str``.
-        join: What to put between two surviving values.
-
-    Returns:
-        The surviving values joined, or ``""`` where none survived.
-    """
-    rendered = [str(value).strip() for value in values if value is not None]
-    return join.join(value for value in rendered if value)
-
-
-@dataclass(frozen=True)
+# `eq=False` for the reason the three pure sources in `dataknobs_common.index`
+# carry it, and this file is the half of the family that did not get it. A
+# source is a configured behaviour, not a value: two over one table are
+# interchangeable and nothing asks whether they are equal. Frozen with equality
+# left on gets a generated `__hash__` over the field tuple, so `fields`
+# declared a `Sequence[str]` -- a list in every example -- gives an instance
+# that answers `Hashable` and raises at the call, which is the one combination
+# that guards a caller against nothing. `RecordFieldSource` has the same shape
+# through `query`, since `Query` holds `filters: list[Filter]`.
+@dataclass(frozen=True, eq=False)
 class RecordFieldSource:
     """One text per row, read from one field of a table.
 
@@ -125,7 +113,7 @@ class RecordFieldSource:
                 yield IndexItem(id=str(record.id), text=text)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MultiFieldSource:
     """One text per row, composed from several fields of a table.
 
@@ -163,8 +151,18 @@ class MultiFieldSource:
         store, which writes it beside the source text it already writes; a
         source that cannot say goes without, and its rows are simply not
         distinguishable from any other caller's.
+
+        **Comma-joined, and deliberately not :attr:`join`.** This key has an
+        established grammar: ``_attach_embedding`` writes
+        ``",".join(text_fields)`` and the staleness check parses it back with
+        ``legacy.split(",")``, while the store lane reads the same key as a
+        record field name. Composing it with the display separator put a
+        second grammar on one key --- ``"title — summary"`` parses as one
+        field named that, and no such field exists --- and tied the key's
+        encoding to a cosmetic choice, so restyling the text silently
+        rewrote it.
         """
-        return self.join.join(self.fields)
+        return ",".join(self.fields)
 
     def declares(self) -> frozenset[str]:
         """Whatever this source was constructed to declare."""

@@ -22,19 +22,23 @@ a reader who has no vocabulary can reach them.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from itertools import islice
 from typing import TYPE_CHECKING, Generic
 
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.hierarchy import K
-from dataknobs_common.index import IndexItem
+from dataknobs_common.index import IndexItem, join_non_empty
+from dataknobs_common.ontology.sources import AUTHORED_SOURCE_ID
 from dataknobs_common.ontology.tags import ALIAS_FORMS_KEY, ONTOLOGY_ID_KEY
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
 
     from dataknobs_common.ontology.values import AsyncOntology
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["EntitySourceIndexSource"]
 
@@ -96,6 +100,19 @@ class EntitySourceIndexSource(Generic[K]):
     #: than a repeated membership test. Not a parameter.
     _fields: tuple[str, ...] = field(init=False, repr=False, compare=False)
 
+    #: The entity types validated at construction, kept rather than re-asked.
+    #:
+    #: ``__post_init__`` refuses a source that cannot enumerate and a source
+    #: declaring a type the schema does not; both refusals are about *this*
+    #: set. ``stream_items`` used to call ``describe()`` a second time and
+    #: write ``or frozenset()`` over the answer, which turned the first
+    #: refusal into a suggestion --- a source answering a set here and
+    #: ``None`` there produced the silently-empty index the refusal exists to
+    #: prevent, and skipped the second refusal on the way. Streaming the
+    #: validated set is what makes both of them bind the read. Not a
+    #: parameter.
+    _declared: frozenset[str] = field(init=False, repr=False, compare=False)
+
     def __post_init__(self) -> None:
         """Refuse a field name, an unenumerable source, and an undeclared type.
 
@@ -149,6 +166,41 @@ class EntitySourceIndexSource(Generic[K]):
                     },
                 )
 
+            # The other direction, and it is a warning rather than a refusal.
+            # A schema declaring two types over a binding that holds one is an
+            # ordinary configuration -- one live table under a vocabulary that
+            # also names types nothing is bound to -- so refusing it would
+            # forbid the common case. But the resulting index *is* partial in
+            # exactly the way the `None` refusal is about: a query about a
+            # type nobody indexed answers "not in the corpus", which is a
+            # legitimate answer nothing reports as an error.
+            #
+            # **Only for a live binding**, and the exclusion is the whole
+            # reason this is not a general check. An authored source derives
+            # `declares` from the entities it actually holds, so a declared
+            # type with no entities is absent from it -- and that is a
+            # document saying a type has no members, which is a vocabulary
+            # being explicit rather than an index being partial. Warning
+            # there would fire on the ordinary authored document and say
+            # nothing true. A live binding is the other case: its projection
+            # names one constant type, so a schema declaring several is a
+            # genuine gap between what is named and what any source can
+            # answer for.
+            missing = sorted(set(self.ontology.entity_types) - set(declared))
+            if missing and description.source_id != AUTHORED_SOURCE_ID:
+                logger.warning(
+                    "index source over ontology %s covers %d of %d declared entity "
+                    "type(s); source %s holds nothing under %s, so an index over it "
+                    "will answer nothing for them",
+                    self.ontology.id,
+                    len(set(declared)),
+                    len(self.ontology.entity_types),
+                    description.source_id,
+                    ", ".join(missing),
+                )
+
+        object.__setattr__(self, "_declared", frozenset(declared))
+
     @property
     def source_field(self) -> str:
         """Which entity fields this source composed its text from, as one name.
@@ -159,8 +211,13 @@ class EntitySourceIndexSource(Generic[K]):
         store, which writes it beside the source text --- so a hit from this
         index is distinguishable from a row some other caller wrote through
         the raw vector door, which it otherwise is not.
+
+        **Comma-joined, and deliberately not :attr:`join`.** The key's reader
+        splits it on commas, so composing it with the display separator wrote
+        a grammar nothing parses --- and tied the key to a cosmetic choice,
+        where changing how the text reads changed how the key encodes.
         """
-        return self.join.join(self._fields)
+        return ",".join(self._fields)
 
     def declares(self) -> frozenset[str]:
         """One named set: this ontology's id.
@@ -184,10 +241,21 @@ class EntitySourceIndexSource(Generic[K]):
         source's own bulk read batches what it sends the backend but returns a
         mapping of everything, so a single call would hold the entire
         vocabulary in memory inside the member whose name says it does not.
+
+        **The batching bounds the entities and not the ids.** ``by_type``
+        answers a set of every id of one type --- its own docstring says *"on
+        a million-row binding this returns a million-element set and there is
+        no ``limit:`` that would make it something else"* --- and the sort
+        below builds a second list of the same size, both held for that
+        type's whole stream. So the memory this method holds is proportional
+        to the largest *type*, not to the vocabulary and not to
+        :data:`STREAM_BATCH_SIZE`. Fixing that needs a streaming enumerator on
+        the entity source, which is a protocol change rather than something
+        this adapter can arrange; until there is one, the claim above is about
+        entity objects and this paragraph is the part it does not cover.
         """
         entities = self.ontology.entities
-        declared = entities.describe().declares or frozenset()
-        for type_id in sorted(declared):
+        for type_id in sorted(self._declared):
             ids = sorted(await entities.by_type(type_id), key=str)
             cursor = iter(ids)
             while batch := list(islice(cursor, STREAM_BATCH_SIZE)):
@@ -213,5 +281,4 @@ class EntitySourceIndexSource(Generic[K]):
         a separator hanging off it. Over a real vocabulary most entities carry
         a name and no description, so this is the ordinary path.
         """
-        values = [str(getattr(entity, name, "") or "").strip() for name in self._fields]
-        return self.join.join(value for value in values if value)
+        return join_non_empty([getattr(entity, name, "") for name in self._fields], self.join)

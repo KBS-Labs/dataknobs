@@ -45,7 +45,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from dataknobs_common.testing import requires_chromadb
+from dataknobs_common.testing import requires_chromadb, requires_faiss
 
 from dataknobs_data.backends.postgres_vector import (
     distance_to_score,
@@ -408,6 +408,50 @@ class TestEveryTableIsKeyedOnTheFamily:
         with pytest.raises(ValueError, match="l1"):
             get_similarity_for_metric(DistanceMetric.L1)
 
+    @pytest.mark.parametrize("member", NON_COSINE)
+    def test_the_script_score_twin_never_answers_a_non_cosine_member_with_cosine(self, member):
+        """The mapping door and the query door are one decision in two places.
+
+        ``get_similarity_for_metric`` builds the ``dense_vector`` mapping;
+        ``build_script_score_query`` builds the query that reads it. The first
+        was keyed on the family and made to refuse; the second still branched
+        on the **member** and ended in ``else: # Default to cosine``, so
+        ``DistanceMetric.L2`` --- a legitimate member and the one a consumer
+        gets from ``metric="l2"`` --- built an ``l2_norm`` mapping and a
+        **cosine** query over it. The two doors then disagreed about the same
+        metric on the same field, which is the state the family keying exists
+        to end.
+        """
+        from dataknobs_data.vector.elasticsearch_utils import build_script_score_query
+
+        try:
+            query = build_script_score_query([1.0, 0.0], "embedding", member)
+        except ValueError:
+            return
+        script = query["script_score"]["script"]["source"]
+        assert "cosineSimilarity" not in script, (
+            f"{member} silently became a cosine script_score query"
+        )
+
+    def test_the_script_score_twin_reads_both_spellings_alike(self):
+        """``L2`` and ``EUCLIDEAN`` are one metric, and were two scripts."""
+        from dataknobs_data.vector.elasticsearch_utils import build_script_score_query
+
+        def script(member):
+            return build_script_score_query([1.0, 0.0], "embedding", member)["script_score"][
+                "script"
+            ]["source"]
+
+        assert script(DistanceMetric.L2) == script(DistanceMetric.EUCLIDEAN)
+        assert script(DistanceMetric.INNER_PRODUCT) == script(DistanceMetric.DOT_PRODUCT)
+
+    def test_the_script_score_twin_refuses_a_metric_it_cannot_serve(self):
+        """Refusing where the mapping door refuses, so the pair cannot diverge."""
+        from dataknobs_data.vector.elasticsearch_utils import build_script_score_query
+
+        with pytest.raises(ValueError, match="l1"):
+            build_script_score_query([1.0, 0.0], "embedding", DistanceMetric.L1)
+
     @pytest.mark.parametrize("spelling", ["manhattan", "cos", "ip", "euclidean_distance", "L2"])
     def test_a_configured_metric_accepts_every_published_spelling(self, spelling):
         """``_apply_vector_config`` used ``DistanceMetric(name.lower())``.
@@ -614,3 +658,54 @@ class TestTheStoreLaneReadsTheSameVocabulary:
 
         with pytest.raises(ValueError, match="l1"):
             ChromaVectorStore({"dimensions": 4, "metric": spelling})
+
+    @requires_faiss
+    @pytest.mark.parametrize(
+        ("spelling", "expected"),
+        [
+            ("cosine", "METRIC_INNER_PRODUCT"),
+            ("cos", "METRIC_INNER_PRODUCT"),
+            ("cosine_similarity", "METRIC_INNER_PRODUCT"),
+            ("euclidean", "METRIC_L2"),
+            ("l2", "METRIC_L2"),
+            ("euclidean_distance", "METRIC_L2"),
+            ("dot_product", "METRIC_INNER_PRODUCT"),
+            ("inner_product", "METRIC_INNER_PRODUCT"),
+            ("ip", "METRIC_INNER_PRODUCT"),
+        ],
+    )
+    def test_faiss_maps_each_servable_family_to_its_own_metric(self, spelling, expected):
+        """Cosine reaches inner product by normalising, which is not a default.
+
+        Three families, two FAISS constants, and every published spelling of
+        the three arrives at the right one.
+        """
+        import faiss
+
+        from dataknobs_data.vector.stores.faiss import FaissVectorStore
+
+        store = FaissVectorStore({"dimensions": 4, "metric": spelling})
+        assert store._faiss_metric() == getattr(faiss, expected)
+
+    @requires_faiss
+    @pytest.mark.parametrize("spelling", ["l1", "manhattan", "l1_distance"])
+    def test_faiss_refuses_a_metric_it_cannot_serve(self, spelling):
+        """The third door, holding the shape the other two were fixed for.
+
+        ``_faiss_metric`` ended in a bare ``return faiss.METRIC_L2``, so a
+        store configured for Manhattan distance built an ``IndexFlatL2``,
+        reported ``DistanceMetric.L1`` from :attr:`metric`, and disagreed with
+        itself with no error and no log line. ``_score_from_raw`` then
+        compounded it: with no ``L1`` arm the raw **L2 distance** came back as
+        the score, so lower was better while every other store and every
+        threshold filter above them reads higher as better.
+
+        FAISS does define ``METRIC_L1``, but ``_new_raw_index`` branches only
+        inner-product against ``IndexFlatL2`` --- so a refusal is the honest
+        fix here rather than a table entry that the index builder would not
+        honour anyway.
+        """
+        from dataknobs_data.vector.stores.faiss import FaissVectorStore
+
+        with pytest.raises(ValueError, match="l1"):
+            FaissVectorStore({"dimensions": 4, "metric": spelling})

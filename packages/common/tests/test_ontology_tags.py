@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dataknobs_common.ontology import tags
 
 
@@ -72,10 +74,19 @@ def test_the_two_halves_of_the_key_family_name_each_other() -> None:
     Read off disk rather than through an import, because ``dataknobs-common``
     must not import ``dataknobs-data`` --- the whole point of the placement
     rule is that this package installs without it.
+
+    **Which is also why the second half skips rather than fails when the
+    sibling tree is absent.** Reaching it is a hard-coded relative offset into
+    the workspace checkout, so running this package's suite against an
+    installed wheel --- the very arrangement the placement rule exists to keep
+    possible --- found no file and failed the assertion, asserting the
+    opposite of what the docstring above claims. The forward half needs no
+    sibling and is checked unconditionally.
     """
     here = Path(tags.__file__)
     assert "vector/content.py" in here.read_text()
 
     content = here.parents[4] / "data" / "src" / "dataknobs_data" / "vector" / "content.py"
-    assert content.exists(), f"expected the other half of the family at {content}"
+    if not content.exists():
+        pytest.skip(f"the sibling package tree is not on disk at {content}")
     assert "ontology/tags.py" in content.read_text()

@@ -1266,18 +1266,36 @@ def test_no_collaborator_carries_both_spellings_of_the_open() -> None:
     import pkgutil
 
     both: list[str] = []
+    seen: set[str] = set()
+    unreadable: dict[str, str] = {}
     for package in ("dataknobs_common", "dataknobs_data"):
         root = importlib.import_module(package)
         for info in pkgutil.walk_packages(root.__path__, prefix=f"{package}."):
             try:
                 module = importlib.import_module(info.name)
-            except Exception:
+            except Exception as exc:
+                unreadable[info.name] = f"{type(exc).__name__}: {exc}"
                 continue
             for name, obj in vars(module).items():
                 if name.startswith("_") or not isinstance(obj, type):
                     continue
+                seen.add(f"{obj.__module__}.{obj.__qualname__}")
                 if hasattr(obj, "connect") and hasattr(obj, "initialize"):
                     both.append(f"{info.name}.{name}")
+
+    # A module that will not import is a **hole in the sweep**, not a module
+    # with nothing to say. This loop used to write `except Exception: continue`,
+    # so the classes most likely to grow a `connect` -- the optional-backend
+    # stores, which are the ones an environment can fail to import -- were
+    # exactly the ones it could skip while still reporting green. Every module
+    # imports today because each optional backend guards its own import, so
+    # there is nothing to allow-list and an empty set is the measurement.
+    assert unreadable == {}, f"the sweep could not read: {unreadable}"
+
+    # Non-vacuous: a sweep that walked nothing would satisfy the assertion
+    # below by finding nothing, which is the other way a guard reports green
+    # over an unasked question.
+    assert len(seen) > 400, f"the sweep resolved only {len(seen)} public classes"
 
     assert both == [], f"the probe would have to choose for: {sorted(set(both))}"
 

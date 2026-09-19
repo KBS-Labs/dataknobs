@@ -61,4 +61,10 @@ NODE_ID_KEY = "dk_node_id"
 #: **List-valued.** Written by a source that yields entities, and read by the
 #: decorator that turns one entity into one indexed row per form --- one key,
 #: two ends, which is why it is a constant rather than a literal at either.
+#:
+#: A reader takes a bare string as one form rather than as its characters, as
+#: :data:`NODE_ID_KEY` above states for the same family. The rule is restated
+#: here because this key's reader is the one that had not applied it: a
+#: consumer-written ``"ACME"`` became four one-character rows, all under the
+#: entity's id, leaving one row holding ``"E"``.
 ALIAS_FORMS_KEY = "dk_alias_forms"

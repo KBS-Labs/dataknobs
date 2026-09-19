@@ -36,11 +36,15 @@ unfrozen with equality on, where the check answers False honestly.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Mapping
+    from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AliasSource",
@@ -49,6 +53,34 @@ __all__ = [
     "IndexItem",
     "MappingSource",
 ]
+
+
+def join_non_empty(values: Sequence[Any], join: str) -> str:
+    """The non-empty values, joined --- and no dangling separator over one.
+
+    One helper rather than one spelling per caller, because the property it
+    carries is the one that is easy to get wrong in the same way twice: a row
+    with a name and no description must produce the name, not the name
+    followed by a separator. Dropping before the join is what makes that true
+    by construction rather than by a strip afterwards.
+
+    **Here rather than beside either caller.** It was written twice --- once
+    in ``dataknobs-data``'s bare-table sources and once in the ontology
+    adapter's ``_text_for``, one package apart, with different default
+    separators --- which is the duplication its own docstring argued against.
+    It is a pure algorithm over values, so it belongs where the protocol it
+    serves is declared, and both composing sources reach it from there.
+
+    Args:
+        values: The values to join, in order. ``None`` and empty strings are
+            dropped; everything else is rendered with ``str``.
+        join: What to put between two surviving values.
+
+    Returns:
+        The surviving values joined, or ``""`` where none survived.
+    """
+    rendered = [str(value).strip() for value in values if value is not None]
+    return join.join(value for value in rendered if value)
 
 
 @dataclass
@@ -242,8 +274,11 @@ class AliasSource:
         ```
     """
 
-    #: The source whose items are decorated.
-    inner: Any
+    #: The source whose items are decorated. Typed as the protocol declared
+    #: in this module rather than ``Any``: it is ``runtime_checkable``, it is
+    #: right here, and the one place a decorator can be handed something that
+    #: is not a source is the one place the annotation is worth having.
+    inner: AsyncIndexSource
 
     #: The metadata key on an inner item whose value is a sequence of surface
     #: forms. Published rather than assumed, because the leaf source writes
@@ -265,8 +300,42 @@ class AliasSource:
         """
         async for item in self.inner.stream_items():
             yield item
-            forms = item.metadata.get(self.aliases_field) or ()
-            for form in forms:
+            for form in self._forms_of(item):
                 if not form or form == item.text:
                     continue
                 yield IndexItem(id=item.id, text=form, metadata=dict(item.metadata))
+
+    def _forms_of(self, item: IndexItem) -> tuple[str, ...]:
+        """The surface forms on one item, reading the key's published rule.
+
+        The alias key is **list-valued**, and the rule its family states is
+        that *a reader takes a bare string as one form rather than as its
+        characters*. This loop iterated the value directly, so a metadata
+        value of ``"ACME"`` produced four one-character items --- all under
+        the entity's id, which a store keyed on id upserts into one row
+        holding ``"E"``. The in-tree writer always writes a ``list``, so the
+        only population that could reach it is the consumer-supplied source
+        this class is documented to decorate: the one that cannot read the
+        constant's docstring at the point of failure.
+
+        A value that is neither a string nor a sequence of them --- a mapping,
+        a number --- is not a malformed list to be salvaged. Iterating a
+        mapping yields its keys and rendering a number yields a digit, and
+        both would be embedded as surface forms under the entity's id. It is
+        logged and dropped, so the entity keeps its canonical text.
+        """
+        value = item.metadata.get(self.aliases_field)
+        if value is None or value == "":
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        if isinstance(value, MappingABC) or not hasattr(value, "__iter__"):
+            logger.warning(
+                "alias field %r on item %r holds a %s; it is list-valued, so the value "
+                "is ignored and the entity keeps its canonical text alone",
+                self.aliases_field,
+                item.id,
+                type(value).__name__,
+            )
+            return ()
+        return tuple(str(form) for form in value)

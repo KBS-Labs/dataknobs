@@ -283,3 +283,57 @@ async def test_the_stream_reads_the_backend_in_batches(tmp_path: Path) -> None:
 
     assert len(items) == 3
     assert asked == [1, 1, 1], "the whole union reached the backend in one ask"
+
+
+async def test_the_enumeration_streamed_is_the_one_validated_at_construction(
+    tmp_path: Path,
+) -> None:
+    """The refusal at construction has to bind the read, or it refuses nothing.
+
+    ``__post_init__`` refuses a source answering ``declares is None``, on the
+    argument that an index over it *"would be silently partial"* and that an
+    entity absent from an index resolves to nothing. ``stream_items`` then
+    asked the same question a second time and wrote ``or frozenset()`` over
+    the answer --- so a source that answered a set at construction and
+    ``None`` at the read produced exactly the empty index the refusal exists
+    to prevent, and the second refusal (a type the schema does not declare)
+    was bypassed on the same path.
+
+    Only a structural implementation can reach this, because both in-tree
+    ``describe()`` implementations answer a non-``None`` set --- which is the
+    population the three-state field was added for.
+    """
+    import dataclasses
+
+    catalog = await _catalog(tmp_path)
+
+    class _ForgetsWhatItHolds:
+        """Enumerable when asked at construction, not when asked again."""
+
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+            self._asked = 0
+
+        def describe(self) -> SourceDescription:
+            self._asked += 1
+            described = self._inner.describe()
+            if self._asked == 1:
+                return described
+            return dataclasses.replace(described, declares=None)
+
+        async def by_type(self, type_id: str) -> frozenset[str]:
+            return await self._inner.by_type(type_id)
+
+        async def get_many(self, entity_ids: Any) -> dict[str, Any]:
+            return await self._inner.get_many(entity_ids)
+
+    forgetful = _with_source(catalog, _ForgetsWhatItHolds(catalog.entities))
+    source = EntitySourceIndexSource(forgetful)
+
+    items = [item async for item in source.stream_items()]
+
+    assert sorted(item.id for item in items) == [
+        "catalog:acme",
+        "catalog:sku-4471",
+        "catalog:sku-8802",
+    ]

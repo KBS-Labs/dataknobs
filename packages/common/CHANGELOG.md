@@ -49,6 +49,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produced the vector, stays in `dataknobs_data.vector.content`; the two
   modules name each other.
 
+### Fixed
+
+- **`AliasSource` reads a bare-string alias value as one form, not as its
+  characters.** `ALIAS_FORMS_KEY` is declared list-valued and the family
+  publishes the rule on `NODE_ID_KEY` -- *"a reader takes a bare string as one
+  node rather than as its characters"* -- and this class, the key's only
+  published reader, iterated the value directly. A consumer-written
+  `{ALIAS_FORMS_KEY: "ACME"}` yielded four one-character items, all carrying the
+  entity's id, so a store keyed on id kept one row holding `"E"` and the entity
+  could no longer be found by its own name. Only a consumer-supplied source can
+  reach it, since the in-tree writer always writes a list -- which is the
+  population that cannot read the constant's docstring at the point of failure.
+  A mapping is logged and dropped rather than iterated into its keys: there is
+  no reading under which those are surface forms. The rule is now restated on
+  `ALIAS_FORMS_KEY` itself.
+
+- **`EntitySourceIndexSource` streams the enumeration it validated at
+  construction.** `__post_init__` refuses a source answering `declares is None`,
+  on the argument that an index over it would be *silently partial*;
+  `stream_items` then asked again and wrote `or frozenset()` over the answer, so
+  a source answering a set at construction and `None` at the read produced
+  exactly the empty index the refusal exists to prevent -- and skipped the
+  undeclared-type refusal on the same path. Both refusals now bind the read.
+
+- **`EntitySourceIndexSource.source_field` is spelled the way its reader parses
+  it.** Composed with the display separator, it wrote a grammar nothing parses
+  into a key that is split on commas, and tied the key's encoding to a cosmetic
+  choice. Comma-joined now, independent of `join`.
+
+### Added
+
+- **A live binding covering fewer types than the schema declares is logged at
+  construction.** The undeclared-type refusal only ran one way -- a source
+  declaring a type the schema does not -- and the other direction is the one
+  that produces a silently partial index: a binding whose projection names one
+  constant type, under a vocabulary declaring several, indexes one of them while
+  a query about the others answers *not in the corpus*, which is a legitimate
+  answer nothing reports as an error. A warning rather than a refusal, because
+  one live table under a vocabulary naming more types is an ordinary
+  configuration. **Not raised for an authored source**, which derives `declares`
+  from the entities it holds, so a declared type with no members is absent from
+  it -- and that is a document being explicit, not an index being partial.
+
+- **`join_non_empty`** moves to `dataknobs_common.index`, beside the protocol it
+  serves. It was written twice -- once in `dataknobs-data`'s bare-table sources
+  and once in the ontology adapter's `_text_for`, one package apart, with
+  different default separators -- which is the duplication its own docstring
+  argued against. A pure algorithm over values; not added to any `__all__`.
+
 ### Changed
 
 - **`SourceDescription.declares` is `frozenset[str] | None` and has no

@@ -24,7 +24,7 @@ import copy
 import dataclasses
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 from dataknobs_common.entity_resolution import async_signal_backends
@@ -44,6 +44,7 @@ from dataknobs_common.ontology import (
     build_ontology,
     split_qualified,
 )
+from dataknobs_common.index import AliasSource, AsyncIndexSource
 from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -69,6 +70,15 @@ from dataknobs_data.schema import DatabaseSchema, FieldSchema
 from dataknobs_data.vector.semantic_index import SemanticIndex
 from dataknobs_data.vector.stores.factory import VectorStoreFactory
 from dataknobs_data.vector.types import DistanceMetric
+
+#: Every key the ``index:`` section reads.
+#:
+#: Declared rather than left implicit so an unread key is refused instead of
+#: accepted-and-ignored: ``_index_from`` read three names off the block and
+#: dropped the rest, which made ``metirc:`` a configuration the registry took,
+#: reported success over, and acted on in no way. The same silent-drop failure
+#: the ``embedder:`` refusal in that method exists to prevent.
+INDEX_BLOCK_KEYS = frozenset({"store", "embedder", "metric", "fields", "join", "aliases"})
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -654,6 +664,14 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         **The index is built, not connected, on every read.** The store behind
         it was opened at load and is released by :meth:`close`; this member
         hands back a value and opens nothing.
+
+        **After ``close()`` this still answers the index**, and the store it
+        holds is shut. That is :meth:`close`'s documented philosophy rather
+        than an oversight --- the values stay reachable and what is gone is
+        the ability to read through them --- but the sentence above says the
+        store is released without saying the index outlives the release. A
+        caller holding one across a ``close()`` gets a live object over a dead
+        store, and the failure arrives from the store.
 
         Args:
             ontology_id: Which loaded vocabulary's index to return.
@@ -1303,12 +1321,34 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             The index, or ``None`` where the document declared no section.
 
         Raises:
-            ValidationError: When the section is malformed, or declares an
-                embedder with nothing injected to satisfy it.
+            ValidationError: When the section carries a key this block does
+                not read, is malformed, declares an embedder with nothing
+                injected to satisfy it (or with one injected, so that two
+                sources name the model), names entity fields an entity does
+                not carry, misspells ``metric:``, or claims a metric the
+                configured store is not serving.
+
+                **One exception type, and the last two used to escape it.**
+                ``DistanceMetric.resolve`` and the index's own claim check
+                both raise ``ValueError``, so a caller catching what this
+                docstring named did not catch a misspelled or disagreeing
+                metric. What is being refused in every one of these cases is
+                a *document*, which is what ``ValidationError`` means here.
         """
         block = config.index
         if not block:
             return None
+
+        undeclared = sorted(set(block) - INDEX_BLOCK_KEYS)
+        if undeclared:
+            raise ValidationError(
+                f"ontology {config.id!r} declares an `index:` section with key(s) "
+                f"{undeclared}, which this block does not read. A key nothing acts on is "
+                f"configuration a consumer wrote and the registry accepted while ignoring "
+                f"-- `metirc:` builds an index with no metric check and reports success. "
+                f"This block reads: {', '.join(sorted(INDEX_BLOCK_KEYS))}",
+                context={"ontology_id": config.id, "undeclared": undeclared},
+            )
 
         store_block = block.get("store")
         if not isinstance(store_block, Mapping) or not store_block:
@@ -1320,8 +1360,32 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             )
 
         # Refused before the store is opened, so a document that cannot build
-        # an index does not leave a handle behind proving it tried.
-        if block.get("embedder") is not None and self._injected_embedder is None:
+        # an index does not leave a handle behind proving it tried. That is
+        # true of everything down to `_vector_store_handle` below -- the two
+        # embedder refusals, the source the document configures, and the
+        # spelling of `metric:` -- and it is why they are ordered this way
+        # rather than written in the order the constructor takes them. The one
+        # check that cannot move is the metric *claim*, which is a comparison
+        # against `store.metric` and so needs the store it is about.
+        #
+        # **Both directions**, because a section parsed and dropped is the
+        # failure named above: with an embedder injected, a declared
+        # `embedder:` used to be read by nothing at all, so a document naming
+        # one model and a process injecting another agreed on nothing and
+        # reported success. Every row records the injected model, so the
+        # staleness contract stays self-consistent while the document is
+        # silently untrue.
+        declared_embedder = block.get("embedder")
+        if declared_embedder is not None and self._injected_embedder is not None:
+            raise ValidationError(
+                f"ontology {config.id!r} declares an `index:` section with an `embedder:` "
+                f"block **and** an embedder was injected. Both name the model every row is "
+                f"written and judged stale against, and this registry cannot build the "
+                f"declared one to compare -- so it would silently index under the injected "
+                f"model while the document named another. Drop one",
+                context={"ontology_id": config.id},
+            )
+        if declared_embedder is not None:
             raise ValidationError(
                 f"ontology {config.id!r} declares an `index:` section with an `embedder:` "
                 f"block, and no embedder was injected. An embedder is built in "
@@ -1339,15 +1403,110 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 context={"ontology_id": config.id},
             )
 
-        store = await self._vector_store_handle(dict(store_block))
-        source = EntitySourceIndexSource(ontology)
+        source = self._index_source_from(block, ontology)
+
         metric = block.get("metric")
-        return SemanticIndex(
-            source,
-            self._injected_embedder,
-            store,
-            metric=DistanceMetric.resolve(metric) if metric is not None else None,
-        )
+        try:
+            claimed = DistanceMetric.resolve(metric) if metric is not None else None
+        except ValueError as exc:
+            raise ValidationError(
+                f"ontology {config.id!r} declares `index.metric: {metric!r}`, which is not "
+                f"a spelling this library resolves: {exc}",
+                context={"ontology_id": config.id, "metric": metric},
+            ) from exc
+
+        store = await self._vector_store_handle(dict(store_block))
+        try:
+            return SemanticIndex(source, self._injected_embedder, store, metric=claimed)
+        except ValueError as exc:
+            # A claim about a store that is not serving it. Raised as what
+            # every sibling refusal in this block raises, because the thing
+            # being refused is a document.
+            raise ValidationError(
+                f"ontology {config.id!r} declares an `index:` section whose store "
+                f"disagrees with it: {exc}",
+                context={"ontology_id": config.id, "metric": metric},
+            ) from exc
+
+    def _index_source_from(
+        self, block: Mapping[str, Any], ontology: AsyncOntology[str]
+    ) -> AsyncIndexSource:
+        """The source an ``index:`` block describes, decorated if it asks to be.
+
+        The block used to build ``EntitySourceIndexSource(ontology)`` and
+        nothing else, so a document could not name the fields its text is
+        composed from, could not set the separator between them, and could not
+        reach :class:`~dataknobs_common.index.AliasSource` at all --- which is
+        a published class whose only route was Python. A reference
+        implementation shipped beside a configured door that cannot name it is
+        a seam rather than a feature.
+
+        Args:
+            block: The ``index:`` section, already checked for unread keys.
+            ontology: The vocabulary the source enumerates.
+
+        Returns:
+            The source, wrapped in the surface-form decorator where the block
+            asked for one.
+
+        Raises:
+            ValidationError: When ``fields:``, ``join:`` or ``aliases:`` is
+                malformed, when the block names fields an entity does not
+                carry, or when the source cannot be enumerated. Every refusal
+                reachable from here is one, which is the guarantee the door
+                above it makes.
+        """
+        # Built as kwargs rather than passed positionally so the adapter keeps
+        # ownership of its own defaults: a block naming neither key gets
+        # whatever `EntitySourceIndexSource` declares, and this method does not
+        # restate them where they would drift.
+        configured: dict[str, Any] = {}
+
+        fields = block.get("fields")
+        if fields is not None:
+            # A bare scalar in YAML is a string, so `fields: name` is what a
+            # consumer writes by hand -- and `tuple("name")` is four
+            # one-character field names, so the adapter's refusal would name
+            # 'a', 'e', 'm', 'n' rather than the mistake. A non-sequence raised
+            # `TypeError` past a door whose every other refusal is a
+            # `ValidationError` about a document.
+            if isinstance(fields, str) or not isinstance(fields, Sequence):
+                raise ValidationError(
+                    f"ontology {ontology.id!r} declares `index.fields: {fields!r}`; it takes "
+                    f"a list of entity field names, and a bare string is one name spelled "
+                    f"as its characters rather than a list of one",
+                    context={"ontology_id": ontology.id, "fields": fields},
+                )
+            configured["fields"] = tuple(fields)
+
+        join = block.get("join")
+        if join is not None:
+            # Not validated, this reaches `str.join`'s receiver slot and fails
+            # at the first read rather than at load.
+            if not isinstance(join, str):
+                raise ValidationError(
+                    f"ontology {ontology.id!r} declares `index.join: {join!r}`; it is what "
+                    f"goes between two field values, so it is a string",
+                    context={"ontology_id": ontology.id, "join": join},
+                )
+            configured["join"] = join
+
+        leaf = EntitySourceIndexSource(ontology, **configured)
+
+        aliases = block.get("aliases")
+        # Checked for being a boolean rather than for truthiness: `aliases: "no"`
+        # is truthy, so the value that most obviously means *off* turned it on.
+        if aliases is not None and not isinstance(aliases, bool):
+            raise ValidationError(
+                f"ontology {ontology.id!r} declares `index.aliases: {aliases!r}`; it is on "
+                f"or off, so it is `true` or `false`",
+                context={"ontology_id": ontology.id, "aliases": aliases},
+            )
+        if not aliases:
+            return leaf
+        # Pointed at the leaf's own key rather than at the constant, so the
+        # two ends of a one-key contract cannot be spelled apart here.
+        return AliasSource(leaf, leaf.aliases_key)
 
     async def _vector_store_handle(self, block: dict[str, Any]) -> VectorStore:
         """A vector store for one resolved ``store:`` block, built once.
