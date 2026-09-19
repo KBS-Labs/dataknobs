@@ -638,9 +638,15 @@ only the collaborators it declares (or all of them, if it declares
 never crashed by an undeclared injected collaborator — that collaborator
 stays reachable on `self.components`. An override that consumes a
 collaborator declares it keyword-only with a default:
-`async def _ainit(self, *, dep=None)`. A collaborator parameter *without*
+`async def _ainit(self, *, dep=None, **_: Any)`. A collaborator parameter *without*
 a default (or a required positional) still breaks the zero-injection call
 and is rejected by `assert_structured_config_consumer`.
+
+Close the parameter list with `**_: Any`. Delivery tolerates the narrowed
+signature, but the *declared* hook takes `**components`, so a type checker
+reads the narrowing as an override refusing keywords the base accepts — a
+finding about the declaration, on a hook whose narrowing is the documented
+way to use it.
 
 ### Cooperative multiple inheritance
 
@@ -779,8 +785,10 @@ declares `**kwargs`), so a no-arg or narrowly-typed override is never
 crashed by an undeclared injected collaborator — it stays reachable on
 `self.components`. An `_ainit` (or `_adopt_components`) override that
 consumes a collaborator declares it **keyword-only with a default** so
-the zero-injection path stays safe; a parameter without a default (or a
-required positional) is rejected by `assert_structured_config_consumer`.
+the zero-injection path stays safe, and closes the list with `**_: Any` so
+the narrowing stays compatible with the `**components` the base declares; a
+parameter without a default (or a required positional) is rejected by
+`assert_structured_config_consumer`.
 
 #### Dual input: `from_components`
 
@@ -792,12 +800,12 @@ When the parent already holds fully-built collaborators (and so should
 class Bot(StructuredConfigConsumer[BotConfig]):
     CONFIG_CLS: ClassVar[type[BotConfig]] = BotConfig
 
-    def _adopt_components(self, *, llm=None, memory=None) -> None:
+    def _adopt_components(self, *, llm=None, memory=None, **_) -> None:
         # Bind pre-built collaborators (the config-driven build is skipped).
         self._llm = llm
         self._memory = memory
 
-    async def _ainit(self, *, llm=None, memory=None) -> None:
+    async def _ainit(self, *, llm=None, memory=None, **_) -> None:
         if self._prebuilt:
             return  # already wired by from_components — don't rebuild
         self._llm = await build_llm(self.config.llm)

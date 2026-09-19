@@ -32,6 +32,8 @@ from dataknobs_data.user.store import AsyncUserStateStore, UserStateStore
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from dataknobs_data.records import Record
+
 SECTIONS = [{"name": "notes", "kind": "collection"}]
 
 
@@ -126,3 +128,63 @@ def test_an_injected_sync_handle_is_not_connected_by_the_store() -> None:
         assert calls == []
     finally:
         store.close()
+
+
+# --------------------------------------------------------------------------
+# The handle the store was handed through the config door
+# --------------------------------------------------------------------------
+#
+# ``from_components`` short-circuits the build entirely (``_prebuilt``), so the
+# two tests above exercise a path that never reaches the question "was a
+# database injected?". The config door is where that question is asked, and
+# where both wrong answers are silent: a store that builds its own handle
+# despite the injection answers every call correctly while writing into a
+# database nobody else holds, and a store that adopts the handle but claims
+# ownership of it closes a collaborator its caller is still using.
+
+
+async def test_an_async_handle_injected_with_a_config_is_used_and_not_owned() -> None:
+    """One handle, supplied through the config door: it is used, and left open."""
+    calls: list[str] = []
+
+    class _RecordsCalls(AsyncMemoryDatabase):
+        async def create(self, record: Record) -> str:
+            calls.append("create")
+            return await super().create(record)
+
+        async def close(self) -> None:
+            calls.append("close")
+            await super().close()
+
+    database = _RecordsCalls()
+    store = await AsyncUserStateStore.from_config(
+        {"backend": "memory", "sections": list(SECTIONS)}, db=database
+    )
+    await store.add_record("user-1", "notes", {"text": "hello"})
+    await store.close()
+
+    # The write went through this handle, and ``close()`` left it alone.
+    assert calls == ["create"]
+
+
+def test_a_sync_handle_injected_with_a_config_is_used_and_not_owned() -> None:
+    """The twin's half of the same door."""
+    calls: list[str] = []
+
+    class _RecordsCalls(SyncMemoryDatabase):
+        def create(self, record: Record) -> str:
+            calls.append("create")
+            return super().create(record)
+
+        def close(self) -> None:
+            calls.append("close")
+            super().close()
+
+    database = _RecordsCalls()
+    store = UserStateStore.from_config(
+        {"backend": "memory", "sections": list(SECTIONS)}, db=database
+    )
+    store.add_record("user-1", "notes", {"text": "hello"})
+    store.close()
+
+    assert calls == ["create"]

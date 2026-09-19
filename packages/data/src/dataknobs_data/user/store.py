@@ -55,7 +55,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
@@ -71,6 +71,7 @@ from dataknobs_common.exceptions import (
 from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_common.tenancy import SingleTenantContext, TenantContext
+from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.factory import async_database_factory, database_factory
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.records import Record
@@ -213,7 +214,12 @@ def _in_scope(record: Record, user_id: str, section: str, tenant_id: str | None)
     :meth:`~AsyncUserStateStore.record_version` (which returns ``None`` for an
     out-of-scope id rather than leaking its existence via an exception).
     """
-    return (
+    # ``get_value`` answers ``Any``: a record field holds whatever was written
+    # to it, and nothing obliges that value's ``__eq__`` to answer a ``bool``.
+    # Coerced here so the declared return type is a fact rather than a
+    # convention — both callers branch on the result, and one of them turns it
+    # into the difference between "no such record" and an exception.
+    return bool(
         record.get_value("user_id") == user_id
         and record.get_value("section") == section
         and record.get_value("tenant_id") == tenant_id
@@ -418,7 +424,16 @@ def _snapshot_sections(
 # --------------------------------------------------------------------- #
 
 
-class _UserStateStoreCommon:
+# The backing database's flavour — the one thing the two stores do not share:
+# the async store holds an ``AsyncDatabase`` and the sync store a
+# ``SyncDatabase``. Parameterizing the mixin on it gives every ``self._db``
+# call site in a variant the real return types of the handle that variant
+# actually holds, rather than the ``Any`` a single shared declaration is left
+# offering both.
+_DatabaseT = TypeVar("_DatabaseT", bound=AsyncDatabase | SyncDatabase)
+
+
+class _UserStateStoreCommon(Generic[_DatabaseT]):
     """Shared setup / validation / record-building for both variants.
 
     Mixed in after ``StructuredConfigConsumer`` and ``CapabilityMixin`` so the
@@ -435,10 +450,21 @@ class _UserStateStoreCommon:
     # delete already persisted). Overridden to ``True`` on the async variant.
     _SUPPORTS_ASYNC_FANOUT: ClassVar[bool] = False
 
+    if TYPE_CHECKING:
+        # Supplied by ``StructuredConfigConsumer``, which every host of this
+        # mixin lists ahead of it, and declared here as the read-only
+        # properties they are. A bare annotation would declare a *writeable*
+        # attribute instead — a different thing from a property, and one a
+        # host cannot inherit from both bases at once.
+
+        @property
+        def config(self) -> UserStateStoreConfig: ...
+
+        @property
+        def components(self) -> Mapping[str, Any]: ...
+
     # Attributes established by :meth:`_bind_common` (declared for typing).
-    config: UserStateStoreConfig
-    components: Mapping[str, Any]
-    _db: Any
+    _db: _DatabaseT
     _owns_db: bool
     _tenant: TenantContext
     _sections: dict[str, UserStateSectionSpec]
@@ -461,7 +487,13 @@ class _UserStateStoreCommon:
         in-process sync callbacks registered on :attr:`_callbacks`.
         """
         self._owns_db = False
-        self._db = self.components.get("db")
+        # The components channel is untyped by construction — it carries
+        # whatever a caller injected — and holds no ``db`` at all until a
+        # variant builds one. Both are absorbed into this one binding rather
+        # than widening ``_db`` itself, which every read of the handle would
+        # then pay for.
+        injected_db: Any = self.components.get("db")
+        self._db = injected_db
         tenant = self.components.get("tenant")
         self._tenant = (
             tenant if tenant is not None else SingleTenantContext(domain_id=self.config.namespace)
@@ -820,7 +852,7 @@ class _UserStateStoreCommon:
 class AsyncUserStateStore(
     StructuredConfigConsumer[UserStateStoreConfig],
     CapabilityMixin,
-    _UserStateStoreCommon,
+    _UserStateStoreCommon[AsyncDatabase],
 ):
     """Async coordinator for per-user cross-session state.
 
@@ -867,13 +899,18 @@ class AsyncUserStateStore(
         event_bus: Any = None,
         tenant: Any = None,
         now: Any = None,
+        **_: Any,
     ) -> None:
         if self._prebuilt:
             return
         # ``db`` / ``event_bus`` / ``tenant`` / ``now`` were already bound from
         # the components channel in ``_bind_common``; the only async-only work
-        # is building a database when none was injected.
-        if self._db is None:
+        # is building a database when none was injected. The channel is asked
+        # rather than ``self._db``, because "did the caller hand us one" is a
+        # question about what was supplied — ``_bind_common`` copied this
+        # exact expression into ``self._db`` and nothing between the two
+        # writes to it.
+        if self.components.get("db") is None:
             # ``backend`` forwarded only when the config named one, so an
             # unnamed backend reaches the factory as an absent key rather
             # than as this config's guess at what it should have been.
@@ -898,6 +935,7 @@ class AsyncUserStateStore(
         event_bus: Any = None,
         tenant: Any = None,
         now: Any = None,
+        **_: Any,
     ) -> None:
         if db is None:
             raise TypeError("AsyncUserStateStore.from_components requires a `db` collaborator.")
@@ -1412,7 +1450,7 @@ class AsyncUserStateStore(
 class UserStateStore(
     StructuredConfigConsumer[UserStateStoreConfig],
     CapabilityMixin,
-    _UserStateStoreCommon,
+    _UserStateStoreCommon[SyncDatabase],
 ):
     """Synchronous coordinator for per-user cross-session state.
 
@@ -1432,8 +1470,9 @@ class UserStateStore(
     def _setup(self) -> None:
         self._bind_common()
         # Sync construction has no async hook, so the database (when not
-        # injected) is built here.
-        if self._db is None:
+        # injected) is built here. The channel is asked rather than
+        # ``self._db`` — see the async twin.
+        if self.components.get("db") is None:
             # ``backend`` forwarded only when the config named one, so an
             # unnamed backend reaches the factory as an absent key rather
             # than as this config's guess at what it should have been.
@@ -1453,6 +1492,7 @@ class UserStateStore(
         event_bus: Any = None,
         tenant: Any = None,
         now: Any = None,
+        **_: Any,
     ) -> None:
         if db is None:
             raise TypeError("UserStateStore.from_components requires a `db` collaborator.")

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-19T03:22:53Z",
+  "timestamp": "2026-09-19T03:47:32Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/leg-d1-the-registry-that-owns-a-lifecycle",
-  "git_commit": "b3332ce28e31ff4f7d23cde8db18d85f5234db8f",
+  "git_branch": "sbk/what-the-user-state-store-owed",
+  "git_commit": "01ea01680fdbd5c014f78a26cd92dd6be954c6e9",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
