@@ -25,9 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that leaves its type vocabulary to a source it imports or projects is
   unaffected -- the check does not fire where the target section is empty.
   `relation` resolves against `relation_types:` *union* the declared attribute
-  names, because an attribute-valued assertion names an attribute. An
-  assertion's `subject:` and `object:` are not references of this kind and are
-  not checked: the entity population is open by design.
+  names, because an attribute-valued assertion names an attribute; the
+  **section alone decides whether that reference is checked**, so a document
+  declaring no `relation_types:` is unaffected however many attributes it
+  declares. A `kind:`-bearing `taxonomies:` row is exempt: a column axis reads
+  two columns and constructs no assertion, so its `relation:` names what its
+  edges *mean* rather than a set of assertions to walk. An assertion's
+  `subject:` and `object:` are not references of this kind and are not
+  checked: the entity population is open by design.
+
+  **A document declaring `imports:` is exempt from all eight.** That is the
+  other way a document says it does not declare its sections in full, and an
+  import is carried and never followed -- resolving across one needs a second
+  vocabulary in scope, which a door loading one file does not have, so a name
+  this document does not declare may be one the import declares and the
+  loader cannot tell that from a typo. The component that holds both
+  vocabularies is where the check can be right.
 
 - **Both resolver doors take `handles=`**, a mapping of live objects a rung is
   constructed over and a document cannot write -- an index, a store, a client.
@@ -109,11 +122,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the private function that constructed it, so the `Raises:` section
   belongs on the member a caller holds. Both `taxonomy` accessors raise
   `NotFoundError` for an axis the vocabulary does not declare **and**
-  `ValidationError` for a declared axis whose `materialization` asks for a copy
-  of every entity on it -- the second being the half a reader would not predict
-  from the member's name. The four asynchronous twins whose docstrings point at
-  their siblings are unchanged: the contract is written once, where the pointer
-  leads.
+  `ValidationError` for two unrelated reasons -- a declared axis whose
+  `materialization` asks for a copy of every entity on it, and one declaring
+  `materialization.structure: materialized` that the ontology carries no copy
+  of, which escapes through `structure_for`. Both are the halves a reader
+  would not predict from the member's name. The four asynchronous twins whose
+  docstrings point at their siblings are unchanged: the contract is written
+  once, where the pointer leads.
+
+- **A relation type's `domain:` or `range:` refuses a bare string rather than
+  reading it as its characters.** `domain: Person` is what a hand-edited file
+  carries, and `frozenset("Person")` is six one-character type names -- so the
+  reference check above reported `domain: 'P'` against a declared list holding
+  the exact word the author wrote. Refused naming the scalar, as
+  `index.fields` is refused one package over for the same shape. Endpoints are
+  also stored as `str` per element, because `entity_types:` is keyed by
+  `str(id)`: an endpoint left uncoerced resolved at load and matched nothing
+  after it.
 
 - **`AliasSource` reads a bare-string alias value as one form, not as its
   characters.** `ALIAS_FORMS_KEY` is declared list-valued and the family

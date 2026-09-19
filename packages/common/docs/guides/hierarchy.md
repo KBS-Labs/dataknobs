@@ -99,6 +99,8 @@ from dataknobs_common import (
 
 A vocabulary declares an axis by naming the relation its edges are made of:
 
+<!-- worked-input -->
+
 ```yaml
 ontology:
   id: mammals
@@ -133,6 +135,8 @@ ontology:
 ```
 
 `Ontology.taxonomy(name)` reaches it:
+
+<!-- worked-call-site -->
 
 ```python
 from pathlib import Path

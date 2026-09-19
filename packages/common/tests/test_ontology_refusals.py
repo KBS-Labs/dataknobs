@@ -102,11 +102,25 @@ def test_an_isa_naming_an_undeclared_type_is_refused(door: Door) -> None:
 
     Not a forward reference: the document declares its own types, so every
     parent it can legally name is somewhere in the same section.
+
+    **Message and context pinned exactly, because this one is a regression
+    guard as well as a refusal.** ``isa`` is the check that predates the
+    shared refusal and was converted into a caller of it, on the claim that
+    the conversion could not change a verdict. A substring assertion would
+    pass against a rewritten message or a changed context dict, which is to
+    say it would not hold the claim it exists for. The context keeps this
+    section's own two keys rather than the uniform four the other seven
+    carry -- see :func:`_refuse_an_unresolved_reference` -- and that is
+    itself part of what is pinned.
     """
     with pytest.raises(ValidationError) as excinfo:
         door({"id": "x", "entity_types": [{"id": "Breed", "isa": "Speceis"}]})
 
-    assert "'Speceis'" in str(excinfo.value)
+    assert str(excinfo.value) == (
+        "entity type 'Breed' declares `isa: 'Speceis'`, which no entity type "
+        "in this document declares. Declared: ['Breed']"
+    )
+    assert excinfo.value.context == {"entity_type": "Breed", "isa": "Speceis"}
 
 
 @DOORS
@@ -917,15 +931,22 @@ def test_an_assertion_relation_may_name_a_declared_attribute(door: Door) -> None
     """The positive control, and the half of this rule that can rot.
 
     An attribute-valued assertion names an attribute, not a relation type, so
-    the section a ``relation:`` resolves against is ``relation_types:`` *union*
+    the set a ``relation:`` resolves against is ``relation_types:`` *union*
     the declared attribute names. A check that looked at ``relation_types:``
     alone would refuse this document -- and a suite that only asserted the
     seven refusals above would pass against a loader that had started refusing
     everything.
+
+    ``relation_types:`` is declared and holds something else, which is what
+    puts the check in play at all: the section decides *whether* a
+    ``relation:`` is checked, and the union decides what resolves. Without it
+    this document is unchecked, and the control would pass against a loader
+    that had stopped reading attributes entirely.
     """
     door(
         {
             "id": "x",
+            "relation_types": [{"id": "isa"}],
             "entity_types": [
                 {"id": "Species", "attributes": [{"name": "lifespan_years", "type": "integer"}]}
             ],
@@ -944,14 +965,15 @@ def test_an_assertion_relation_may_name_a_declared_attribute(door: Door) -> None
 def test_an_assertion_relation_naming_neither_half_of_the_union_is_refused(door: Door) -> None:
     """The control's difference, constructed rather than assumed.
 
-    The same document with a *different* attribute declared: the union is
-    non-empty either way, so the guard is not what decides it, and the only
-    thing that changed is whether the name is in the union.
+    The same document with a *different* attribute declared: both halves of
+    the union are present either way, so the guard is not what decides it, and
+    the only thing that changed is whether the name is in the union.
     """
     with pytest.raises(ValidationError) as excinfo:
         door(
             {
                 "id": "x",
+                "relation_types": [{"id": "isa"}],
                 "entity_types": [
                     {"id": "Species", "attributes": [{"name": "weight_kg", "type": "float"}]}
                 ],
@@ -979,3 +1001,315 @@ def test_a_reference_is_not_checked_against_a_section_the_document_omits(door: D
     documents a live source completes.
     """
     door({"id": "x", "entities": [{"id": "beagle", "type": "Dog"}]})
+
+
+# --------------------------------------------------------------------------
+# What decides the guard, where the target is a union
+# --------------------------------------------------------------------------
+#
+# Seven of the eight references point at one declared section, so "that
+# section is empty" and "this document declares no vocabulary for this
+# reference" are the same sentence. `relation:` resolves against
+# `relation_types:` *union* the declared attribute names, and there the two
+# sentences come apart: the union is non-empty the moment any entity type
+# declares any attribute, in a document that declares no relation vocabulary
+# at all. The section decides the guard; the union decides what resolves.
+
+
+@DOORS
+def test_an_attribute_elsewhere_does_not_make_relation_types_mandatory(door: Door) -> None:
+    """A document with no ``relation_types:`` makes no claim about relations.
+
+    The loader has never required an assertion's ``relation:`` to have a
+    ``relation_types:`` row -- ``_build_assertions`` stores the string and the
+    axis filters on it -- so a document that names its edges and declares no
+    relation vocabulary is the ordinary authored shape, not an incomplete one.
+
+    Measured against the union, this document's guard turns on an attribute
+    that has nothing to do with the reference: ``latin_name`` makes the union
+    non-empty, and ``isa`` is then refused for not being in it. The same
+    document with the attribute deleted loads. A guard a reader cannot predict
+    from the reference is worse than no guard.
+    """
+    door(
+        {
+            "id": "x",
+            "entity_types": [
+                {"id": "Species", "attributes": [{"name": "latin_name", "type": "string"}]}
+            ],
+            "entities": [{"id": "dog", "type": "Species"}, {"id": "mammal", "type": "Species"}],
+            "assertions": [{"subject": "dog", "relation": "isa", "object": "mammal"}],
+        }
+    )
+
+
+@DOORS
+def test_the_same_document_without_the_attribute_loads_too(door: Door) -> None:
+    """The other half of the pair, which is what makes the first one a claim.
+
+    Green before this change and after it. A suite holding only the first test
+    would pass against a loader that had stopped checking ``relation:``
+    altogether; holding both pins that the attribute is not what decides.
+    """
+    door(
+        {
+            "id": "x",
+            "entity_types": [{"id": "Species"}],
+            "entities": [{"id": "dog", "type": "Species"}, {"id": "mammal", "type": "Species"}],
+            "assertions": [{"subject": "dog", "relation": "isa", "object": "mammal"}],
+        }
+    )
+
+
+@DOORS
+def test_a_taxonomy_relation_is_not_checked_where_no_relation_types_are_declared(
+    door: Door,
+) -> None:
+    """The axis half of the same rule, over the section that decides it."""
+    door(
+        {
+            "id": "x",
+            "entity_types": [
+                {"id": "Species", "attributes": [{"name": "latin_name", "type": "string"}]}
+            ],
+            "taxonomies": [{"id": "lattice", "relation": "isa"}],
+        }
+    )
+
+
+def test_a_kind_bearing_axis_declares_a_label_rather_than_a_reference() -> None:
+    """A column axis's ``relation:`` names what its edges mean, not a section.
+
+    Reached through the core rather than a door, as
+    ``test_the_core_refuses_grammar_but_not_ownership`` is: a ``kind:`` on an
+    axis row is refused by both module doors, so a registry is the only caller
+    that gets this far, and the registry is where such a document is loaded.
+
+    Nothing constructs an ``Assertion`` for a column row -- the edges are two
+    columns -- so this ``relation:`` resolves against no set of assertions and
+    is not a reference into ``relation_types:``. Checking it would refuse a
+    document the registry guide publishes as valid.
+    """
+    config = OntologyConfig.from_dict(
+        {
+            "id": "catalog",
+            "relation_types": [{"id": "part_of"}],
+            "entity_types": [{"id": "Product", "attributes": [{"name": "sku", "type": "string"}]}],
+            "taxonomies": [
+                {
+                    "id": "categories",
+                    "kind": "column",
+                    "source": "products",
+                    "parent_key": "parent_sku",
+                    "relation": "parent",
+                }
+            ],
+        }
+    )
+
+    parts = build_ontology(config)
+
+    assert parts.taxonomy_specs[0]["relation"] == "parent"
+
+
+# --------------------------------------------------------------------------
+# A bare string is one name, not its characters
+# --------------------------------------------------------------------------
+
+
+@DOORS
+def test_a_scalar_domain_is_refused_naming_the_scalar(door: Door) -> None:
+    """``domain: Person`` is the authoring mistake, and it has to be named.
+
+    ``frozenset("Person")`` is six one-character type names, so the reference
+    check downstream reported ``domain: 'P'`` against a declared list holding
+    the exact word the author wrote. The sibling door states the rule for the
+    same shape -- ``index.fields`` takes a list, and a bare string is one name
+    spelled as its characters rather than a list of one.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [{"id": "Person"}],
+                "relation_types": [{"id": "owns", "domain": "Person"}],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'Person'" in message
+    assert "'P'" not in message
+    assert excinfo.value.context == {
+        "section": "relation_types",
+        "id": "owns",
+        "field": "domain",
+        "value": "Person",
+    }
+
+
+@DOORS
+def test_a_scalar_range_is_refused_by_the_same_rule(door: Door) -> None:
+    """Its sibling key, because one of the two being right is the failure mode.
+
+    ``'Person'`` alone does not distinguish the two refusals -- the character
+    refusal names it too, in its ``Declared:`` list -- so this asserts the
+    absence of the character the old message led with.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [{"id": "Person"}],
+                "relation_types": [{"id": "owns", "range": "Person"}],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'Person'" in message
+    assert "'P'" not in message
+    assert excinfo.value.context["field"] == "range"
+
+
+@DOORS
+def test_a_list_of_one_is_what_the_scalar_was_trying_to_say(door: Door) -> None:
+    """The form the refusal points at, loading."""
+    door(
+        {
+            "id": "x",
+            "entity_types": [{"id": "Person"}],
+            "relation_types": [{"id": "owns", "domain": ["Person"]}],
+        }
+    )
+
+
+@DOORS
+def test_an_endpoint_is_stored_as_the_string_its_section_is_keyed_by(door: Door) -> None:
+    """``entity_types:`` keys by ``str(id)``, so an endpoint has to agree.
+
+    A non-string endpoint passed the reference check by coercion and was then
+    stored uncoerced, so ``domain`` held ``1`` against a map keyed ``'1'`` --
+    the reference resolved at load and the constraint matched nothing after it.
+    """
+    del door
+    config = OntologyConfig.from_dict(
+        {
+            "id": "x",
+            "entity_types": [{"id": 1}],
+            "relation_types": [{"id": "owns", "domain": [1]}],
+        }
+    )
+
+    parts = build_ontology(config)
+
+    assert parts.relation_types["owns"].domain == frozenset({"1"})
+
+
+# --------------------------------------------------------------------------
+# A malformed row is named by what it carries, not by `str(None)`
+# --------------------------------------------------------------------------
+
+
+@DOORS
+def test_an_assertion_missing_its_subject_still_meets_the_missing_field_refusal(
+    door: Door,
+) -> None:
+    """Well-formedness wins over a reference check, as it does in ``relation_types:``.
+
+    ``_build_relation_types`` already sequences this way and says why: a row
+    has to be well formed before it is worth telling its author which of its
+    keys resolves. A reference check running first reported ``assertion on
+    subject 'None'`` and carried ``id: 'None'`` in its context -- a refusal
+    about the key the author *did* write, addressed to a row it could not name.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "relation_types": [{"id": "isa"}],
+                "assertions": [{"relation": "isaa", "object": "mammal"}],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'subject'" in message
+    assert "None" not in message
+    assert excinfo.value.context["field"] == "subject"
+
+
+@DOORS
+def test_a_taxonomy_missing_its_id_is_named_by_the_keys_it_carries(door: Door) -> None:
+    """The axis half: ``_row_handle``'s other branch, which this reached as ``'None'``."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "relation_types": [{"id": "isa"}],
+                "taxonomies": [{"relation": "isaa"}],
+            }
+        )
+
+    assert "None" not in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# `imports:` is the document saying it does not declare its sections in full
+# --------------------------------------------------------------------------
+
+
+@DOORS
+def test_a_document_that_imports_is_not_checked_against_its_local_half(door: Door) -> None:
+    """The premise of every one of the eight, stated by the document itself.
+
+    Each check reads *a reference into a section this document declares in
+    full*, and the guard on an empty section is how that premise is enforced.
+    ``imports:`` is the other way a document says the premise does not hold:
+    ``Ontology.imports`` is carried and never followed, because resolving
+    across one needs a second vocabulary in scope that a door loading one
+    file does not have -- so a name this document does not declare may be one
+    the import declares, and refusing it is refusing a document this loader
+    cannot adjudicate.
+
+    Measured against the local half alone the check is shape-dependent in
+    exactly the way the union was: ``IMPORTING_DOCUMENT`` in
+    ``test_ontology_loading.py`` loads only because it declares **no**
+    ``entity_types:``, and declaring one local type would refuse an entity
+    typed from the import. One local declaration is what this adds.
+    """
+    door(
+        {
+            "id": "breeds",
+            "imports": ["mammals"],
+            "entity_types": [{"id": "Kennel"}],
+            "entities": [{"id": "beagle", "type": "Breed"}],
+        }
+    )
+
+
+@DOORS
+def test_an_importing_document_may_extend_an_imported_type(door: Door) -> None:
+    """The lattice half, which is the reference that predates the rule.
+
+    ``isa`` behaved this way before the other seven existed, so this is the
+    one member of the family where the narrowing is not new -- and the reason
+    it is asserted rather than left implicit.
+    """
+    door(
+        {
+            "id": "breeds",
+            "imports": ["zoology"],
+            "entity_types": [{"id": "Breed", "isa": "Species"}],
+        }
+    )
+
+
+@DOORS
+def test_a_document_that_imports_nothing_is_checked_as_before(door: Door) -> None:
+    """The difference, so the exemption is the import and not the section.
+
+    The same document with the one key removed, which is what makes the pair
+    a claim about ``imports:`` rather than about the type it names.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "breeds", "entity_types": [{"id": "Breed", "isa": "Species"}]})
+
+    assert "'Species'" in str(excinfo.value)

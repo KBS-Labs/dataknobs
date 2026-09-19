@@ -191,19 +191,23 @@ def test_the_edge_relation_is_configurable() -> None:
     assert onto.assertions.find(subject="top/under", relation="isa") == []
 
 
-def test_a_document_declaring_no_entity_types_loads_with_entities_of_any_type() -> None:
-    """The guard on the reference checks, asserted where the fixture already was.
+def test_a_minted_type_is_not_a_reference_the_loader_checks() -> None:
+    """The mint runs after the reference checks, so what it types is not checked.
 
-    A reference into a section this document declares must resolve -- but an
-    **empty** section is *no* schema rather than an empty one, so a document
-    that leaves its type vocabulary to a source is not making a claim the
-    loader can check. ``PRODUCT_AREAS`` declares no ``entity_types:`` at all
-    and types four minted entities ``product_areas``, which no section of it
-    declares; dropping the guard would refuse it.
+    ``PRODUCT_AREAS`` types four minted entities ``product_areas``, which no
+    section of it declares. The reason that loads is **not** the guard on an
+    empty section -- ``_refuse_undeclared_entity_types`` reads ``entities:``,
+    and this document has none, so the check iterates nothing whatever
+    ``entity_types:`` holds. It is that ``_mint_nested`` runs after the eight
+    checks, deliberately: what a mint types is taken from ``sources:``, which
+    is a different question and not yet a ruled one.
 
-    Listed beside the refusals rather than after them, because a suite
-    asserting only that the check fires would pass against a loader that had
-    started refusing everything.
+    Asserted as a **difference**, because the claim is about which mechanism
+    carries it. The second document declares an ``entity_types:`` section, so
+    the guard cannot fire -- and the minted type is still not refused. A test
+    over the first document alone passes identically with the guard deleted,
+    and so pins nothing; the guard's own controls are in
+    ``test_ontology_refusals.py``, over documents that declare ``entities:``.
     """
     assert "entity_types" not in PRODUCT_AREAS
 
@@ -213,3 +217,12 @@ def test_a_document_declaring_no_entity_types_loads_with_entities_of_any_type() 
     minted = onto.entities.by_type("product_areas")
     assert len(minted) == 4
     assert {onto.entity(entity_id).type for entity_id in minted} == {"product_areas"}
+
+    # The difference: a declared type vocabulary that does not contain the
+    # minted type. The guard is inert here, and the mint is still unrefused.
+    with_types = {**PRODUCT_AREAS, "entity_types": [{"id": "Area"}]}
+
+    also = load_ontology(with_types)
+
+    assert set(also.entity_types) == {"Area"}
+    assert len(also.entities.by_type("product_areas")) == 4

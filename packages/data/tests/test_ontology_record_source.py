@@ -560,6 +560,81 @@ async def test_a_type_column_is_refused_while_declares_cannot_say_it_cannot_enum
         await registry.close()
 
 
+async def test_a_projection_typing_every_row_with_an_undeclared_type_is_refused() -> None:
+    """The ninth reference of the class the loader refuses eight of.
+
+    ``entity_projection.type: {const: Widget}`` names an ``entity_types:`` id
+    exactly as an ``entities:`` row's ``type:`` does, and the consequence of
+    its naming nothing is the same one: the entities are untyped, and an index
+    enumerating the vocabulary by type finds none of them. It is the worse
+    half of the pair, because an authored row mistypes one entity and a
+    projection mistypes **every row of a live table**.
+
+    Refused here rather than in ``build_ontology`` with the other eight:
+    ``entity_projection`` is this package's schema and ``dataknobs_common``
+    has no notion of it, so checking it there would make the core read a
+    section only a live binding understands.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document(projection=dict(PROJECTION, type={"const": "Widget"}))),
+        database=await _store(),
+    )
+    try:
+        with pytest.raises(ValidationError) as excinfo:
+            await registry.load()
+
+        message = str(excinfo.value)
+        assert "'Widget'" in message
+        assert "'products'" in message, "the refusal names the binding a consumer edits"
+        assert "Product" in message, "and what the document does declare"
+    finally:
+        await registry.close()
+
+
+async def test_a_projection_type_is_unchecked_where_no_entity_types_are_declared() -> None:
+    """The guard the other eight carry, at the ninth: an empty section is no schema.
+
+    A document that binds a live table and leaves its type vocabulary to an
+    ontology it imports is not making a claim this registry can check.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document(entity_types=[])),
+        database=await _store({"sku": "sku-1", "title": "Beagle"}),
+    )
+    try:
+        ontology = await registry.load()
+
+        assert await ontology.entity("sku-1") is not None
+    finally:
+        await registry.close()
+
+
+async def test_a_projection_type_is_unchecked_where_the_document_imports() -> None:
+    """The ninth reference inherits the family's other exemption too.
+
+    ``imports:`` is the document saying it does not declare its sections in
+    full, and a projection's ``const:`` may name a type the imported
+    vocabulary declares. The core switches all eight of its checks off for
+    such a document; this one is the same rule over this package's section,
+    so it switches off with them or the family disagrees with itself.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(
+            **_document(
+                projection=dict(PROJECTION, type={"const": "Widget"}),
+                imports=["catalogue-core"],
+            )
+        ),
+        database=await _store({"sku": "sku-1", "title": "Beagle"}),
+    )
+    try:
+        ontology = await registry.load()
+
+        assert await ontology.entity("sku-1") is not None
+    finally:
+        await registry.close()
+
+
 async def test_a_binding_with_neither_a_database_nor_a_handle_is_refused() -> None:
     """A live source is read through a resolved reference or an injected handle."""
     registry = OntologyRegistry(config=OntologyConfig(**_document()))

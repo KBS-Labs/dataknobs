@@ -24,7 +24,7 @@ import copy
 import dataclasses
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 from dataknobs_common.entity_resolution import async_signal_backends
@@ -1025,11 +1025,18 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     "source_ids": [spec.get("id") for spec in live],
                 },
             )
-        source, binding = await self._bind_record_source(config, live[0], ontology_id=parts.id)
+        source, binding = await self._bind_record_source(
+            config, live[0], ontology_id=parts.id, entity_types=parts.entity_types.keys()
+        )
         return _BoundSources(source, (source.describe(),), {binding.source_id: binding})
 
     async def _bind_record_source(
-        self, config: OntologyConfig, spec: Mapping[str, Any], *, ontology_id: str
+        self,
+        config: OntologyConfig,
+        spec: Mapping[str, Any],
+        *,
+        ontology_id: str,
+        entity_types: Collection[str],
     ) -> tuple[RecordEntitySource, _LiveBinding]:
         """One ``kind: record`` binding, validated before a handle is opened.
 
@@ -1037,6 +1044,10 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         claimed on the ontology's behalf rather than the binding's: it is
         released when the ontology is unloaded, and a document replacing
         itself must not collide with the copy it replaces.
+
+        ``entity_types`` is carried for
+        :func:`_refuse_an_undeclared_projection_type`, which is this package's
+        member of the reference family ``build_ontology`` refuses eight of.
 
         **The pair rather than the source alone**, because an axis over the
         same table needs the three things this method resolved and the source
@@ -1057,6 +1068,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 context={"source_id": source_id},
             )
         projection = EntityProjection.from_mapping(projection_spec, binding=source_id)
+        if not config.imports:
+            # `imports:` switches the core's eight reference checks off, for
+            # the reason `_owns_its_sections` gives: an import is carried and
+            # never followed, so a name this document does not declare may be
+            # one the import declares. This is the ninth, so it switches off
+            # with them or the family disagrees with itself.
+            _refuse_an_undeclared_projection_type(projection, entity_types, binding=source_id)
         declared_schema = _declared_schema(spec, binding=source_id)
         validate_against_schema(projection, declared_schema, binding=source_id)
         _refuse_a_form_reading_rung_with_no_lookup(config, projection, binding=source_id)
@@ -2388,6 +2406,53 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
             "source_id": binding,
             "rungs": scanning,
             "surface_forms_table": lookup.table,
+        },
+    )
+
+
+def _refuse_an_undeclared_projection_type(
+    projection: EntityProjection, entity_types: Collection[str], *, binding: str
+) -> None:
+    """A projection's ``type: {const: ...}`` names a type the document declares.
+
+    The ninth member of the family
+    :func:`~dataknobs_common.ontology.loader._refuse_an_unresolved_reference`
+    refuses eight of, and the one that cannot live beside them: the core has
+    no notion of ``entity_projection:``, which is this package's schema, so
+    reading it there would make ``dataknobs_common`` parse a section only a
+    live binding understands. The rule travels; the reading stays here.
+
+    **It is the worst-consequence member of the family.** An ``entities:``
+    row whose ``type:`` names nothing mistypes one entity; a projection's
+    ``const:`` types *every row of the table*, so an index enumerating the
+    vocabulary by type silently finds none of them -- over a source whose
+    whole purpose is that nobody enumerated its rows by hand.
+
+    The same guard the other eight carry: an empty ``entity_types:`` is *no*
+    schema rather than an empty one, and a document binding a live table
+    while leaving its type vocabulary elsewhere is not making a claim this
+    registry can check. Its caller applies the family's other exemption, for
+    a document declaring ``imports:``.
+
+    After :meth:`EntityProjection.from_mapping`, which is where ``type:``
+    being a column or a malformed block is refused. A row has to be well
+    formed before it is worth telling its author which of its keys resolves.
+    """
+    if not entity_types:
+        return
+    if projection.const_type in entity_types:
+        return
+    raise ValidationError(
+        f"binding {binding!r} declares `entity_projection.type: "
+        f"{{const: {projection.const_type!r}}}`, which no entity type in this "
+        f"document declares -- so every row of {projection.table!r} would be "
+        f"typed as something the vocabulary does not hold. "
+        f"Declared: {sorted(entity_types)}",
+        context={
+            "source_id": binding,
+            "section": "entity_projection",
+            "field": "type",
+            "value": projection.const_type,
         },
     )
 

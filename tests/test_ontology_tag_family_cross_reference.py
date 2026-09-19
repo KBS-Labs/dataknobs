@@ -23,20 +23,28 @@ import direction, which is the property that makes the guard placeable at all.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from tests._workspace import ROOT
 
+#: Spelled once each, and read through these rather than beside them.
+#:
+#: Both were written twice --- once here, once as a bare string argument
+#: below --- and the two spellings answer different questions: the existence
+#: guard checks these, ``_files_the_workspace_guards_read`` populates its
+#: hash scope from these, and the assertions read the strings. A rename would
+#: leave the first two agreeing about a file the third had stopped reading.
 IDENTITY_KEYS = ROOT / "packages/common/src/dataknobs_common/ontology/tags.py"
 EMBEDDER_KEY = ROOT / "packages/data/src/dataknobs_data/vector/content.py"
 
 
-def _module_docstring(path: str) -> str:
-    return ast.get_docstring(ast.parse((ROOT / path).read_text())) or ""
+def _module_docstring(path: Path) -> str:
+    return ast.get_docstring(ast.parse(path.read_text(encoding="utf-8"))) or ""
 
 
 def test_the_identity_half_names_the_embedder_half() -> None:
     """``tags.py`` says where the fifth key of the same row lives."""
-    doc = _module_docstring("packages/common/src/dataknobs_common/ontology/tags.py")
+    doc = _module_docstring(IDENTITY_KEYS)
 
     assert doc, "tags.py has no module docstring"
     assert "dataknobs_data.vector.content" in doc or "vector/content.py" in doc
@@ -49,7 +57,7 @@ def test_the_embedder_half_names_the_identity_half() -> None:
     about hashing rather than about the family, so a reader editing it has no
     reason to know the sentence is load-bearing.
     """
-    doc = _module_docstring("packages/data/src/dataknobs_data/vector/content.py")
+    doc = _module_docstring(EMBEDDER_KEY)
 
     assert doc, "vector/content.py has no module docstring"
     assert "dataknobs_common.ontology.tags" in doc or "ontology/tags.py" in doc
@@ -58,8 +66,8 @@ def test_the_embedder_half_names_the_identity_half() -> None:
 def test_the_two_files_this_guard_names_both_exist() -> None:
     """A path guard whose paths have moved passes by reading nothing.
 
-    Both assertions above parse a file named by a string. If either file were
-    renamed, ``ast.parse`` would raise --- but a guard that only fails by
+    Both assertions above parse one of these two paths. If either file were
+    renamed, ``read_text`` would raise --- but a guard that only fails by
     raising ``FileNotFoundError`` says nothing useful about which half moved.
     """
     assert IDENTITY_KEYS.is_file()

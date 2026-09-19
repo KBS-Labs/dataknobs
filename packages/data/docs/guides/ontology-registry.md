@@ -186,6 +186,14 @@ Every bare scalar names a column; the braced forms are the ones that do
 something else — `{const: ...}` is a literal, `{column: ..., split: ...}` is a
 delimited list, `{columns: [...]}` gathers metadata.
 
+**`type: {const: ...}` names a type the document declares.** It is the one
+key of the projection that is a reference into another section rather than
+into the table, and it is checked at load like the references the core
+refuses: a `const:` naming no `entity_types:` row would type *every row of
+the table* as something the vocabulary does not hold, so an index enumerating
+by type would find none of them. A document that declares no `entity_types:`
+at all is unaffected — an empty section is no schema rather than an empty one.
+
 A column may be a **dotted path** into a JSON value (`name: payload.legal_name`),
 and exactly one thing is promised about that: the *root segment* is validated at
 load and the path within the value is not. A declared `payload` proves the
