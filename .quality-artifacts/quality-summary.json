@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-19T15:57:36Z",
+  "timestamp": "2026-09-19T17:02:36Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,9 +19,9 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "d331ab8ce0f96410f81fb717d38ac9d6d6db64fc7126ae970f3ec04ac1cc1030",
-    "common": "c16647f87505da230e8ee2880183b4c9433335cdaafb32a15c2cc1f4021d6556",
+    "common": "367b0caa2a18154e7d577fc591a0e0be826ac6c3e63be5db2ad42331ef28179d",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "f0f6cc6b08b4dd978c819be2ffc66646fde55f10b341bfb817a27d38cc460c55",
+    "data": "626492b567982fdbe429bb024ad6c36644e0d9b36f98de2759c5a5b919818bb5",
     "fsm": "caf631115ee1943be5236aac21b28371fa5096be80e33e3d7aad66d5fda95324",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "706d5477e00d3dfb23688dc71c2b816538c7ba2f184d0d134feb657834fef09b",
@@ -35,15 +35,15 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "c8b233939cf62855d5b03e55554af3512db0b40c3fb41c5594a344d415a5690f",
-    "docs": "2c903947066f50fa7ee34f1c41b21bd6e099297bc42267f71ca6ec310a87f6eb"
+    "docs": "84be09932db47312f9c8aecc60477af41e5d5d006217c9b94af7372870fe6d23"
   },
-  "total_seconds": 377,
+  "total_seconds": 379,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
@@ -55,14 +55,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 2
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 92
+      "duration_seconds": 95
     },
     "documentation": {
       "status": "pass",
