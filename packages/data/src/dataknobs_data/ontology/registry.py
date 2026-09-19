@@ -1001,10 +1001,22 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         query, so a ``$resource`` naming one produced a source that loaded
         clean and failed on its first read. An injected handle is connected
         by whoever handed it over, which is the same line ownership is drawn
-        on everywhere else here. Not through
-        :meth:`~dataknobs_data.database.AsyncDatabase.from_backend`, which
-        does both halves in one call: it resolves and builds on the caller's
-        loop, which is the import this offload exists to keep off it.
+        on everywhere else here.
+
+        **Not through**
+        :meth:`~dataknobs_data.database.AsyncDatabase.from_backend`, **for
+        three reasons, none of them the loop.** That method offloads its own
+        resolve-and-build to a thread exactly as this does -- its comment
+        names this one as the precedent -- so a paragraph here once said this
+        went its own way to keep the import off the loop, and by the time both
+        had landed that was the one reason that had stopped being true. What
+        it cannot do is the rest: it takes a backend name and a config, so it
+        has nowhere to put the table :meth:`_keyed_block` writes into the
+        resolved block; it builds an instance per call, where a handle here is
+        cached under that keyed block and shared by every projection resolving
+        to it; and it connects without owning the failure, where
+        :meth:`_connect_or_close` closes a handle that raises mid-connect
+        rather than losing it between *built* and *recorded*.
         """
         async with self._handle_lock:
             keyed = await asyncio.to_thread(self._keyed_block, block, table)

@@ -46,6 +46,7 @@ from .sql_base import (
     SQLTableManager,
     constraint_violation_error,
     validate_field_name,
+    validate_field_path,
 )
 from ..vector.types import DistanceMetric
 
@@ -862,9 +863,13 @@ class SyncPostgresDatabase(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from PostgreSQL."""
+        # Pre-flight the field grammar before a connection is acquired, through
+        # the same check ``build_where_clause`` applies at the point of
+        # interpolation below. Both sites called a grammar of their own once,
+        # and the two disagreed about a dotted path.
         if query and query.filters:
             for f in query.filters:
-                validate_field_name(f.field)
+                validate_field_path(f.field)
         self._check_connection()
         config = config or StreamConfig()
 
@@ -1960,9 +1965,9 @@ class AsyncPostgresDatabase(
 
         # Use the shared batch update query builder. It already
         # produces positional parameters ($1, $2) AND appends
-        # ``RETURNING id`` when ``dialect="postgres"``
-        # (sql_base.py:559-561) — do NOT append a second ``RETURNING
-        # id`` here, that produces invalid SQL.
+        # ``RETURNING id`` when ``dialect="postgres"`` -- see
+        # ``SQLQueryBuilder.build_batch_update_query`` -- so do NOT append
+        # a second ``RETURNING id`` here, that produces invalid SQL.
         query, params = query_builder.build_batch_update_query(updates)
 
         # Execute the batch update
@@ -2244,9 +2249,10 @@ class AsyncPostgresDatabase(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from PostgreSQL using cursor."""
+        # Pre-flight the field grammar -- see the sync twin.
         if query and query.filters:
             for f in query.filters:
-                validate_field_name(f.field)
+                validate_field_path(f.field)
         self._check_connection()
         config = config or StreamConfig()
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation
+
+- **`VectorKnowledgeSource.query` names the symbol it takes its filter-slice
+  convention from.** The comment cited `database.py:300` — a file that does not
+  exist in this package, in a line range that had drifted off the statement it
+  meant. It now names `DatabaseSource._build_structural_filters` and says which
+  package that lives in.
+
 ### Changed
 
 - **`HeadingTreeIndex` expands a region through the shared hierarchy walks.**
