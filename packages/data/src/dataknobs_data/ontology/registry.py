@@ -25,7 +25,7 @@ import dataclasses
 import json
 import logging
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 from dataknobs_common.entity_resolution import async_signal_backends
 from dataknobs_common.events import Event, EventType, create_event_bus
@@ -286,6 +286,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # handle rather than opening a second connection and leaving the first
         # to a `close()` that may be a long way off.
         self._database_cache: dict[str, AsyncDatabase] = {}
+        # Which store each loaded ontology's live binding took, and the tables
+        # it named there. Read to refuse a second binding over one store; not
+        # pruned on `unload`, because a claim is only consulted while its
+        # ontology is loaded and `_ontologies` is where that is recorded.
+        self._store_claims: dict[str, _StoreClaim] = {}
         # One handle opened at a time, so that the cache lookup and the open
         # it guards are one step. Held on the loop rather than in the worker
         # thread the open is offloaded to -- see `_database_handle`.
@@ -629,6 +634,10 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         """
         held, self._handles = self._handles, [entry for entry in self._handles if not entry[1]]
         self._database_cache = {}
+        # The claims name handles that are about to be closed, so they outlive
+        # nothing. A load after a close opens a fresh handle and takes a fresh
+        # claim, which is the arrangement that keeps the two in step.
+        self._store_claims = {}
         bus, owns_bus = self._event_bus, self._owns_event_bus
         if owns_bus:
             self._event_bus = None
@@ -841,13 +850,19 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     "source_ids": [spec.get("id") for spec in live],
                 },
             )
-        source = await self._bind_record_source(config, live[0])
+        source = await self._bind_record_source(config, live[0], ontology_id=parts.id)
         return source, (source.describe(),)
 
     async def _bind_record_source(
-        self, config: OntologyConfig, spec: Mapping[str, Any]
+        self, config: OntologyConfig, spec: Mapping[str, Any], *, ontology_id: str
     ) -> RecordEntitySource:
-        """One ``kind: record`` binding, validated before a handle is opened."""
+        """One ``kind: record`` binding, validated before a handle is opened.
+
+        ``ontology_id`` is carried because the store this binding takes is
+        claimed on the ontology's behalf rather than the binding's: it is
+        released when the ontology is unloaded, and a document replacing
+        itself must not collide with the copy it replaces.
+        """
         source_id = str(spec.get("id", ""))
         projection_spec = spec.get("entity_projection")
         if not isinstance(projection_spec, Mapping):
@@ -894,6 +909,20 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 if projection.surface_forms is not None
                 else database
             )
+        tables = (
+            (projection.table,)
+            if projection.surface_forms is None
+            else (projection.table, projection.surface_forms.table)
+        )
+        _refuse_a_second_binding_over_one_store(
+            self._store_claims,
+            self._ontologies,
+            database,
+            tables,
+            ontology_id=ontology_id,
+            binding=source_id,
+        )
+        self._store_claims[ontology_id] = _StoreClaim(database, tables, source_id)
         return RecordEntitySource(
             database,
             projection,
@@ -1203,8 +1232,30 @@ def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
     """Whether this backend's config declares a ``table`` -- i.e. is one table's.
 
     Asked of the registered backend's own config class rather than decided
-    from a list here, so a consumer-registered backend answers for itself and
-    a backend added to this package answers without an edit in this file.
+    from a list here, so a backend added to this package answers without an
+    edit in this file.
+
+    **Two limits, both of which read as "the handle is the store".** Neither
+    is a defect in the seven backends this package ships -- all seven register
+    a class carrying a ``CONFIG_CLS`` dataclass, and the three that address a
+    table spell the field ``table`` -- but both are properties of the
+    *mechanism* rather than of those seven, so a reader must not take a
+    ``False`` here as *asked and answered no*.
+
+    A :class:`~dataknobs_common.registry.PluginRegistry` accepts a plain
+    callable as a factory, and a function carries no ``CONFIG_CLS``. Such a
+    registration therefore cannot answer yes, whatever it builds: a
+    consumer-registered backend answers for itself only where it is
+    registered as a *class* whose ``CONFIG_CLS`` is a dataclass.
+
+    And the field is matched by the name ``table``. Elasticsearch's ``index``
+    and S3's ``prefix`` are the same concept spelled differently, so both are
+    read here as store-is-handle -- which for Elasticsearch is what routes it
+    onto the shared-store path the guide describes, and is load-bearing there
+    rather than incidental. Widening the match is not a rename: the caller
+    that acts on a ``True`` writes the *projection's* table into the block
+    under a key, so an addressing backend has to say which key rather than
+    only that it has one.
 
     **Imported at module scope, and the laziness it dropped was buying
     nothing.** All three names here were once imported in the body, which
@@ -1225,6 +1276,96 @@ def _backend_addresses_one_table(block: Mapping[str, Any]) -> bool:
         return False
     factory = async_backends.get_factory(normalize_backend(declared))
     return _config_class_addresses_one_table(getattr(factory, "CONFIG_CLS", None))
+
+
+class _StoreClaim(NamedTuple):
+    """One loaded ontology's hold on a store, and what it named there.
+
+    ``database`` is compared by **identity**, which is the whole mechanism:
+    two bindings collide exactly when the registry handed them one object,
+    and that is true for a different reason at each door. A backend declaring
+    a ``table`` gets one handle per table from
+    :meth:`OntologyRegistry._database_handle`, so two tables are two objects
+    and never meet here. A backend declaring none gets one handle for its
+    whole store. An injected handle is one object for every document the
+    registry loads, and where that handle is itself table-addressed it is
+    stuck on the *one* table it was built for -- so two bindings naming two
+    tables through it are further wrong, not less. Asking the object rather
+    than asking the backend is what covers all three with one question.
+    """
+
+    database: AsyncDatabase
+    tables: tuple[str, ...]
+    binding: str
+
+
+def _refuse_a_second_binding_over_one_store(
+    claims: Mapping[str, _StoreClaim],
+    loaded: Mapping[str, Any],
+    database: AsyncDatabase,
+    tables: tuple[str, ...],
+    *,
+    ontology_id: str,
+    binding: str,
+) -> None:
+    """Refuse a binding that would share a store with one already loaded.
+
+    **Nothing narrows a read to a binding's table on a store that has no
+    table dimension.** ``table:`` survives as a cache-key discriminator that
+    :meth:`OntologyRegistry._keyed_block` drops for such a backend and as a
+    ``describe()`` field; no query carries it. So two bindings over one store
+    read each other's rows on both axes at once --
+    :meth:`~...RecordEntitySource.by_type` answers with the other binding's
+    ids, :meth:`~...RecordEntitySource.get` answers with the other binding's
+    row projected under this binding's type and name, and
+    :meth:`~...RecordEntitySource.by_surface_form` filters a folded-form
+    column that the other binding's form rows also carry.
+
+    **Refused rather than narrowed, because there is nothing to narrow
+    with.** The one discriminator this design has is the form column, and it
+    separates *form rows from entity rows* rather than one binding's entities
+    from another's. Giving it a second job would need a column on the
+    consumer's own table saying which binding a row belongs to -- and this
+    source only ever reads, so such a column is theirs to add and backfill
+    rather than ours to write. The shape that would lift this refusal is a
+    projection naming a type column it already has, alongside the ``const``
+    it already declares, so that ``declares`` stays a complete enumeration and
+    the reads gain a filter. Until a binding can say that, a composition this
+    refuses is one no arrangement of these handles can serve.
+
+    **Declaring the same tables is left alone.** Two documents projecting one
+    table asked for the population they get -- the same rows read as a
+    catalogue entry by one and as something else by the other -- and nothing
+    here can tell that apart from a mistake. What is caught is narrower: two
+    bindings that named *different* tables and were handed one store.
+
+    **A claim is consulted only while its ontology is loaded**, which is why
+    ``loaded`` is passed rather than the claims being pruned. An id that was
+    unloaded releases its store with no bookkeeping, a document replacing
+    itself does not collide with itself, and a load that failed after binding
+    leaves a claim that can never be reached.
+    """
+    for other_id, claim in claims.items():
+        if other_id == ontology_id or other_id not in loaded:
+            continue
+        if claim.database is not database or claim.tables == tables:
+            continue
+        raise ValidationError(
+            f"binding {binding!r} names {list(tables)} in a store that "
+            f"ontology {other_id!r} already binds as {list(claim.tables)} "
+            f"(binding {claim.binding!r}). One handle serves both, and no read "
+            f"narrows to a binding's table there, so each would answer with "
+            f"the other's rows. Give this binding a `$resource` of its own, or "
+            f"a backend that addresses a table",
+            context={
+                "source_id": binding,
+                "ontology_id": ontology_id,
+                "tables": list(tables),
+                "held_by": other_id,
+                "held_tables": list(claim.tables),
+                "handle": type(database).__name__,
+            },
+        )
 
 
 def _refuse_one_handle_for_two_tables(
@@ -1294,6 +1435,15 @@ def _handle_addresses_one_table(database: AsyncDatabase) -> bool:
     implementation, or a test double -- answers False, which is the reading
     that refuses nothing: it says *this handle is the store*, which is what an
     implementation with no table concept is.
+
+    **That default is a guess where the handle is a consumer's own**, and it
+    guesses in the direction that stays quiet. An implementation that really
+    does address one table, and carries no ``CONFIG_CLS`` dataclass to say so,
+    is read as a shared store and passes a refusal it should have failed --
+    leaving :meth:`~...RecordEntitySource.by_surface_form` filtering the form
+    column against a table that does not carry it. The remedy is on the
+    caller's side and needs no classification: hand the second handle in as
+    ``forms_database=``, and the question never arises.
     """
     return _config_class_addresses_one_table(getattr(type(database), "CONFIG_CLS", None))
 

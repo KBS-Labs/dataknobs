@@ -1715,3 +1715,243 @@ async def test_a_composition_with_no_scan_needs_no_bound() -> None:
         assert ontology.entities.longest_form_tokens() is None
     finally:
         await registry.close()
+
+
+# --------------------------------------------------------------------------
+# Two bindings, one store that cannot tell them apart
+# --------------------------------------------------------------------------
+
+
+def _binding(ontology_id: str, table: str, type_id: str, **projection: Any) -> dict[str, Any]:
+    """One `kind: record` ontology over a `$resource`, projecting one table."""
+    entity_projection: dict[str, Any] = {
+        "table": table,
+        "id": "sku",
+        "name": "title",
+        "type": {"const": type_id},
+    }
+    entity_projection.update(projection)
+    return {
+        "id": ontology_id,
+        "version": "1.0",
+        "entity_types": [{"id": type_id}],
+        "sources": [
+            {
+                "id": f"{ontology_id}-src",
+                "kind": "record",
+                "database": {"$resource": "catalog", "type": "databases"},
+                "entity_projection": entity_projection,
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                    {"name": "folded_form", "type": "string"},
+                ],
+            }
+        ],
+    }
+
+
+async def test_two_bindings_naming_two_tables_of_one_storeless_backend_are_refused(
+    deployment: Path,
+) -> None:
+    """The population each one reports is the other's as well.
+
+    ``memory`` declares no ``table`` on its config, so the registry opens one
+    handle for both bindings and ``table:`` narrows nothing -- it survives as a
+    cache-key discriminator that :meth:`_keyed_block` discards and as a
+    ``describe()`` field. Neither read is filtered by it, so ``by_type`` over
+    the products binding answers with the supplier ids too, and ``get`` on a
+    supplier id answers with that row projected as a Product: an entity with
+    the wrong type, the wrong name and no error anywhere.
+
+    Refused rather than narrowed because there is nothing to narrow *with*.
+    The one discriminator this design has is the form column, and it separates
+    form rows from entity rows rather than one binding's entities from
+    another's.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = OntologyRegistry(environment=cfg.environment)
+    try:
+        await registry.load(_binding("catalog-products", "products", "Product"))
+
+        with pytest.raises(ValidationError) as raised:
+            await registry.load(_binding("catalog-suppliers", "suppliers", "Supplier"))
+
+        message = str(raised.value)
+        assert "suppliers" in message
+        assert "products" in message
+        assert "catalog-products" in message, "the refusal names who holds the store"
+        assert registry.list_ids() == ["catalog-products"], "the refused load left nothing"
+    finally:
+        await registry.close()
+
+
+async def test_two_bindings_that_name_one_table_are_left_alone(deployment: Path) -> None:
+    """Sharing a table is a decision; sharing a store by accident is not.
+
+    Two documents projecting *the same* table asked for the population they
+    get -- one as a catalogue entry, one as something else, over rows that
+    really are shared. Nothing here can tell that apart from a mistake, and
+    refusing it would cost a composition that is reading exactly what it
+    declared. What the refusal above catches is narrower: two bindings that
+    named two tables and were handed one.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = OntologyRegistry(environment=cfg.environment)
+    try:
+        await registry.load(_binding("catalog-products", "products", "Product"))
+        await registry.load(_binding("catalog-listings", "products", "Listing"))
+
+        assert registry.list_ids() == ["catalog-products", "catalog-listings"]
+    finally:
+        await registry.close()
+
+
+async def test_two_bindings_sharing_a_store_must_also_agree_on_the_form_table(
+    deployment: Path,
+) -> None:
+    """The lookup contaminates on an axis of its own, and has no type to pin.
+
+    ``by_surface_form`` emits one filter -- the folded form column -- against a
+    table the backend does not separate, so two bindings whose form rows land
+    in one store answer with each other's entity ids. Agreeing on the entity
+    table is therefore not enough: the whole set of tables a binding names has
+    to match the one already holding the store, or the two are separable only
+    in the document.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = OntologyRegistry(environment=cfg.environment)
+    lookup = {"table": "product_forms", "form": "folded_form", "entity": "sku"}
+    try:
+        await registry.load(
+            _binding("catalog-products", "products", "Product", surface_forms=lookup)
+        )
+
+        with pytest.raises(ValidationError) as raised:
+            await registry.load(
+                _binding(
+                    "catalog-listings",
+                    "products",
+                    "Listing",
+                    surface_forms=dict(lookup, table="listing_forms"),
+                )
+            )
+
+        assert "listing_forms" in str(raised.value)
+    finally:
+        await registry.close()
+
+
+@requires_package("aiosqlite")
+async def test_a_backend_that_addresses_a_table_binds_both_without_a_refusal(
+    tmp_path: Path,
+) -> None:
+    """The negative control, and the reason the refusal asks the backend.
+
+    ``sqlite`` declares a ``table`` on its config, so the registry opens a
+    handle per table and each binding's reads reach only its own rows. The
+    same two documents that cannot be told apart over ``memory`` are served
+    correctly here -- which is what makes this a property of the backend
+    rather than a rule about how many ontologies a registry may hold.
+    """
+    path = str(tmp_path / "catalog.db")
+    environment = EnvironmentConfig(
+        name="t", resources={"databases": {"catalog": {"backend": "sqlite", "path": path}}}
+    )
+    registry = OntologyRegistry(environment=environment)
+    try:
+        await registry.load(_binding("catalog-products", "products", "Product"))
+        await registry.load(_binding("catalog-suppliers", "suppliers", "Supplier"))
+
+        assert registry.list_ids() == ["catalog-products", "catalog-suppliers"]
+    finally:
+        await registry.close()
+
+
+async def test_one_injected_handle_cannot_carry_two_bindings_either(deployment: Path) -> None:
+    """The injected door reaches the same store by a shorter route.
+
+    ``from_components`` holds one handle for every document the registry
+    loads, so two documents through that door share a store for a reason the
+    configured door reaches only through a backend that declares no table.
+    Same hazard, and the refusal is the handle's rather than the block's --
+    which is why it is asked of the handle and not of a ``database:`` section
+    that the injected door does not have.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=AsyncMemoryDatabase()
+    )
+    try:
+        await registry.load()
+
+        with pytest.raises(ValidationError) as raised:
+            await registry.load(
+                OntologyConfig(
+                    **_document(
+                        id="other",
+                        sources=[
+                            {
+                                "id": "suppliers",
+                                "kind": "record",
+                                "entity_projection": {
+                                    "table": "suppliers",
+                                    "id": "sku",
+                                    "name": "title",
+                                    "type": {"const": "Product"},
+                                },
+                                "schema": [
+                                    {"name": "sku", "type": "string"},
+                                    {"name": "title", "type": "string"},
+                                ],
+                            }
+                        ],
+                    )
+                )
+            )
+
+        assert "suppliers" in str(raised.value)
+    finally:
+        await registry.close()
+
+
+async def test_unloading_the_holder_frees_the_store_for_another_binding(
+    deployment: Path,
+) -> None:
+    """The claim is the loaded vocabulary's, not the registry's for all time.
+
+    A refusal that outlived the ontology it was taken for would make
+    :meth:`unload` a partial operation -- the vocabulary gone and the store
+    still spoken for, with nothing a caller could do about it but build a
+    second registry. So the question is asked of what is loaded *now*, which
+    is also why replacing a document with itself is not a collision with
+    itself.
+    """
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = OntologyRegistry(environment=cfg.environment)
+    try:
+        await registry.load(_binding("catalog-products", "products", "Product"))
+        assert await registry.unload("catalog-products") is True
+
+        await registry.load(_binding("catalog-suppliers", "suppliers", "Supplier"))
+
+        assert registry.list_ids() == ["catalog-suppliers"]
+    finally:
+        await registry.close()
+
+
+async def test_replacing_a_document_does_not_collide_with_the_one_it_replaces(
+    deployment: Path,
+) -> None:
+    """``replace=True`` takes the id, so the departing claim is the arriving one's."""
+    cfg = EnvironmentAwareConfig.load_app("catalog")
+    registry = OntologyRegistry(environment=cfg.environment)
+    try:
+        await registry.load(_binding("catalog-products", "products", "Product"))
+
+        again = await registry.load(
+            _binding("catalog-products", "widgets", "Product"), replace=True
+        )
+
+        assert again.describes[0].table == "widgets"
+    finally:
+        await registry.close()

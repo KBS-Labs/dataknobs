@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Generic
 
 from dataknobs_common.entity_resolution.registry import (
     async_signal_backends,
+    declared_signal_metadata,
     signal_backends,
 )
 from dataknobs_common.entity_resolution.signals import declared_candidates
@@ -321,12 +322,38 @@ def _make_async_authority(config: dict[str, Any]) -> AsyncMatchSignal[Any]:
 #: service. ``requires_install`` is what makes the mark this registration
 #: clears actionable -- a reader who asked ``common`` for this kind and was
 #: told it ships elsewhere can act on the answer.
-_AUTHORITY_METADATA = {
+_AUTHORITY_BASE = {
     "flavour": "sync",
     "needs_io": False,
     "requires_install": "pip install dataknobs-xization",
 }
-_ASYNC_AUTHORITY_METADATA = dict(_AUTHORITY_METADATA, flavour="async")
+
+#: The base, plus what each rung declares about itself, read off the class by
+#: :func:`~dataknobs_common.entity_resolution.declared_signal_metadata` rather
+#: than written out here.
+#:
+#: **This is the registration that shows why that function is published.** The
+#: keys it adds are read at *load* time by doors in other distributions --
+#: whether a rung reads folded surface forms, and whether its cost is bounded
+#: by a number the source may not be able to supply -- and a registration that
+#: omits them is not refused, it is simply never asked about. Restating them
+#: here would put a second spelling of each fact one package away from the
+#: class that owns it, which is the drift the derivation exists to prevent and
+#: is worse across a distribution boundary than within one: the two files
+#: version separately, so a rung that gained a fact in a release this package
+#: has not picked up disagrees silently.
+#:
+#: Both rungs here answer ``False`` to both, and the answer is the *class's*
+#: rather than this dict's. Neither subclasses ``DeclaredSignal`` -- see
+#: :class:`AuthoritySignal` -- so neither declares either attribute and the
+#: helper reads its default, which is the reading that refuses nothing. An
+#: authority stack holds no folded form table and enumerates no window, so
+#: that is the right answer; what matters is that it stops being a coincidence
+#: the day either rung gains a fact.
+_AUTHORITY_METADATA = declared_signal_metadata(AuthoritySignal, _AUTHORITY_BASE)
+_ASYNC_AUTHORITY_METADATA = declared_signal_metadata(
+    AsyncAuthoritySignal, dict(_AUTHORITY_BASE, flavour="async")
+)
 
 
 def _register_rungs(*, override: bool = False) -> None:

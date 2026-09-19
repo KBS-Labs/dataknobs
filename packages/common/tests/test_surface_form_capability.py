@@ -46,6 +46,7 @@ from dataknobs_common.entity_resolution import (
     LexicalSignal,
     ScanningSignal,
     async_signal_backends,
+    declared_signal_metadata,
     signal_backends,
 )
 from dataknobs_common.exceptions import ValidationError
@@ -344,3 +345,95 @@ def test_the_default_composition_still_builds_over_a_source_that_folds(
     resolved = resolver.resolve("beagles")
 
     assert [candidate.entity_id for candidate in resolved.candidates] == ["beagle"]
+
+
+# --------------------------------------------------------------------------
+# The extension point, where the fact is restated or derived
+# --------------------------------------------------------------------------
+
+
+class _BareProtocolRung:
+    """A rung written against the protocol, declaring neither fact.
+
+    Not a stand-in for anything: ``AuthoritySignal`` in ``dataknobs-xization``
+    is this shape for a stated reason -- its backing is an authority stack
+    rather than a dictionary, so it subclasses no base that would supply these
+    attributes. A helper that reached them by attribute access would be
+    unusable by the one registration in the tree that is not written here.
+    """
+
+    key = "bare"
+
+
+class _ConsumerRung:
+    """A rung that declares, without inheriting the base that usually does."""
+
+    key = "consumer"
+    reads_surface_forms = True
+    bounded_by_longest_form = True
+
+
+def test_a_rung_that_declares_nothing_is_read_as_declaring_nothing() -> None:
+    """The default is the reading that refuses nothing.
+
+    A rung with no opinion must not be refused a lookup it never reads, nor a
+    bound it never spends -- so the absent attribute answers ``False`` rather
+    than raising, which is what lets a bare-protocol rung use this at all.
+    """
+    metadata = declared_signal_metadata(_BareProtocolRung, {"flavour": "sync"})
+
+    assert metadata == {
+        "flavour": "sync",
+        "reads_surface_forms": False,
+        "bounded_by_longest_form": False,
+    }
+
+
+def test_a_consumers_rung_declares_on_the_class_and_the_registry_reports_it() -> None:
+    """The asymmetry this function is published to close.
+
+    A consumer hand-writing the keys can write them wrongly, and the cost is
+    silent: the class-level guard still fires when the rung is constructed,
+    while every *load-time* refusal reading this registry passes them over.
+    Derived from the class, the two cannot disagree.
+    """
+    metadata = declared_signal_metadata(_ConsumerRung, {"flavour": "sync", "needs_io": True})
+
+    assert metadata["reads_surface_forms"] is True
+    assert metadata["bounded_by_longest_form"] is True
+    assert metadata["needs_io"] is True
+
+
+def test_the_base_is_copied_so_one_base_serves_both_flavours() -> None:
+    """Both flavours are registered from one base, which must survive the first."""
+    base = {"flavour": "sync", "needs_io": False}
+
+    declared_signal_metadata(_ConsumerRung, base)
+
+    assert base == {"flavour": "sync", "needs_io": False}
+
+
+@pytest.mark.parametrize(
+    ("registry", "flavour"),
+    [(signal_backends, "sync"), (async_signal_backends, "async")],
+    ids=["sync", "async"],
+)
+def test_a_rung_registered_from_another_distribution_declares_both_facts(
+    registry: Any, flavour: str
+) -> None:
+    """``authority`` ships in ``dataknobs-xization`` and is the live case.
+
+    It is the one registration in the tree written outside the module that
+    holds the four built-ins, so it is the one that had to restate these keys
+    by hand -- and it did not, which is what a consumer's registration would
+    also do. The keys being *present* is the assertion; their values are the
+    rung's own answer and are ``False`` because an authority stack holds no
+    folded form table.
+    """
+    pytest.importorskip("dataknobs_xization.entity_resolution")
+
+    metadata = registry.get_metadata("authority")
+
+    assert metadata["flavour"] == flavour
+    assert metadata["reads_surface_forms"] is False
+    assert metadata["bounded_by_longest_form"] is False

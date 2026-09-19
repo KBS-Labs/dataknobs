@@ -26,6 +26,7 @@ beside the protocol is reachable from both.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from dataknobs_common.entity_resolution.protocols import AsyncMatchSignal, MatchSignal
@@ -41,7 +42,7 @@ from dataknobs_common.entity_resolution.signals import (
 )
 from dataknobs_common.registry import PluginRegistry
 
-__all__ = ["async_signal_backends", "signal_backends"]
+__all__ = ["async_signal_backends", "declared_signal_metadata", "signal_backends"]
 
 
 #: Rungs a synchronous cascade can be built from.
@@ -137,7 +138,7 @@ _DECLARED_METADATA = {"flavour": "sync", "needs_io": False}
 _ASYNC_DECLARED_METADATA = {"flavour": "async", "needs_io": False}
 
 
-def _declared(rung: type[Any], base: dict[str, Any]) -> dict[str, Any]:
+def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[str, Any]:
     """This rung's registered metadata, with the facts read off the class.
 
     ``reads_surface_forms`` is a property of the rung and is enforced by the
@@ -153,37 +154,76 @@ def _declared(rung: type[Any], base: dict[str, Any]) -> dict[str, Any]:
     restated, because two spellings of one fact drift and the drift is
     silent: a rung marked here and not on the class refuses nothing, and a
     rung marked on the class and not here is not refused early.
+
+    **Published because the drift it prevents is a property of the extension
+    point, not of this module.** A consumer registering their own rung writes
+    the same ``register(key, factory, metadata=...)`` call the four below
+    write, and a fact they restate by hand is one they can restate wrongly --
+    at which point the class-level guard still fires when the rung is
+    constructed, loudly, while every *load-time* refusal reading this registry
+    misses them. That is the exact asymmetry the derivation exists to close,
+    so it is reachable from wherever a rung is registered rather than from
+    here only.
+
+    **Read with a default rather than as an attribute**, because a rung need
+    not inherit :class:`~dataknobs_common.entity_resolution.DeclaredSignal` to
+    be registered -- ``AuthoritySignal`` is written against the bare protocol,
+    for the reason its own docstring gives, and an attribute access would make
+    this helper unusable by exactly the registrations that most need it. The
+    class attribute is the one spelling either way: a base supplies it to its
+    subclasses, a bare-protocol rung sets it itself, and a rung that declares
+    nothing gets the reading that refuses nothing.
+
+    Args:
+        rung: The class whose declarations are read. Not the factory -- a
+            factory may be a plain callable, which declares nothing
+        base: What this registration carries regardless of the rung, such as
+            its ``flavour`` and whether it ``needs_io``. Copied, not mutated,
+            so one base can serve both flavours
+
+    Returns:
+        A new dict: ``base``, plus each fact read off ``rung``.
     """
     return dict(
         base,
-        reads_surface_forms=rung.reads_surface_forms,
-        bounded_by_longest_form=rung.bounded_by_longest_form,
+        reads_surface_forms=getattr(rung, "reads_surface_forms", False),
+        bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
     )
 
 
 signal_backends.register(
-    "exact", _make_exact, metadata=_declared(ExactNormalizedSignal, _DECLARED_METADATA)
+    "exact",
+    _make_exact,
+    metadata=declared_signal_metadata(ExactNormalizedSignal, _DECLARED_METADATA),
 )
-signal_backends.register("alias", _make_alias, metadata=_declared(AliasSignal, _DECLARED_METADATA))
-signal_backends.register("scan", _make_scan, metadata=_declared(ScanningSignal, _DECLARED_METADATA))
 signal_backends.register(
-    "lexical", _make_lexical, metadata=_declared(LexicalSignal, _DECLARED_METADATA)
+    "alias", _make_alias, metadata=declared_signal_metadata(AliasSignal, _DECLARED_METADATA)
+)
+signal_backends.register(
+    "scan", _make_scan, metadata=declared_signal_metadata(ScanningSignal, _DECLARED_METADATA)
+)
+signal_backends.register(
+    "lexical", _make_lexical, metadata=declared_signal_metadata(LexicalSignal, _DECLARED_METADATA)
 )
 async_signal_backends.register(
     "exact",
     _make_async_exact,
-    metadata=_declared(AsyncExactNormalizedSignal, _ASYNC_DECLARED_METADATA),
+    metadata=declared_signal_metadata(AsyncExactNormalizedSignal, _ASYNC_DECLARED_METADATA),
 )
 async_signal_backends.register(
-    "alias", _make_async_alias, metadata=_declared(AsyncAliasSignal, _ASYNC_DECLARED_METADATA)
+    "alias",
+    _make_async_alias,
+    metadata=declared_signal_metadata(AsyncAliasSignal, _ASYNC_DECLARED_METADATA),
 )
 async_signal_backends.register(
-    "scan", _make_async_scan, metadata=_declared(AsyncScanningSignal, _ASYNC_DECLARED_METADATA)
+    "scan",
+    _make_async_scan,
+    metadata=declared_signal_metadata(AsyncScanningSignal, _ASYNC_DECLARED_METADATA),
 )
 async_signal_backends.register(
     "lexical",
     _make_async_lexical,
-    metadata=_declared(AsyncLexicalSignal, _ASYNC_DECLARED_METADATA),
+    metadata=declared_signal_metadata(AsyncLexicalSignal, _ASYNC_DECLARED_METADATA),
 )
 
 

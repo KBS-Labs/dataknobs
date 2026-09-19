@@ -13,10 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether a rung's enumeration is bounded by the vocabulary's longest declared
   form. `ScanningSignal` and `AsyncScanningSignal` set it; the default is
   False, matching `reads_surface_forms`' safe direction. Derived into the
-  signal registries' metadata by the same `_declared()` helper, so a door
+  signal registries' metadata by `declared_signal_metadata()`, so a door
   holding a declared composition and no instances can ask which of its rungs
   depend on a number the source it is about to bind cannot supply — and refuse
   before anything is built.
+
+- **`declared_signal_metadata(rung, base)`**, exported from
+  `dataknobs_common.entity_resolution`: the registered metadata for a rung,
+  with `reads_surface_forms` and `bounded_by_longest_form` read off the class
+  rather than restated beside it. Registering a rung is the extension point,
+  and both keys are read at *load* time by doors that hold a composition and
+  no instances — so a registration that omits one is not refused, it is never
+  asked about, while the rung's own construction-time guard still fires. The
+  facts are read with a default, so a rung written against the bare
+  `MatchSignal` protocol rather than against `DeclaredSignal` can use it too;
+  the class attribute is the single spelling in either case.
 
 - **`OPTIONAL_COMPONENTS` on `StructuredConfigConsumer`**, with
   `optional_components()` and `accepted_components()` beside the existing

@@ -247,6 +247,21 @@ read the member, so a cascade built over such a binding is refused when the
 rungs are constructed rather than here. A binding loaded only to read entities
 from is never refused for a cascade nobody builds.
 
+Declaring the lookup is what `exact` and `scan` need, and it is **not** enough
+for `lexical`. That rung scores the query against *every* form the vocabulary
+declares — `list(catalogue.surface_forms())`, on each call — so it needs a
+source that can enumerate its forms rather than one that can look a form up. A
+`kind: record` binding is the second kind and not the first: a live table has
+no bounded enumeration to offer, and pulling one would read the form table into
+memory per query. `LexicalSignal` and its async twin therefore require a
+surface-form *catalogue* — `AsyncSurfaceFormCatalog` on the flavour a registry
+builds — and refuse anything else when the rung is **constructed**, whatever
+the projection declares. The refusal names the source and the protocol.
+
+Over a live binding, `exact` is the rung that matches a form exactly and `scan`
+the one that finds it inside a longer utterance; near-spelling over a table is
+a different mechanism and is not this one.
+
 ### A `scan` rung needs a bound the table cannot supply
 
 A scanning rung probes every contiguous window of a query, and takes how wide a
@@ -364,6 +379,52 @@ environment that keeps moving therefore grows one handle per distinct
 resolution; the way to bound it is to close the registry, not to reload it
 forever.
 
+### Two bindings may not share a store they cannot be told apart in
+
+`table:` narrows nothing on `memory`, `file`, `s3` and `elasticsearch`. It
+survives as the discriminator that decides whether a *second handle* is opened
+— which those four do not need — and as a `describe()` field. No query carries
+it. So two ontologies in one registry, both binding one `$resource` there and
+projecting two different tables, get **one store and no separation**:
+
+```yaml
+# ontology `catalog-products`        # ontology `catalog-suppliers`
+database: {$resource: catalog}       database: {$resource: catalog}
+entity_projection:                   entity_projection:
+  table: products                      table: suppliers
+```
+
+Both read every row. `by_type("Product")` answers with the supplier ids too,
+`get()` on a supplier id answers with that row projected under the wrong type
+and name, and where both declare a `surface_forms:` lookup, `by_surface_form`
+matches the other binding's form rows as well — three wrong answers, none of
+them an error.
+
+**The second load is refused**, naming both bindings, both sets of tables, and
+the ontology already holding the store. A `$resource` of its own is the remedy,
+or a backend that addresses a table — on `sqlite`, `postgres` and `duckdb` the
+registry opens a handle per table and the same two documents are served
+correctly, which is what makes this a property of the backend rather than a
+limit on how many ontologies a registry may hold.
+
+Two bindings declaring the **same** tables are left alone: the same rows read
+as a catalogue entry by one document and as something else by the other is a
+decision, and nothing here can tell it apart from a mistake. What is refused is
+narrower — two bindings that named different tables and were handed one store.
+
+This applies to the injected door for a reason of its own, and reaches further
+there. `from_components` holds one handle for every document the registry
+loads, so two documents through it share a store even where the handle is
+`sqlite` — a table-addressed handle is bound to the *one* table it was built
+for, so two bindings naming two tables through it are further wrong, not less.
+The question is therefore asked of the handle both doors end up holding rather
+than of the `database:` block only one of them has.
+
+The separation that would lift this needs a column on your own table saying
+which binding a row belongs to. A `kind: record` binding only ever **reads**,
+so that column is yours to add rather than the registry's to write, and there
+is no form of `table:` that could stand in for one.
+
 ## What it refuses
 
 | Refused | Because |
@@ -372,6 +433,7 @@ forever.
 | a document declaring both `entities:` and a live source | reads across both need a router that does not exist yet, and letting one win would be a silent choice about which entities exist |
 | more than one live source | the same router |
 | an ontology id already loaded | the registry instance is the unit of sharing; pass `replace=True`, or use a registry per tenant |
+| a second binding over a store another ontology already holds, naming different tables | one handle serves both and no read narrows to a binding's table there, so each would answer with the other's rows |
 | `type:` naming a column | a source over a type column cannot yet report that its declared types are unenumerable, and reporting an empty set instead would read as a complete enumeration |
 
 ## Events

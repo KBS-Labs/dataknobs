@@ -255,6 +255,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that addresses one table, handed a projection naming two, is refused at load
   rather than answering `frozenset()` from the wrong table.
 
+  **Two bindings may not share a store they cannot be told apart in.** Because
+  `table:` decides whether a second handle is opened rather than narrowing any
+  read, two ontologies in one registry binding one `$resource` on those four
+  backends and projecting different tables would get one store and no
+  separation --- `by_type` answering with the other binding's ids, `get()`
+  answering with its row under the wrong type, `by_surface_form` matching its
+  form rows, none of it an error. The second load is refused instead, naming
+  both bindings and the ontology already holding the store. Two bindings
+  declaring the *same* tables are left alone, since reading one table two ways
+  is a decision. The question is asked of the handle rather than of the backend,
+  which is what also covers the injected door: one handle serves every document
+  loaded through `from_components`, and where that handle is itself
+  table-addressed it is fixed on the one table it was built for.
+
   `get()` is a query rather than a read, because the projection's `id:` is not
   the storage id. `get_many` and `fetch_origins` are one `IN` filter rather
   than a round trip per id, split into batches so no single read exceeds what a

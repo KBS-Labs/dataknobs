@@ -93,7 +93,14 @@ backends share one `FileDatabaseConfig`.
 - `clear() -> int`: Delete all records
 - `stream_read(query, config) -> Iterator[Record]`: Stream records, applying the
   same `query` filters `search` applies — the two doors over one `Query` return
-  the same rows, and differ only in how much is resident at once
+  the same rows. **How much is resident at once is the backend's answer, not the
+  door's.** Postgres streams by cursor, S3 by paginator, and SQLite, DuckDB and
+  asynchronous Elasticsearch a page at a time, so the footprint there is the
+  batch rather than the result. `memory`, `file` and *synchronous*
+  Elasticsearch call `search` first and hand its result out in batches: the
+  rows are materialised whether they are streamed or not, so the iterator is
+  the shape of the read rather than a bound on it, and a query too large to
+  hold is too large on those three either way.
 - `stream_write(records, config) -> StreamResult`: Stream write records
 
 #### Create semantics (atomic create-if-absent)
