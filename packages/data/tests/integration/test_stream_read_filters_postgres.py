@@ -34,9 +34,9 @@ from dataknobs_data.query import Filter, Operator, Query
 pytestmark = requires_postgres
 
 ROWS = [
-    Record({"name": "ada", "age": 36, "team": "core"}, id="r1"),
-    Record({"name": "bela", "age": 41, "team": "core"}, id="r2"),
-    Record({"name": "cyd", "age": 29, "team": "edge"}, id="r3"),
+    Record({"name": "ada", "age": 36, "team": "core"}, metadata={"work_order_id": "W-1"}, id="r1"),
+    Record({"name": "bela", "age": 41, "team": "core"}, metadata={"work_order_id": "W-2"}, id="r2"),
+    Record({"name": "cyd", "age": 29, "team": "edge"}, metadata={"work_order_id": "W-1"}, id="r3"),
 ]
 
 
@@ -187,3 +187,46 @@ async def test_async_an_unfiltered_stream_is_still_the_whole_table(
         "bela",
         "cyd",
     ]
+
+
+def test_sync_a_dotted_metadata_field_streams_the_rows_search_returns(
+    sync_pg: SyncPostgresDatabase,
+) -> None:
+    """A nested field is one grammar, not two.
+
+    ``stream_read`` pre-flighted its filter fields against the *whole-identifier*
+    grammar while the builder it now calls validates each dot-separated segment.
+    So ``metadata.work_order_id`` answered rows through ``search`` and raised
+    ``ValueError`` through ``stream_read`` -- on one backend, from one ``Query``.
+    """
+    query = Query(filters=[Filter("metadata.work_order_id", Operator.EQ, "W-1")])
+
+    assert _names(sync_pg.stream_read(query)) == ["ada", "cyd"]
+    assert _names(sync_pg.stream_read(query)) == _names(sync_pg.search(query))
+
+
+async def test_async_a_dotted_metadata_field_streams_the_rows_search_returns(
+    async_pg: AsyncPostgresDatabase,
+) -> None:
+    """The same nested field, on the twin."""
+    query = Query(filters=[Filter("metadata.work_order_id", Operator.EQ, "W-1")])
+
+    streamed = _names([record async for record in async_pg.stream_read(query)])
+
+    assert streamed == ["ada", "cyd"]
+    assert streamed == _names(await async_pg.search(query))
+
+
+def test_sync_an_unsafe_field_is_still_refused_before_the_query_runs(
+    sync_pg: SyncPostgresDatabase,
+) -> None:
+    """Widening the grammar to dotted paths must not widen it to anything else.
+
+    The control on the fix: the pre-flight still refuses a field that would
+    reach a JSONB key position unquoted, and still refuses it on first
+    iteration rather than at the server.
+    """
+    query = Query(filters=[Filter("x'; DROP TABLE records;--", Operator.EQ, "x")])
+
+    with pytest.raises(ValueError, match="Invalid field name segment"):
+        next(iter(sync_pg.stream_read(query)))

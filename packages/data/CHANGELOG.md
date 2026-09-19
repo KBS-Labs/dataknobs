@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`stream_read` on both Postgres backends accepts the nested field names
+  `search` accepts.** Each twin pre-flighted its filter fields against
+  `validate_field_name`, which reads a field as one SQL identifier and so
+  rejects any dot in it. The builder those methods now call reads a dot as a
+  JSON *path separator* and validates each segment. So one backend answered
+  one `Query` two ways: `search(Query(filters=[Filter("metadata.work_order_id",
+  EQ, "W-1")]))` returned rows through `metadata->>'work_order_id'`, and
+  `stream_read` over the same `Query` raised `ValueError`. No other backend's
+  `stream_read` validated at all, so the same field streamed on SQLite and
+  DuckDB and raised on Postgres.
+
+  The grammar is now one function — `validate_field_path` in `sql_base` —
+  called both by `SQLQueryBuilder._build_json_field_expr` at the point of
+  interpolation and by the two `stream_read` twins, which still pre-flight it
+  so a malformed field is refused before a connection is acquired. Field names
+  that are unsafe in a JSONB key position are refused exactly as before;
+  `validate_field_name` keeps the single-segment positions that have no path
+  to parse (`get_vector_extraction_sql`, `_build_text_field_concat`).
+
 - **`stream_read` on both Postgres backends applies the filters it was
   given.** Each twin open-coded its own WHERE construction and emitted a
   clause only for `Operator.EQ`, so every other operator was dropped in
@@ -68,6 +87,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than as `(name, type)` tuples. `validate_conversion` takes the prefix it
   filters from `MetadataConfig` instead of repeating `_meta_` literally, so a
   changed `metadata_prefix` is reflected there too.
+
+### Documentation
+
+- **`OntologyRegistry._database_handle` no longer explains itself by something
+  that stopped being true.** Its docstring closed by saying it does not use
+  `AsyncDatabase.from_backend` because that method "resolves and builds on the
+  caller's loop" — which `from_backend` stopped doing in the same release that
+  paragraph shipped in, and whose own comment now names `_database_handle` as
+  the precedent for offloading. The reasons that survive are named instead:
+  `from_backend` has nowhere to put the table `_keyed_block` writes into the
+  resolved block, it builds an instance per call where a handle here is cached
+  and shared, and it connects without owning a mid-connect failure.
+
+- **Two source comments name a symbol rather than a line number.**
+  `AsyncPostgresDatabase.update_batch` cited `sql_base.py:559-561` for the
+  `RETURNING id` it must not append twice; that range had drifted into
+  `build_search_query`'s ORDER BY construction, ~200 lines from the append,
+  which is in `SQLQueryBuilder.build_batch_update_query`. A line number is a
+  citation that goes stale on the next edit above it and says nothing when it
+  does.
 
 ### Changed
 
