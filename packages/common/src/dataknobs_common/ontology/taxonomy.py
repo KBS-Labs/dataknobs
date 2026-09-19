@@ -315,6 +315,14 @@ class Taxonomy(Generic[K]):
         per-walk memo would buy nothing and retain the axis for the caller's
         iteration. What a caller *supplies* outlives the walk, which is what
         makes a cache filled by a collecting walk readable here.
+
+        Raises:
+            NotFoundError: On a ``from_id`` the structure axis does not hold.
+                A walk includes its anchor, so an unknown one would come back
+                as a one-element stream a caller cannot tell from a leaf.
+                Raised on the first ``next()`` rather than at the call, which
+                is what a generator does with everything before its first
+                ``yield``.
         """
         seen: set[K] = set()
         if from_id is not None:
@@ -402,6 +410,11 @@ class Taxonomy(Generic[K]):
         name the taxonomy in the refusal, and the axis a caller filters on is
         where that context is worth one lookup; the walk's own refusal is what
         makes the rule true for somebody who reaches it directly.
+
+        Raises:
+            NotFoundError: On a ``root_id`` the structure axis does not hold,
+                naming the taxonomy. Refused here as well as by the walk this
+                delegates to, for the reason above.
         """
         if not self.structure.contains(root_id):
             _refuse_an_unknown_anchor(self.definition.id, root_id)
@@ -437,6 +450,12 @@ class Taxonomy(Generic[K]):
         the axis because that is the surface a schema projector can reach
         without holding a resolution, which is the whole of the ruling that
         placed it.
+
+        Raises:
+            NotFoundError: Naming a type this vocabulary does not declare --
+                whether it is the one asked about or one reached from it. A
+                type declared with nothing returns ``[]``, which is an answer
+                to a different question.
         """
         return _inherited_attributes(self.entity_types, self.definition.id, entity_type)
 

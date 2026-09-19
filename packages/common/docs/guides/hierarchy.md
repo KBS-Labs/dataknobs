@@ -106,6 +106,8 @@ ontology:
 
   entity_types:
     - id: Species
+      attributes:
+        - {name: lifespan_years, type: integer}
     - id: Breed
       isa: Species
 

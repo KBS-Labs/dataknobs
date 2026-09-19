@@ -203,6 +203,23 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     "LICENSES/MIT-historical.txt",
     "packages/*/LICENSE",
     "packages/*/NOTICE",
+    # The two module docstrings that pay for one family being split across two
+    # packages: the four identity keys in common, the fifth embedder key in
+    # data, and a cross-reference in each direction so a reader who reaches
+    # either module finds the other. A workspace guard asserts both directions,
+    # because a guard inside packages/common/tests asserting anything about
+    # dataknobs_data would import the package two guards there exist to keep
+    # out of common's import graph.
+    #
+    # The first entries in this tier that DO move a package's result, so the
+    # sentence every note above ends with does not apply to them and is not
+    # repeated. They are declared anyway, and the reason is the one this whole
+    # mechanism is about: a package scope covering the source looks like
+    # coverage of the workspace guard that reads it, and those are different
+    # sets. The cost of the redundancy is a gate run that was not needed, which
+    # is the direction _QUALITY_INPUT_SUFFIXES already says to err in.
+    "packages/common/src/dataknobs_common/ontology/tags.py",
+    "packages/data/src/dataknobs_data/vector/content.py",
     # The root README, read by the documented-import guard along with every
     # package README and the site tree. The per-package copies ride their own
     # package scope and docs/ rides the docs scope; this one is reached by no

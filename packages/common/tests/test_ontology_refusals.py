@@ -770,3 +770,212 @@ def test_an_unknown_polarity_is_refused(door: Door) -> None:
     assert "'maybe'" in message
     assert "negated" in message
     assert excinfo.value.context["field"] == "polarity"
+
+
+# --------------------------------------------------------------------------
+# References into a section this document owns in full
+# --------------------------------------------------------------------------
+#
+# Eight references, one refusal. The `isa` case above is the eighth and was
+# already here: it is the one the loader refused before the rule was general,
+# and it stays where it is as the regression guard for the conversion.
+
+
+#: The seven references that resolved against nothing until this rule.
+#:
+#: Each row is a document constructed dangling, the value that dangles, and
+#: the field it dangles from. Table-driven because the claim is uniform -- a
+#: reference into a section this document declares must resolve -- and a
+#: per-case suite would let one of the seven drift into a different shape.
+_DANGLING = [
+    (
+        "entity_type",
+        "Persen",
+        {
+            "id": "x",
+            "entity_types": [
+                {
+                    "id": "Dog",
+                    "attributes": [{"name": "owner", "type": "entity", "entity_type": "Persen"}],
+                }
+            ],
+        },
+    ),
+    (
+        "domain",
+        "Persen",
+        {
+            "id": "x",
+            "entity_types": [{"id": "Dog"}],
+            "relation_types": [{"id": "owns", "domain": ["Persen"]}],
+        },
+    ),
+    (
+        "range",
+        "Bicicle",
+        {
+            "id": "x",
+            "entity_types": [{"id": "Dog"}],
+            "relation_types": [{"id": "owns", "range": ["Bicicle"]}],
+        },
+    ),
+    (
+        "inverse_of",
+        "owned_bye",
+        {
+            "id": "x",
+            "relation_types": [{"id": "owns", "inverse_of": "owned_bye"}],
+        },
+    ),
+    (
+        "type",
+        "Dogg",
+        {
+            "id": "x",
+            "entity_types": [{"id": "Dog"}],
+            "entities": [{"id": "beagle", "type": "Dogg"}],
+        },
+    ),
+    (
+        "relation",
+        "isaa",
+        {
+            "id": "x",
+            "relation_types": [{"id": "isa"}],
+            "assertions": [{"subject": "dog", "relation": "isaa", "object": "mammal"}],
+        },
+    ),
+    (
+        "relation",
+        "isaa",
+        {
+            "id": "x",
+            "relation_types": [{"id": "isa"}],
+            "taxonomies": [{"id": "kinds", "relation": "isaa"}],
+        },
+    ),
+]
+
+DANGLING = pytest.mark.parametrize(
+    ("field", "dangles", "document"),
+    _DANGLING,
+    ids=[
+        "attribute_entity_type",
+        "relation_domain",
+        "relation_range",
+        "relation_inverse_of",
+        "entity_type",
+        "assertion_relation",
+        "taxonomy_relation",
+    ],
+)
+
+
+@DOORS
+@DANGLING
+def test_a_reference_into_a_section_this_document_declares_must_resolve(
+    door: Door, field: str, dangles: str, document: Mapping[str, Any]
+) -> None:
+    """Seven references that used to resolve against nothing at all.
+
+    Every one of these documents loaded before this rule, and every one of them
+    is a typo whose consequence is silence: a relation type whose domain names
+    no type constrains nothing, an entity whose type names none is untyped, an
+    axis whose relation names none walks an empty graph. The document said
+    something and the vocabulary meant nothing.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(document)
+
+    message = str(excinfo.value)
+    assert repr(dangles) in message
+    assert field in message
+    assert excinfo.value.context["value"] == dangles
+    assert excinfo.value.context["field"] == field
+
+
+@DOORS
+def test_a_subject_and_an_object_naming_nothing_declared_still_load(door: Door) -> None:
+    """Layer 1 asks whether a name resolves; layer 2 whether a statement is true.
+
+    An assertion's ``subject:`` and ``object:`` are layer 2 -- they are claims
+    about a graph that a live source may supply -- so a document may assert an
+    edge between two ids it does not itself declare. Only the ``relation:`` is
+    a reference into a section this document owns in full.
+    """
+    door(
+        {
+            "id": "x",
+            "relation_types": [{"id": "isa"}],
+            "assertions": [{"subject": "ghost", "relation": "isa", "object": "phantom"}],
+        }
+    )
+
+
+@DOORS
+def test_an_assertion_relation_may_name_a_declared_attribute(door: Door) -> None:
+    """The positive control, and the half of this rule that can rot.
+
+    An attribute-valued assertion names an attribute, not a relation type, so
+    the section a ``relation:`` resolves against is ``relation_types:`` *union*
+    the declared attribute names. A check that looked at ``relation_types:``
+    alone would refuse this document -- and a suite that only asserted the
+    seven refusals above would pass against a loader that had started refusing
+    everything.
+    """
+    door(
+        {
+            "id": "x",
+            "entity_types": [
+                {"id": "Species", "attributes": [{"name": "lifespan_years", "type": "integer"}]}
+            ],
+            "assertions": [
+                {
+                    "subject": "dog",
+                    "relation": "lifespan_years",
+                    "object": {"value": 12, "type": "integer"},
+                }
+            ],
+        }
+    )
+
+
+@DOORS
+def test_an_assertion_relation_naming_neither_half_of_the_union_is_refused(door: Door) -> None:
+    """The control's difference, constructed rather than assumed.
+
+    The same document with a *different* attribute declared: the union is
+    non-empty either way, so the guard is not what decides it, and the only
+    thing that changed is whether the name is in the union.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [
+                    {"id": "Species", "attributes": [{"name": "weight_kg", "type": "float"}]}
+                ],
+                "assertions": [
+                    {
+                        "subject": "dog",
+                        "relation": "lifespan_years",
+                        "object": {"value": 12, "type": "integer"},
+                    }
+                ],
+            }
+        )
+
+    assert "'lifespan_years'" in str(excinfo.value)
+
+
+@DOORS
+def test_a_reference_is_not_checked_against_a_section_the_document_omits(door: Door) -> None:
+    """An empty section is NO schema rather than an empty one.
+
+    The regime ``build_ontology`` already runs for tree nodes, generalised:
+    a document declaring no ``entity_types:`` at all is not making claims about
+    a type vocabulary, so an ``entities:`` row naming a type cannot be wrong
+    about one. Refusing here would make the rule unusable for exactly the
+    documents a live source completes.
+    """
+    door({"id": "x", "entities": [{"id": "beagle", "type": "Dog"}]})

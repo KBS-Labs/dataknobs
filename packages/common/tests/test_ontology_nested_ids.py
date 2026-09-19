@@ -189,3 +189,27 @@ def test_the_edge_relation_is_configurable() -> None:
 
     assert onto.assertions.find(subject="top/under", relation="part_of")
     assert onto.assertions.find(subject="top/under", relation="isa") == []
+
+
+def test_a_document_declaring_no_entity_types_loads_with_entities_of_any_type() -> None:
+    """The guard on the reference checks, asserted where the fixture already was.
+
+    A reference into a section this document declares must resolve -- but an
+    **empty** section is *no* schema rather than an empty one, so a document
+    that leaves its type vocabulary to a source is not making a claim the
+    loader can check. ``PRODUCT_AREAS`` declares no ``entity_types:`` at all
+    and types four minted entities ``product_areas``, which no section of it
+    declares; dropping the guard would refuse it.
+
+    Listed beside the refusals rather than after them, because a suite
+    asserting only that the check fires would pass against a loader that had
+    started refusing everything.
+    """
+    assert "entity_types" not in PRODUCT_AREAS
+
+    onto = load_ontology(PRODUCT_AREAS)
+
+    assert not onto.entity_types
+    minted = onto.entities.by_type("product_areas")
+    assert len(minted) == 4
+    assert {onto.entity(entity_id).type for entity_id in minted} == {"product_areas"}

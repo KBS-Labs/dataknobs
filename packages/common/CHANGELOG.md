@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A reference into a section an ontology document declares must resolve, or
+  the document is refused.** Eight of them: an entity type's `isa`, an
+  attribute's `entity_type`, a relation type's `domain`, `range` and
+  `inverse_of`, an entity's `type`, and an assertion's or a taxonomy's
+  `relation`. Each names something the same document is responsible for
+  declaring in full, so a misspelling is a typo rather than a claim a source
+  might complete -- and until now seven of the eight loaded, with a consequence
+  that is silence rather than an error: a relation type whose `domain` names no
+  type constrains nothing, an entity whose `type` names none is untyped, and an
+  axis whose `relation` names none walks an empty graph. Every message names
+  the offending value and lists what the section declares.
+
+  **An empty section is no schema rather than an empty one**, so a document
+  that leaves its type vocabulary to a source it imports or projects is
+  unaffected -- the check does not fire where the target section is empty.
+  `relation` resolves against `relation_types:` *union* the declared attribute
+  names, because an attribute-valued assertion names an attribute. An
+  assertion's `subject:` and `object:` are not references of this kind and are
+  not checked: the entity population is open by design.
+
 - **Both resolver doors take `handles=`**, a mapping of live objects a rung is
   constructed over and a document cannot write -- an index, a store, a client.
   Forwarded into every rung's spec, so one mapping serves a composition whose
@@ -82,6 +102,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   modules name each other.
 
 ### Fixed
+
+- **`Ontology.taxonomy`, `AsyncOntology.taxonomy`, `Taxonomy.walk`,
+  `Taxonomy.subtree_keys` and `Taxonomy.inherited_attributes` document what
+  they raise.** Each of the five refuses, and a caller meets the class rather
+  than the private function that constructed it, so the `Raises:` section
+  belongs on the member a caller holds. Both `taxonomy` accessors raise
+  `NotFoundError` for an axis the vocabulary does not declare **and**
+  `ValidationError` for a declared axis whose `materialization` asks for a copy
+  of every entity on it -- the second being the half a reader would not predict
+  from the member's name. The four asynchronous twins whose docstrings point at
+  their siblings are unchanged: the contract is written once, where the pointer
+  leads.
 
 - **`AliasSource` reads a bare-string alias value as one form, not as its
   characters.** `ALIAS_FORMS_KEY` is declared list-valued and the family
