@@ -344,16 +344,24 @@ def test_a_criterion_number_is_caught_in_both_casings() -> None:
         assert GUARD.LABEL_PATTERN.search(spelling), f"not matched: {spelling}"
 
 
-def test_a_bare_single_digit_decision_code_is_caught() -> None:
+def test_a_bare_decision_code_is_caught_at_one_digit_and_at_two() -> None:
     """A decision code resolves to nothing in this repository, source included.
 
     Nineteen lines carried one, two of them in shipped ``react.py`` -- the
     only half of this family a consumer could actually encounter. The
     separator varies the way the ``Item N`` branch's does, so the branch ends
     at a word boundary rather than at a space.
+
+    **Two digits, because one was a hole rather than a ceiling.** The branch
+    was single-digit on the belief that anything wider collides with
+    pydocstyle, which is true at three digits and not at two -- and a
+    two-digit code reached shipped source in ``dataknobs-data`` while this
+    guard reported green. The test below pins where the widening has to stop.
     """
     for spelling in ("D5", "D2", "D3-cap", "D1/D4", "(D3/D7)", "the D4 scoping"):
         assert GUARD.LABEL_PATTERN.search(spelling), f"not matched: {spelling}"
+    for two_digit in ("D80", "D12", "(D80/D5)", "the D42 rule"):
+        assert GUARD.LABEL_PATTERN.search(two_digit), f"not matched: {two_digit}"
 
 
 def test_the_decision_branch_does_not_catch_a_pydocstyle_code() -> None:

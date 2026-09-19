@@ -248,6 +248,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncOntology", "localize", "qualified_id", "door"),
     ("AsyncOntology", "qualify", "->", "door"),
     ("AsyncOntology", "qualify", "local_id", "key"),
+    ("AsyncOntology", "structure_for", "->", "key"),
+    ("AsyncOntology", "structure_for", "name", "schema"),
     ("AsyncOntology", "taxonomy", "->", "key"),
     ("AsyncOntology", "taxonomy", "name", "schema"),
     ("AsyncTaxonomy", "<field>", "assertions", "key"),
@@ -345,6 +347,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("Ontology", "localize", "qualified_id", "door"),
     ("Ontology", "qualify", "->", "door"),
     ("Ontology", "qualify", "local_id", "key"),
+    ("Ontology", "structure_for", "->", "key"),
+    ("Ontology", "structure_for", "name", "schema"),
     ("Ontology", "taxonomy", "->", "key"),
     ("Ontology", "taxonomy", "name", "schema"),
     ("ParentChoice", "choose", "->", "key"),
@@ -433,7 +437,7 @@ _REACHABLE_VALUE_TYPES = 36
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 320
+_ROWS = 324
 
 
 def _modules() -> Iterator[ast.Module]:

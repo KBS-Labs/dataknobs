@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from dataknobs_common.ontology import OntologyParts, SourceDescription
 
     from dataknobs_data.database import AsyncDatabase
+    from dataknobs_data.query import Filter
 
 logger = logging.getLogger(__name__)
 
@@ -979,7 +980,9 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             normalizer=self._normalizer,
             forms_database=forms_database,
         )
-        return source, _LiveBinding(source_id, database, projection, declared_schema)
+        return source, _LiveBinding(
+            source_id, database, projection, declared_schema, tuple(source.entity_filters())
+        )
 
     async def _bind_taxonomies(
         self, parts: OntologyParts, live: Mapping[str, _LiveBinding]
@@ -1011,6 +1014,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         already resolved for the entity table, handed over rather than asked
         for again -- so ``self._handles`` gains no entry, ``close()``'s cascade
         is unchanged, and the axis cannot outlive the source it reads beside.
+
+        Which is also why this ``async def`` awaits nothing, and it is stated
+        rather than left for the next reader to go looking for the I/O: binding
+        an axis is parsing a row and constructing over handles already open.
+        The flavour is :meth:`_bind_sources`', whose own binding does open one,
+        so that the two halves of a document are dispatched the same way and a
+        backing whose binding *is* asynchronous needs no signature change here.
         """
         bound: dict[str, AsyncHierarchy[str]] = {}
         declared_sources = tuple(str(spec.get("id", "")) for spec in parts.source_specs)
@@ -1060,6 +1070,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 binding.projection.table,
                 binding.projection.id,
                 axis.parent_key,
+                binding.narrowing,
             )
         return bound
 
@@ -1084,24 +1095,39 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         and it gives every node an entry including one that is only ever a
         parent.
 
-        **Only where there is a bus**, because the population is a delta's
-        input and a delta with no bus is computed for nobody. On a live axis
-        the read is a query, which is a cost a registry publishing nothing has
-        no reason to pay.
+        Asked through :meth:`~dataknobs_common.ontology.AsyncOntology.structure_for`
+        rather than through ``taxonomy(name)``, and that is a correctness
+        matter rather than a saving. The accessor refuses a definition
+        declaring ``materialization.content: materialized`` -- a refusal about
+        the axis's *content*, which this method never touches -- so asking
+        through it made such a document raise out of :meth:`load`, and only
+        where a bus was held. A refusal whose own reason is that it belongs
+        where a caller asked for the axis had been moved to a call site that
+        did not.
 
-        ``None`` for an axis whose backing cannot enumerate itself. The two
-        optional hierarchy protocols are opt-in by member presence, so an axis
-        a caller supplied may have only the four singular members -- from which
-        the only enumeration available is a descent from the roots, which
-        misses a cyclic component entirely. A population that is a guess is
-        worse than one that says so, and :meth:`_publish_taxonomy_delta` has a
-        form for saying so.
+        ``None`` where the population is **not known**, which is a different
+        answer from ``frozenset()`` and the one
+        :meth:`_publish_taxonomy_delta` has a form for. Two things produce it:
+
+        * **no bus at this load.** The read is a query, which a registry
+          publishing nothing has no reason to pay -- but a registry can
+          acquire a bus *after* a load, since any document may declare one, and
+          the next reload then compares a real reading against this one. Read
+          as an empty population that comparison reports every node as
+          ``arrived`` on an axis where nothing changed;
+        * **a backing that cannot enumerate itself.** The two optional
+          hierarchy protocols are opt-in by member presence, so an axis with
+          only the four singular members offers no enumeration but a descent
+          from the roots, which misses a cyclic component entirely. Every
+          backing a door files here answers ``parent_edges``, so the branch is
+          the type checker's guarantee rather than a case reached today.
         """
+        unknown = dict.fromkeys(ontology.taxonomies)
         if self._event_bus is None:
-            return {}
+            return unknown
         populations: dict[str, frozenset[str] | None] = {}
         for name in ontology.taxonomies:
-            axis = ontology.taxonomy(name).structure
+            axis = ontology.structure_for(name)
             populations[name] = (
                 frozenset(await axis.parent_edges())
                 if isinstance(axis, AsyncEnumerableHierarchy)
@@ -1131,7 +1157,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         degenerate one**, and what makes it work is on the source rather than
         here: the surface-form column is what tells the two kinds of row
         apart, in both directions. See
-        :meth:`~dataknobs_data.ontology.sources.RecordEntitySource._entity_filters`
+        :meth:`~dataknobs_data.ontology.sources.RecordEntitySource.entity_filters`
         for the invariant that rests on -- an entity row must not carry the
         form column, which is what the lookup direction already required.
 
@@ -1284,19 +1310,25 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         is what makes an axis over rows answerable at all. Computed here from
         the two documents, they would be the *declared* assertions either side
         -- which is ``{}`` for every vocabulary this registry exists to bind,
-        so the three sets were empty whatever had changed and ``D80``'s
-        guarantee that an empty payload means a no-op was false in the common
-        case. Re-reading the outgoing axis here does not fix it either: a live
-        axis reads the table, so both sides would answer with today's rows.
-        See :meth:`_axis_populations`.
+        so the three sets were empty whatever had changed and the guarantee
+        stated above -- that an empty payload means a genuine no-op -- was
+        false in the common case. Re-reading the outgoing axis here does not
+        fix it either: a live axis reads the table, so both sides would answer
+        with today's rows. See :meth:`_axis_populations`.
 
-        **Two forms, for the axis a registry cannot enumerate.** Where either
-        side's population is unknown the payload carries
-        ``axis_unenumerable: true`` instead of three sets, which tells a
-        subscriber to re-read the axis rather than telling them nothing
+        **Two forms, for the axis whose population is not known.** Where either
+        side's is unknown the payload carries ``axis_unenumerable: true`` and
+        **none of the three sets** -- a subscriber reading ``payload["gone"]``
+        gets a ``KeyError`` rather than an empty list, which is the point: it
+        tells them to re-read the axis rather than telling them nothing
         happened. It is the shape :meth:`_departing` takes for the same reason
         one method along: a payload that cannot carry the ids says so, rather
         than carrying an empty list that already means something else.
+
+        The reachable producer of that form is a registry that acquired its
+        bus **between** two loads -- the first recorded nothing, having nobody
+        to tell -- rather than an exotic backing; see
+        :meth:`_axis_populations` for both.
 
         **Both levels, because neither contains the other.** An entity in no
         axis at all changes nothing on any axis topic and would otherwise be
@@ -1326,17 +1358,12 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         for taxonomy_id in (*after.taxonomies, *departed):
             # An axis either side no longer declares held nothing, rather than
             # holding something unknown: the whole of its population is `gone`,
-            # which is the strongest thing its subscribers can be told.
-            was_nodes = (
-                was.get(taxonomy_id, frozenset())
-                if taxonomy_id in before.taxonomies
-                else frozenset()
-            )
-            now_nodes = (
-                now.get(taxonomy_id, frozenset())
-                if taxonomy_id in after.taxonomies
-                else frozenset()
-            )
+            # which is the strongest thing its subscribers can be told. An axis
+            # it *did* declare and no population was recorded for is the other
+            # case, and `.get` answering None is what keeps the two apart --
+            # `frozenset()` there would report a whole axis as newly arrived.
+            was_nodes = was.get(taxonomy_id) if taxonomy_id in before.taxonomies else frozenset()
+            now_nodes = now.get(taxonomy_id) if taxonomy_id in after.taxonomies else frozenset()
             await self._publish(
                 topic=f"taxonomy:{taxonomy_id}",
                 event_type=EventType.UPDATED,
@@ -1514,6 +1541,14 @@ class _LiveBinding(NamedTuple):
     database: AsyncDatabase
     projection: EntityProjection
     schema: DatabaseSchema | None
+    #: What narrows a read through this handle to the binding's **entity**
+    #: rows, as :meth:`RecordEntitySource.entity_filters` computes it. Empty
+    #: where the two tables have handles of their own; the form-column
+    #: discriminator where the handle *is* the store. Carried rather than
+    #: re-derived, because a second reader deriving it from a different
+    #: invariant is how the axis and the entity source came to disagree about
+    #: which rows of one store are this binding's.
+    narrowing: tuple[Filter, ...]
 
 
 class _BoundSources(NamedTuple):
@@ -1627,7 +1662,7 @@ def _refuse_one_handle_for_two_tables(
 
     **Why this is a refusal rather than a miss.** Nothing downstream can
     notice. ``_shared_store`` is true because the two handles are one object,
-    so ``_entity_filters`` emits the form-column discriminator and the entity
+    so ``entity_filters`` emits the form-column discriminator and the entity
     reads are correct; ``describe()`` advertises ``SURFACE_FORM_LOOKUP``
     because the projection declares a lookup; and ``by_surface_form`` filters
     the form column against a table that does not carry it, finding nothing.

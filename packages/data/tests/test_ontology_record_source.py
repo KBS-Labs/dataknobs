@@ -970,7 +970,7 @@ async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_must_su
         source = ontology.entities
         assert len(registry._handles) == 1, "one table named twice is one handle"
         assert source._shared_store is True
-        assert [f.operator for f in source._entity_filters()] == [Operator.NOT_EXISTS]
+        assert [f.operator for f in source.entity_filters()] == [Operator.NOT_EXISTS]
     finally:
         await registry.close()
 

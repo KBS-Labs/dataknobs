@@ -198,6 +198,41 @@ def test_an_axis_declaring_no_kind_is_the_one_this_door_builds(door: Door) -> No
 
 
 @DOORS
+def test_a_taxonomy_row_refuses_a_key_this_loader_does_not_read(door: Door) -> None:
+    """The rule `kind:` is refused under, applied to the rest of the row.
+
+    `_build_taxonomies` reads six keys. Every other key on a `taxonomies:` row
+    loaded and was discarded -- which from the author's chair is
+    indistinguishable from being honoured, and is the exact failure the
+    `kind:` refusal was added to end. A misspelt `materialisation:` configured
+    nothing and said nothing.
+
+    **A row declaring a `kind:` is not this door's to check**, and is refused
+    before reaching here anyway: the keys such a row carries belong to
+    whichever door binds that backing, and a closed set here would refuse the
+    `source:` and `parent_key:` a registry reads. The two halves of the check
+    meet at the `kind:` discriminator.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [{"id": "Breed"}],
+                "entities": [{"id": "dog", "type": "Breed", "name": "Dog"}],
+                "taxonomies": [
+                    {"id": "kinds", "relation": "isa", "materialisation": {"structure": "copied"}}
+                ],
+            }
+        )
+
+    message = str(excinfo.value)
+    assert "'kinds'" in message
+    assert "materialisation" in message
+    assert "materialization" in message, "the message lists the keys this door does read"
+    assert excinfo.value.context["taxonomy"] == "kinds"
+
+
+@DOORS
 def test_a_duplicate_source_id_is_refused(door: Door) -> None:
     """Source ids are the closed set a qualified id is parsed against."""
     with pytest.raises(ValidationError) as excinfo:

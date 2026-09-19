@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Ontology.structure_for` and `AsyncOntology.structure_for`**, the structure
+  axis an ontology answers a name with, without building the rest of the
+  taxonomy around it. `taxonomy()` reads it, and so does anything wanting an
+  axis's *shape* rather than its content -- enumerating its nodes to compare
+  two loads of one document is the case that drove publishing it. Such a caller
+  asking through `taxonomy()` met the refusal of a
+  `materialization.content: materialized` definition, which is about a half of
+  the axis they never touch.
+
+- **`dedupe_ordered`, `nodes_of` and `parent_edges_of`** in
+  `dataknobs_common.hierarchy` --- what a backing's edges reduce to once they
+  are `(child, parent)` pairs, with `None` for a child placed under nothing.
+  Who is above whom, who is here at all, and in what order do not depend on
+  whether an edge arrived as an assertion or as two columns of a row, and two
+  backings had written the rules twice, one of the three copies
+  character-for-character identical to its twin. A backing maps its own edges
+  to pairs; the rules have one home.
+
+- **`TAXONOMY_ROW_KEYS`**, the keys a `taxonomies:` row is read for here.
+  Published because the check over them cannot be finished in this package: a
+  row declaring `kind:` names a backing another distribution binds, and reads
+  keys this one has never heard of.
+
 - **`OntologyParts.taxonomy_specs`**, the `taxonomies:` rows as written.
   `source_specs`' counterpart, and carried for its reason: a row may name a
   backing this package binds no implementation of, and the door that does is
@@ -288,9 +311,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all: the accessor answered with an assertion read over an empty source and
   the vocabulary reported an empty axis with nothing saying why.
 
-  Every existing path answers exactly as it did. An axis declaring a copy and
-  supplying none is refused on the same condition and with the same message;
-  an axis with no entry is still built per call from the assertion source.
+  One existing path answers differently, and it is the one the change is for:
+  a `structures` entry filed under a name whose definition declares
+  `structure: on_demand` is now honoured, where it was previously ignored in
+  favour of the live read. `structures` is a public field a caller building an
+  ontology directly may fill with any `Hierarchy`, so that is a real change for
+  them -- and it is the same act as honouring the entry when the definition
+  said `materialized`, which always happened. An axis declaring a copy and
+  supplying none is refused on the same condition and with the same message; an
+  axis with no entry at all is still built per call from the assertion source.
+
+- **A `taxonomies:` row refuses any key nothing reads**, not only `kind:`.
+  `_build_taxonomies` reads six, and every other key on such a row went on
+  loading and being discarded -- a misspelt `materialisation:` configured
+  nothing and said nothing, which is the failure the rule below is about.
+  A row declaring a `kind:` is passed over here and checked by whichever door
+  binds that backing, since the keys it reads are ones this package has never
+  heard of; the two halves meet at the `kind:` discriminator.
 
 - **A `taxonomies:` row declaring a `kind:` is refused rather than dropped.**
   `TaxonomyDefinition` reads six keys and `kind:` is not one of them, so a row

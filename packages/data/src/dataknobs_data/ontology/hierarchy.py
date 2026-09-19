@@ -31,22 +31,34 @@ from itertools import batched
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.hierarchy import dedupe_ordered, nodes_of, parent_edges_of
+from dataknobs_common.ontology import TAXONOMY_ROW_KEYS
 
 from dataknobs_data.ontology.sources import READ_BATCH_SIZE
 from dataknobs_data.query import Filter, Operator, Query
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
     from dataknobs_data.database import AsyncDatabase
 
 #: The axis kind this module binds. One value, spelled the way the published
-#: ``taxonomies:`` grammar spells it, and read by the registry's axis dispatch
-#: -- which computes its refusal from the declared kind alone, so a document
-#: means the same thing whether or not this package has been imported.
+#: ``taxonomies:`` grammar spells it, and read by the registry's axis dispatch.
+#:
+#: The refusal that holds whether or not this package has been imported is the
+#: **loader's** -- ``_refuse_unbindable_axes`` computes it from the declared
+#: kind alone, in a distribution that binds no backing at all, so a document
+#: means the same thing either way. The registry's own dispatch is the other
+#: half of that split and lives here by definition: its ``LIVE_AXIS_KINDS``
+#: cannot be consulted without importing the code that fills it.
 COLUMN_AXIS_KIND = "column"
 
 #: A ``(child, parent)`` pair, as one row of the table yields one.
+#:
+#: Both ends are present rather than ``str | None``, which is the shape
+#: :func:`~dataknobs_common.hierarchy.parent_edges_of` takes: the two ``EXISTS``
+#: filters are what make that true, and this alias is where the guarantee they
+#: buy is written down.
 _Edge = tuple[str, str]
 
 
@@ -86,12 +98,62 @@ class ColumnAxisBinding:
             The parsed binding
 
         Raises:
-            ValidationError: On a missing ``source:`` or ``parent_key:``
+            ValidationError: On a missing ``source:`` or ``parent_key:``, or on
+                a key nothing reading this row reads
         """
+        _refuse_an_unread_key(row, binding=binding)
         return cls(
             source=str(_required(row, "source", binding=binding)),
             parent_key=str(_required(row, "parent_key", binding=binding)),
         )
+
+
+#: Every key a ``kind: column`` row is read for, across both readers of it.
+#:
+#: ``TaxonomyDefinition``'s six, which ``dataknobs_common`` publishes rather
+#: than this module re-spelling, plus the discriminator and the two this
+#: binding parses. One set because one row: the split between the two readers
+#: is an implementation detail of where the code lives, and an author looking
+#: at the line has to be told what the *line* may carry.
+_KNOWN_KEYS: frozenset[str] = TAXONOMY_ROW_KEYS | {"kind", "source", "parent_key"}
+
+
+def _refuse_an_unread_key(row: Mapping[str, Any], *, binding: str) -> None:
+    """Refuse a key on this row that neither reader of it reads.
+
+    The rule ``kind:`` is refused under, applied to the rest of the row --
+    ``_refuse_unbindable_axes`` in ``dataknobs_common`` states it: *a dropped
+    key and an unsupported key have to look different, or the file says one
+    thing and the vocabulary means another.* Enforced for ``kind:`` alone, it
+    left a misspelt ``parent_col:`` caught only by the coincidence that the
+    canonical spelling is then absent and required, and a key that is nobody's
+    typo dropped in silence.
+
+    **``child:`` gets its own message**, because this class's own docstring
+    teaches it as the one key that deliberately does not exist, and an author
+    who writes it anyway has read that and disagreed. Telling them the set of
+    keys they could have written answers a question they did not ask; telling
+    them where the child column actually comes from answers the one they did.
+    """
+    unread = sorted(set(row) - _KNOWN_KEYS)
+    if not unread:
+        return
+    if "child" in unread:
+        raise ValidationError(
+            f"taxonomy {binding!r} declares `child:`, which a column axis does "
+            f"not have. The child column is the source's projection `id:`, "
+            f"which is what keeps the ids a walk answers with the ids "
+            f"`entity()` takes -- a second place to say it is the first place "
+            f"the two could diverge. Drop it, or change the source's `id:` if "
+            f"the axis really is keyed on another column",
+            context={"taxonomy": binding, "kind": COLUMN_AXIS_KIND, "key": "child"},
+        )
+    raise ValidationError(
+        f"taxonomy {binding!r} declares {unread}, which nothing reading a "
+        f"`kind: {COLUMN_AXIS_KIND}` row reads. Such a row is read for "
+        f"{sorted(_KNOWN_KEYS)}",
+        context={"taxonomy": binding, "kind": COLUMN_AXIS_KIND, "keys": unread},
+    )
 
 
 def _required(row: Mapping[str, Any], key: str, *, binding: str) -> Any:
@@ -106,39 +168,6 @@ def _required(row: Mapping[str, Any], key: str, *, binding: str) -> Any:
     return value
 
 
-def _ordered(node_ids: Iterable[str]) -> tuple[str, ...]:
-    """Deduplicate in first-appearance order.
-
-    A DAG node is reachable by several paths, so a repeated id changes no
-    membership answer and does change a count someone is reporting.
-    """
-    return tuple(dict.fromkeys(node_ids))
-
-
-def _parent_edges_of(edges: Sequence[_Edge]) -> dict[str, tuple[str, ...]]:
-    """Every node these pairs mention, and what each is directly under.
-
-    The extent :meth:`ColumnHierarchy.roots` is not. Every node gets an entry,
-    including one that only ever appears as somebody's parent; its entry is
-    empty, which is the same thing ``roots()`` reports about it.
-
-    The pair-shaped twin of ``dataknobs_common.ontology.hierarchy``'s
-    assertion-shaped ``_parent_edges_of``, and it is the same rule over a
-    different edge representation: there an edge is an asserted relation
-    between two entities, here it is two columns of one row. The rule the two
-    share is stated once, in
-    :meth:`~dataknobs_common.hierarchy.Hierarchy.roots`'s own docstring, which
-    both implementations are written against.
-    """
-    above: dict[str, list[str]] = {}
-    for child, parent in edges:
-        above.setdefault(child, [])
-        above.setdefault(parent, [])
-        if parent not in above[child]:
-            above[child].append(parent)
-    return {node_id: tuple(parents) for node_id, parents in above.items()}
-
-
 def _eq(column: str, node_id: str) -> Filter:
     """One end of an edge, pinned to a key.
 
@@ -148,19 +177,6 @@ def _eq(column: str, node_id: str) -> Filter:
     gives for taking it over a query-time fold.
     """
     return Filter(column, Operator.EQ, node_id)
-
-
-def _nodes_of(edges: Sequence[_Edge]) -> tuple[str, ...]:
-    """Every node these pairs mention, deduplicated in first-appearance order.
-
-    Read order, because it is the only order a table gives and the alternative
-    -- sorting -- would make ``roots()`` report an order nothing chose.
-    """
-    nodes: list[str] = []
-    for child, parent in edges:
-        nodes.append(child)
-        nodes.append(parent)
-    return _ordered(nodes)
 
 
 @dataclass(frozen=True)
@@ -197,21 +213,36 @@ class ColumnHierarchy:
     naturally for a catalogue and would make this axis disagree with the same
     edges read as assertions on every isolated row.
 
-    **An edge is a row with both ends**, and that is one rule with three
-    consequences. It is spelled as two ``EXISTS`` filters, which mean *is not
-    null* on every backend in this package -- ``IS NOT NULL`` on the three SQL
-    ones, ``exists`` on Elasticsearch, ``is not None`` in process. It excludes
-    a row with no parent, which is what makes the node set edge-derived. And
-    over a **shared store**, where the handle *is* the store and surface-form
-    rows live beside entity rows, it excludes the form rows for free: a form
-    row carries the projection's id column and no parent column, so no
-    narrowing of this axis's own has to be written for an arrangement the
-    entity source needed one for.
+    **An edge is a row with both ends**, spelled as two ``EXISTS`` filters,
+    which mean *is not null* on every backend in this package -- ``IS NOT
+    NULL`` on the three SQL ones, ``exists`` on Elasticsearch, ``is not None``
+    in process. It excludes a row with no parent, which is what makes the node
+    set edge-derived.
+
+    **Which rows are the binding's is a separate question, and it is the
+    binding's to answer** -- :attr:`narrowing`, not this rule. Over a shared
+    store, where the handle *is* the store and surface-form rows live beside
+    entity rows, ``EXISTS`` on the parent column was relied on to exclude the
+    form rows: a form row carries the projection's id column and, in the
+    arrangements written so far, no parent column. That is a property of the
+    *data* rather than of the declaration, and nothing enforces it -- a side
+    table denormalised by a join carries whatever it was joined from. The axis
+    then read edges out of rows
+    :meth:`~dataknobs_data.ontology.sources.RecordEntitySource.entity_filters`
+    excludes, and ``parents()`` disagreed with ``entity()`` about one id. Both
+    readers of one binding now narrow by one filter, taken from the binding.
 
     Referential integrity is not this axis's subject. A parent column naming a
     key no row carries places a node that ``entity()`` will not find, exactly
     as an assertion may name an entity no ``entities:`` row declares --
     ``_publish_taxonomy_delta`` states that case from the other side.
+
+    **The keys are read as strings**, matching
+    :meth:`~dataknobs_data.ontology.sources.RecordEntitySource._projected`,
+    which is what the *keyed alike by construction* claim above rests on for an
+    id column that is not one. An integer ``id:``/``parent_key:`` pair walks in
+    the string space, and a consumer holding integer keys converts once at the
+    boundary rather than per member.
 
     Args:
         database: The handle the rows are read through -- the **source's**,
@@ -227,20 +258,43 @@ class ColumnHierarchy:
         child: The column holding a row's own key -- the source's projection
             ``id:``, so that a walk answers in the space ``entity()`` takes
         parent: The column holding the parent's key, in that same space
+        narrowing: What every read of this axis is additionally bounded by, so
+            that it reaches the same rows the entity source does. The
+            binding's, handed over by the registry; empty where the handle
+            addresses the entity table alone. It is a tuple of
+            :class:`~dataknobs_data.query.Filter`, which is frozen and hashes
+            over a projected value, so a narrowed axis hashes exactly as an
+            unnarrowed one does. That is a property of the field's type rather
+            than of this class, and it is named here because it was once the
+            other way round: a filter was a mutable dataclass whose value may
+            be a list, and adding this field made a *narrowed* axis withhold
+            the hash its frozen field tuple promises -- the failure
+            ``AssertionHierarchy`` normalises its own relation to avoid
     """
 
     database: AsyncDatabase
     table: str
     child: str
     parent: str
+    narrowing: tuple[Filter, ...] = ()
 
-    async def _edges(self, *narrowing: Filter) -> list[_Edge]:
+    async def _edges(self, *criteria: Filter, limit: int | None = None) -> list[_Edge]:
         """Every ``(child, parent)`` pair matching the criteria, in one read.
 
         Every member below goes through here, so a member added later cannot
         omit an end of the edge by writing a search that looks complete --
         which is how ``parent_edges``, the one whose whole job is completeness,
-        would have arrived carrying rows that are not edges.
+        would have arrived carrying rows that are not edges. It is also the one
+        place :attr:`narrowing` is spent, which is what makes *which rows of
+        this store are the binding's* a property of the binding rather than of
+        whichever member remembered to ask.
+
+        ``limit`` bounds a read whose caller does not need all of it --
+        :meth:`contains` is the case, and it is the only one: every other
+        member's answer *is* the set. The bound is applied to the query and to
+        the collection, which are the same number because the two ``EXISTS``
+        filters are what decide whether a row is an edge; the check below
+        cannot subtract from a bounded read without contradicting them.
 
         **Streamed rather than searched, and the reason is a shipped defect one
         module over.** What this returns is bounded by the *data* and not by
@@ -263,9 +317,12 @@ class ColumnHierarchy:
             filters=[
                 Filter(self.child, Operator.EXISTS),
                 Filter(self.parent, Operator.EXISTS),
-                *narrowing,
+                *self.narrowing,
+                *criteria,
             ]
         )
+        if limit is not None:
+            query = query.limit(limit)
         edges: list[_Edge] = []
         async for record in self.database.stream_read(query):
             child = record.get_value(self.child)
@@ -273,6 +330,8 @@ class ColumnHierarchy:
             if child is None or parent is None:
                 continue
             edges.append((str(child), str(parent)))
+            if limit is not None and len(edges) >= limit:
+                break
         return edges
 
     async def _edges_for(self, column: str, node_ids: Sequence[str]) -> list[_Edge]:
@@ -287,7 +346,7 @@ class ColumnHierarchy:
         package's existing answer to *how many rows per read*.
         """
         found: list[_Edge] = []
-        for chunk in batched(_ordered(node_ids), READ_BATCH_SIZE):
+        for chunk in batched(dedupe_ordered(node_ids), READ_BATCH_SIZE):
             found.extend(await self._edges(Filter(column, Operator.IN, list(chunk))))
         return found
 
@@ -300,7 +359,7 @@ class ColumnHierarchy:
         """
         edges = await self._edges()
         placed = {child for child, _ in edges}
-        return tuple(node for node in _nodes_of(edges) if node not in placed)
+        return tuple(node for node in nodes_of(edges) if node not in placed)
 
     async def parents(self, node_id: str) -> Sequence[str]:
         """The nodes ``node_id`` is directly under.
@@ -309,11 +368,11 @@ class ColumnHierarchy:
         promises the child column is unique, so two rows carrying one key are
         two edges rather than an error this axis is in a position to raise.
         """
-        return _ordered(parent for _, parent in await self._edges(_eq(self.child, node_id)))
+        return dedupe_ordered(parent for _, parent in await self._edges(_eq(self.child, node_id)))
 
     async def children(self, node_id: str) -> Sequence[str]:
         """The nodes directly under ``node_id``."""
-        return _ordered(child for child, _ in await self._edges(_eq(self.parent, node_id)))
+        return dedupe_ordered(child for child, _ in await self._edges(_eq(self.parent, node_id)))
 
     async def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
         """:meth:`parents` for a whole frontier, in one query per batch.
@@ -322,7 +381,7 @@ class ColumnHierarchy:
         empty tuple, not a missing slot -- and it is in the order asked, which
         is what the walk drivers index it by.
         """
-        found = _parent_edges_of(await self._edges_for(self.child, node_ids))
+        found = parent_edges_of(await self._edges_for(self.child, node_ids))
         return tuple(found.get(node_id, ()) for node_id in node_ids)
 
     async def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
@@ -343,10 +402,18 @@ class ColumnHierarchy:
         found nothing: a disjunction over two columns is not a narrowing every
         backend in this package compiles the same way, and a byte comparison
         per column is.
+
+        **Bounded at one edge each, because the question is a bool.** Unbounded,
+        the second read is *the rows whose parent column is this node*, which
+        is the node's whole fan-out -- so a root with two hundred thousand
+        children streamed two hundred thousand rows to answer ``True``. That is
+        not a corner: ``AsyncHierarchyView.exists`` asks this, and
+        ``Taxonomy.walk`` checks its anchor with it, so ``at(root)`` paid the
+        fan-out before the walk began.
         """
-        if await self._edges(_eq(self.child, node_id)):
+        if await self._edges(_eq(self.child, node_id), limit=1):
             return True
-        return bool(await self._edges(_eq(self.parent, node_id)))
+        return bool(await self._edges(_eq(self.parent, node_id), limit=1))
 
     async def parent_edges(self) -> Mapping[str, Sequence[str]]:
         """Every node this axis knows, and what each is directly under, in one read.
@@ -356,7 +423,7 @@ class ColumnHierarchy:
         column rather than a descent, so what it can see does not depend on
         anything being reachable from a root.
         """
-        return _parent_edges_of(await self._edges())
+        return parent_edges_of(await self._edges())
 
 
 if TYPE_CHECKING:  # pragma: no cover - checked by the type checker, not run

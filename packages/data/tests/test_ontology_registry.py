@@ -1681,7 +1681,7 @@ async def test_a_store_that_is_its_own_handle_still_needs_only_one(tmp_path: Pat
 
     ``memory`` declares no ``table``, so one handle *is* the store and both
     kinds of row live in it -- discriminated by the form column, which is what
-    ``_entity_filters`` emits. A projection naming two tables over such a
+    ``entity_filters`` emits. A projection naming two tables over such a
     handle is the shared-store arrangement working, not the defect above, and
     it must keep loading from one injected handle.
     """

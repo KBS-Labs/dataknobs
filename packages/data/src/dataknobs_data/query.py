@@ -170,12 +170,57 @@ def is_storage_key_field(field_name: str) -> bool:
     return field_name == RESERVED_KEY_FIELD
 
 
-@dataclass
+def _hashable(value: Any) -> Any:
+    """Project a filter value onto a shape that hashes.
+
+    ``Filter.value`` is annotated ``Any`` because it holds whatever the field
+    holds, and four operators hold a *list*: ``IN`` and ``NOT_IN`` take the
+    candidate set, ``BETWEEN`` and ``NOT_BETWEEN`` take the two bounds. A hash
+    over the field tuple alone would therefore refuse exactly the operators
+    whose value is most often written as a literal.
+
+    The projection is for the hash and for nothing else --- :attr:`Filter.value`
+    keeps the object it was handed, so ``to_dict()`` answers in the shape
+    ``from_dict()`` takes and every backend reads the list it was given.
+    Normalising at construction instead would be cheaper here and wrong
+    everywhere else: ``Filter("tags", Operator.EQ, ["a"])`` compares its value
+    against what a JSON column hands back, and a tuple does not equal a list.
+
+    Equal values project onto equal shapes, which is the half of the hash
+    contract a hand-written ``__hash__`` owes. The converse is not promised and
+    need not be: ``["a"]`` and ``("a",)`` are unequal filters that land on one
+    hash, which is an ordinary collision.
+    """
+    if isinstance(value, (list, tuple)):
+        return tuple(_hashable(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_hashable(item) for item in value)
+    if isinstance(value, dict):
+        return frozenset((key, _hashable(item)) for key, item in value.items())
+    return value
+
+
+@dataclass(frozen=True)
 class Filter:
     """Represents a filter condition.
 
     A Filter combines a field name, an operator, and a value to create a query condition.
     Multiple filters can be combined in a Query for complex filtering.
+
+    **A value, and frozen so that it hashes.** A condition is described rather
+    than built up: nothing in this repository has ever assigned to one of these
+    fields after construction, and a filter that could be edited under a caller
+    holding it is the reason a mutable type is conventionally refused a hash.
+    Frozen, it can sit in a set, key a cache, or be a field of another frozen
+    value --- which is what :class:`~dataknobs_data.ontology.ColumnHierarchy`
+    does with the narrowing its binding hands it.
+
+    Hashability is the whole of that promise rather than most of it. A frozen
+    dataclass satisfies :class:`~collections.abc.Hashable` whatever its fields
+    hold, so one whose field tuple sometimes refuses the call answers the check
+    a caller is supposed to ask with and then raises anyway. The list-valued
+    operators are not a corner here --- ``IN`` is the common case --- so
+    :meth:`__hash__` is written out over a projected value instead.
 
     Attributes:
         field: The field name to filter on
@@ -203,6 +248,20 @@ class Filter:
     field: str
     operator: Operator
     value: Any = None
+
+    def __hash__(self) -> int:
+        """Hash the condition, projecting a container value onto a hashable shape.
+
+        Written out rather than generated, because the generated one would
+        raise for every list-valued operator --- see :func:`_hashable`, which
+        is where that projection and its cost are argued.
+
+        Equality stays the generated one, over the value as held. So two
+        filters that compare equal hash equal, and the pair that does not ---
+        a list value against the equivalent tuple --- is unequal and collides,
+        which is the direction the contract allows.
+        """
+        return hash((self.field, self.operator, _hashable(self.value)))
 
     def matches(self, record_value: Any) -> bool:
         """Check if a record value matches this filter.
@@ -340,9 +399,16 @@ class Filter:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class SortSpec:
-    """Represents a sort specification."""
+    """Represents a sort specification.
+
+    Frozen for :class:`Filter`'s reason and with none of its difficulty: this
+    is the other spec a :class:`Query` holds, it describes a sort rather than
+    accumulating one, and nothing assigns to a field of one after construction.
+    Both its fields are hashable on their own, so the generated hash is correct
+    here and no projection is needed.
+    """
 
     field: str
     order: SortOrder = SortOrder.ASC

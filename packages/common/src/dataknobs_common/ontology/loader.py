@@ -987,11 +987,58 @@ def _mint_assertion_id(subject: str, relation: str, obj: Term) -> str:
     return f"{subject}-{relation}-{tail}"
 
 
+#: The keys a ``taxonomies:`` row is read for, where it names no backing.
+#:
+#: Published because the check over them cannot be finished here. A row
+#: declaring ``kind:`` is asking for a backing another distribution binds, and
+#: the keys *that* door reads -- ``source:``, ``parent_key:`` -- are keys this
+#: one has never heard of. So the closed set is enforced here for a row with no
+#: ``kind:``, and handed over for a row that has one, which is the same split
+#: :func:`_refuse_unbindable_axes` makes about the row as a whole.
+TAXONOMY_ROW_KEYS: frozenset[str] = frozenset(
+    {"id", "relation", "name", "description", "metadata", "materialization"}
+)
+
+
+def _refuse_an_unread_taxonomy_key(row: Mapping[str, Any], taxonomy_id: str) -> None:
+    """Refuse a key on an axis row that nothing here reads.
+
+    :func:`_refuse_unbindable_axes` states the rule this enforces -- *a
+    dropped key and an unsupported key have to look different, or the file
+    says one thing and the vocabulary means another* -- and enforced it for
+    ``kind:`` alone. Every other key on the same row went on loading and being
+    discarded: a misspelt ``materialisation:`` configured nothing and said
+    nothing, which is the failure that rule is about.
+
+    **A row declaring a ``kind:`` is passed over**, because the closed set
+    here is not the closed set for such a row: it names a backing whose binder
+    reads keys of its own, in a distribution this module does not import. That
+    door owns the check over its own rows, and refuses the same way -- see
+    ``ColumnAxisBinding.from_mapping`` in ``dataknobs-data``. The module-level
+    doors never see such a row at all, :func:`_refuse_unbindable_axes` having
+    refused it first.
+    """
+    if "kind" in row:
+        return
+    unread = sorted(set(row) - TAXONOMY_ROW_KEYS)
+    if not unread:
+        return
+    raise ValidationError(
+        f"`taxonomies:` row {taxonomy_id!r} declares {unread}, which this "
+        f"loader does not read. An axis over this document's own assertions is "
+        f"read for {sorted(TAXONOMY_ROW_KEYS)}; a row asking for any other "
+        f"backing declares `kind:`, and the door that binds that kind reads "
+        f"the keys it needs",
+        context={"taxonomy": taxonomy_id, "keys": unread},
+    )
+
+
 def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefinition]:
     built: dict[str, TaxonomyDefinition] = {}
     for row in rows:
         taxonomy_id = str(_required(row, "id", "taxonomies"))
         _refuse_duplicate_id(built, taxonomy_id, "taxonomies")
+        _refuse_an_unread_taxonomy_key(row, taxonomy_id)
         materialization = row.get("materialization", {})
         built[taxonomy_id] = TaxonomyDefinition(
             id=taxonomy_id,

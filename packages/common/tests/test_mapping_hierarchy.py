@@ -19,6 +19,9 @@ import pytest
 
 from dataknobs_common.exceptions import NotFoundError, ValidationError
 from dataknobs_common.hierarchy import (
+    dedupe_ordered,
+    nodes_of,
+    parent_edges_of,
     AsyncBulkHierarchy,
     AsyncEnumerableHierarchy,
     AsyncHierarchy,
@@ -460,3 +463,49 @@ def test_the_async_snapshot_enumerates_where_the_axis_offers_it() -> None:
     assert asyncio.run(copied.contains("a"))
     assert asyncio.run(copied.parents("a")) == ("b",)
     assert asyncio.run(copied.parents("dog")) == ("mammal",)
+
+
+# --------------------------------------------------------------------------
+# The edge-list core both concrete backings reduce their own edges to
+# --------------------------------------------------------------------------
+
+
+def test_the_edge_rules_answer_for_a_node_placed_under_nothing() -> None:
+    """`parent_edges_of` is an extent, so a node with no parent is still in it.
+
+    The case the two copies of this rule used to disagree about being *able* to
+    express. The assertion-shaped one took a literal object as "a node placed
+    under nothing" and gave it an entry with no parents; the pair-shaped one
+    over a parent column could not receive such an edge at all, because two
+    `EXISTS` filters had already excluded it. One core takes both, which is
+    what makes a third backing free to have either.
+    """
+    assert parent_edges_of([("leaf", "mid"), ("mid", "root")]) == {
+        "leaf": ("mid",),
+        "mid": ("root",),
+        "root": (),
+    }
+    # A literal object, a null parent column: a node, and no edge.
+    assert parent_edges_of([("dog", None), ("beagle", "dog")]) == {
+        "dog": (),
+        "beagle": ("dog",),
+    }
+    assert nodes_of([("dog", None), ("beagle", "dog")]) == ("dog", "beagle")
+
+
+def test_the_edge_rules_keep_read_order_and_drop_a_repeat() -> None:
+    """First-appearance order, and each node once.
+
+    Order is load-bearing rather than incidental: `roots()` reports in it, and
+    a DAG node reachable by several paths would otherwise be counted twice by
+    anyone reporting a size.
+    """
+    assert dedupe_ordered(["c", "a", "c", "b", "a"]) == ("c", "a", "b")
+    assert nodes_of([("b", "a"), ("c", "a"), ("d", "b")]) == ("b", "a", "c", "d")
+    # Two rows carrying one key are two edges, and the second parent is kept
+    # once however many rows assert it.
+    assert parent_edges_of([("x", "p"), ("x", "q"), ("x", "p")]) == {
+        "x": ("p", "q"),
+        "p": (),
+        "q": (),
+    }

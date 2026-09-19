@@ -30,12 +30,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypedDict
 
-from dataknobs_common.hierarchy import K
+from dataknobs_common.hierarchy import K, dedupe_ordered, nodes_of, parent_edges_of
 from dataknobs_common.ontology.model import EntityRef, Polarity, relation_id
 from dataknobs_common.ontology.sources import object_entity_id
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
     from dataknobs_common.ontology.model import Assertion, RelationRef, Term
     from dataknobs_common.ontology.sources import AssertionSource, AsyncAssertionSource
@@ -73,13 +73,21 @@ def edge_criteria(relation: RelationRef) -> EdgeCriteria:
     return {"relation": relation, "polarity": Polarity.ASSERTED}
 
 
-def _ordered(node_ids: Iterable[K]) -> tuple[K, ...]:
-    """Deduplicate in first-appearance order.
+def _pairs(assertions: Sequence[Assertion[K]]) -> list[tuple[K, K | None]]:
+    """These assertions as ``(child, parent)`` edges, which is all a rule needs.
 
-    A DAG node is reachable by several paths, so a repeated id changes no
-    membership answer and does change a count someone is reporting.
+    The one line that is this backing's own. What *reads* these pairs --
+    :func:`~dataknobs_common.hierarchy.parent_edges_of`,
+    :func:`~dataknobs_common.hierarchy.nodes_of` -- is shared with every other
+    backing, because who is above whom does not depend on whether an edge
+    arrived as an assertion or as two columns of a row.
+
+    ``None`` where the object is a literal: an axis is made of edges between
+    entities, and ``dog lifespan_years 12`` is a value rather than a place in a
+    structure. The shared rules take that as *a node placed under nothing*,
+    which is the same thing this module used to spell as a ``continue``.
     """
-    return tuple(dict.fromkeys(node_ids))
+    return [(assertion.subject, object_entity_id(assertion.object)) for assertion in assertions]
 
 
 def _parents_of(assertions: Sequence[Assertion[K]]) -> tuple[K, ...]:
@@ -89,11 +97,7 @@ def _parents_of(assertions: Sequence[Assertion[K]]) -> tuple[K, ...]:
     made of edges between entities, and ``dog lifespan_years 12`` is a value
     rather than a place in a structure.
     """
-    return _ordered(
-        entity_id
-        for assertion in assertions
-        if (entity_id := object_entity_id(assertion.object)) is not None
-    )
+    return dedupe_ordered(parent for _, parent in _pairs(assertions) if parent is not None)
 
 
 def _children_of(assertions: Sequence[Assertion[K]]) -> tuple[K, ...]:
@@ -102,7 +106,7 @@ def _children_of(assertions: Sequence[Assertion[K]]) -> tuple[K, ...]:
     The mirror of :func:`_parents_of`: a child is an edge's subject, and no
     literal check is needed because a subject is always an entity id.
     """
-    return _ordered(assertion.subject for assertion in assertions)
+    return dedupe_ordered(assertion.subject for assertion in assertions)
 
 
 def _parent_edges_of(edges: Sequence[Assertion[K]]) -> dict[K, tuple[K, ...]]:
@@ -114,22 +118,11 @@ def _parent_edges_of(edges: Sequence[Assertion[K]]) -> dict[K, tuple[K, ...]]:
     root to be found from, and ``isa`` is asserted rather than constrained, so a
     document may name one.
 
-    Every node gets an entry, including one that only ever appears as a parent;
-    its entry is empty, which is the same thing :meth:`roots` reports about it.
-    An assertion whose object is a literal contributes a node and no edge, for
-    the reason :func:`_parents_of` gives: ``dog lifespan_years 12`` is a value
-    rather than a place in a structure.
+    The rule is :func:`~dataknobs_common.hierarchy.parent_edges_of`'s and this
+    is the adapter onto it; the docstring there states what it answers for
+    every backing.
     """
-    above: dict[K, list[K]] = {}
-    for edge in edges:
-        above.setdefault(edge.subject, [])
-        parent = object_entity_id(edge.object)
-        if parent is None:
-            continue
-        above.setdefault(parent, [])
-        if parent not in above[edge.subject]:
-            above[edge.subject].append(parent)
-    return {node_id: tuple(parents) for node_id, parents in above.items()}
+    return parent_edges_of(_pairs(edges))
 
 
 def _nodes_of(edges: Sequence[Assertion[K]]) -> tuple[K, ...]:
@@ -137,15 +130,10 @@ def _nodes_of(edges: Sequence[Assertion[K]]) -> tuple[K, ...]:
 
     Declaration order, because it is the only order a hand-edited file gives
     and the alternative -- sorting -- would make ``roots()`` report an order
-    the author did not write.
+    the author did not write. :func:`~dataknobs_common.hierarchy.nodes_of` is
+    the rule; this is the adapter onto it.
     """
-    nodes: list[K] = []
-    for edge in edges:
-        nodes.append(edge.subject)
-        entity_id = object_entity_id(edge.object)
-        if entity_id is not None:
-            nodes.append(entity_id)
-    return _ordered(nodes)
+    return nodes_of(_pairs(edges))
 
 
 @dataclass(frozen=True)

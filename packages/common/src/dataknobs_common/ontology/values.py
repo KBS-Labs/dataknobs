@@ -152,8 +152,8 @@ class StrCodec:
         return rendered
 
 
-def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> TaxonomyDefinition:
-    """The definition this ontology declares under ``name``.
+def _declared(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> TaxonomyDefinition:
+    """The definition this ontology declares under ``name``, and nothing more.
 
     Refuses an undeclared name listing what *is* declared: the caller asked for
     an axis by a name they typed, and the useful answer to a typo is the set it
@@ -162,6 +162,11 @@ def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> Taxo
     Shared by both flavours rather than written into each -- the refusals
     either twin makes are the same refusals, and a rule a twin re-implements is
     a rule that drifts.
+
+    **The lookup alone**, which is what lets a caller wanting one *half* of an
+    axis ask for it without meeting the other half's refusal. See
+    :func:`_definition` for the whole, and :meth:`Ontology.structure_for` for
+    the caller that needed the half.
     """
     definition = taxonomies.get(name)
     if definition is None:
@@ -169,6 +174,24 @@ def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> Taxo
             f"no taxonomy {name!r} in this ontology. Declared: {sorted(taxonomies)}",
             context={"taxonomy": name, "declared": sorted(taxonomies)},
         )
+    return definition
+
+
+def _definition(taxonomies: Mapping[str, TaxonomyDefinition], name: str) -> TaxonomyDefinition:
+    """:func:`_declared`, plus the refusals *building the whole axis* owes.
+
+    What ``taxonomy()`` asks, and the pair is split because the content
+    refusal is about an axis's **content** -- so a caller who wants only its
+    structure meets a refusal about a half they did not ask for.
+
+    That is not a hypothetical caller. ``OntologyRegistry`` records each axis's
+    node set at load, which is a question about the structure alone, and asking
+    it through this door made a ``content: materialized`` document raise out of
+    ``load()`` -- at a call site with no idea why it failed, which is the exact
+    placement :func:`_refuse_a_materialized_content_axis` gives its reason for
+    avoiding.
+    """
+    definition = _declared(taxonomies, name)
     _refuse_a_materialized_content_axis(definition)
     return definition
 
@@ -472,18 +495,47 @@ class Ontology(Generic[K]):
         ``materialization`` asks for something this ontology cannot supply --
         see :func:`_refuse_a_materialized_content_axis`.
         """
-        definition = _definition(self.taxonomies, name)
         return Taxonomy(
-            definition=definition,
-            structure=_structure_for(
-                name,
-                definition,
-                self.structures,
-                AssertionHierarchy(self.assertions, definition.relation),
-            ),
+            definition=_definition(self.taxonomies, name),
+            structure=self.structure_for(name),
             entities=self.entities,
             assertions=self.assertions,
             entity_types=self.entity_types,
+        )
+
+    def structure_for(self, name: str) -> Hierarchy[K]:
+        """The structure axis this ontology answers ``name`` with, and only that.
+
+        :meth:`taxonomy` reads it, and so does anything that wants an axis's
+        *shape* without its content -- enumerating its nodes to compare two
+        loads of one document is the case that drove publishing it. Such a
+        caller asking through :meth:`taxonomy` meets
+        :func:`_refuse_a_materialized_content_axis`, which is a refusal about
+        a half of the axis they never touch.
+
+        Whatever a door bound under this name, and the live read over the
+        assertions where a door bound nothing -- one rule, in
+        :func:`_structure_for`, so that what a subscriber holds and what a
+        reporter counts cannot be two different axes.
+
+        Args:
+            name: The name the axis is reached under, as :attr:`taxonomies`
+                keys it
+
+        Returns:
+            The axis, live or bound
+
+        Raises:
+            NotFoundError: When no taxonomy is declared under ``name``
+            ValidationError: When the definition asks for a copy of its
+                structure that this ontology does not carry
+        """
+        definition = _declared(self.taxonomies, name)
+        return _structure_for(
+            name,
+            definition,
+            self.structures,
+            AssertionHierarchy(self.assertions, definition.relation),
         )
 
     def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
@@ -653,18 +705,27 @@ class AsyncOntology(Generic[K]):
         an asynchronous snapshot. Both are coroutines, and there is nowhere in
         this signature to await one.
         """
-        definition = _definition(self.taxonomies, name)
         return AsyncTaxonomy(
-            definition=definition,
-            structure=_structure_for(
-                name,
-                definition,
-                self.structures,
-                AsyncAssertionHierarchy(self.assertions, definition.relation),
-            ),
+            definition=_definition(self.taxonomies, name),
+            structure=self.structure_for(name),
             entities=self.entities,
             assertions=self.assertions,
             entity_types=self.entity_types,
+        )
+
+    def structure_for(self, name: str) -> AsyncHierarchy[K]:
+        """:meth:`Ontology.structure_for`, in an asynchronous slot.
+
+        A plain ``def`` for :meth:`taxonomy`'s reason: choosing between two
+        objects this ontology is already holding awaits nothing, and the
+        binding that *did* await something happened at the door.
+        """
+        definition = _declared(self.taxonomies, name)
+        return _structure_for(
+            name,
+            definition,
+            self.structures,
+            AsyncAssertionHierarchy(self.assertions, definition.relation),
         )
 
     def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
