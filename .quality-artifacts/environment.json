@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-19T15:57:36Z",
+  "timestamp": "2026-09-19T17:46:15Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/leg-d2-the-column-taxonomy",
-  "git_commit": "c45985209131ea92308c0aa0c5eb78469526b731",
+  "git_branch": "sbk/leg-d3-the-index-and-what-fills-it",
+  "git_commit": "100f82d63c433517b991ab0323633e21bc93c3e6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

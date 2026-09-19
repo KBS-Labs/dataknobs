@@ -9,6 +9,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`IndexItem`, `AsyncIndexSource` and three pure index sources**, in
+  `dataknobs_common.index`. A thing that can stream `(id, text, metadata)`
+  triples and say which named sets its ids fall in is what "some other data
+  source" means to anything that indexes text, and the protocol is what keeps
+  every layer above it source-agnostic. `MappingSource` indexes an in-memory
+  mapping, `CallableSource` adapts any callable, and `AliasSource` is a
+  decorator turning one entity into one item per surface form, all carrying the
+  entity's id -- so alias matching is part of the corpus rather than a separate
+  lookup table that drifts from it.
+
+  Top level rather than inside a subpackage: the protocol has no dependency
+  beyond the standard library and both a vocabulary and a bare table reach it.
+
+  Qualification happens in the source and never in a consumer. A source emits
+  ids in whatever space it was built for; nothing downstream rewrites one or
+  infers a namespace.
+
+- **`EntitySourceIndexSource`**, the adapter that makes a vocabulary
+  indexable. It takes the ontology rather than its entity source, because
+  producing an item needs both the set of entities to yield and a qualified id
+  per item, and only one of those is on the entity source. It adds no member to
+  any protocol: the enumeration is `describe().declares` and `by_type`, which
+  are the same set seen from two sides, read in batches so a member called
+  `stream_items` does not materialise the vocabulary.
+
+  Three refusals, all at construction and all naming the source: a field an
+  entity does not carry, a source that cannot enumerate its types at all, and a
+  type the schema does not declare -- the last skipped where the document
+  declares no schema section, because an empty schema section is no schema and
+  refusing there would forbid the by-reference case entirely.
+
+- **`ONTOLOGY_ID_KEY`, `TAXONOMY_ID_KEY`, `NODE_ID_KEY` and
+  `ALIAS_FORMS_KEY`**, in `dataknobs_common.ontology.tags` -- the keys an
+  indexed row carries to say which vocabulary, which axis, which node and which
+  surface forms it is about. Published rather than spelled at each end, because
+  a key spelled at each end is a reader reaching for the wrong one and a key
+  nothing wrote reads as absent. The fifth key of the same row, the model that
+  produced the vector, stays in `dataknobs_data.vector.content`; the two
+  modules name each other.
+
+### Fixed
+
+- **`AliasSource` reads a bare-string alias value as one form, not as its
+  characters.** `ALIAS_FORMS_KEY` is declared list-valued and the family
+  publishes the rule on `NODE_ID_KEY` -- *"a reader takes a bare string as one
+  node rather than as its characters"* -- and this class, the key's only
+  published reader, iterated the value directly. A consumer-written
+  `{ALIAS_FORMS_KEY: "ACME"}` yielded four one-character items, all carrying the
+  entity's id, so a store keyed on id kept one row holding `"E"` and the entity
+  could no longer be found by its own name. Only a consumer-supplied source can
+  reach it, since the in-tree writer always writes a list -- which is the
+  population that cannot read the constant's docstring at the point of failure.
+  A mapping is logged and dropped rather than iterated into its keys: there is
+  no reading under which those are surface forms. The rule is now restated on
+  `ALIAS_FORMS_KEY` itself.
+
+- **`EntitySourceIndexSource` streams the enumeration it validated at
+  construction.** `__post_init__` refuses a source answering `declares is None`,
+  on the argument that an index over it would be *silently partial*;
+  `stream_items` then asked again and wrote `or frozenset()` over the answer, so
+  a source answering a set at construction and `None` at the read produced
+  exactly the empty index the refusal exists to prevent -- and skipped the
+  undeclared-type refusal on the same path. Both refusals now bind the read.
+
+- **`EntitySourceIndexSource.source_field` is spelled the way its reader parses
+  it.** Composed with the display separator, it wrote a grammar nothing parses
+  into a key that is split on commas, and tied the key's encoding to a cosmetic
+  choice. Comma-joined now, independent of `join`.
+
+### Added
+
+- **`DataclassSweep`**, in `dataknobs_common.testing` -- every dataclass a
+  package defines, with a value built for each from its own declared field
+  types, so a guard about a *class* of types can find the class rather than the
+  instances somebody thought to list. `Supplied` and `UnbuildableError` come
+  with it.
+
+  It existed as a test-directory helper here and named `dataknobs_common` in
+  four places, so the second package that needed it could only get it by
+  copying -- which is how a sweep acquires two spellings and then two answers.
+  It takes its root as an argument now. `dataknobs-data` is the first other
+  caller, and what it found on arrival is the reason: two index sources in
+  exactly the shape the hashable-contract census is about, in a family whose
+  three other members had already been ruled the other way in this package.
+  The guard that would have caught them swept a tree they were not in.
+
+  Its `TYPE_CHECKING` replay now seeds the module's own import context, so a
+  **relative** import in such a block resolves. `exec` against a bare namespace
+  has no `__package__`, so `from .vector.types import DistanceMetric` was
+  skipped and the names it would have bound stayed missing -- surfacing later
+  as a `NameError` from `get_type_hints` that reads as an unconstructible type
+  rather than as a hole in the replay. This package writes most of these
+  absolutely and barely noticed; a package that writes them relatively loses
+  every one.
+
+- **A live binding covering fewer types than the schema declares is logged at
+  construction.** The undeclared-type refusal only ran one way -- a source
+  declaring a type the schema does not -- and the other direction is the one
+  that produces a silently partial index: a binding whose projection names one
+  constant type, under a vocabulary declaring several, indexes one of them while
+  a query about the others answers *not in the corpus*, which is a legitimate
+  answer nothing reports as an error. A warning rather than a refusal, because
+  one live table under a vocabulary naming more types is an ordinary
+  configuration. **Not raised for an authored source**, which derives `declares`
+  from the entities it holds, so a declared type with no members is absent from
+  it -- and that is a document being explicit, not an index being partial.
+
+- **`join_non_empty`** moves to `dataknobs_common.index`, beside the protocol it
+  serves. It was written twice -- once in `dataknobs-data`'s bare-table sources
+  and once in the ontology adapter's `_text_for`, one package apart, with
+  different default separators -- which is the duplication its own docstring
+  argued against. A pure algorithm over values; not added to any `__all__`.
+
+### Changed
+
+- **`SourceDescription.declares` is `frozenset[str] | None` and has no
+  default.** *Cannot enumerate* and *holds nothing* were one value: a source
+  that omitted the field claimed to hold no types at all, which is a complete
+  closed answer a reader is entitled to act on. `None` now means the first and
+  `frozenset()` the second, and a source that says neither does not construct.
+  Every construction names the field.
+
 - **`Ontology.structure_for` and `AsyncOntology.structure_for`**, the structure
   axis an ontology answers a name with, without building the rest of the
   taxonomy around it. `taxonomy()` reads it, and so does anything wanting an
@@ -940,9 +1062,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 347,
-  the seven beyond them being the operation family, the near-spelling rung and
-  the surface-form catalogue, each in both flavours and each added by its own
+  the resolution cascade — 134 names, taking the package's `__all__` to 352,
+  the twelve beyond them being the operation family, the near-spelling rung,
+  the surface-form catalogue and the index-source family, each added by its own
   entry above. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that

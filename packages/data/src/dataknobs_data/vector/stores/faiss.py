@@ -66,6 +66,45 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
 
         super()._setup()
 
+        # Map the configured distance metric to a FAISS metric constant.
+        #
+        # Keyed on the canonical member, so the table has one key per family
+        # and no spelling can be missed: `self.metric` arrives canonical from
+        # `super()._setup()`, so there are four families to cover and the
+        # three below cover every one this backend serves. Cosine reaches
+        # inner product by normalising the vectors first, which `_normalize`
+        # does on every write and every query.
+        #
+        # **There is no `L1` arm, and the absence is the decision.** FAISS
+        # defines `METRIC_L1`, but `_new_raw_index` branches only
+        # `METRIC_INNER_PRODUCT` against `IndexFlatL2`, so an entry here would
+        # name a metric the index builder does not honour. This block used to
+        # end in a bare `return faiss.METRIC_L2`, which meant a store
+        # configured for `l1` built an L2 index, reported `DistanceMetric.L1`
+        # from `metric`, and disagreed with itself with no error and no log
+        # line -- and `_score_from_raw`, having no `L1` arm either, then
+        # returned the raw L2 *distance* as the score, inverting better and
+        # worse for every reader above it. The chroma and Elasticsearch doors
+        # already refuse this member rather than answering something else;
+        # this is that decision arriving at the third door.
+        #
+        # Refused here rather than in `_faiss_metric` so the caller is told
+        # while still holding the mistake, which is where the sibling backend
+        # refuses it too -- not at the first index build, several awaits away.
+        metric_map = {
+            DistanceMetric.COSINE: faiss.METRIC_INNER_PRODUCT,
+            DistanceMetric.EUCLIDEAN: faiss.METRIC_L2,
+            DistanceMetric.DOT_PRODUCT: faiss.METRIC_INNER_PRODUCT,
+        }
+        if self.metric not in metric_map:
+            raise ValueError(
+                f"faiss cannot serve {self.metric.value!r} here: `_new_raw_index` builds "
+                f"an inner-product or an L2 index and nothing else. Configure "
+                f"{', '.join(sorted(m.value for m in metric_map))}, or use a backend "
+                f"that serves it."
+            )
+        self.faiss_metric: Any = metric_map[self.metric]
+
         # Determine index type. The explicit ``index_type`` config key
         # wins; otherwise fall back to ``index_params["type"]`` (default
         # ``"auto"``), preserving the legacy dual-source precedence.
@@ -150,18 +189,12 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         self._initialized = True
 
     def _faiss_metric(self) -> Any:
-        """Map the configured distance metric to a FAISS metric const."""
-        if self.metric == DistanceMetric.COSINE:
-            # Cosine: vectors are normalized, then inner product.
-            return faiss.METRIC_INNER_PRODUCT
-        if self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
-            return faiss.METRIC_L2
-        if self.metric in (
-            DistanceMetric.DOT_PRODUCT,
-            DistanceMetric.INNER_PRODUCT,
-        ):
-            return faiss.METRIC_INNER_PRODUCT
-        return faiss.METRIC_L2
+        """The FAISS metric constant this store was configured for.
+
+        Resolved once in :meth:`_setup` and returned here, so the four call
+        sites that ask read one answer rather than re-deriving it.
+        """
+        return self.faiss_metric
 
     def _new_raw_index(self, index_type: str) -> Any:
         """Build an unwrapped FAISS index of the given concrete type.
@@ -574,19 +607,27 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         """Convert a raw FAISS metric value into the score callers see.
 
         Cosine is an inner product of normalized vectors, which already
-        *is* the similarity. L2 arrives as a distance and is inverted.
-        Every other configured metric maps onto one of those two FAISS
-        metrics (:meth:`_faiss_metric`) and its raw value is reported
-        unchanged, which is what callers have always received.
+        *is* the similarity. L2 arrives as a distance and is inverted so that
+        higher stays better, which is what every reader above a store assumes
+        and what a threshold filter compares against. An inner product is
+        already a similarity and is reported unchanged.
+
+        **Three arms and no fall-through.** ``self.metric`` is canonical, and
+        :meth:`_setup` refuses the one family not listed here --- so the
+        trailing ``return raw`` this used to end in is unreachable rather than
+        merely unused. It was reachable before, and what reached it was ``L1``:
+        a raw L2 *distance* returned as a similarity, ordering every result
+        backwards for the one metric that got that far.
 
         Both search paths convert here, so a filtered search and an
         unfiltered one report the same number for the same row.
         """
-        if self.metric == DistanceMetric.COSINE:
+        if self.metric is DistanceMetric.COSINE:
             # Inner product of normalized vectors = cosine similarity
             return raw
-        if self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+        if self.metric is DistanceMetric.EUCLIDEAN:
             return 1.0 / (1.0 + raw)
+        # DOT_PRODUCT: the inner product is the similarity.
         return raw
 
     def _result_row(

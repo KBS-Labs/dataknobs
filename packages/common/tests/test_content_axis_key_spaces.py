@@ -306,6 +306,15 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("EntitySource", "get", "entity_id", "key"),
     ("EntitySource", "get_many", "->", "key"),
     ("EntitySource", "get_many", "entity_ids", "key"),
+    ("EntitySourceIndexSource", "<field>", "_declared", "schema"),
+    ("EntitySourceIndexSource", "<field>", "_fields", "schema"),
+    ("EntitySourceIndexSource", "<field>", "aliases_key", "payload"),
+    ("EntitySourceIndexSource", "<field>", "fields", "schema"),
+    ("EntitySourceIndexSource", "<field>", "join", "text"),
+    ("EntitySourceIndexSource", "<field>", "ontology", "key"),
+    ("EntitySourceIndexSource", "_text_for", "->", "text"),
+    ("EntitySourceIndexSource", "declares", "->", "schema"),
+    ("EntitySourceIndexSource", "source_field", "->", "schema"),
     ("EntityType", "<field>", "isa", "schema"),
     ("EntityType", "<field>", "type", "schema"),
     ("FormHit", "<field>", "entity_id", "key"),
@@ -433,11 +442,11 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
 #: and the pass that makes that change is the pass that should be reading the
 #: rows it brings with it.
 _PROTOCOLS = 15
-_REACHABLE_VALUE_TYPES = 36
+_REACHABLE_VALUE_TYPES = 37
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 324
+_ROWS = 333
 
 
 def _modules() -> Iterator[ast.Module]:
@@ -572,7 +581,7 @@ def _generic_aliases() -> set[str]:
     return found
 
 
-@functools.cache  # the two subpackages' ASTs, parsed once: the row test below is parametrised 271 times
+@functools.cache  # the two subpackages' ASTs, parsed once: the row test below is parametrised 332 times
 def _population() -> tuple[dict[str, ast.ClassDef], list[str], list[str]]:
     """The protocols, and the concrete types their annotations reach.
 
@@ -660,7 +669,7 @@ def _population() -> tuple[dict[str, ast.ClassDef], list[str], list[str]]:
     return classes, protocols, sorted(closure)
 
 
-@functools.cache  # and the rows read off them once: the row test below is parametrised 271 times
+@functools.cache  # and the rows read off them once: the row test below is parametrised 332 times
 def _measured() -> dict[tuple[str, str, str], str]:
     """Every row in the tree, mapped to the annotation the source carries."""
     classes, protocols, values = _population()

@@ -43,7 +43,9 @@ from .exceptions import (
     VectorNotSupportedError,
     VectorValidationError,
 )
+from .index_sources import MultiFieldSource, RecordFieldSource
 from .migration import IncrementalVectorizer, VectorMigration
+from .semantic_index import SemanticIndex
 from .mixins import (
     AsyncVectorOperationsMixin,
     SyncVectorOperationsMixin,
@@ -147,4 +149,7 @@ __all__ = [
     "VectorIndexError",
     "VectorNotSupportedError",
     "VectorValidationError",
+    "MultiFieldSource",
+    "RecordFieldSource",
+    "SemanticIndex",
 ]

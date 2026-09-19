@@ -29,6 +29,22 @@ pass their own configuration as the fallback, which is what those records were
 digested under, so no stored hash is invalidated and nothing re-embeds on
 upgrade.
 
+The other half of the keys on an indexed row
+--------------------------------------------
+
+``MODEL_NAME_KEY`` below is one of five keys written onto a single stored row,
+and the other four --- which vocabulary, which axis, which node, which surface
+forms --- live in ``dataknobs_common.ontology.tags``. The split is by subject
+rather than by accident: this one is about the **embedder** that produced the
+vector, and is half of the staleness contract the digest above is the other
+half of; those four are about **identity**, and belong beside the vocabulary
+that mints the ids.
+
+So the two modules name each other, in both directions, because four keys
+declared in two modules is otherwise a reader reaching for one module and
+finding one of four --- which is this module's own stated defect, one level
+up. See ``dataknobs_common/ontology/tags.py``.
+
 Two questions, two functions
 ----------------------------
 

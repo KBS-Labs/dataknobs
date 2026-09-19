@@ -226,6 +226,13 @@ from dataknobs_common.hierarchy import (
     leaves,
     paths_to_root,
 )
+from dataknobs_common.index import (
+    AliasSource,
+    AsyncIndexSource,
+    CallableSource,
+    IndexItem,
+    MappingSource,
+)
 from dataknobs_common.imports import (
     ClassConstraint,
     dotted_path,
@@ -870,4 +877,9 @@ __all__ = [
     # Testing - File Helpers
     "create_test_markdown_files",
     "create_test_json_files",
+    "AliasSource",
+    "AsyncIndexSource",
+    "CallableSource",
+    "IndexItem",
+    "MappingSource",
 ]
