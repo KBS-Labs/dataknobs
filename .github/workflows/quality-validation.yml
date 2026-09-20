@@ -45,6 +45,20 @@ jobs:
               - 'pytest.ini'
               - '.python-version'
               - '.pylintrc'
+              # A package's test inputs: the files its suite reads but pytest does
+              # not collect. '**/*.py' already covers the suite itself, so what
+              # this adds is exactly the twelve non-Python files under
+              # packages/*/tests — ten fixtures that decide whether a suite passes
+              # and now enter their package's hash, and two READMEs that decide
+              # nothing. Without it a pull request editing only a golden answer
+              # matched no pattern here, skipped the sole PR-time quality job, and
+              # merged an artifact the edit had just invalidated.
+              #
+              # Wider than PACKAGE_TEST_FIXTURE_DIRS on purpose. A pattern per
+              # declared directory would be a fourth place that declaration has to
+              # be repeated and kept in step; the cost of the wider form is one job
+              # for a prose edit under a test tree.
+              - 'packages/*/tests/**'
               # Shell scripts at the repository root. The '**/*.py' and 'bin/**'
               # patterns above reach neither, and the shell lint reports on both
               # — so a change to one moves the recorded shell_lint verdict while
@@ -98,6 +112,25 @@ jobs:
               # is deliberately absent — 'bin/**' already matches it.)
               - '.gitignore'
               - '.gitattributes'
+              # The licensing surface, read by tests/test_licensing.py: it pins
+              # each package's LICENSE and NOTICE copy against the root pair and
+              # checks the historical MIT file's version list against
+              # packages.json. No pattern above reaches any of these — they are
+              # not code, not under a docs/ tree, and '.dataknobs/*.json' covers
+              # only the registry side of that last comparison. Without them,
+              # editing the license text moves that guard's verdict while
+              # skipping the job that would have recomputed it.
+              #
+              # Each package's copy needs its own pattern: the dorny globs
+              # above are not implicitly recursive, so 'LICENSE' matches the
+              # root file alone. The copies are what that guard is mostly
+              # about, so omitting them left it asserting against files no
+              # change to which could start the job.
+              - 'LICENSE'
+              - 'NOTICE'
+              - 'LICENSES/**'
+              - 'packages/*/LICENSE'
+              - 'packages/*/NOTICE'
             docs:
               - 'docs/**'
               - '!docs/changelog.md'
@@ -120,7 +153,7 @@ jobs:
         fetch-depth: 1
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
       with:
         enable-cache: true
 
@@ -189,7 +222,7 @@ jobs:
         fetch-depth: 0  # Full history for git revision date plugin
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
       with:
         enable-cache: true
         version: "latest"

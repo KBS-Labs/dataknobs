@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """aiohttp request-shape knowledge shared across the HTTP-only providers.
 
 Two dataknobs providers speak their vendor API directly over ``aiohttp`` with

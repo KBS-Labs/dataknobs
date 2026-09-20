@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Template rendering utilities for dataknobs-llm.
 
 This module provides shared template rendering functions used by both the LLM

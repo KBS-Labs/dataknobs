@@ -267,7 +267,9 @@ Use `EchoProvider` for deterministic testing:
 from dataknobs_llm import EchoProvider, ParallelLLMExecutor, LLMTask, LLMMessage
 from dataknobs_llm.testing import text_response
 
-provider = EchoProvider()
+# EchoProvider takes a config like any other provider; the provider/model
+# names are free-form because nothing is dialled.
+provider = EchoProvider({"provider": "echo", "model": "echo-model"})
 provider.set_responses([
     text_response("Math question"),
     text_response("Science question"),
@@ -290,7 +292,9 @@ assert results["science"].success
 ```python
 from dataknobs_llm.testing import text_response, ErrorResponse
 
-provider = EchoProvider()
+# EchoProvider takes a config like any other provider; the provider/model
+# names are free-form because nothing is dialled.
+provider = EchoProvider({"provider": "echo", "model": "echo-model"})
 provider.set_responses([
     text_response("OK"),
     ErrorResponse(RuntimeError("simulated failure")),

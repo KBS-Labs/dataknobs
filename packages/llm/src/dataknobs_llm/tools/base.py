@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base tool abstraction for LLM function calling.
 
 This module provides the base Tool class for implementing callable tools

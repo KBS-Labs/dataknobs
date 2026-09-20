@@ -5,6 +5,45 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### dataknobs-structures
+
+#### Changed
+- **`Tree.children` returns a tuple rather than the live list.** Reading, indexing, iterating, slicing and `len()` are unaffected; a caller that *mutated* what it got back — `node.children.append(x)`, `.remove(x)`, `.sort()` — now gets an `AttributeError` at that line, and the remedy is `add_child` / `prune`, or `list(node.children)` where a mutable copy was what was wanted. In-place mutation walked past every check `add_child` performs, so it could give a node two parents that disagreed about it. A tuple was chosen over a defensive list copy because a copy accepts the write and silently discards it. The package ships `py.typed`, so the annotation change is visible to downstream type checkers as well as at runtime
+
+#### Fixed
+- **a tree can no longer be made its own ancestor.** `add_child`, the `parent` setter and `add_edge` refuse a child that is the node itself or one of its ancestors, raising `ValidationError`. Nothing can have depended on the old behaviour: the object it produced is one that ten of this class's twelve traversals spin on forever and two raise `RecursionError` on, so a tree that accepted the write had no reader left. `add_edge` was the worst entrance — asked for an edge inverting one already present, it built the cycle *and* emptied the tree, because the node it moved was pruned from its parent on the way. This is the first exception this package raises
+- **setting `parent` maintains both halves of the link.** It previously assigned the node's parent reference and nothing else, so the new parent never gained the child and the old one never lost it — a node naming a parent that did not list it, which `sibnum`, `prune` and every edge walk then answered wrongly about. `node.parent = other` is now `other.add_child(node)`, and `node.parent = None` detaches both sides
+
+### Licensing
+
+- **DataKnobs is relicensed from MIT to Apache-2.0.** This version and every
+  later version of all ten packages is licensed under the Apache License,
+  Version 2.0. **All previously released versions remain available under the
+  MIT License**, on the terms under which they were published — the change is
+  not retroactive.
+
+  What moved:
+
+  - the root `LICENSE` now holds the Apache-2.0 text, and a `NOTICE` file
+    carries the attribution the license requires on redistribution;
+  - the MIT text is preserved in `LICENSES/MIT-historical.txt`, alongside the
+    last MIT-licensed release of each package;
+  - every package declares `license = "Apache-2.0"` and ships `LICENSE` and
+    `NOTICE` inside its wheel and sdist, so the published metadata reads
+    `License-Expression: Apache-2.0`. No distribution carried license text
+    before this change;
+  - every shipped Python source file carries the SPDX short-form header
+    `# SPDX-License-Identifier: Apache-2.0`;
+  - every manifest now requires `hatchling>=1.27` to build. PEP 639's
+    bare-string `license` and list-form `license-files` are the two fields
+    above, and an older backend rejects them rather than dropping them
+    quietly.
+
+  No patent grant file is included; `NOTICE` and the Apache-2.0 text are the
+  whole of the licensing surface.
+
 ## Release - 2026-09-03
 
 ### dataknobs-llm [0.10.0]

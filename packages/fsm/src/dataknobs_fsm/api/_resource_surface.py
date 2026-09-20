@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The resource-facing half of an FSM API class, written once.
 
 :class:`~dataknobs_fsm.api.simple.SimpleFSM`,

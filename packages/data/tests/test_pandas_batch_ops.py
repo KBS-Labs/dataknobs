@@ -299,7 +299,16 @@ class TestBatchOperations:
             progress_calls.append((current, total))
 
         df = pd.DataFrame({"value": range(5)})
-        config = BatchConfig(progress_callback=progress_callback, memory_efficient=False)
+        # "log" rather than the default "raise": the batch write here is
+        # sabotaged on purpose to reach the per-record path, and a batch
+        # failure that every row then survives is still a failure. Under
+        # "raise" it is now raised rather than silently absorbed, so a test
+        # whose subject is the progress callbacks has to say it tolerates one.
+        config = BatchConfig(
+            progress_callback=progress_callback,
+            memory_efficient=False,
+            error_handling="log",
+        )
 
         batch_ops.bulk_insert_dataframe(df, config)
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Vector store support for DataKnobs data package.
 
 This module provides vector field types, operations, and backend integrations
@@ -14,6 +17,7 @@ from .content import (
     compute_content_hash,
     content_hash_metadata,
     current_content_hash,
+    derive_source_text,
     describes_its_assembly,
     recompute_content_hash,
     stored_assembly,
@@ -39,7 +43,9 @@ from .exceptions import (
     VectorNotSupportedError,
     VectorValidationError,
 )
+from .index_sources import MultiFieldSource, RecordFieldSource
 from .migration import IncrementalVectorizer, VectorMigration
+from .semantic_index import SemanticIndex
 from .mixins import (
     AsyncVectorOperationsMixin,
     SyncVectorOperationsMixin,
@@ -128,6 +134,7 @@ __all__ = [
     "compute_content_hash",
     "content_hash_metadata",
     "current_content_hash",
+    "derive_source_text",
     "describes_its_assembly",
     "recompute_content_hash",
     "stored_assembly",
@@ -142,4 +149,7 @@ __all__ = [
     "VectorIndexError",
     "VectorNotSupportedError",
     "VectorValidationError",
+    "MultiFieldSource",
+    "RecordFieldSource",
+    "SemanticIndex",
 ]

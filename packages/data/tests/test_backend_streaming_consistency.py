@@ -8,15 +8,40 @@ from collections.abc import Generator
 import pytest
 
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_data.backend_selection import known_backend_classes
 from dataknobs_data.backends import async_backends, sync_backends
 
 
 def _backend_items(
     registry: PluginRegistry[type],
 ) -> Generator[tuple[str, type], None, None]:
-    """Yield (name, class) pairs from a PluginRegistry."""
-    for key in registry.list_keys():
-        yield key, registry.get_factory(key)
+    """Yield ``(key, class)`` for every backend the registry knows of.
+
+    Two things this used to get wrong, both of which made a loop over it
+    cover a different population than it reads as covering.
+
+    It walked ``list_keys``, which lists every accepted *spelling* --- so
+    ``mem`` and ``memory`` each yielded ``SyncMemoryDatabase`` and the
+    assertions below ran twice against one class. Harmless, but it means the
+    count of what was checked was never the count of backends.
+
+    And ``list_keys`` answers "what can this installation build?". A backend
+    whose optional driver is absent is declared unavailable and drops out of
+    it, taking its assertions with it silently --- the shape where a check
+    goes on reporting green over a shrinking population. Backends now come
+    from what the registry *knows of*, and one whose class cannot be imported
+    at all is named in a skip raised once the loop has finished, so everything
+    reachable is still asserted and the run says what it could not reach.
+    """
+    unreachable = []
+    for entry in known_backend_classes(registry):
+        if entry.cls is None:
+            unreachable.append(f"{entry.key} ({entry.unavailable_reason})")
+            continue
+        yield entry.key, entry.cls
+
+    if unreachable:
+        pytest.skip(f"class unimportable here, not checked: {', '.join(unreachable)}")
 
 
 class TestBackendConsistency:

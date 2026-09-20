@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base classes and types for the prompt library system."""
 
 from .types import (
@@ -14,7 +17,14 @@ from .types import (
     AdapterDict,
 )
 from .abstract_prompt_library import AbstractPromptLibrary
+from .async_prompt_library import AsyncPromptLibrary
 from .base_prompt_library import BasePromptLibrary
+from .views import (
+    AsyncPromptLibraryView,
+    SyncPromptLibraryView,
+    as_async,
+    as_sync,
+)
 
 __all__ = [
     # Validation types
@@ -33,7 +43,13 @@ __all__ = [
     "AdapterDict",
     # Base classes
     "AbstractPromptLibrary",
+    "AsyncPromptLibrary",
     "BasePromptLibrary",
+    # Flavour conversion
+    "AsyncPromptLibraryView",
+    "SyncPromptLibraryView",
+    "as_async",
+    "as_sync",
 ]
 
 # Note: TemplateSyntax is exported from dataknobs_llm.prompts.syntax, not here,

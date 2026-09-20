@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Streaming processor for incremental markdown chunking.
 
 This module provides functionality to process large markdown documents

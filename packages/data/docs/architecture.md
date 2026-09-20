@@ -133,10 +133,13 @@ Query().or_(
 
 #### Streaming API
 ```python
-async for result in db.stream(query, StreamConfig(chunk_size=1000)):
-    for record in result.records:
-        process(record)
-    print(f"Progress: {result.progress.percentage:.1f}%")
+# Reads yield one record at a time, fetched in batches of `batch_size`
+async for record in db.stream_read(query, StreamConfig(batch_size=1000)):
+    process(record)
+
+# Writes consume an async iterator and report what landed
+result = await db.stream_write(records(), StreamConfig(batch_size=1000))
+print(f"{result.successful}/{result.total_processed} written ({result.success_rate:.1f}%)")
 ```
 
 #### Schema Validation

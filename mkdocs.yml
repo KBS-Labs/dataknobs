@@ -94,6 +94,8 @@ nav:
       - packages/common/ontology.md
       - packages/common/hierarchy.md
       - packages/common/anchored-view.md
+      - packages/common/content-tags.md
+      - packages/common/roll-up.md
       - packages/common/entity-resolution.md
       - packages/common/testing.md
       - packages/common/api.md
@@ -141,6 +143,7 @@ nav:
         - packages/data/vector-staleness.md
         - packages/data/vector-store-capabilities.md
         - packages/data/text-embedder.md
+        - packages/data/guides/ontology-registry.md
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md
@@ -299,6 +302,7 @@ nav:
         - packages/xization/quality-filtering.md
         - packages/xization/heading-enrichment.md
       - packages/xization/json-chunking.md
+      - packages/xization/entity-resolution.md
       - Ingestion:
         - packages/xization/ingestion.md
         - packages/xization/ingestion/directory-processor.md

@@ -50,7 +50,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from tests._workspace import ROOT, executed_source, published_fence
+from dataknobs_common.entity_resolution import BridgedEntityResolver
+
+from tests._workspace import ROOT, door_imports, executed_source, published_fence
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -60,6 +62,15 @@ EXECUTED = ROOT / "tests" / "worked_entity_resolution_call_site.py"
 
 INPUT_MARKER = "worked-input"
 CALL_SITE_MARKER = "worked-call-site"
+BRIDGE_MARKER = "worked-bridge"
+
+BRIDGE_EXECUTED = ROOT / "tests" / "worked_entity_resolution_bridge.py"
+
+#: The daemon thread the published block allocates, named off the wrapper that
+#: allocates it rather than off the bridge's default. Read from the class so a
+#: rename there moves the watch set with it, and shared by the leak assertion
+#: and its positive control so the two cannot come to watch different things.
+BRIDGE_THREADS = (BridgedEntityResolver.BRIDGE_THREAD_NAME,)
 
 #: The sentence the block resolves, and the two forms it carries.
 QUERY = "my golden retriever has been limping"
@@ -114,11 +125,7 @@ def test_the_call_site_imports_only_through_the_doors() -> None:
     incidental.
     """
     doors = {"dataknobs_common", "dataknobs_common.entity_resolution", "dataknobs_common.ontology"}
-    reached = {
-        line.split()[1]
-        for line in published_fence(GUIDE, CALL_SITE_MARKER).splitlines()
-        if line.startswith("from dataknobs_common")
-    }
+    reached = door_imports(published_fence(GUIDE, CALL_SITE_MARKER))
 
     assert reached, "the call site imports nothing from this package"
     assert reached <= doors, (
@@ -328,3 +335,143 @@ def test_the_published_rung_reaches_no_multi_word_form(punctuated_rung: type) ->
     assert [c.entity_id for c in ScanningSignal(vocabulary).candidates(query, k=5)] == [
         "golden_retriever"
     ], "the shipped scan is the half of the composition that reaches it"
+
+
+# --------------------------------------------------------------------------
+# The second fence: the bridge, which is the same page's other published block
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bridged(vocabulary: Path) -> dict[str, Any]:
+    """The bridge block, run the way a reader would run it.
+
+    Its own fixture rather than a second call inside :func:`ran`, because
+    ``published_fence`` admits exactly one fence per marker and two markers are
+    two *programs*: ``runpy.run_path`` gives each its own namespace, so nothing
+    here is inherited from the call site above. That is the property the block
+    is written against --- it builds its own cascade instead of reaching for
+    one the page bound earlier.
+    """
+    return runpy.run_path(str(BRIDGE_EXECUTED), run_name="__worked_bridge__")
+
+
+def test_the_executed_bridge_is_the_published_one() -> None:
+    """Character for character, as the call site's copy is held."""
+    published = published_fence(GUIDE, BRIDGE_MARKER)
+    executed = executed_source(BRIDGE_EXECUTED)
+
+    assert executed == published, (
+        "the executed bridge block and the one the guide publishes have "
+        f"diverged. Edit the fence in {GUIDE.relative_to(ROOT)} and copy it to "
+        f"{BRIDGE_EXECUTED.relative_to(ROOT)}, or the reverse -- never one alone."
+    )
+
+
+def test_the_bridge_block_imports_only_through_the_doors() -> None:
+    """The same three doors, and the same reason.
+
+    This page is ``dataknobs_common``'s and teaches a rung from another
+    distribution through the *mark* -- an install sentence and a link -- rather
+    than by importing it. So the door set is unchanged by the arrival of a
+    second block, and a block that widened it would be teaching the wrong thing
+    on the wrong page.
+    """
+    doors = {"dataknobs_common", "dataknobs_common.entity_resolution", "dataknobs_common.ontology"}
+    reached = door_imports(published_fence(GUIDE, BRIDGE_MARKER))
+
+    assert reached, "the bridge block imports nothing from this package"
+    assert reached <= doors, f"{sorted(reached - doors)} is a module path rather than a door"
+
+
+def test_the_bridge_block_asserts_what_it_teaches(bridged: dict[str, Any]) -> None:
+    """Running it *is* the check, so a block with no assertions checks nothing.
+
+    The published shape puts the cascade's construction inside an
+    ``asyncio.run`` and the resolve outside it, which leaves ``result`` at
+    module scope -- so unlike the sibling page's async block this one *could*
+    be read from outside. It asserts inside itself anyway: the two published
+    blocks on the two pages are read together, and a reader who copies one
+    should not find that only the other says what it expects.
+    """
+    published = published_fence(GUIDE, BRIDGE_MARKER)
+
+    asserted = [node for node in ast.walk(ast.parse(published)) if isinstance(node, ast.Assert)]
+    assert len(asserted) >= 2, "the bridge block no longer asserts what it teaches"
+
+    result = bridged["result"]
+    assert [candidate.entity_id for candidate in result.candidates] == ["beagle"]
+
+    # The `with` is the half a reader most easily drops, and dropping it leaks
+    # a daemon thread per resolver rather than failing. Asserted through the
+    # published reader rather than the object's private flag, because what a
+    # reader copying this block can go and check for themselves is the thread.
+    from dataknobs_common.testing import live_dk_daemon_threads
+
+    assert live_dk_daemon_threads(BRIDGE_THREADS) == [], (
+        "the block leaves the bridge's daemon thread running, which is what the `with` is for"
+    )
+
+
+def test_the_watch_set_sees_the_thread_this_block_allocates(bridged: dict[str, Any]) -> None:
+    """The positive control, without which the assertion above cannot fail correctly.
+
+    ``live_dk_daemon_threads`` is scoped by the names handed to it, so an
+    assertion naming a thread the block never allocates is empty for the wrong
+    reason --- it passes over a leak and can only ever fail spuriously, when
+    something unrelated leaves a differently-named bridge alive.
+
+    That is not hypothetical. This watch set was
+    :data:`~dataknobs_common.testing.DK_SYNC_BRIDGE_THREAD`, which is
+    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge`'s **default** name,
+    while every :class:`~dataknobs_common.sync_bridge.SyncBridgeAdapter`
+    subclass is required to name its own --- ``BridgedEntityResolver`` names
+    ``dk-sync-resolver``. ``DK_DAEMON_THREAD_NAMES``'s own docstring states the
+    hazard in those words: *a bridge that is watched only under its default
+    name is one that is not watched at all*.
+
+    So this constructs the leak the sibling assertion exists to catch and
+    requires the watch set to see it, over the same constant the sibling uses.
+    A watch set that stops covering this wrapper fails here rather than going
+    quiet there.
+    """
+    from dataknobs_common.entity_resolution import BridgedEntityResolver
+    from dataknobs_common.testing import live_dk_daemon_threads
+
+    leaked = BridgedEntityResolver(bridged["async_resolver"])
+    try:
+        leaked.resolve("beagles", k=5)
+        assert live_dk_daemon_threads(BRIDGE_THREADS), (
+            "the watch set does not cover the thread this wrapper allocates, so the "
+            "assertion it scopes is empty whether or not the `with` is there"
+        )
+    finally:
+        leaked.close()
+
+    assert live_dk_daemon_threads(BRIDGE_THREADS) == [], (
+        "and the same watch set reports the thread gone once it is closed, which is "
+        "the other half of a control: a set that always answers non-empty would pass "
+        "the assertion above and fail the block's"
+    )
+
+
+def test_the_bridge_answers_what_an_await_would(bridged: dict[str, Any]) -> None:
+    """The bridge's whole contract, asserted against the resolver it wraps.
+
+    A forwarder that answered *something* would satisfy every assertion above.
+    What makes it a bridge rather than a second implementation is that the
+    answer is the one the wrapped cascade gives, so that is compared directly
+    -- through a loop of this test's own, which is the arrangement a
+    synchronous caller does not have and the bridge exists to spare them.
+    """
+    import asyncio
+
+    direct = asyncio.run(bridged["async_resolver"].resolve("beagles", k=5))
+    result = bridged["result"]
+
+    assert [candidate.entity_id for candidate in direct.candidates] == [
+        candidate.entity_id for candidate in result.candidates
+    ]
+    assert [evidence.signal for evidence in direct.explain("beagle")] == [
+        evidence.signal for evidence in result.explain("beagle")
+    ]

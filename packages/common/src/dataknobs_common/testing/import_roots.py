@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Declare a test tree's own directory as an import root.
 
 A test suite that shares scaffolding between modules has to name that

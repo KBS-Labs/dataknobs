@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Display helpers for rendering artifact and evaluation data as markdown.
 
 Pure functions that format rubric evaluations, criterion details,

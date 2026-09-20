@@ -7,6 +7,7 @@ from datetime import date, time, timedelta
 from enum import Enum
 
 from dataknobs_data.pandas.converter import DataFrameConverter, ConversionOptions
+from dataknobs_data.pandas.metadata import MetadataStrategy
 from dataknobs_data.pandas.batch_ops import BatchOperations, BatchConfig
 from dataknobs_data.pandas.type_mapper import TypeMapper
 from dataknobs_data.records import Record
@@ -722,3 +723,95 @@ class TestBatchOperations:
         assert len(import_df) == 5
         assert "id" in import_df.columns
         assert "value" in import_df.columns
+
+
+class TestMetadataStrategyIsHonoured:
+    """The placement named by `metadata_strategy` is the placement used.
+
+    All four members used to answer the same frame. `records_to_dataframe`
+    never read the option -- the string did not appear in its source -- and the
+    four placements sat unreached in `MetadataHandler`, which nothing in either
+    package constructed. A consumer selecting a placement got the default in
+    silence, and a consumer reading the enum had no way to tell.
+    """
+
+    @staticmethod
+    def _records() -> list[Record]:
+        return [
+            Record({"a": 1}, metadata={"src": "x"}),
+            Record({"a": 2}, metadata={"src": "y"}),
+        ]
+
+    def _frame(self, strategy: MetadataStrategy) -> pd.DataFrame:
+        return DataFrameConverter().records_to_dataframe(
+            self._records(), ConversionOptions(metadata_strategy=strategy)
+        )
+
+    def test_columns_strategy_writes_prefixed_columns(self):
+        """COLUMNS places each metadata key in its own prefixed column."""
+        df = self._frame(MetadataStrategy.COLUMNS)
+
+        assert "_meta_src" in df.columns
+        assert df["_meta_src"].tolist() == ["x", "y"]
+
+    def test_attrs_strategy_writes_frame_attrs(self):
+        """ATTRS -- the declared default -- places metadata on `df.attrs`."""
+        df = self._frame(MetadataStrategy.ATTRS)
+
+        assert df.attrs["record_metadata"] == [{"src": "x"}, {"src": "y"}]
+        assert "_meta_src" not in df.columns
+
+    def test_multi_index_strategy_writes_a_multiindex(self):
+        """MULTI_INDEX places the field type in a second column level."""
+        df = self._frame(MetadataStrategy.MULTI_INDEX)
+
+        assert isinstance(df.columns, pd.MultiIndex)
+        assert list(df.columns.names) == ["field_name", "field_type"]
+
+    def test_none_strategy_writes_neither(self):
+        """NONE is the member that asks for nothing, and gets nothing."""
+        df = self._frame(MetadataStrategy.NONE)
+
+        assert list(df.columns) == ["a"]
+        assert df.attrs == {}
+
+    def test_the_four_members_no_longer_answer_alike(self):
+        """The shape of the defect: four placements, one frame.
+
+        Measured before the fix, all four answered columns ['a'] with an empty
+        `attrs`. This asserts the population rather than any one member, so a
+        later change that re-collapses two of them fails here.
+        """
+        signatures = set()
+        for strategy in MetadataStrategy:
+            df = self._frame(strategy)
+            signatures.add((tuple(map(str, df.columns)), tuple(sorted(df.attrs))))
+
+        assert len(signatures) == len(list(MetadataStrategy))
+
+    def test_a_columns_round_trip_restores_metadata_rather_than_fields(self):
+        """The reverse direction reads back what the forward one wrote.
+
+        Without this the wiring would introduce an asymmetry it did not
+        inherit: `_meta_src` is a column, so `dataframe_to_records` would make
+        it an ordinary field and the metadata would come back as data.
+        """
+        options = ConversionOptions(metadata_strategy=MetadataStrategy.COLUMNS)
+        converter = DataFrameConverter()
+
+        df = converter.records_to_dataframe(self._records(), options)
+        back = converter.dataframe_to_records(df, options)
+
+        assert [r.metadata["src"] for r in back] == ["x", "y"]
+        assert all("_meta_src" not in r.fields for r in back)
+        assert all(sorted(r.fields) == ["a"] for r in back)
+
+    def test_a_multi_index_round_trip_keeps_field_names_as_names(self):
+        """A MultiIndex column is a tuple, and a tuple is not a field name."""
+        options = ConversionOptions(metadata_strategy=MetadataStrategy.MULTI_INDEX)
+        converter = DataFrameConverter()
+
+        df = converter.records_to_dataframe(self._records(), options)
+        back = converter.dataframe_to_records(df, options)
+
+        assert all(sorted(r.fields) == ["a"] for r in back)

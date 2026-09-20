@@ -156,7 +156,8 @@ bot_config = {
 }
 
 registry = BotRegistry()
-bot = registry.create_bot("support", bot_config)
+registry.register("support", bot_config)
+bot = registry.get_bot("support")
 
 # Multi-session conversations with persistence
 response = bot.chat("How do I reset my password?", session_id="user123")

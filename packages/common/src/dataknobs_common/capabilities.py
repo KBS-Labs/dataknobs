@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Declarative capability advertisement.
 
 Classes that participate in capability advertisement declare which
@@ -95,6 +98,19 @@ class Capability(str, Enum):
     # from "no such row".
     ORIGIN_FETCH = "origin_fetch"
 
+    # ---- Vocabulary lookup ----
+    # The source can answer ``by_surface_form`` -- i.e. it holds, or can
+    # reach, forms folded the way its own normalizer folds them. Declared
+    # for ``ORIGIN_FETCH``'s reason one member up, and the negative case is
+    # just as ordinary: a vocabulary backed by a live table holds the form
+    # as it was written, and no engine primitive folds at query time the way
+    # ``str.casefold`` does. A source in that position says so here and
+    # refuses the call, rather than answering over the unfolded column --
+    # which would return ``frozenset()`` for every query whose case differs
+    # by one letter, and ``frozenset()`` already means "ran and matched
+    # nothing" to every rung that reads it.
+    SURFACE_FORM_LOOKUP = "surface_form_lookup"
+
     # ---- Scope projection ----
     SCOPE_PROJECTOR_READ_ONLY = "scope_projector_read_only"
 
@@ -162,6 +178,11 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
         "origin_reachability": frozenset(
             {
                 Capability.ORIGIN_FETCH,
+            }
+        ),
+        "vocabulary_lookup": frozenset(
+            {
+                Capability.SURFACE_FORM_LOOKUP,
             }
         ),
         "scope_projection": frozenset(
@@ -423,4 +444,5 @@ __all__ = [
     "CapabilityNotSupportedError",
     "DynamicCapabilityMixin",
     "require_capability",
+    "supports_capability",
 ]

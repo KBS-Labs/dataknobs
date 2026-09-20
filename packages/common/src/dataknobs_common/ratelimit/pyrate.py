@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Rate limiter backed by pyrate-limiter.
 
 This module wraps the ``pyrate-limiter`` library (MIT, v4.x) to provide

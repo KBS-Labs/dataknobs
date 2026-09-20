@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Structured data records with typed fields and metadata.
 
 This module defines the Record class for representing structured data with

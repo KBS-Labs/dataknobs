@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Asynchronous prompt builder for constructing prompts with parameter resolution and RAG.
 
 This module provides the AsyncPromptBuilder class which coordinates between:
@@ -108,6 +111,7 @@ from ..base import (
     RAGConfig,
     ValidationLevel,
     RenderResult,
+    as_async,
 )
 from ..adapters import AsyncResourceAdapter
 from .base_prompt_builder import BasePromptBuilder
@@ -163,6 +167,14 @@ class AsyncPromptBuilder(BasePromptBuilder):
         """
         super().__init__(library, adapters, default_validation, raise_on_rag_error)
         self._validate_adapters()
+        # Every reach for a template happens inside an ``async def`` here, and
+        # the library is whatever a consumer handed over --- a dict in memory,
+        # or a directory this thread would have to read. Offloading through
+        # ``as_async`` keeps the loop free either way, for one executor hop
+        # where the library really does answer from memory. ``self.library``
+        # stays the object that was passed: this view is private, and the
+        # inherited synchronous helpers still answer over the original.
+        self._async_library = as_async(library)
 
     def _validate_adapters(self) -> None:
         """Validate that all adapters are asynchronous.
@@ -223,7 +235,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         params = params or {}
 
         # Retrieve template from library
-        template_dict = self.library.get_system_prompt(name, **kwargs)
+        template_dict = await self._async_library.get_system_prompt(name, **kwargs)
         if template_dict is None:
             raise ValueError(f"System prompt not found: {name}")
 
@@ -271,7 +283,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         params = params or {}
 
         # Retrieve template from library
-        template_dict = self.library.get_user_prompt(name, **kwargs)
+        template_dict = await self._async_library.get_user_prompt(name, **kwargs)
         if template_dict is None:
             raise ValueError(f"User prompt not found: {name}")
 
@@ -528,7 +540,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         if rag_configs_override is not None:
             rag_configs = rag_configs_override
         else:
-            rag_configs = self.library.get_prompt_rag_configs(
+            rag_configs = await self._async_library.get_prompt_rag_configs(
                 prompt_name=prompt_name, prompt_type=prompt_type, **kwargs
             )
 
@@ -536,8 +548,8 @@ class AsyncPromptBuilder(BasePromptBuilder):
             return {}, None
 
         # Execute all RAG searches in parallel
-        rag_content = {}
-        rag_metadata = {} if capture_metadata else None
+        rag_content: Dict[str, str] = {}
+        rag_metadata: Dict[str, Any] | None = {} if capture_metadata else None
 
         if capture_metadata:
             tasks_with_metadata = [
@@ -577,18 +589,21 @@ class AsyncPromptBuilder(BasePromptBuilder):
             ]
             results_no_metadata = await asyncio.gather(*tasks_no_metadata, return_exceptions=True)
 
-            for rag_config, result in zip(rag_configs, results_no_metadata, strict=True):
+            # A distinct name: the two loops carry different element types, and
+            # one name for both makes the second loop's element look like the
+            # first's to a reader and to the type checker alike.
+            for rag_config, content in zip(rag_configs, results_no_metadata, strict=True):
                 placeholder = rag_config.get("placeholder", "RAG_CONTENT")
 
-                if isinstance(result, BaseException):
-                    error_msg = f"RAG search failed for {prompt_name}: {result}"
+                if isinstance(content, BaseException):
+                    error_msg = f"RAG search failed for {prompt_name}: {content}"
                     if self._raise_on_rag_error:
-                        raise RuntimeError(error_msg) from result
+                        raise RuntimeError(error_msg) from content
                     else:
                         logger.warning(error_msg)
                         rag_content[placeholder] = ""
                 else:
-                    rag_content[placeholder] = result
+                    rag_content[placeholder] = content
 
         return rag_content, rag_metadata
 

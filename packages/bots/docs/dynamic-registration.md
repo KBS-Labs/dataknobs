@@ -487,9 +487,9 @@ manager = ConfigCachingManager(
 await manager.initialize()
 
 # Get resolved config
-resolved: ResolvedConfig = await manager.get("my-bot")
-print(f"Config: {resolved.config}")
-print(f"Version: {resolved.version}")
+resolved: ResolvedConfig = await manager.get_or_create("my-bot")
+print(f"Config: {resolved.resolved_config}")
+print(f"Environment: {resolved.environment_name}")
 ```
 
 ## Hot Reload
@@ -500,18 +500,38 @@ Hot reload enables updating bot configurations without application restarts.
 
 Detects changes in backends that don't support push notifications:
 
+An event bus is required, not optional: the poller publishes CREATED /
+UPDATED / DELETED events to it. A direct callback is registered separately,
+after construction, and receives `(instance_id, event_type)` -- not the old
+and new configs.
+
 ```python
 from dataknobs_bots.registry import RegistryPoller
+from dataknobs_common.events import create_event_bus
 
-async def on_change(bot_id: str, old_config: dict, new_config: dict):
-    print(f"Config changed for {bot_id}")
-    await invalidate_bot(bot_id)
+event_bus = create_event_bus({"backend": "memory"})
 
 poller = RegistryPoller(
     backend=backend,
-    poll_interval=60,  # seconds
-    on_change=on_change,
+    event_bus=event_bus,        # required
+    poll_interval=60,           # seconds
+    event_topic="registry:changes",
 )
+
+# Either subscribe to the bus...
+async def on_event(event):
+    instance_id = event.payload["instance_id"]
+    print(f"Config changed for {instance_id}")
+    await invalidate_bot(instance_id)
+
+await event_bus.subscribe("registry:changes", on_event)
+
+# ...or register a callback directly, which fires in addition to the events.
+async def on_change(instance_id: str, event_type):
+    print(f"{event_type} for {instance_id}")
+
+poller.add_change_callback(on_change)
+
 await poller.start()
 
 # Later
@@ -525,12 +545,14 @@ Coordinates polling, events, and cache invalidation:
 ```python
 from dataknobs_bots.registry import HotReloadManager, ReloadMode
 
+# `caching_manager` is the only required argument, and comes first. The
+# interval is `poll_interval`, matching RegistryPoller.
 hot_reload = HotReloadManager(
-    backend=backend,
     caching_manager=bot_manager,
+    backend=backend,
     event_bus=event_bus,         # Optional
     mode=ReloadMode.POLLING,     # or ReloadMode.EVENT_DRIVEN, ReloadMode.HYBRID
-    polling_interval=60,
+    poll_interval=60,
 )
 await hot_reload.initialize()
 
@@ -538,7 +560,7 @@ await hot_reload.initialize()
 # Starts poller if mode includes polling
 # Invalidates cache on changes
 
-await hot_reload.shutdown()
+await hot_reload.close()
 ```
 
 ### Reload Modes
@@ -857,8 +879,9 @@ async def main():
     response = await bot.chat("Hello!")
     print(response)
 
-    # Update config - hot reload will invalidate cache
-    await backend.update("support-bot", {
+    # Update config - hot reload will invalidate cache. `register` both
+    # registers and updates; there is no separate update.
+    await backend.register("support-bot", {
         "llm": {"provider": "anthropic", "model": "claude-3-opus"},
         "system_prompt": "You are a helpful support agent."
     })
@@ -877,7 +900,7 @@ async def main():
     bot = await manager.get_or_create("support-bot")
 
     # Cleanup
-    await hot_reload.shutdown()
+    await hot_reload.close()
     await event_bus.close()
 
 

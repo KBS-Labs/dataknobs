@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Advanced prompt engineering library for dataknobs_llm.
 
 This package provides a comprehensive prompt management system with:
@@ -46,7 +49,10 @@ from .base import (
     MessageIndex,
     RenderResult,
     AbstractPromptLibrary,
+    AsyncPromptLibrary,
     BasePromptLibrary,
+    as_async,
+    as_sync,
 )
 
 # Resource adapters
@@ -104,13 +110,20 @@ from .versioning import (
     VersionManager,
     ABTestManager,
     MetricsCollector,
+    DatabaseVersionStore,
+    ExperimentStore,
+    InMemoryVersionStore,
+    MetricsStore,
     PromptVersion,
     PromptExperiment,
     PromptVariant,
     PromptMetrics,
     VersioningError,
+    VersioningStore,
     VersionStatus,
+    VersionStore,
     MetricEvent,
+    require_store,
 )
 
 # Version info
@@ -130,7 +143,11 @@ __all__ = [
     "RenderResult",
     # Base classes
     "AbstractPromptLibrary",
+    "AsyncPromptLibrary",
     "BasePromptLibrary",
+    # Flavour conversion
+    "as_async",
+    "as_sync",
     # Adapters
     "ResourceAdapter",
     "AsyncResourceAdapter",
@@ -174,4 +191,12 @@ __all__ = [
     "VersioningError",
     "VersionStatus",
     "MetricEvent",
+    # Versioning storage
+    "VersionStore",
+    "ExperimentStore",
+    "MetricsStore",
+    "VersioningStore",
+    "InMemoryVersionStore",
+    "DatabaseVersionStore",
+    "require_store",
 ]

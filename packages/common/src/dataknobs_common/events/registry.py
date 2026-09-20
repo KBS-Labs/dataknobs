@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Registry-extensible factory for event bus backends.
 
 ``create_event_bus()`` resolves the ``backend`` config key through this

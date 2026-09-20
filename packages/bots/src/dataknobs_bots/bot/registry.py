@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Multi-tenant bot registry with pluggable storage backends.
 
 This module provides a registry for managing bot configurations and instances

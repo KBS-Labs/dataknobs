@@ -48,6 +48,9 @@ SKIP_INTEGRATION="false"  # If true, sets TEST_*=false
 ONLY_INTEGRATION="false"  # If true, only runs integration tests
 PARALLEL="no"  # If yes, use pytest-xdist for parallel test execution
 VERBOSITY=""   # Empty = default, "quiet" = -q, "verbose" = -v
+# The pytest-randomly seed, chosen here rather than left to the plugin.
+# Empty means no seed is injected -- see init_random_seed.
+RANDOMLY_SEED=""
 
 # Check if we're running in a Docker container
 IN_DOCKER=false
@@ -101,6 +104,36 @@ build_cov_args() {
     echo "$args"
 }
 
+# Pick the seed pytest-randomly will run with, so the run can be replayed.
+#
+# This used to be left to the plugin, and the banner told the reader the seed
+# was "printed in the pytest header below". It is not, whenever this runner
+# passes -q -- which is what the quality gate passes, so the one caller whose
+# failures most need replaying is the one caller that never recorded a seed.
+# `--randomly-seed=last` was no fallback either: the plugin caches the seed
+# under the rootdir it ran with, and the gate's output files are the only
+# record anybody reads.
+#
+# Choosing it here removes the dependency on pytest's header entirely: the
+# seed is known before pytest starts, so it can be printed by us and passed
+# explicitly, at any verbosity.
+init_random_seed() {
+    # Nothing to seed when the caller turned the plugin off -- and passing
+    # --randomly-seed to a pytest without it is a usage error, not a no-op.
+    case "$PYTEST_ARGS" in
+        *no:randomly*) return ;;
+    esac
+    # A caller who named a seed keeps it. Theirs is appended after ours and
+    # would win anyway, but then the banner would advertise a seed the run did
+    # not use, which is worse than advertising none.
+    case "$PYTEST_ARGS" in
+        *--randomly-seed=*) return ;;
+    esac
+    # Same shape the plugin derives its own default from. Two runs in one
+    # second share an order, which is harmless and occasionally useful.
+    RANDOMLY_SEED="${PYTEST_RANDOMLY_SEED:-$(date +%s)}"
+}
+
 # Build extra pytest args for parallel execution and verbosity
 build_extra_args() {
     local parts=()
@@ -115,6 +148,11 @@ build_extra_args() {
         quiet)   parts+=("-q") ;;
         verbose) parts+=("-v") ;;
     esac
+    # Ahead of "$PYTEST_ARGS" at every call site, so a caller naming a seed
+    # still overrides this one.
+    if [ -n "$RANDOMLY_SEED" ]; then
+        parts+=("--randomly-seed=$RANDOMLY_SEED")
+    fi
     echo "${parts[*]}"
 }
 
@@ -237,12 +275,13 @@ ${YELLOW}Advanced Usage:${NC}
     --maxfail=N             Stop after N failures
 
 ${YELLOW}Randomized test order (pytest-randomly):${NC}
-    Test order is randomized each run. pytest prints the seed in its
-    header (e.g. "Using --randomly-seed=123456789"); pass it back to
-    reproduce an order-dependent flake from the log:
+    Test order is randomized each run. This runner picks the seed and
+    prints it in its own header, at every verbosity -- pytest's header
+    carries it too, but not under -q, which is what the quality gate
+    passes. Take the seed from a run's log and hand it back:
+    $0 data -- --randomly-seed=123456789  # Replay that exact order
     $0 data -- -p no:randomly             # Disable randomization
-    $0 data -- --randomly-seed=last       # Replay the previous run's order
-    $0 data -- --randomly-seed=123456789  # Replay a specific logged seed
+    PYTEST_RANDOMLY_SEED=42 $0 data       # Fix the seed for every package
 
 ${YELLOW}Examples:${NC}
     $0                                    # Run all tests with default settings
@@ -746,10 +785,16 @@ fi
 if [ -n "$PYTEST_ARGS" ]; then
     echo -e "Pytest args: ${CYAN}$PYTEST_ARGS${NC}"
 fi
-echo -e "${YELLOW}Test order is randomized (pytest-randomly).${NC} The seed is" \
-        "printed in the pytest header below; replay an order-dependent" \
-        "flake with ${CYAN}-- --randomly-seed=last${NC} (or a logged seed)," \
-        "or disable with ${CYAN}-- -p no:randomly${NC}."
+init_random_seed
+if [ -n "$RANDOMLY_SEED" ]; then
+    echo -e "${YELLOW}Test order is randomized (pytest-randomly).${NC} Seed:" \
+            "${CYAN}${RANDOMLY_SEED}${NC} --- replay this exact order with" \
+            "${CYAN}-- --randomly-seed=${RANDOMLY_SEED}${NC}, or disable" \
+            "randomization with ${CYAN}-- -p no:randomly${NC}."
+else
+    echo -e "${YELLOW}Test order:${NC} taking randomization from the pytest" \
+            "args given above rather than seeding it here."
+fi
 echo ""
 
 # Track overall test result

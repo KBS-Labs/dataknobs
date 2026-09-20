@@ -1,0 +1,1 @@
+--8<-- "packages/data/docs/guides/ontology-registry.md"

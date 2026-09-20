@@ -27,7 +27,7 @@ from dataknobs_data.backends import AsyncMemoryDatabase
 from pathlib import Path
 
 # Setup
-config = LLMConfig(provider="openai", api_key="your-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
 llm = create_llm_provider(config)
 
 library = FileSystemPromptLibrary(prompt_dir=Path("prompts/"))

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Collaborator-lifetime helpers for owned-vs-injected teardown.
 
 A class that holds a collaborator (a database connection, an LLM

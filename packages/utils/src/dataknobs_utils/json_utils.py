@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Utility functions for JSON processing, streaming, and manipulation.
 
 Provides functions for working with JSON data including nested value access,
@@ -574,9 +577,10 @@ class ValuePath:
         for elt in path:
             if isinstance(elt, int):
                 found = False
-                if node.has_children() and node.children is not None:
+                children = node.children
+                if children:
                     # simplifying assumption: idxs are in consecutive order fm 0
-                    child = node.children[-1]
+                    child = children[-1]
                     if str(elt) == child.data:
                         node = child
                         found = True

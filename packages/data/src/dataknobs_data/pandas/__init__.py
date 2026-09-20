@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Pandas integration for DataKnobs data package.
 
 This module provides seamless conversion between DataKnobs Records/Fields

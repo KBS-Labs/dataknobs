@@ -7,6 +7,15 @@ This document provides comprehensive examples of data validation scenarios using
 ### Scenario
 Complete user registration with multi-level validation, duplicate checking, and security requirements.
 
+!!! note "Where the error message comes from"
+
+    The built-in constraints write their own failure message from what they
+    know -- `Pattern` reports the value and the regex it did not match,
+    `Range` reports the bound it crossed -- so they take no message argument.
+    `Custom` is the one that does: it pairs a predicate with the exact wording
+    you want, which is why it appears below wherever the message matters more
+    than the mechanism.
+
 ```python
 from dataknobs_data.validation import (
     Schema, Required, Length, Pattern, Enum, Unique, Custom, Range
@@ -34,15 +43,13 @@ class UserRegistrationSystem:
             .field("username", "STRING", required=True,
                    constraints=[
                        Length(min=3, max=30),
-                       Pattern(r"^[a-zA-Z0-9_-]+$", 
-                              "Username can only contain letters, numbers, hyphens, and underscores"),
+                       Pattern(r"^[a-zA-Z0-9_-]+$"),
                        Unique("username"),
                        Custom(self.check_reserved_usernames, "Username is reserved")
                    ])
             .field("email", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
-                              "Invalid email format"),
+                       Pattern(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"),
                        Unique("email"),
                        Custom(self.check_disposable_email, "Disposable email addresses not allowed")
                    ])
@@ -53,7 +60,7 @@ class UserRegistrationSystem:
                    ])
             .field("age", "INTEGER", required=True,
                    constraints=[
-                       Range(min=13, max=150, message="Age must be between 13 and 150")
+                       Range(min=13, max=150)
                    ])
             .field("country", "STRING", required=True,
                    constraints=[
@@ -413,18 +420,16 @@ class FinancialTransactionValidator:
         self.base_transaction_schema = (Schema("BaseTransaction", strict=True)
             .field("transaction_id", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^TXN-[0-9]{4}-[0-9]{6}-[A-Z0-9]{6}$",
-                              "Invalid transaction ID format")
+                       Pattern(r"^TXN-[0-9]{4}-[0-9]{6}-[A-Z0-9]{6}$")
                    ])
             .field("amount", "FLOAT", required=True,
                    constraints=[
-                       Range(min=0.01, max=1000000,
-                            message="Amount must be between $0.01 and $1,000,000"),
+                       Range(min=0.01, max=1000000),
                        Custom(self.validate_decimal_places, "Amount must have at most 2 decimal places")
                    ])
             .field("currency", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^[A-Z]{3}$", "Currency must be 3-letter ISO code")
+                       Pattern(r"^[A-Z]{3}$")
                    ])
             .field("timestamp", "STRING", required=True,
                    constraints=[
@@ -447,8 +452,7 @@ class FinancialTransactionValidator:
             .copy_from(self.base_transaction_schema)
             .field("swift_code", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$",
-                              "Invalid SWIFT/BIC code")
+                       Pattern(r"^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$")
                    ])
             .field("reference", "STRING", required=True,
                    constraints=[
@@ -458,7 +462,7 @@ class FinancialTransactionValidator:
             .field("beneficiary_name", "STRING", required=True,
                    constraints=[
                        Length(min=2, max=70),
-                       Pattern(r"^[a-zA-Z\s\-'\.]+$", "Invalid beneficiary name")
+                       Pattern(r"^[a-zA-Z\s\-'\.]+$")
                    ])
             .field("beneficiary_address", "DICT", required=True,
                    constraints=[
@@ -471,7 +475,7 @@ class FinancialTransactionValidator:
             .copy_from(self.base_transaction_schema)
             .field("routing_number", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^\d{9}$", "Routing number must be 9 digits"),
+                       Pattern(r"^\d{9}$"),
                        Custom(self.validate_routing_number, "Invalid routing number")
                    ])
             .field("sec_code", "STRING", required=True,
@@ -828,12 +832,12 @@ class HealthcareDataValidator:
         self.patient_schema = (Schema("PatientRecord", strict=False)
             .field("patient_id", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^PAT-\d{10}$", "Invalid patient ID format"),
+                       Pattern(r"^PAT-\d{10}$"),
                        Custom(self.validate_not_ssn, "Patient ID cannot be SSN")
                    ])
             .field("mrn", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^MRN-\d{8}$", "Invalid MRN format")
+                       Pattern(r"^MRN-\d{8}$")
                    ])
             .field("name", "DICT", required=True,
                    constraints=[
@@ -858,7 +862,7 @@ class HealthcareDataValidator:
             .field("patient_id", "STRING", required=True)
             .field("encounter_id", "STRING", required=True,
                    constraints=[
-                       Pattern(r"^ENC-\d{12}$", "Invalid encounter ID")
+                       Pattern(r"^ENC-\d{12}$")
                    ])
             .field("encounter_date", "STRING", required=True,
                    constraints=[

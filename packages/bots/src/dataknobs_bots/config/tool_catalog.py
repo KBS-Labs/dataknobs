@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Tool catalog mapping tool names to class paths and default configuration.
 
 Provides a single source of truth for tool metadata, enabling config

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Core Config class implementation."""
 
 import copy
@@ -42,7 +45,8 @@ class Config:
         self,
         *sources: Union[str, Path, dict],
         allow_reference_outside_config_root: bool = False,
-        **kwargs: Any,
+        use_env: bool = True,
+        env_overrides: EnvironmentOverrides | None = None,
     ) -> None:
         """Initialize a Config object from one or more sources.
 
@@ -54,13 +58,32 @@ class Config:
                 default. A caller argument rather than a ``settings:`` key
                 because config content is the plane the guard bounds — see
                 :meth:`_load_referenced_file`.
-            **kwargs: Additional keyword arguments
+            use_env: Apply ``DATAKNOBS_``-prefixed environment overrides once
+                every source is loaded. On by default; pass ``False`` to build
+                from the files alone. Declared rather than read out of
+                ``**kwargs`` so that a misspelling raises ``TypeError`` instead
+                of silently leaving the overrides on — this switch gates
+                environment values reaching configuration, so it fails closed.
+            env_overrides: The source of environment overrides, defaulting to
+                ``EnvironmentOverrides()``. Supply one to read a different
+                prefix (``EnvironmentOverrides(prefix="MYAPP_")``) or a
+                subclass to filter what is handed over; either way the values
+                are applied by the same loop as the default source, so a
+                caller does not reimplement the assignment to change where it
+                reads from. Passing one with ``use_env=False`` raises
+                ``ValueError`` rather than building a source nothing reads.
         """
+        if env_overrides is not None and not use_env:
+            raise ValueError(
+                "env_overrides was given with use_env=False, so nothing would read it; "
+                "drop one of the two"
+            )
+
         self._allow_reference_outside_config_root = allow_reference_outside_config_root
         self._data: Dict[str, List[Dict[str, Any]]] = {}
         self._settings_manager = SettingsManager()
         self._reference_resolver = ReferenceResolver(self)
-        self._environment_overrides = EnvironmentOverrides()
+        self._environment_overrides = env_overrides or EnvironmentOverrides()
         self._object_builder = ObjectBuilder(self)
         self._registered_factories = Registry[Any](name="factories", enable_metrics=True)
 
@@ -69,18 +92,25 @@ class Config:
             self.load(source)
 
         # Apply environment overrides if enabled
-        if kwargs.get("use_env", True):
+        if use_env:
             self._apply_environment_overrides()
 
     @classmethod
     def from_file(
-        cls, path: Union[str, Path], *, allow_reference_outside_config_root: bool = False
+        cls,
+        path: Union[str, Path],
+        *,
+        allow_reference_outside_config_root: bool = False,
+        use_env: bool = True,
+        env_overrides: EnvironmentOverrides | None = None,
     ) -> "Config":
         """Create a Config object from a file.
 
         Args:
             path: Path to configuration file (YAML or JSON)
             allow_reference_outside_config_root: As :meth:`__init__` takes it.
+            use_env: As :meth:`__init__` takes it.
+            env_overrides: As :meth:`__init__` takes it.
 
         Returns:
             Config object
@@ -88,17 +118,26 @@ class Config:
         return cls(
             path,
             allow_reference_outside_config_root=allow_reference_outside_config_root,
+            use_env=use_env,
+            env_overrides=env_overrides,
         )
 
     @classmethod
     def from_dict(
-        cls, data: dict, *, allow_reference_outside_config_root: bool = False
+        cls,
+        data: dict,
+        *,
+        allow_reference_outside_config_root: bool = False,
+        use_env: bool = True,
+        env_overrides: EnvironmentOverrides | None = None,
     ) -> "Config":
         """Create a Config object from a dictionary.
 
         Args:
             data: Configuration dictionary
             allow_reference_outside_config_root: As :meth:`__init__` takes it.
+            use_env: As :meth:`__init__` takes it.
+            env_overrides: As :meth:`__init__` takes it.
 
         Returns:
             Config object
@@ -106,6 +145,8 @@ class Config:
         return cls(
             data,
             allow_reference_outside_config_root=allow_reference_outside_config_root,
+            use_env=use_env,
+            env_overrides=env_overrides,
         )
 
     def load(self, source: Union[str, Path, dict]) -> None:
@@ -385,17 +426,114 @@ class Config:
                     ref
                 )
 
+                if attr is None:
+                    # Every reference `get_overrides` builds carries an
+                    # attribute; one that does not is naming a whole
+                    # configuration, and there is nothing to assign into it.
+                    logger.warning(
+                        "Failed to apply environment override %s: it names no attribute",
+                        ref,
+                    )
+                    continue
+
                 # Get the configuration
                 config = self.get(type_name, name_or_index)
 
                 # Apply the override
-                config[attr] = value
+                if not self._assign_override(config, attr, value):
+                    logger.warning(
+                        "Failed to apply environment override %s: %r does not resolve in "
+                        "%s[%s], so nothing was written",
+                        ref,
+                        attr,
+                        type_name,
+                        name_or_index,
+                    )
+                    continue
 
                 # Set it back
                 self.set(type_name, name_or_index, config)
             except Exception as e:
                 # Log warning but don't fail
                 logger.warning(f"Failed to apply environment override {ref}: {e}")
+
+    @staticmethod
+    def _as_index(segment: str) -> int | None:
+        """Read a path segment as a list index, or None if it is not one.
+
+        Negative indices are accepted for the same reason
+        :meth:`EnvironmentOverrides._env_var_to_reference` accepts them in the
+        NAME_OR_INDEX field: the two are the same notation.
+
+        Args:
+            segment: One segment of a ``__``-joined attribute path
+
+        Returns:
+            The index, or None if the segment does not spell one
+        """
+        if segment.isdigit() or (segment.startswith("-") and segment[1:].isdigit()):
+            return int(segment)
+        return None
+
+    @classmethod
+    def _assign_override(cls, config: Dict[str, Any], attr: str, value: Any) -> bool:
+        """Write an override into a configuration, descending a joined path.
+
+        The attribute field of an environment variable is everything past the
+        second separator, rejoined -- so ``DATAKNOBS_DB__0__CONNECTION__TIMEOUT``
+        arrives here as the single name ``connection__timeout``. Assigning that
+        name flat put a key beside its target and left the target alone, which
+        is the one outcome worth refusing: the operator sees a variable that
+        looks applied and a value that has not moved.
+
+        A name with no separator in it is assigned as it always was, created if
+        absent. A name with separators is walked: each leading segment must
+        name an existing key of a dict or an in-range index of a list, and the
+        final segment is then written. A dict gains the final key if it is
+        absent, matching the single-segment case; a list does not gain a
+        position, because there is none to create and appending would put the
+        value somewhere the operator did not name.
+
+        Args:
+            config: The configuration to write into
+            attr: Attribute name, possibly a ``__``-joined path
+            value: Parsed value to write
+
+        Returns:
+            True if the value was written; False if the path does not resolve,
+            in which case nothing at all has been written.
+        """
+        separator = EnvironmentOverrides.ENV_SEPARATOR
+        if separator not in attr:
+            config[attr] = value
+            return True
+
+        *path, leaf = attr.split(separator)
+
+        target: Any = config
+        for segment in path:
+            if isinstance(target, dict):
+                if segment not in target:
+                    return False
+                target = target[segment]
+            elif isinstance(target, list):
+                index = cls._as_index(segment)
+                if index is None or not -len(target) <= index < len(target):
+                    return False
+                target = target[index]
+            else:
+                return False
+
+        if isinstance(target, dict):
+            target[leaf] = value
+            return True
+        if isinstance(target, list):
+            index = cls._as_index(leaf)
+            if index is None or not -len(target) <= index < len(target):
+                return False
+            target[index] = value
+            return True
+        return False
 
     def get_types(self) -> List[str]:
         """Get all configuration types.

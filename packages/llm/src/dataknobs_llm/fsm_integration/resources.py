@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """LLM resource provider for language model interactions.
 
 Note: This module was migrated from dataknobs_fsm.resources.llm to
@@ -13,7 +16,7 @@ from dataclasses import dataclass, field as dataclass_field
 from typing import TYPE_CHECKING, Any, Dict, List, Union, cast
 from enum import Enum
 
-from dataknobs_common.lifecycle import close_if_owned_sync
+from dataknobs_common.lifecycle import aclose_if_owned, close_if_owned_sync
 from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
@@ -415,10 +418,19 @@ class LLMResource(BaseResourceProvider):
         if provider is None:
             from dataknobs_llm.llm.providers import create_llm_provider
 
+            provider = None
             try:
                 provider = create_llm_provider(self._provider_config(key), is_async=False)
                 provider.initialize()
             except Exception as e:
+                # The adapter is only recorded in `_providers` below, so an
+                # `initialize` that raises leaves one that `close()` can never
+                # reach -- and it holds a loop thread the moment it reaches
+                # the provider. Nor does the finalizer rescue it: the
+                # `ResourceError` raised here carries a traceback holding this
+                # frame, which holds `provider`. A caller that catches and
+                # retries would accumulate a thread per attempt, silently.
+                close_if_owned_sync(provider, True, on_error=self._log_close_error)
                 raise self._operation_error(e, "initialize") from e
             self._providers[key] = provider
         return provider
@@ -607,10 +619,22 @@ class LLMResource(BaseResourceProvider):
         including the injected provider that class does accept, is its own
         question, and this change neither widens nor narrows it.
         """
-        for provider in self._providers.values():
+        for provider in self._owned_adapters():
             close_if_owned_sync(provider, True, on_error=self._log_close_error)
-        self._providers.clear()
         super().close()
+
+    def _owned_adapters(self) -> list[SyncProviderAdapter]:
+        """The adapters this resource built, detached from the map.
+
+        Shared by ``close()`` and ``AsyncLLMResource.aclose()``, which differ
+        only in how they reach each adapter --- ``close()`` through the
+        bridge, ``aclose()`` by awaiting. Which adapters are owned, and
+        clearing the map so a second teardown finds nothing, is the same
+        decision in both and is made here once.
+        """
+        adapters = list(self._providers.values())
+        self._providers.clear()
+        return adapters
 
     def _log_close_error(self, exc: Exception) -> None:
         """One provider failing to close must not strand the others."""
@@ -875,9 +899,23 @@ class AsyncLLMResource(LLMResource):
                 self.release(session)
 
     async def aclose(self) -> None:
-        """Close async provider and rate limiter resources."""
+        """Close the async provider, the rate limiter, and the sync adapters.
+
+        This class overrides ``generate`` and ``embed`` but **not**
+        ``complete``, so ``LLMResource``'s synchronous one runs here too and
+        fills ``_providers`` with adapters that each own a loop thread. Those
+        were free to strand before they held one; closing only the async
+        provider now leaks a daemon thread per model key, per resource.
+
+        The sync teardown is reached through ``super().close()`` rather than
+        repeated here, so the two halves cannot drift about what owning a
+        provider means.
+        """
         if self._async_provider is not None:
             await self._async_provider.close()
             self._async_provider = None
         if self._rate_limiter is not None:
             await self._rate_limiter.close()
+        for provider in self._owned_adapters():
+            await aclose_if_owned(provider, True, on_error=self._log_close_error)
+        super().close()

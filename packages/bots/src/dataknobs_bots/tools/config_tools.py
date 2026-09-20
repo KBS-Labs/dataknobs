@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """ConfigBot toolkit tools for DynaBot configuration workflows.
 
 Provides reusable LLM-callable tools for wizard-driven bot configuration.

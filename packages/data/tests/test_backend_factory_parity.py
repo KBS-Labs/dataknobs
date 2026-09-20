@@ -14,8 +14,11 @@ Drift modes:
 
 These structural checks run without instantiating backends, so
 optional-dependency backends (postgres → psycopg2/asyncpg,
-elasticsearch → elasticsearch, s3 → boto3, ...) are still audited.
-Behavioural coverage of each backend lives in its own test module.
+elasticsearch → elasticsearch, s3 → boto3, ...) are still audited --- the
+population comes from every backend the registry *knows of* rather than
+every one it can build, so a missing driver costs a named skip rather than
+a case that quietly stops being collected. Behavioural coverage of each
+backend lives in its own test module.
 """
 
 from __future__ import annotations
@@ -24,36 +27,35 @@ import inspect
 
 import pytest
 
+from dataknobs_data.backend_selection import KnownBackend, known_backend_classes
 from dataknobs_data.backends import async_backends, sync_backends
 
 
-def _registered_backend_classes(registry: object) -> list[tuple[str, type]]:
-    """Collect ``(key, class)`` pairs from a backend registry, de-duped.
-
-    The same backend class may be registered under aliases (e.g.,
-    ``"memory"`` and ``"mem"`` both point at ``SyncMemoryDatabase``).
-    The parity guarantee is per-class, not per-alias, so we de-duplicate
-    on the class identity.
-    """
-    by_class: dict[type, str] = {}
-    for key in registry.list_keys():  # type: ignore[attr-defined]
-        cls = registry.get_factory(key)  # type: ignore[attr-defined]
-        if cls is None:
-            continue
-        by_class.setdefault(cls, key)
-    return [(name, cls) for cls, name in by_class.items()]
-
-
-SYNC_BACKENDS = _registered_backend_classes(sync_backends)
-ASYNC_BACKENDS = _registered_backend_classes(async_backends)
+#: One entry per backend, aliases collapsed --- the parity guarantee is a
+#: property of the class, and ``mem`` and ``memory`` are one class.
+#:
+#: Derived through the shared accessor rather than by walking ``list_keys``
+#: here, because that walk answers "what can this installation build?" and the
+#: claim in this module's docstring is the wider one: that optional-dependency
+#: backends are audited too. They were not. A backend whose driver is absent is
+#: declared unavailable, drops out of ``list_keys``, and takes its parametrized
+#: case with it --- so the audit went on reporting green over whichever
+#: backends the environment happened to have. ``known_backend_classes`` keeps
+#: it in the population and reports why its class could not be reached, which
+#: :func:`_reachable` turns into a named skip.
+SYNC_BACKENDS = known_backend_classes(sync_backends)
+ASYNC_BACKENDS = known_backend_classes(async_backends)
 
 
-@pytest.mark.parametrize(
-    "name, backend_cls",
-    SYNC_BACKENDS,
-    ids=[name for name, _ in SYNC_BACKENDS],
-)
-def test_sync_backend_exposes_from_config(name: str, backend_cls: type) -> None:
+def _reachable(entry: KnownBackend) -> type:
+    """The backend's class, or a skip naming the one that could not be reached."""
+    if entry.cls is None:
+        pytest.skip(f"{entry.key}: {entry.unavailable_reason}")
+    return entry.cls
+
+
+@pytest.mark.parametrize("entry", SYNC_BACKENDS, ids=lambda e: e.key)
+def test_sync_backend_exposes_from_config(entry: KnownBackend) -> None:
     """Every registered sync backend exposes ``from_config(cls, config)``.
 
     ``DatabaseFactory.create`` calls ``backend_class.from_config(config)``
@@ -62,6 +64,7 @@ def test_sync_backend_exposes_from_config(name: str, backend_cls: type) -> None:
     factory dispatch breaks at the first consumer call — this test
     surfaces the regression at unit-test time instead.
     """
+    name, backend_cls = entry.key, _reachable(entry)
     assert hasattr(backend_cls, "from_config"), (
         f"Backend {name} ({backend_cls.__name__}) has no `from_config` "
         "classmethod; DatabaseFactory.create would raise AttributeError."
@@ -73,13 +76,10 @@ def test_sync_backend_exposes_from_config(name: str, backend_cls: type) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "name, backend_cls",
-    ASYNC_BACKENDS,
-    ids=[name for name, _ in ASYNC_BACKENDS],
-)
-def test_async_backend_exposes_from_config(name: str, backend_cls: type) -> None:
-    """Every registered async backend exposes ``from_config(cls, config)``."""
+@pytest.mark.parametrize("entry", ASYNC_BACKENDS, ids=lambda e: e.key)
+def test_async_backend_exposes_from_config(entry: KnownBackend) -> None:
+    """Every known async backend exposes ``from_config(cls, config)``."""
+    name, backend_cls = entry.key, _reachable(entry)
     assert hasattr(backend_cls, "from_config"), (
         f"Async backend {name} ({backend_cls.__name__}) has no `from_config` classmethod."
     )

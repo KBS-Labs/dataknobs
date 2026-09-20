@@ -7,7 +7,1223 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation
+
+- **The roll-up guide's narrowing paragraph names the member that narrows.**
+  `ontology_support` counts every vocabulary a corpus names, held or not, and
+  narrowing that answer to the ones a deployment actually holds is
+  `dataknobs-data`'s `OntologyRegistry.ontologies_in_play`. The paragraph names
+  it, says what the narrowing drops and that `ontology_support` is the door
+  back to it, and points at the registry guide by absolute site URL, since no
+  relative path between two package trees resolves from both.
+  `OntologySupport`'s own docstring is reached from two distributions for the
+  same reason, and says so: the second is a filter over the first rather than a
+  second count.
+
 ### Added
+
+- **Rolling a set of tagged rows up onto the vocabulary that placed them:
+  `roll_up`, `ontology_support` and the three value types they answer with**, on
+  the `dataknobs_common.ontology` door. Reading one row's tags says which
+  entities *that row* is about; this asks what a whole page of results is about.
+  `roll_up` groups a corpus's tags by node within one axis of one vocabulary and
+  answers a `SupportSet` -- every node the rows named that the axis carries, in
+  the order they named it, each carrying the row positions that are its
+  evidence. `ontology_support` is the same counting one level up, grouped by
+  vocabulary and needing no vocabulary loaded at all, which is what a caller
+  holding a page of results and no idea what is on it asks first.
+
+  **Three answers rather than one, because a record and a presentation are
+  different questions.** `supported` is first-seen order and keeps everything;
+  `SupportSet.prune(policy)` is ranked and keeps what a policy selects --
+  `MOST_SPECIFIC` drops a node when something below it was named, `MOST_GENERAL`
+  keeps only what nothing in the set stands above, and `ALL` is the identity.
+  Pruning changes what is presented, never what is reachable, so a pruned node's
+  rows stay in `supported`. The ranking is by row count descending with ties in
+  first-seen order, and that is not *by specificity*: after `MOST_SPECIFIC` the
+  survivors are mutually incomparable by construction, so specificity cannot
+  order them. `AT_TYPE` is a member of the enum whose only behaviour is a
+  refusal naming the entity source it would need, because reading what a node
+  *is* is a source read and a support set holds no source.
+
+  **A name off a row and a name you passed are disposed of differently.** The
+  `taxonomy_id` argument is refused when the vocabulary does not declare it --
+  somebody typed it, and they are one edit from the right one. A tag naming
+  another vocabulary or another axis is filtered silently into
+  `unsupported_rows`, and `Ontology.localize` is never even asked about it: a
+  drifted corpus is ordinary rather than a mistake anyone can be told about. A
+  node id the axis does not carry is *reported* in `unplaced`, carrying the rows
+  that named it, so a maintainer can find the tagger.
+
+  **`NodeSupport.above` is not `ancestors()`** -- it holds the nodes of the same
+  answer set standing above each entry, nearest first, so an ancestor no row
+  named does not appear. It is a field rather than a member because deriving it
+  is a hierarchy walk, and that walk happens once in the call that already has
+  the vocabulary open rather than every time a projection is read. That is what
+  lets `prune` be pure. Rows are positions into the sequence the caller passed,
+  ascending and without duplicates, so the argument must be a `Sequence`: a
+  generator has no positions to report.
+
+  **A cyclic axis is presented rather than emptied.** Nothing refuses a document
+  declaring `A isa B` alongside `B isa A`, so a support set in which two nodes
+  each stand above the other is reachable from a valid vocabulary. Both
+  selecting policies read `above` with mutual pairs subtracted, because mutual
+  ancestry says the two are at the same height rather than one over the other;
+  read literally, every projection would empty and a page with evidence for two
+  entities would present as a page about nothing.
+
+  **Two flavours of the roll-up: `roll_up` over an `Ontology` and
+  `async_roll_up` over an `AsyncOntology`.** Whether an axis carries a node, and
+  what stands above it, are reads -- and on the asynchronous flavour both are
+  awaited -- so a vocabulary whose structure is backed by rows reaches the
+  roll-up through the twin. Everything that is not an `await` is shared between
+  them: the grouping, the localizing, the cache scoping and the assembly.
+  `ontology_support` has no twin, because it reads the tags' own `ontology_id`
+  and holds no vocabulary at all.
+
+  **A walk cache may be spent across axes**, which a bare one may not: a cache
+  carries no hierarchy in its key, so one handed to two axes would otherwise
+  answer the second from the first's edges with no exception anywhere. The
+  roll-up holds the axis name, so it scopes what it forwards. The axis is also
+  asked about each node once rather than once per tag that named it, which makes
+  a page of many hits naming one entity one membership query rather than many.
+
+  **A local id the vocabulary's `KeyCodec` cannot read costs its row, not the
+  answer.** `Ontology.localize` lets a codec's own refusal through unwrapped by
+  a documented contract, so over a non-`str` key space a single row tagged
+  before the key space changed would otherwise raise out of the whole call. It
+  is the same operational class `unplaced` exists for, and its row lands in
+  `unsupported_rows`.
+
+  The new `roll-up.md` guide publishes the whole call site, executed verbatim by
+  a workspace test.
+
+- **Reading a content row's tags back: `read_node_tags`, `read_node_tags_many`
+  and the three value types they answer with**, on the `dataknobs_common.ontology`
+  door beside the keys they read. An indexed row written from a vocabulary
+  carries which vocabulary, which axis and which nodes it is about; those keys
+  already shipped, and nothing read them. `read_node_tags` is a pure function
+  over the row's own metadata mapping -- no store, no embedder, no event loop,
+  and no vocabulary either, so it works on rows out of a corpus this package has
+  never seen. A `NodeTag` carries the three strings and composes the one
+  qualified id `Ontology.localize` takes, which is the member that says the
+  family's two keys and `qualify`'s one string are the same thing.
+
+  **A row that touched no vocabulary answers `()` and a half-written one
+  refuses.** Those are different states: most of a corpus is untagged, so an
+  exception there would make every caller wrap the common path in a `try`,
+  while a row carrying some of the three keys and not all is a writer that can
+  be told. The refusal names the keys that are absent. Presence is read off
+  the *value*, so a key whose value is `None` is a key nothing wrote -- the
+  argument is a row as the consumer's own store handed it back, and a
+  relational or columnar store materialises an unwritten column as a null
+  rather than omitting it.
+
+  **A bare string under the node key is one node, and everything else that
+  satisfies *iterate it* is refused** -- any `Buffer` (`bytes`, `bytearray`,
+  `memoryview`, `array`), a `Mapping`, a `set`, and any scalar that is not a
+  string -- naming the key, the type found and every offending position. The
+  buffer exclusion is that property rather than a list of types, because a
+  list is the types somebody thought of: a `memoryview` is what a driver hands
+  back for a binary column and an empty one would otherwise answer `()`. A
+  `:` in the ontology id is refused too, because the qualified id is joined
+  with that character and split on the first one, so a colon there composes an
+  id a *different* vocabulary accepts. This is the last frame that can still
+  see the type or the shape: one call later the value is a rendered string,
+  and at the cursor a writer's mistake is indistinguishable from a stale id. A
+  row with one bad entry refuses whole, so it cannot count as evidence for
+  fewer nodes than it declared; `[]` is not a malformation and answers `()`.
+
+  **Over a hit set, `read_node_tags_many` reports rather than raises.**
+  `TagReading` holds one entry per position in the order asked, and a second
+  field naming every position that was refused -- without which an untagged row
+  and a malformed one would both be spelled `()`. `TagReading.require_readable()`
+  is the refusal, once, naming every one of them, so the stance is visible at
+  the call site rather than buried in a reader.
+
+  A new guide, `content-tags.md`, publishes the worked call site: four hits, of
+  which one is about two nodes, one touched no vocabulary, one names an axis the
+  vocabulary does not declare, and one was written wrong.
+
+- **`read_alias_forms`**, the read of the family's fourth key, on the same
+  door. `ALIAS_FORMS_KEY` says which surface forms a row's entity is known by;
+  it shipped with the other three and, like them, nothing read it. It reads
+  through the same core the node list does, which is the point: the rule that
+  **a bare string is one form rather than its characters** was implemented
+  here the whole time and implemented privately, so the reader that had to
+  apply it wrote it again and got it wrong -- a `"ACME"` became four
+  one-character rows, all under the entity's id, leaving one holding `"E"`.
+  One implementation now serves both keys, and each refusal names the key the
+  writer actually wrote.
+
+  The key is a parameter defaulting to `ALIAS_FORMS_KEY`, because
+  `EntitySourceIndexSource.aliases_key` is a configurable field: a read
+  hard-coded to the constant could not open the rows the writer beside it
+  produces. A row carrying no forms answers `()`; there is no half-written
+  state, because this key describes the entity rather than a placement and has
+  no companion key to be absent against.
+
+- **A reference into a section an ontology document declares must resolve, or
+  the document is refused.** Eight of them: an entity type's `isa`, an
+  attribute's `entity_type`, a relation type's `domain`, `range` and
+  `inverse_of`, an entity's `type`, and an assertion's or a taxonomy's
+  `relation`. Each names something the same document is responsible for
+  declaring in full, so a misspelling is a typo rather than a claim a source
+  might complete -- and until now seven of the eight loaded, with a consequence
+  that is silence rather than an error: a relation type whose `domain` names no
+  type constrains nothing, an entity whose `type` names none is untyped, and an
+  axis whose `relation` names none walks an empty graph. Every message names
+  the offending value and lists what the section declares.
+
+  **An empty section is no schema rather than an empty one**, so a document
+  that leaves its type vocabulary to a source it imports or projects is
+  unaffected -- the check does not fire where the target section is empty.
+  `relation` resolves against `relation_types:` *union* the declared attribute
+  names, because an attribute-valued assertion names an attribute; the
+  **section alone decides whether that reference is checked**, so a document
+  declaring no `relation_types:` is unaffected however many attributes it
+  declares. A `kind:`-bearing `taxonomies:` row is exempt: a column axis reads
+  two columns and constructs no assertion, so its `relation:` names what its
+  edges *mean* rather than a set of assertions to walk. An assertion's
+  `subject:` and `object:` are not references of this kind and are not
+  checked: the entity population is open by design.
+
+  **A document declaring `imports:` is exempt from all eight.** That is the
+  other way a document says it does not declare its sections in full, and an
+  import is carried and never followed -- resolving across one needs a second
+  vocabulary in scope, which a door loading one file does not have, so a name
+  this document does not declare may be one the import declares and the
+  loader cannot tell that from a typo. The component that holds both
+  vocabularies is where the check can be right.
+
+- **Both resolver doors take `handles=`**, a mapping of live objects a rung is
+  constructed over and a document cannot write -- an index, a store, a client.
+  Forwarded into every rung's spec, so one mapping serves a composition whose
+  rungs need different things and a caller holding such an object reaches rung
+  construction through the published door rather than assembling a list beside
+  it.
+
+  The merge order is part of the contract: handles beat the document, because a
+  document cannot write a live object; `entities` beats handles, because it is
+  the door's one guarantee that every rung matches against the ontology the
+  caller handed in. `build_resolver` carries the channel although this
+  distribution ships no synchronous rung that needs one: the rung registry is a
+  published extension point, so the rung with a synchronous form and a live
+  backing is a consumer's to write, and a channel they cannot reach is one they
+  reimplement.
+
+- **`refuse_unbuildable_rungs`**, which refuses a `resolver:` composition a
+  registry cannot build while constructing nothing -- an entry that is not a
+  mapping, one naming no `kind:`, a kind nothing registers. Both doors run it
+  before they build; it is published for the caller that opens resources on its
+  way to building a cascade and needs to ask before it opens them.
+
+- **`refuse_negative_k`**, the `k` check `declared_candidates` runs, published
+  so a rung doing its own assembly refuses the same argument its siblings do.
+  A negative `k` is a slice counting back from the end, so `k=-1` returns every
+  entity but the last one rather than none.
+
+- **The asynchronous rung registry declares `semantic`**, naming the install
+  and the module to import, and the mark is cleared by that import. Asking for
+  the kind now answers where it ships instead of reporting an unknown key and
+  sending a reader to look for a typo in a name they spelled correctly.
+
+- **`IndexItem`, `AsyncIndexSource` and three pure index sources**, in
+  `dataknobs_common.index`. A thing that can stream `(id, text, metadata)`
+  triples and say which named sets its ids fall in is what "some other data
+  source" means to anything that indexes text, and the protocol is what keeps
+  every layer above it source-agnostic. `MappingSource` indexes an in-memory
+  mapping, `CallableSource` adapts any callable, and `AliasSource` is a
+  decorator turning one entity into one item per surface form, all carrying the
+  entity's id -- so alias matching is part of the corpus rather than a separate
+  lookup table that drifts from it.
+
+  Top level rather than inside a subpackage: the protocol has no dependency
+  beyond the standard library and both a vocabulary and a bare table reach it.
+
+  Qualification happens in the source and never in a consumer. A source emits
+  ids in whatever space it was built for; nothing downstream rewrites one or
+  infers a namespace.
+
+- **`EntitySourceIndexSource`**, the adapter that makes a vocabulary
+  indexable. It takes the ontology rather than its entity source, because
+  producing an item needs both the set of entities to yield and a qualified id
+  per item, and only one of those is on the entity source. It adds no member to
+  any protocol: the enumeration is `describe().declares` and `by_type`, which
+  are the same set seen from two sides, read in batches so a member called
+  `stream_items` does not materialise the vocabulary.
+
+  Three refusals, all at construction and all naming the source: a field an
+  entity does not carry, a source that cannot enumerate its types at all, and a
+  type the schema does not declare -- the last skipped where the document
+  declares no schema section, because an empty schema section is no schema and
+  refusing there would forbid the by-reference case entirely.
+
+- **`ONTOLOGY_ID_KEY`, `TAXONOMY_ID_KEY`, `NODE_ID_KEY` and
+  `ALIAS_FORMS_KEY`**, in `dataknobs_common.ontology.tags` -- the keys an
+  indexed row carries to say which vocabulary, which axis, which node and which
+  surface forms it is about. Published rather than spelled at each end, because
+  a key spelled at each end is a reader reaching for the wrong one and a key
+  nothing wrote reads as absent. The fifth key of the same row, the model that
+  produced the vector, stays in `dataknobs_data.vector.content`; the two
+  modules name each other.
+
+### Fixed
+
+- **`Ontology.taxonomy`, `AsyncOntology.taxonomy`, `Taxonomy.walk`,
+  `Taxonomy.subtree_keys` and `Taxonomy.inherited_attributes` document what
+  they raise.** Each of the five refuses, and a caller meets the class rather
+  than the private function that constructed it, so the `Raises:` section
+  belongs on the member a caller holds. Both `taxonomy` accessors raise
+  `NotFoundError` for an axis the vocabulary does not declare **and**
+  `ValidationError` for two unrelated reasons -- a declared axis whose
+  `materialization` asks for a copy of every entity on it, and one declaring
+  `materialization.structure: materialized` that the ontology carries no copy
+  of, which escapes through `structure_for`. Both are the halves a reader
+  would not predict from the member's name. The four asynchronous twins whose
+  docstrings point at their siblings are unchanged: the contract is written
+  once, where the pointer leads.
+
+- **A relation type's `domain:` or `range:` refuses a bare string rather than
+  reading it as its characters.** `domain: Person` is what a hand-edited file
+  carries, and `frozenset("Person")` is six one-character type names -- so the
+  reference check above reported `domain: 'P'` against a declared list holding
+  the exact word the author wrote. Refused naming the scalar, as
+  `index.fields` is refused one package over for the same shape. Endpoints are
+  also stored as `str` per element, because `entity_types:` is keyed by
+  `str(id)`: an endpoint left uncoerced resolved at load and matched nothing
+  after it.
+
+- **`AliasSource` reads a bare-string alias value as one form, not as its
+  characters.** `ALIAS_FORMS_KEY` is declared list-valued and the family
+  publishes the rule on `NODE_ID_KEY` -- *"a reader takes a bare string as one
+  node rather than as its characters"* -- and this class, the key's only
+  published reader, iterated the value directly. A consumer-written
+  `{ALIAS_FORMS_KEY: "ACME"}` yielded four one-character items, all carrying the
+  entity's id, so a store keyed on id kept one row holding `"E"` and the entity
+  could no longer be found by its own name. Only a consumer-supplied source can
+  reach it, since the in-tree writer always writes a list -- which is the
+  population that cannot read the constant's docstring at the point of failure.
+  A mapping is logged and dropped rather than iterated into its keys: there is
+  no reading under which those are surface forms. The rule is now restated on
+  `ALIAS_FORMS_KEY` itself.
+
+- **`EntitySourceIndexSource` streams the enumeration it validated at
+  construction.** `__post_init__` refuses a source answering `declares is None`,
+  on the argument that an index over it would be *silently partial*;
+  `stream_items` then asked again and wrote `or frozenset()` over the answer, so
+  a source answering a set at construction and `None` at the read produced
+  exactly the empty index the refusal exists to prevent -- and skipped the
+  undeclared-type refusal on the same path. Both refusals now bind the read.
+
+- **`EntitySourceIndexSource.source_field` is spelled the way its reader parses
+  it.** Composed with the display separator, it wrote a grammar nothing parses
+  into a key that is split on commas, and tied the key's encoding to a cosmetic
+  choice. Comma-joined now, independent of `join`.
+
+### Added
+
+- **`DataclassSweep`**, in `dataknobs_common.testing` -- every dataclass a
+  package defines, with a value built for each from its own declared field
+  types, so a guard about a *class* of types can find the class rather than the
+  instances somebody thought to list. `Supplied` and `UnbuildableError` come
+  with it.
+
+  It existed as a test-directory helper here and named `dataknobs_common` in
+  four places, so the second package that needed it could only get it by
+  copying -- which is how a sweep acquires two spellings and then two answers.
+  It takes its root as an argument now. `dataknobs-data` is the first other
+  caller, and what it found on arrival is the reason: two index sources in
+  exactly the shape the hashable-contract census is about, in a family whose
+  three other members had already been ruled the other way in this package.
+  The guard that would have caught them swept a tree they were not in.
+
+  Its `TYPE_CHECKING` replay now seeds the module's own import context, so a
+  **relative** import in such a block resolves. `exec` against a bare namespace
+  has no `__package__`, so `from .vector.types import DistanceMetric` was
+  skipped and the names it would have bound stayed missing -- surfacing later
+  as a `NameError` from `get_type_hints` that reads as an unconstructible type
+  rather than as a hole in the replay. This package writes most of these
+  absolutely and barely noticed; a package that writes them relatively loses
+  every one.
+
+- **A live binding covering fewer types than the schema declares is logged at
+  construction.** The undeclared-type refusal only ran one way -- a source
+  declaring a type the schema does not -- and the other direction is the one
+  that produces a silently partial index: a binding whose projection names one
+  constant type, under a vocabulary declaring several, indexes one of them while
+  a query about the others answers *not in the corpus*, which is a legitimate
+  answer nothing reports as an error. A warning rather than a refusal, because
+  one live table under a vocabulary naming more types is an ordinary
+  configuration. **Not raised for an authored source**, which derives `declares`
+  from the entities it holds, so a declared type with no members is absent from
+  it -- and that is a document being explicit, not an index being partial.
+
+- **`join_non_empty`** moves to `dataknobs_common.index`, beside the protocol it
+  serves. It was written twice -- once in `dataknobs-data`'s bare-table sources
+  and once in the ontology adapter's `_text_for`, one package apart, with
+  different default separators -- which is the duplication its own docstring
+  argued against. A pure algorithm over values; not added to any `__all__`.
+
+### Changed
+
+- **`build_resolver`'s refusal names a remedy that can build the rung.** The
+  remedy is chosen from the rung's own mark, and there are three: a kind whose
+  mark here declares `flavour: "sync"` is a rung this door builds as soon as
+  the module the reason names is imported; a kind belonging to the other
+  flavour goes to `async_build_resolver`; one that also reaches for data goes
+  to a door holding a live handle. One sentence for all three sent two of them
+  to a door carrying the identical mark.
+
+- **Both resolver doors raise `ValidationError` for every way a composition can
+  fail to build**, which is what their `Raises:` sections always said. A rung
+  entry that is not a mapping, one naming no `kind:`, a `kind:` nothing
+  registers and a factory's own refusal reached callers as `TypeError`,
+  `ValueError`, `NotFoundError` and `OperationError` respectively. Each names
+  the offending entry's position, and an authored `ValidationError` from a rung
+  factory is read back out of the registry's bounded wrapper -- the diagnosis
+  that says which handle was missing.
+
+- **`SourceDescription.declares` is `frozenset[str] | None` and has no
+  default.** *Cannot enumerate* and *holds nothing* were one value: a source
+  that omitted the field claimed to hold no types at all, which is a complete
+  closed answer a reader is entitled to act on. `None` now means the first and
+  `frozenset()` the second, and a source that says neither does not construct.
+  Every construction names the field.
+
+- **`Ontology.structure_for` and `AsyncOntology.structure_for`**, the structure
+  axis an ontology answers a name with, without building the rest of the
+  taxonomy around it. `taxonomy()` reads it, and so does anything wanting an
+  axis's *shape* rather than its content -- enumerating its nodes to compare
+  two loads of one document is the case that drove publishing it. Such a caller
+  asking through `taxonomy()` met the refusal of a
+  `materialization.content: materialized` definition, which is about a half of
+  the axis they never touch.
+
+- **`dedupe_ordered`, `nodes_of` and `parent_edges_of`** in
+  `dataknobs_common.hierarchy` --- what a backing's edges reduce to once they
+  are `(child, parent)` pairs, with `None` for a child placed under nothing.
+  Who is above whom, who is here at all, and in what order do not depend on
+  whether an edge arrived as an assertion or as two columns of a row, and two
+  backings had written the rules twice, one of the three copies
+  character-for-character identical to its twin. A backing maps its own edges
+  to pairs; the rules have one home.
+
+- **`TAXONOMY_ROW_KEYS`**, the keys a `taxonomies:` row is read for here.
+  Published because the check over them cannot be finished in this package: a
+  row declaring `kind:` names a backing another distribution binds, and reads
+  keys this one has never heard of.
+
+- **`OntologyParts.taxonomy_specs`**, the `taxonomies:` rows as written.
+  `source_specs`' counterpart, and carried for its reason: a row may name a
+  backing this package binds no implementation of, and the door that does is
+  in another distribution. Without it that door would re-read
+  `config.taxonomies` for itself, which is a second reader of one section.
+
+- **`assemble_ontology` and `assemble_async_ontology` take `structures=`** --
+  the axes the calling door bound, keyed by the name each is reached under. A
+  door holding a live axis over rows hands it over and the assembly files it;
+  where the definition declares `materialization.structure: materialized` the
+  snapshot is taken **of that axis**, rather than of an assertion read over
+  edges the document never declared.
+
+- **`DeclaredSignal.bounded_by_longest_form`**, on both twins, declaring
+  whether a rung's enumeration is bounded by the vocabulary's longest declared
+  form. `ScanningSignal` and `AsyncScanningSignal` set it; the default is
+  False, matching `reads_surface_forms`' safe direction. Derived into the
+  signal registries' metadata by `declared_signal_metadata()`, so a door
+  holding a declared composition and no instances can ask which of its rungs
+  depend on a number the source it is about to bind cannot supply — and refuse
+  before anything is built.
+
+- **`declared_signal_metadata(rung, base)`**, exported from
+  `dataknobs_common.entity_resolution`: the registered metadata for a rung,
+  with `reads_surface_forms` and `bounded_by_longest_form` read off the class
+  rather than restated beside it. Registering a rung is the extension point,
+  and both keys are read at *load* time by doors that hold a composition and
+  no instances — so a registration that omits one is not refused, it is never
+  asked about, while the rung's own construction-time guard still fires. The
+  facts are read with a default, so a rung written against the bare
+  `MatchSignal` protocol rather than against `DeclaredSignal` can use it too;
+  the class attribute is the single spelling in either case.
+
+- **`OPTIONAL_COMPONENTS` on `StructuredConfigConsumer`**, with
+  `optional_components()` and `accepted_components()` beside the existing
+  `expected_components()`. `EXPECTED_COMPONENTS` means *must be supplied* and
+  feeds `missing_components()` / `require_components()`; there was no spelling
+  for a collaborator a consumer genuinely accepts and genuinely does not
+  require. Declared in the only field there was, such a collaborator makes a
+  correctly built consumer report itself under-wired --- the diff names it and
+  the loud check raises, on an object with nothing wrong with it.
+
+  The new field is read by `accepted_components()` alone. `missing_components()`,
+  `missing_from()` and `require_components()` still read
+  `EXPECTED_COMPONENTS` only, because an optional collaborator can never be
+  missing and a second field feeding those diffs would be the first field
+  again under a new name. A caller writing a `from_components(...)` call reads
+  the union; a composing parent checking what it must satisfy reads the
+  required half.
+
+- **`Capability.SURFACE_FORM_LOOKUP`**, and the contract it declares. An
+  `EntitySource` answers `by_surface_form` from forms **it** folded, with
+  `default_normalizer` unless it was built with another --- and `frozenset()`
+  means *ran and matched nothing*, which is what every cascade reads it as
+  before falling through to a guessing rung. A source that cannot fold now has
+  a way to say so: it withholds this capability from `describe()` and raises
+  `CapabilityNotSupportedError` when asked, rather than answering over
+  unfolded values. Both protocol twins state it; it had lived only in the
+  in-memory implementation's private index, which is one implementation away
+  from two packages answering the same question two ways.
+
+  The contract has a **reader** as well as a writer. `MappingEntitySource` and
+  its async twin declare the capability --- the index folds every entity's id,
+  name and aliases when it is built, which is exactly what the member answers
+  over --- and a rung that reads the member refuses at construction over a
+  source that withholds it, rather than carrying a call that can only fail.
+  Each rung kind declares whether it reads folded forms, as
+  `reads_surface_forms` on the class and in the registry it is registered
+  under; `exact`, `scan` and `lexical` do, `alias` does not. A consumer's own
+  rung declares the same thing and gets the same guard.
+
+  This reaches the composition **nobody wrote**, which is the one that needed
+  it: a document declaring no `resolver:` section gets the default rungs, two
+  of whose three read the member, and no inspection of the document can see
+  that. The refusal is where the rungs are constructed, which is the one place
+  holding both the composition and the source.
+
+- **`assemble_ontology` / `assemble_async_ontology`**, exported from
+  `dataknobs_common.ontology`. Everything a vocabulary carries that is not a
+  bound source --- the id, the version, the two type tables, the taxonomy
+  definitions, the imports, the codec, and which structure axes are copied at
+  load --- comes off an `OntologyParts` and is the same for every door, so it
+  is written once and the doors pass only what differs:
+
+  ```python
+  parts = build_ontology(config)
+  entities = MySource(parts.declared_entities)
+  onto = await assemble_async_ontology(
+      parts,
+      entities=entities,
+      assertions=MyAssertions(parts.declared_assertions),
+      describes=(entities.describe(),),
+  )
+  ```
+
+  Published because the third door is in another distribution:
+  `OntologyRegistry` (`dataknobs-data`) binds live sources and owns their
+  lifecycle, and assembled a vocabulary of its own. A field added to
+  `Ontology` now reaches all three doors rather than needing to be threaded
+  three times, across a package boundary, with nothing checking.
+
+- **`event_bus:` on `OntologyConfig`**, raw, beside `index:` and `resolver:`
+  and for their reason: a section whose backends belong to other packages,
+  which a module-level loader ignores and a registry reads. It is a declared
+  field rather than a key read off the mapping beside it because every
+  published construction door coerces its argument to this class first, so a
+  section this class does not declare does not survive the trip.
+
+- **`LexicalSignal` / `AsyncLexicalSignal` --- a rung for the query that does
+  not spell the form.** Every other rung here answers a lookup, so a query
+  carrying a typo reaches none of them. This one compares each window of the
+  query against every form the vocabulary declares and proposes the ones that
+  came close, with a span into the **query** and a score saying how close.
+
+  ```python
+  from dataknobs_common.entity_resolution import LexicalSignal
+
+  rung = LexicalSignal(onto.entities)                  # threshold=0.85
+  found = rung.candidates("my goldne retriver has been limping", k=5)
+  found[0].evidence[0].matched_text                    # "retriver"
+  found[0].evidence[0].kind                            # EvidenceKind.INFERRED
+  ```
+
+  Registered as `kind: "lexical"` in both registries. The evidence is
+  `INFERRED` and `NATIVE`: the entity was proposed rather than found, and the
+  number means whatever the configured scorer means --- so it stays out of
+  `as_distribution()` by construction.
+
+  `scorer` is the seam for a vocabulary large enough that the standard
+  library's `difflib` stops being free; the default takes no dependency, and a
+  consumer who needs the fast end passes `rapidfuzz.fuzz.ratio` and takes it in
+  their own tree. `threshold` defaults to `0.85`, which is measured rather than
+  chosen: a lower one does not find more entities, it finds the same ones at
+  spans that run past them.
+
+  `max_query_tokens` caps the query, and is off by default because it is the
+  one parameter here that can cost an answer. The threshold bounds how *wide*
+  a window may be; how many there are is the caller's token count, and each
+  costs a scorer call per declared form where a scan's costs a dictionary
+  lookup --- linear in the token count, and a nine-hundred-token paste over a
+  five-hundred-entity vocabulary is two seconds of one CPU. A query over the
+  cap is refused rather than truncated, because answering from the head of a
+  paste is a plausible-looking answer to a question nobody asked.
+
+  **The asynchronous twin runs its scan on a worker thread.** Every other rung
+  in this family awaits a lookup and does arithmetic on the answer; this one
+  scores every window against every form, which is CPU proportional to the
+  vocabulary with no `await` inside it to yield on. Left on the event loop
+  that is the whole scan's duration during which nothing else on the loop
+  makes progress --- and neither the `ASYNC2xx` lint nor `assert_no_blocking`
+  can see it, because the work is arithmetic rather than a syscall.
+
+  **Its evidence is the first here that is `INFERRED` *and* carries a span**,
+  which is why `Coverage` now reads the evidence's `kind` --- see *Changed*
+  below. Adding this rung to a cascade adds candidates and never coverage.
+
+- **`SurfaceFormCatalog` / `AsyncSurfaceFormCatalog` --- an optional protocol
+  for a source that can hand over its forms.** One member,
+  `surface_forms()`. `EntitySource` publishes lookups alone, so a query
+  spelling no form has nothing to hand it; a near-spelling rung reads the
+  vocabulary out instead.
+
+  Separate from `EntitySource` rather than a member on it, on
+  `AliasFormSource`'s precedent: that protocol is `@runtime_checkable` and
+  consumers satisfy it structurally, so a member added to it turns every
+  implementation we never see from conforming into non-conforming, silently
+  and at once. `MappingEntitySource` and `AsyncMappingEntitySource` satisfy the
+  new one for free --- their index is already keyed by the folded form.
+
+  Both twins spell the member `surface_forms`, and a runtime-checkable
+  protocol compares member *names* --- so `isinstance` alone cannot tell a
+  synchronous source from an asynchronous one. The rungs ask the flavour
+  separately and refuse with a message naming the one they found, because
+  `entities:` is resolved before either registry sees it and the flavours are
+  exactly what a configuration gets wrong.
+
+
+- **`declared_candidates` --- the assembly a rung over declared forms owes,
+  now on the package door.** Find your hits; this turns them into what the
+  cascade expects. It groups them by entity so `k` counts **entities** rather
+  than places, keeps the order the rung returned them in, and slices
+  `matched_text` out of the query so the text and the span agree by
+  construction. Evidence is `DECLARED` and scored `1.0` unless a rung passes
+  `kind=` and `scoring=`, which is what a rung that *measures* does.
+
+  ```python
+  from dataknobs_common.entity_resolution import declared_candidates
+
+  declared_candidates(self._located(query), k, signal=self.name, query=query)
+  ```
+
+  `DeclaredSignal` runs the same function, so a rung written against the bare
+  `MatchSignal` protocol --- the escape hatch that base's own docstring names,
+  for a backing that is not a dictionary lookup --- produces the same evidence
+  shape as a shipped rung rather than a copy of it. A rung that narrows passes
+  the ids its filter left standing as `admitted=`; one that does not omits it.
+
+- **`kind: "authority"` is a known rung kind, declared unavailable until its
+  package is imported.** `dataknobs-xization` ships the rung that reads an
+  authority stack, and `dataknobs_common` cannot import it --- so both rung
+  registries now declare the key with a reason naming the distribution *and*
+  the module, rather than reporting an unknown kind. Importing
+  `dataknobs_xization.entity_resolution` registers over both marks and clears
+  them. `get_metadata("authority")["requires_install"]` answers either way.
+
+  This is the second such mark and the first for this condition: `semantic` is
+  withdrawn because no synchronous form of it exists anywhere, while
+  `authority` exists in both flavours and merely ships elsewhere.
+
+
+- **`BridgedOperation` and `bridged_operation()` --- one loop and one budget,
+  for the span of one synchronous call.** A synchronous wrapper over an
+  asynchronous object reaches that object more than once per public call (a
+  chunked write per chunk, a batch per item, a stream per record), and both of
+  the things governing those reaches belong to the *operation* rather than to
+  the wrapper: the **loop**, because an object that bound state to one loop is
+  unusable from the next, and the **budget**, because a timeout spent afresh on
+  each reach is no bound on the call the caller made --- thirty seconds over
+  twenty chunks is ten minutes.
+
+  ```python
+  def _operation(self):
+      return bridged_operation(
+          bridge=self._bridge, timeout=self._timeout,
+          thread_name="dk-wrapper", label="Wrapper",
+      )
+
+  def do_many(self, items):                  # the public call
+      with self._operation() as op:
+          return [op.run(self._obj.do(item)) for item in items]
+  ```
+
+  A `TimeoutError` reaching `run` from the coroutine is distinguished from an
+  expired wait by the deadline — except when it is already an
+  `OperationTimeoutError`, which is passed through by type. A bridge reports an
+  expired wait as the *builtin*, and this type is only ever constructed by
+  `run` itself, so one arriving from the work belongs to an operation nested
+  inside this one; relabelling it would name the wrong deadline and erase the
+  one that expired.
+
+  `timeout=` bounds the **work**, not the call. Ending an owned bridge happens
+  after the budget is spent and waits up to `_TEARDOWN_DRAIN_SECONDS` for a
+  cancelled coroutine to unwind, so `timeout + 5s` is the worst case a caller
+  can observe. Only cleanup that awaits something slow — or ignores
+  cancellation — spends it; the alternative is destroying that cleanup
+  mid-flight, which is the defect the drain exists to fix. The same is true of
+  `run_coro_sync(coro, timeout=...)`, which opens a throwaway bridge. Both
+  docstrings and the guide now say so.
+
+  A supplied `bridge` is used as-is and **left running**, because it belongs to
+  whoever passed it; otherwise the operation owns one and leaving the block
+  ends it, on the error paths too. `needs_loop=False` is for a call whose work
+  turns out to be synchronous: it carries the deadline and allocates no thread.
+
+  This is the counterpart to `SyncBridgeAdapter`, which is for a wrapper that
+  *holds* a bridge across its own lifetime. A wrapper handed an object it does
+  not own cannot own a loop past the call, and that is the shape three wrappers
+  in this workspace had written by hand.
+
+- **`OperationTimeoutError`**, raised when a `BridgedOperation`'s deadline
+  expires --- either before a reach starts, in which case the coroutine is
+  closed rather than started, or while waiting for one. It subclasses the
+  **builtin** `TimeoutError` (not `dataknobs_common.exceptions.TimeoutError`,
+  which shadows that name), so `except TimeoutError` keeps working. The
+  distinct type is for the caller that must let the *operation's* deadline
+  through a per-item error handler while still absorbing an item's own failure.
+
+### Changed
+
+- **`Ontology.structures` is what a door *bound*, not only what it copied**,
+  and `taxonomy()` hands back whatever is filed there under the name it is
+  filed under. A snapshot is one kind of bound axis; a live backing over rows
+  is another, and only the mode decides what a door must do *before* filing
+  one. The mapping used to be consulted only where the definition declared
+  `materialization.structure: materialized`, so an axis a door had bound over
+  a live backing -- which means `on_demand` -- had no way to be reached at
+  all: the accessor answered with an assertion read over an empty source and
+  the vocabulary reported an empty axis with nothing saying why.
+
+  One existing path answers differently, and it is the one the change is for:
+  a `structures` entry filed under a name whose definition declares
+  `structure: on_demand` is now honoured, where it was previously ignored in
+  favour of the live read. `structures` is a public field a caller building an
+  ontology directly may fill with any `Hierarchy`, so that is a real change for
+  them -- and it is the same act as honouring the entry when the definition
+  said `materialized`, which always happened. An axis declaring a copy and
+  supplying none is refused on the same condition and with the same message; an
+  axis with no entry at all is still built per call from the assertion source.
+
+- **A `taxonomies:` row refuses any key nothing reads**, not only `kind:`.
+  `_build_taxonomies` reads six, and every other key on such a row went on
+  loading and being discarded -- a misspelt `materialisation:` configured
+  nothing and said nothing, which is the failure the rule below is about.
+  A row declaring a `kind:` is passed over here and checked by whichever door
+  binds that backing, since the keys it reads are ones this package has never
+  heard of; the two halves meet at the `kind:` discriminator.
+
+- **A `taxonomies:` row declaring a `kind:` is refused rather than dropped.**
+  `TaxonomyDefinition` reads six keys and `kind:` is not one of them, so a row
+  spelling `kind: column` loaded with that key and every key beside it
+  discarded -- as an assertion axis over assertions the document never
+  declared, answering empty for every walk. Both module-level doors now refuse
+  it, naming the axis, the kind and `OntologyRegistry`, which is
+  `_refuse_live_sources`' sibling for the other half of a document. An axis
+  over this document's own assertions declares no `kind:` at all, which is
+  unchanged and is what the refusal says.
+
+- **`EntitySource.fetch_origins` and its async twin now answer
+  `list[Record | None]`**, one slot per ref in the order they were passed,
+  rather than `dict[SourceRef, Record]`. The mapping was not a type any
+  implementation could return: `SourceRef` is compared field-wise so that two
+  references naming one row are one reference, its `locator` is a mapping, and
+  a type that answers `Hashable` and then raises at the call is not a shape
+  this package ships. Every implementation that existed answered `{}` and
+  satisfied the declaration only by being empty --- the single value of that
+  type anything could build.
+
+  A positional answer loses nothing to the mapping and reports what it would
+  have dropped: the caller already holds `refs`, so any pairing it wants is
+  reconstructible, while a ref that reached no row is a `None` in its own slot
+  instead of an absent key, and two refs naming one row stay two slots.
+  `len(result) == len(refs)`, always. `MappingEntitySource` and its async twin
+  answer all-`None` of the right length, which is a claim about the refs
+  passed rather than a value that was correct only because it was empty.
+
+- **`Coverage` counts `DECLARED` evidence spans**, where it counted every
+  span that was not `None`. No shipped composition changes: until
+  `LexicalSignal` there was no rung whose evidence was `INFERRED` *and*
+  located, so *inferred* implied *unlocated* by construction and the two
+  tests were one. A near-spelling proposal is located --- it knows exactly
+  which words it scored --- so the implication had to become a condition or
+  the field would change meaning under the first cascade holding such a rung.
+
+  `DECLARED` is the half kept, because *what the vocabulary accounted for* is
+  the question `matched` and `unmatched` are read for, and a near-spelling
+  proposal is a rung reporting that the vocabulary accounts for **none** of
+  what the query said. Counting the words it scored would delete the residue
+  that proposal is evidence for --- the maintenance line `unmatched` exists to
+  give. It would also let an *overreaching* window widen `matched` on a query
+  with no typo in it, since a measured rung reports every window that cleared
+  its threshold and one padded by a neighbouring word still does.
+
+  Nothing is hidden: the proposals are candidates, they carry their spans, and
+  `explain()` hands the evidence over with its `kind`. A consumer wanting
+  everywhere any rung read something builds it from those; coverage answers
+  the narrower question, which is the one that is hard to reconstruct.
+
+- **A rung written on `DeclaredSignal` can now carry a measured score.** The
+  two bases gained `kind` and `scoring` as overridable class attributes, and
+  `FormHit` gained an optional `score`. A rung that sets none of them is
+  unchanged: the defaults are the three constants the base wrote
+  unconditionally before, so every shipped rung and every consumer rung
+  produces exactly the evidence it did.
+
+  What it buys is that a rung proposing an entity the query did not spell no
+  longer has to drop to the bare `MatchSignal` protocol and reimplement the
+  assembly to say so. A hit's score is its own where it measured one and `1.0`
+  where it did not; a candidate's is the best of its hits'.
+
+### Fixed
+
+- **The authored entity sources answer the guard their description
+  declares.** `MappingEntitySource` and its async twin report
+  `Capability.SURFACE_FORM_LOOKUP` from `describe()` and had no `supports`
+  member at all --- and `require_capability` / `supports_capability`, the
+  pre-call guards this surface tells a consumer to use, duck-type on that
+  member and read its absence as *no*. So the guard refused the one source
+  that always folds, for the capability it is built around. Both twins take
+  the contract from `CapabilityMixin` now, over a single constant that the
+  index building the description also reads, so the two answers cannot
+  drift.
+
+- **`supports_capability` is in `dataknobs_common.capabilities.__all__`**
+  alongside `require_capability`. It was reachable by name and absent from
+  the export list, so the non-raising half of a documented pair was missing
+  from `import *` and from anything reading the module's declared surface.
+
+- **A source publishing an index member in the wrong flavour is refused by
+  name.** `AliasSignal` checks `isinstance(..., AliasFormSource)` before asking
+  for alias forms, and its asynchronous twin checks the asynchronous protocol
+  --- but both protocols spell the member `by_alias_form`, and a
+  runtime-checkable protocol compares member *names*. Either check therefore
+  passed for either flavour, so a synchronous source in `AsyncAliasSignal`
+  raised `TypeError: object frozenset can't be used in 'await' expression`
+  from inside a cascade, and the mirror case raised `'coroutine' object is not
+  iterable` alongside a *coroutine was never awaited* warning. Both now raise
+  `ValidationError` saying which flavour was found and which was wanted. A
+  source that simply *lacks* the member still yields the empty answer it
+  always did --- a vocabulary may legitimately declare no aliases, and that is
+  a different fact from a misconfigured one.
+
+- **A `normalizer` that is not callable is refused where it was supplied.**
+  Every rung takes it straight from its config dict, and a configuration
+  document cannot write a callable --- so `normalizer: "casefold"`, the
+  obvious thing to write, is a string. A string is truthy: it passed every
+  guard and raised `TypeError: 'str' object is not callable` at the first
+  query, from inside the fold. Both bases now refuse it at construction, which
+  covers every rung and both flavours; `LexicalSignal` refuses its `scorer` on
+  the same grounds. The path is refused, not resolved: turning a dotted path
+  into the function it names would let a document reach any importable
+  callable, which is a wider decision than this one.
+
+- **A negative `k` is refused rather than read as counting back from the end.**
+  Every rung's cut to `k` is a list slice, so `k=-1` returned all but the *last*
+  entity: not an error, not the empty list, and indistinguishable from a rung
+  that genuinely found that many. Nothing upstream validates it --- a resolver
+  takes `k` as a keyword and hands it down untouched --- so `declared_candidates`
+  now raises `ValidationError`, which refuses it for every rung that assembles
+  through it. `k=0` is a real request and still answers the empty list.
+
+- **A closing `SyncLoopBridge` no longer destroys work that is still running
+  on its loop.** Teardown drained the loop's async generators and nothing
+  else, so any task still pending when the loop stopped was destroyed by
+  `loop.close()` with its `finally` unrun — the only report being
+  `Task was destroyed but it is pending!` on stderr, while whatever that
+  `finally` would have released (a pooled connection, an open transaction, a
+  lock) stayed held. Two ordinary shapes reached it: a coroutine that spawned
+  a task and returned without awaiting it, which leaks one from a wholly
+  *successful* `run()`; and a coroutine cancelled by `run(..., timeout=)`
+  whose cleanup awaits more than once, which is what realistic cleanup does.
+  `close()` now cancels what is still running and waits for it to unwind
+  before closing the loop, so `run()`'s documented "not abandoned mid-flight"
+  holds on the close path as well as the timeout path. The wait is bounded at
+  five seconds — `close()` joins the loop thread, so an uncancellable task
+  would otherwise hang the closing caller indefinitely — and a task that
+  outlasts it is logged by name. Teardown therefore costs a loop iteration
+  rather than nothing; a holder that cannot afford that already had the
+  remedy of wrapping `aclose()` in `asyncio.to_thread`.
+
+### Documentation
+
+- **The sync-bridge guide says how long a bridge has to live, not just what it
+  costs.** Thread cost is the cheap half of choosing a scope; the other half
+  is that an object can bind itself to the first loop it runs on — an
+  `asyncpg` pool acquired by `connect()` belongs to that loop and no other —
+  so a wrapper's bridge scope is bounded by its object's lifetime, and a
+  wrapper handed an already-connected object cannot reach the loop that
+  connected it. That is what `bridge=` is for there, and the guide now says
+  so, with the reason the failure is easy to miss: an uncontended
+  `asyncio.Lock` never reaches `_get_loop`, so an in-memory store survives any
+  amount of loop churn and a test suite built on one reports green.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-common` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
+### Added
+
+- **`SyncBridgeAdapter` — the shape of a synchronous wrapper over an
+  asynchronous object, declared once.** A subclass names its loop thread with
+  `BRIDGE_THREAD_NAME` (required — omitting it raises `TypeError` at
+  class-creation time, since the only available default is the shared name
+  `run_coro_sync` already uses) and forwards through `_run(coro)`. It inherits
+  `bridge=` (run on a bridge the caller owns, so several wrappers cost one
+  thread), `timeout=`, `close()`, `aclose()`, both context-manager protocols,
+  and a bridge built on first use rather than at construction. Override
+  `_close_inner()` / `_aclose_inner()` only where the wrapper owns what it
+  wraps, and reach the wrapped object from them through `_run_teardown(coro)`:
+  the hooks run with the wrapper already marked closed, where `_run` refuses.
+  `aclose()` guarantees the holder's *loop* is free, not that the teardown runs
+  on it — a subclass whose object holds loop-bound state closes it on the
+  bridge with `await asyncio.to_thread(self._close_inner)`. Teardown is
+  concurrency-safe: exactly one caller of `close()` or `aclose()` tears the
+  wrapped object down and the rest wait for it, so two holders closing at once
+  cannot stop the loop under each other's teardown, and the bridge is asked on
+  every call so a teardown that raises part way stays recoverable. The wrapped
+  object is not stored by the base: it is the one thing that genuinely varies,
+  and the three adopters name it differently.
+
+- **`SyncLoopBridge.is_closed`** — whether `close()` has been claimed, for a
+  teardown path that must not raise. The case it is written for is a
+  finalizer, where a `RuntimeError: SyncLoopBridge is closed` has nowhere to go
+  and is printed as "Exception ignored".
+
+- **`Ontology.inherited_attributes(entity_type)` and its asynchronous twin** —
+  the same walk `Taxonomy` publishes, on the object that owns the store it
+  reads. It walks `entity_types` and nothing else, which is why every taxonomy
+  of one vocabulary answers it identically; reaching it only through an axis
+  meant building one to ask a question the axis has no part in, and choosing
+  which axis to build would have been choosing something the answer does not
+  depend on. Both surfaces are one line over the shared walk.
+
+- **`EntityType.isa`** — the type this one specialises, as a declared field.
+  Same shape and same reason as `RelationType.inverse_of` beside it: a scalar
+  reference to another declaration in the same section, validated by the loader.
+
+- **An entity id may be any `Hashable`, defaulting to `str`** — `EntitySource`,
+  `AssertionSource`, `Entity`, `Assertion`, every `entity_id` on a resolution,
+  and `Ontology`, `Taxonomy` and both cursors above them are generic in the
+  entity key.
+
+  **Existing code is unchanged.** A bare `EntitySource` is an
+  `EntitySource[str]`, `load_ontology` returns an `Ontology[str]` because a
+  document's ids are the strings its author typed, and every call site written
+  before the parameter existed means what it meant.
+
+  **A non-`str` key supplies a `KeyCodec`, and the type checker will not let it
+  be forgotten.** The codec says how a key is written down when it leaves and
+  read back when it arrives — `to_id` and `from_id`, a pair rather than a
+  rendering, because `Ontology.localize` is documented as *what `entity()`
+  takes* and `entity()` takes the key. `StrCodec` is the identity and what the
+  `str` path uses.
+
+  It has **no default for a non-`str` key**, and neither refused alternative
+  was a matter of taste. A bound cannot express *a type that has a string
+  representation*, because in Python every type has one. And `repr()` cannot
+  stand in: a key is addressed by **equality** while a default `repr` is a
+  function of **identity**, so two equal keys would render to two strings, one
+  node would address two entities, and it would type-check and pass every test
+  that holds a single key object. The field is required rather than defaulted,
+  so omitting it is an error at the construction rather than a wrong answer
+  later.
+
+  Rendering happens only where an id **leaves** — `qualify` out, `localize`
+  back. Everything in between carries the key, so a frozen value type never
+  reaches for a codec and a key never becomes a string by accident.
+
+  **The codec's space is the ontology's own — the whole post-ontology
+  remainder**, which carries the source segment for a vocabulary binding more
+  than one. That is the space `entities` is keyed by and the space `localize`
+  returns, so it is the space `to_id` renders and `from_id` parses.
+  `Ontology.qualify` therefore takes **the key and nothing else**: the
+  `source_id` it used to take composed a segment *inside* that space, so
+  `from_id` received a string `to_id` had never produced. Over `str` nothing
+  showed, because the identity codec parses anything; over a key of a
+  consumer's own it returned a key that addresses nothing, silently. Every id
+  `qualify` builds, `localize` now reads back — unconditionally. A caller
+  holding the parts separately still composes them with the free
+  `qualify(ontology_id, local_id, source_id)`, which is what it is for.
+
+  **The resolution cascade is the boundary, and it is declared rather than
+  defaulted.** `MatchSignal`, `EntityResolver`, `EntityCandidate` and
+  `ResolutionResult` are generic in the key; the shipped `CascadingResolver`,
+  its rungs and `CascadeState` are `str`-keyed. An unparameterised generic in a
+  signature binds `Any`, so a consumer's non-`str` signal would have been
+  accepted and its ids would have landed in fields annotated `str` with nothing
+  reporting it. `build_resolver` and `async_build_resolver` now say
+  `Ontology[str]` and `EntityResolver[str]`, so a vocabulary keyed by something
+  else is a type error at the call rather than a wrong answer later. Moving the
+  boundary is annotations rather than transport — the rungs already read
+  `by_surface_form`, which answers in the key — and is a change of its own
+  size.
+
+- **The five walk-shaped members on all four cursors** — `ancestors`,
+  `descendants`, `descendants_to_depth`, `children_at_depth` and
+  `paths_to_root`, on `HierarchyView`, `TaxonomyView` and both asynchronous
+  twins. Each is one line over the module-level walk of the same name, so what
+  each returns, which of them include their anchor and which refuse an unknown
+  one are that function's contract rather than a second one. Every keyword the
+  walk takes, the member takes: `cache=` on all five, `max_paths=` on
+  `paths_to_root`, and `max_concurrency=` on every asynchronous twin — and each
+  of those is asserted to be *forwarded*, not merely declared, because a
+  signature comparison cannot tell a member that passes a keyword on from one
+  that accepts it and drops it.
+
+  **A walk is a member when its anchor means *where you are*.** That is the
+  rule the set is drawn by. It puts `children_at_depth` inside — its anchor is
+  required and `depth=0` is the node itself — and leaves `flatten` and `leaves`
+  out, because their anchors are *optional* and default to every root, so a
+  member reading the cursor's node as that argument would answer a different
+  question from the one the same name answers beside it.
+  `deepest_common_ancestor` is out for a plainer reason: it takes two anchors
+  and a cursor names one.
+
+  `ancestors`, `descendants`, `descendants_to_depth` and `children_at_depth`
+  answer with **cursors**, so a walk composes; `paths_to_root` answers with
+  **keys**, because it returns routes and a route's meaning is its order.
+
+  **`descendants`, `descendants_to_depth` and `children_at_depth` are three
+  members rather than one taking `depth=`.** The first two differ in what they
+  emit — the second includes the anchor — and in what they do with an anchor the
+  structure does not contain: the first answers `()`, the second raises
+  `NotFoundError`. The third answers *one level* where the second answers a
+  *span*, so a caller wanting it from the second subtracts two walks. One
+  member would select between three contracts by the presence of a keyword.
+
+- **`Taxonomy.inherited_attributes(type_id)` and its asynchronous twin**, and
+  the fifth field they read — `entity_types`, a `Mapping[str, EntityType]`.
+
+  A vocabulary writes `isa` twice and they are **different stores**: the
+  assertions between entities, which a taxonomy's `structure` walks, and the
+  `isa:` field on an entity type declaration, which carries the schema. This
+  member walks the second and returns what a type may be asked for — its own
+  attribute declarations first, then each ancestor's, **a nearer declaration
+  shadowing a farther one of the same name**, because a subtype redeclaring
+  `sku` is specialising it rather than adding a second field.
+
+  **An undeclared type is refused; a type declared with nothing returns `[]`.**
+  Those answer different questions, and collapsing them would report a caller's
+  typo as a fact about their vocabulary.
+
+  `entity_types` is a mapping rather than a source, because a vocabulary's
+  instances may be millions behind a backing and its types are tens, authored
+  in the document — `Ontology` already carries them that way, and
+  `Ontology.taxonomy()` now hands them to the axis. It is **optional**: an axis
+  built without one refuses every call to this member, which is an answer
+  rather than a gap. It is **appended last**, so nothing constructing a
+  `Taxonomy` positionally moves.
+
+  **A plain `def` on the asynchronous twin**, because a mapping awaits nothing —
+  the rule that already makes `AsyncTaxonomy.at()` synchronous.
+
+- **`TaxonomyView.entity()` and its asynchronous twin** — what a node **is**,
+  read off the content axis. `None` from it is a state rather than an error and
+  is not what `exists()` answers: a node the structure knows with nothing
+  written about it is ordinary under a live backing. `exists()` asks the
+  structure; this asks the content.
+
+- **`paths_to_root` and `deepest_common_ancestor`, in both flavours** — the
+  last two walks over `Hierarchy`, each with an `async_` twin, and both
+  readings of the descent the other six share.
+
+  **`paths_to_root` answers a question `ancestors` cannot.** That walk returns
+  the set of nodes above one, deduplicated, which is *what is above me*;
+  this returns one tuple per route, anchor at index 0, which is *how did I get
+  here*. A node with two parents gives two paths where `ancestors` gives one
+  entry for each shared node above it.
+
+  **Its cycle guard is scoped to the route rather than to the walk.**
+  Reachability is a property of a route: a node on two routes is two answers,
+  and a walk-scoped visited set returns one path where two exist. A path is
+  emitted when it cannot be extended — at a root, or at a node whose every
+  parent is already on that path — so no path here is a prefix of another, and
+  **cyclic data returns paths that reach no root** rather than raising. The two
+  endings look alike in the result, because the result is routes and not a
+  verdict about the axis; `parents(path[-1])` is empty for a root and non-empty
+  for a path that closed a cycle. Paths come back in parent order, outermost
+  first. An anchor the axis does not contain is refused, because `(("x",),)` is
+  exactly the shape a root gives.
+
+  **`max_paths` bounds the one cost the ascent cannot.** The fetch is one
+  request per node however branchy the axis is; the number of maximal routes up
+  it doubles per stacked branch point, so a sixty-one node axis can carry a
+  million. Exceeding the ceiling raises `OperationError` carrying the anchor
+  and the ceiling, rather than returning the first `max_paths` routes —
+  truncating would collapse *there were exactly this many ways up* into *there
+  were at least this many*, which is the pair of answers `contains()` and the
+  unknown-anchor refusal exist to keep apart. The ceiling is read while routes
+  are emitted, so a refusal costs the ascent and not the answer it declined to
+  build, and a ceiling the axis stays under changes nothing. It bounds routes
+  rather than depth deliberately: an axis three levels deep whose every node
+  has ten parents carries a thousand routes, and a bound on the descent would
+  both miss that and end each route at a node the walk never asked about —
+  which is *unknown* rather than *unextendable*. `max_paths=None` is the
+  default and is unbounded, because a ceiling nobody asked for turns a correct
+  answer into an exception.
+
+  The bound refusal below one is now shared with `max_concurrency` and names
+  the caller's keyword: two bounds, one rule, one message shape.
+
+  **`deepest_common_ancestor` returns the deepest node above two others, or
+  `None`** — a common ancestor with no *other* common ancestor standing below
+  it. Deepest is a claim about the partial order and not about distance, and
+  those agree only over a tree: one shortcut edge, a node asserted under both a
+  broad category and a narrow one, puts the broad category *nearer* than a
+  common ancestor standing strictly beneath it. Either argument may be the
+  answer. The tie-break is **asymmetric** and is part of the definition: over a
+  DAG several common ancestors can be minimal and pairwise incomparable, with
+  nothing to choose between them on depth, and the answer is then the first in
+  the first argument's own ancestry, nearest first — so swapping the arguments
+  can swap the answer. Mutual ancestry is a tie rather than an exclusion, which
+  is the only sense *deepest* has inside a cycle. Both arguments are anchors
+  and an unknown one is refused, like every walk here that can emit its anchor;
+  `None` means the two nodes have no common ancestor and nothing else.
+
+- **One descent underneath every walk, keeping every edge it is told about.**
+  A walk answering *what is above me* can drop the second edge into a node two
+  frontiers reach, because a node reachable two ways is one member of a set. A
+  walk answering *how did I get here*, or *does this ancestor stand above that
+  one*, cannot: those are the questions the dropped edge is the answer to. The
+  shared descent keeps the whole reply, so the readings that need the induced
+  subgraph have it and the readings that do not are unaffected — over a tree
+  the two coincide and the difference costs nothing.
+
+  Repeated neighbours are collapsed there too, once, for every reading:
+  `parents()` and `children()` are arbitrary consumer code and a query over a
+  join answers one row per match, so a backing naming the same edge twice is
+  one edge rather than two routes.
+
+  **Every walk this package ships is now a reading of that one descent**, which
+  restores three properties as structural claims rather than tallies. Each asks
+  its backing about a node exactly once — `deepest_common_ancestor` seeds one
+  ascent with both arguments where two composed ancestor walks re-asked the
+  ancestry they shared, 44 requests over a 23-node axis where 23 answer it,
+  with no cache and nothing to publish. Each asks about a
+  **frontier** rather than a node, so a bulk backing gets one query per level
+  and `async_drive` its round of concurrency per depth: `paths_to_root` over a
+  node with eight parents is two queries rather than nine, and
+  `async_paths_to_root`'s `max_concurrency` binds like every other twin's. And
+  no walk keeps a memo of its own: the route enumeration reads replies already
+  in hand — 16 requests for the sixteen nodes carrying thirty-two routes, where
+  a route-at-a-time descent needed 125 and a memo to buy them back.
+
+  `cache=` stays what it always was on all four new names, as on every walk
+  this package ships: for spending replies across *other* walks, with no
+  exception and no walk depending on one.
+
+- **Five more walks over `Hierarchy`, in both flavours** — `descendants`,
+  `descendants_to_depth`, `children_at_depth`, `flatten` and `leaves`, each
+  with an `async_` twin, beside the `ancestors` pair that was there before.
+  Every guarantee the existing walk makes holds for all of them: the visited
+  set is unconditional, so a walk terminates on cyclic data whatever an
+  acyclicity constraint claims, and results are deduplicated in walk order.
+  `flatten` and `leaves` descend from every root when their anchor is omitted;
+  the other three take one.
+
+  **The anchor boundary is per walk, and it is four answers rather than one.**
+  `descendants` excludes it, as `ancestors` does. `flatten` and
+  `descendants_to_depth` include it — they answer *the axis from a point*
+  rather than *the strict descendants of a point*. `children_at_depth` includes
+  it at `depth=0`, which is the anchor alone. `leaves` includes it only if it
+  is one, since a childless node is its own only leaf.
+
+  **Every walk that includes its anchor refuses one the axis does not
+  contain**, raising `NotFoundError` with the anchor in its `context`. It has
+  to: a one-element result is exactly what a childless node returns, so an
+  unchecked anchor comes back as a term of the axis with nothing to
+  distinguish it from a real leaf — the refusal `Taxonomy.walk()` already
+  made, now made by every walk with the same reason to make it. The excluding
+  walks still do not refuse, because they return nothing false about an
+  unknown anchor: there the answer is ambiguous rather than wrong, and
+  `contains()` resolves it in one call.
+
+  **The four flattened descents emit pre-order by discovery**: each node, then
+  everything first reached through it, then the next. One rule across the
+  bound, so `max_depth` decides how far a walk goes and never what order it
+  comes back in — a bounded answer is the unbounded one cut short. Over a tree
+  that is the depth-first order; over a DAG it is not, and the name says which
+  one you get, because a node reachable by several paths is emitted under
+  whichever discovered it first. `ancestors` keeps level order, because
+  *nearest first* is a claim about distance that pre-order does not keep, and
+  `children_at_depth` returns a level, which has no emission order to choose.
+  `Taxonomy.walk()` stays breadth first: it streams, and pre-order by
+  discovery is not an order a level-synchronous descent can stream. A node's
+  place depends on everything under its earlier siblings, so over a root whose
+  first child leads a chain the second child waits for the whole chain — a lag
+  bounded by the branch's depth and by nothing else, which is a collecting walk
+  with extra steps rather than a stream. Streaming it with a bounded lag means
+  one request per node instead of one per level, which is the round trip the
+  shared descent exists not to make.
+
+  None of this costs a second traversal. The five share one level-synchronous
+  descent with `ancestors` — one request per frontier, which is what lets the
+  asynchronous driver issue one round of concurrency per depth and a bulk
+  backing answer a level in one query — and differ only in how the descent's
+  discovery edges are read afterwards.
+
+  **`leaves` costs no second request either.** A node that discovered nothing
+  is either a leaf or a node whose every child had already been reached along
+  another path, and over a DAG those are different answers — but which one is
+  in the *reply*, and the descent keeps it rather than asking again for edges
+  it already had. So the walk is the descent and nothing more, and the backing
+  sees each node exactly once with or without a cache.
+
+- **`WalkCache` and `WalkCacheKey` — a cache a caller owns, for spending edge
+  replies across walks.** `cache=` is a keyword on every walk here: the two
+  drivers, `ancestors`, the five descending walks, both flavours of each, and
+  `Taxonomy.walk()` and `Taxonomy.subtree_keys()`. It lives in the frontier
+  read both drivers share, which is why the streaming walk — the one walk that
+  goes through no driver at all — reaches it by forwarding a parameter rather
+  than needing an implementation of its own. A cache filled by a collecting
+  walk therefore answers a streaming one.
+
+  **There is no default cache, because no walk here asks twice.** The descent
+  asks each node once, and `leaves` reads childlessness off the reply rather
+  than asking a second time, so a memo built per walk would fill with entries
+  that walk will never read back: a 20,000-node `MappingHierarchy.snapshot()`
+  held one at 107% of the edge map it returns. Lifetime is therefore the
+  caller's, which is also the only place it can be decided — how stale a reply
+  may be is a fact about their data, not about a walk.
+
+  `WalkCache` is a two-member Protocol — `get` and `__setitem__` — rather than
+  `MutableMapping`, so this package's own `BoundedLRUCache` fits: it implements
+  every member the ABC requires without inheriting it, and an ABC matches
+  nominally. `hierarchy.py` carries that as a type-checked assignment rather
+  than a claim, which is how the value parameter got pinned: it has to be the
+  reply type, since `get` is read covariantly and a cache of `object` does not
+  satisfy the seam. A bounded cache is admitted too, and costs at most
+  re-fetches — no walk's answer depends on a hit.
+
+  A caller-supplied cache is scoped to **one axis**. The key is
+  `(member, node_id)` and names no hierarchy, so a cache spent on a second axis
+  answers it from the first's edges. There is no discriminator available to put
+  there: a `Hierarchy` is arbitrary consumer code and need not be hashable — a
+  plain `@dataclass` backing has `__hash__` of `None` — while `id()` is reused
+  after a collection and would answer a new axis from a dead one's entries.
+
+  `roots()` is deliberately not cached. One walk asks it, once, and remembering
+  it would cost a caller their only chance to notice the axis grew a root.
+
+- **`Taxonomy.subtree_keys()` and its asynchronous twin** — a root and
+  everything under it, as the keys a subtree filter is built from
+  (`Filter(column, Operator.IN, axis.subtree_keys(node))`). The root is
+  included, the result is deduplicated in walk order, `depth` bounds it and is
+  optional, and a root the axis does not contain is **refused** rather than
+  returned as a one-element list a caller cannot tell from a leaf — which is
+  the refusal `Taxonomy.walk()` already makes, for the same reason: both
+  answers include their anchor. **The keys are the structure axis's own**, so
+  the filter is right exactly when the axis and the column are keyed alike --
+  a property of how the axis was bound, not of the call, which has never been
+  told which table it is about to be filtered against. That is also what lets
+  a key it returns go back in as a `root_id`.
 
 - **`ScanningSignal` and `AsyncScanningSignal`, registered under
   `kind: "scan"`.** A rung that finds declared forms *inside* a query rather
@@ -106,9 +1322,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 116 names, taking the package's `__all__` to 321. Every one of them was already importable by module path; what
-  changes is that they are now a promise this package keeps rather than a path
-  that happened to work. Nothing is renamed and nothing shadows an existing
+  the resolution cascade — 134 names, taking the package's `__all__` to 352,
+  the twelve beyond them being the operation family, the near-spelling rung,
+  the surface-form catalogue and the index-source family, each added by its own
+  entry above. `declared_candidates` is inside the 134 rather than beyond
+  them, which is what took that figure from 133.
+  Every one of them was already importable by module path; what changes is that
+  they are now a promise this package keeps rather than a path that happened to
+  work. Nothing is renamed and nothing shadows an existing
   export: the two sets are disjoint, checked against both the `__all__` and the
   file's own bindings, since a name published by an import line the list never
   mentions is the collision the list cannot see.
@@ -731,7 +1952,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compared, and a member that later becomes genuinely asynchronous fails rather
   than going quiet.
 
+### Documentation
+
+- **The anchored-view guide now carries a worked call site that is executed.**
+  Two fences — the vocabulary and the code that reads it — with a workspace test
+  that writes the first to disk, runs the second against it, and asserts the
+  executed copy is character-identical to the published one. The guide is the
+  third to carry the pair, after the ontology and entity-resolution guides.
+
+  It is run from the workspace root rather than from inside the package, which
+  is the point: a test living beside the code can reach a name whether or not
+  the door exports it, so it cannot fail for the one reason this test exists.
+
 ### Changed
+
+- **`BridgedEntityResolver` takes `bridge=` and answers `aclose()`, and builds
+  its loop thread on first use.** It is now a `SyncBridgeAdapter`. Hand several
+  resolvers the same bridge and they share one thread; a bridge passed in
+  belongs to the caller, so `close()` leaves it running. `aclose()` and
+  `async with` are the teardown forms for a holder that is itself on a loop,
+  and they await the teardown rather than putting it through the bridge. Constructing one no
+  longer allocates a thread — that happens on the first `resolve`. Its
+  forwarding methods, their signatures and the fact that it does not close the
+  resolver handed to it are all unchanged.
+
+- **`KeyCodec` and `StrCodec` are on the top-level door**, beside the `Ontology`
+  that now requires one. A required constructor argument whose only two possible
+  values were published a module deeper is a name withheld at the moment it
+  became mandatory.
+
+- **`Ontology.codec` and `AsyncOntology.codec` are keyword-only.** A required
+  field may not follow a defaulted one, so the codec lands at position nine —
+  where `structures` used to be — and a nine-positional construction would bind
+  a structures mapping to a codec. Both are objects, so nothing reports it at
+  the construction and the first symptom is a rendered key somewhere else.
+  `kw_only` keeps the field required while making the misbinding unspellable.
+
+- **`TreeProjection` is generic in the node key.** It holds a `ParentChoice`,
+  which picks a parent from `Sequence[K]`, and a `ProjectionContext[K]` travels
+  with it — so a holder that named the policy bare pinned both to `str` and left
+  a consumer's non-`str` axis unable to declare a projection over itself.
+
+- **`EntityType`'s parent moved out of `metadata`** into the `isa` field above.
+  While it lived in the open dict the loader copied a row's `metadata` wholesale
+  before folding the declared `isa:` in, so a document writing the parent one
+  level down reached the type lattice without passing the check that refuses an
+  undeclared one. `ENTITY_TYPE_ISA_KEY`, the constant that named the parking
+  spot, is gone with it.
+
+- **`MappingHierarchy.snapshot` and its asynchronous twin take `cache=`** — both
+  drive a walk, and both dropped the caller's memo. A caller who snapshotted a
+  live axis and then walked the same axis paid for the descent twice: over a
+  thirteen-node axis, twenty-six backing calls where thirteen suffice, with
+  identical answers either way. The memo reaches the walking branch only — an
+  axis that publishes `parent_edges` is asked once and never descends, so
+  supplying one there saves nothing and is not an error.
+
+- **A bulk member that answers the wrong number of replies is refused by
+  name.** `BulkHierarchy` states a positional contract — one reply per node
+  asked about, in the order asked, an empty sequence where there is no answer —
+  and the natural implementation breaks it, because a query returning one row
+  per match returns no row for a node with none. Every walk already caught the
+  breach, by pairing the frontier with its replies under `zip(strict=True)`:
+  `ValueError: zip() argument 2 is shorter than argument 1`, which names an
+  argument position and neither the backing, the member, nor the counts. The
+  refusal now happens where a bulk member answers and says all three; the
+  strict pairings stay, as the assertion that the check ran.
 
 - **`Coverage` holds offsets rather than text, and reports what the evidence
   *located* rather than what reached a candidate.** `matched` is the union of
@@ -782,6 +2068,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package and a 3.13 install adds nothing at all.
 
 ### Fixed
+
+- **A bare `ScopeAuthority` meant `ScopeAuthority[Any]`, not `[str]`.** The
+  alias was spelled with a PEP 695 `type` statement, which declares a *fresh*
+  parameter in the alias's own scope — unbounded, undefaulted, and shadowing the
+  module-level key parameter it was spelled the same as. PEP 696 defaults reach
+  `type` statements only at 3.13 and the floor is 3.12, so the default was not
+  expressible in that form; an explicit `TypeAliasType` carrying the key as
+  `type_params` restores it while keeping the lazy evaluation the union needs.
+  The regression was silent in a suite that binds `str` everywhere, which is
+  what the new `assert_type` fence in the source exists to catch.
+
+- **`inherited_attributes` truncated silently on an undeclared *ancestor*.** An
+  absent anchor was refused and an absent parent was not, so a schema read off a
+  partial type store came back short with nothing to say it was short — the same
+  collapse of *declares nothing* into *is not here* that the anchor's refusal
+  exists to prevent. Both ends are now refused by one rule, and the refusal
+  names the type asked about alongside the one that is missing.
 
 - **`requires_elasticsearch` skips a cluster that cannot host a test index,
   instead of letting the suite time out against it.** `is_elasticsearch_available()`

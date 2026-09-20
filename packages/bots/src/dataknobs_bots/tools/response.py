@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Standardized tool response format (AD-9).
 
 All bank and catalog tools return dicts with a consistent structure:

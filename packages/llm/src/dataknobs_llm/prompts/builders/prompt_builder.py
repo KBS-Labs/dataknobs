@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Synchronous prompt builder for constructing prompts with parameter resolution and RAG.
 
 This module provides the PromptBuilder class which coordinates between:
@@ -315,8 +318,8 @@ class PromptBuilder(BasePromptBuilder):
         if not rag_configs:
             return {}, None
 
-        rag_content = {}
-        rag_metadata = {} if capture_metadata else None
+        rag_content: Dict[str, str] = {}
+        rag_metadata: Dict[str, Any] | None = {} if capture_metadata else None
 
         for rag_config in rag_configs:
             placeholder = rag_config.get("placeholder", "RAG_CONTENT")

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Hybrid reasoning strategy — grounded retrieval + ReAct tool use.
 
 Composes :class:`GroundedReasoning` (mandatory KB retrieval) with

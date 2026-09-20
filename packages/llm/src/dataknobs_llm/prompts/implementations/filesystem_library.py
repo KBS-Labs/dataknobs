@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Filesystem-based prompt library implementation.
 
 This module provides a prompt library that loads prompts from a directory structure
@@ -39,6 +42,7 @@ from dataknobs_common.config_loading import (
 )
 
 from ..base import (
+    AbstractPromptLibrary,
     BasePromptLibrary,
     PromptTemplateDict,
     RAGConfig,
@@ -48,7 +52,7 @@ from ..base import (
 logger = logging.getLogger(__name__)
 
 
-class FileSystemPromptLibrary(BasePromptLibrary):
+class FileSystemPromptLibrary(BasePromptLibrary, AbstractPromptLibrary):
     """Prompt library that loads prompts from filesystem directory.
 
     Features:
@@ -343,6 +347,16 @@ class FileSystemPromptLibrary(BasePromptLibrary):
                     )
 
         return configs
+
+    def reload(self) -> None:
+        """Re-read every prompt file under :attr:`prompt_dir`.
+
+        Both halves matter. Dropping the caches alone would *empty* the
+        library rather than reload it: the listings answer from those caches,
+        so they are this library's content and not a copy of it.
+        """
+        self._reload_caches()
+        self.load_all()
 
     def list_system_prompts(self) -> List[str]:
         """List all available system prompt names.

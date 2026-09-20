@@ -98,7 +98,7 @@ hold**:
    bundle it into anything we publish.
 4. **If it is ever bundled** into a published artifact (a container image, an
    installer), GPL §6 obligations attach **to that artifact** — a written offer
-   of source. This never changes dataknobs' own MIT license; it creates a
+   of source. This never changes dataknobs' own Apache-2.0 license; it creates a
    distribution obligation on that one artifact. Prefer a tool the CI runner or
    the developer already has, so the question does not arise.
 

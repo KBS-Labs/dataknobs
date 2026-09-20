@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """MemoryBank — typed collection of structured records for wizard data collection.
 
 MemoryBank is a sibling to the existing ``Memory`` ABC (cross-conversation

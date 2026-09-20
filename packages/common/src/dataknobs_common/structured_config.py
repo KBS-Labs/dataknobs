@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Typed-configuration base class and consumer-side dispatch mixin.
 
 ``StructuredConfig`` is the typed successor to
@@ -1332,7 +1335,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
       narrowly-typed override is never crashed by an undeclared injected
       collaborator. A consumed collaborator should be declared
       keyword-only with a default
-      (``async def _ainit(self, *, knowledge_base=None)``) so the
+      (``async def _ainit(self, *, knowledge_base=None, **_: Any)``) so the
       zero-injection path is safe.
     - When mixing in alongside other bases, list
       ``StructuredConfigConsumer`` **first** so its ``__init__`` is the
@@ -1481,6 +1484,36 @@ class StructuredConfigConsumer(Generic[ConfigT]):
     #:     EXPECTED_COMPONENTS = Base.EXPECTED_COMPONENTS | {"extra_dep"}
     EXPECTED_COMPONENTS: ClassVar[frozenset[str]] = frozenset()
 
+    #: Names of injected collaborators this consumer ACCEPTS and does not
+    #: require. The *may* half of the advertise surface, where
+    #: :attr:`EXPECTED_COMPONENTS` is the *must* half.
+    #:
+    #: **Why two fields rather than one.** A name belongs here when the
+    #: consumer has a real injection point for it — ``from_components``
+    #: takes it, and the object behaves differently when it arrives — *and*
+    #: the object is complete without it, because it resolves one from its
+    #: own config or does without. Declared under ``EXPECTED_COMPONENTS``
+    #: instead, such a name makes a correctly built consumer report itself
+    #: under-wired: :meth:`missing_components` names it and
+    #: :meth:`require_components` raises, on an object with nothing wrong
+    #: with it. That is not a hypothetical: it is the reading a consumer in
+    #: ``dataknobs-data`` ran into, and this field is what it produced.
+    #:
+    #: **Read by :meth:`accepted_components` only.** It is deliberately
+    #: absent from :meth:`missing_components`, :meth:`missing_from` and
+    #: :meth:`require_components` — an optional collaborator can never be
+    #: missing, and a field that fed those would be the first field again
+    #: under a second name. A caller writing a ``from_components`` call wants
+    #: :meth:`accepted_components`; a composing parent checking whether it can
+    #: satisfy a child wants :meth:`expected_components`.
+    #:
+    #: Orthogonal to :attr:`INTERNAL_COMPONENTS` on the same terms
+    #: ``EXPECTED_COMPONENTS`` is, and disjoint from ``EXPECTED_COMPONENTS``
+    #: itself by construction: a name cannot be both required and not. No MRO
+    #: auto-union, matching the sibling fields — a subclass extending the set
+    #: unions explicitly.
+    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset()
+
     #: Names of injected collaborators THIS class consumes itself.
     #: Excluded from :meth:`forwardable_components` so children built
     #: by composing strategies do not inherit their parent's own
@@ -1614,6 +1647,30 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         (see :attr:`EXPECTED_COMPONENTS` for the explicit-union recipe).
         """
         return cls.EXPECTED_COMPONENTS
+
+    @classmethod
+    def optional_components(cls) -> frozenset[str]:
+        """Return the collaborators this consumer accepts and does not require.
+
+        The advertise query for :attr:`OPTIONAL_COMPONENTS`, on
+        :meth:`expected_components`' terms — class-level, most-derived class's
+        own set, no MRO auto-union. Feeds no diff: see the field for why an
+        optional collaborator is never *missing*.
+        """
+        return cls.OPTIONAL_COMPONENTS
+
+    @classmethod
+    def accepted_components(cls) -> frozenset[str]:
+        """Return every collaborator this consumer takes, required or not.
+
+        The union of :meth:`expected_components` and
+        :meth:`optional_components` — what a caller writing a
+        ``from_components(...)`` call is asking for when it asks what this
+        class accepts. The two halves stay separately readable because only
+        one of them is a requirement, and conflating them is what makes a
+        correctly built consumer report itself under-wired.
+        """
+        return cls.expected_components() | cls.optional_components()
 
     @classmethod
     def missing_from(cls, available: Iterable[str]) -> frozenset[str]:
@@ -1852,9 +1909,14 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         override receives none (and reads ``self.components`` instead). An
         override that consumes a collaborator should declare it
         keyword-only with a default — e.g.
-        ``async def _ainit(self, *, knowledge_base=None)`` — so the
+        ``async def _ainit(self, *, knowledge_base=None, **_: Any)`` — so the
         zero-injection call is safe; an undeclared collaborator is dropped
-        from delivery rather than crashing the hook. A collaborator param
+        from delivery rather than crashing the hook. Close the parameter
+        list with ``**_: Any``. Delivery tolerates a narrowed signature,
+        but this method's *declared* one is ``**components``, so a type
+        checker reads the narrowing as an override that refuses keywords
+        the base accepts — a finding about the declaration, on a hook
+        whose narrowing is the documented way to use it. A collaborator param
         *without* a default (or a required positional) still breaks the
         zero-injection path and is rejected by
         :func:`dataknobs_common.testing.assert_structured_config_consumer`.

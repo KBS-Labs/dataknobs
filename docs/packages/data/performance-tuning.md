@@ -115,7 +115,7 @@ async def bulk_insert(db, records):
         record_generator(),
         config=StreamConfig(
             batch_size=500,  # Optimal batch size
-            parallel=True     # Enable parallel processing
+            prefetch=4,      # Read ahead 4 batches while one is written
         )
     )
     return result
@@ -133,7 +133,7 @@ async def read_all_optimized(db, query=None):
     # Use streaming for large result sets
     stream_config = StreamConfig(
         batch_size=1000,  # Fetch 1000 at a time
-        buffer_size=5000   # Buffer up to 5000 records
+        prefetch=5,       # Read ahead 5 batches -- 5,000 records in flight
     )
     
     async for record in db.stream_read(query, stream_config):
@@ -549,10 +549,11 @@ DuckDB performs best with larger batch sizes:
 ```python
 from dataknobs_data.streaming import StreamConfig
 
-# Optimal for DuckDB - larger batches
+# Optimal for DuckDB - larger batches. There is no `parallel` switch;
+# `prefetch` is the concurrency knob, and it counts batches read ahead.
 duckdb_config = StreamConfig(
     batch_size=10000,  # Larger batches for columnar storage
-    parallel=True
+    prefetch=4,
 )
 
 # Stream write with optimized batching

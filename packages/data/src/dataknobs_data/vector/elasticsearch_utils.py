@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Elasticsearch-specific vector utilities."""
 
 from __future__ import annotations
@@ -12,24 +15,49 @@ from .types import DistanceMetric
 logger = logging.getLogger(__name__)
 
 
-def get_similarity_for_metric(metric: DistanceMetric) -> str:
-    """Get Elasticsearch similarity function for a distance metric.
+#: The ``dense_vector`` similarities Elasticsearch offers, keyed on the
+#: canonical member so the table has one entry per metric rather than one per
+#: spelling. ``L1`` is absent because Elasticsearch has no Manhattan
+#: similarity --- not because the table forgot it.
+_SIMILARITIES: dict[DistanceMetric, str] = {
+    DistanceMetric.COSINE: "cosine",
+    DistanceMetric.DOT_PRODUCT: "dot_product",
+    DistanceMetric.EUCLIDEAN: "l2_norm",
+}
+
+
+def get_similarity_for_metric(metric: DistanceMetric | str) -> str:
+    """The Elasticsearch ``dense_vector`` similarity for a distance metric.
+
+    Keyed on :meth:`DistanceMetric.canonical` and refusing what it cannot
+    serve. It was keyed on the member and ended in ``.get(metric, "cosine")``,
+    which is the pgvector defect in another file: ``L2`` and ``INNER_PRODUCT``
+    are spellings the table did not list, so an explicit
+    ``create_vector_index(metric="l2")`` built a mapping with
+    ``similarity: cosine`` and reported success. Every vector written into
+    that field was then ranked under a metric nobody asked for, and the only
+    way to notice was to read the mapping back.
 
     Args:
-        metric: Distance metric
+        metric: A member, member value, or published alias.
 
     Returns:
-        Elasticsearch similarity function name
-    """
-    mapping = {
-        DistanceMetric.COSINE: "cosine",
-        DistanceMetric.DOT_PRODUCT: "dot_product",
-        DistanceMetric.EUCLIDEAN: "l2_norm",
-        DistanceMetric.INNER_PRODUCT: "dot_product",
-    }
+        The similarity name for the field mapping.
 
-    similarity = mapping.get(metric, "cosine")
-    logger.debug(f"Using similarity '{similarity}' for metric {metric}")
+    Raises:
+        ValueError: If the name is not an accepted spelling, or names a
+            metric Elasticsearch has no similarity for.
+    """
+    canonical = DistanceMetric.resolve(metric).canonical()
+    try:
+        similarity = _SIMILARITIES[canonical]
+    except KeyError:
+        offered = ", ".join(sorted(m.value for m in _SIMILARITIES))
+        raise ValueError(
+            f"Elasticsearch has no dense_vector similarity for {canonical.value!r}; "
+            f"it offers: {offered}"
+        ) from None
+    logger.debug("Using similarity '%s' for metric %s", similarity, canonical)
     return similarity
 
 
@@ -60,8 +88,10 @@ def build_knn_query(
     if num_candidates is None:
         num_candidates = max(k * 10, 100)
 
-    # Build the KNN query
-    knn_query = {
+    # Build the KNN query. Annotated because ``filter`` below puts a nested
+    # query object in, which the inferred value type from the four scalars
+    # does not admit.
+    knn_query: dict[str, Any] = {
         "field": f"data.{field_name}",
         "query_vector": query_vector,
         "k": k,
@@ -78,19 +108,32 @@ def build_knn_query(
 def build_script_score_query(
     query_vector: np.ndarray | list[float],
     field_name: str,
-    metric: DistanceMetric = DistanceMetric.COSINE,
+    metric: DistanceMetric | str = DistanceMetric.COSINE,
     filter_query: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a script_score query for exact vector search.
 
+    The query-side twin of :func:`get_similarity_for_metric`, and keyed the
+    same way for the same reason. That one builds the ``dense_vector``
+    mapping; this builds the query that reads it, so the two are one decision
+    about a metric taken in two places. It branched on the **member** and
+    ended in ``else: # Default to cosine``, which meant ``L2`` --- a member a
+    consumer reaches by configuring ``metric="l2"`` --- mapped to ``l2_norm``
+    at one door and was queried with ``cosineSimilarity`` at the other, with
+    nothing reporting the disagreement.
+
     Args:
         query_vector: Query vector
         field_name: Name of the vector field
-        metric: Distance metric to use
+        metric: A member, member value, or published alias.
         filter_query: Optional filter query
 
     Returns:
         Elasticsearch script_score query
+
+    Raises:
+        ValueError: If the name is not an accepted spelling, or names a
+            metric Elasticsearch has no painless function for.
     """
     # Convert numpy array to list if needed
     if isinstance(query_vector, np.ndarray):
@@ -99,15 +142,25 @@ def build_script_score_query(
     # Build the script based on metric
     field_path = f"data.{field_name}"
 
-    if metric == DistanceMetric.COSINE:
-        script_source = f"cosineSimilarity(params.query_vector, '{field_path}') + 1.0"
-    elif metric == DistanceMetric.DOT_PRODUCT or metric == DistanceMetric.INNER_PRODUCT:
-        script_source = f"dotProduct(params.query_vector, '{field_path}')"
-    elif metric == DistanceMetric.EUCLIDEAN:
-        script_source = f"1 / (1 + l2norm(params.query_vector, '{field_path}'))"
-    else:
-        # Default to cosine
-        script_source = f"cosineSimilarity(params.query_vector, '{field_path}') + 1.0"
+    # Keyed on the canonical member, so there is one entry per family and no
+    # spelling can be missed. ``L1`` is absent for the reason it is absent
+    # from ``_SIMILARITIES``: painless has ``cosineSimilarity``,
+    # ``dotProduct`` and ``l2norm`` and no Manhattan function, so a refusal
+    # is the honest answer and it is the one the mapping door already gives.
+    canonical = DistanceMetric.resolve(metric).canonical()
+    scripts = {
+        DistanceMetric.COSINE: f"cosineSimilarity(params.query_vector, '{field_path}') + 1.0",
+        DistanceMetric.DOT_PRODUCT: f"dotProduct(params.query_vector, '{field_path}')",
+        DistanceMetric.EUCLIDEAN: f"1 / (1 + l2norm(params.query_vector, '{field_path}'))",
+    }
+    try:
+        script_source = scripts[canonical]
+    except KeyError:
+        offered = ", ".join(sorted(m.value for m in scripts))
+        raise ValueError(
+            f"Elasticsearch has no script_score function for {canonical.value!r}; "
+            f"it offers: {offered}"
+        ) from None
 
     # Build the query
     base_query = filter_query if filter_query else {"match_all": {}}

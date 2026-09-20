@@ -11,16 +11,20 @@ Trees are hierarchical data structures used for representing relationships.
 ```python
 from dataknobs_structures import Tree
 
-# Create a tree manually
-tree = Tree()
-root = tree.add_node("root")
-child1 = tree.add_child(root, "child1")
-child2 = tree.add_child(root, "child2")
-leaf = tree.add_child(child1, "leaf")
+# A Tree node is itself the tree -- there is no separate container, and the
+# root is simply the node whose parent is None.
+root = Tree("root")
+child1 = root.add_child("child1")
+child2 = root.add_child("child2")
+leaf = child1.add_child("leaf")
 
-# Traverse the tree
-for node in tree.traverse():
-    print(f"Node: {node.value}, Level: {node.level}")
+# Walk it: find_nodes takes a predicate, so `lambda n: True` visits everything
+for node in root.find_nodes(lambda n: True):
+    print(f"Node: {node.data}, Depth: {node.depth}")
+# Node: root, Depth: 0
+# Node: child1, Depth: 1
+# Node: leaf, Depth: 2
+# Node: child2, Depth: 1
 ```
 
 ### Documents
@@ -30,16 +34,22 @@ Documents represent text with metadata and structure.
 ```python
 from dataknobs_structures import Text, TextMetaData
 
-# Create a document with metadata
+# text_id is required and positional; text_label defaults to "text".
+# Anything else you pass is kept as free-form metadata.
 metadata = TextMetaData(
+    "doc_001",
+    text_label="article",
     source="example.txt",
     created_at="2024-01-01",
-    author="John Doe"
+    author="John Doe",
 )
 
 text = Text("This is the document content.", metadata)
-print(f"Content: {text.content}")
-print(f"Source: {text.metadata.source}")
+print(f"Content: {text.text}")     # Content: This is the document content.
+print(f"Id:      {text.text_id}")  # Id:      doc_001
+print(f"Label:   {text.text_label}")  # Label:   article
+# Free-form keys are read through get_value, not as attributes
+print(f"Source:  {text.metadata.get_value('source')}")  # Source:  example.txt
 ```
 
 ### Conditional Dictionaries
@@ -71,12 +81,18 @@ data = {
     ]
 }
 
-# Get nested values
-first_user = json_utils.get_value(data, "users.0")
-print(first_user)  # {"name": "Alice", "age": 30}
+# Indexed dot notation: list positions are [n], not .n
+first_user = json_utils.get_value(data, "users[0]")
+print(first_user)  # {'name': 'Alice', 'age': 30}
 
-# Set nested values
-json_utils.set_value(data, "users.0.age", 31)
+print(json_utils.get_value(data, "users[0].name"))  # Alice
+
+# A path that matches nothing answers the default rather than raising
+print(json_utils.get_value(data, "users[9].name", "unknown"))  # unknown
+
+# There is no set_value -- this module reads and indexes JSON; assign
+# through the object itself when you need to change it.
+data["users"][0]["age"] = 31
 ```
 
 ### File Utilities
@@ -84,15 +100,25 @@ json_utils.set_value(data, "users.0.age", 31)
 ```python
 from dataknobs_utils import file_utils
 
-# Read and write files
-content = file_utils.read_file("input.txt")
-processed = content.upper()
-file_utils.write_file("output.txt", processed)
+# This module streams lines rather than reading whole files: fileline_generator
+# yields one line at a time (and transparently handles gzip), write_lines
+# writes a list back out.
+lines = [line.rstrip("\n") for line in file_utils.fileline_generator("input.txt")]
+file_utils.write_lines("output.txt", [line.upper() for line in lines])
 
-# Work with JSON files
-data = file_utils.read_json("config.json")
+# Walk a directory tree
+for path in file_utils.filepath_generator("data/", descend=True):
+    print(path)
+
+# There is no read_json/write_json helper here -- use the standard library,
+# or dataknobs_utils.json_utils for path-based access into a loaded object.
+import json
+
+with open("config.json") as handle:
+    data = json.load(handle)
 data["updated"] = True
-file_utils.write_json("config.json", data)
+with open("config.json", "w") as handle:
+    json.dump(data, handle)
 ```
 
 ## Text Processing
@@ -102,17 +128,21 @@ file_utils.write_json("config.json", data)
 ```python
 from dataknobs_xization.normalize import basic_normalization_fn
 
-# Basic text normalization
+# Only three transforms are on by default: lowercasing, camelCase expansion and
+# smart-quote simplification. Whitespace and symbols are left exactly as found.
 text = "  HELLO   World!!!  "
-normalized = basic_normalization_fn(text)
-print(normalized)  # "hello world!"
+print(repr(basic_normalization_fn(text)))
+# '  hello   world!!!  '
 
-# Custom normalization
-def custom_normalize(text):
-    return text.lower().replace("!", "").strip()
+print(basic_normalization_fn("parseHTTPResponse"))
+# parse http response
 
-result = custom_normalize("Hello World!")
-print(result)  # "hello world"
+# The rest are opt-in, and `do_all` turns on every one of them.
+print(repr(basic_normalization_fn(text, squash_whitespace=True)))
+# 'hello world!!!'
+
+print(repr(basic_normalization_fn(text, do_all=True)))
+# 'hello world'
 ```
 
 ### Tokenization
@@ -120,14 +150,29 @@ print(result)  # "hello world"
 ```python
 from dataknobs_xization import masking_tokenizer
 
-# Tokenize text with masking
+# Tokenizing goes through TextFeatures, which builds per-character feature
+# masks and derives tokens from them. The mark_* flags choose which character
+# classes are marked; emoji_data=None skips loading the emoji tables.
 text = "John Doe lives at 123 Main St"
-tokenizer = masking_tokenizer.MaskingTokenizer()
-tokens = tokenizer.tokenize(text)
+features = masking_tokenizer.TextFeatures(
+    text, mark_alpha=True, mark_digit=True, emoji_data=None
+)
 
-# Tokens will include masked versions for sensitive data
-for token in tokens:
-    print(f"Token: {token.value}, Type: {token.type}")
+for token in features.get_tokens():
+    print(f"Token: {token.token_text}, Position: {token.token_pos}")
+# Token: John, Position: (0, 4)
+# Token: Doe, Position: (5, 8)
+# Token: lives, Position: (9, 14)
+# Token: at, Position: (15, 17)
+# Token: 123, Position: (18, 21)
+# Token: Main, Position: (22, 26)
+# Token: St, Position: (27, 29)
+
+# Tokens are doubly linked and carry a normalized form, so a pass can walk
+# forward from the first one without re-tokenizing.
+first = features.build_first_token(normalize_fn=str.lower)
+print(first.token_text, "->", first.norm_text)   # John -> john
+print(first.next_token.token_text)               # Doe
 ```
 
 ## Working with RecordStore
@@ -135,21 +180,24 @@ for token in tokens:
 ```python
 from dataknobs_structures import RecordStore
 
-# Create a record store
-store = RecordStore()
+# A RecordStore is backed by a TSV path, which is required -- pass None for an
+# in-memory store with no file behind it. Records are rows, not keyed entries.
+store = RecordStore(None)
 
-# Add records
-store.add_record("user:1", {"name": "Alice", "age": 30})
-store.add_record("user:2", {"name": "Bob", "age": 25})
+store.add_rec({"id": "user:1", "name": "Alice", "age": 30})
+store.add_rec({"id": "user:2", "name": "Bob", "age": 25})
 
-# Retrieve records
-user1 = store.get_record("user:1")
-print(user1)  # {"name": "Alice", "age": 30}
+# Read them back as a list of dicts, or as a pandas DataFrame
+print(store.records[0])            # {'id': 'user:1', 'name': 'Alice', 'age': 30}
+print(len(store.records))          # 2
 
-# Query records
-young_users = store.query(lambda r: r.get("age", 0) < 30)
-for user in young_users:
-    print(user)
+# There is no query() -- filter the DataFrame, or the list
+young = [r for r in store.records if r["age"] < 30]
+print([r["name"] for r in young])  # ['Bob']
+
+# With a path, save() writes the TSV and restore() reads it back
+# store = RecordStore("/data/users.tsv")
+# store.save()
 ```
 
 ## Error Handling
@@ -157,16 +205,24 @@ for user in young_users:
 All packages include proper error handling:
 
 ```python
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_structures import Tree
 
+root = Tree("root")
+child = root.add_child("child")
+
+# A search that matches nothing returns an empty list rather than raising
+found = root.find_nodes(lambda n: n.data == "nonexistent")
+if not found:
+    print("No matching node")
+
+# Writes that would make a node its own ancestor are refused, and the tree
+# is left exactly as it was
 try:
-    tree = Tree()
-    # Attempt to access non-existent node
-    node = tree.get_node("nonexistent")
-except KeyError as e:
-    print(f"Node not found: {e}")
-except Exception as e:
-    print(f"Unexpected error: {e}")
+    child.add_child(root)
+except ValidationError as e:
+    print(f"Refused: {e}")
+    print(e.context)  # {'child': 'root', 'parent': 'child'}
 ```
 
 ## Beyond the Basics

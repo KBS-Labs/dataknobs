@@ -1,5 +1,8 @@
 [build-system]
-requires = ["hatchling"]
+# hatchling gained PEP 639 support (a bare-string `license` and a list-form
+# `license-files`) in 1.27; both are declared above, so an older backend
+# rejects this manifest rather than silently dropping the metadata.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,15 +10,15 @@ name = "dataknobs-config"
 version = "0.7.1"
 description = "Modular configuration system with composable settings and environment variable overrides"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
-license = {text = "MIT"}
 authors = [
     {name = "KBS Labs", email = "info@kbs-labs.com"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
 ]

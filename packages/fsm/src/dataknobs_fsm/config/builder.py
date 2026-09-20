@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """FSM builder for constructing FSM instances from configuration.
 
 This module provides the FSMBuilder class that constructs executable FSM

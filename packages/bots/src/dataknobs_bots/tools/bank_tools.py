@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """MemoryBank CRUD tools and ArtifactBank tools for wizard review stages.
 
 Provides LLM-callable tools that operate on ``MemoryBank`` instances

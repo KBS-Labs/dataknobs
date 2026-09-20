@@ -67,21 +67,31 @@ from dataknobs_structures import Text  # Scattered
 ### Graceful Degradation
 
 ```python
-from dataknobs_structures import Tree
 import logging
+
+from pyparsing import ParseException
+
+from dataknobs_structures import Tree, build_tree_from_string
 
 logger = logging.getLogger(__name__)
 
 def safe_tree_operation(tree_string):
     try:
-        tree = build_tree_from_string(tree_string)
-        return tree
-    except ValueError as e:
-        logger.warning(f"Invalid tree format: {e}")
-        return Tree()  # Return empty tree
+        return build_tree_from_string(tree_string)
+    except ParseException as e:
+        # Unbalanced parentheses raise pyparsing's ParseException, not
+        # ValueError -- the parser's exception reaches the caller unchanged.
+        logger.warning("Invalid tree format: %s", e)
+        return Tree(None)  # Tree requires data; there is no empty Tree()
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error("Unexpected error: %s", e)
         raise  # Re-raise unexpected errors
+
+# Note what does NOT raise: input that does not start with "(" is taken as a
+# single node's data, so a malformed string often parses successfully into a
+# childless node rather than failing. Check num_children if you expected one.
+suspicious = build_tree_from_string("root -> a, b")
+print(suspicious.data, suspicious.num_children)   # root -> a, b 0
 ```
 
 ### Input Validation
@@ -98,9 +108,10 @@ def process_document(text, metadata=None):
     if metadata and not isinstance(metadata, dict):
         raise TypeError(f"Metadata must be dict, got {type(metadata)}")
     
-    # Process
+    # Process. TextMetaData requires a text_id, so there is no argument-less
+    # form to fall back on -- supply one when the caller gave no metadata.
     from dataknobs_structures import Text, TextMetaData
-    meta = TextMetaData(**metadata) if metadata else TextMetaData()
+    meta = TextMetaData(**metadata) if metadata else TextMetaData("unidentified")
     return Text(text, meta)
 ```
 
@@ -118,7 +129,11 @@ class DocumentProcessor:
     def tokenizer(self):
         if self._tokenizer is None:
             from dataknobs_xization import masking_tokenizer
-            self._tokenizer = masking_tokenizer.MaskingTokenizer()
+            # Tokenizing is per-text: TextFeatures takes the text itself, so
+            # what is worth caching is a configured factory, not an object.
+            self._tokenizer = lambda text: masking_tokenizer.TextFeatures(
+                text, mark_alpha=True, mark_digit=True, emoji_data=None
+            ).get_tokens()
         return self._tokenizer
     
     @property
@@ -158,22 +173,23 @@ from contextlib import contextmanager
 
 @contextmanager
 def large_tree_processor(tree_data):
-    from dataknobs_structures import Tree
-    
-    tree = None
+    from dataknobs_structures import build_tree_from_string
+
+    # There is no Tree.from_data and no tree.clear(). The parenthesized string
+    # form is the bulk constructor the package exports, and a tree is ordinary
+    # garbage: dropping the last reference to the root frees it.
+    tree = build_tree_from_string(tree_data)
     try:
-        tree = Tree.from_data(tree_data)
         yield tree
     finally:
-        # Cleanup
-        if tree:
-            tree.clear()
-        del tree
+        # Detach the children so the subtrees are collectable even if a caller
+        # kept a reference to the root. Iterate a snapshot, not the live list.
+        for child in tree.children or ():
+            child.prune()
 
 # Usage
-with large_tree_processor(data) as tree:
-    process_tree(tree)
-# Tree is automatically cleaned up
+with large_tree_processor("(root (a a1 a2) b)") as tree:
+    print(tree.as_string())   # (root (a a1 a2) b)
 ```
 
 ### Generator Patterns
@@ -199,30 +215,30 @@ for processed in read_large_dataset("large_file.jsonl"):
 
 ```python
 import pytest
-from dataknobs_structures import Tree
+from dataknobs_structures import Tree, build_tree_from_string
 
 class TestTreeOperations:
     def test_tree_creation(self):
-        tree = Tree()
-        assert tree.root is None
-        
-        tree.add_root("root")
-        assert tree.root.value == "root"
-    
+        # Tree takes its data positionally; a node with no parent is a root
+        root = Tree("root")
+        assert root.parent is None
+        assert root.data == "root"
+        assert root.children is None       # None until it first holds a child
+
     def test_tree_traversal(self):
-        tree = build_tree_from_string("root -> a, b")
-        nodes = list(tree.traverse())
+        tree = build_tree_from_string("(root a b)")
+        nodes = tree.find_nodes(lambda n: True)
         assert len(nodes) == 3
-        assert nodes[0].value == "root"
-    
+        assert nodes[0].data == "root"
+
     @pytest.mark.parametrize("input_str,expected_nodes", [
         ("root", 1),
-        ("root -> a", 2),
-        ("root -> a, b\na -> c", 4),
+        ("(root a)", 2),
+        ("(root (a c) b)", 4),
     ])
     def test_tree_sizes(self, input_str, expected_nodes):
         tree = build_tree_from_string(input_str)
-        assert len(list(tree.traverse())) == expected_nodes
+        assert len(tree.find_nodes(lambda n: True)) == expected_nodes
 ```
 
 ### Integration Testing
@@ -233,22 +249,23 @@ def test_full_pipeline():
     from dataknobs_xization.normalize import basic_normalization_fn
     from dataknobs_utils import json_utils
     
-    # Create document
-    metadata = TextMetaData(source="test")
+    # Create document -- text_id is required and positional
+    metadata = TextMetaData("test_doc", source="test")
     doc = Text("  TEST Document  ", metadata)
-    
-    # Process
-    normalized = basic_normalization_fn(doc.content)
-    
-    # Store result
+
+    # Process. The content is doc.text, and basic_normalization_fn lowercases
+    # without stripping or collapsing whitespace.
+    normalized = basic_normalization_fn(doc.text)
+
+    # Store result. Free-form metadata keys are read through get_value.
     result = {
-        "original": doc.content,
+        "original": doc.text,
         "normalized": normalized,
-        "metadata": {"source": doc.metadata.source}
+        "metadata": {"source": doc.metadata.get_value("source")},
     }
-    
+
     # Verify
-    assert json_utils.get_value(result, "normalized") == "test document"
+    assert json_utils.get_value(result, "normalized") == "  test document  "
     assert json_utils.get_value(result, "metadata.source") == "test"
 ```
 
@@ -259,6 +276,7 @@ def test_full_pipeline():
 ```python
 import logging
 import json
+from datetime import datetime
 
 class StructuredLogger:
     def __init__(self, name):
@@ -306,22 +324,32 @@ def sanitize_input(text):
 ### Sensitive Data Handling
 
 ```python
+import re
+
 from dataknobs_xization import masking_tokenizer
 
 class SecureProcessor:
-    def __init__(self):
-        self.tokenizer = masking_tokenizer.MaskingTokenizer()
-        self.tokenizer.add_pattern(r'\b\d{3}-\d{2}-\d{4}\b', 'SSN')
-        self.tokenizer.add_pattern(r'\b\d{16}\b', 'CREDIT_CARD')
-    
+    # There is no add_pattern hook to register these with; the patterns live
+    # here and are applied to the text the tokenizer yields.
+    SENSITIVE = (
+        re.compile(r"^\d{3}-\d{2}-\d{4}$"),   # SSN
+        re.compile(r"^\d{16}$"),               # card number
+    )
+
     def process_sensitive(self, text):
-        # Mask sensitive data
-        tokens = self.tokenizer.tokenize(text)
-        masked = ' '.join([
-            '[REDACTED]' if t.type in ['SSN', 'CREDIT_CARD'] else t.value
-            for t in tokens
-        ])
-        return masked
+        features = masking_tokenizer.TextFeatures(
+            text, mark_alpha=True, mark_digit=True, emoji_data=None
+        )
+        return " ".join(
+            "[REDACTED]"
+            if any(p.match(token.token_text) for p in self.SENSITIVE)
+            else token.token_text
+            for token in features.get_tokens()
+        )
+
+# Note: the tokenizer splits on punctuation, so "123-45-6789" arrives as three
+# tokens and the SSN pattern above will not match it. Redact over the raw text
+# with re.sub when the thing you are hiding spans a delimiter.
 ```
 
 ## Monitoring
@@ -369,24 +397,41 @@ from dataknobs_structures import Tree
 ### Avoid These Patterns
 
 ```python
-# Bad: Modifying trees during traversal
-for node in tree.traverse():
-    if node.value == "remove":
-        tree.remove_node(node)  # Don't do this!
+from dataknobs_structures import build_tree_from_string
 
-# Good: Collect then modify
-nodes_to_remove = [n for n in tree.traverse() if n.value == "remove"]
-for node in nodes_to_remove:
-    tree.remove_node(node)
+# Removing nodes while walking is safe here, and it is worth knowing why
+# rather than copying the usual "collect first" rule by reflex:
+#   - `children` answers a snapshot tuple, not the live list, so pruning a
+#     child cannot make the iteration skip its sibling;
+#   - `find_nodes` returns a materialised list, not a lazy iterator.
+# There is no remove_node; a node detaches itself with prune().
+tree = build_tree_from_string("(root a remove b remove c)")
+for node in tree.find_nodes(lambda n: n.data == "remove"):
+    node.prune()
+print(tree.as_string())   # (root a b c)
 
+# The rule still applies to anything you iterate lazily or mutate in place,
+# so collect first when the sequence is a generator rather than a list.
+```
+
+```python
+from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
+
+# There is no module-level elasticsearch_utils.search(); searching goes
+# through an index object, and the body is an Elasticsearch query dict.
+index = SimplifiedElasticsearchIndex("my-index")
+
+# search() answers a ServerResponse, not a dict -- read .result, and check
+# .succeeded rather than assuming the call reached the server.
 # Bad: Not handling empty results
-result = elasticsearch_utils.search(query)
-first = result[0]  # May fail!
+response = index.search({"query": {"match_all": {}}})
+first = response.result["hits"]["hits"][0]  # May fail!
 
 # Good: Check first
-result = elasticsearch_utils.search(query)
-if result:
-    first = result[0]
+response = index.search({"query": {"match_all": {}}})
+hits = response.result["hits"]["hits"] if response.succeeded else []
+if hits:
+    first = hits[0]
 else:
     handle_empty_result()
 ```

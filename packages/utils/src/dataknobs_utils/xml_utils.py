@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """XML processing utilities with streaming and memory-efficient parsing.
 
 Provides classes and functions for parsing and streaming XML documents,

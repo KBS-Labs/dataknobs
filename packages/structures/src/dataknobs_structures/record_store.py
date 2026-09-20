@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Record storage with in-memory and disk persistence.
 
 This module provides RecordStore, a flexible container for managing tabular data

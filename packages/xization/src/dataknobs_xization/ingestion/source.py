@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Storage-agnostic document source protocol for ingestion.
 
 Decouples ``DirectoryProcessor`` from the local filesystem so the same
@@ -103,11 +106,18 @@ class DocumentSource(Protocol):
     for pattern semantics that match :func:`pathlib.Path.glob`.
     """
 
-    async def iter_files(self, patterns: Iterable[str]) -> AsyncIterator[DocumentFileRef]:
+    def iter_files(self, patterns: Iterable[str]) -> AsyncIterator[DocumentFileRef]:
         """Yield :class:`DocumentFileRef` for each file matching any
         of ``patterns``. Deduplication across patterns is the caller's
         responsibility; implementations may yield the same file twice
         if it matches multiple patterns.
+
+        Declared ``def`` returning an ``AsyncIterator``, not ``async def``:
+        an async *generator* function returns its iterator when called, with
+        nothing to await first, which is what ``async for`` over the result
+        requires. Spelled ``async def`` here the member describes a coroutine
+        that *resolves* to an iterator — a shape every call site would have to
+        ``await`` before iterating, and which neither implementation has.
         """
         ...
 
@@ -124,12 +134,11 @@ class DocumentSource(Protocol):
         """
         ...
 
-    async def read_streaming(
-        self, ref: DocumentFileRef, chunk_size: int = 8192
-    ) -> AsyncIterator[bytes]:
+    def read_streaming(self, ref: DocumentFileRef, chunk_size: int = 8192) -> AsyncIterator[bytes]:
         """Stream file contents in byte-sized chunks.
 
-        Bounded by the same rule as :meth:`read_bytes`.
+        Bounded by the same rule as :meth:`read_bytes`, and declared ``def``
+        for the same reason as :meth:`iter_files`.
         """
         ...
 
@@ -401,10 +410,17 @@ class BackendDocumentSource:
                 continue
             size = getattr(kf, "size_bytes", None)
             if size is None:
-                size = getattr(kf, "size", -1)
+                size = getattr(kf, "size", None)
             yield DocumentFileRef(
                 path=path,
-                size_bytes=int(size),
+                # ``-1`` is what :class:`DocumentFileRef` documents for a size
+                # the source cannot report cheaply. A record with no size
+                # attribute at all already landed there, via the ``getattr``
+                # default; one that *carries* the attribute as ``None`` --- a
+                # remote backend listing without stat-ing --- did not, and
+                # reached ``int(None)``. Both mean the same thing, so both
+                # answer the same way.
+                size_bytes=-1 if size is None else int(size),
                 source_uri=f"{base_uri}/{path}",
             )
 

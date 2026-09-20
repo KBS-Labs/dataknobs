@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base I/O abstraction layer components.
 
 This module provides the base abstractions for unified I/O operations.

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Hot-reload manager for dynamic configuration updates.
 
 This module provides a coordinator that manages hot-reloading of registered

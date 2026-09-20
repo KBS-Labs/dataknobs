@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Built-in streaming functions for FSM.
 
 This module provides streaming-related functions that can be referenced

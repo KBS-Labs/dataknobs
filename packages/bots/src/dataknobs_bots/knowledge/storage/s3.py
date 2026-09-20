@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """S3-based knowledge resource backend for production deployments.
 
 This backend stores files in Amazon S3 (or S3-compatible storage like MinIO,

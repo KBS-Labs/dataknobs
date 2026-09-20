@@ -8,6 +8,7 @@ This guide covers the prompt versioning system in dataknobs-llm, which provides 
 - [Quick Start](#quick-start)
 - [Version Management](#version-management)
 - [Core Concepts](#core-concepts)
+- [Storage](#storage)
 - [API Reference](#api-reference)
 - [Best Practices](#best-practices)
 - [Examples](#examples)
@@ -293,6 +294,164 @@ v3 = await manager.create_version(
 )
 ```
 
+## Storage
+
+The three managers keep nothing of their own. Versions, experiments, user
+assignments, metric aggregates and events all live in a **store**, and which
+store you pass is the only thing that decides whether they outlive the
+process.
+
+### The default is in memory
+
+```python
+from dataknobs_llm.prompts import InMemoryVersionStore, VersionManager
+
+manager = VersionManager()                            # the common case
+manager = VersionManager(InMemoryVersionStore())      # exactly the same thing
+```
+
+### Persisting to a backend
+
+`DatabaseVersionStore` accepts any dataknobs `AsyncDatabase`, which is all
+seven backends -- memory, file, SQLite, PostgreSQL, S3, DuckDB and
+Elasticsearch:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import DatabaseVersionStore, VersionedPromptLibrary
+
+# Any backend key: "memory", "file", "sqlite", "postgres", "s3", "duckdb",
+# "elasticsearch". The factory builds but does not connect.
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
+library = VersionedPromptLibrary(store=DatabaseVersionStore(db))
+await library.create_version(
+    name="greeting",
+    prompt_type="system",
+    template="Hello {{name}}!",
+    version="1.0.0",
+)
+
+# Anything holding the same database reads it back -- including the next
+# time this program runs.
+await db.close()
+```
+
+The store does **not** own the database. You opened it, so you close it;
+nothing on this layer has a `close()` of its own to forget.
+
+Backends other than memory and file need their driver: SQLite is
+`dataknobs-data[sqlite]` (aiosqlite), PostgreSQL `dataknobs-data[postgres]`,
+and so on. The factory raises naming the extra if one is missing.
+
+### One store, three managers
+
+`VersionedPromptLibrary` builds one store and hands the same object to all
+three of its managers. Do the same when wiring the managers yourself, or each
+one gets a store of its own:
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
+store = DatabaseVersionStore(db)
+
+vm = VersionManager(store)
+ab = ABTestManager(store)
+mc = MetricsCollector(store)
+
+await db.close()
+```
+
+Separate stores are not an error -- the three hold different things and never
+read each other's -- but they are three databases' worth of configuration
+where one will do.
+
+### The protocols
+
+Each manager declares only the part of the surface it uses, so a store written
+for one of them need not implement the others:
+
+| Protocol | Declared by | Holds |
+|---|---|---|
+| `VersionStore` | `VersionManager` | versions |
+| `ExperimentStore` | `ABTestManager` | experiments, user assignments |
+| `MetricsStore` | `MetricsCollector` | aggregates, events |
+| `VersioningStore` | `VersionedPromptLibrary` | all three at once |
+
+Both shipped stores satisfy all four. To write your own, implement the
+protocol whose manager you are serving; a manager checks at construction and
+names any method it cannot find.
+
+### What a store hands back
+
+A load returns a **value**, not a handle. Mutating what you loaded changes
+nothing until you save it:
+
+```python
+version = await store.load_version(version_id)
+version.tags.append("production")     # changes nothing yet
+await store.save_version(version)     # now it is stored
+```
+
+This holds for `InMemoryVersionStore` too, deliberately: a store that handed
+out live references would make the line above work in development and lose the
+tag in production.
+
+### Recording an event is one operation
+
+Appending an event and folding it into the version's aggregate happen
+together, inside the store:
+
+```python
+from dataknobs_llm.prompts import InMemoryVersionStore, MetricEvent
+
+store = InMemoryVersionStore()
+
+metrics = await store.record_event(
+    MetricEvent(version_id="v1", success=True, tokens=120)
+)
+print(metrics.total_uses)      # 1
+```
+
+Separately -- append, then read the aggregate, add to it, write it back --
+there is a suspension point in the middle of a read-modify-write, and two
+recordings for one version racing each other lose an increment. The store is
+where that can be made atomic: `InMemoryVersionStore` awaits nothing in
+between, and `DatabaseVersionStore` writes the aggregate as a compare-and-set,
+re-reading and re-folding when it loses. How many times it will do that is
+`DatabaseVersionStore(db, max_retries=8)`; exhausting it raises rather than
+dropping the fold.
+
+`MetricsCollector.record_event` is the ordinary way in and does this for you.
+
+### Reading an event stream is bounded
+
+Events accumulate without limit, so `load_events` returns them newest first
+and takes a bound:
+
+```python
+recent = await store.load_events("v1", limit=50)
+```
+
+The limit reaches the query, so the rest is never loaded.
+`MetricsCollector.get_events` passes yours down when nothing is filtered out
+afterwards -- a page taken before a time filter is not the page you would get
+after one.
+
+Versions have no such bound, deliberately: resolving `latest` and refusing a
+duplicate version string are questions about the whole set, and answered over
+a page they would name the latest of that page.
+
 ## API Reference
 
 ### VersionManager
@@ -300,10 +459,12 @@ v3 = await manager.create_version(
 #### Constructor
 
 ```python
-manager = VersionManager(storage=None)
+manager = VersionManager(store=None)
 ```
 
-- `storage`: Optional backend storage (None for in-memory)
+- `store`: A [`VersionStore`](#the-protocols). `None` builds a fresh
+  `InMemoryVersionStore`. Passing anything that is not a `VersionStore` raises
+  `TypeError` naming the methods it lacks.
 
 #### create_version()
 
@@ -559,8 +720,9 @@ await manager.untag_version(new_version.version_id, "production")
 await manager.tag_version(previous.version_id, "production")
 await manager.update_status(new_version.version_id, VersionStatus.DEPRECATED)
 
-# Use the rollback version
-library.get_system_prompt("greeting", version=previous.version)
+# Use the rollback version. `VersionedPromptLibrary` is an `AsyncPromptLibrary`,
+# so its readers are awaited like its writers.
+template = await library.get_system_prompt("greeting", version=previous.version)
 ```
 
 ### Example 3: Team Collaboration

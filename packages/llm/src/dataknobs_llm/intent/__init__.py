@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Intent classification — pluggable IntentClassifier protocol.
 
 Forward-looking intent classification for any LLM-layer consumer

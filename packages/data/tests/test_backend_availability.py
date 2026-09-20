@@ -42,6 +42,7 @@ from dataknobs_data.backend_selection import (
     available_backends,
     backend_available,
     backend_info,
+    known_backend_classes,
     select_backend,
 )
 from dataknobs_data.backends import (
@@ -175,6 +176,96 @@ class TestABackendThatDefersItsImportError:
         registry = _async_registry(_without("elasticsearch"))
 
         assert backend_available(registry, "elasticsearch") is False
+
+
+# ---------------------------------------------------------------------------
+# Enumerating backends for a structural check, rather than for a build
+# ---------------------------------------------------------------------------
+
+
+class TestTheListAStructuralCheckNeeds:
+    """``available_backends`` is the wrong list to audit backend classes with.
+
+    It answers "what can I build here?", which is right for a caller choosing
+    a backend and wrong for a guard over the classes: a backend behind a
+    missing driver drops out of it, so the guard covers fewer classes on a
+    lean machine and reports the same green. Three such guards in this package
+    were built on that list, and each was silently narrower than its own
+    docstring claimed.
+
+    ``known_backend_classes`` is the other list --- every backend the registry
+    has heard of, with the reason attached where a class cannot be reached, so
+    a caller can skip one by name but cannot fail to notice it.
+
+    The environment cannot supply a missing driver on demand, so these pass
+    the registration functions their own "is this installed?" predicate, as
+    the tests above do.
+    """
+
+    def test_a_backend_behind_a_missing_driver_stays_in_the_population(self) -> None:
+        registry = _sync_registry(_without("psycopg2", "asyncpg"))
+
+        assert "postgres" not in available_backends(registry)
+        assert "postgres" in {entry.key for entry in known_backend_classes(registry)}
+
+    def test_its_class_is_still_offered_when_the_module_imports(self) -> None:
+        """Most do: a driver imported lazily leaves the module importable.
+
+        Which backends those are is a property of where each puts its driver
+        import, discovered here rather than modelled by the caller.
+        """
+        registry = _sync_registry(_without("boto3"))
+
+        entry = next(e for e in known_backend_classes(registry) if e.key == "s3")
+
+        assert entry.cls is not None
+        assert entry.cls.__name__ == "SyncS3Database"
+
+    def test_a_class_it_cannot_reach_is_reported_rather_than_dropped(self) -> None:
+        """The other shape: the reason travels with the entry.
+
+        Constructed rather than waited for --- every optional driver is
+        installed in this repo's dev env, so the state this exists to describe
+        is one a real registry here never reaches.
+        """
+        registry: PluginRegistry[Any] = PluginRegistry("probe_unreachable", canonicalize_keys=True)
+        registry.declare_unavailable(
+            "ghost",
+            metadata={"description": "a backend whose module does not import"},
+            reason="ghostdriver is not installed",
+            type_loader=None,
+        )
+
+        (entry,) = known_backend_classes(registry)
+
+        assert entry.key == "ghost"
+        assert entry.cls is None
+        assert entry.unavailable_reason == "ghostdriver is not installed"
+
+    def test_an_unavailable_backend_reports_under_one_name(self) -> None:
+        """Aliases collapse in both states, not only while registered.
+
+        ``list_canonical_keys`` collapses by shared factory, and an
+        unavailable backend has none --- so a derivation reusing it would
+        report ``pg``, ``postgres`` and ``postgresql`` as three backends the
+        moment the driver went missing.
+        """
+        registry = _sync_registry(_without("psycopg2", "asyncpg"))
+
+        keys = [entry.key for entry in known_backend_classes(registry)]
+
+        assert keys.count("postgres") == 1
+        assert "pg" not in keys
+        assert "postgresql" not in keys
+
+    def test_the_two_lists_agree_where_everything_is_installed(self) -> None:
+        """A positive control: the difference above is the driver, not the accessor."""
+        registry = _sync_registry(lambda module: True)
+
+        assert [entry.key for entry in known_backend_classes(registry)] == available_backends(
+            registry
+        )
+        assert all(entry.unavailable_reason is None for entry in known_backend_classes(registry))
 
 
 # ---------------------------------------------------------------------------

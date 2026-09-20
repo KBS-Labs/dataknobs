@@ -275,17 +275,26 @@ LABEL_PATTERN = re.compile(
     r"|(?<![:>%])\b[0-9]{2,3}[a-g]\b"
     # Plan ``decision N`` references.
     r"|\bdecision [0-9]{1,3}\b"
-    # A decision's *code* rather than its word: ``D5``, ``D3-cap``,
-    # ``(D3/D7)``.  Single-digit and word-bounded on both sides, which is
-    # the whole of what makes this branch usable: ruff's pydocstyle codes
-    # are ``D1xx``-``D4xx`` and are public, legitimate, and 27 of the 48
-    # raw hits the census started from.  A branch one digit wider catches
-    # every pydocstyle suppression in the repository and the guard fails on
-    # its first run -- the literal directive is not written here, because a
-    # comment quoting one is parsed as one.  The trailing ``\b`` is also what
-    # catches the separator forms an author reaches for -- ``D1/D4``,
-    # ``D3-cap`` -- the same degree of freedom the ``Item[ -]`` branch covers.
-    r"|\bD[0-9]\b"
+    # A decision's *code* rather than its word: ``D5``, ``D80``, ``D3-cap``,
+    # ``(D3/D7)``.  One or two digits, word-bounded on both sides, which is
+    # the whole of what makes this branch usable: ruff's pydocstyle codes are
+    # ``D1xx``-``D4xx`` and are public, legitimate, and 27 of the 48 raw hits
+    # the census started from.  The trailing ``\b`` is what keeps them out --
+    # ``D10`` cannot match inside ``D100``, because the next character is a
+    # word character and there is no boundary there.  The literal directive is
+    # not written here, because a comment quoting one is parsed as one.  That
+    # same trailing ``\b`` catches the separator forms an author reaches for --
+    # ``D1/D4``, ``D3-cap`` -- the same degree of freedom the ``Item[ -]``
+    # branch covers.
+    #
+    # **Two digits rather than one, and the one-digit form was a hole.**  The
+    # ceiling was set at a single digit on the belief that a wider branch
+    # collides with pydocstyle; it does so only at three, and the gap in
+    # between is not hypothetical -- a ``D80`` reached shipped source in
+    # ``dataknobs-data``, in a docstring that renders into published API docs,
+    # and this guard reported green over it.  Three digits is where the
+    # collision starts and is therefore where this stops.
+    r"|\bD[0-9]{1,2}\b"
     # Ontology/acceptance ``criterion N`` references.  A criterion number
     # is a pointer into a document the reader cannot open, and it is the
     # one planning object a test is genuinely *about* -- which is why the

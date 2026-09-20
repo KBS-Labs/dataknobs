@@ -9,6 +9,7 @@ to what was and was not reached.
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -16,7 +17,11 @@ import yaml
 
 from dataknobs_common.entity_resolution import EntityCandidate, signal_backends
 from dataknobs_common.exceptions import ValidationError
-from dataknobs_common.ontology import async_load_ontology, load_ontology
+from dataknobs_common.ontology import (
+    async_build_resolver,
+    async_load_ontology,
+    load_ontology,
+)
 from dataknobs_common.ontology.loader import build_resolver
 
 if TYPE_CHECKING:
@@ -83,19 +88,47 @@ def restored_registry() -> Iterator[None]:
     into it at import -- so a test that registers must put the declaration
     back or every later test runs against a registry that can build the thing
     they assert is unbuildable.
+
+    **The metadata is restored as well as the reason, and it has to be.**
+    ``declare_unavailable`` with no ``metadata=`` leaves whatever the key
+    already carried, so restoring by reason alone put the *sentence* back and
+    left the *facts* wherever the test moved them. That was invisible while
+    nothing read them: it stopped being invisible when
+    :func:`~dataknobs_common.ontology.loader._refuse_async_only_rungs` began
+    choosing its remedy off ``needs_io``, at which point a test that had set
+    that key decided the message every later test in the process saw.
     """
     reason = signal_backends.unavailable_reason("semantic")
+    metadata = dict(signal_backends.get_metadata("semantic"))
     assert reason is not None, "the declaration under test is absent before the test runs"
     try:
         yield
     finally:
-        signal_backends.declare_unavailable("semantic", reason=reason)
+        signal_backends.declare_unavailable("semantic", reason=reason, metadata=metadata)
 
 
 def test_a_rung_the_sync_flavour_cannot_build_is_refused(
     mammals_path: Path, tmp_path: Path
 ) -> None:
-    """Refused by the **build** door, naming the kind and the way out."""
+    """Refused by the **build** door, naming the kind and the way out.
+
+    **The way out used to be one sentence for every kind, and it was false
+    for half of them.** This assertion pinned ``async_load_ontology``, on the
+    reasoning that whatever the synchronous door refuses the asynchronous one
+    accepts. That holds for a rung whose asynchrony is its own; it does not
+    hold for a rung constructed over a **live handle**, which no door taking a
+    document and a vocabulary can conjure. Following the old sentence for
+    ``semantic`` produced a second error rather than a rung.
+
+    So what is asserted here is the remedy for *this* kind, which the mark's
+    own ``needs_io`` picks out -- and the sibling below asserts that a rung
+    without it still gets the original sentence, because that half was always
+    true and losing it would be the other way to make the message wrong.
+    """
+    assert signal_backends.get_metadata("semantic").get("needs_io") is True, (
+        "the mark's `needs_io` is what picks the remedy, so a test that moved it "
+        "and did not put it back decides this assertion -- see `restored_registry`"
+    )
     path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
     ontology = load_ontology(path)
 
@@ -104,8 +137,203 @@ def test_a_rung_the_sync_flavour_cannot_build_is_refused(
 
     message = str(raised.value)
     assert "semantic" in message
-    assert "async_load_ontology" in message
     assert "no synchronous form" in message
+    assert "OntologyRegistry" in message
+    assert "handles=" in message
+    assert "async_load_ontology" not in message, (
+        "the door that builds an ontology cannot build a rung that needs an index"
+    )
+
+
+def test_a_rung_that_needs_no_handle_is_still_sent_to_the_async_door(
+    mammals_path: Path, tmp_path: Path, restored_registry: None
+) -> None:
+    """The half of the message that was always true, kept.
+
+    A kind declared unavailable without ``needs_io`` **and whose flavour here
+    is** ``async`` is a rung this distribution could build in the other
+    flavour, and
+    :func:`~dataknobs_common.ontology.loader.async_build_resolver` really is
+    where such a caller goes. Asserted over a mark stood up for the purpose
+    rather than over ``semantic``, because ``semantic`` is the kind that made
+    the distinction necessary and cannot demonstrate its other side.
+
+    **The flavour in the stand-in is load-bearing and used not to be.** This
+    mark said only ``needs_io: False``, which made it a stand-in for a
+    population of one that does not exist: the real kind reaching the
+    ``needs_io`` branch's ``else`` is ``authority``, whose mark *here*
+    declares ``flavour: "sync"`` and which this sentence is wrong for. The
+    sibling below is that case.
+    """
+    signal_backends.declare_unavailable(
+        "semantic",
+        reason="a stand-in rung with no backing to reach",
+        metadata={"flavour": "async", "needs_io": False},
+    )
+    path = semantic_document(mammals_path, tmp_path / "semantic.yaml")
+
+    with pytest.raises(ValidationError) as raised:
+        build_resolver(path, load_ontology(path))
+
+    message = str(raised.value)
+    assert "async_build_resolver" in message
+    assert "async_load_ontology" in message
+    assert "OntologyRegistry" not in message
+
+
+def test_a_rung_that_ships_elsewhere_is_sent_to_the_import_and_not_to_a_door(
+    mammals_path: Path, tmp_path: Path
+) -> None:
+    """The third remedy, for the only kind that ever reached the second one.
+
+    The two-way split read ``needs_io`` and sent everything else to
+    :func:`~dataknobs_common.ontology.loader.async_build_resolver`. Measured
+    over the marks this registry actually carries, *everything else* is
+    ``authority`` and nothing more --- and that door carries the **identical**
+    mark, so an author who followed the sentence got the same refusal back
+    from the door it named. A remedy whose remedy builds nothing is the
+    failure this whole paragraph of the module exists to have fixed once.
+
+    The real remedy is the reason's own: import the module. After that this
+    door builds the kind, because ``AuthoritySignal`` has a synchronous form
+    --- which is exactly what the mark says in the one key the two flavours'
+    marks do not share, ``flavour``. So that is the discriminator now.
+
+    Skipped rather than weakened where the import has already happened, for
+    the reason the mark's own test gives: once ``xization`` is imported the
+    mark is *correctly* gone and there is no version of this that holds in
+    both worlds.
+    """
+    if "dataknobs_xization.entity_resolution" in sys.modules:
+        pytest.skip(
+            "dataknobs_xization.entity_resolution is imported in this process, so "
+            "the kind is registered and there is no refusal to read"
+        )
+    assert signal_backends.get_metadata("authority")["flavour"] == "sync", (
+        "the mark must say a synchronous form exists, or this asserts the wrong branch"
+    )
+
+    document = yaml.safe_load(mammals_path.read_text())
+    document["ontology"]["resolver"] = {"rungs": [{"kind": "authority"}]}
+    path = tmp_path / "authority.yaml"
+    path.write_text(yaml.safe_dump(document))
+
+    with pytest.raises(ValidationError) as raised:
+        build_resolver(path, load_ontology(path))
+
+    message = str(raised.value)
+    assert "dataknobs_xization.entity_resolution" in message
+    assert "import the module that registers it" in message
+    assert "async_build_resolver" not in message, (
+        "that door carries the same mark, so naming it sends the author in a circle"
+    )
+    assert "async_load_ontology" not in message
+
+
+@pytest.mark.parametrize(
+    ("section", "says"),
+    [
+        ({"rungs": ["exact"]}, "not a mapping"),
+        ({"rungs": [{"threshold": 0.5}]}, "names no `kind:`"),
+        ({"rungs": [{"kind": "exatc"}]}, "does not build"),
+    ],
+)
+def test_every_way_a_composition_can_be_unbuildable_is_one_exception_type(
+    section: dict[str, Any], says: str, mammals_path: Path, tmp_path: Path
+) -> None:
+    """Both doors' ``Raises:`` promise one type, and three shapes escaped it.
+
+    A bare string in ``rungs:`` came out of the spec merge as ``TypeError``,
+    an entry with no ``kind:`` out of the registry's key resolution as
+    ``ValueError`` -- raised *before* the wrapper that would have converted
+    it -- and a misspelled kind as ``NotFoundError``. A caller catching what
+    the docstring named caught none of the three.
+
+    The one consumer that noticed converted them on **its** side, which left
+    every other caller of these doors holding the original types. They are
+    normalized at the door now, which is the layer the promise is made at.
+    """
+    document = yaml.safe_load(mammals_path.read_text())
+    document["ontology"]["resolver"] = section
+    path = tmp_path / "composition.yaml"
+    path.write_text(yaml.safe_dump(document))
+    ontology = load_ontology(path)
+
+    with pytest.raises(ValidationError) as raised:
+        build_resolver(path, ontology)
+    assert says in str(raised.value)
+
+    asynchronous = asyncio.run(async_load_ontology(path))
+    with pytest.raises(ValidationError) as raised_async:
+        asyncio.run(async_build_resolver(path, asynchronous))
+    assert says in str(raised_async.value)
+
+
+def test_the_synchronous_door_forwards_handles_as_its_twin_does(
+    mammals_path: Path, tmp_path: Path, restored_registry: None
+) -> None:
+    """The channel, on the door that used to lack it.
+
+    The asymmetry was argued from the shipped rungs -- *the synchronous door
+    builds no rung that needs a handle, because the one rung that does has no
+    synchronous form* -- which is true and is not the question. The registry
+    both doors read is a published extension point, so the rung with a
+    synchronous form and a live backing is a consumer's to write, and a
+    channel they cannot reach is one they reimplement: a ``CascadingResolver``
+    assembled beside this door, which is a second copy of it.
+
+    Asserted with a rung that records what it was handed, so this is the
+    merge order rather than the parameter's existence: a handle beats a key
+    the document spelled the same way, and ``entities`` beats both.
+    """
+    seen: dict[str, Any] = {}
+
+    class _Recording(CountingSignal):
+        def __init__(self, config: dict[str, Any] | None = None) -> None:
+            super().__init__(config)
+            seen.update(config or {})
+
+    signal_backends.register("semantic", _Recording, override=True)
+    document = yaml.safe_load(mammals_path.read_text())
+    document["ontology"]["resolver"] = {
+        "rungs": [{"kind": "semantic", "backing": "what the document wrote"}]
+    }
+    path = tmp_path / "handled.yaml"
+    path.write_text(yaml.safe_dump(document))
+    ontology = load_ontology(path)
+    live = object()
+
+    resolver = build_resolver(path, ontology, handles={"backing": live})
+
+    assert [type(rung) for rung in resolver.rungs] == [_Recording]
+    assert seen["backing"] is live, "a handle must beat the key a document spelled"
+    assert seen["entities"] is ontology.entities, "and `entities` must beat the handle"
+
+
+def test_a_handle_may_not_be_named_kind(mammals_path: Path, tmp_path: Path) -> None:
+    """The one key that would make two readers disagree about one composition.
+
+    Every refusal that runs before construction reads ``kind:`` off the
+    document; the registry resolves it off the **merged** config. A handle
+    spelled ``kind`` therefore has a composition checked as one thing and
+    built as another, with nothing between them noticing -- which is exactly
+    the class of silent redirection the merge order's published rule exists to
+    rule out, in the one position that rule cannot cover.
+
+    Asserted on both doors, because the merge is one body and a guard on one
+    of them would be a guard neither reader could rely on.
+    """
+    document = yaml.safe_load(mammals_path.read_text())
+    document["ontology"]["resolver"] = {"rungs": [{"kind": "exact"}, {"kind": "alias"}]}
+    path = tmp_path / "kinded.yaml"
+    path.write_text(yaml.safe_dump(document))
+
+    with pytest.raises(ValidationError, match="may not carry 'kind'"):
+        build_resolver(path, load_ontology(path), handles={"kind": "scan"})
+
+    asynchronous = asyncio.run(async_load_ontology(path))
+    with pytest.raises(ValidationError, match="may not carry 'kind'"):
+        asyncio.run(async_build_resolver(path, asynchronous, handles={"kind": "scan"}))
 
 
 def test_the_refusal_constructs_nothing(mammals_path: Path, tmp_path: Path) -> None:
@@ -282,3 +510,63 @@ def test_a_loader_does_not_refuse_a_rung_it_never_builds(
 
     asynchronous = asyncio.run(async_load_ontology(path))
     assert asynchronous.id == ontology.id
+
+
+def test_a_rung_that_ships_elsewhere_says_so_rather_than_reading_as_a_typo() -> None:
+    """The second mark, and it is marked for a different condition than the first.
+
+    ``semantic`` is withdrawn because no synchronous form of it exists
+    anywhere. ``authority`` exists in both flavours and ships in
+    ``dataknobs-xization``, which ``dataknobs-common`` cannot import and must
+    not -- so the key is declared here and the class is not. Both registries
+    carry it, and importing ``dataknobs_xization.entity_resolution`` clears
+    both marks by registering over them.
+
+    **The pre-import state is what is asserted, so the test checks that it is
+    still the pre-import state.** ``bin/test.sh`` gives each package its own
+    pytest process and nothing in ``common`` depends on ``xization``, so under
+    the runner of record nothing here has imported it. That is a property of
+    *that runner* and not of this test, and the workspace supports another:
+    the root ``pytest.ini`` sets ``testpaths = packages tests`` -- deliberately,
+    so a bare ``pytest`` at the root does not skip the workspace guards -- and
+    under it ``xization``'s own suite imports the module and registers the kind
+    in these same process-global registries. ``pytest-randomly`` then decides
+    which suite runs first, so the assertion below held or failed by seed.
+
+    Skipping rather than asserting a weaker thing: once the module is imported
+    the mark is *correctly* gone, and there is no version of these assertions
+    that is true in both worlds. The condition is named so a reader who meets
+    the skip learns why rather than assuming the test was disabled.
+
+    The reason names the distribution *and* the import, because a reader
+    stuck on this key has two questions and a package name answers only the
+    first: registration happens at a module's import, not at a distribution's
+    presence.
+    """
+    if "dataknobs_xization.entity_resolution" in sys.modules:
+        pytest.skip(
+            "dataknobs_xization.entity_resolution is imported in this process, "
+            "so it has registered over both marks -- which is the behaviour "
+            "xization's own suite asserts. The mark is only observable before "
+            "that import, and bin/test.sh is the runner that guarantees it."
+        )
+
+    from dataknobs_common.entity_resolution import async_signal_backends
+
+    for registry in (signal_backends, async_signal_backends):
+        assert registry.is_known("authority")
+        assert not registry.is_registered("authority")
+
+        reason = registry.unavailable_reason("authority")
+        assert reason is not None
+        assert "dataknobs-xization" in reason
+        assert "dataknobs_xization.entity_resolution" in reason
+
+        assert registry.get_metadata("authority")["requires_install"] == (
+            "pip install dataknobs-xization"
+        )
+
+    # The flavour a door refuses a composition by, which is per registry and
+    # is the one piece of this metadata the two marks do not share.
+    assert signal_backends.get_metadata("authority")["flavour"] == "sync"
+    assert async_signal_backends.get_metadata("authority")["flavour"] == "async"

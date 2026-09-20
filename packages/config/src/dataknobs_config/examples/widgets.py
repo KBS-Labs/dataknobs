@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Example StructuredConfig consumers for async object construction.
 
 These demonstrate the async build path: ``Config.build_object_async`` /

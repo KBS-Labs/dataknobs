@@ -65,7 +65,7 @@ class _RecordingEntitySource:
     def fetch_origin(self, ref: SourceRef) -> Record | None:
         return self._inner.fetch_origin(ref)
 
-    def fetch_origins(self, refs: Sequence[SourceRef]) -> dict[SourceRef, Record]:
+    def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
         return self._inner.fetch_origins(refs)
 
     def describe(self) -> SourceDescription:
@@ -125,6 +125,7 @@ def test_entity_invokes_the_sources_get(mammals_path: Path) -> None:
         assertions=onto.assertions,
         taxonomies=onto.taxonomies,
         describes=onto.describes,
+        codec=onto.codec,
     )
 
     result = swapped.entity("dog")
@@ -150,6 +151,7 @@ def test_by_surface_form_invokes_the_sources_member(mammals_path: Path) -> None:
         assertions=onto.assertions,
         taxonomies=onto.taxonomies,
         describes=onto.describes,
+        codec=onto.codec,
     )
 
     assert swapped.by_surface_form("beagles") == frozenset({"sentinel"})
@@ -177,6 +179,7 @@ def test_longest_form_tokens_invokes_the_sources_member(mammals_path: Path) -> N
         assertions=onto.assertions,
         taxonomies=onto.taxonomies,
         describes=onto.describes,
+        codec=onto.codec,
     )
 
     assert swapped.longest_form_tokens() == 99

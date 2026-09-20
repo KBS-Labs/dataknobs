@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase, _pool_manager
+from dataknobs_data.query import Filter, Operator, Query
 
 
 @pytest.mark.asyncio
@@ -57,3 +58,33 @@ async def test_connect_releases_holder_when_table_setup_fails():
     assert db._connected is False
     assert db._pool is None
     assert _pool_manager.get_pool_count() == baseline
+
+
+@pytest.mark.asyncio
+async def test_no_reader_reaches_the_query_builder_before_connect_binds_it():
+    """What replaced the guard `search` used to carry, and `stream_read` never did.
+
+    The asymmetry was the finding: one reader re-created the builder under a
+    `hasattr` check and the other reached for it directly, so the pair read as
+    though `stream_read` had lost a guard it needed. It never needed one.
+    `connect()` binds the builder before it sets `_connected`, and every reader
+    calls `_check_connection()` first, so the unbound state is unreachable from
+    the outside -- which is what makes the guard removable rather than merely
+    unused.
+
+    Pinned from the outside, through the two doors, because the claim is about
+    reachability rather than about either statement: an ordering change inside
+    `connect()` that set `_connected` first would make this fail without
+    touching either reader.
+    """
+    db = AsyncPostgresDatabase(
+        host="127.0.0.1", port=1, database="x", user="u", password="p", table="t"
+    )
+    query = Query(filters=[Filter("a", Operator.EQ, 1)])
+
+    assert db.query_builder is None, "declared, unbound, and the sync twin's shape"
+
+    with pytest.raises(RuntimeError, match="not connected"):
+        await db.search(query)
+    with pytest.raises(RuntimeError, match="not connected"):
+        await db.stream_read(query).__anext__()

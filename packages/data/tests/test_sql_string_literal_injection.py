@@ -104,10 +104,13 @@ class TestBuildTextFieldConcatValidation:
 class TestStreamReadFilterValidation:
     """stream_read must reject filter.field values unsafe in JSONB key positions.
 
-    Both SyncPostgresDatabase.stream_read and AsyncPostgresDatabase.stream_read embed
-    filter.field into data->>'{filter.field}' — the same injection class as
-    _build_text_field_concat.  Validation fires before _check_connection() so it is
-    reachable on first iteration without a live database connection.
+    Both SyncPostgresDatabase.stream_read and AsyncPostgresDatabase.stream_read put
+    filter.field into a data->>'<key>' JSONB key position — the same injection class
+    as _build_text_field_concat.  They open-coded that interpolation when these tests
+    were written and now reach it through SQLQueryBuilder.build_where_clause, which
+    validates at the point of interpolation; the twins pre-flight the same check so a
+    malformed field is still refused before a connection is acquired.  That ordering
+    is what makes the refusal reachable on first iteration with no live database.
     """
 
     def _bad_query(self, field: str = "x'; DROP TABLE records;--") -> Query:
@@ -141,4 +144,51 @@ class TestStreamReadFilterValidation:
         db = AsyncPostgresDatabase({})
         with pytest.raises(ValueError, match="Invalid field name"):
             async for _ in db.stream_read(self._bad_query("my-field")):
+                pass  # pragma: no cover
+
+
+class TestStreamReadAppliesTheBuilderGrammar:
+    """stream_read's pre-check must apply the same grammar its builder applies.
+
+    The pre-check above exists because the filter field reaches a JSONB key in
+    SQL *string-literal* position, where ``quote_ident()`` does not apply.  When
+    it was written, ``stream_read`` interpolated that position itself.  It no
+    longer does — the field now reaches SQL through ``build_where_clause``, and
+    the builder validates each dot-separated **segment** at the point of
+    interpolation.
+
+    So the grammars have to agree, and the whole-identifier check did not: it
+    read ``metadata.work_order_id`` as one name containing an illegal ``.`` and
+    refused it, while ``search`` over the same ``Query`` answered rows through
+    ``metadata->>'work_order_id'``.  One backend, one ``Query``, two answers.
+    """
+
+    DOTTED_FIELD = "metadata.work_order_id"
+
+    def _dotted_query(self) -> Query:
+        return Query(filters=[Filter(field=self.DOTTED_FIELD, operator=Operator.EQ, value="W-1")])
+
+    def test_builder_accepts_the_dotted_field(self):
+        """Positive control: the grammar the pre-check is required to match."""
+        from dataknobs_data.backends.sql_base import SQLQueryBuilder
+
+        builder = SQLQueryBuilder(table_name="records", dialect="postgres")
+        where_clause, params = builder.build_where_clause(self._dotted_query())
+        assert where_clause == " AND metadata->>'work_order_id' = $1"
+        assert params == ["W-1"]
+
+    def test_sync_stream_read_accepts_the_dotted_field(self):
+        """Reaching the connection check is the assertion: the grammar let it by."""
+        from dataknobs_data.backends.postgres import SyncPostgresDatabase
+
+        db = SyncPostgresDatabase({})
+        with pytest.raises(RuntimeError, match="not connected"):
+            next(iter(db.stream_read(self._dotted_query())))
+
+    async def test_async_stream_read_accepts_the_dotted_field(self):
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+        db = AsyncPostgresDatabase({})
+        with pytest.raises(RuntimeError, match="not connected"):
+            async for _ in db.stream_read(self._dotted_query()):
                 pass  # pragma: no cover

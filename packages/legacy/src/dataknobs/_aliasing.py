@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Publish a modular package's submodules under the legacy dotted namespace.
 
 Each shim in this package re-exports from a modular package by importing its

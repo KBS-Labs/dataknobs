@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """A hierarchy whose edges are assertions of one relation.
 
 The component behind the sentence *a taxonomy is a view of an ontology's
@@ -25,13 +28,14 @@ goes where its dependency is, not beside its protocol.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Generic, TypedDict
 
+from dataknobs_common.hierarchy import K, dedupe_ordered, nodes_of, parent_edges_of
 from dataknobs_common.ontology.model import EntityRef, Polarity, relation_id
 from dataknobs_common.ontology.sources import object_entity_id
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
     from dataknobs_common.ontology.model import Assertion, RelationRef, Term
     from dataknobs_common.ontology.sources import AssertionSource, AsyncAssertionSource
@@ -69,39 +73,43 @@ def edge_criteria(relation: RelationRef) -> EdgeCriteria:
     return {"relation": relation, "polarity": Polarity.ASSERTED}
 
 
-def _ordered(node_ids: Iterable[str]) -> tuple[str, ...]:
-    """Deduplicate in first-appearance order.
+def _pairs(assertions: Sequence[Assertion[K]]) -> list[tuple[K, K | None]]:
+    """These assertions as ``(child, parent)`` edges, which is all a rule needs.
 
-    A DAG node is reachable by several paths, so a repeated id changes no
-    membership answer and does change a count someone is reporting.
+    The one line that is this backing's own. What *reads* these pairs --
+    :func:`~dataknobs_common.hierarchy.parent_edges_of`,
+    :func:`~dataknobs_common.hierarchy.nodes_of` -- is shared with every other
+    backing, because who is above whom does not depend on whether an edge
+    arrived as an assertion or as two columns of a row.
+
+    ``None`` where the object is a literal: an axis is made of edges between
+    entities, and ``dog lifespan_years 12`` is a value rather than a place in a
+    structure. The shared rules take that as *a node placed under nothing*,
+    which is the same thing this module used to spell as a ``continue``.
     """
-    return tuple(dict.fromkeys(node_ids))
+    return [(assertion.subject, object_entity_id(assertion.object)) for assertion in assertions]
 
 
-def _parents_of(assertions: Sequence[Assertion]) -> tuple[str, ...]:
+def _parents_of(assertions: Sequence[Assertion[K]]) -> tuple[K, ...]:
     """The entity objects of these assertions, deduplicated in order.
 
     An assertion whose object is a literal contributes no parent: an axis is
     made of edges between entities, and ``dog lifespan_years 12`` is a value
     rather than a place in a structure.
     """
-    return _ordered(
-        entity_id
-        for assertion in assertions
-        if (entity_id := object_entity_id(assertion.object)) is not None
-    )
+    return dedupe_ordered(parent for _, parent in _pairs(assertions) if parent is not None)
 
 
-def _children_of(assertions: Sequence[Assertion]) -> tuple[str, ...]:
+def _children_of(assertions: Sequence[Assertion[K]]) -> tuple[K, ...]:
     """The subjects of these assertions, deduplicated in order.
 
     The mirror of :func:`_parents_of`: a child is an edge's subject, and no
     literal check is needed because a subject is always an entity id.
     """
-    return _ordered(assertion.subject for assertion in assertions)
+    return dedupe_ordered(assertion.subject for assertion in assertions)
 
 
-def _parent_edges_of(edges: Sequence[Assertion]) -> dict[str, tuple[str, ...]]:
+def _parent_edges_of(edges: Sequence[Assertion[K]]) -> dict[K, tuple[K, ...]]:
     """Every node these edges mention, and what each is directly under.
 
     The extent :meth:`AssertionHierarchy.roots` is not, which is what lets a
@@ -110,43 +118,35 @@ def _parent_edges_of(edges: Sequence[Assertion]) -> dict[str, tuple[str, ...]]:
     root to be found from, and ``isa`` is asserted rather than constrained, so a
     document may name one.
 
-    Every node gets an entry, including one that only ever appears as a parent;
-    its entry is empty, which is the same thing :meth:`roots` reports about it.
-    An assertion whose object is a literal contributes a node and no edge, for
-    the reason :func:`_parents_of` gives: ``dog lifespan_years 12`` is a value
-    rather than a place in a structure.
+    The rule is :func:`~dataknobs_common.hierarchy.parent_edges_of`'s and this
+    is the adapter onto it; the docstring there states what it answers for
+    every backing.
     """
-    above: dict[str, list[str]] = {}
-    for edge in edges:
-        above.setdefault(edge.subject, [])
-        parent = object_entity_id(edge.object)
-        if parent is None:
-            continue
-        above.setdefault(parent, [])
-        if parent not in above[edge.subject]:
-            above[edge.subject].append(parent)
-    return {node_id: tuple(parents) for node_id, parents in above.items()}
+    return parent_edges_of(_pairs(edges))
 
 
-def _nodes_of(edges: Sequence[Assertion]) -> tuple[str, ...]:
+def _nodes_of(edges: Sequence[Assertion[K]]) -> tuple[K, ...]:
     """Every node these edges mention, deduplicated in first-appearance order.
 
     Declaration order, because it is the only order a hand-edited file gives
     and the alternative -- sorting -- would make ``roots()`` report an order
-    the author did not write.
+    the author did not write. :func:`~dataknobs_common.hierarchy.nodes_of` is
+    the rule; this is the adapter onto it.
     """
-    nodes: list[str] = []
-    for edge in edges:
-        nodes.append(edge.subject)
-        entity_id = object_entity_id(edge.object)
-        if entity_id is not None:
-            nodes.append(entity_id)
-    return _ordered(nodes)
+    return nodes_of(_pairs(edges))
 
 
 @dataclass(frozen=True)
-class AssertionHierarchy:
+class AssertionHierarchy(Generic[K]):
     """A :class:`~dataknobs_common.hierarchy.Hierarchy` over one relation.
+
+    **Generic in the node key**, and it has to be rather than merely may be:
+    this is the axis an :class:`~dataknobs_common.ontology.Ontology` builds
+    when a definition asks for a live read, so a ``K``-keyed ontology whose
+    structure came back ``str``-keyed would be an axis in one space beside a
+    content lookup in another. A consumer's own concrete is free to bind
+    ``str`` and compile unchanged; this one is on the path from a widened
+    surface to a widened axis, which is the difference.
 
     ``parents(x)`` is ``find(subject=x, ...)`` read for its objects;
     ``children(x)`` is ``find(object=x, ...)`` read for its subjects -- the
@@ -172,15 +172,15 @@ class AssertionHierarchy:
     door still takes either, and :attr:`relation` hands back the id.
     """
 
-    source: AssertionSource
+    source: AssertionSource[K]
     relation: RelationRef
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "relation", relation_id(self.relation))
 
     def _find(
-        self, *, subject: str | None = None, object: Term | None = None
-    ) -> Sequence[Assertion]:
+        self, *, subject: K | None = None, object: Term[K] | None = None
+    ) -> Sequence[Assertion[K]]:
         """Every **asserted** edge of this relation matching the criteria.
 
         Every read below goes through here, and this goes through
@@ -199,14 +199,14 @@ class AssertionHierarchy:
         return self.source.find(subject=subject, object=object, **edge_criteria(self.relation))
 
     def _find_many(
-        self, *, subjects: Sequence[str] | None = None, objects: Sequence[str] | None = None
-    ) -> Mapping[str, Sequence[Assertion]]:
+        self, *, subjects: Sequence[K] | None = None, objects: Sequence[K] | None = None
+    ) -> Mapping[K, Sequence[Assertion[K]]]:
         """:meth:`_find`'s bulk form, narrowed identically."""
         return self.source.find_many(
             subjects=subjects, objects=objects, **edge_criteria(self.relation)
         )
 
-    def roots(self) -> Sequence[str]:
+    def roots(self) -> Sequence[K]:
         """The nodes this axis has with no parent.
 
         Not an extent, and the distinction matters: this is *the nodes this
@@ -221,15 +221,15 @@ class AssertionHierarchy:
         placed = {edge.subject for edge in edges if object_entity_id(edge.object) is not None}
         return tuple(node for node in _nodes_of(edges) if node not in placed)
 
-    def parents(self, node_id: str) -> Sequence[str]:
+    def parents(self, node_id: K) -> Sequence[K]:
         """The nodes ``node_id`` is directly under."""
         return _parents_of(self._find(subject=node_id))
 
-    def children(self, node_id: str) -> Sequence[str]:
+    def children(self, node_id: K) -> Sequence[K]:
         """The nodes directly under ``node_id``."""
         return _children_of(self._find(object=EntityRef(node_id)))
 
-    def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+    def parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
         """:meth:`parents` for a whole frontier, in one query.
 
         ``AssertionSource.find_many`` is the bulk form the singular member
@@ -240,12 +240,12 @@ class AssertionHierarchy:
         found = self._find_many(subjects=tuple(node_ids))
         return tuple(_parents_of(found.get(node_id, [])) for node_id in node_ids)
 
-    def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+    def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
         """:meth:`children` for a whole frontier, in one query."""
         found = self._find_many(objects=tuple(node_ids))
         return tuple(_children_of(found.get(node_id, [])) for node_id in node_ids)
 
-    def contains(self, node_id: str) -> bool:
+    def contains(self, node_id: K) -> bool:
         """Whether any **asserted** edge of this relation names the node.
 
         What keeps *nothing below this node* distinguishable from *this node is
@@ -260,7 +260,7 @@ class AssertionHierarchy:
             return True
         return bool(self._find(object=EntityRef(node_id)))
 
-    def parent_edges(self) -> Mapping[str, Sequence[str]]:
+    def parent_edges(self) -> Mapping[K, Sequence[K]]:
         """Every asserted edge of this relation, in one query.
 
         The member that makes a copy of this axis complete. It is one ``find``
@@ -276,7 +276,7 @@ class AssertionHierarchy:
 
 
 @dataclass(frozen=True)
-class AsyncAssertionHierarchy:
+class AsyncAssertionHierarchy(Generic[K]):
     """The asynchronous twin, over an ``AsyncAssertionSource``.
 
     Same two fields and the same members, every one ``async def``, returning a
@@ -289,7 +289,7 @@ class AsyncAssertionHierarchy:
     performs no read and so has no flavour.
     """
 
-    source: AsyncAssertionSource
+    source: AsyncAssertionSource[K]
     relation: RelationRef
 
     def __post_init__(self) -> None:
@@ -302,52 +302,52 @@ class AsyncAssertionHierarchy:
         object.__setattr__(self, "relation", relation_id(self.relation))
 
     async def _find(
-        self, *, subject: str | None = None, object: Term | None = None
-    ) -> Sequence[Assertion]:
+        self, *, subject: K | None = None, object: Term[K] | None = None
+    ) -> Sequence[Assertion[K]]:
         """:meth:`AssertionHierarchy._find`, awaited."""
         return await self.source.find(
             subject=subject, object=object, **edge_criteria(self.relation)
         )
 
     async def _find_many(
-        self, *, subjects: Sequence[str] | None = None, objects: Sequence[str] | None = None
-    ) -> Mapping[str, Sequence[Assertion]]:
+        self, *, subjects: Sequence[K] | None = None, objects: Sequence[K] | None = None
+    ) -> Mapping[K, Sequence[Assertion[K]]]:
         """:meth:`AssertionHierarchy._find_many`, awaited."""
         return await self.source.find_many(
             subjects=subjects, objects=objects, **edge_criteria(self.relation)
         )
 
-    async def roots(self) -> Sequence[str]:
+    async def roots(self) -> Sequence[K]:
         """The nodes this axis has with no parent."""
         edges = await self._find()
         placed = {edge.subject for edge in edges if object_entity_id(edge.object) is not None}
         return tuple(node for node in _nodes_of(edges) if node not in placed)
 
-    async def parents(self, node_id: str) -> Sequence[str]:
+    async def parents(self, node_id: K) -> Sequence[K]:
         """The nodes ``node_id`` is directly under."""
         return _parents_of(await self._find(subject=node_id))
 
-    async def children(self, node_id: str) -> Sequence[str]:
+    async def children(self, node_id: K) -> Sequence[K]:
         """The nodes directly under ``node_id``."""
         return _children_of(await self._find(object=EntityRef(node_id)))
 
-    async def parents_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+    async def parents_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
         """:meth:`AssertionHierarchy.parents_many`, awaited."""
         found = await self._find_many(subjects=tuple(node_ids))
         return tuple(_parents_of(found.get(node_id, [])) for node_id in node_ids)
 
-    async def children_many(self, node_ids: Sequence[str]) -> Sequence[Sequence[str]]:
+    async def children_many(self, node_ids: Sequence[K]) -> Sequence[Sequence[K]]:
         """:meth:`AssertionHierarchy.children_many`, awaited."""
         found = await self._find_many(objects=tuple(node_ids))
         return tuple(_children_of(found.get(node_id, [])) for node_id in node_ids)
 
-    async def contains(self, node_id: str) -> bool:
+    async def contains(self, node_id: K) -> bool:
         """Whether any asserted edge of this relation names the node."""
         if await self._find(subject=node_id):
             return True
         return bool(await self._find(object=EntityRef(node_id)))
 
-    async def parent_edges(self) -> Mapping[str, Sequence[str]]:
+    async def parent_edges(self) -> Mapping[K, Sequence[K]]:
         """:meth:`AssertionHierarchy.parent_edges`, awaited."""
         return _parent_edges_of(await self._find())
 

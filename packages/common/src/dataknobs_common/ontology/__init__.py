@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Vocabularies: entities, the relations between them, and the axes they form.
 
 An ontology here is a **value**. It holds sources rather than entities, owns no
@@ -26,7 +29,9 @@ must be closed, and a module-level function has no ``close()``.
 from dataknobs_common.entity_resolution.protocols import (
     AliasFormSource,
     AsyncAliasFormSource,
+    AsyncSurfaceFormCatalog,
     MembershipOracle,
+    SurfaceFormCatalog,
 )
 from dataknobs_common.entity_resolution.values import (
     CompatibilityVerdict,
@@ -36,7 +41,17 @@ from dataknobs_common.entity_resolution.values import (
     RunnerUp,
     Scoring,
 )
+from dataknobs_common.ontology.ascent import (
+    Granularity,
+    NodeSupport,
+    OntologySupport,
+    SupportSet,
+    async_roll_up,
+    ontology_support,
+    roll_up,
+)
 from dataknobs_common.ontology.config import OntologyConfig
+from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
@@ -46,13 +61,28 @@ from dataknobs_common.ontology.hierarchy import (
 from dataknobs_common.ontology.loader import (
     AUTHORED_SOURCE_KINDS,
     DEFAULT_NESTED_RELATION,
-    ENTITY_TYPE_ISA_KEY,
     RESERVED_ONTOLOGY_ID,
+    TAXONOMY_ROW_KEYS,
+    assemble_async_ontology,
+    assemble_ontology,
     async_build_resolver,
     async_load_ontology,
     build_ontology,
     build_resolver,
     load_ontology,
+    refuse_unbuildable_rungs,
+)
+from dataknobs_common.ontology.tags import (
+    ALIAS_FORMS_KEY,
+    NODE_ID_KEY,
+    ONTOLOGY_ID_KEY,
+    TAXONOMY_ID_KEY,
+    MalformedRow,
+    NodeTag,
+    TagReading,
+    read_alias_forms,
+    read_node_tags,
+    read_node_tags_many,
 )
 from dataknobs_common.ontology.model import (
     DK_ENTITY_TYPE,
@@ -101,7 +131,13 @@ from dataknobs_common.ontology.taxonomy import (
     TaxonomyView,
 )
 from dataknobs_common.text import default_normalizer
-from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts
+from dataknobs_common.ontology.values import (
+    AsyncOntology,
+    KeyCodec,
+    Ontology,
+    OntologyParts,
+    StrCodec,
+)
 
 __all__ = [
     "AUTHORED_SOURCE_ID",
@@ -109,13 +145,14 @@ __all__ = [
     "DEFAULT_NESTED_RELATION",
     "DK_ENTITY_TYPE",
     "DK_RELATION_TYPE",
-    "ENTITY_TYPE_ISA_KEY",
     "RESERVED_ONTOLOGY_ID",
+    "TAXONOMY_ROW_KEYS",
     "AliasFormSource",
     "Assertion",
     "AssertionHierarchy",
     "AssertionSource",
     "AsyncAliasFormSource",
+    "AsyncSurfaceFormCatalog",
     "AsyncAssertionHierarchy",
     "AsyncAssertionSource",
     "AsyncEntitySource",
@@ -133,16 +170,22 @@ __all__ = [
     "EntitySource",
     "EntityType",
     "EvidenceKind",
+    "Granularity",
     "InferenceMode",
+    "KeyCodec",
     "Literal",
     "MatchEvidence",
+    "MalformedRow",
     "MappingAssertionSource",
     "MappingEntitySource",
     "Materialization",
     "MembershipOracle",
+    "NodeSupport",
+    "NodeTag",
     "Ontology",
     "OntologyConfig",
     "OntologyParts",
+    "OntologySupport",
     "ParentChoice",
     "Polarity",
     "ProjectionContext",
@@ -156,19 +199,37 @@ __all__ = [
     "SiblingOrder",
     "SourceDescription",
     "SourceRef",
+    "StrCodec",
+    "SupportSet",
+    "SurfaceFormCatalog",
+    "TagReading",
     "Taxonomy",
     "TaxonomyDefinition",
     "TaxonomyView",
     "Term",
     "TreeProjection",
+    "assemble_async_ontology",
+    "assemble_ontology",
     "async_build_resolver",
     "async_load_ontology",
+    "async_roll_up",
     "build_ontology",
     "build_resolver",
     "default_normalizer",
     "edge_criteria",
     "load_ontology",
+    "ontology_support",
     "qualify",
+    "read_alias_forms",
+    "read_node_tags",
+    "read_node_tags_many",
+    "refuse_unbuildable_rungs",
     "relation_id",
+    "roll_up",
     "split_qualified",
+    "EntitySourceIndexSource",
+    "ALIAS_FORMS_KEY",
+    "NODE_ID_KEY",
+    "ONTOLOGY_ID_KEY",
+    "TAXONOMY_ID_KEY",
 ]

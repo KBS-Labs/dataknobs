@@ -73,8 +73,8 @@ from dataknobs_llm import ToolRegistry
 
 # Create and populate registry
 registry = ToolRegistry()
-registry.register(WeatherTool())
-registry.register(CalculatorTool())
+registry.register_tool(WeatherTool())
+registry.register_tool(CalculatorTool())
 
 # Check for tools
 if registry.has_tool("get_weather"):

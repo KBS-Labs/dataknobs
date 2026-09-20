@@ -7,6 +7,278 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **The synchronous provider adapter no longer raises inside a running event
+  loop.** All six of `SyncProviderAdapter`'s async-reaching methods —
+  `initialize`, `close`, `complete`, `stream`, `embed`, `validate_model` —
+  reached their provider with `loop.run_until_complete`, which raises
+  `RuntimeError: This event loop is already running` when the caller is
+  already on a loop, and left an un-awaited coroutine behind with it. That is
+  the case a synchronous wrapper exists to serve, and it was the case that
+  failed. Each now runs its coroutine on a private `SyncLoopBridge` loop.
+  `LLMResource` — the FSM integration's LLM resource, which holds one adapter
+  per model — was unusable from async code for the same reason and is fixed
+  with it. The adapter owns one daemon thread, named `dk-sync-llm-provider`,
+  from the first call that reaches its provider until `close()`.
+- **Abandoning a partially consumed sync stream now closes the provider's
+  generator.** `SyncProviderAdapter.stream` drove a wrapper around the
+  provider's async generator, and closing a wrapper does not close what it was
+  iterating: `async for` has no implicit `aclose`, so the provider's generator
+  merely lost its last reference and was finalized later by the event loop's
+  async-generator hook — after the caller had moved on, and possibly not
+  before the loop was torn down. Its `finally` is where a provider releases
+  the HTTP response the stream was reading. The provider's generator is now
+  driven directly, so breaking out of a stream closes it synchronously — and
+  that holds after `close()` on a shared `bridge=` too, where there is no
+  bridge teardown to drain it because the bridge belongs to someone else.
+- **Tearing down an LLM resource releases the threads it allocated.** A
+  `LLMResource` whose provider failed to `initialize()` kept the adapter that
+  failed — it is recorded only after initialization succeeds, so `close()`
+  could not reach it and the `ResourceError`'s traceback kept the finalizer
+  from collecting it. A caller that caught the error and retried accumulated
+  one daemon thread and two descriptors per attempt. `AsyncLLMResource.aclose()`
+  closed the async provider and the rate limiter but never the adapters that
+  the inherited synchronous `complete()` builds, leaking one per model key.
+- **`VersionedPromptLibrary` can be constructed.** `AbstractPromptLibrary.reload`
+  carried an `@abstractmethod` that its own docstring contradicted — *"This is
+  optional… Default implementation does nothing."* The method shipped
+  undecorated; a later lint sweep added the decorator and left the docstring
+  standing. `VersionedPromptLibrary` is the one subclass that did not override
+  `reload`, so it was abstract and every one of its twenty-odd methods was
+  unreachable. The decorator is removed, with a per-line `# noqa: B027` naming
+  the reason, and the class now has behavioural tests.
+- **Listing system prompts no longer installs an event loop.**
+  `VersionedPromptLibrary.list_system_prompts` opened by constructing an event
+  loop and installing it thread-globally with `set_event_loop`, then never used
+  or closed it — so calling it from a loopless thread left a live loop behind.
+  Its sibling `list_user_prompts` does the same dict read with none of that.
+- **Reloading a prompt library no longer empties it.** `FileSystemPromptLibrary`
+  and `ConfigPromptLibrary` keep their whole content in the caches
+  `BasePromptLibrary` manages — the listings answer from those caches — and
+  both inherited a `reload()` that only *cleared* them. Reloading a filesystem
+  library discarded every prompt and read nothing back, leaving
+  `list_system_prompts()` empty. Each library now spells its own `reload()`
+  over the mixin's shared `_reload_caches()`, and re-reads its source after
+  clearing.
+- **A prompt library's listings match what its getters answer.** Two defects in
+  one walk. Deleting a prompt's last version left the version index holding its
+  name against an empty list, so `list_system_prompts()` kept naming a prompt
+  `get_system_prompt()` then answered `None` for. And a prompt name containing
+  a `:` was dropped from its own listing: the index key is `f"{name}:{type}"`
+  and the walk split on the *first* colon, putting the tail of the name into
+  the type slot — such a prompt could be created and fetched but never listed.
+- **A prompt template reflects a tag added after it was first read.**
+  `VersionedPromptLibrary` converted each version to a template dictionary
+  once and kept it in a cache nothing ever invalidated, so `tag_version`
+  changed the store and not what `get_system_prompt` returned. The staleness
+  hid itself while a manager handed back the object it held — the cached
+  `tags` was the same list the tag was appended to, so it showed through for
+  exactly the fields that were mutable. There is no cache; the conversion
+  builds a dictionary from an object already in hand.
+- **`get_events(limit=0)` returns no events.** It returned every one of them:
+  the bound was applied under `if limit:`, where `0` is indistinguishable from
+  "no limit given".
+- **A store's protocol check accepts a wrapper and refuses a non-method.**
+  It decided with `isinstance` against a `runtime_checkable` protocol, which
+  answers two questions wrongly for a store: it cannot see a method reached
+  through `__getattr__`, so the wrapper a consumer writes to log or trace a
+  real store was refused — and refused naming *nothing*, every member being
+  reachable after all; and it counts any member that is not `None` as present,
+  so an attribute of the wrong type was accepted and failed later as
+  `'int' object is not callable`. The verdict is now whether each member is
+  callable, which is also what the message says.
+- **Two assignments can no longer take each other's row.**
+  `DatabaseVersionStore` keyed an assignment by joining the experiment and
+  user ids with a colon, so experiment `a:b` with user `c` and experiment `a`
+  with user `b:c` composed the same key and one silently overwrote the other.
+  The experiment id is length-prefixed, and `load_assignment` finds the record
+  by its fields as its plural sibling already did.
+- **`delete_metrics` deletes every event or says why it could not.** It
+  skipped any search result whose record id was absent and still reported
+  success, which would have left the events behind for a backend that does not
+  populate one. The deletes are also one batch rather than one call each.
+- **The versioning module's quick start runs.** Both of its load-bearing
+  lines failed: it imported `VersionedPromptLibrary` from
+  `dataknobs_llm.prompts.versioning`, which does not export it, and then
+  constructed it with `backend=`, which the constructor has never accepted. A
+  reader following it got an `ImportError` and, on fixing that, a `TypeError`.
+- **`AsyncPromptBuilder` no longer calls its prompt library on the event loop.**
+  All three library reaches — the system-prompt fetch, the user-prompt fetch
+  and the RAG-config fetch — ran synchronously inside `async def` bodies over
+  an `AbstractPromptLibrary` the builder does not choose, so a library that
+  read a file to answer stalled the builder's loop and every other task on it
+  for the duration. The builder holds an `as_async` view privately and awaits
+  it; `builder.library` is still the object that was passed, and the inherited
+  synchronous helpers still answer over it.
+
+### Changed
+
+- **Prompt libraries come in two flavours, and there are two named doors
+  between them (breaking).** `AsyncPromptLibrary` joins `AbstractPromptLibrary`
+  as the interface for a library that has to reach a store to answer, and
+  `VersionedPromptLibrary` is the first implementation of it — its accessors
+  are coroutines now, like the writers that populate it. The two protocols
+  declare one surface member for member, with one stated difference:
+  `get_metadata` is synchronous on both, because it answers from the library's
+  own configuration rather than from its content. `as_async(library)` presents
+  a synchronous library to an async consumer, offloading each call to a worker
+  thread so a library that reads a file cannot stall the consumer's loop;
+  `as_sync(library)` presents an async library to a `def` consumer, at the cost
+  of a private event loop on a daemon thread and a calling thread blocked for
+  the whole of every call. The asymmetry is the point: where a consumer can
+  take the async library directly, that is always cheaper than `as_sync`.
+  `as_sync` into `AsyncPromptBuilder` pays twice for one read — that builder is
+  still typed to the synchronous interface and offloads through `as_async`
+  itself, so the fetch crosses to a worker thread, blocks it on the bridge and
+  crosses back — and the bridge it opens is one nothing downstream will close,
+  because `AbstractPromptLibrary` declares no `close()`. Widening the builder
+  to take either flavour is still open.
+
+  Breaking on paper, vacuous in fact: `VersionedPromptLibrary` was abstract in
+  every published version, so nothing has ever held one. `get_metadata` no
+  longer reports `version_count` / `experiment_count` — they counted rows by
+  reaching into two managers' private dictionaries, and counting rows in a
+  store is a query, not metadata about a library. `base_library` now accepts
+  either flavour, normalising a synchronous one through `as_async`, and is a
+  property so that replacing it replaces what lookups reach; a library
+  answering to neither protocol is a `TypeError` at the point it is set rather
+  than an un-awaitable object surfacing from a later fallback. `VersionManager`
+  gains `list_names(prompt_type)`, which is what the library's two listings
+  walk now — they previously read the manager's private index and parsed its
+  key format back.
+
+- **`BasePromptLibrary` no longer stubs the interface it extends, and no
+  longer declares it (breaking).** Eight `NotImplementedError` overrides stood
+  in for the ABC's abstract methods — and to `abc` a stub is an
+  implementation, so those eight switched off the construct-time check for
+  every subclass: a library missing a method built fine and raised at the
+  first call instead, which is the one moment its author is no longer
+  watching. They are gone; `get_metadata`, the ninth and the only real one,
+  stays. With them gone the class carries no interface at all, so it stops
+  declaring one: it is a mixin holding caching, parsing and metadata, which is
+  what lets a library of *either* flavour reuse it. `FileSystemPromptLibrary`
+  and `ConfigPromptLibrary` name `AbstractPromptLibrary` themselves, so every
+  `isinstance` check against them answers as before. A consumer subclassing
+  `BasePromptLibrary` directly now names the flavour too, and a subclass
+  missing a method is refused at construction, naming what it is missing.
+  Flavour-neutrality reaches the members as well as the bases: the shared
+  reloading is `_reload_caches()`, because a public `def reload` on the mixin
+  wins the MRO over `AsyncPromptLibrary`'s `async def` default and left an
+  asynchronous library that reused the mixin raising `TypeError` on
+  `await library.reload()`.
+
+- **The versioning layer persists, and reads back what it writes
+  (breaking).** `VersionManager`, `ABTestManager`, `MetricsCollector` and
+  `VersionedPromptLibrary` took a `storage: Any` and duck-typed it for `set`,
+  `append` and `delete`. They take a typed `store` instead:
+  `InMemoryVersionStore` when nothing is passed, or `DatabaseVersionStore(db)`
+  over any of the seven dataknobs backends. Every read goes through it.
+
+  "Breaking" understates what the old parameter did. `set` and `append` are on
+  no dataknobs backend, so against any of them every write was dropped in
+  silence, while `delete` matched **by name** and fired — against ids that had
+  therefore never been written. Every read came from an instance dictionary
+  the writes shadowed and nothing replayed. So a version created through a
+  real database was invisible to anything else holding that database,
+  `delete_version` reported `True` over a database that had never held it, and
+  none of these coroutines ever suspended, because a method that never reads
+  has nothing to await. Two of the five entities could not have been stored
+  even had the verbs existed: a user's variant assignment was a bare `str`
+  under a composed key, and metric events were `append`-ed to a list under one
+  key, neither of which is a record.
+
+  What a consumer sees:
+
+  - `storage=` is now `store=`. An object that cannot answer the protocol is a
+    `TypeError` at construction, naming every method it lacks — which is what
+    an object written for the old parameter gets.
+  - Three protocols, one per manager — `VersionStore`, `ExperimentStore`,
+    `MetricsStore` — so a store need only implement the manager it serves.
+    `VersioningStore` is all three, and one object still serves all three
+    managers exactly as one `storage` argument did.
+  - A load returns a value rather than a handle, `InMemoryVersionStore`
+    included. Mutating what a manager returned no longer changes what is
+    stored: `tag_version` and friends return the updated version, and that is
+    the object to read. A store that handed out live references would work in
+    development and lose writes in production.
+  - `VersionedPromptLibrary.get_metadata` reports `store` — the store's class
+    name — where it reported `storage`.
+  - `VersionManager` no longer keeps a name index. Which names exist is
+    derived from the versions themselves, so there is no second record of it
+    to drift.
+  - Nothing on this layer owns a database. `DatabaseVersionStore` is handed
+    one, so the caller closes it, and no class here grows a `close()`.
+  - Recording an event is one store operation, not two. `MetricsStore` has a
+    `record_event` that appends the event **and** folds it into the version's
+    aggregate, because folding is a read-modify-write and doing it in the
+    caller puts a suspension point between the read and the write: two
+    recordings for one version racing each other lose an increment, or
+    collide outright creating the first aggregate.
+    `InMemoryVersionStore` awaits nothing in between;
+    `DatabaseVersionStore` writes the aggregate as a compare-and-set and
+    re-reads and re-folds when it loses, up to
+    `DatabaseVersionStore(db, max_retries=8)` times. The fold itself is
+    `PromptMetrics.fold`, so the two stores cannot come to disagree about
+    what an event does to the totals.
+  - `load_events(version_id, *, limit=None)` returns events **newest first**,
+    and the limit reaches the query, so an unbounded stream is never fully
+    materialized to answer for its most recent few. The protocol used to
+    promise no order at all, which made a bound meaningless. Versions
+    deliberately have no such bound: resolving `latest` and refusing a
+    duplicate version string are questions about the whole set.
+  - `require_store` returns the store it accepted and is exported from
+    `dataknobs_llm.prompts`, so a consumer writing their own store can run
+    the same check before wiring it in.
+  - An aware `MetricEvent.timestamp` is stored as UTC, so the stored strings
+    sort chronologically — a store asks its backend to order an event stream
+    by that field, which is a comparison of the text.
+
+- **`SyncProviderAdapter` is a `SyncBridgeAdapter` from `dataknobs-common`.**
+  `bridge=`, `timeout=`, `close()`, `aclose()` and `with` all behave exactly
+  as before, and it still closes the provider it wraps, which the base leaves
+  to a hook because the other adopters do not own what they wrap. Two things
+  are new. The bridge it accepts can be shared with anything else built on
+  that base, so a service holding a sync provider and a `SyncTextEmbedder`
+  need not hold two daemon threads. And it answers `async with`, which pairs
+  with the `aclose()` it already had: entry initializes nothing, so an async
+  holder still runs the blocking calls in a worker and takes the async form
+  only for the teardown.
+
+- **A synchronous provider carries a teardown obligation, and a wider surface
+  to meet it with.** `create_llm_provider(config, is_async=False)` and
+  `LLMProviderFactory(is_async=False).create(...)` return an adapter that
+  allocates an event loop on a daemon thread the first time it reaches its
+  provider, and holds it until `close()`. Construction itself allocates
+  nothing, so building one to read `provider_name` or `get_capabilities()`
+  stays free; an adapter that has served a call and is then dropped emits a
+  `ResourceWarning` (which Python's default filters ignore — run under
+  `-W always::ResourceWarning` to see it). `SyncProviderAdapter` is now a
+  context manager, takes `timeout=` for an upper bound on a blocking wait a
+  synchronous caller cannot otherwise cancel, takes `bridge=` so several
+  adapters can share one thread, and offers `aclose()` for async holders, which
+  frees the caller's loop for the teardown rather than blocking it. The
+  provider itself is closed on the bridge in both forms: its HTTP session, its
+  transports and its in-flight tasks were created by an `initialize()` that
+  went through the bridge and belong to that loop.
+- **tree walks bind `children` once per node rather than re-reading it.**
+  `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
+  than the list the node holds, so each read allocates one. `get_node_by_id`
+  read it three times per path segment and the branch and RAG-metadata walks
+  twice per node; each now reads once. No behaviour changed.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-llm` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ### Security
 
 - Bumped minimum `transformers` requirement in the `embeddings` extra from

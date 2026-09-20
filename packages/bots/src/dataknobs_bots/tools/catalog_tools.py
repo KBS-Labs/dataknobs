@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Catalog tools — LLM-callable tools for ArtifactBankCatalog operations.
 
 Provides tools for listing, saving to, and loading from an

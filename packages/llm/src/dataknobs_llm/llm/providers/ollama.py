@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Ollama local LLM provider implementation.
 
 This module provides Ollama integration for dataknobs-llm, enabling local LLM

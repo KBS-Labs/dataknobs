@@ -32,19 +32,39 @@ import numpy as np
 import pytest
 
 from dataknobs_data import Record
+from dataknobs_data.backend_selection import (
+    KnownBackend,
+    available_backends,
+    known_backend_classes,
+)
+from dataknobs_data.backends import async_backends, sync_backends
 from dataknobs_data.backends.file import AsyncFileDatabase
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.fields import VectorField
 from dataknobs_data.testing import DeterministicEmbedder
+from dataknobs_data.vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from dataknobs_data.vector.content import (
     CONTENT_HASH_KEY,
     FIELD_SEPARATOR_KEY,
     SOURCE_FIELDS_KEY,
     compute_content_hash,
 )
+from dataknobs_data.vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 
-ASYNC_BACKENDS = ["memory", "file", "sqlite"]
+#: The backends the behavioural half below drives. Three rather than every
+#: async backend, because driving one means standing up its store --- which
+#: the structural half deliberately does not need, and which is why that half
+#: can cover every backend and this one cannot.
+BEHAVIOURAL_BACKENDS = ["memory", "file", "sqlite"]
+
+#: Every backend each registry knows of. Derived, because the hand-written
+#: version of this list is what row-by-row coverage looks like when nobody
+#: updates it: it named seven classes while eleven carry the method, and the
+#: four it missed included ``AsyncPostgresDatabase`` --- the async twin of the
+#: very class whose stub this guard was written for.
+SYNC_BACKENDS = known_backend_classes(sync_backends)
+ASYNC_BACKENDS = known_backend_classes(async_backends)
 
 
 def _embed(texts: list[str]) -> np.ndarray:
@@ -67,7 +87,7 @@ async def _make_async_db(kind: str, root: Path) -> Any:
     return db
 
 
-@pytest.fixture(params=ASYNC_BACKENDS)
+@pytest.fixture(params=BEHAVIOURAL_BACKENDS)
 async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     with tempfile.TemporaryDirectory() as d:
         db = await _make_async_db(request.param, Path(d))
@@ -79,25 +99,219 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
                 await close()
 
 
-class TestTheAsyncMethodIsAwaitable:
-    """The structural half: an async backend's method is a coroutine function.
+def _reachable(entry: KnownBackend) -> type:
+    """The backend's class, or a skip naming the backend that could not be reached.
 
-    This is what the wiring bug actually was, and it is checkable without
-    running anything --- which is the point. It failed for every async backend
-    while every behavioural vector test in the suite went on passing, because
-    nothing called this method on an async backend.
+    A backend importing its driver at module top level is unimportable where
+    that driver is absent, and the class is what this guard inspects. Skipping
+    is therefore the honest answer --- and it is a skip rather than a silent
+    absence from the population, so a run covering five of seven backends says
+    which two it did not reach.
+    """
+    if entry.cls is None:
+        pytest.skip(f"{entry.key}: {entry.unavailable_reason}")
+    return entry.cls
+
+
+def _assert_wired(
+    entry: KnownBackend,
+    *,
+    operations: type,
+    shared: type,
+    awaitable: bool,
+) -> None:
+    """One backend's ``bulk_embed_and_store``: absent, or the shared one.
+
+    Three facts checked against each other rather than against a list --- what
+    the class says it owes, whether it has the method, and where the method
+    comes from. Checking the first two against each other is what keeps a
+    backend from leaving the population quietly: dropping the operations mixin
+    while keeping a hand-rolled body fails here rather than becoming a backend
+    this guard has no opinion about.
+    """
+    cls = _reachable(entry)
+    owes = issubclass(cls, operations)
+    method = getattr(cls, "bulk_embed_and_store", None)
+
+    if not owes:
+        assert method is None, (
+            f"{cls.__name__} defines bulk_embed_and_store without inheriting "
+            f"{operations.__name__}, so nothing declares what it owes and no "
+            f"abstract check covers it. Mix the operations in, or drop the method."
+        )
+        return
+
+    assert method is not None, (
+        f"{cls.__name__} inherits {operations.__name__} without reaching an "
+        f"implementation of its abstract bulk_embed_and_store"
+    )
+    owner = next(k for k in cls.__mro__ if "bulk_embed_and_store" in k.__dict__)
+    assert owner is shared, (
+        f"{cls.__name__}.bulk_embed_and_store resolves to {owner.__name__}, not "
+        f"{shared.__name__}. A backend defining its own body here is either a real "
+        f"override worth explaining or a stub standing in for the abstract method"
+    )
+    expected = "a coroutine function" if awaitable else "a plain def"
+    assert inspect.iscoroutinefunction(method) is awaitable, (
+        f"{cls.__name__}.bulk_embed_and_store should be {expected} and is not; "
+        f"it resolves to {owner.__name__}"
+    )
+
+
+class TestEveryBackendReachesTheSharedImplementation:
+    """The structural half, asked of every backend rather than of a list.
+
+    Two wiring failures, one question. ``AsyncBulkEmbedMixin`` existed and was
+    mixed into nothing, so every async backend inherited the **sync** body and
+    its method was not a coroutine function --- checkable without running
+    anything, which is the point: it failed for every async backend while every
+    behavioural vector test went on passing, because nothing called this method
+    on an async backend. And ``SyncVectorOperationsMixin`` declares
+    ``bulk_embed_and_store`` ``@abstractmethod`` while ``BulkEmbedMixin`` is
+    what a sync backend is supposed to satisfy it with; a backend that instead
+    *stubs* it satisfies ``abc`` just as well --- to ``abc`` a ``raise
+    NotImplementedError`` body is an implementation --- so the class constructs,
+    the abstract check reports nothing, and the failure waits for the first
+    caller. ``SyncPostgresDatabase`` was that backend.
+
+    Both were found one class at a time and fixed one class at a time, and the
+    guard written for them named its backends by hand: seven of the eleven
+    classes carrying this method. Among the four it did not name was
+    ``AsyncPostgresDatabase``, in the same file as the sync class the stub was
+    found in. The population is derived now, so a backend added tomorrow is
+    covered by having been registered rather than by being remembered here.
+    """
+
+    @pytest.mark.parametrize("entry", SYNC_BACKENDS, ids=lambda e: e.key)
+    def test_a_sync_backend_resolves_to_the_sync_mixin(self, entry: KnownBackend) -> None:
+        _assert_wired(
+            entry,
+            operations=SyncVectorOperationsMixin,
+            shared=BulkEmbedMixin,
+            awaitable=False,
+        )
+
+    @pytest.mark.parametrize("entry", ASYNC_BACKENDS, ids=lambda e: e.key)
+    def test_an_async_backend_resolves_to_the_async_mixin(self, entry: KnownBackend) -> None:
+        _assert_wired(
+            entry,
+            operations=AsyncVectorOperationsMixin,
+            shared=AsyncBulkEmbedMixin,
+            awaitable=True,
+        )
+
+
+class TestThePopulationIsComplete:
+    """A derived list beats a hand-written one only if it is actually complete.
+
+    The failure this replaces was a guard reporting green over four fewer
+    backends than it appeared to cover. Deriving the list removes the way that
+    happened and introduces another: a derivation that quietly returns less
+    than the registry knows fails in exactly the same silence. So the two are
+    cross-checked, by an accessor that is not the one under test.
     """
 
     @pytest.mark.parametrize(
-        "cls",
-        [AsyncMemoryDatabase, AsyncFileDatabase, AsyncSQLiteDatabase],
-        ids=lambda c: c.__name__,
+        ("label", "registry", "derived"),
+        [
+            ("sync", sync_backends, SYNC_BACKENDS),
+            ("async", async_backends, ASYNC_BACKENDS),
+        ],
+        ids=["sync", "async"],
     )
-    def test_resolves_to_a_coroutine_function(self, cls: type) -> None:
-        assert inspect.iscoroutinefunction(cls.bulk_embed_and_store), (
-            f"{cls.__name__}.bulk_embed_and_store is not awaitable; it resolves to "
-            f"{next(k.__name__ for k in cls.__mro__ if 'bulk_embed_and_store' in k.__dict__)}"
-        )
+    def test_every_buildable_backend_is_in_it(
+        self, label: str, registry: Any, derived: list[KnownBackend]
+    ) -> None:
+        missing = sorted(set(available_backends(registry)) - {entry.key for entry in derived})
+
+        assert missing == [], f"{label}: {missing} can be built here but is not checked"
+
+    def test_the_two_lanes_know_the_same_backends(self) -> None:
+        """Each backend ships as a twin, so a name on one side only is a gap."""
+        assert {entry.key for entry in SYNC_BACKENDS} == {entry.key for entry in ASYNC_BACKENDS}
+
+    def test_it_covers_the_four_the_hand_written_list_left_out(self) -> None:
+        """The regression guard for the gap itself, named rather than counted.
+
+        A floor, not the population --- these four are in because they were the
+        ones missed, and removing one should be a deliberate edit here rather
+        than a number quietly going down.
+        """
+        covered = {
+            entry.cls.__name__
+            for entry in (*SYNC_BACKENDS, *ASYNC_BACKENDS)
+            if entry.cls is not None
+        }
+
+        assert {
+            "AsyncElasticsearchDatabase",
+            "AsyncPostgresDatabase",
+            "AsyncS3Database",
+            "SyncS3Database",
+        } <= covered
+
+
+class TestTheGuardHasTeeth:
+    """What it says to a backend wired each of the three wrong ways.
+
+    An assertion never observed to fail is not evidence that it can, and this
+    one now runs over a population nobody maintains --- so the cases it exists
+    to catch are constructed here rather than waited for. Each of the three is
+    a shape this package has actually shipped.
+    """
+
+    def test_a_stub_standing_in_for_the_abstract_method_fails(self) -> None:
+        """``SyncPostgresDatabase``, before the stub was deleted."""
+
+        class _Stubbed(BulkEmbedMixin, SyncVectorOperationsMixin):
+            def bulk_embed_and_store(self, *args: Any, **kwargs: Any) -> list[str]:
+                raise NotImplementedError("placeholder to satisfy the abstract method")
+
+        with pytest.raises(AssertionError, match="resolves to _Stubbed"):
+            _assert_wired(
+                KnownBackend("probe", _Stubbed, None),
+                operations=SyncVectorOperationsMixin,
+                shared=BulkEmbedMixin,
+                awaitable=False,
+            )
+
+    def test_an_async_backend_carrying_the_sync_body_fails(self) -> None:
+        """Every async backend, before ``AsyncBulkEmbedMixin`` was mixed into any."""
+
+        class _WrongFlavour(BulkEmbedMixin, AsyncVectorOperationsMixin):
+            pass
+
+        with pytest.raises(AssertionError, match="resolves to BulkEmbedMixin"):
+            _assert_wired(
+                KnownBackend("probe", _WrongFlavour, None),
+                operations=AsyncVectorOperationsMixin,
+                shared=AsyncBulkEmbedMixin,
+                awaitable=True,
+            )
+
+    def test_a_method_nothing_declares_fails(self) -> None:
+        """The way a backend would leave the population without being noticed."""
+
+        class _Freelance(BulkEmbedMixin):
+            pass
+
+        with pytest.raises(AssertionError, match="without inheriting"):
+            _assert_wired(
+                KnownBackend("probe", _Freelance, None),
+                operations=SyncVectorOperationsMixin,
+                shared=BulkEmbedMixin,
+                awaitable=False,
+            )
+
+    def test_an_unreachable_backend_is_skipped_by_name(self) -> None:
+        """Not silently dropped: the run says which backend it did not cover."""
+        with pytest.raises(pytest.skip.Exception, match="probe: boto3 is not installed"):
+            _assert_wired(
+                KnownBackend("probe", None, "boto3 is not installed"),
+                operations=SyncVectorOperationsMixin,
+                shared=BulkEmbedMixin,
+                awaitable=False,
+            )
 
 
 class TestTheRecordsAreActuallyStored:

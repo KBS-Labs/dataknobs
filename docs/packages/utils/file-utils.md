@@ -269,8 +269,8 @@ for filepath in file_utils.filepath_generator("/data"):
         for line in file_utils.fileline_generator(filepath):
             try:
                 data = json.loads(line)
-                # Process JSON data
-                processed_data = json_utils.process_data(data)
+                # Address into the parsed record; there is no process_data.
+                processed_data = json_utils.get_value(data, "payload.id")
             except json.JSONDecodeError:
                 continue
 ```

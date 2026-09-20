@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Common exception hierarchy for all dataknobs packages.
 
 This module provides a unified exception framework that all dataknobs packages

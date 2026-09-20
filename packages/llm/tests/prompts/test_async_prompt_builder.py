@@ -659,3 +659,89 @@ class TestAsyncPromptBuilderIntegration:
         assert result.metadata["prompt_name"] == "analyze"
         assert result.metadata["prompt_type"] == "system"
         assert result.metadata["include_rag"] is True
+
+
+class TestAsyncPromptBuilderDoesNotBlockItsLoop:
+    """The builder reaches its library from ``async def``, so it must offload.
+
+    ``AsyncPromptBuilder`` enforces asynchrony on one collaborator --- a sync
+    adapter is a ``TypeError`` at construction --- and called the other one
+    synchronously from inside three ``async def`` bodies. The library it is
+    typed to is :class:`AbstractPromptLibrary`: shipped code, handed any
+    implementation, including one that reads a file or opens a socket to
+    answer. A shipped ``async def`` cannot see who else is on its loop, which
+    is the harm ``.claude/rules/async-transport.md`` exists to prevent.
+
+    ``as_async`` is the remedy this package already ships, and the remedy
+    ``VersionedPromptLibrary`` already applies to its own ``base_library``.
+    """
+
+    @staticmethod
+    def _witness(seen, config):
+        """A real library that records which thread answered."""
+        import threading
+
+        class Witness(ConfigPromptLibrary):
+            def get_system_prompt(self, name, **kwargs):
+                seen.append(threading.current_thread().name)
+                return super().get_system_prompt(name, **kwargs)
+
+            def get_user_prompt(self, name, **kwargs):
+                seen.append(threading.current_thread().name)
+                return super().get_user_prompt(name, **kwargs)
+
+            def get_prompt_rag_configs(self, prompt_name, prompt_type="user", **kwargs):
+                seen.append(threading.current_thread().name)
+                return super().get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
+
+        return Witness(config)
+
+    @pytest.mark.asyncio
+    async def test_the_system_prompt_fetch_runs_off_the_loop_thread(self):
+        import threading
+
+        seen = []
+        library = self._witness(seen, {"system": {"greet": {"template": "Hello {{name}}!"}}})
+        builder = AsyncPromptBuilder(library=library)
+
+        result = await builder.render_system_prompt("greet", params={"name": "Ada"})
+
+        assert result.content == "Hello Ada!"
+        assert seen, "the witness never ran, so it proves nothing"
+        assert threading.current_thread().name not in seen
+
+    @pytest.mark.asyncio
+    async def test_the_user_prompt_fetch_runs_off_the_loop_thread(self):
+        import threading
+
+        seen = []
+        library = self._witness(seen, {"user": {"ask": {"template": "About {{topic}}?"}}})
+        builder = AsyncPromptBuilder(library=library)
+
+        result = await builder.render_user_prompt("ask", params={"topic": "looms"})
+
+        assert result.content == "About looms?"
+        assert seen, "the witness never ran, so it proves nothing"
+        assert threading.current_thread().name not in seen
+
+    @pytest.mark.asyncio
+    async def test_the_rag_config_fetch_runs_off_the_loop_thread(self):
+        import threading
+
+        seen = []
+        library = self._witness(seen, {"system": {"greet": {"template": "Hello {{name}}!"}}})
+        builder = AsyncPromptBuilder(library=library)
+
+        await builder.render_system_prompt("greet", params={"name": "Ada"}, include_rag=True)
+
+        assert seen.count(threading.current_thread().name) == 0
+        assert len(seen) >= 2, "both the template fetch and the RAG-config fetch are offloaded"
+
+    def test_the_published_library_attribute_is_the_object_that_was_passed(self):
+        """The offload is private; a consumer reading ``builder.library`` is not."""
+        library = ConfigPromptLibrary({"system": {"greet": {"template": "Hi!"}}})
+        builder = AsyncPromptBuilder(library=library)
+
+        assert builder.library is library
+        # The inherited synchronous helper still answers over it.
+        assert builder.get_required_parameters("greet", "system") == []

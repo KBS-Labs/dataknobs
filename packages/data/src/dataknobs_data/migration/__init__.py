@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Migration Module v2 - Clean, streaming-based data migration API.
 
 This module provides a complete rewrite of the migration system with:

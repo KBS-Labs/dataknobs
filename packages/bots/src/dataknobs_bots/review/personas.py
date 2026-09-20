@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Review personas for artifact evaluation.
 
 This module defines personas that guide the LLM to evaluate artifacts

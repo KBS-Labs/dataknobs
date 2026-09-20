@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Claude-family request-shape knowledge shared across providers.
 
 Claude runs behind **two** dataknobs providers — the native Anthropic Messages

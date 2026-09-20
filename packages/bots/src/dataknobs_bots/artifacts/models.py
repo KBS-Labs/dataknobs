@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Artifact data models for tracking work products in conversational workflows.
 
 This module provides the core data structures for:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Common base implementation for vector stores."""
 
 from __future__ import annotations
@@ -254,9 +257,20 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
         self.dimensions = cfg.dimensions
 
         # Distance metric: keep the string in config, derive the enum here.
-        self.metric = (
-            cfg.metric if isinstance(cfg.metric, DistanceMetric) else DistanceMetric(cfg.metric)
-        )
+        #
+        # Through `resolve`, not `DistanceMetric(...)`, because the string
+        # arrives from a consumer's configuration and the constructor knows
+        # member values only: six of the twelve spellings `get_aliases`
+        # publishes -- `cos`, `manhattan`, `euclidean_distance`,
+        # `cosine_similarity`, `l1_distance`, `ip` -- were refused at this
+        # door and accepted at every other one. `resolve` reads the same
+        # table `get_aliases` prints, so the two cannot drift.
+        #
+        # `.canonical()` because every table below is keyed on the family:
+        # four keys covering six members rather than six keys a writer may
+        # spell five of. It is the same settling the database vector lane
+        # does with its own configured metric.
+        self.metric = DistanceMetric.resolve(cfg.metric).canonical()
 
         # Expand ~ to home directory for persistent storage.
         self.persist_path = Path(cfg.persist_path).expanduser() if cfg.persist_path else None

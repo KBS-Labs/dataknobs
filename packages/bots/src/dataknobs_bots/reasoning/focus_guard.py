@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Focus guards for maintaining conversation focus in ReAct reasoning.
 
 This module provides tools to detect and correct conversational drift,

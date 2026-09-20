@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Synthesizer for the ``intent_confirm:`` stage primitive.
 
 Pure load-time YAML transformation. ``intent_confirm:`` expands to:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Copy nested containers without duplicating what they hold.
 
 One function, for the case that sits between ``dict(value)`` and

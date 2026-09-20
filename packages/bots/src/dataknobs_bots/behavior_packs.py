@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Bot-flavored vocabulary for :mod:`dataknobs_common.packs`.
 
 A *behavior pack* is a named, frozen bundle of bot-shaping declarations —

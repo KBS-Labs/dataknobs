@@ -107,8 +107,11 @@ result = fsm.process({"input": "data"})
 tree = Tree("root")
 tree.add_child("child1")
 
-# Work with JSON
-data = json_utils.load_json_file("data.json")
+# Work with JSON. Reading the file is stdlib json; what json_utils adds is
+# addressing into the result by path.
+import json
+with open("data.json") as handle:
+    data = json.load(handle)
 value = json_utils.get_value(data, "path.to.value")
 ```
 
@@ -196,4 +199,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is licensed under the terms specified in the LICENSE file.
+DataKnobs is licensed under the [Apache License, Version 2.0](LICENSE).
+Attribution requirements are in [NOTICE](NOTICE).
+
+Versions released before this change remain available under the MIT License,
+preserved in [LICENSES/MIT-historical.txt](LICENSES/MIT-historical.txt).

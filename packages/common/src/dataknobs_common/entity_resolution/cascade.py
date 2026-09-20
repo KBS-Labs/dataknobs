@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The control flow, and the two resolvers that drive it.
 
 A cascade asks its rungs in order and stops when it has enough. It does not
@@ -23,8 +26,9 @@ implementations of one algorithm. Patch :func:`merge_rung` and both change.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.sync_bridge import SyncBridgeAdapter, SyncLoopBridge
 from dataknobs_common.entity_resolution.values import (
     CompatibilityVerdict,
     Coverage,
@@ -42,7 +46,6 @@ from dataknobs_common.entity_resolution.values import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-    from types import TracebackType
 
     from dataknobs_common.entity_resolution.protocols import (
         AsyncEntityResolver,
@@ -68,6 +71,26 @@ class CascadeState:
     Pure: no rung, no store, no ``await``. Everything a cascade does apart
     from calling a rung is a function of this value, which is what lets one
     core sit under both flavours.
+
+    **Keyed by ``str``, and this is the boundary of the key widening.** The
+    protocols this module implements -- :class:`MatchSignal`,
+    :class:`EntityResolver`, :class:`EntityCandidate`,
+    :class:`ResolutionResult` -- are generic in the entity key; the shipped
+    cascade and the shipped rungs are not. So a vocabulary keyed by something
+    other than ``str`` gets the axes, the cursors and the vocabulary, and
+    brings its own resolver.
+
+    **Stated rather than left to the default, because the default is silent.**
+    An unparameterised ``MatchSignal`` in a signature binds ``Any``, so a
+    consumer's ``MatchSignal[Sku]`` would be accepted here and its ids would
+    land in the three fields below, which are annotated ``str``. Nothing
+    reports that. :func:`~dataknobs_common.ontology.build_resolver` therefore
+    declares ``Ontology[str]``, so the refusal arrives at the call.
+
+    Moving the boundary is mechanical rather than blocked: the rungs read
+    :meth:`EntitySource.by_surface_form`, which already answers in the key, so
+    what stands between here and a generic cascade is annotations rather than a
+    transport. It is a change of its own size and is not made here.
     """
 
     query: str
@@ -110,7 +133,7 @@ class CascadeState:
 
 def merge_rung(
     state: CascadeState,
-    produced: Sequence[EntityCandidate],
+    produced: Sequence[EntityCandidate[str]],
     *,
     signal: str,
     kind: EvidenceKind,
@@ -203,7 +226,7 @@ def _trimmed(query: str, start: int, end: int) -> tuple[int, int] | None:
 def _coverage(
     candidates: Sequence[EntityCandidate], query: str
 ) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
-    """The union of the evidence spans, and the residue the query has left.
+    """The union of the **declared** evidence spans, and the query's residue.
 
     **Positional, and derived rather than accumulated.** Coverage is a view
     over the candidates now, not a second computation kept in step with them
@@ -214,10 +237,29 @@ def _coverage(
     reading rather than a hole in it: a cosine neighbour over an embedded
     utterance has no position in that utterance to report. So a query whose
     only hits are vector hits comes back with nothing matched and the whole
-    string unmatched -- no declared form was found in the text and a
-    neighbourhood guess is being offered anyway, which is the line a consumer
+    string unmatched -- a neighbourhood guess is being offered and nothing the
+    vocabulary carries was found in the text, which is a line a consumer
     maintaining a vocabulary can act on and the older all-or-nothing rule
     could not state.
+
+    **Two conditions, and the second used to be implied by the first.** A span
+    alone was the whole test while every rung able to place a hit was a rung
+    that looked one up -- so ``INFERRED`` meant ``span is None`` by
+    construction, and reading the kind would have changed no answer.
+    :class:`~dataknobs_common.entity_resolution.LexicalSignal` breaks that: it
+    proposes an entity the query **misspelled** and knows exactly where it
+    read. Its evidence is ``INFERRED`` *and* located, so the implication has
+    to become a condition or the field silently changes meaning under the
+    first cascade that holds such a rung.
+
+    It is ``DECLARED`` that is kept, because *what the vocabulary accounted
+    for* is the question both fields are read for --- and a near-spelling
+    proposal is the rung reporting that the vocabulary accounts for **none**
+    of what the query said. Counting the words it scored would delete the
+    residue that proposal is evidence *for*. The proposals themselves are
+    unaffected: they are candidates, they carry their spans, and
+    :meth:`~dataknobs_common.entity_resolution.values.ResolutionResult.explain`
+    hands them over.
 
     An empty span is dropped rather than reported: the union of point sets is
     what ``matched`` means, and an empty interval adds no points to it.
@@ -226,7 +268,9 @@ def _coverage(
         item.span
         for candidate in candidates
         for item in candidate.evidence
-        if item.span is not None and item.span[1] > item.span[0]
+        if item.kind is EvidenceKind.DECLARED
+        and item.span is not None
+        and item.span[1] > item.span[0]
     )
     merged: list[tuple[int, int]] = []
     for start, end in spans:
@@ -245,7 +289,9 @@ def _coverage(
     return tuple(merged), tuple(residue)
 
 
-def finish(state: CascadeState, *, compatibility: CompatibilityVerdict | None) -> ResolutionResult:
+def finish(
+    state: CascadeState, *, compatibility: CompatibilityVerdict | None
+) -> ResolutionResult[str]:
     """Turn the state into the result a caller gets back.
 
     Coverage is derived here too, from the evidence the candidates carry --
@@ -567,16 +613,18 @@ def _merge_batch(
     ]
 
 
-class BridgedEntityResolver:
+class BridgedEntityResolver(SyncBridgeAdapter):
     """An :class:`~dataknobs_common.entity_resolution.protocols.EntityResolver`
     over an asynchronous cascade.
 
     For a synchronous caller who has no choice: the rungs they need are
-    asynchronous, and the call site cannot await. It holds one
-    :class:`~dataknobs_common.sync_bridge.SyncLoopBridge` -- a private event
-    loop on a daemon thread -- so it is callable from plain synchronous code
-    *and* from inside a running loop without the ``run_until_complete``
-    deadlock.
+    asynchronous, and the call site cannot await. It is a
+    :class:`~dataknobs_common.sync_bridge.SyncBridgeAdapter`, so it reaches
+    the cascade over a private event loop on a daemon thread and is callable
+    from plain synchronous code *and* from inside a running loop without the
+    ``run_until_complete`` deadlock. That base is also where ``bridge=``,
+    ``timeout=``, :meth:`~SyncBridgeAdapter.close`,
+    :meth:`~SyncBridgeAdapter.aclose` and the context-manager pair come from.
 
     It is **not** a twin of :class:`CascadingResolver`. It satisfies the
     synchronous protocol by forwarding rather than by implementing, which is
@@ -590,48 +638,44 @@ class BridgedEntityResolver:
     ``await resolver.resolve(...)`` directly.
 
     The bridge costs one daemon thread for the object's lifetime, so build one
-    and keep it rather than one per call. It is a daemon, so it can never
-    block process exit; :meth:`close` is for deterministic teardown, and the
-    class is a context manager for the same reason.
+    and keep it rather than one per call --- or hand several resolvers the same
+    ``bridge`` and they share the one thread. It is a daemon, so it can never
+    block process exit; :meth:`~SyncBridgeAdapter.close` is for deterministic
+    teardown, and ``with`` is its context-manager form. An async holder ---
+    code that builds one of these to hand to a ``def`` site in a worker thread
+    --- takes ``async with`` instead, so tearing the bridge down does not
+    block its loop.
+
+    The resolver handed in is **not** this object's to close: it was built
+    elsewhere, so :meth:`~SyncBridgeAdapter.close` ends only the bridge. That
+    is why no ``_close_inner`` is overridden here.
     """
 
-    def __init__(self, inner: AsyncEntityResolver, *, timeout: float | None = None) -> None:
+    BRIDGE_THREAD_NAME = "dk-sync-resolver"
+
+    def __init__(
+        self,
+        inner: AsyncEntityResolver,
+        *,
+        bridge: SyncLoopBridge | None = None,
+        timeout: float | None = None,
+    ) -> None:
         """Args:
         inner: The asynchronous resolver to reach.
+        bridge: A bridge to run this resolver's coroutines on. The default
+            builds a private one on first use and ends it in ``close()``.
         timeout: Seconds to allow each call, giving a synchronous caller an
             upper bound on a blocking wait it cannot otherwise cancel.
         """
-        from dataknobs_common.sync_bridge import SyncLoopBridge
-
+        super().__init__(bridge=bridge, timeout=timeout)
         self._inner = inner
-        self._timeout = timeout
-        self._bridge = SyncLoopBridge(thread_name="dk-sync-resolver")
 
     def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult:
         """The inner resolver's, run on the bridge's loop."""
-        return self._bridge.run(
-            self._inner.resolve(name, k=k, within=within), timeout=self._timeout
-        )
+        return self._run(self._inner.resolve(name, k=k, within=within))
 
     def resolve_many(
         self, names: Sequence[str], *, k: int = 5, within: Within = None
     ) -> list[ResolutionResult]:
         """The inner resolver's, run on the bridge's loop."""
-        return self._bridge.run(
-            self._inner.resolve_many(names, k=k, within=within), timeout=self._timeout
-        )
-
-    def close(self) -> None:
-        """Stop the bridge's loop and join its thread."""
-        self._bridge.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        self.close()
+        return self._run(self._inner.resolve_many(names, k=k, within=within))

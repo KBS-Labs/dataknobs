@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 r"""Template composition utilities for building complex prompts from reusable parts.
 
 This module provides the TemplateComposer class which handles:

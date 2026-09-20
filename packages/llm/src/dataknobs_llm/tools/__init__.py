@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Tool system for LLM function calling.
 
 This module provides abstractions for creating and managing tools that can be

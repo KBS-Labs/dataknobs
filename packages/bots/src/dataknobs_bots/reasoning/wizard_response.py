@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Response generation, context building, and auto-advance for wizard flows.
 
 Extracted from ``wizard.py``.  This module owns all

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Wizard lifecycle hooks for customizing wizard behavior.
 
 This module provides WizardHooks for adding custom behavior at various

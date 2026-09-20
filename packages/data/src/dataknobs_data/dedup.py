@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Content deduplication checking.
 
 Provides a general-purpose utility for checking content uniqueness against

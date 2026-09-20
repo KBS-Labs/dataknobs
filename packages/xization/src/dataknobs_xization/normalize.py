@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Text normalization utilities and regular expressions.
 
 Provides functions and regex patterns for normalizing text including
@@ -7,7 +10,7 @@ whitespace handling, camelCase splitting, and symbol processing.
 import math
 import re
 from itertools import product
-from typing import List, Set
+from typing import Sequence, Set
 
 # squash whitespace: to collapse consecutive whitespace to a single space by
 #    x.sub(' ', text)
@@ -56,7 +59,11 @@ SLASH_ONLY_RE = re.compile(r"(?<=\w)\/(?=\w)")
 
 # parenthetical expressions: to drop parenthetical expressions by
 #    x.sub('', text)
-PARENTHETICAL_RE = re.compile(r"\(.*\)")
+# The class is negated rather than the quantifier made lazy: both stop the
+# match at the first ')', but `[^)]*` also cannot span one, so two
+# parentheticals in a string are two matches instead of one match over
+# everything between them.
+PARENTHETICAL_RE = re.compile(r"\([^)]*\)")
 
 
 # ampersand: to replace an ampersand with " and " by
@@ -82,7 +89,7 @@ def drop_embedded_symbols_fn(text: str, repl: str = "") -> str:
 
 def get_hyphen_slash_expansions_fn(
     text: str,
-    subs: List[str] = ("-", " ", ""),
+    subs: Sequence[str] = ("-", " ", ""),
     add_self: bool = True,
     do_split: bool = True,
     min_split_token_len: int = 2,
@@ -147,11 +154,11 @@ def get_lexical_variations(
     drop_embedded_symbols: bool = True,
     spacify_embedded_symbols: bool = False,
     do_hyphen_expansion: bool = True,
-    hyphen_subs: List[str] = (" ", ""),
+    hyphen_subs: Sequence[str] = (" ", ""),
     do_hyphen_split: bool = True,
     min_hyphen_split_token_len: int = 2,
     do_slash_expansion: bool = True,
-    slash_subs: List[str] = (" ", " or "),
+    slash_subs: Sequence[str] = (" ", " or "),
     do_slash_split: bool = True,
     min_slash_split_token_len: int = 1,
     drop_parentheticals: bool = True,

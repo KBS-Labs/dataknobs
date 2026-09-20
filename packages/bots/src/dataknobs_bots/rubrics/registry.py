@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Rubric registry for storing and retrieving rubrics.
 
 This module provides persistent rubric storage backed by AsyncDatabase,

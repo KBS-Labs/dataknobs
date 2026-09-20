@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Advisory whole-file locking, held against every overlapping holder.
 
 The hazard this addresses is a store that persists by serializing its

@@ -1,9 +1,19 @@
 """A published input fence and the suite constant beside it are one document.
 
-Two guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
+Five guides publish a ``worked-input`` fence: a vocabulary a reader can copy,
 which a workspace test writes to disk and runs the guide's published call site
-against. ``_vocabularies.py`` holds the *same* vocabulary as a module
-constant, which this package's fixtures and most of its suites load instead.
+against. For four of them ``_vocabularies.py`` holds the *same* vocabulary as a
+module constant, which this package's fixtures and most of its suites load
+instead. The fifth publishes a document no constant holds, so it is one copy
+rather than two -- see ``UNPAIRED`` below, which is where that is said and
+where it is checked.
+
+**Three of the five pair rows name one constant**, which is the shape to
+expect rather than an anomaly: ``anchored-view.md``, ``content-tags.md`` and
+``roll-up.md`` publish the same vocabulary on purpose, so that three
+service-free acceptances run against one substrate. That is precisely the
+arrangement this file exists for -- two published copies of one document -- so
+both are compared to the constant and thereby to each other.
 
 **Nothing compared the two.** Each copy was guarded by its own suite -- a fence
 that drifts takes its workspace runner red, a constant that drifts takes
@@ -41,11 +51,24 @@ rather than on both. Read from this side, the input is a package document, which
 ``PACKAGE_TEST_DOC_INPUTS`` already exists to declare and ``packages/*/docs/``
 already hashes. ``test_packs.py`` reads its own guide the same way.
 
-**Adding a third pair is one row in the table below and one in that
-declaration**, and forgetting the first is caught rather than trusted:
+**Adding a pair is one row in the table below and one in that declaration**,
+and forgetting the first is caught rather than trusted:
 ``test_every_published_vocabulary_is_in_the_table`` reads the guides for the
-marker and fails on one the table does not carry. A table nobody checks against
-the tree is a list of the pairs somebody remembered.
+marker and fails on one neither the table nor ``UNPAIRED`` carries. A table
+nobody checks against the tree is a list of the pairs somebody remembered.
+
+**Publishing a fence is not the same as adding a pair**, which is the
+distinction that assertion learned the hard way: it read the marker as a proxy
+for "half of a pair" and fired on a guide publishing a whole vocabulary of its
+own that mirrored nothing. A single copy has no sameness to guard -- it is
+guarded by being *executed* -- so it is declared rather than tabled, and the
+declaration is checked against the tree too. ``hierarchy.md`` is the one such
+guide left; the guide that taught the distinction has since acquired a second
+published copy and become a pair, which is the transition
+``test_a_declared_single_copy_is_still_single`` exists to force rather than to
+trust. What stays total is that every published fence is accounted for as one
+kind or the other, so a new one still fails here until somebody decides which
+it is.
 """
 
 from __future__ import annotations
@@ -55,7 +78,8 @@ import re
 
 import pytest
 
-from _vocabularies import MAMMALS_DOCUMENT, MAMMALS_V11_DOCUMENT
+import _vocabularies
+from _vocabularies import MAMMALS_DOCUMENT, MAMMALS_GUIDE_DOCUMENT, MAMMALS_V11_DOCUMENT
 
 #: Every guide that could carry a published vocabulary. Globbed rather than
 #: listed, so a guide added tomorrow is inside what the table is checked
@@ -76,6 +100,10 @@ ONTOLOGY_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "ontolo
 ENTITY_RESOLUTION_GUIDE = (
     pathlib.Path(__file__).parents[1] / "docs" / "guides" / "entity-resolution.md"
 )
+ANCHORED_VIEW_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "anchored-view.md"
+HIERARCHY_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "hierarchy.md"
+CONTENT_TAGS_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "content-tags.md"
+ROLL_UP_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "roll-up.md"
 
 GUIDES = sorted(ONTOLOGY_GUIDE.parent.glob("*.md"))
 
@@ -147,11 +175,50 @@ def _published_vocabulary(guide: pathlib.Path) -> str:
 PAIRS = [
     (ONTOLOGY_GUIDE, MAMMALS_DOCUMENT, "MAMMALS_DOCUMENT"),
     (ENTITY_RESOLUTION_GUIDE, MAMMALS_V11_DOCUMENT, "MAMMALS_V11_DOCUMENT"),
+    (ANCHORED_VIEW_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
+    (CONTENT_TAGS_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
+    (ROLL_UP_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
 ]
+
+#: Guides that publish a vocabulary **no constant mirrors**, and why. Named so
+#: the completeness assertion below stays total: a published fence is accounted
+#: for as half of a pair or as a single copy with a reason, and a fence that is
+#: neither fails.
+#:
+#: The distinction is not bookkeeping. This file exists because two copies of
+#: one document were each guarded and their *sameness* was guarded by nobody.
+#: A document with one copy has no sameness to guard, and declaring it here says
+#: that in the place somebody adding the next fence will read -- where
+#: omitting it from ``PAIRS`` alone would read as an oversight.
+#:
+#: Checked rather than believed: ``test_a_declared_single_copy_is_still_single``
+#: fails if a constant ever comes to hold one of these, which is the moment the
+#: reason stops being true and a row becomes owed.
+UNPAIRED: dict[pathlib.Path, str] = {
+    HIERARCHY_GUIDE: (
+        "its only consumer is tests/test_worked_hierarchy_call_site.py, which "
+        "writes the fence to disk and runs the guide's published call site "
+        "against it -- so the fence is guarded by execution rather than by "
+        "comparison. The vocabulary is its own and is the smallest of the "
+        "four: nearest is MAMMALS_V11_DOCUMENT, which differs substantively "
+        "(it declares latin_name and akc_group, carries golden_retriever, and "
+        "so walks five nodes where this walks four), so it is a fourth "
+        "document rather than a drifted copy. It is declared in "
+        "PACKAGE_TEST_DOC_INPUTS all the same, for the reason above it: the "
+        "test below reads it to check this very claim."
+    ),
+}
 
 
 @pytest.mark.parametrize(
-    ("guide", "declared", "constant"), PAIRS, ids=["ontology", "entity-resolution"]
+    ("guide", "declared", "constant"),
+    PAIRS,
+    # Derived, not listed. A hand-written ``ids`` has to be the same length as
+    # ``PAIRS``, so a third row would raise at *collection* --- turning "adding
+    # a pair is one row here and one in the declaration" into a third edit the
+    # docstring does not mention and pytest reports as a collection error
+    # rather than a missing id.
+    ids=[guide.stem for guide, _, _ in PAIRS],
 )
 def test_the_published_input_is_this_suites_own_vocabulary(
     guide: pathlib.Path, declared: str, constant: str
@@ -188,10 +255,59 @@ def test_every_published_vocabulary_is_in_the_table() -> None:
     """
     publishing = {guide.name for guide in GUIDES if _carries_marker(guide)}
     tabled = {guide.name for guide, _, _ in PAIRS}
+    single = {guide.name for guide in UNPAIRED}
 
-    assert publishing == tabled, (
-        f"guides publishing a {_MARKER} fence: {sorted(publishing)}; guides in "
-        f"the table: {sorted(tabled)}. A published vocabulary outside the table "
-        f"is compared to nothing, and a table row for a guide that no longer "
-        f"publishes one is a guard that has quietly stopped reading."
+    assert not (tabled & single), (
+        f"{sorted(tabled & single)} is both a declared pair and a declared "
+        f"single copy. Those are contradictory claims about the same document, "
+        f"and whichever one this file happened to read first would decide "
+        f"which guard ran."
     )
+    assert publishing == tabled | single, (
+        f"guides publishing a {_MARKER} fence: {sorted(publishing)}; guides in "
+        f"the table: {sorted(tabled)}; declared single copies: {sorted(single)}. "
+        f"A published vocabulary in neither is compared to nothing and declared "
+        f"as nothing, and an entry for a guide that no longer publishes one is a "
+        f"guard that has quietly stopped reading. If the new fence mirrors a "
+        f"constant it is a row in PAIRS; if it is the only copy of its document "
+        f"it is an entry in UNPAIRED, with the reason."
+    )
+
+
+def test_a_declared_single_copy_is_still_single() -> None:
+    """``UNPAIRED`` is checked against the tree, not taken at its word.
+
+    Each entry claims that no constant in ``_vocabularies`` holds that guide's
+    vocabulary, which is the whole reason it is exempt from the comparison
+    above. The day a constant does hold it, the claim is false and a row in
+    ``PAIRS`` is owed -- and nothing else in this file would notice, because
+    every guard here is keyed off the table the entry is keeping it out of.
+
+    Both the fence body and the body less its opening filename line are
+    compared, since that line is the one declared difference between a fence
+    and its constant. Matching either is a pair.
+    """
+    constants = {
+        name: value
+        for name, value in vars(_vocabularies).items()
+        if name.isupper() and isinstance(value, str)
+    }
+    assert constants, (
+        "no string constants found in _vocabularies -- this guard would pass "
+        "by reading nothing, which is the failure mode every reader in this "
+        "file refuses"
+    )
+
+    for guide, reason in UNPAIRED.items():
+        body = _published_vocabulary(guide)
+        held_by = sorted(
+            constant
+            for constant, value in constants.items()
+            if value in (body, body.partition("\n")[2])
+        )
+        assert not held_by, (
+            f"{guide.name} is declared as the only copy of its vocabulary, but "
+            f"{held_by} in _vocabularies.py now holds it. The declared reason "
+            f"({reason}) has stopped being true: move it from UNPAIRED to PAIRS "
+            f"so the two copies are held to each other."
+        )

@@ -257,28 +257,32 @@ All patterns are designed to be extensible through configuration:
 from dataknobs_fsm.patterns.api_orchestration import APIOrchestrator, APIOrchestrationConfig
 from dataknobs_fsm.patterns.api_orchestration import OrchestrationMode, APIEndpoint
 
-# Create custom configuration
+# `endpoints` is the only required field and comes first; the config carries
+# no name of its own. Retry and rate limiting are flat per-endpoint fields,
+# not nested config dicts.
 config = APIOrchestrationConfig(
-    name="custom_api_workflow",
-    mode=OrchestrationMode.HYBRID,
     endpoints=[
         APIEndpoint(
             name="auth",
             url="https://api.example.com/auth",
             method="POST",
             headers={"Content-Type": "application/json"},
-            retry_config={"max_attempts": 5}
+            retry_count=5,
+            retry_delay=1.0,
         ),
         APIEndpoint(
             name="data",
             url="https://api.example.com/data",
             method="GET",
-            depends_on=["auth"],  # Sequential dependency
-            transform=lambda resp: resp.get("data", [])
+            depends_on=["auth"],       # Sequential dependency
+            # `transform_input` reshapes what goes IN; to reshape what comes
+            # back, use `response_parser`.
+            response_parser=lambda resp: resp.get("data", []),
         )
     ],
-    rate_limit=100,
-    timeout=30.0
+    mode=OrchestrationMode.HYBRID,
+    global_rate_limit=100,             # per `rate_limit_window` seconds
+    total_timeout=30.0,
 )
 
 # Create orchestrator with custom config
@@ -340,14 +344,18 @@ Patterns with built-in metrics support:
 ```python
 from dataknobs_fsm.patterns.error_recovery import ErrorRecoveryWorkflow, ErrorRecoveryConfig
 
-# Create workflow with monitoring
+# Create workflow with monitoring. `primary_strategy` is a RecoveryStrategy
+# member, not a string, and `retry_config` is a RetryConfig from
+# dataknobs_common rather than a dict.
+from dataknobs_common.retry import BackoffStrategy, RetryConfig
+from dataknobs_fsm.patterns.error_recovery import RecoveryStrategy
+
 config = ErrorRecoveryConfig(
-    name="monitored_workflow",
-    primary_strategy="retry",
-    retry_config={
-        "max_attempts": 3,
-        "backoff_strategy": "exponential"
-    }
+    primary_strategy=RecoveryStrategy.RETRY,
+    retry_config=RetryConfig(
+        max_attempts=3,
+        backoff_strategy=BackoffStrategy.EXPONENTIAL,
+    ),
 )
 
 workflow = ErrorRecoveryWorkflow(config)

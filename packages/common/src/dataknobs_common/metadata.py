@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Layered metadata-merge primitives.
 
 Used by ``VectorMemory`` (tenant-scope enforcement),

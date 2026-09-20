@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """``DistributedLock`` protocol and the shared ``hold()`` mechanic.
 
 Mirrors the established concurrency-primitive style in

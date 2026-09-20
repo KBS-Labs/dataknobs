@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Placing a string against a vocabulary, with the reason each candidate won.
 
 A **cascade**: rungs asked in order, stopping when ``k`` is filled. There is
@@ -54,12 +57,15 @@ from dataknobs_common.entity_resolution.protocols import (
     AsyncAliasFormSource,
     AsyncEntityResolver,
     AsyncMatchSignal,
+    AsyncSurfaceFormCatalog,
     EntityResolver,
     MatchSignal,
     MembershipOracle,
+    SurfaceFormCatalog,
 )
 from dataknobs_common.entity_resolution.registry import (
     async_signal_backends,
+    declared_signal_metadata,
     signal_backends,
 )
 from dataknobs_common.entity_resolution.signals import (
@@ -67,10 +73,14 @@ from dataknobs_common.entity_resolution.signals import (
     AsyncAliasSignal,
     AsyncDeclaredSignal,
     AsyncExactNormalizedSignal,
+    AsyncLexicalSignal,
     AsyncScanningSignal,
     DeclaredSignal,
     ExactNormalizedSignal,
+    LexicalSignal,
     ScanningSignal,
+    declared_candidates,
+    refuse_negative_k,
 )
 from dataknobs_common.entity_resolution.values import (
     ENTITY_TYPE_KEY,
@@ -104,7 +114,9 @@ __all__ = [
     "AsyncCascadingResolver",
     "AsyncEntityResolver",
     "AsyncExactNormalizedSignal",
+    "AsyncLexicalSignal",
     "AsyncScanningSignal",
+    "AsyncSurfaceFormCatalog",
     "DeclaredSignal",
     "AsyncMatchSignal",
     "BridgedEntityResolver",
@@ -117,6 +129,7 @@ __all__ = [
     "EvidenceKind",
     "ExactNormalizedSignal",
     "FormHit",
+    "LexicalSignal",
     "MatchEvidence",
     "MatchSignal",
     "MembershipOracle",
@@ -126,11 +139,15 @@ __all__ = [
     "ScanningSignal",
     "ScopeAuthority",
     "Scoring",
+    "SurfaceFormCatalog",
     "Within",
     "async_signal_backends",
     "content_span",
+    "declared_candidates",
+    "declared_signal_metadata",
     "finish",
     "merge_rung",
+    "refuse_negative_k",
     "signal_backends",
     "token_spans",
     "refuse_unknown_axes",

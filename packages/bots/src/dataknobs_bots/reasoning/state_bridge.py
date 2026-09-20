@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Named-key state bridging Protocol and reference implementations.
 
 A :class:`StateBridge` is the discipline layer over a state-carrying host

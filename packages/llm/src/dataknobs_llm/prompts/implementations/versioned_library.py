@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Versioned prompt library implementation.
 
 This module provides a prompt library with full versioning support,
@@ -6,21 +9,75 @@ combining version management, A/B testing, and metrics tracking.
 
 from typing import Any, Dict, List
 
-from ..base import AbstractPromptLibrary, PromptTemplateDict, MessageIndex, RAGConfig
+from ..base import (
+    AbstractPromptLibrary,
+    AsyncPromptLibrary,
+    MessageIndex,
+    PromptTemplateDict,
+    RAGConfig,
+    as_async,
+)
 from ..versioning import (
     VersionManager,
     ABTestManager,
     MetricsCollector,
+    InMemoryVersionStore,
     PromptVersion,
     PromptExperiment,
     PromptVariant,
     PromptMetrics,
+    VersioningStore,
     VersionStatus,
+    require_store,
 )
 
 
-class VersionedPromptLibrary(AbstractPromptLibrary):
+def _normalized_base(
+    library: AbstractPromptLibrary | AsyncPromptLibrary | None,
+) -> AsyncPromptLibrary | None:
+    """The base library in the one flavour this library can await.
+
+    Total over its argument, which is the point. It was a two-way branch ---
+    ``as_async`` for an :class:`AbstractPromptLibrary`, store as-is otherwise
+    --- over a three-way question, so anything it did not recognise was kept as
+    though it were already asynchronous. That constructed cleanly and raised
+    ``TypeError: ... can't be used in 'await' expression`` from a fallback
+    lookup, which only runs for a name carrying no version and so need not
+    happen anywhere near construction.
+
+    Args:
+        library: A library of either flavour, or ``None`` for no base.
+
+    Returns:
+        An :class:`AsyncPromptLibrary`, or ``None``.
+
+    Raises:
+        TypeError: If ``library`` answers to neither protocol.
+    """
+    if library is None:
+        return None
+    if isinstance(library, AsyncPromptLibrary):
+        # Already the flavour this library awaits; wrapping would buy a thread
+        # hop and nothing else. Checked first so a class declaring both is
+        # taken at its asynchronous word rather than offloaded.
+        return library
+    if isinstance(library, AbstractPromptLibrary):
+        return as_async(library)
+    raise TypeError(
+        f"base_library must be an AbstractPromptLibrary or an AsyncPromptLibrary, "
+        f"got {type(library).__name__}. A library extending BasePromptLibrary answers "
+        f"to neither until it names a flavour, because that mixin declares no interface"
+    )
+
+
+class VersionedPromptLibrary(AsyncPromptLibrary):
     """Prompt library with versioning, A/B testing, and metrics tracking.
+
+    An :class:`AsyncPromptLibrary`, because every answer it gives comes from
+    an asynchronous version manager. A synchronous consumer reaches it through
+    :func:`~dataknobs_llm.prompts.base.views.as_sync`, paying a bridge thread
+    and a blocked calling thread for the privilege; an async consumer awaits it
+    and pays neither.
 
     This library extends the base prompt library interface with:
     - Version management with semantic versioning
@@ -32,8 +89,9 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         ```python
         from dataknobs_llm.prompts import VersionedPromptLibrary
 
-        # Create library (with optional backend storage)
-        library = VersionedPromptLibrary(storage=backend)
+        # In memory by default; DatabaseVersionStore(db) for any of the
+        # seven dataknobs backends.
+        library = VersionedPromptLibrary()
 
         # Create a version
         v1 = await library.create_version(
@@ -44,7 +102,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         )
 
         # Get latest version (returns PromptTemplateDict for compatibility)
-        template = library.get_system_prompt("greeting")
+        template = await library.get_system_prompt("greeting")
 
         # Create A/B test
         experiment = await library.create_experiment(
@@ -68,25 +126,64 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
 
     def __init__(
         self,
-        storage: Any | None = None,
-        base_library: AbstractPromptLibrary | None = None,
+        store: VersioningStore | None = None,
+        base_library: AbstractPromptLibrary | AsyncPromptLibrary | None = None,
     ):
         """Initialize versioned prompt library.
 
         Args:
-            storage: Backend storage for persistence (None for in-memory)
-            base_library: Optional base library to wrap (for migration)
+            store: Where versions, experiments and metrics live. Defaults to
+                :class:`~dataknobs_llm.prompts.versioning.InMemoryVersionStore`;
+                pass
+                :class:`~dataknobs_llm.prompts.versioning.DatabaseVersionStore`
+                for persistence across processes. One object serves all three
+                managers, which is why the parameter is singular and why the
+                protocol it names is the three of theirs together.
+            base_library: Optional base library to wrap (for migration). Either
+                flavour: a synchronous one is reached through
+                :func:`~dataknobs_llm.prompts.base.views.as_async`, so a
+                fallback lookup cannot stall this library's caller on a
+                filesystem read. ``base_library`` keeps exactly the object that
+                was passed; the view is private.
+
+        Raises:
+            TypeError: If ``store`` is not a
+                :class:`~dataknobs_llm.prompts.versioning.VersioningStore`, or
+                if ``base_library`` answers to neither library protocol. For
+                the latter a class extending :class:`BasePromptLibrary` alone
+                is the likely case: that mixin declares no interface, so such a
+                library has to name a flavour before anything can tell which
+                one it is.
         """
-        self.storage = storage
+        self.store: VersioningStore = require_store(
+            store if store is not None else InMemoryVersionStore(),
+            VersioningStore,
+            holder="VersionedPromptLibrary",
+        )
         self.base_library = base_library
 
-        # Initialize managers
-        self.version_manager = VersionManager(storage)
-        self.ab_test_manager = ABTestManager(storage)
-        self.metrics_collector = MetricsCollector(storage)
+        # One store, three managers -- each declaring only the part of it that
+        # it uses. ``self.store`` rather than the argument, which is still
+        # ``None`` when the default was taken.
+        self.version_manager = VersionManager(self.store)
+        self.ab_test_manager = ABTestManager(self.store)
+        self.metrics_collector = MetricsCollector(self.store)
 
-        # Cache for converting versions to templates
-        self._template_cache: Dict[str, PromptTemplateDict] = {}
+    @property
+    def base_library(self) -> AbstractPromptLibrary | AsyncPromptLibrary | None:
+        """The base library exactly as it was handed over, either flavour.
+
+        A property rather than a plain attribute because the flavour-normalised
+        view every lookup actually reaches is derived from it. As a plain pair
+        the two drifted on assignment: ``get_metadata`` reported the new library
+        while every fallback kept consulting the old one.
+        """
+        return self._base_library
+
+    @base_library.setter
+    def base_library(self, library: AbstractPromptLibrary | AsyncPromptLibrary | None) -> None:
+        self._base_library = library
+        self._async_base = _normalized_base(library)
 
     # ===== Version Management API =====
 
@@ -294,7 +391,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         tokens: int | None = None,
         user_rating: float | None = None,
         metadata: Dict[str, Any] | None = None,
-    ):
+    ) -> None:
         """Record a usage event for metrics tracking.
 
         Args:
@@ -342,15 +439,12 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         """
         return await self.metrics_collector.compare_variants(version_ids)
 
-    # ===== AbstractPromptLibrary Implementation =====
+    # ===== AsyncPromptLibrary Implementation =====
 
-    def get_system_prompt(
+    async def get_system_prompt(
         self, name: str, version: str = "latest", **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Get a system prompt template.
-
-        This method is synchronous for compatibility with AbstractPromptLibrary.
-        For async version access, use get_version() directly.
 
         Args:
             name: Prompt name
@@ -360,28 +454,17 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplateDict if found, None otherwise
         """
-        import asyncio
-
-        # Run async version retrieval
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        prompt_version = loop.run_until_complete(
-            self.version_manager.get_version(name, "system", version)
-        )
+        prompt_version = await self.version_manager.get_version(name, "system", version)
 
         if not prompt_version:
             # Fall back to base library if available
-            if self.base_library:
-                return self.base_library.get_system_prompt(name, **kwargs)
+            if self._async_base:
+                return await self._async_base.get_system_prompt(name, **kwargs)
             return None
 
         return self._version_to_template(prompt_version)
 
-    def get_user_prompt(
+    async def get_user_prompt(
         self, name: str, version: str = "latest", **kwargs: Any
     ) -> PromptTemplateDict | None:
         """Get a user prompt template.
@@ -394,70 +477,50 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplateDict if found, None otherwise
         """
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        prompt_version = loop.run_until_complete(
-            self.version_manager.get_version(name, "user", version)
-        )
+        prompt_version = await self.version_manager.get_version(name, "user", version)
 
         if not prompt_version:
-            if self.base_library:
-                return self.base_library.get_user_prompt(name, **kwargs)
+            if self._async_base:
+                return await self._async_base.get_user_prompt(name, **kwargs)
             return None
 
         return self._version_to_template(prompt_version)
 
-    def list_system_prompts(self) -> List[str]:
+    async def list_system_prompts(self) -> List[str]:
         """List all system prompt names.
+
+        The walk belongs to the version manager, which owns the index and its
+        key format. Doing it here meant reading that manager's private
+        dictionary and parsing its keys back --- a second implementation of a
+        private detail, which drifted from it in two ways at once. A listing
+        that asks the manager can follow it to a store; one that reads its
+        in-memory dict cannot.
 
         Returns:
             List of prompt names
         """
-        import asyncio
-
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        # Get unique prompt names from version index
-        names = set()
-        for key in self.version_manager._version_index.keys():
-            name, ptype = key.split(":", 1)
-            if ptype == "system":
-                names.add(name)
+        names = await self.version_manager.list_names("system")
 
         # Add from base library if available
-        if self.base_library:
-            names.update(self.base_library.list_system_prompts())
+        if self._async_base:
+            names.update(await self._async_base.list_system_prompts())
 
         return sorted(names)
 
-    def list_user_prompts(self) -> List[str]:
+    async def list_user_prompts(self) -> List[str]:
         """List all user prompt names.
 
         Returns:
             List of prompt names
         """
-        names = set()
-        for key in self.version_manager._version_index.keys():
-            name, ptype = key.split(":", 1)
-            if ptype == "user":
-                names.add(name)
+        names = await self.version_manager.list_names("user")
 
-        if self.base_library:
-            names.update(self.base_library.list_user_prompts())
+        if self._async_base:
+            names.update(await self._async_base.list_user_prompts())
 
         return sorted(names)
 
-    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
+    async def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
         """Get a message index.
 
         Note: Message indexes are not versioned in this implementation.
@@ -470,21 +533,21 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             MessageIndex if found, None otherwise
         """
-        if self.base_library:
-            return self.base_library.get_message_index(name, **kwargs)
+        if self._async_base:
+            return await self._async_base.get_message_index(name, **kwargs)
         return None
 
-    def list_message_indexes(self) -> List[str]:
+    async def list_message_indexes(self) -> List[str]:
         """List all message index names.
 
         Returns:
             List of message index names
         """
-        if self.base_library:
-            return self.base_library.list_message_indexes()
+        if self._async_base:
+            return await self._async_base.list_message_indexes()
         return []
 
-    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
+    async def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
         """Get a RAG configuration.
 
         Note: RAG configs are not versioned in this implementation.
@@ -497,11 +560,11 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             RAGConfig if found, None otherwise
         """
-        if self.base_library:
-            return self.base_library.get_rag_config(name, **kwargs)
+        if self._async_base:
+            return await self._async_base.get_rag_config(name, **kwargs)
         return None
 
-    def get_prompt_rag_configs(
+    async def get_prompt_rag_configs(
         self, prompt_name: str, prompt_type: str = "user", **kwargs: Any
     ) -> List[RAGConfig]:
         """Get RAG configurations for a prompt.
@@ -514,50 +577,60 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         Returns:
             List of RAG configurations
         """
-        if self.base_library:
-            return self.base_library.get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
+        if self._async_base:
+            return await self._async_base.get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
         return []
 
     def get_metadata(self) -> Dict[str, Any]:
         """Get library metadata.
+
+        Synchronous, like its twin: every key here answers from this object's
+        own construction rather than from its content. It reported a
+        ``version_count`` and an ``experiment_count`` too, which did neither ---
+        they counted rows by reaching into two managers' private dictionaries,
+        and counting rows in a store is a query, not metadata about a library.
+        Nothing read either key.
 
         Returns:
             Metadata dictionary
         """
         return {
             "type": "VersionedPromptLibrary",
-            "storage": str(type(self.storage).__name__) if self.storage else "in-memory",
+            "store": type(self.store).__name__,
             "has_base_library": self.base_library is not None,
-            "version_count": len(self.version_manager._versions),
-            "experiment_count": len(self.ab_test_manager._experiments),
         }
 
     # ===== Helper Methods =====
 
     def _version_to_template(self, version: PromptVersion) -> PromptTemplateDict:
-        """Convert PromptVersion to PromptTemplateDict for compatibility."""
-        # Check cache
-        cache_key = version.version_id
-        if cache_key in self._template_cache:
-            return self._template_cache[cache_key]
+        """Convert PromptVersion to PromptTemplateDict for compatibility.
 
+        Uncached. What stood here kept a dictionary keyed by version id that
+        nothing ever invalidated, so a tag added to a version already read was
+        invisible to every later read. It was invisible in a way that hid
+        itself: the cached ``tags`` was the *same list object* the manager
+        held, so mutating it in place showed through, and the staleness healed
+        itself for exactly the fields a test would have poked at. Now that a
+        load hands back a copy, the alias is gone and the cache would be a
+        snapshot of whatever the version looked like the first time anybody
+        asked.
+
+        It bought one dictionary construction from an object already in hand.
+        """
         template: PromptTemplateDict = {
             "template": version.template,
-            "defaults": version.defaults,
+            "defaults": dict(version.defaults),
             "metadata": {
                 **version.metadata,
                 "version_id": version.version_id,
                 "version": version.version,
                 "created_at": version.created_at.isoformat(),
-                "tags": version.tags,
+                "tags": list(version.tags),
                 "status": version.status.value,
             },
         }
 
         if version.validation:
             template["validation"] = version.validation  # type: ignore[typeddict-item]
-
-        # Cache it
-        self._template_cache[cache_key] = template
 
         return template

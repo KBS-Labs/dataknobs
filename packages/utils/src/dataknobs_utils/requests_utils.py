@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """HTTP request utilities for making API calls and handling responses.
 
 Provides convenience functions for making HTTP requests with error handling,

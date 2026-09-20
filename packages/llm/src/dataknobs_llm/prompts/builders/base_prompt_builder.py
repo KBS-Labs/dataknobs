@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base prompt builder with shared functionality for sync and async builders.
 
 This module provides BasePromptBuilder, an abstract base class that contains
@@ -7,18 +10,24 @@ code duplication and ensures consistent behavior across both implementations.
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable
 from typing import Any, Dict, List
 
 from ..base import (
     AbstractPromptLibrary,
     PromptTemplateDict,
     RAGConfig,
+    RenderResult,
     ValidationLevel,
     ValidationConfig,
 )
 from ..rendering import TemplateRenderer
 
 logger = logging.getLogger(__name__)
+
+#: What a RAG search pass hands back: the content keyed by placeholder, and the
+#: full per-placeholder detail when the caller asked for it.
+_RagSearchResult = tuple[Dict[str, str], Dict[str, Any] | None]
 
 
 class BasePromptBuilder(ABC):
@@ -285,12 +294,16 @@ class BasePromptBuilder(ABC):
         validation_override: ValidationLevel | None,
         return_rag_metadata: bool = False,
         cached_rag: Dict[str, Any] | None = None,
-        index: int = 0,
         **kwargs: Any,
-    ):
+    ) -> RenderResult | Awaitable[RenderResult]:
         """Internal method to render a prompt template.
 
         This is the core rendering logic that differs between sync/async.
+
+        The return type carries that difference: ``PromptBuilder`` returns a
+        :class:`RenderResult` and ``AsyncPromptBuilder`` returns a coroutine
+        producing one, so the hook they share admits either. A caller holds a
+        concrete builder and gets the concrete type.
 
         Args:
             prompt_name: Name of the prompt
@@ -316,19 +329,19 @@ class BasePromptBuilder(ABC):
         self,
         prompt_name: str,
         prompt_type: str,
-        index: int,
         params: Dict[str, Any],
         capture_metadata: bool = False,
         **kwargs: Any,
-    ):
+    ) -> _RagSearchResult | Awaitable[_RagSearchResult]:
         """Execute RAG searches and format results for injection.
 
-        This method differs between sync (sequential) and async (parallel).
+        This method differs between sync (sequential) and async (parallel),
+        and in the flavour of what it hands back --- see
+        :meth:`_render_prompt_impl` on why the hook admits either.
 
         Args:
             prompt_name: Name of the prompt
             prompt_type: Type of prompt ("system" or "user")
-            index: Prompt index (for user prompts)
             params: Resolved parameters for query templating
             capture_metadata: If True, capture RAG metadata
             **kwargs: Additional parameters

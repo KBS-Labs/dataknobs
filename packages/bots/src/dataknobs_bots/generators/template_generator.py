@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Template-based content generator using Jinja2.
 
 Renders Jinja2 templates with input parameters to produce structured
