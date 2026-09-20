@@ -9,6 +9,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rolling a set of tagged rows up onto the vocabulary that placed them:
+  `roll_up`, `ontology_support` and the three value types they answer with**, on
+  the `dataknobs_common.ontology` door. Reading one row's tags says which
+  entities *that row* is about; this asks what a whole page of results is about.
+  `roll_up` groups a corpus's tags by node within one axis of one vocabulary and
+  answers a `SupportSet` -- every node the rows named that the axis carries, in
+  the order they named it, each carrying the row positions that are its
+  evidence. `ontology_support` is the same counting one level up, grouped by
+  vocabulary and needing no vocabulary loaded at all, which is what a caller
+  holding a page of results and no idea what is on it asks first.
+
+  **Three answers rather than one, because a record and a presentation are
+  different questions.** `supported` is first-seen order and keeps everything;
+  `SupportSet.prune(policy)` is ranked and keeps what a policy selects --
+  `MOST_SPECIFIC` drops a node when something below it was named, `MOST_GENERAL`
+  keeps only what nothing in the set stands above, and `ALL` is the identity.
+  Pruning changes what is presented, never what is reachable, so a pruned node's
+  rows stay in `supported`. The ranking is by row count descending with ties in
+  first-seen order, and that is not *by specificity*: after `MOST_SPECIFIC` the
+  survivors are mutually incomparable by construction, so specificity cannot
+  order them. `AT_TYPE` is a member of the enum whose only behaviour is a
+  refusal naming the entity source it would need, because reading what a node
+  *is* is a source read and a support set holds no source.
+
+  **A name off a row and a name you passed are disposed of differently.** The
+  `taxonomy_id` argument is refused when the vocabulary does not declare it --
+  somebody typed it, and they are one edit from the right one. A tag naming
+  another vocabulary or another axis is filtered silently into
+  `unsupported_rows`, and `Ontology.localize` is never even asked about it: a
+  drifted corpus is ordinary rather than a mistake anyone can be told about. A
+  node id the axis does not carry is *reported* in `unplaced`, carrying the rows
+  that named it, so a maintainer can find the tagger.
+
+  **`NodeSupport.above` is not `ancestors()`** -- it holds the nodes of the same
+  answer set standing above each entry, nearest first, so an ancestor no row
+  named does not appear. It is a field rather than a member because deriving it
+  is a hierarchy walk, and that walk happens once in the call that already has
+  the vocabulary open rather than every time a projection is read. That is what
+  lets `prune` be pure. Rows are positions into the sequence the caller passed,
+  ascending and without duplicates, so the argument must be a `Sequence`: a
+  generator has no positions to report.
+
+  **A cyclic axis is presented rather than emptied.** Nothing refuses a document
+  declaring `A isa B` alongside `B isa A`, so a support set in which two nodes
+  each stand above the other is reachable from a valid vocabulary. Both
+  selecting policies read `above` with mutual pairs subtracted, because mutual
+  ancestry says the two are at the same height rather than one over the other;
+  read literally, every projection would empty and a page with evidence for two
+  entities would present as a page about nothing.
+
+  **Two flavours of the roll-up: `roll_up` over an `Ontology` and
+  `async_roll_up` over an `AsyncOntology`.** Whether an axis carries a node, and
+  what stands above it, are reads -- and on the asynchronous flavour both are
+  awaited -- so a vocabulary whose structure is backed by rows reaches the
+  roll-up through the twin. Everything that is not an `await` is shared between
+  them: the grouping, the localizing, the cache scoping and the assembly.
+  `ontology_support` has no twin, because it reads the tags' own `ontology_id`
+  and holds no vocabulary at all.
+
+  **A walk cache may be spent across axes**, which a bare one may not: a cache
+  carries no hierarchy in its key, so one handed to two axes would otherwise
+  answer the second from the first's edges with no exception anywhere. The
+  roll-up holds the axis name, so it scopes what it forwards. The axis is also
+  asked about each node once rather than once per tag that named it, which makes
+  a page of many hits naming one entity one membership query rather than many.
+
+  **A local id the vocabulary's `KeyCodec` cannot read costs its row, not the
+  answer.** `Ontology.localize` lets a codec's own refusal through unwrapped by
+  a documented contract, so over a non-`str` key space a single row tagged
+  before the key space changed would otherwise raise out of the whole call. It
+  is the same operational class `unplaced` exists for, and its row lands in
+  `unsupported_rows`.
+
+  The new `roll-up.md` guide publishes the whole call site, executed verbatim by
+  a workspace test.
+
 - **Reading a content row's tags back: `read_node_tags`, `read_node_tags_many`
   and the three value types they answer with**, on the `dataknobs_common.ontology`
   door beside the keys they read. An indexed row written from a vocabulary

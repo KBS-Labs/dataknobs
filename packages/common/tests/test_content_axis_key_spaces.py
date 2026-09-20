@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import itertools
 import pathlib
 from typing import TYPE_CHECKING
 
@@ -152,6 +153,21 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     # `Ontology.localize`, whose parameter is the `door` row it has to be. So
     # the read answers `str` on both sides and widens nothing, which is why no
     # row here is `key`.
+    # The roll-up, which is polymorphic in the key where every `bound` row in
+    # this table is spelled `Ontology[str]` by a door that already knows its
+    # keys. `bound` is therefore unavailable here rather than declined: the
+    # per-row test is binary on whether the annotation names `K`, and this one
+    # does.
+    ("<module>", "roll_up", "ontology", "key"),
+    ("<module>", "roll_up", "taxonomy_id", "schema"),
+    ("<module>", "roll_up", "->", "key"),
+    # Its twin, whose rows are the same three verdicts for the same three
+    # reasons: the flavour is in the vocabulary it takes, not in the key space
+    # it speaks, so `AsyncOntology[K]` is `key` exactly as `Ontology[K]` is.
+    # `max_concurrency` is an `int` and reaches this table nowhere.
+    ("<module>", "async_roll_up", "ontology", "key"),
+    ("<module>", "async_roll_up", "taxonomy_id", "schema"),
+    ("<module>", "async_roll_up", "->", "key"),
     ("<module>", "read_node_tags", "metadata", "payload"),
     ("<module>", "read_node_tags_many", "metadatas", "payload"),
     # The fourth key's read. `metadata` is `payload` for the reason above, and
@@ -184,7 +200,6 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "refuse_unknown_axes", "axes", "schema"),
     ("AliasFormSource", "by_alias_form", "->", "key"),
     ("AliasFormSource", "by_alias_form", "form", "text"),
-    ("SurfaceFormCatalog", "surface_forms", "->", "text"),
     ("Assertion", "<field>", "derived_from", "schema"),
     ("Assertion", "<field>", "id", "schema"),
     ("Assertion", "<field>", "metadata", "payload"),
@@ -219,12 +234,6 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AssertionSource", "get", "assertion_id", "schema"),
     ("AsyncAliasFormSource", "by_alias_form", "->", "key"),
     ("AsyncAliasFormSource", "by_alias_form", "form", "text"),
-    # The two catalogue protocols answer with **forms**, so their one member
-    # mentions no key at all -- which is why neither is generic where the two
-    # alias-form protocols above are. `text` rather than `key`: a surface form
-    # is what a person typed or wrote, and it stays `str` however the entities
-    # it resolves to are keyed.
-    ("AsyncSurfaceFormCatalog", "surface_forms", "->", "text"),
     ("AsyncAssertionHierarchy", "<field>", "source", "key"),
     ("AsyncAssertionHierarchy", "_find", "->", "key"),
     ("AsyncAssertionHierarchy", "_find", "object", "key"),
@@ -293,6 +302,13 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncOntology", "structure_for", "name", "schema"),
     ("AsyncOntology", "taxonomy", "->", "key"),
     ("AsyncOntology", "taxonomy", "name", "schema"),
+    # The two catalogue protocols -- this one and `SurfaceFormCatalog`, which
+    # sorts far below rather than beside it -- answer with **forms**, so their
+    # one member mentions no key at all. That is why neither is generic where
+    # the two alias-form protocols above both are. `text` rather than `key`: a
+    # surface form is what a person typed or wrote, and it stays `str` however
+    # the entities it resolves to are keyed.
+    ("AsyncSurfaceFormCatalog", "surface_forms", "->", "text"),
     ("AsyncTaxonomy", "<field>", "assertions", "key"),
     ("AsyncTaxonomy", "<field>", "entities", "key"),
     ("AsyncTaxonomy", "<field>", "entity_types", "schema"),
@@ -314,8 +330,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncTaxonomyView", "at", "node_id", "key"),
     ("AsyncTaxonomyView", "child_edges", "->", "key"),
     ("AsyncTaxonomyView", "children", "->", "key"),
-    ("AsyncTaxonomyView", "descendants", "->", "key"),
     ("AsyncTaxonomyView", "children_at_depth", "->", "key"),
+    ("AsyncTaxonomyView", "descendants", "->", "key"),
     ("AsyncTaxonomyView", "descendants_to_depth", "->", "key"),
     ("AsyncTaxonomyView", "entity", "->", "key"),
     ("AsyncTaxonomyView", "parent_edges", "->", "key"),
@@ -378,6 +394,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("MembershipOracle", "axes", "->", "payload"),
     ("MembershipOracle", "memberships", "->", "payload"),
     ("MembershipOracle", "memberships", "entity", "key"),
+    ("NodeSupport", "<field>", "above", "key"),
+    ("NodeSupport", "<field>", "node_id", "key"),
     ("Ontology", "<field>", "assertions", "key"),
     ("Ontology", "<field>", "codec", "key"),
     ("Ontology", "<field>", "entities", "key"),
@@ -439,6 +457,15 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("SourceRef", "<field>", "locator", "payload"),
     ("SourceRef", "<field>", "projection_id", "payload"),
     ("SourceRef", "<field>", "source_id", "schema"),
+    ("SupportSet", "<field>", "ontology_id", "schema"),
+    ("SupportSet", "<field>", "supported", "key"),
+    ("SupportSet", "<field>", "taxonomy_id", "schema"),
+    ("SupportSet", "<field>", "unplaced", "key"),
+    ("SupportSet", "_strictly_above", "->", "key"),
+    ("SupportSet", "prune", "->", "key"),
+    # `text` for the reason given at `AsyncSurfaceFormCatalog` above, which the
+    # twins share: a catalogue answers with forms, and a form is a `str`.
+    ("SurfaceFormCatalog", "surface_forms", "->", "text"),
     ("Taxonomy", "<field>", "assertions", "key"),
     ("Taxonomy", "<field>", "entities", "key"),
     ("Taxonomy", "<field>", "entity_types", "schema"),
@@ -464,8 +491,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("TaxonomyView", "at", "node_id", "key"),
     ("TaxonomyView", "child_edges", "->", "key"),
     ("TaxonomyView", "children", "->", "key"),
-    ("TaxonomyView", "descendants", "->", "key"),
     ("TaxonomyView", "children_at_depth", "->", "key"),
+    ("TaxonomyView", "descendants", "->", "key"),
     ("TaxonomyView", "descendants_to_depth", "->", "key"),
     ("TaxonomyView", "entity", "->", "key"),
     ("TaxonomyView", "parent_edges", "->", "key"),
@@ -483,11 +510,11 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
 #: and the pass that makes that change is the pass that should be reading the
 #: rows it brings with it.
 _PROTOCOLS = 15
-_REACHABLE_VALUE_TYPES = 37
+_REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 341
+_ROWS = 355
 
 
 def _modules() -> Iterator[ast.Module]:
@@ -762,6 +789,64 @@ def test_every_annotation_in_the_population_has_a_verdict() -> None:
 
     assert set(measured) - declared == set(), "rows in the tree that no verdict claims"
     assert declared - set(measured) == set(), "verdicts for rows the tree does not have"
+
+
+#: The one block whose rows are ordered by **topic** rather than by member name,
+#: and the exemption is earned rather than granted: 57 of the table's 62 prose
+#: lines sit inside it, each explaining the cluster of rows beneath it -- why the
+#: roll-up's three are `key`/`schema`/`key`, why the tag reads are `payload`.
+#: Sorting it alphabetically would scatter every one of them away from what it
+#: explains, which is a worse table than an unsorted block. No other block in the
+#: population carries a comment at all except `AsyncSurfaceFormCatalog`, whose
+#: one comment travels with its one row.
+_TOPIC_ORDERED = "<module>"
+
+
+def test_the_verdict_table_is_one_ordered_run() -> None:
+    """The table's shape, which was a convention nothing checked.
+
+    **Three properties, and they are separable**, which is why they are asserted
+    apart rather than as one ``sorted()`` comparison: an owner's rows are
+    contiguous, the blocks are in name order, and within a block the rows are in
+    member order. The first is the one that matters most and the one that was
+    actually broken --- five ``SupportSet`` rows once landed *inside* the
+    ``TaxonomyView`` block, splitting the only owner the table had ever split,
+    and the table read as fine because nothing compared it to anything.
+
+    **Written because the convention turned out not to be the one anybody
+    believed.** The commit that repaired that split described the table as
+    ordered "by member name" throughout. It was not: two blocks were out of name
+    order and three blocks were internally unsorted, none of which anything could
+    report. A convention that is undeclared, unchecked and already violated is
+    not a convention; it is a habit that happens to hold in most places.
+
+    ``<field>`` sorts first with no special case, because ``<`` is ``0x3C`` and
+    precedes both ``_`` and every letter --- so a private member lands between
+    the fields and the public ones, which is where a reader looks for it.
+    """
+    owners = [owner for owner, _, _, _ in _VERDICTS]
+    blocks = [owner for owner, _ in itertools.groupby(owners)]
+
+    split = sorted({owner for owner in blocks if blocks.count(owner) > 1})
+    assert split == [], (
+        f"{split} appear in more than one place in the table, so the rows of one "
+        f"owner are not together. A reader looking for what was decided about an "
+        f"owner finds some of it"
+    )
+
+    assert blocks == sorted(blocks), (
+        "the owner blocks are not in name order: "
+        f"{[(a, b) for a, b in itertools.pairwise(blocks) if a > b]}"
+    )
+
+    for owner, rows in itertools.groupby(_VERDICTS, key=lambda row: row[0]):
+        if owner == _TOPIC_ORDERED:
+            continue
+        members = [(member, position) for _, member, position, _ in rows]
+        assert members == sorted(members), (
+            f"{owner}'s rows are not in member order, which is how a duplicate "
+            f"verdict for one member hides: {members}"
+        )
 
 
 @pytest.mark.parametrize(

@@ -8,12 +8,12 @@ instead. The fifth publishes a document no constant holds, so it is one copy
 rather than two -- see ``UNPAIRED`` below, which is where that is said and
 where it is checked.
 
-**Two of the four pair rows name one constant**, which is the shape to expect
-rather than an anomaly: ``anchored-view.md`` and ``content-tags.md`` publish
-the same vocabulary on purpose, so that two service-free acceptances run
-against one substrate. That is precisely the arrangement this file exists for
--- two published copies of one document -- so both are compared to the constant
-and thereby to each other.
+**Three of the five pair rows name one constant**, which is the shape to
+expect rather than an anomaly: ``anchored-view.md``, ``content-tags.md`` and
+``roll-up.md`` publish the same vocabulary on purpose, so that three
+service-free acceptances run against one substrate. That is precisely the
+arrangement this file exists for -- two published copies of one document -- so
+both are compared to the constant and thereby to each other.
 
 **Nothing compared the two.** Each copy was guarded by its own suite -- a fence
 that drifts takes its workspace runner red, a constant that drifts takes
@@ -103,6 +103,7 @@ ENTITY_RESOLUTION_GUIDE = (
 ANCHORED_VIEW_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "anchored-view.md"
 HIERARCHY_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "hierarchy.md"
 CONTENT_TAGS_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "content-tags.md"
+ROLL_UP_GUIDE = pathlib.Path(__file__).parents[1] / "docs" / "guides" / "roll-up.md"
 
 GUIDES = sorted(ONTOLOGY_GUIDE.parent.glob("*.md"))
 
@@ -176,6 +177,7 @@ PAIRS = [
     (ENTITY_RESOLUTION_GUIDE, MAMMALS_V11_DOCUMENT, "MAMMALS_V11_DOCUMENT"),
     (ANCHORED_VIEW_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
     (CONTENT_TAGS_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
+    (ROLL_UP_GUIDE, MAMMALS_GUIDE_DOCUMENT, "MAMMALS_GUIDE_DOCUMENT"),
 ]
 
 #: Guides that publish a vocabulary **no constant mirrors**, and why. Named so

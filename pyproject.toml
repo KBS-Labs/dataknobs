@@ -635,7 +635,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "packages/utils/src/dataknobs_utils/json_utils.py" = ["SIM115"]  # ownership switches on the argument type: opened here only when passed a path, and then closed here
 "packages/utils/src/dataknobs_utils/xml_utils.py" = ["SIM115"]  # handle must outlive the expression because mmap borrows its fileno()
 "packages/xization/src/dataknobs_xization/ingestion/source.py" = ["SIM115"]  # handle crosses a thread boundary to a generator that finalizes it
-# The four entries below are the only ones here waiving a rule over a file whose
+# The five entries below are the only ones here waiving a rule over a file whose
 # text is not its own. Each is a transcription of a fence published in a
 # packages/common/docs/guides/ page, held character-for-character equal to it by
 # its own workspace test — so the per-LINE form this block otherwise prefers is
@@ -649,7 +649,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # the same identity assertion: a new statement cannot be added to either file
 # without being added to the published guide first.
 #
-# One of the four also waives B015, and the second code is worth reading as a
+# One of the five also waives B015, and the second code is worth reading as a
 # separate decision rather than as the first one spreading. B018 covers a bare
 # attribute read; B015 covers a bare *comparison*, which is the shape the
 # ontology page uses to show what a source declares — `Capability.X in
@@ -676,6 +676,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 "tests/worked_entity_resolution_call_site.py" = ["B018"]  # same, for the entity-resolution guide's scanning call site: 5 bare reads of candidates, spans and coverage
 "tests/worked_anchored_view_call_site.py" = ["B018"]  # same, for the anchored-view guide's cursor call site: 4 bare reads of a node id and an ancestor's name and description
 "tests/worked_content_tags_call_site.py" = ["B018"]  # same, for the content-tags guide's read call site: 6 bare reads of a malformed row's reason, a node id, an entity name and three projections
+"tests/worked_roll_up_call_site.py" = ["B018"]  # same, for the roll-up guide's call site: 1 bare read of the rows a set of hits supported nothing with
 
 [tool.ruff.lint.isort]
 # Configure import sorting
