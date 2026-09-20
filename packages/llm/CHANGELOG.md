@@ -295,6 +295,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call it, so the floor moves rather than the finding being accepted.
   Surfaced by the floor resolve step in the `dependency-update` workflow.
 
+- Bumped minimum `openai` requirement in the `openai` extra from `>=1.0.0` to
+  `>=1.3.8`. No advisory affects `openai` itself; the floor moves because
+  `1.0.0`–`1.3.7` declare `anyio<4`, and that cap is what made a fresh
+  consumer install vulnerable. It pins `anyio` to `3.7.1` — the last 3.x
+  release — and, because `httpx2>=2.7.0` requires `anyio>=4.10`, it drags
+  `httpx2` down to `2.6.0`, which exact-pins `httpcore2==2.6.0`. `1.3.8`
+  relaxes the cap to `anyio<5`, so the floor resolve sweeps eight advisories
+  across those three transitives at once:
+
+    - `anyio` (both fixed in 4.14.2): GHSA-82r6-8w77-94w6 / CVE-2026-63374
+      (CVSS 9.3) — `TLSStream` encodes host names as IDNA 2003, so a
+      certificate issued for the IDNA 2003 form of an internationalized
+      domain validates against the IDNA 2008 name the caller asked for; and
+      GHSA-5p39-cfhj-2xmp / CVE-2026-64847 (CVSS 6.8) — process-pool workers
+      never drain the worker `stderr` pipe and deadlock once it fills.
+    - `httpx2` / `httpcore2`: GHSA-7mj9-2mp8-4m2p / CVE-2026-84381 (CVSS 8.1,
+      `wss://` through a SOCKS5 proxy skips the TLS upgrade and sends the
+      handshake and every frame in plaintext; fixed in `httpcore2` 2.10.0 and
+      `httpx2` 2.10.0), GHSA-8xx6-hgc6-gc2m / CVE-2026-84382 (CVSS 7.5,
+      streaming decompression inflates each 64 KiB read in one allocation at
+      up to 1032:1; fixed in 2.12.0), GHSA-f2fp-rgf2-35cp / CVE-2026-84378
+      (CVSS 5.9, quadratic SSE line buffering; fixed in 2.10.0),
+      GHSA-pf96-p4fj-6566 / CVE-2026-84380 (CVSS 5.6, a default
+      `Content-Length` is emitted alongside a caller-supplied
+      `Transfer-Encoding`; fixed in 2.11.0) and GHSA-h4x7-gw46-3wm6 /
+      CVE-2026-84379 (CVSS 5.3, CR/LF in a `files=` per-part `Content-Type`
+      injects multipart part headers; fixed in 2.11.0).
+
+  Of the eight, only the `anyio` IDNA finding has a live path from this
+  package — `httpx`'s `AsyncClient` reaches `anyio`'s `TLSStream` through
+  `httpcore`'s anyio backend — and exploiting it additionally requires an
+  already-redirected connection and a non-ASCII host name. `anyio.to_process`
+  and `httpx2` have no call sites in this workspace. The floor moves anyway,
+  because the extra ships the whole chain to consumers. Surfaced by the floor
+  resolve step in the `dependency-update` workflow.
+
 ## v0.10.0 - 2026-09-03
 
 ### Fixed
