@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation
+
+- **The roll-up guide's narrowing paragraph names the member that does it.** It
+  read *"nothing ships that filter today"* --- true when it was written, and
+  `dataknobs-data`'s `OntologyRegistry.ontologies_in_play` is now that filter.
+  The paragraph says so, says what the narrowing drops and that
+  `ontology_support` is the door back to it, and points at the registry guide
+  by absolute site URL, since no relative path between two package trees
+  resolves from both. `OntologySupport`'s own docstring stops saying it has one
+  producer for the same reason: it has two, in two distributions, and the
+  second is a filter over the first rather than a second count.
+
 ### Added
 
 - **Rolling a set of tagged rows up onto the vocabulary that placed them:

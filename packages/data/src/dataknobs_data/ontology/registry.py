@@ -39,10 +39,13 @@ from dataknobs_common.ontology import (
     AsyncMappingEntitySource,
     AsyncOntology,
     Entity,
+    NodeTag,
     OntologyConfig,
+    OntologySupport,
     assemble_async_ontology,
     async_build_resolver,
     build_ontology,
+    ontology_support,
     refuse_unbuildable_rungs,
     split_qualified,
 )
@@ -643,6 +646,58 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     def list_ids(self) -> list[str]:
         """The ids this registry holds, in load order."""
         return list(self._ontologies)
+
+    def ontologies_in_play(
+        self, tagged: Sequence[Sequence[NodeTag]]
+    ) -> tuple[OntologySupport, ...]:
+        """Which of the vocabularies this registry holds the rows are about, ranked.
+
+        **The step between reading a corpus's tags and descending into one
+        vocabulary.** ``read_node_tags_many`` says what each row named, this
+        says which of those are here to be asked, and :meth:`get` is what the
+        descent goes through. A deployment holding one vocabulary names it and
+        needs none of this --- the registry instance is the unit of sharing ---
+        and a deployment holding several has to pick. Picking by rank is what
+        this is.
+
+        **It narrows and does not count.** The counting is
+        :func:`~dataknobs_common.ontology.ontology_support`, and this member
+        filters that answer to the ids :meth:`list_ids` reports. Filtering a
+        ranked tuple preserves both the ranking and the tie-break, so there is
+        no second ordering to disagree with the first and no second measure to
+        drift from it.
+
+        **What it drops is recoverable and is not reported.** A tag naming a
+        vocabulary this registry does not hold is dropped here; a caller who
+        wants it calls ``ontology_support`` directly, which is one import and
+        the same argument. ``()`` therefore answers three states at once --- a
+        corpus carrying no tags, a corpus naming only vocabularies this
+        registry has never seen, and a registry holding nothing --- and that
+        conflation is asserted by a test rather than left to be discovered.
+
+        **It opens nothing, awaits nothing and is not a coroutine.** The tags
+        are the caller's and the held ids are a dict this registry already
+        has, so there is nothing to await. It is the one member here whose
+        argument is a page of the caller's own content rather than an id or a
+        document.
+
+        Args:
+            tagged: One row's tags per position, as
+                :func:`~dataknobs_common.ontology.read_node_tags_many`
+                answered. Positions are the row references, and they are the
+                caller's sequence's rather than this registry's.
+
+        Returns:
+            One :class:`~dataknobs_common.ontology.OntologySupport` per held
+            vocabulary the tags name, ranked by row count descending with ties
+            in first-seen order. **Empty is an answer**, and more than one
+            state produces it.
+        """
+        return tuple(
+            support
+            for support in ontology_support(tagged)
+            if support.ontology_id in self._ontologies
+        )
 
     async def resolve_ref(self, qualified_id: str) -> Entity[str] | None:
         """Name resolution: a qualified id to the entity it names, or None.

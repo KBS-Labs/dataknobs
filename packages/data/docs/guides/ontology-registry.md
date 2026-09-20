@@ -862,12 +862,25 @@ this same document declared — it is the one rung a document cannot configure
 from a value-level door, because it is constructed over a live index rather
 than over the vocabulary alone.
 
+**The block below opens one step earlier than this heading**, because a
+deployment holding more than one vocabulary has to pick before it resolves. It
+loads two, asks which of them a page of tagged results is about, and resolves
+against the answer; `ontologies_in_play` is that step, and the prose after the
+fence is about it.
+
 <!-- worked-call-site -->
 ```python
 import asyncio
+from typing import Any
 
 from dataknobs_common.entity_resolution import ResolutionResult
-from dataknobs_common.ontology import OntologyConfig
+from dataknobs_common.ontology import (
+    NODE_ID_KEY,
+    ONTOLOGY_ID_KEY,
+    TAXONOMY_ID_KEY,
+    OntologyConfig,
+    read_node_tags_many,
+)
 from dataknobs_data.ontology import OntologyRegistry
 from dataknobs_data.testing import DeterministicEmbedder
 
@@ -898,6 +911,27 @@ document = {
     "resolver": {"rungs": [{"kind": "exact"}, {"kind": "semantic"}]},
 }
 
+# A second vocabulary, loaded into the same registry. One is the case where the
+# question below has a single answer and nobody has to ask it -- the registry
+# instance is the unit of sharing, so a deployment holding several holds them
+# here, in one flat id space.
+suppliers = {
+    "id": "suppliers",
+    "version": "1.0",
+    "entity_types": [{"id": "Supplier"}],
+    "entities": [{"id": "acme-co", "type": "Supplier", "name": "Acme Corporation"}],
+}
+
+# What your own retrieval handed back. This page wrote none of it: rows out of
+# somebody else's store, carrying whatever tags were written on them. Row 1
+# touched no vocabulary at all, which most of a corpus does.
+rows: list[dict[str, Any]] = [
+    {ONTOLOGY_ID_KEY: "catalog", TAXONOMY_ID_KEY: "kinds", NODE_ID_KEY: ["sku-4471"]},
+    {"invoice_id": "2291"},
+    {ONTOLOGY_ID_KEY: "suppliers", TAXONOMY_ID_KEY: "trade", NODE_ID_KEY: ["acme-co"]},
+    {ONTOLOGY_ID_KEY: "catalog", TAXONOMY_ID_KEY: "kinds", NODE_ID_KEY: ["sku-8802"]},
+]
+
 
 async def main() -> ResolutionResult:
     registry = OntologyRegistry.from_components(
@@ -905,14 +939,27 @@ async def main() -> ResolutionResult:
         embedder=DeterministicEmbedder(dimensions=32),
     )
     await registry.load()
+    await registry.load(suppliers)
     try:
+        # Which of the vocabularies this registry holds is that page of results
+        # even about? Ranked by how many rows named each, so the answer is also
+        # a measure of how much of it, and the rows ride along so that picking
+        # one costs no second pass over the corpus. The axis id on each row is
+        # not read here -- rolling a corpus up onto one axis is what needs it.
+        in_play = registry.ontologies_in_play(read_node_tags_many(rows).tags)
+        assert [(s.ontology_id, s.rows) for s in in_play] == [
+            ("catalog", (0, 3)),
+            ("suppliers", (2,)),
+        ]
+        about = in_play[0].ontology_id  # "catalog", on two rows against one
+
         # `load()` assembles the index; filling it is yours. Nothing here
         # re-embeds a vocabulary on every reload behind your back.
-        index = registry.index("catalog")
+        index = registry.index(about)
         assert index is not None  # `None` where a document declares no `index:`
         await index.build()
 
-        resolver = registry.resolver("catalog")
+        resolver = registry.resolver(about)
         assert resolver is not None  # and `None` where it declares none
         result = await resolver.resolve("Acme Widget", k=5)
 
@@ -932,6 +979,33 @@ async def main() -> ResolutionResult:
 
 result = asyncio.run(main())
 ```
+
+**Which vocabularies a page of results is even about is a question this
+registry answers, and the answer is a ranking.** `ontologies_in_play` takes the
+tags a corpus carries — one row's per position, as `read_node_tags_many` reads
+them — and reports one entry per vocabulary *this registry holds* that the rows
+named, ranked by how many rows named each, ties in the order the corpus first
+named them. The rows travel with each entry, positionally, so picking one and
+going on to use its evidence costs no second pass over the corpus.
+
+**It narrows and does not count.** The measure is `ontology_support` in
+`dataknobs_common.ontology`, which counts over the tags alone and holds no
+registry at all; this member filters that answer to the ids it carries.
+Filtering a ranked tuple preserves both the ranking and the tie-break, so there
+is no second ordering here to disagree with the first — and no second
+implementation of the measure to drift from it. The roll-up guide in
+`dataknobs-common` is the same operation one level down, over the nodes of one
+axis rather than over vocabularies:
+<https://kbs-labs.github.io/dataknobs/packages/common/roll-up/>.
+
+**What it drops is recoverable and is not reported.** A tag naming a vocabulary
+this registry never loaded is gone from the answer, and nothing says it was
+there. The door back is one import: `ontology_support` over the same tags
+answers every vocabulary the rows named, held or not, so the residue is one set
+difference. `()` therefore has more than one producer — a corpus carrying no
+tags, a corpus naming only vocabularies you do not hold, and a registry holding
+nothing — and which of those you are looking at is a question the tags answer
+rather than this call.
 
 **`registry.index(id).build()` is yours to call, and the cascade says so when
 you have not.** A load assembles the index and returns; it does not embed the

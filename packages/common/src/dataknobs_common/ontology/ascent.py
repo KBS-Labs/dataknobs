@@ -312,12 +312,13 @@ class OntologySupport:
     difference. A generic pair would let a caller pass either where either is
     expected, which is the one mistake the names exist to prevent.
 
-    **One producer today**, which is :func:`ontology_support`. The shape is the
-    one a registry narrowing this answer to the vocabularies it holds would
-    report in, and it is published from here so that such a narrowing is a
-    filter over this module's answer rather than a second count --- but nothing
-    outside this package produces one yet, and this sentence says so rather than
-    describing an integration as though it existed.
+    **Two producers, in two distributions.** :func:`ontology_support` counts
+    over the tags alone, and ``dataknobs_data.ontology.OntologyRegistry``'s
+    ``ontologies_in_play`` narrows that answer to the vocabularies one registry
+    holds. The second is a **filter** over the first rather than a second
+    count, which is what publishing the type from here bought: the shape exists
+    a distribution below the registry, so the narrowing has something to filter
+    and one implementation of the measure serves both.
     """
 
     ontology_id: str

@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OntologyRegistry.ontologies_in_play(tagged)` --- which of the vocabularies
+  a registry holds a page of tagged rows is about, ranked.** It takes the tags a
+  corpus carries, one row's per position as `read_node_tags_many` reads them,
+  and answers one `OntologySupport` per held vocabulary the rows named, ranked
+  by how many rows named each with ties in the order the corpus first named
+  them. The rows travel with each entry, positionally, so picking one and using
+  its evidence costs no second pass over the corpus. A deployment holding one
+  vocabulary names it and needs none of this; a deployment holding several has
+  to pick, and picking by rank is what this is.
+
+  **It narrows and does not count.** The measure is `ontology_support` in
+  `dataknobs_common.ontology`, which counts over the tags alone and holds no
+  registry; this member filters that answer to the ids it carries. Filtering a
+  ranked tuple preserves both the ranking and the tie-break, so there is no
+  second ordering to disagree with the first and no second implementation of the
+  measure to drift from it.
+
+  **What it drops is recoverable and is not reported.** A tag naming a
+  vocabulary this registry never loaded is gone from the answer and nothing
+  says it was there; `ontology_support` over the same tags answers every
+  vocabulary the rows named, held or not, so the residue is one set difference.
+  `()` therefore has more than one producer -- a corpus carrying no tags, a
+  corpus naming only vocabularies you do not hold, and a registry holding
+  nothing.
+
+  It opens nothing, awaits nothing and has no asynchronous twin: the tags are
+  the caller's and the held ids are a mapping the registry already has, so there
+  is nothing to await.
+
 - **`SemanticSignal`**, in `dataknobs_data.entity_resolution`, and the
   `kind: "semantic"` rung a `resolver:` section can now name. It proposes
   entities whose indexed text sits nearest a query, as `INFERRED` evidence with
