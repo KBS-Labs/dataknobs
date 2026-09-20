@@ -41,6 +41,14 @@ from dataknobs_common.entity_resolution.values import (
     RunnerUp,
     Scoring,
 )
+from dataknobs_common.ontology.ascent import (
+    Granularity,
+    NodeSupport,
+    OntologySupport,
+    SupportSet,
+    ontology_support,
+    roll_up,
+)
 from dataknobs_common.ontology.config import OntologyConfig
 from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.hierarchy import (
@@ -161,6 +169,7 @@ __all__ = [
     "EntitySource",
     "EntityType",
     "EvidenceKind",
+    "Granularity",
     "InferenceMode",
     "KeyCodec",
     "Literal",
@@ -170,10 +179,12 @@ __all__ = [
     "MappingEntitySource",
     "Materialization",
     "MembershipOracle",
+    "NodeSupport",
     "NodeTag",
     "Ontology",
     "OntologyConfig",
     "OntologyParts",
+    "OntologySupport",
     "ParentChoice",
     "Polarity",
     "ProjectionContext",
@@ -188,6 +199,7 @@ __all__ = [
     "SourceDescription",
     "SourceRef",
     "StrCodec",
+    "SupportSet",
     "SurfaceFormCatalog",
     "TagReading",
     "Taxonomy",
@@ -205,10 +217,12 @@ __all__ = [
     "edge_criteria",
     "load_ontology",
     "qualify",
+    "ontology_support",
     "read_alias_forms",
     "read_node_tags",
     "read_node_tags_many",
     "refuse_unbuildable_rungs",
+    "roll_up",
     "relation_id",
     "split_qualified",
     "EntitySourceIndexSource",

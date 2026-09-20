@@ -152,6 +152,14 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     # `Ontology.localize`, whose parameter is the `door` row it has to be. So
     # the read answers `str` on both sides and widens nothing, which is why no
     # row here is `key`.
+    # The roll-up, which is polymorphic in the key where every `bound` row in
+    # this table is spelled `Ontology[str]` by a door that already knows its
+    # keys. `bound` is therefore unavailable here rather than declined: the
+    # per-row test is binary on whether the annotation names `K`, and this one
+    # does.
+    ("<module>", "roll_up", "ontology", "key"),
+    ("<module>", "roll_up", "taxonomy_id", "schema"),
+    ("<module>", "roll_up", "->", "key"),
     ("<module>", "read_node_tags", "metadata", "payload"),
     ("<module>", "read_node_tags_many", "metadatas", "payload"),
     # The fourth key's read. `metadata` is `payload` for the reason above, and
@@ -378,6 +386,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("MembershipOracle", "axes", "->", "payload"),
     ("MembershipOracle", "memberships", "->", "payload"),
     ("MembershipOracle", "memberships", "entity", "key"),
+    ("NodeSupport", "<field>", "node_id", "key"),
+    ("NodeSupport", "<field>", "above", "key"),
     ("Ontology", "<field>", "assertions", "key"),
     ("Ontology", "<field>", "codec", "key"),
     ("Ontology", "<field>", "entities", "key"),
@@ -467,6 +477,11 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("TaxonomyView", "descendants", "->", "key"),
     ("TaxonomyView", "children_at_depth", "->", "key"),
     ("TaxonomyView", "descendants_to_depth", "->", "key"),
+    ("SupportSet", "<field>", "ontology_id", "schema"),
+    ("SupportSet", "<field>", "taxonomy_id", "schema"),
+    ("SupportSet", "<field>", "supported", "key"),
+    ("SupportSet", "<field>", "unplaced", "key"),
+    ("SupportSet", "prune", "->", "key"),
     ("TaxonomyView", "entity", "->", "key"),
     ("TaxonomyView", "parent_edges", "->", "key"),
     ("TaxonomyView", "parents", "->", "key"),
@@ -483,11 +498,11 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
 #: and the pass that makes that change is the pass that should be reading the
 #: rows it brings with it.
 _PROTOCOLS = 15
-_REACHABLE_VALUE_TYPES = 37
+_REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 341
+_ROWS = 351
 
 
 def _modules() -> Iterator[ast.Module]:

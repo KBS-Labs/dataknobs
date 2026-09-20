@@ -82,6 +82,10 @@
           "site": "content-tags.md"
         },
         {
+          "package": "guides/roll-up.md",
+          "site": "roll-up.md"
+        },
+        {
           "package": "guides/entity-resolution.md",
           "site": "entity-resolution.md"
         },
