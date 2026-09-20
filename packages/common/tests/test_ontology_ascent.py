@@ -571,11 +571,11 @@ def test_the_vocabulary_level_entry_travels_on_its_own(
     """``OntologySupport`` is constructible, hashable, positional, and on the door.
 
     **Reachability is what this asserts**, and the distinction is worth keeping:
-    the type is published by this module and nothing outside the package
-    produces one today. It is on the door so that a registry narrowing this
-    answer to the vocabularies it holds could be a filter over this module's
-    answer rather than a second count --- and being importable is the part of
-    that which is true now and testable now.
+    the type is published by this module and the narrowing that consumes it is
+    a distribution away, on ``dataknobs_data``'s registry, which a test here
+    cannot import. Being on the door is what made that narrowing a filter over
+    this module's answer rather than a second count, and it is the part of that
+    which is testable from inside this package.
 
     Positional for the reason the node-level rows are: the row is recoverable
     from its position and the position is never recoverable from the row.

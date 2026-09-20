@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation
+
+- **The roll-up guide's narrowing paragraph names the member that narrows.**
+  `ontology_support` counts every vocabulary a corpus names, held or not, and
+  narrowing that answer to the ones a deployment actually holds is
+  `dataknobs-data`'s `OntologyRegistry.ontologies_in_play`. The paragraph names
+  it, says what the narrowing drops and that `ontology_support` is the door
+  back to it, and points at the registry guide by absolute site URL, since no
+  relative path between two package trees resolves from both.
+  `OntologySupport`'s own docstring is reached from two distributions for the
+  same reason, and says so: the second is a filter over the first rather than a
+  second count.
+
 ### Added
 
 - **Rolling a set of tagged rows up onto the vocabulary that placed them:

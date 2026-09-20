@@ -308,11 +308,15 @@ know what is on it --- and it holds no vocabulary, so it answers over ones you
 have never loaded and ones nobody holds.
 
 If you hold a registry of vocabularies and want this narrowed to the ones it
-carries, filter the tuple rather than counting again. A filter over a ranked
-tuple preserves both the ranking and the tie-break, which is why the narrowing
-is a filter: one implementation of the measure, in one place. Nothing ships
-that filter today --- `OntologySupport` is published from here so that it can be
-written where the registry is, against a shape that already exists.
+carries, `OntologyRegistry.ontologies_in_play` in `dataknobs-data` is that
+narrowing, and it filters the tuple rather than counting again. A filter over a
+ranked tuple preserves both the ranking and the tie-break, so one
+implementation of the measure serves both heights --- which is why
+`OntologySupport` is published from here rather than from there. What the
+narrowing drops, a vocabulary the rows name and that registry does not hold, is
+recovered by calling `ontology_support` yourself: the same call, over the same
+tags, with nothing filtered. The registry guide is where that member is taught:
+<https://kbs-labs.github.io/dataknobs/packages/data/guides/ontology-registry/#which-vocabularies-a-page-of-results-is-about>.
 
 ## The walk one word away
 
