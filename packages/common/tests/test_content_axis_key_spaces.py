@@ -160,6 +160,13 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "roll_up", "ontology", "key"),
     ("<module>", "roll_up", "taxonomy_id", "schema"),
     ("<module>", "roll_up", "->", "key"),
+    # Its twin, whose rows are the same three verdicts for the same three
+    # reasons: the flavour is in the vocabulary it takes, not in the key space
+    # it speaks, so `AsyncOntology[K]` is `key` exactly as `Ontology[K]` is.
+    # `max_concurrency` is an `int` and reaches this table nowhere.
+    ("<module>", "async_roll_up", "ontology", "key"),
+    ("<module>", "async_roll_up", "taxonomy_id", "schema"),
+    ("<module>", "async_roll_up", "->", "key"),
     ("<module>", "read_node_tags", "metadata", "payload"),
     ("<module>", "read_node_tags_many", "metadatas", "payload"),
     # The fourth key's read. `metadata` is `payload` for the reason above, and
@@ -453,6 +460,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("SupportSet", "<field>", "supported", "key"),
     ("SupportSet", "<field>", "taxonomy_id", "schema"),
     ("SupportSet", "<field>", "unplaced", "key"),
+    ("SupportSet", "_strictly_above", "->", "key"),
     ("SupportSet", "prune", "->", "key"),
     ("Taxonomy", "<field>", "assertions", "key"),
     ("Taxonomy", "<field>", "entities", "key"),
@@ -502,7 +510,7 @@ _REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 351
+_ROWS = 355
 
 
 def _modules() -> Iterator[ast.Module]:

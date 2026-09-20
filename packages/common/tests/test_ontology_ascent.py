@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import ast
 import sys
-from dataclasses import fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,20 +32,33 @@ from dataknobs_common.ontology import (
     NODE_ID_KEY,
     ONTOLOGY_ID_KEY,
     TAXONOMY_ID_KEY,
+    AsyncMappingAssertionSource,
+    AsyncMappingEntitySource,
+    AsyncOntology,
     Granularity,
+    MappingAssertionSource,
+    MappingEntitySource,
     NodeSupport,
     NodeTag,
     Ontology,
     OntologySupport,
+    StrCodec,
     SupportSet,
+    TaxonomyDefinition,
+    async_roll_up,
     load_ontology,
     ontology_support,
     read_node_tags,
     roll_up,
 )
 from dataknobs_common.ontology import ascent
+from dataknobs_common.testing import assert_twins_agree
+
+from _vocabularies import Sku, SkuCodec
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from dataknobs_common.ontology.taxonomy import Taxonomy
 
 
@@ -68,6 +81,107 @@ CORPUS = [
     _row("golden_retriever"),
     _row("wolfhound"),
 ]
+
+
+@dataclass
+class _Edges:
+    """A structure axis over an explicit parent map, recording what it was asked.
+
+    Hand-built rather than loaded, because the properties below are about
+    vocabularies a document cannot conveniently express: two axes over one node
+    set, a cycle, and a key space that is not ``str``. It is a real
+    ``Hierarchy`` --- the four members, answered from a mapping --- so what runs
+    over it is the walk rather than a stand-in for one, and ``asked`` is the
+    structure's own record of the question that has no cache.
+    """
+
+    up: Mapping[Any, tuple[Any, ...]]
+    asked: list[Any] = field(default_factory=list)
+
+    def roots(self) -> Sequence[Any]:
+        return tuple(node for node, above in self.up.items() if not above)
+
+    def parents(self, node_id: Any) -> Sequence[Any]:
+        return self.up.get(node_id, ())
+
+    def children(self, node_id: Any) -> Sequence[Any]:
+        return tuple(node for node, above in self.up.items() if node_id in above)
+
+    def contains(self, node_id: Any) -> bool:
+        self.asked.append(node_id)
+        return node_id in self.up
+
+
+@dataclass
+class _AsyncEdges:
+    """:class:`_Edges` with its four members awaited --- what a live backing is.
+
+    Async on every member rather than only the ones a test happens to reach: a
+    synchronous stand-in for an asynchronous backing is how a missing ``await``
+    survives a suite, because calling a sync function without one works.
+    """
+
+    up: Mapping[Any, tuple[Any, ...]]
+    asked: list[Any] = field(default_factory=list)
+
+    async def roots(self) -> Sequence[Any]:
+        return tuple(node for node, above in self.up.items() if not above)
+
+    async def parents(self, node_id: Any) -> Sequence[Any]:
+        return self.up.get(node_id, ())
+
+    async def children(self, node_id: Any) -> Sequence[Any]:
+        return tuple(node for node, above in self.up.items() if node_id in above)
+
+    async def contains(self, node_id: Any) -> bool:
+        self.asked.append(node_id)
+        return node_id in self.up
+
+
+def _built(
+    axes: Mapping[str, _Edges],
+    *,
+    ontology_id: str = "mammals",
+    codec: Any = None,
+) -> Ontology[Any]:
+    """A vocabulary whose axes are the given structures, and which loads nothing.
+
+    ``structures`` is the field a door fills and a caller building directly may
+    fill with any ``Hierarchy``, so this is the documented seam rather than a
+    way around one. The two sources are empty because nothing here reads them:
+    the roll-up walks the structure and counts, and asks what a node *is*
+    nowhere.
+    """
+    return Ontology(
+        id=ontology_id,
+        version="1.0",
+        entity_types={},
+        relation_types={},
+        entities=MappingEntitySource({}),
+        assertions=MappingAssertionSource([]),
+        taxonomies={name: TaxonomyDefinition(id=name, relation=name) for name in axes},
+        describes=(),
+        codec=StrCodec() if codec is None else codec,
+        structures=dict(axes),
+    )
+
+
+def _built_async(
+    axes: Mapping[str, _AsyncEdges], *, ontology_id: str = "mammals"
+) -> AsyncOntology[Any]:
+    """:func:`_built`'s twin, over asynchronous backings."""
+    return AsyncOntology(
+        id=ontology_id,
+        version="1.0",
+        entity_types={},
+        relation_types={},
+        entities=AsyncMappingEntitySource({}),
+        assertions=AsyncMappingAssertionSource([]),
+        taxonomies={name: TaxonomyDefinition(id=name, relation=name) for name in axes},
+        describes=(),
+        codec=StrCodec(),
+        structures=dict(axes),
+    )
 
 
 @pytest.fixture
@@ -185,17 +299,39 @@ def test_the_projection_cannot_walk() -> None:
     the edit this criterion is actually about --- a field added later that the
     walk could arrive through --- and that is what this asserts.
 
+    **The dotted spelling counts**, which is the difference between a guard and
+    the appearance of one. An annotation is a string under
+    ``from __future__ import annotations``, so a field written
+    ``dataknobs_common.ontology.taxonomy.Taxonomy[K]`` is exactly as reachable as
+    one written ``Taxonomy[K]`` and reads as neither under a split that does not
+    separate on the dot. The extraction is a named function here and is asserted
+    against both spellings, so the test that catches a later edit is itself
+    caught when it stops being able to.
+
     The answer over a hand-built set is asserted with it, so the pair is *the
     projection is right* and *the projection cannot become I/O*.
     """
     reachable = {"Ontology", "Taxonomy", "TaxonomyView", "Hierarchy", "HierarchyView"}
+
+    def _named(annotation: object) -> set[str]:
+        """Every bare name an annotation mentions, however it is qualified."""
+        spelled = str(annotation)
+        for separator in ("[", "]", ",", "|", "."):
+            spelled = spelled.replace(separator, " ")
+        return {part for part in spelled.split() if part}
+
+    assert _named("dataknobs_common.ontology.taxonomy.Taxonomy[K]") & reachable, (
+        "a dotted annotation no longer reads as naming a vocabulary object, so the "
+        "assertion below would pass for a field this test exists to catch"
+    )
+    assert _named("Taxonomy[K]") & reachable
+    assert not (_named("tuple[int, ...]") & reachable)
+
     for value in (SupportSet, NodeSupport):
-        for field in fields(value):
-            named = {
-                part for part in str(field.type).replace("[", " ").replace("]", " ").split() if part
-            }
+        for declared in fields(value):
+            named = _named(declared.type)
             assert not (named & reachable), (
-                f"{value.__name__}.{field.name} is annotated {field.type!r}, which names a "
+                f"{value.__name__}.{declared.name} is annotated {declared.type!r}, which names a "
                 f"vocabulary object. prune() is a member on a value and its no-I/O guarantee "
                 f"is that no field can reach one -- a field that can is the edit this test "
                 f"exists to catch"
@@ -242,9 +378,10 @@ def test_a_cache_changes_cost_and_never_the_answer(
     """A supplied cache gives an equal answer and is non-empty afterwards.
 
     One is used within a call whether or not one is given, because the several
-    ascents share a frontier. Supplying one spends those replies across other
-    walks as well, which is the use a cache is for and the reason the parameter
-    is forwarded rather than kept private.
+    ascents share a frontier, and supplying one is how those replies outlive the
+    call. What may be done with them afterwards is the neighbouring test's
+    subject: a cache carries no hierarchy in its key, so spending one across two
+    axes is safe here only because this call scopes what it forwards.
 
     A bare ``dict`` satisfies the cache protocol, which is what makes this
     assertable without building anything: the answer is compared for equality and
@@ -433,12 +570,12 @@ def test_the_vocabulary_level_entry_travels_on_its_own(
 ) -> None:
     """``OntologySupport`` is constructible, hashable, positional, and on the door.
 
-    The type is published by this module and **produced** by the ontology
-    registry a package away, which narrows it to the vocabularies that registry
-    holds. That is a filter over this module's answer rather than a second
-    count, so the one implementation of the measure is here --- and the type has
-    to be reachable from there for any of that to be true, which is what the
-    last clause asserts.
+    **Reachability is what this asserts**, and the distinction is worth keeping:
+    the type is published by this module and nothing outside the package
+    produces one today. It is on the door so that a registry narrowing this
+    answer to the vocabularies it holds could be a filter over this module's
+    answer rather than a second count --- and being importable is the part of
+    that which is true now and testable now.
 
     Positional for the reason the node-level rows are: the row is recoverable
     from its position and the position is never recoverable from the row.
@@ -459,3 +596,239 @@ def test_the_vocabulary_level_entry_travels_on_its_own(
 
     for support in ontology_support(tagged):
         assert list(support.rows) == sorted(set(support.rows))
+
+
+def test_a_cache_is_scoped_to_the_axis_it_was_filled_from() -> None:
+    """One cache handed to two axes answers the second from the first's edges.
+
+    **The hazard is silent, which is why it is asserted rather than documented.**
+    A walk cache's key is ``(member, node)`` and deliberately carries no
+    hierarchy --- a backing is arbitrary consumer code that need not be hashable
+    --- so a cache filled over one axis and read over another returns the first
+    axis's parents with no exception anywhere. What comes back is a *wrong
+    answer*, not a failure: ``beagle`` stands under ``dog`` on one axis and under
+    ``small`` on the other, and the second roll-up reading the first's replies
+    finds ``dog``, which is not in the second answer's own node set, and reports
+    ``beagle`` as standing under nothing.
+
+    ``roll_up`` is the one member of this family that takes the axis **by name**
+    rather than taking the hierarchy, so it is also the one that can scope the
+    cache rather than asking the caller to. A caller holding one vocabulary and
+    two axis names holds one ontology, and reusing the cache across them is the
+    natural call shape rather than an exotic one.
+
+    The equality against a fresh cache is the whole assertion: a scoping that
+    stopped working shows up as a different answer, which is exactly the symptom
+    a consumer would otherwise have to diagnose from a UI.
+    """
+    onto = _built(
+        {
+            "species": _Edges({"beagle": ("dog",), "dog": ()}),
+            "size": _Edges({"beagle": ("small",), "small": ()}),
+        }
+    )
+    species_rows = [read_node_tags(_row("beagle")), read_node_tags(_row("dog"))]
+    size_rows = [
+        read_node_tags(_row("beagle", axis="size")),
+        read_node_tags(_row("small", axis="size")),
+    ]
+
+    shared: dict[Any, Any] = {}
+    first = roll_up(onto, "species", species_rows, cache=shared)
+    second = roll_up(onto, "size", size_rows, cache=shared)
+
+    assert second == roll_up(onto, "size", size_rows), (
+        "the second axis was answered from the first axis's cached edges: a cache "
+        "carries no hierarchy in its key, so roll_up must scope what it forwards"
+    )
+    assert [s.above for s in second.supported] == [("small",), ()]
+    assert [s.above for s in first.supported] == [("dog",), ()]
+    assert shared, "the cache was not reached, so the parameter is being dropped"
+
+
+def test_an_unreadable_local_id_is_residue_rather_than_a_refusal() -> None:
+    """A node id this vocabulary's key space cannot parse costs its row, not the answer.
+
+    **Only reachable off ``str``.** ``localize`` hands the local segment to the
+    vocabulary's own codec and lets the codec's refusal through unwrapped, which
+    is that door's documented contract. Over ``StrCodec`` nothing can fail, so a
+    suite written entirely over string keys cannot see this at all --- and the
+    operation is generic in the key precisely so that a consumer binds their own.
+
+    The failure it replaces is the disproportionate one: a page of rows, one of
+    them tagged before the key space changed, and the *whole* roll-up raises ---
+    no supported set, no unplaced, no residue --- over one row in a corpus the
+    caller did not write and cannot fix.
+
+    So it is the same operational class as ``unplaced``, disposed of the way
+    ``unsupported_rows`` disposes of the other three: the row contributed to no
+    entry, and the caller holds the tags, so which of the four causes applies is
+    one lookup away rather than a field.
+    """
+    line = Sku(plant="ashland", line=3)
+    plant = Sku(plant="ashland", line=0)
+    onto = _built(
+        {"lines": _Edges({line: (plant,), plant: ()})},
+        ontology_id="acme",
+        codec=SkuCodec(),
+    )
+
+    def _row_of(*ids: str) -> dict[str, Any]:
+        return {
+            ONTOLOGY_ID_KEY: "acme",
+            TAXONOMY_ID_KEY: "lines",
+            NODE_ID_KEY: list(ids),
+        }
+
+    drifted = [
+        read_node_tags(_row_of("ashland/3")),
+        read_node_tags(_row_of("dog")),
+        read_node_tags(_row_of("ashland/0")),
+    ]
+
+    answer = roll_up(onto, "lines", drifted)
+
+    assert [(s.node_id, s.rows) for s in answer.supported] == [(line, (0,)), (plant, (2,))]
+    assert answer.unsupported_rows == (1,)
+    assert answer.unplaced == ()
+
+
+def test_the_axis_is_asked_once_per_node_not_once_per_tag() -> None:
+    """``contains`` is a question about a node, and the corpus has fewer nodes than tags.
+
+    **The cache does not cover this one.** ``ancestors`` takes a cache and the
+    *n* ascents share a frontier, but ``exists()`` takes none --- so a
+    membership test written inside the per-tag loop is one backing round trip
+    per tag occurrence, not per node. Over a page of results that is the whole
+    page's worth of identical queries to answer one question.
+
+    The protocol invites exactly the backing that makes it expensive: a
+    hierarchy over rows answers ``contains`` with a query, and the bulk variants
+    exist because per-node querying is the cost the singular members force.
+
+    **A second reading comes free and is asserted with it.** Asking once per
+    node also makes the partition a function of the axis at one instant: asked
+    per occurrence, a backing that changes mid-call can put one node in both
+    ``supported`` and ``unplaced``, which is two answers to one question.
+    """
+    axis = _Edges({"dog": (), "beagle": ("dog",)})
+    onto = _built({"species": axis})
+    page = [read_node_tags(_row("dog")) for _ in range(5)]
+    page.append(read_node_tags(_row("beagle", "dog")))
+
+    answer = roll_up(onto, "species", page)
+
+    assert sorted(axis.asked) == ["beagle", "dog"], (
+        f"the axis was asked {len(axis.asked)} times about 2 nodes: membership is a "
+        f"question about a node, so it belongs outside the per-tag loop"
+    )
+    assert [(s.node_id, s.rows) for s in answer.supported] == [
+        ("dog", (0, 1, 2, 3, 4, 5)),
+        ("beagle", (5,)),
+    ]
+
+
+def test_a_row_naming_one_node_twice_contributes_one_row() -> None:
+    """Ascending and without duplicates, over a row that names the same node twice.
+
+    The tag reader does not deduplicate --- two entries under the node-id key
+    are two tags --- so the guarantee is this operation's to keep, and it is
+    kept at both heights. The vocabulary level already asserts it; this is the
+    node level, which had the same guard and no test over it.
+    """
+    onto = _built({"species": _Edges({"dog": ()})})
+
+    answer = roll_up(onto, "species", [read_node_tags(_row("dog", "dog"))])
+
+    assert [(s.node_id, s.rows) for s in answer.supported] == [("dog", (0,))]
+    assert answer.unsupported_rows == ()
+
+
+def test_a_cycle_is_presented_rather_than_emptied() -> None:
+    """Two nodes each above the other are equally specific, so neither excludes the other.
+
+    **A cyclic document loads**, which is what makes this reachable rather than
+    hypothetical: nothing refuses ``A isa B`` alongside ``B isa A``, and the
+    walks over such an axis terminate. So a consumer can hold a support set in
+    which ``a`` stands above ``b`` and ``b`` above ``a``, both with real rows
+    behind them.
+
+    Read literally, every projection then empties: ``MOST_SPECIFIC`` drops both
+    because each is an ancestor of something in the set, and ``MOST_GENERAL``
+    drops both because neither has an empty ``above``. A page with evidence for
+    two entities presents as a page about nothing --- the one outcome that is
+    certainly wrong, because ``supported`` plainly holds them.
+
+    Mutual ancestry is not a specificity relation. It is the statement that the
+    two are at the same height, so the projection keeps both and the ranking ---
+    by rows, which always exists --- decides the order. ``above`` itself is
+    unchanged: it is the record of what the axis says, and the record is that
+    each stands above the other.
+    """
+    onto = _built({"species": _Edges({"a": ("b",), "b": ("a",)})})
+    rows = [read_node_tags(_row(node)) for node in ("a", "a", "a", "b", "b")]
+
+    answer = roll_up(onto, "species", rows)
+
+    assert [(s.node_id, s.rows, s.above) for s in answer.supported] == [
+        ("a", (0, 1, 2), ("b",)),
+        ("b", (3, 4), ("a",)),
+    ]
+    assert [s.node_id for s in answer.prune()] == ["a", "b"]
+    assert [s.node_id for s in answer.prune(Granularity.MOST_GENERAL)] == ["a", "b"]
+    assert [s.node_id for s in answer.prune(Granularity.ALL)] == ["a", "b"]
+
+
+async def test_the_two_flavours_answer_the_same_roll_up() -> None:
+    """The asynchronous twin, over the backing that is the reason it exists.
+
+    **The flavour a live vocabulary has.** An axis over rows is asynchronous ---
+    that is what a by-reference backing needs --- so a consumer whose vocabulary
+    came from a registry holds an ``AsyncOntology`` and cannot call the
+    synchronous roll-up at all. Without the twin, the operation is unreachable
+    from the flavour built for the backing it was designed around.
+
+    Asserted as an *equality between the two answers over one corpus* rather
+    than as a second expectation, so the twin cannot drift into being right
+    about something else: the structures carry the same edges, the tags are the
+    same tags, and the two support sets must be the same value.
+    """
+    edges = {"beagle": ("dog",), "golden_retriever": ("dog",), "dog": ()}
+    rows = [
+        read_node_tags(_row("golden_retriever", "beagle")),
+        {},
+        read_node_tags(_row("dog")),
+        read_node_tags(_row("golden_retriever")),
+        read_node_tags(_row("wolfhound")),
+    ]
+
+    synchronous = roll_up(_built({"species": _Edges(edges)}), "species", rows)
+    asynchronous = await async_roll_up(
+        _built_async({"species": _AsyncEdges(edges)}), "species", rows
+    )
+
+    assert asynchronous == synchronous
+    assert [s.node_id for s in asynchronous.prune()] == ["golden_retriever", "beagle"]
+    assert asynchronous.unplaced == (NodeSupport(node_id="wolfhound", rows=(4,)),)
+    assert asynchronous.unsupported_rows == (1, 4)
+
+
+def test_the_two_flavours_expose_one_surface() -> None:
+    """The parity guard every other twin in this family carries.
+
+    A twin is not two functions that happen to agree on one corpus; it is one
+    surface with one flavoured member. ``max_concurrency`` is the asynchronous
+    half's alone --- a frontier fetched concurrently is the thing the flavour
+    adds --- and ``ontology`` is flavoured by definition, since the whole point
+    is which kind of vocabulary it takes. Everything else must match, and an
+    argument added to one half and not the other fails here rather than being
+    discovered by the consumer who needed it.
+    """
+    assert_twins_agree(
+        roll_up,
+        async_roll_up,
+        async_only=("max_concurrency",),
+        flavour_typed=("ontology",),
+        compare_return=False,
+        label="roll_up/async_roll_up",
+    )

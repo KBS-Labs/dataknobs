@@ -18,11 +18,18 @@ your rows never named and have no evidence for. This *selects*: of the entities
 the rows did name, it keeps the ones nothing more specific was named for, and
 each one carries the rows that are its evidence. [Both are run below](#the-walk-one-word-away).
 
-**It holds no vocabulary until you give it one, and opens nothing ever.** The
+**It holds no vocabulary until you give it one, and opens nothing itself.** The
 count over tags needs no ontology at all; the roll-up needs one because only a
-vocabulary can say whether `beagle` is a node it carries. Neither needs a store,
-an embedder or an event loop, so there is no asynchronous twin --- there is
-nothing to await.
+vocabulary can say whether `beagle` is a node it carries. Neither reaches a
+store or an embedder.
+
+**The roll-up comes in two flavours** --- `roll_up` over an `Ontology` and
+`async_roll_up` over an `AsyncOntology` --- because asking a vocabulary whether
+it carries a node, and what stands above one, are reads, and on the
+asynchronous flavour both are awaited. If your vocabulary's structure is backed
+by rows rather than authored in a file, that is the flavour you hold, and
+`async_roll_up` is the one to call. `ontology_support` has no twin, because it
+reads the tags' own `ontology_id` and never asks a vocabulary anything.
 
 ## Where the names live
 
@@ -34,6 +41,7 @@ from dataknobs_common.ontology import (
     NodeSupport,
     OntologySupport,
     SupportSet,
+    async_roll_up,
     ontology_support,
     roll_up,
 )
@@ -299,10 +307,12 @@ the same way. It is what you call when you have a page of results and do not yet
 know what is on it --- and it holds no vocabulary, so it answers over ones you
 have never loaded and ones nobody holds.
 
-If you are holding an ontology registry, its own selection is this answer
-filtered to the vocabularies that registry holds. A filter over a ranked tuple
-preserves both the ranking and the tie-break, which is why that is a filter
-rather than a second count: one implementation of the measure, in one place.
+If you hold a registry of vocabularies and want this narrowed to the ones it
+carries, filter the tuple rather than counting again. A filter over a ranked
+tuple preserves both the ranking and the tie-break, which is why the narrowing
+is a filter: one implementation of the measure, in one place. Nothing ships
+that filter today --- `OntologySupport` is published from here so that it can be
+written where the registry is, against a shape that already exists.
 
 ## The walk one word away
 
@@ -349,5 +359,8 @@ than becoming a policy buried in here.
 already placed, by whatever built the index; this asks what a set of placements
 adds up to.
 
-**No asynchronous twin.** There is nothing to await: the count is pure over the
-tags, and the walk is pure over the vocabulary's own fields.
+**No entity reads.** Neither call asks what a node *is*. `roll_up` asks whether
+an axis carries a node and what stands above it; the entity behind a node is a
+source read, and it is why `Granularity.AT_TYPE` is refused rather than
+answered. If you want the types, ask the vocabulary for the entity of each node
+the projection kept.

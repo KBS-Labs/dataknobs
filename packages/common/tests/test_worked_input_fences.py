@@ -11,9 +11,9 @@ where it is checked.
 **Three of the five pair rows name one constant**, which is the shape to
 expect rather than an anomaly: ``anchored-view.md``, ``content-tags.md`` and
 ``roll-up.md`` publish the same vocabulary on purpose, so that three
-service-free acceptances run against one substrate. That is precisely the arrangement this file exists for
--- two published copies of one document -- so both are compared to the constant
-and thereby to each other.
+service-free acceptances run against one substrate. That is precisely the
+arrangement this file exists for -- two published copies of one document -- so
+both are compared to the constant and thereby to each other.
 
 **Nothing compared the two.** Each copy was guarded by its own suite -- a fence
 that drifts takes its workspace runner red, a constant that drifts takes
