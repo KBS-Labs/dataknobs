@@ -32,7 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vocabulary the rows named, held or not, so the residue is one set difference.
   `()` therefore has more than one producer -- a corpus carrying no tags, a
   corpus naming only vocabularies you do not hold, and a registry holding
-  nothing.
+  nothing. The tags separate the first two and say nothing about the third, so
+  `list_ids()` is what answers that one. It matters because the answer is over
+  what a registry has *loaded* rather than over what its config names, and the
+  synchronous `from_config` door loads nothing: a registry built through it
+  answers `()` for every corpus until a `load()` has been awaited. Every other
+  member you would reach for that early is a coroutine and forces the await;
+  this one is not.
 
   It opens nothing, awaits nothing and has no asynchronous twin: the tags are
   the caller's and the held ids are a mapping the registry already has, so there

@@ -316,7 +316,7 @@ implementation of the measure serves both heights --- which is why
 narrowing drops, a vocabulary the rows name and that registry does not hold, is
 recovered by calling `ontology_support` yourself: the same call, over the same
 tags, with nothing filtered. The registry guide is where that member is taught:
-<https://kbs-labs.github.io/dataknobs/packages/data/guides/ontology-registry/>.
+<https://kbs-labs.github.io/dataknobs/packages/data/guides/ontology-registry/#which-vocabularies-a-page-of-results-is-about>.
 
 ## The walk one word away
 

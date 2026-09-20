@@ -220,6 +220,14 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     # is the direction _QUALITY_INPUT_SUFFIXES already says to err in.
     "packages/common/src/dataknobs_common/ontology/tags.py",
     "packages/data/src/dataknobs_data/vector/content.py",
+    # The same sentence one module over, and the reason is sharper there. The
+    # two heights of the vocabulary measure live in two distributions, and the
+    # counting half names the narrowing half *by symbol* -- a name it cannot
+    # import, so nothing in its own package can resolve it. A workspace guard
+    # does, and reads this file as text to do it. Only the common side is
+    # declared: the guard's other two inputs are guides, which ride the docs
+    # scope already.
+    "packages/common/src/dataknobs_common/ontology/ascent.py",
     # The root README, read by the documented-import guard along with every
     # package README and the site tree. The per-package copies ride their own
     # package scope and docs/ rides the docs scope; this one is reached by no

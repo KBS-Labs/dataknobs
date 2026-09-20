@@ -862,11 +862,11 @@ this same document declared — it is the one rung a document cannot configure
 from a value-level door, because it is constructed over a live index rather
 than over the vocabulary alone.
 
-**The block below opens one step earlier than this heading**, because a
-deployment holding more than one vocabulary has to pick before it resolves. It
-loads two, asks which of them a page of tagged results is about, and resolves
-against the answer; `ontologies_in_play` is that step, and the prose after the
-fence is about it.
+**The block below opens one step earlier**, because a deployment holding more
+than one vocabulary has to pick before it resolves. It loads two, asks which of
+them a page of tagged results is about, and resolves against the answer.
+`ontologies_in_play` is that step, and *Which vocabularies a page of results is
+about* below the fence is where it is taught.
 
 <!-- worked-call-site -->
 ```python
@@ -941,12 +941,19 @@ async def main() -> ResolutionResult:
     await registry.load()
     await registry.load(suppliers)
     try:
+        # Read the tags once and keep the reading. `.tags` is the answer and
+        # `.malformed` is the report: a row whose writer wrote two of the three
+        # tag keys is refused by name rather than passing as untagged, and
+        # taking `.tags` inline off the call is how that report gets dropped.
+        reading = read_node_tags_many(rows)
+        assert not reading.malformed  # `reading.require_readable()` raises instead
+
         # Which of the vocabularies this registry holds is that page of results
         # even about? Ranked by how many rows named each, so the answer is also
         # a measure of how much of it, and the rows ride along so that picking
         # one costs no second pass over the corpus. The axis id on each row is
         # not read here -- rolling a corpus up onto one axis is what needs it.
-        in_play = registry.ontologies_in_play(read_node_tags_many(rows).tags)
+        in_play = registry.ontologies_in_play(reading.tags)
         assert [(s.ontology_id, s.rows) for s in in_play] == [
             ("catalog", (0, 3)),
             ("suppliers", (2,)),
@@ -980,6 +987,8 @@ async def main() -> ResolutionResult:
 result = asyncio.run(main())
 ```
 
+### Which vocabularies a page of results is about
+
 **Which vocabularies a page of results is even about is a question this
 registry answers, and the answer is a ranking.** `ontologies_in_play` takes the
 tags a corpus carries — one row's per position, as `read_node_tags_many` reads
@@ -1004,8 +1013,18 @@ there. The door back is one import: `ontology_support` over the same tags
 answers every vocabulary the rows named, held or not, so the residue is one set
 difference. `()` therefore has more than one producer — a corpus carrying no
 tags, a corpus naming only vocabularies you do not hold, and a registry holding
-nothing — and which of those you are looking at is a question the tags answer
-rather than this call.
+nothing. The tags separate the first two, and they say nothing at all about the
+third: `list_ids()` is what answers that one.
+
+**Which matters because the answer is over what a registry has loaded, not over
+what its configuration names.** `from_config` is the synchronous door and it
+loads nothing — a registry built through it answers `()` for every corpus until
+a `load()` has been awaited, even though its config named a vocabulary. Every
+other member you would reach for that early is a coroutine, so the await is
+forced; this one is not, which is exactly why the empty answer is worth one
+`list_ids()` before you read anything into it.
+
+### Filling the index is yours to call
 
 **`registry.index(id).build()` is yours to call, and the cascade says so when
 you have not.** A load assembles the index and returns; it does not embed the

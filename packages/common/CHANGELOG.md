@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- **The roll-up guide's narrowing paragraph names the member that does it.** It
-  read *"nothing ships that filter today"* --- true when it was written, and
-  `dataknobs-data`'s `OntologyRegistry.ontologies_in_play` is now that filter.
-  The paragraph says so, says what the narrowing drops and that
-  `ontology_support` is the door back to it, and points at the registry guide
-  by absolute site URL, since no relative path between two package trees
-  resolves from both. `OntologySupport`'s own docstring stops saying it has one
-  producer for the same reason: it has two, in two distributions, and the
-  second is a filter over the first rather than a second count.
+- **The roll-up guide's narrowing paragraph names the member that narrows.**
+  `ontology_support` counts every vocabulary a corpus names, held or not, and
+  narrowing that answer to the ones a deployment actually holds is
+  `dataknobs-data`'s `OntologyRegistry.ontologies_in_play`. The paragraph names
+  it, says what the narrowing drops and that `ontology_support` is the door
+  back to it, and points at the registry guide by absolute site URL, since no
+  relative path between two package trees resolves from both.
+  `OntologySupport`'s own docstring is reached from two distributions for the
+  same reason, and says so: the second is a filter over the first rather than a
+  second count.
 
 ### Added
 

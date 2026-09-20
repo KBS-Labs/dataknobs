@@ -681,6 +681,15 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         argument is a page of the caller's own content rather than an id or a
         document.
 
+        **The answer is over what this registry has loaded, not over what its
+        configuration names**, and those come apart on the synchronous door:
+        ``from_config`` never runs ``_ainit``, so a registry built through it
+        holds nothing until a :meth:`load` has been awaited and answers ``()``
+        for every corpus until then. Every other member worth calling that
+        early is a coroutine and forces the await; this one is not, which is
+        what makes the state reachable a line too early. :meth:`list_ids` is
+        what tells it from the other two, because the tags cannot.
+
         Args:
             tagged: One row's tags per position, as
                 :func:`~dataknobs_common.ontology.read_node_tags_many`

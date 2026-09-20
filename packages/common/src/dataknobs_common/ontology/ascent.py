@@ -312,7 +312,7 @@ class OntologySupport:
     difference. A generic pair would let a caller pass either where either is
     expected, which is the one mistake the names exist to prevent.
 
-    **Two producers, in two distributions.** :func:`ontology_support` counts
+    **Two doors, in two distributions.** :func:`ontology_support` counts
     over the tags alone, and ``dataknobs_data.ontology.OntologyRegistry``'s
     ``ontologies_in_play`` narrows that answer to the vocabularies one registry
     holds. The second is a **filter** over the first rather than a second

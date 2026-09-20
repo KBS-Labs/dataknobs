@@ -77,12 +77,19 @@ async def main() -> ResolutionResult:
     await registry.load()
     await registry.load(suppliers)
     try:
+        # Read the tags once and keep the reading. `.tags` is the answer and
+        # `.malformed` is the report: a row whose writer wrote two of the three
+        # tag keys is refused by name rather than passing as untagged, and
+        # taking `.tags` inline off the call is how that report gets dropped.
+        reading = read_node_tags_many(rows)
+        assert not reading.malformed  # `reading.require_readable()` raises instead
+
         # Which of the vocabularies this registry holds is that page of results
         # even about? Ranked by how many rows named each, so the answer is also
         # a measure of how much of it, and the rows ride along so that picking
         # one costs no second pass over the corpus. The axis id on each row is
         # not read here -- rolling a corpus up onto one axis is what needs it.
-        in_play = registry.ontologies_in_play(read_node_tags_many(rows).tags)
+        in_play = registry.ontologies_in_play(reading.tags)
         assert [(s.ontology_id, s.rows) for s in in_play] == [
             ("catalog", (0, 3)),
             ("suppliers", (2,)),
