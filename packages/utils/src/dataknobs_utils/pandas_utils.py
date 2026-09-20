@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Pandas DataFrame utility functions and data transformations.
 
 Provides utilities for creating, transforming, and manipulating Pandas DataFrames,

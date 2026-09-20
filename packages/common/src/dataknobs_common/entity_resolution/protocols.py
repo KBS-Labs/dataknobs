@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The four protocols a placement is written against.
 
 Two pairs, twinned. A cascade over a vocabulary someone typed is dictionary
@@ -16,10 +19,34 @@ property of the protocol; a registry cannot add it.
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+# The key parameter, at runtime: a ``Protocol[K]`` reads it when the class is
+# created, so it cannot be deferred to ``TYPE_CHECKING`` the way the
+# annotations below are.
+from dataknobs_common.hierarchy import K
+
+if sys.version_info >= (3, 13):  # pragma: no cover - 3.12 is the floor and what runs
+    from typing import TypeVar
+else:
+    # PEP 696 defaults reach ``typing`` at 3.13; the floor is 3.12. The same
+    # branch ``hierarchy`` carries, for the same runtime reason.
+    from typing_extensions import TypeVar
+
+#: The same key, in the one variance a **returns-only** protocol has.
+#:
+#: :data:`~dataknobs_common.hierarchy.K` is invariant because every other
+#: surface here both takes a key and answers with one. The two alias-form
+#: protocols only *answer*, and a protocol whose parameter appears in output
+#: position alone is covariant -- so this is not a second key, it is the same
+#: key with the variance those two signatures actually have. Declared here
+#: rather than beside ``K`` because these two are its only users.
+K_co = TypeVar("K_co", bound=Hashable, default=str, covariant=True)
+
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Collection, Iterable, Mapping, Sequence
 
     from dataknobs_common.entity_resolution.values import (
         EntityCandidate,
@@ -33,15 +60,24 @@ __all__ = [
     "AsyncAliasFormSource",
     "AsyncEntityResolver",
     "AsyncMatchSignal",
+    "AsyncSurfaceFormCatalog",
     "EntityResolver",
     "MatchSignal",
     "MembershipOracle",
+    "SurfaceFormCatalog",
 ]
 
 
 @runtime_checkable
-class MatchSignal(Protocol):
-    """One rung of a cascade: a way of proposing entities for a query."""
+class MatchSignal(Protocol[K]):
+    """One rung of a cascade: a way of proposing entities for a query.
+
+    **Generic in the entity key**, defaulted to ``str``. Nothing a rung is
+    *asked* moves with the key -- a query is text and a filter is a blob --
+    and what it *answers with* does: an ``EntityCandidate`` carries an entity
+    id. A rung written before the parameter existed is a ``MatchSignal[str]``
+    and conforms unchanged.
+    """
 
     @property
     def name(self) -> str:
@@ -76,11 +112,11 @@ class MatchSignal(Protocol):
 
     def candidates(
         self, query: str, k: int, *, filter: dict[str, Any] | None = None
-    ) -> list[EntityCandidate]: ...
+    ) -> list[EntityCandidate[K]]: ...
 
     def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
-    ) -> list[list[EntityCandidate]]:
+    ) -> list[list[EntityCandidate[K]]]:
         """The batch form, for a corpus rather than a turn.
 
         A rung with no real batch path loops :meth:`candidates`; one that can
@@ -99,7 +135,7 @@ class MatchSignal(Protocol):
 
 
 @runtime_checkable
-class AsyncMatchSignal(Protocol):
+class AsyncMatchSignal(Protocol[K]):
     """:class:`MatchSignal` for a rung that reaches for data.
 
     ``name`` stays a property and ``narrows()`` a plain ``def``: neither
@@ -117,42 +153,60 @@ class AsyncMatchSignal(Protocol):
 
     async def candidates(
         self, query: str, k: int, *, filter: dict[str, Any] | None = None
-    ) -> list[EntityCandidate]: ...
+    ) -> list[EntityCandidate[K]]: ...
 
     async def candidates_many(
         self, queries: Sequence[str], k: int, *, filter: dict[str, Any] | None = None
-    ) -> list[list[EntityCandidate]]: ...
+    ) -> list[list[EntityCandidate[K]]]: ...
 
 
 @runtime_checkable
-class EntityResolver(Protocol):
-    """Turn a string into ranked entities, with the reason each won."""
+class EntityResolver(Protocol[K]):
+    """Turn a string into ranked entities, with the reason each won.
 
-    def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult: ...
+    Generic for :class:`MatchSignal`'s reason and at one remove: what it is
+    asked is text, and a ``ResolutionResult`` carries candidates, which carry
+    entity ids.
+    """
+
+    def resolve(self, name: str, *, k: int = 5, within: Within = None) -> ResolutionResult[K]: ...
 
     def resolve_many(
         self, names: Sequence[str], *, k: int = 5, within: Within = None
-    ) -> list[ResolutionResult]:
+    ) -> list[ResolutionResult[K]]:
         """The bulk form, for a corpus rather than a turn."""
         ...
 
 
 @runtime_checkable
-class AsyncEntityResolver(Protocol):
+class AsyncEntityResolver(Protocol[K]):
     """:class:`EntityResolver` for a cascade whose rungs reach for data."""
 
     async def resolve(
         self, name: str, *, k: int = 5, within: Within = None
-    ) -> ResolutionResult: ...
+    ) -> ResolutionResult[K]: ...
 
     async def resolve_many(
         self, names: Sequence[str], *, k: int = 5, within: Within = None
-    ) -> list[ResolutionResult]: ...
+    ) -> list[ResolutionResult[K]]: ...
 
 
 @runtime_checkable
-class MembershipOracle(Protocol):
+class MembershipOracle(Protocol[K]):
     """A source that answers what an entity **is**, per scope axis.
+
+    **Generic in the entity key**, and it is here rather than with the four
+    sources because the type checker asked for it: the published default
+    reads an ``Entity[K]``, so an oracle declared over an ``Entity[str]``
+    could not be handed one. It is one of the protocols outside the widened
+    four that carrying a widened *value* forced -- the two resolvers above are
+    the others, for the same reason at one remove: a ``ResolutionResult``
+    carries candidates and a candidate carries an entity id.
+
+    :meth:`axes` below is the counter-case and is **correctly** ``str``. Its
+    answer is a set of axis *names*, which are authored in a scope rather than
+    keyed by an entity, so it reads the same whatever this protocol is bound
+    to. The two kinds of ``str`` in this class are not the same kind.
 
     The library derives membership from ``Entity.type`` -- see
     :func:`~dataknobs_common.entity_resolution.values.within_memberships`,
@@ -176,7 +230,7 @@ class MembershipOracle(Protocol):
     synchronous member.
     """
 
-    def memberships(self, entity: Entity) -> Mapping[str, str]:
+    def memberships(self, entity: Entity[K]) -> Mapping[str, str]:
         """What this entity is, on every axis this source can answer for.
 
         Returns:
@@ -217,7 +271,7 @@ class MembershipOracle(Protocol):
 
 
 @runtime_checkable
-class AliasFormSource(Protocol):
+class AliasFormSource(Protocol[K_co]):
     """A source that can report which of its entities declare an **alias** form.
 
     Optional, and separate for the reason
@@ -239,11 +293,11 @@ class AliasFormSource(Protocol):
     empty rung rather than an ``AttributeError``.
     """
 
-    def by_alias_form(self, form: str) -> frozenset[str]: ...
+    def by_alias_form(self, form: str) -> frozenset[K_co]: ...
 
 
 @runtime_checkable
-class AsyncAliasFormSource(Protocol):
+class AsyncAliasFormSource(Protocol[K_co]):
     """:class:`AliasFormSource` for a source that reaches for data.
 
     ``isinstance`` cannot tell this from its twin -- a runtime-checkable
@@ -254,4 +308,89 @@ class AsyncAliasFormSource(Protocol):
     distinguish them, and for a reader looking for the asynchronous spelling.
     """
 
-    async def by_alias_form(self, form: str) -> frozenset[str]: ...
+    async def by_alias_form(self, form: str) -> frozenset[K_co]: ...
+
+
+@runtime_checkable
+class SurfaceFormCatalog(Protocol):
+    """A source that can hand over **every form it carries**.
+
+    What a rung comparing a query against each form needs, and the one thing
+    :class:`~dataknobs_common.ontology.sources.EntitySource` cannot answer:
+    every member there is a *lookup*, so a rung can ask whether a form is
+    declared and never which forms are. A near-spelling rung has no form to
+    look up -- the query spells none of them -- so it must read the
+    vocabulary out.
+
+    **Separate from** ``EntitySource``, on
+    :class:`AliasFormSource`'s precedent and for the reason that protocol
+    states: ``EntitySource`` is ``@runtime_checkable`` and consumers satisfy
+    it structurally, so a member added to it turns every implementation we
+    never see from conforming into non-conforming, silently and at once.
+
+    The free window in which that could still be spent is open and is
+    deliberately not spent here.
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.longest_form_tokens`
+    calls itself *the only member that will ever be able to say that*, so a
+    second member added on the same authority would make this package
+    contradict its own docstring -- and a separate protocol costs a source
+    that does not satisfy it nothing at all.
+
+    **The member yields forms, not ``(form, ids)`` pairs.** A rung scores
+    forms and resolves the winners back to ids through
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`,
+    which every entity source already has, so the pairs would be a second
+    spelling of a lookup that exists. One extra lookup per *hit* -- not per
+    form -- buys the smallest protocol there is, and a small protocol is what
+    makes it plausible that a source we never see satisfies this by accident.
+
+    **A default body would not have rescued a source that lacks the member.**
+    A Protocol's method body runs for an explicit subclass and for nothing
+    else, so ``isinstance`` stays ``False`` for a structural conformer and a
+    default fixes the type checker's complaint while leaving the runtime
+    break where it was. :class:`~dataknobs_common.entity_resolution.LexicalSignal`
+    checks for this and refuses at construction rather than matching
+    nothing -- which is where it differs from
+    :class:`~dataknobs_common.entity_resolution.AliasSignal`, and the
+    difference is that a vocabulary genuinely may declare no aliases while no
+    vocabulary has no forms.
+
+    **Not generic in the entity key**, where its two neighbours here are. A
+    surface form is text: this protocol's one member takes nothing and
+    answers with strings, so a key parameter would appear in no signature it
+    declares. Carrying one anyway would cost something real rather than
+    nothing -- ``isinstance`` against a subscripted generic protocol raises,
+    so the parameter's only visible effect would be to offer a spelling that
+    fails at runtime.
+
+    The forms are expected in the spelling the source's own index holds --
+    folded, where it folds -- because that is the spelling a comparison
+    against a folded query wants and the one
+    :meth:`~dataknobs_common.ontology.sources.EntitySource.by_surface_form`
+    will resolve.
+    """
+
+    def surface_forms(self) -> Iterable[str]: ...
+
+
+@runtime_checkable
+class AsyncSurfaceFormCatalog(Protocol):
+    """:class:`SurfaceFormCatalog` for a source that reaches for data.
+
+    **This member is ``async`` where**
+    :meth:`~dataknobs_common.ontology.sources.AsyncEntitySource.longest_form_tokens`
+    **is not**, and the two are not inconsistent. That one stays synchronous
+    because it answers from a number the source measured at construction; a
+    catalogue of every form a source carries is the source's whole contents,
+    which a database-backed or service-backed one does not hold and must go
+    and get. This protocol is written for the sources we never see rather
+    than for the one concrete that happens to keep its forms in a dict.
+
+    ``isinstance`` cannot tell this from its twin, for
+    :class:`AsyncAliasFormSource`'s reason: a runtime-checkable protocol
+    compares member *names* and both spell it ``surface_forms``. Each
+    flavour's rung holds a source of its own flavour already, so what the
+    check asks is *does this source publish its forms at all*.
+    """
+
+    async def surface_forms(self) -> Iterable[str]: ...

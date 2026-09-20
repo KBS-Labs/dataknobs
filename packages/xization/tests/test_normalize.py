@@ -71,6 +71,42 @@ def test_drop_parentheticals_fn():
     assert f("a (b(cef(gh) d") == "a  d"
 
 
+def test_each_parenthetical_is_dropped_not_the_span_between_them():
+    r"""Test that two parentheticals leave the text between them alone.
+
+    `PARENTHETICAL_RE` was the greedy `\(.*\)`, which matches from the FIRST
+    opening parenthesis to the LAST closing one -- so a second parenthetical
+    made the whole span between them one match and the words in between were
+    deleted along with it. Silently: the result is a plausible string.
+
+    Neither assertion in `test_drop_parentheticals_fn` above can catch this.
+    Both of its strings answer "a  d" under the greedy pattern AND under the
+    non-greedy one, the nested `a (b(cef(gh) d` included -- so the case that
+    reads as deliberate edge coverage discriminates nothing. It takes two
+    SEPARATE parentheticals.
+    """
+    f = dk_norm.drop_parentheticals_fn
+
+    assert f("AI (Artificial Intelligence) and ML (Machine Learning)") == "AI  and ML "
+    assert f("a (b) c (d) e") == "a  c  e"
+
+
+def test_the_truncation_does_not_reach_the_lexical_variations():
+    """Test the public surface the fn is reachable through.
+
+    `drop_parentheticals` is a keyword of `get_lexical_variations`, so the
+    greedy match did not stay in the helper: the truncated string was one of
+    the variations returned, and a caller matching a query against that set was
+    matching against a string that had lost words it never asked to lose.
+    """
+    text = "AI (Artificial Intelligence) and ML (Machine Learning)"
+
+    variations = dk_norm.get_lexical_variations(text, drop_parentheticals=True)
+
+    assert "AI " not in variations
+    assert "AI  and ML " in variations
+
+
 def test_expand_ampersand_fn():
     f = dk_norm.expand_ampersand_fn
     assert f("a&b") == "a and b"

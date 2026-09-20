@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """``PostgresAdvisoryLock`` — the cross-replica :class:`DistributedLock`.
 
 A session-scoped ``pg_advisory_lock`` on a dedicated asyncpg connection

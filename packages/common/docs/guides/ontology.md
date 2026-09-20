@@ -79,7 +79,7 @@ below runs against the file above, exactly as written.
 ```python
 from pathlib import Path
 
-from dataknobs_common import ancestors
+from dataknobs_common import Capability, ancestors
 from dataknobs_common.ontology import (
     AssertionHierarchy,
     build_resolver,
@@ -104,8 +104,10 @@ onto.assertions.find(subject="beagle", relation="isa")  # -> [Assertion(...)]
 
 # (4) leave with something spendable on your own data
 beagle.source  # SourceRef(clinic_db, ...)
-onto.entities.describe().capabilities  # frozenset() -- no ORIGIN_FETCH, so the
-# reference is yours to spend and not ours to dereference
+capabilities = onto.entities.describe().capabilities
+Capability.ORIGIN_FETCH in capabilities  # False -- the reference is yours to
+# spend and not ours to dereference
+Capability.SURFACE_FORM_LOOKUP in capabilities  # True -- step (1) is this one
 
 # (5) the same placement, ranked and with its reasons
 resolver = build_resolver(Path("mammals.yaml"), onto)
@@ -142,6 +144,31 @@ before any source is constructed over it. Reach for those two when you want the
 parse without the assembly; `load_ontology` is the whole path and is what most
 callers want.
 
+### Writing a door of your own
+
+A door is `build_ontology` for the parse, sources of your own over the result,
+and `assemble_ontology` (or `assemble_async_ontology`) to turn the two back
+into a vocabulary:
+
+```python
+from dataknobs_common.ontology import assemble_async_ontology, build_ontology
+
+parts = build_ontology(config)
+entities = MySource(parts.declared_entities)
+onto = await assemble_async_ontology(
+    parts,
+    entities=entities,
+    assertions=MyAssertions(parts.declared_assertions),
+    describes=(entities.describe(),),
+)
+```
+
+The assembler is published because the third door in this workspace is in
+another distribution — `OntologyRegistry`, in `dataknobs-data`, which binds
+live sources and owns their lifecycle. Everything a vocabulary carries that is
+not a bound source is the same for every door, so it is written once: a field
+added to `Ontology` reaches all three without anyone threading it three times.
+
 ## What one holds
 
 Ten fields, and the ones you read most are sources rather than containers:
@@ -150,7 +177,7 @@ Ten fields, and the ones you read most are sources rather than containers:
 |---|---|
 | `id`, `version` | the vocabulary's own identity |
 | `entity_types`, `relation_types` | the declared kinds, as `EntityType` and `RelationType` |
-| `entities` | an `EntitySource` — `get`, `get_many`, `by_surface_form`, `by_type`, `fetch_origin`, `describe` |
+| `entities` | an `EntitySource` — `get`, `get_many`, `by_surface_form`, `by_type`, `fetch_origin`, `fetch_origins`, `describe` |
 | `assertions` | an `AssertionSource` — `get`, `find`, `find_many` |
 | `taxonomies` | `TaxonomyDefinition` per declared axis, keyed by its own id |
 | `structures` | a materialized structure per axis, where one was asked for |
@@ -182,12 +209,94 @@ split_qualified("mammals:beagle")           # QualifiedId(ontology_id=..., sourc
 
 `RESERVED_ONTOLOGY_ID` is `dk`, the prefix this package keeps for itself:
 `DK_ENTITY_TYPE` and `DK_RELATION_TYPE` are the two built-in types every
-vocabulary has without declaring them. `ENTITY_TYPE_ISA_KEY` is the key an
-entity type's own parent is declared under, and `DEFAULT_NESTED_RELATION` is
-the relation a nested declaration means when it names none.
+vocabulary has without declaring them, and `DEFAULT_NESTED_RELATION` is the
+relation a nested declaration means when it names none. An entity type's own
+parent is `EntityType.isa` — a declared field, like `RelationType.inverse_of`,
+rather than a key in the open `metadata` dict.
 
 A relation can be written as a bare string or as a `RelationType`;
 `relation_id` reduces either to the string, which is what every holder stores.
+
+## What an entity id may be
+
+**Whatever your records are keyed by.** An id is a `str` unless you say
+otherwise, and every vocabulary loaded from a document is `str`-keyed, because
+an author types strings. What changed is that the type is a parameter rather
+than a pin, so a source over your own key works with the same axes, cursors and
+walks:
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Sku:
+    plant: str
+    line: int
+```
+
+Binding it costs one thing, and the type checker will not let you skip it: a
+**`KeyCodec`**, which says how the key is written down when it leaves and read
+back when it arrives.
+
+```python
+from dataknobs_common.ontology import KeyCodec, StrCodec, load_ontology
+
+
+class SkuCodec:
+    def to_id(self, key: Sku, /) -> str:
+        return f"{key.plant}/{key.line}"
+
+    def from_id(self, rendered: str, /) -> Sku:
+        plant, _, line = rendered.rpartition("/")
+        return Sku(plant=plant, line=int(line))
+
+
+assert isinstance(SkuCodec(), KeyCodec)
+```
+
+**It has no default, and that is the point rather than an omission.** It cannot
+be inferred: *a type that has a string representation* describes every type in
+Python, so no bound can single out the ones that mean it. And it cannot be
+`repr()`: a key is addressed by **equality**, while a default `repr` is a
+function of **identity** — so two equal keys would render to two different
+strings, one node would address two entities, and nothing would report it.
+
+```python
+class Opaque:
+    def __init__(self, part): self.part = part
+    def __eq__(self, other): return isinstance(other, Opaque) and other.part == self.part
+    def __hash__(self): return hash(self.part)
+
+
+first, second = Opaque("a-1"), Opaque("a-1")
+
+assert first == second and hash(first) == hash(second)   # the structure axis is fine
+assert repr(first) != repr(second)                       # the rendering is not
+```
+
+So the codec is a field an `Ontology` requires. `StrCodec` is the identity and
+what `load_ontology` supplies, so **nothing you already wrote changes**: a
+vocabulary from a document keeps its string ids, `onto.entity("beagle")` takes
+the same argument it always took, and `qualify` / `localize` answer what they
+always answered.
+
+```python
+vocabulary = load_ontology(
+    {"id": "mammals", "entities": [{"id": "beagle", "type": "Species"}],
+     "entity_types": [{"id": "Species"}]}
+)
+
+assert isinstance(vocabulary.codec, StrCodec)
+assert vocabulary.qualify("beagle") == "mammals:beagle"
+assert vocabulary.localize("mammals:beagle") == "beagle"
+assert vocabulary.entity("beagle").name == "beagle"
+```
+
+The rendering happens only where an id **leaves** — `qualify` out, `localize`
+back. Everything between simply carries the key: `Entity.id`, `Assertion.subject`,
+every `entity_id` on a resolution. So a value type never reaches for a codec,
+and a key that is not a `str` never becomes one by accident.
 
 ## Sources, and why they are protocols
 
@@ -224,6 +333,30 @@ not there. An authored vocabulary carrying references into your production
 table is the ordinary case, not a broken one: the reference is yours to spend
 and not ours to dereference.
 
+`fetch_origins` asks the same question for a sequence of refs, and answers
+**positionally**: one slot per ref, in the order they were passed, with
+`len(result) == len(refs)`. A ref that reached no row is a `None` in its own
+slot.
+
+The obvious signature — `dict[SourceRef, Record]` — is not one any
+implementation can satisfy. `SourceRef` is compared field-wise, so that two
+references naming one row are one reference, and its `locator` is a mapping;
+a type that answers `Hashable` and then raises at the call is not a shape this
+package ships. A positional answer loses nothing by comparison: the caller
+already holds `refs`, so it can build any pairing it wants, while the misses a
+mapping would have dropped are in the result where they happened.
+
+```python
+origins = await onto.entities.fetch_origins([first.source, second.source])
+# [Record(...), None]  -- the second ref reached no row
+```
+
+The member exists for the round trips, not the rows: a live source answers N
+refs in one read where a loop over `fetch_origin` pays N. A source that cannot
+reach an origin at all answers all-`None` and withholds
+`Capability.ORIGIN_FETCH`, which is the same thing `fetch_origin` says one ref
+at a time.
+
 A `Provenance` records the other direction: where an assertion came from, who
 asserted it and when.
 
@@ -238,6 +371,38 @@ Two capabilities a source may have and need not, across three protocols:
 
 A source that implements one is used through it; a source that does not is
 used without it, and nothing degrades silently.
+
+### The one member that is partial
+
+`by_surface_form` is on the protocol rather than beside it, and is the one
+member a conforming source may decline. The fold is the **source's** —
+a caller hands the query as it was typed — and a source reading a live table
+holds the form as it was written, with no engine primitive folding at query
+time the way `str.casefold` does. Such a source withholds
+`Capability.SURFACE_FORM_LOOKUP` from `describe()` and raises
+`CapabilityNotSupportedError` when asked anyway, because `frozenset()` already
+means *ran and matched nothing* and a cascade falls through to a guessing rung
+on exactly that reading.
+
+An authored vocabulary declares the capability: its index folds every entity's
+id, name and aliases when it is built, which is what the member answers over.
+
+A rung reading the member declares `reads_surface_forms`, and refuses **at
+construction** over a source that withholds it rather than carrying a call that
+can only fail. `exact`, `scan` and `lexical` do; `alias` does not, because it
+reads `by_alias_form` and a vocabulary genuinely may declare no aliases.
+
+Both sources here answer the **capability contract**, so either question
+reaches the same answer — the probe on the description, and the guard the
+capability surface tells you to call:
+
+```python
+from dataknobs_common.capabilities import Capability, require_capability
+
+require_capability(onto.entities, Capability.SURFACE_FORM_LOOKUP)
+onto.entities.supported_capabilities()   # what this kind of source can do
+onto.entities.instance_capabilities()    # what this one does — describe()'s set
+```
 
 ## Taxonomies and how a tree is projected
 
@@ -258,6 +423,86 @@ a relation plus a polarity, so a walk follows asserted edges and not negated
 ones. The walks themselves are in
 [Walking a Structure](hierarchy.md), and the cursor `taxonomy().at()` returns
 has its own page — [The Anchored View](anchored-view.md).
+
+## Two `isa` lattices, and the one that carries the schema
+
+A vocabulary writes `isa` twice, and they are different stores:
+
+| | Where it is written | What it relates |
+|---|---|---|
+| **instance** | `assertions: - {subject: beagle, relation: isa, object: dog}` | entities, and it is what a taxonomy's `structure` walks |
+| **type** | `entity_types: - {id: Breed, isa: Species}` | *declarations*, and it is what attribute inheritance runs on |
+
+**The second must not leak into the first.** If it did, walking up from
+`beagle` would return `Species` beside `dog` — a schema node in a walk over
+instances, which a consumer folding ancestors into a prompt has no way to spot.
+It does not: an axis is built from the assertion store, and the type store is
+read only by the member below.
+
+`inherited_attributes(type_id)` is that member, and it is on **both** the
+vocabulary and the axis. It walks the **type** lattice and returns what a type
+may be asked for — its own declarations first, then each ancestor's:
+
+```python
+catalogue = load_ontology(
+    {
+        "id": "catalogue",
+        "entity_types": [
+            {
+                "id": "Item",
+                "attributes": [{"name": "sku", "type": "string"}, {"name": "weight", "type": "number"}],
+            },
+            {"id": "Product", "isa": "Item", "attributes": [{"name": "warranty", "type": "string"}]},
+        ],
+        "entities": [{"id": "widget", "type": "Product"}],
+        "relation_types": [{"id": "isa"}],
+        "taxonomies": [{"id": "kinds", "relation": "isa"}],
+    }
+)
+kinds = catalogue.taxonomy("kinds")
+
+assert [a.name for a in kinds.inherited_attributes("Product")] == ["warranty", "sku", "weight"]
+```
+
+**Ask the vocabulary directly when you are not already holding an axis.**
+`Ontology.inherited_attributes` is the same walk over the same store, and it is
+the surface to reach for first — the answer is a function of `entity_types` and
+nothing else, so building an axis to ask would mean choosing a relation the
+answer does not depend on:
+
+```python
+assert catalogue.inherited_attributes("Product") == kinds.inherited_attributes("Product")
+```
+
+Every taxonomy of one vocabulary therefore answers this identically, and
+neither surface is a second implementation: both are one line over the shared
+walk.
+
+**A nearer declaration shadows a farther one of the same name**, because a
+subtype redeclaring `sku` is specialising it rather than adding a second field.
+
+**An undeclared type is refused rather than answered with `[]`.** A type
+declared with nothing legitimately inherits nothing, so an empty list for a
+type the store has never heard of would report a caller's typo as a fact about
+their vocabulary:
+
+```python
+from dataknobs_common.exceptions import NotFoundError
+
+try:
+    kinds.inherited_attributes("NoSuchType")
+except NotFoundError as refusal:
+    assert refusal.context["entity_type"] == "NoSuchType"
+```
+
+The store is `Taxonomy.entity_types`, a plain mapping rather than a source —
+a vocabulary's instances may be millions behind a backing, and its types are
+tens, authored in the document. `onto.taxonomy()` fills it. An axis you build
+by hand may leave it out, and then this member refuses every call, which is the
+answer rather than a gap in it.
+
+**It is a plain `def` on both asynchronous twins too**, because a mapping
+awaits nothing.
 
 ## What a resolution leaves behind
 
@@ -284,8 +529,9 @@ alternatives existed and nothing about what any of them meant.
 `build_resolver` is the bridge: hand it the same document and the loaded
 vocabulary and it returns an `EntityResolver` composed from the document's own
 `resolver:` section. A document that declares none gets the sensible default —
-exact then alias, over the vocabulary's own entities — which is what makes step
-(5) of the call site run against a file that never mentions resolution.
+exact, then alias, then a scan that locates declared forms *inside* a longer
+string, all over the vocabulary's own entities — which is what makes step (5)
+of the call site run against a file that never mentions resolution.
 
 ## What is not on the door
 

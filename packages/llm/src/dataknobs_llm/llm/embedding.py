@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Adapting an LLM provider to the ``TextEmbedder`` seam.
 
 ``dataknobs-data`` declares the protocol and ``dataknobs-llm`` supplies the

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Grounded source abstraction for structured retrieval.
 
 Provides the types and ABC for queryable data sources that participate
@@ -20,13 +23,16 @@ from .cluster_index import (
 )
 from .cluster_index import VectorQueryFn as ClusterVectorQueryFn
 from .database import DatabaseSource
+from .semantic_index_source import SemanticIndexSource
 from .topic_index import (
     DEFAULT_HEADING_EXCLUDE_PATTERNS,
     DEFAULT_HEADING_STOPWORDS,
     DEFAULT_MIN_WORD_LENGTH,
     HeadingMatchConfig,
     TopicIndex,
+    TopicKey,
     TopicNode,
+    TopicNodeHierarchy,
     build_heading_tree,
     expand_region,
     extract_query_words,
@@ -78,11 +84,14 @@ __all__ = [
     "TermOverlapClusterer",
     "TfidfClusterer",
     "TopicIndex",
+    "TopicKey",
     "TopicNode",
+    "TopicNodeHierarchy",
     "build_heading_tree",
     "build_pipeline",
     "expand_region",
     "extract_query_words",
     "find_heading_regions",
     "inject_embedder",
+    "SemanticIndexSource",
 ]

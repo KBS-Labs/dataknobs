@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Utility functions for I/O operations.
 
 This module provides utility functions for common I/O patterns.

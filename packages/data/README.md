@@ -2,10 +2,9 @@
 
 A unified data abstraction layer that provides consistent database operations across multiple storage technologies.
 
-**Version**: 0.1.0  
 **Status**: Released ([PyPI](https://pypi.org/project/dataknobs-data/))  
 **Python**: 3.12+  
-**License**: MIT  
+**License**: Apache-2.0  
 
 ## Overview
 
@@ -302,11 +301,19 @@ The data package provides comprehensive pandas integration for data analysis wor
 
 ```python
 import pandas as pd
-from dataknobs_data.pandas import DataFrameConverter, BatchOperations
+from dataknobs_data.pandas import (
+    BatchConfig,
+    BatchOperations,
+    ConversionOptions,
+    DataFrameConverter,
+)
 
-# Convert records to DataFrame with type preservation
+# Convert records to DataFrame with type preservation. Conversion knobs are
+# carried by ConversionOptions, not passed one at a time.
 converter = DataFrameConverter()
-df = converter.records_to_dataframe(records, preserve_types=True)
+df = converter.records_to_dataframe(
+    records, options=ConversionOptions(preserve_types=True)
+)
 
 # Perform pandas operations
 df_filtered = df[df['age'] > 25]
@@ -315,17 +322,17 @@ df_aggregated = df.groupby('category').agg({'price': 'mean'})
 # Convert back to records
 new_records = converter.dataframe_to_records(df_filtered)
 
-# Bulk operations with DataFrames
+# Bulk operations with DataFrames. Batch knobs are carried by BatchConfig,
+# and the statistics come back as a dict.
 batch_ops = BatchOperations(database)
-result = batch_ops.bulk_insert_dataframe(df, batch_size=1000)
-print(f"Inserted {result.successful} records")
+result = batch_ops.bulk_insert_dataframe(df, config=BatchConfig(chunk_size=1000))
+print(f"Inserted {result['inserted']} of {result['total_rows']} records")
 
-# Upsert from DataFrame
-result = batch_ops.bulk_upsert_dataframe(
-    df, 
-    id_column="user_id",
-    merge_strategy="update"
-)
+# Update existing records from a DataFrame, keyed by a column. There is no
+# upsert: a row whose id is not already present is counted in `not_found`
+# rather than inserted.
+result = batch_ops.update_from_dataframe(df, id_column="user_id")
+print(f"Updated {result['updated']}, missing {result['not_found']}")
 ```
 
 ## Schema Validation
@@ -425,9 +432,11 @@ results = await db.search(query)
 from dataknobs_data import StreamConfig
 
 # Stream large datasets efficiently
+# `prefetch` counts BATCHES held ahead of the consumer, not records -- so
+# this buffers 200 records, not 1000.
 config = StreamConfig(
     batch_size=100,
-    buffer_size=1000
+    prefetch=2
 )
 
 # Stream read
@@ -521,8 +530,12 @@ The package is designed for optimal performance:
 
 ## Contributing
 
-Contributions are welcome! Please see our [Contributing Guide](../../CONTRIBUTING.md) for details.
+Contributions are welcome! Please see our [Contributing Guide](../../docs/development/contributing.md) for details.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](../../LICENSE) file for details.
+Licensed under the [Apache License, Version 2.0](LICENSE); see [NOTICE](NOTICE)
+for attribution requirements.
+
+Versions released before this change remain available under the MIT License,
+preserved in [LICENSES/MIT-historical.txt](../../LICENSES/MIT-historical.txt).

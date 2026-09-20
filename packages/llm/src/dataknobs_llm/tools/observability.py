@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Tool execution observability for tracking tool invocations.
 
 This module provides data structures for recording tool executions,

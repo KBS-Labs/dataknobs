@@ -24,7 +24,7 @@ from dataknobs_llm.conversations import (
 from dataknobs_data.backends import AsyncMemoryDatabase
 
 # Create LLM provider
-config = LLMConfig(provider="openai", api_key="key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="key")
 llm = create_llm_provider(config)
 
 # Create storage
@@ -126,16 +126,27 @@ For complete RAG caching documentation, see:
 
 ### Middleware System
 
+Validation is itself an LLM call: the middleware asks a model whether the
+response satisfies a prompt you name, so it takes the same collaborators the
+manager does plus the prompt to validate against.
+
 ```python
 from dataknobs_llm.conversations import LoggingMiddleware, ValidationMiddleware
 
 manager = await ConversationManager.create(
     llm=llm,
     prompt_builder=builder,
+    storage=storage,
     middleware=[
         LoggingMiddleware(),
-        ValidationMiddleware(rules=my_rules)
-    ]
+        ValidationMiddleware(
+            llm=llm,
+            prompt_builder=builder,
+            validation_prompt="response_check",
+            auto_retry=True,
+            retry_limit=3,
+        ),
+    ],
 )
 ```
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Artifact corpus for managing collections of related artifacts.
 
 A corpus is a named, typed collection of artifacts (e.g., a quiz bank is a

@@ -29,6 +29,7 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common import SyncLoopBridge
 from dataknobs_common.testing import assert_no_leaked_bridge_threads
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.config.builder import FSMBuilder
@@ -345,3 +346,114 @@ def test_simple_fsm_process_batch_timeout_is_bounded() -> None:
         assert elapsed < 3.0, f"process_batch(timeout=0.3) was not bounded — it took {elapsed:.2f}s"
     finally:
         fsm.close()
+
+
+# --------------------------------------------------------------------------- #
+# ``FSM.execute`` takes the same bridge= / timeout= pair as the executors
+# --------------------------------------------------------------------------- #
+
+
+def _loop_witness_fsm(loops: list[Any], *, delay: float = 0.0) -> Any:
+    """A start→end FSM whose transform records the loop that ran it."""
+
+    async def witness(data: Any, context: Any) -> Any:
+        loops.append(asyncio.get_running_loop())
+        if delay:
+            await asyncio.sleep(delay)
+        return data
+
+    config = FSMConfig(
+        name="loop_witness",
+        main_network="main",
+        networks=[
+            NetworkConfig(
+                name="main",
+                states=[
+                    StateConfig(
+                        name="start",
+                        is_start=True,
+                        arcs=[
+                            ArcConfig(
+                                target="end",
+                                transform=FunctionReference(type="registered", name="witness"),
+                            )
+                        ],
+                    ),
+                    StateConfig(name="end", is_end=True),
+                ],
+            )
+        ],
+    )
+    builder = FSMBuilder()
+    builder.register_function("witness", witness)
+    return builder.build(config)
+
+
+def test_the_caller_can_name_the_loop_fsm_execute_runs_on() -> None:
+    """``FSM.execute`` was the one-shot surface left without ``bridge=``.
+
+    It drives the same engine the executors drive, so the same thing is true of
+    it: an ``AsyncDatabaseResourceAdapter`` keeps its ``AsyncDatabase`` open
+    across acquisitions and belongs to whichever loop opened it, and a
+    ``SimpleFSM.process()`` on the same FSM has already opened it on the FSM's
+    own bridge. Two ``execute`` calls ran on two throwaway loops, neither of
+    them that one.
+
+    ``98191919`` scoped this surface to a throwaway bridge so a one-shot
+    execute leaves no process-lifetime thread. That is about thread *lifetime*
+    and is unchanged: without ``bridge=`` the scoping is exactly what that
+    commit left, which ``test_fsm_execute_leaves_no_bridge_thread`` still pins.
+    """
+    loops: list[Any] = []
+    fsm = _loop_witness_fsm(loops)
+
+    with SyncLoopBridge(thread_name="dk-test-owner") as bridge:
+        fsm.execute({"id": 1}, bridge=bridge)
+        fsm.execute({"id": 2}, bridge=bridge)
+
+    assert len(loops) == 2, f"the transform ran {len(loops)} times, expected 2"
+    assert len({id(loop) for loop in loops}) == 1, (
+        "two FSM.execute calls given one bridge still ran on different loops"
+    )
+
+
+def test_fsm_execute_without_a_bridge_still_leaves_no_thread() -> None:
+    """The opt-in does not change the default, which is the leak guard's claim."""
+    loops: list[Any] = []
+    fsm = _loop_witness_fsm(loops)
+
+    with assert_no_leaked_bridge_threads():
+        fsm.execute({"id": 1})
+        fsm.execute({"id": 2})
+
+    assert len({id(loop) for loop in loops}) == 2, (
+        "the default is a throwaway loop per call; this test would not detect a "
+        "regression to a shared one"
+    )
+
+
+def test_fsm_execute_timeout_is_bounded() -> None:
+    """``timeout=`` bounds a call that blocks a caller inside a ``def``.
+
+    ``98191919`` gave this bound to ``SimpleFSM.process`` and the two module
+    helpers. ``FSM.execute`` blocks its caller exactly as they do and was the
+    one one-shot surface it did not reach.
+
+    It *reports* the expiry rather than raising it, which is what this surface
+    does with every other failure: ``execute`` returns a result envelope and
+    ``SimpleFSM.process(timeout=)`` --- the closest sibling --- converts a
+    ``TimeoutError`` into an error result in so many words. The executors raise
+    because they return lists and statistics, with no envelope to put it in.
+    """
+    loops: list[Any] = []
+    fsm = _loop_witness_fsm(loops, delay=5.0)
+
+    started = time.monotonic()
+    result = fsm.execute({"id": 1}, timeout=0.2)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"the call ran {elapsed:.2f}s under a 0.2s bound"
+    assert result["status"] == "error"
+    assert "timeout" in result["error"].lower(), (
+        f"the result does not say the operation timed out: {result['error']!r}"
+    )

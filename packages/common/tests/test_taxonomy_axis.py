@@ -17,17 +17,22 @@ from pathlib import Path
 import pytest
 
 from dataknobs_common.exceptions import NotFoundError, ValidationError
-from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy
+from dataknobs_common.hierarchy import AsyncMappingHierarchy, MappingHierarchy, flatten
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.hierarchy import (
     AssertionHierarchy,
     AsyncAssertionHierarchy,
 )
 from dataknobs_common.ontology.model import (
+    AttributeDef,
+    EntityType,
     InferenceMode,
     Materialization,
     TaxonomyDefinition,
+    split_qualified,
 )
+from dataknobs_common.ontology.sources import MappingEntitySource
+from dataknobs_common.ontology.values import AsyncOntology
 from dataknobs_common.ontology.taxonomy import AsyncTaxonomy, Taxonomy
 from dataknobs_common.testing import assert_twins_agree
 
@@ -402,11 +407,19 @@ def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
     nothing is worse than an asymmetry that is stated. The guard compares that
     set by equality, so a second divergence fails rather than joining it.
 
-    No ``compare_return``: this pair is the one that streams, so its return
-    annotations differ by flavour (``Iterator[str]`` against
+    No ``compare_return`` on ``walk``: that pair is the one that streams, so its
+    return annotations differ by flavour (``Iterator[str]`` against
     ``AsyncIterator[str]``) and asserting on them would pin the flavour rather
-    than the contract. The hierarchy members, which do not stream, are checked
-    the other way.
+    than the contract. ``subtree_keys`` collects, returns ``list[str]`` on both
+    halves, and is checked the other way -- which is the whole reason it gets
+    its own call rather than joining the first.
+
+    **All three members, because this type's surface is not one walk.** A guard
+    over ``walk`` alone is green about ``subtree_keys`` by saying nothing about
+    it, and a parameter added to one half of the member it does not name is
+    exactly the drift it exists to catch. The field lists are compared too, so
+    a field added to one flavour and not the other fails here -- which is the
+    assertion the fifth field arrived under.
     """
     sync_fields = Taxonomy.__dataclass_fields__
     async_fields = AsyncTaxonomy.__dataclass_fields__
@@ -418,6 +431,28 @@ def test_the_taxonomy_twins_expose_the_same_annotated_surface() -> None:
         AsyncTaxonomy.walk,
         async_only={"max_concurrency"},
         label="Taxonomy.walk",
+    )
+
+    assert_twins_agree(
+        Taxonomy.subtree_keys,
+        AsyncTaxonomy.subtree_keys,
+        async_only={"max_concurrency"},
+        compare_return=True,
+        label="Taxonomy.subtree_keys",
+    )
+
+    # The third member, and the one that is synchronous on both flavours: it
+    # reads a mapping the caller already holds, so there is nothing to await.
+    # `unflavoured` is how that is *declared* rather than skipped -- the guard
+    # refuses a synchronous async-half by default, and an exception written
+    # down is what keeps it from also being how a member drops out of the
+    # comparison unnoticed.
+    assert_twins_agree(
+        Taxonomy.inherited_attributes,
+        AsyncTaxonomy.inherited_attributes,
+        unflavoured=True,
+        compare_return=True,
+        label="Taxonomy.inherited_attributes",
     )
 
 
@@ -647,3 +682,669 @@ async def test_the_async_twin_declines_a_negated_edge_alike() -> None:
     assert sorted(await axis.roots()) == ["mammal", "whale"]
     assert await axis.contains("fish") is False
     assert "fish" not in await axis.parent_edges()
+
+
+# --------------------------------------------------------------------------
+# Spending the axis on a query -- subtree_keys
+# --------------------------------------------------------------------------
+
+
+def test_subtree_keys_is_the_axis_from_a_point_including_the_point(
+    mammals_v11_path: Path,
+) -> None:
+    """What a filter over a foreign table is built from.
+
+    The root is included because naming an interior node means *this and
+    everything under it*. An off-by-one here under-counts silently while the
+    count is the whole answer, which is why the inclusion is asserted rather
+    than left to whichever walk the method happens to delegate to.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    keys = axis.subtree_keys("dog")
+
+    assert keys[0] == "dog"
+    assert set(keys) == {"dog", "retriever", "beagle", "golden_retriever"}
+    assert len(keys) == len(set(keys)), "a repeated key changes a length a caller reports"
+
+
+def test_subtree_keys_emits_the_delegated_pre_order_rather_than_the_walks_breadth(
+    mammals_v11_path: Path,
+) -> None:
+    """It delegates, and the delegation is observable.
+
+    ``walk`` is breadth first because it streams; ``subtree_keys`` collects, so
+    it emits what the descending flattened walks emit. Over this vocabulary the
+    two are different tuples, which is what makes the delegation assertable at
+    all rather than merely plausible.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    assert axis.subtree_keys("dog") == ["dog", "retriever", "golden_retriever", "beagle"]
+    assert tuple(axis.walk(from_id="dog")) == (
+        "dog",
+        "retriever",
+        "beagle",
+        "golden_retriever",
+    )
+
+
+def test_subtree_keys_bounds_on_depth_and_is_unbounded_by_default(
+    mammals_v11_path: Path,
+) -> None:
+    """``depth`` is the bound, and the ordinary question is *everything under this*."""
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    assert axis.subtree_keys("dog", depth=0) == ["dog"]
+    assert set(axis.subtree_keys("dog", depth=1)) == {"dog", "retriever", "beagle"}
+    assert axis.subtree_keys("dog", depth=None) == axis.subtree_keys("dog")
+
+
+def test_subtree_keys_refuses_an_unknown_root(mammals_v11_path: Path) -> None:
+    """``walk``'s refusal, for ``walk``'s reason and not a new one.
+
+    This walk *includes* its anchor, so an unknown one comes back as a
+    one-element list -- a wrong answer indistinguishable from a leaf, arriving
+    as the filter a caller is about to count with.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    with pytest.raises(NotFoundError) as raised:
+        axis.subtree_keys("marmoset")
+
+    assert raised.value.context["anchor"] == "marmoset"
+    assert raised.value.context["taxonomy"] == "species"
+
+
+@pytest.mark.asyncio
+async def test_both_flavours_of_subtree_keys_agree(mammals_v11_path: Path) -> None:
+    """The differential: what is twinned here is the driving and nothing else.
+
+    Including the refusal, which is the half a hand-twinned pair loses first --
+    the containment question is the ``await``, and the refusal below it is not.
+    """
+    onto = load_ontology(mammals_v11_path)
+    async_onto = await async_load_ontology(mammals_v11_path)
+
+    assert onto.taxonomy("species").subtree_keys("dog") == await async_onto.taxonomy(
+        "species"
+    ).subtree_keys("dog")
+    assert onto.taxonomy("species").subtree_keys("dog", depth=1) == await async_onto.taxonomy(
+        "species"
+    ).subtree_keys("dog", depth=1)
+
+    with pytest.raises(NotFoundError) as sync_raised:
+        onto.taxonomy("species").subtree_keys("marmoset")
+    with pytest.raises(NotFoundError) as async_raised:
+        await async_onto.taxonomy("species").subtree_keys("marmoset")
+
+    assert str(sync_raised.value) == str(async_raised.value)
+
+
+#: A structure axis whose keys a localising parse would change, and which is
+#: nonetheless entirely local-keyed.
+#:
+#: The two are different claims, which is the whole reason the guard below is a
+#: round trip rather than a parse: ``split_qualified('mammal:carnivore')`` reads
+#: ``mammal`` as an ontology segment and answers ``carnivore``, over an axis
+#: where nothing was ever qualified.
+COLON_KEYED = {"mammal:felid": ("mammal:carnivore",), "mammal:carnivore": ()}
+
+
+def test_every_key_subtree_keys_returns_is_one_the_axis_answers_for(
+    mammals_v11_path: Path,
+) -> None:
+    """The keys are the axis's own, and that is a round trip rather than a spelling.
+
+    ``root_id`` arrives in the structure axis's space, so a key returned in any
+    other space could not be fed back -- not to :meth:`Taxonomy.at`, not to
+    ``structure.contains``, not to this method. Asserted as the round trip
+    rather than as a parse, because *the axis is local-keyed* and *no key holds
+    a colon* are different claims and only the second is one a parse can check.
+    """
+    axis = load_ontology(mammals_v11_path).taxonomy("species")
+
+    for key in axis.subtree_keys("dog"):
+        assert axis.structure.contains(key)
+        assert axis.subtree_keys(key)[0] == key
+        assert axis.at(key).exists()
+
+
+def test_the_round_trip_is_what_a_localising_parse_would_break(
+    mammals_v11_path: Path,
+) -> None:
+    """The control, without which the guard above is green by saying nothing.
+
+    Over the mammals vocabulary a localising parse changes no key, so that
+    guard would pass against a member that localised. This axis is the case
+    that separates them: entirely local-keyed, and every key changed by the
+    parse. The contract holds, and the assertion at the end is what it would
+    cost to break it -- every key handed out would be one the axis refuses.
+    """
+    onto = load_ontology(mammals_v11_path)
+    colonised = Taxonomy(
+        definition=onto.taxonomies["species"],
+        structure=MappingHierarchy(COLON_KEYED),
+        entities=onto.entities,
+    )
+
+    keys = colonised.subtree_keys("mammal:carnivore")
+
+    assert keys == ["mammal:carnivore", "mammal:felid"]
+    for key in keys:
+        assert colonised.structure.contains(key)
+
+    localised = [split_qualified(key).local_id for key in keys]
+    assert localised == ["carnivore", "felid"], "the parse changes every one of them"
+    assert not any(colonised.structure.contains(key) for key in localised)
+
+
+# --------------------------------------------------------------------------
+# The memo, and the walk that goes through no driver
+# --------------------------------------------------------------------------
+
+
+class CountingStructure:
+    """A structure axis that records every ``children`` call.
+
+    Offers no bulk member deliberately: ``children_many`` answers a frontier in
+    one call and hides the per-node question these tests ask.
+    """
+
+    def __init__(self, parents: dict[str, tuple[str, ...]]) -> None:
+        self._inner = MappingHierarchy(parents)
+        self.asked: list[str] = []
+
+    def roots(self) -> tuple[str, ...]:
+        return tuple(self._inner.roots())
+
+    def parents(self, node_id: str) -> tuple[str, ...]:
+        return tuple(self._inner.parents(node_id))
+
+    def children(self, node_id: str) -> tuple[str, ...]:
+        self.asked.append(node_id)
+        return tuple(self._inner.children(node_id))
+
+    def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+class AsyncCountingStructure:
+    """:class:`CountingStructure`, awaited."""
+
+    def __init__(self, parents: dict[str, tuple[str, ...]]) -> None:
+        self._inner = CountingStructure(parents)
+
+    @property
+    def asked(self) -> list[str]:
+        return self._inner.asked
+
+    async def roots(self) -> tuple[str, ...]:
+        return self._inner.roots()
+
+    async def parents(self, node_id: str) -> tuple[str, ...]:
+        return self._inner.parents(node_id)
+
+    async def children(self, node_id: str) -> tuple[str, ...]:
+        return self._inner.children(node_id)
+
+    async def contains(self, node_id: str) -> bool:
+        return self._inner.contains(node_id)
+
+
+#: mammal -> dog -> {retriever, beagle}. Two levels, so the streaming walk
+#: issues more than one frontier read and a memo has something to answer.
+STRUCTURE = {
+    "mammal": (),
+    "dog": ("mammal",),
+    "retriever": ("dog",),
+    "beagle": ("dog",),
+}
+
+
+def _axis_over(structure: object, path: Path) -> Taxonomy:
+    onto = load_ontology(path)
+    return replace(onto.taxonomy("species"), structure=structure)  # type: ignore[arg-type]
+
+
+def test_the_streaming_walk_reads_a_caller_supplied_memo(mammals_v11_path: Path) -> None:
+    """The memo lives in the frontier read *because* this walk calls it directly.
+
+    ``walk`` cannot go through the collecting core, so a memo written into the
+    drivers would have left it as the only walk without one -- which is the
+    stated reason the memo is in the shared step rather than in either driver.
+    A reason is only load-bearing if the walk it names can actually be given a
+    cache, so this is what makes the claim true rather than merely available.
+    """
+    structure = CountingStructure(STRUCTURE)
+    axis = _axis_over(structure, mammals_v11_path)
+    warm: dict[tuple[str, object], object] = {}
+
+    first = tuple(axis.walk())
+    asked_once = len(structure.asked)
+    assert asked_once > 0
+
+    structure.asked.clear()
+    second = tuple(axis.walk(cache=warm))
+    third = tuple(axis.walk(cache=warm))
+
+    assert first == second == third
+    assert len(structure.asked) == asked_once, (
+        f"the warmed walk re-asked the backing: {structure.asked}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_async_streaming_walk_reads_one_too(mammals_v11_path: Path) -> None:
+    """The memo is in the step both flavours of the streaming walk call."""
+    structure = AsyncCountingStructure(STRUCTURE)
+    onto = await async_load_ontology(mammals_v11_path)
+    axis = replace(onto.taxonomy("species"), structure=structure)  # type: ignore[arg-type]
+    warm: dict[tuple[str, object], object] = {}
+
+    first = [node async for node in axis.walk(cache=warm)]
+    asked_once = len(structure.asked)
+
+    structure.asked.clear()
+    second = [node async for node in axis.walk(cache=warm)]
+
+    assert first == second
+    assert asked_once > 0
+    assert structure.asked == [], "the warmed walk re-asked the backing"
+
+
+def test_a_memo_warmed_by_a_collecting_walk_answers_the_streaming_one(
+    mammals_v11_path: Path,
+) -> None:
+    """One memo, one axis, both kinds of walk -- which is what sharing the step buys.
+
+    The collecting walks and the streaming one issue the same request against
+    the same step, so a cache filled by either is readable by the other. A memo
+    written into the drivers could not have done this.
+    """
+    structure = CountingStructure(STRUCTURE)
+    axis = _axis_over(structure, mammals_v11_path)
+    shared: dict[tuple[str, object], object] = {}
+
+    flatten(structure, cache=shared)  # type: ignore[arg-type]
+    warmed = len(structure.asked)
+
+    walked = tuple(axis.walk(cache=shared))
+
+    assert walked == ("mammal", "dog", "retriever", "beagle")
+    assert len(structure.asked) == warmed, "the streaming walk re-asked the backing"
+
+
+def test_subtree_keys_forwards_a_memo_to_the_walks_it_delegates_to(
+    mammals_v11_path: Path,
+) -> None:
+    """The two delegations carry the caller's cache, or the delegation is partial.
+
+    ``subtree_keys`` *is* ``flatten`` unbounded and ``descendants_to_depth``
+    bounded, and both of those take a memo. A member that delegates to a walk
+    and drops the one parameter that walk grew is the same drift one layer up:
+    the caller holding a long-lived cache pays the backing again on every call.
+    """
+    structure = CountingStructure(STRUCTURE)
+    axis = _axis_over(structure, mammals_v11_path)
+    shared: dict[tuple[str, object], object] = {}
+
+    first = axis.subtree_keys("dog", cache=shared)
+    asked_once = len(structure.asked)
+    second = axis.subtree_keys("dog", cache=shared)
+    bounded = axis.subtree_keys("dog", depth=1, cache=shared)
+
+    assert first == second == ["dog", "retriever", "beagle"]
+    assert bounded == ["dog", "retriever", "beagle"]
+    assert len(structure.asked) == asked_once, (
+        f"a delegated walk re-asked the backing: {structure.asked}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_async_subtree_keys_forwards_one_too(mammals_v11_path: Path) -> None:
+    """The twin, for the reason every twin here is checked: a parameter on one half."""
+    structure = AsyncCountingStructure(STRUCTURE)
+    onto = await async_load_ontology(mammals_v11_path)
+    axis = replace(onto.taxonomy("species"), structure=structure)  # type: ignore[arg-type]
+    shared: dict[tuple[str, object], object] = {}
+
+    first = await axis.subtree_keys("dog", cache=shared)
+    asked_once = len(structure.asked)
+    second = await axis.subtree_keys("dog", cache=shared)
+
+    assert first == second == ["dog", "retriever", "beagle"]
+    assert len(structure.asked) == asked_once
+
+
+# --------------------------------------------------------------------------
+# inherited_attributes -- the OTHER lattice, and the store that answers for it
+# --------------------------------------------------------------------------
+
+
+def test_the_two_lattices_answer_different_questions_about_one_node(
+    mammals_v11_path: Path,
+) -> None:
+    """The criterion this member exists for, asserted rather than described.
+
+    ``beagle`` sits on both lattices and they are different stores. The
+    **instance** lattice -- ``isa`` assertions between entities -- puts ``dog``
+    and ``mammal`` above it; the **type** lattice -- the ``isa:`` field on an
+    entity type declaration -- puts ``Species`` above ``Breed``. Walking one
+    and reading the other are not the same operation, and a reader who reaches
+    for ``inherited_attributes`` expecting ancestors gets declarations.
+
+    Both in one test, because a paragraph saying so is what this replaces.
+    """
+    onto = load_ontology(mammals_v11_path)
+    axis = onto.taxonomy("species")
+
+    beagle = axis.at("beagle")
+    entity = beagle.entity()
+    assert entity is not None
+
+    ancestors = [above.node for above in beagle.ancestors()]
+    inherited = [attribute.name for attribute in axis.inherited_attributes(entity.type)]
+
+    assert ancestors == ["dog", "mammal"], "the instance lattice, as entity ids"
+    assert inherited == ["akc_group", "latin_name", "lifespan_years"], (
+        "the type lattice, as attribute declarations -- Breed's own first, then Species'"
+    )
+    assert set(ancestors).isdisjoint(inherited), "and they name different things entirely"
+
+
+def test_the_nearer_declaration_shadows_the_farther_one(mammals_v11_path: Path) -> None:
+    """A subtype redeclaring an attribute is specialising it, not adding a second.
+
+    Returning both would build an extraction schema with two fields of one
+    name, and the caller has no rule for choosing between them. The nearer one
+    wins because it is the more specific statement about the type that was
+    asked about.
+    """
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "shadowed",
+                "version": "1.0",
+                "entity_types": [
+                    {
+                        "id": "Item",
+                        "attributes": [
+                            {"name": "sku", "type": "string", "description": "the general one"},
+                            {"name": "weight", "type": "number"},
+                        ],
+                    },
+                    {
+                        "id": "Product",
+                        "isa": "Item",
+                        "attributes": [
+                            {
+                                "name": "sku",
+                                "type": "string",
+                                "required": True,
+                                "description": "the specific one",
+                            }
+                        ],
+                    },
+                ],
+            }
+        }
+    )
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+
+    inherited = axis.inherited_attributes("Product")
+
+    assert [attribute.name for attribute in inherited] == ["sku", "weight"], "one sku, not two"
+    assert inherited[0].description == "the specific one"
+    assert inherited[0].required is True
+
+
+def test_a_cyclic_type_lattice_terminates(mammals_v11_path: Path) -> None:
+    """The loader does not refuse one, so the walk has to survive it.
+
+    Measured rather than assumed: ``_refuse_undeclared_isa`` checks that a
+    declared parent *exists* and nothing checks that the chain *ends*, so a
+    document naming ``A isa B`` and ``B isa A`` loads without complaint. The
+    visited set here is unconditional for the same reason every walk over the
+    structure axis carries one.
+    """
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "cyclic",
+                "version": "1.0",
+                "entity_types": [
+                    {"id": "A", "isa": "B", "attributes": [{"name": "a", "type": "string"}]},
+                    {"id": "B", "isa": "A", "attributes": [{"name": "b", "type": "string"}]},
+                ],
+            }
+        }
+    )
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+
+    assert [attribute.name for attribute in axis.inherited_attributes("A")] == ["a", "b"]
+    assert [attribute.name for attribute in axis.inherited_attributes("B")] == ["b", "a"]
+
+
+def test_a_type_the_store_does_not_declare_is_refused(mammals_v11_path: Path) -> None:
+    """Refused, not answered with ``[]``, because the two are different states.
+
+    A type declared with no attributes and no parent legitimately inherits
+    nothing; a type the store has never heard of is a caller error, and an
+    empty list would report the second as the first. It is also what makes the
+    field safe to default: an axis built without types answers nothing at all
+    rather than answering *nothing is declared*.
+    """
+    onto = load_ontology(mammals_v11_path)
+    axis = onto.taxonomy("species")
+
+    with pytest.raises(NotFoundError) as refusal:
+        axis.inherited_attributes("NoSuchType")
+
+    assert refusal.value.context["entity_type"] == "NoSuchType"
+    assert refusal.value.context["taxonomy"] == "species"
+
+    typeless = replace(axis, entity_types={})
+    with pytest.raises(NotFoundError):
+        typeless.inherited_attributes("Breed")
+
+
+def test_the_vocabulary_answers_the_lattice_question_without_building_an_axis(
+    mammals_v11_path: Path,
+) -> None:
+    """The store is the ontology's, so the ontology is a place to ask about it.
+
+    ``inherited_attributes`` reads ``entity_types`` and nothing else -- which is
+    why every taxonomy of one vocabulary answers it identically, and why
+    reaching it only through :meth:`Ontology.taxonomy` meant building an axis to
+    ask a question the axis has no part in. Both surfaces are one line over the
+    same walk, so the two answers are the same object-for-object.
+    """
+    onto = load_ontology(mammals_v11_path)
+
+    direct = onto.inherited_attributes("Breed")
+    via_axis = onto.taxonomy("species").inherited_attributes("Breed")
+
+    assert [a.name for a in direct] == ["akc_group", "latin_name", "lifespan_years"]
+    assert direct == via_axis
+
+    # And the refusal travels with it rather than being re-argued per surface.
+    with pytest.raises(NotFoundError) as refusal:
+        onto.inherited_attributes("NoSuchType")
+    assert refusal.value.context["entity_type"] == "NoSuchType"
+
+
+@pytest.mark.asyncio
+async def test_the_async_vocabulary_answers_it_without_awaiting(mammals_v11_path: Path) -> None:
+    """A plain ``def`` on this twin too, for the mapping's reason."""
+    onto = await async_load_ontology(mammals_v11_path)
+
+    assert not inspect.iscoroutinefunction(AsyncOntology.inherited_attributes)
+    assert [a.name for a in onto.inherited_attributes("Breed")] == [
+        "akc_group",
+        "latin_name",
+        "lifespan_years",
+    ]
+
+
+def test_an_ancestor_the_store_does_not_declare_is_refused_too() -> None:
+    """The same rule as the anchor's, applied to the ancestor the walk reaches for.
+
+    ``_refuse_an_undeclared_type`` argues that answering ``[]`` for a type the
+    store never heard of collapses *this type declares nothing* into *this type
+    is not here*, and that the reading a caller reaches for is the one that is
+    not their fault. Two lines into the walk the same collapse was performed on
+    the anchor's **parent**, silently: a ``Breed`` whose declared ``Species`` is
+    absent answered with Breed's own attributes and said nothing, so a caller
+    could not tell a complete answer from a truncated one.
+
+    It is reachable without a malformed document. ``entity_types`` is a mapping
+    the caller supplies and it defaults to empty -- a partial store is invited
+    by the field rather than guarded against -- and :class:`EntityType` is a
+    public dataclass anyone may construct.
+    """
+    types = {
+        "Breed": EntityType(
+            id="Breed",
+            name="Breed",
+            isa="Species",
+            attributes=[AttributeDef(name="sku", value_type="string")],
+        ),
+        # `Species` deliberately absent: the store is partial, not malformed.
+    }
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=MappingEntitySource({}),
+        entity_types=types,
+    )
+
+    with pytest.raises(NotFoundError) as refusal:
+        axis.inherited_attributes("Breed")
+
+    # The refusal names both ends: what was asked about, and what is missing.
+    assert refusal.value.context["entity_type"] == "Species"
+    assert refusal.value.context["asked_about"] == "Breed"
+    assert refusal.value.context["taxonomy"] == "species"
+
+
+def test_an_isa_is_a_declared_field_rather_than_an_open_metadata_key() -> None:
+    """A parent the loader cannot see is a parent the loader cannot check.
+
+    ``isa`` was parked in :attr:`EntityType.metadata` under a documented key
+    while nothing read it. Once a walk reads it back, the open dict is a hole:
+    ``_type_metadata`` copied a row's ``metadata`` **wholesale** before folding
+    the top-level ``isa:`` in, so a document writing the parent one level down
+    reached the lattice without passing ``_refuse_undeclared_isa`` -- which
+    reads only ``row.get("isa")``.
+
+    A declared field closes it at the source rather than adding a second
+    check: there is no longer a second place a parent can be written.
+    """
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "smuggled",
+                "version": "1.0",
+                "entity_types": [
+                    {
+                        "id": "Breed",
+                        "metadata": {"isa": "NotDeclaredAnywhere"},
+                        "attributes": [{"name": "sku", "type": "string"}],
+                    }
+                ],
+            }
+        }
+    )
+
+    # The key in `metadata` is now inert -- it is not where a parent is kept.
+    assert onto.entity_types["Breed"].isa is None
+    assert onto.entity_types["Breed"].metadata == {"isa": "NotDeclaredAnywhere"}
+
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+    assert [a.name for a in axis.inherited_attributes("Breed")] == ["sku"]
+
+
+def test_the_loader_refuses_an_undeclared_parent_however_it_is_written() -> None:
+    """And the top-level spelling is still refused, which is the half that shipped."""
+    with pytest.raises(ValidationError) as refusal:
+        load_ontology(
+            {
+                "ontology": {
+                    "id": "dangling",
+                    "version": "1.0",
+                    "entity_types": [{"id": "Breed", "isa": "NotDeclaredAnywhere"}],
+                }
+            }
+        )
+
+    assert "NotDeclaredAnywhere" in str(refusal.value)
+
+
+def test_a_type_declaring_nothing_inherits_nothing_and_says_so(mammals_v11_path: Path) -> None:
+    """The other half of the pair above: declared, with nothing to give."""
+    onto = load_ontology(
+        {
+            "ontology": {
+                "id": "bare",
+                "version": "1.0",
+                "entity_types": [{"id": "Thing"}],
+            }
+        }
+    )
+    axis = Taxonomy(
+        definition=TaxonomyDefinition(id="species", relation="isa"),
+        structure=MappingHierarchy({}),
+        entities=onto.entities,
+        entity_types=onto.entity_types,
+    )
+
+    assert axis.inherited_attributes("Thing") == []
+
+
+def test_the_accessor_hands_the_axis_the_type_store(mammals_v11_path: Path) -> None:
+    """A field the accessor forgets to pass is an axis that refuses everything.
+
+    The field defaults to empty, which is what makes a hand-built axis cheap
+    and what makes this assertion necessary: nothing else in the suite would
+    notice ``Ontology.taxonomy`` dropping it, because every other member
+    answers the same either way.
+    """
+    onto = load_ontology(mammals_v11_path)
+
+    assert onto.taxonomy("species").entity_types == onto.entity_types
+    assert onto.taxonomy("species").inherited_attributes("Breed")
+
+
+@pytest.mark.asyncio
+async def test_the_async_twin_answers_without_awaiting(mammals_v11_path: Path) -> None:
+    """A plain ``def`` on both flavours, because a mapping awaits nothing.
+
+    The same rule that makes ``at()`` synchronous on the asynchronous twin:
+    making this awaitable would cost every caller an ``await`` for a walk over
+    a mapping they are already holding.
+    """
+    onto = await async_load_ontology(mammals_v11_path)
+    axis = onto.taxonomy("species")
+
+    assert not inspect.iscoroutinefunction(AsyncTaxonomy.inherited_attributes)
+    assert [a.name for a in axis.inherited_attributes("Breed")] == [
+        "akc_group",
+        "latin_name",
+        "lifespan_years",
+    ]

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Chroma vector store implementation."""
 
 from __future__ import annotations
@@ -104,15 +107,35 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
             else:
                 self.embedding_function = ef
 
-        # Map distance metrics
+        # Map distance metrics.
+        #
+        # Keyed on the canonical member, so the table has one key per family
+        # and no spelling can be missed: `self.metric` arrives canonical from
+        # `_setup`, and the four keys below are every family there is.
+        #
+        # **There is no `L1` arm, and the absence is the decision.** chromadb
+        # validates `hnsw:space` against `^(l2|cosine|ip)$`, so Manhattan
+        # distance is a metric this backend cannot serve. The table used to
+        # end in `.get(self.metric, "cosine")`, which meant a store
+        # configured for `l1` built and queried a **cosine** index with no
+        # error and no log line -- the store reported `DistanceMetric.L1` and
+        # the collection was cosine. The sibling door for Elasticsearch
+        # already refuses the same member rather than answering cosine; this
+        # is that decision arriving at the door that had not taken it, so the
+        # two stop disagreeing about what an unservable metric does.
         metric_map = {
             DistanceMetric.COSINE: "cosine",
             DistanceMetric.EUCLIDEAN: "l2",
-            DistanceMetric.L2: "l2",
             DistanceMetric.DOT_PRODUCT: "ip",
-            DistanceMetric.INNER_PRODUCT: "ip",
         }
-        self.chroma_metric = metric_map.get(self.metric, "cosine")
+        space = metric_map.get(self.metric)
+        if space is None:
+            raise ValueError(
+                f"chromadb cannot serve {self.metric.value!r}: `hnsw:space` accepts "
+                f"{', '.join(sorted(set(metric_map.values())))}. Configure a metric this "
+                f"backend supports, or use a backend that serves it."
+            )
+        self.chroma_metric = space
 
         # Typed ``Any``: the chromadb client/collection types are
         # untyped, and these start ``None`` until ``initialize`` builds

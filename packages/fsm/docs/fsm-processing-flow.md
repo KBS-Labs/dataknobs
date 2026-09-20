@@ -1371,7 +1371,9 @@ def my_factory(func_context: FunctionContext) -> MyAppContext:
         metrics=collector,
     )
 
-exec_context = ExecutionContext(data=input_data)
+# The context describes HOW the run behaves, not what it runs on -- the data
+# arrives with the run, so there is no `data` argument here.
+exec_context = ExecutionContext()
 exec_context.transform_context_factory = my_factory
 ```
 

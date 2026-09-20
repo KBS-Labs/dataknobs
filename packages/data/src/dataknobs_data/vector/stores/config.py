@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Structured configuration dataclasses for vector store backends.
 
 Every vector store's documented config key is a typed dataclass field;

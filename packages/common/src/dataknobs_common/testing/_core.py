@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Test utilities for dataknobs packages.
 
 This module provides pytest utilities for service availability checking,

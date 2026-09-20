@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Rubric evaluation executor for deterministic, schema, and LLM decode scoring.
 
 This module provides the evaluation engine that applies rubrics to targets:

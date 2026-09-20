@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-13T06:17:10Z",
+  "timestamp": "2026-09-20T02:30:34Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/a-validator-reads-rows-through-the-authority-that-found-them",
-  "git_commit": "44e07661ae5cedc62426ce1162eb48851e32b74f",
+  "git_branch": "sbk/leg-d5-which-vocabularies-are-in-play",
+  "git_commit": "8d76dc66e8345e3d7c3bb8948aab7fcb9109e610",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

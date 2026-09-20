@@ -188,12 +188,25 @@ This is used automatically by the `GroundedReasoning` strategy when a bot has a 
 Wraps any `AsyncDatabase` backend with text search across configured fields.
 
 ```python
-from dataknobs_data.sources.database import DatabaseSource
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.fields import FieldType
+from dataknobs_data.schema import DatabaseSchema, FieldSchema
+from dataknobs_data.sources.database import DatabaseSource
 
 db = AsyncMemoryDatabase()
+
+# The schema is required and positional -- it is the second argument, and the
+# source uses it to know which fields exist and what they hold. Everything
+# after it is keyword-only.
+schema = DatabaseSchema(fields={
+    "title": FieldSchema(name="title", type=FieldType.STRING),
+    "summary": FieldSchema(name="summary", type=FieldType.STRING),
+    "tags": FieldSchema(name="tags", type=FieldType.STRING),
+})
+
 source = DatabaseSource(
-    db=db,
+    db,
+    schema,
     name="case_studies",
     content_field="summary",
     text_search_fields=["title", "summary", "tags"],
@@ -231,13 +244,19 @@ Use `AsyncMemoryDatabase` for `DatabaseSource` tests and mock knowledge bases fo
 
 ```python
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
-from dataknobs_data.sources.database import DatabaseSource
+from dataknobs_data.fields import FieldType
+from dataknobs_data.schema import DatabaseSchema, FieldSchema
 from dataknobs_data.sources.base import RetrievalIntent
+from dataknobs_data.sources.database import DatabaseSource
 
 db = AsyncMemoryDatabase()
 await db.create(Record({"title": "OAuth Overview", "summary": "OAuth 2.0 is..."}))
 
-source = DatabaseSource(db=db, name="docs", content_field="summary",
+schema = DatabaseSchema(fields={
+    "title": FieldSchema(name="title", type=FieldType.STRING),
+    "summary": FieldSchema(name="summary", type=FieldType.STRING),
+})
+source = DatabaseSource(db, schema, name="docs", content_field="summary",
                         text_search_fields=["title", "summary"])
 
 intent = RetrievalIntent(text_queries=["OAuth"])

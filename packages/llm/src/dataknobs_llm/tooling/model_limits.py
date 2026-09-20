@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Reconcile a provider's bundled model resource against its live catalog.
 
 A bundled fallback resource is only as useful as it is current, so this

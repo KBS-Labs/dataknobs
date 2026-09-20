@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """A/B testing management for prompt experiments.
 
 This module provides:
@@ -15,6 +18,7 @@ from datetime import UTC, datetime
 
 from dataknobs_llm.exceptions import VersioningError
 
+from .store import ExperimentStore, InMemoryVersionStore, require_store
 from .types import (
     PromptExperiment,
     PromptVariant,
@@ -30,7 +34,9 @@ class ABTestManager:
 
     Example:
         ```python
-        manager = ABTestManager(storage_backend)
+        # In memory when nothing is passed; DatabaseVersionStore(db)
+        # keeps experiments in any of the seven dataknobs backends.
+        manager = ABTestManager()
 
         # Create experiment
         experiment = await manager.create_experiment(
@@ -55,18 +61,27 @@ class ABTestManager:
         ```
     """
 
-    def __init__(self, storage: Any | None = None):
+    def __init__(self, store: ExperimentStore | None = None):
         """Initialize A/B test manager.
 
         Args:
-            storage: Backend storage (dict for in-memory, database for persistence)
-                    If None, uses in-memory dictionary
+            store: Where experiments and their user assignments live. Defaults
+                to :class:`~.store.InMemoryVersionStore`, which is what this
+                manager used to hold in two instance dictionaries. Pass
+                :class:`~.store.DatabaseVersionStore` for any of the seven
+                ``dataknobs_data`` backends.
+
+        Raises:
+            TypeError: If ``store`` is not an :class:`~.store.ExperimentStore`.
+                An assignment used to be persisted as a bare string under a
+                composed key, which is not a record and which no backend could
+                hold, so an object written for the old parameter is caught here.
         """
-        self.storage = storage if storage is not None else {}
-        self._experiments: Dict[str, PromptExperiment] = {}  # experiment_id -> PromptExperiment
-        self._user_assignments: Dict[
-            str, Dict[str, str]
-        ] = {}  # experiment_id -> {user_id -> version}
+        self.store: ExperimentStore = require_store(
+            store if store is not None else InMemoryVersionStore(),
+            ExperimentStore,
+            holder="ABTestManager",
+        )
 
     async def create_experiment(
         self,
@@ -115,15 +130,7 @@ class ABTestManager:
             metadata=metadata or {},
         )
 
-        # Store experiment
-        self._experiments[experiment_id] = experiment
-
-        # Initialize user assignments
-        self._user_assignments[experiment_id] = {}
-
-        # Persist to backend if available
-        if hasattr(self.storage, "set"):
-            await self._persist_experiment(experiment)
+        await self.store.save_experiment(experiment)
 
         return experiment
 
@@ -139,7 +146,7 @@ class ABTestManager:
         Returns:
             PromptExperiment if found, None otherwise
         """
-        return self._experiments.get(experiment_id)
+        return await self.store.load_experiment(experiment_id)
 
     async def list_experiments(
         self,
@@ -157,19 +164,7 @@ class ABTestManager:
         Returns:
             List of matching experiments
         """
-        experiments = list(self._experiments.values())
-
-        # Apply filters
-        if name:
-            experiments = [e for e in experiments if e.name == name]
-
-        if prompt_type:
-            experiments = [e for e in experiments if e.prompt_type == prompt_type]
-
-        if status:
-            experiments = [e for e in experiments if e.status == status]
-
-        return experiments
+        return await self.store.load_experiments(name, prompt_type, status)
 
     async def get_random_variant(
         self,
@@ -188,14 +183,7 @@ class ABTestManager:
         Raises:
             VersioningError: If experiment not found
         """
-        experiment = self._experiments.get(experiment_id)
-        if not experiment:
-            raise VersioningError(f"Experiment not found: {experiment_id}")
-
-        if experiment.status != "running":
-            raise VersioningError(
-                f"Experiment {experiment_id} is not running (status: {experiment.status})"
-            )
+        experiment = await self._running_experiment(experiment_id)
 
         # Weighted random selection
         versions = list(experiment.traffic_split.keys())
@@ -223,33 +211,17 @@ class ABTestManager:
         Raises:
             VersioningError: If experiment not found
         """
-        experiment = self._experiments.get(experiment_id)
-        if not experiment:
-            raise VersioningError(f"Experiment not found: {experiment_id}")
-
-        if experiment.status != "running":
-            raise VersioningError(
-                f"Experiment {experiment_id} is not running (status: {experiment.status})"
-            )
+        experiment = await self._running_experiment(experiment_id)
 
         # Check if user already has assignment
-        if experiment_id in self._user_assignments:
-            existing = self._user_assignments[experiment_id].get(user_id)
-            if existing:
-                return existing
+        existing = await self.store.load_assignment(experiment_id, user_id)
+        if existing:
+            return existing
 
         # Assign user to variant using hash-based selection
         assigned_version = self._hash_based_assignment(user_id, experiment.traffic_split)
 
-        # Store assignment
-        if experiment_id not in self._user_assignments:
-            self._user_assignments[experiment_id] = {}
-        self._user_assignments[experiment_id][user_id] = assigned_version
-
-        # Persist assignment if backend available
-        if hasattr(self.storage, "set"):
-            key = f"assignment:{experiment_id}:{user_id}"
-            await self.storage.set(key, assigned_version)
+        await self.store.save_assignment(experiment_id, user_id, assigned_version)
 
         return assigned_version
 
@@ -272,7 +244,7 @@ class ABTestManager:
         Raises:
             VersioningError: If experiment not found
         """
-        experiment = self._experiments.get(experiment_id)
+        experiment = await self.store.load_experiment(experiment_id)
         if not experiment:
             raise VersioningError(f"Experiment not found: {experiment_id}")
 
@@ -283,9 +255,7 @@ class ABTestManager:
         elif end_date:
             experiment.end_date = end_date
 
-        # Persist if backend available
-        if hasattr(self.storage, "set"):
-            await self._persist_experiment(experiment)
+        await self.store.save_experiment(experiment)
 
         return experiment
 
@@ -303,9 +273,7 @@ class ABTestManager:
         Returns:
             Assigned version if exists, None otherwise
         """
-        if experiment_id not in self._user_assignments:
-            return None
-        return self._user_assignments[experiment_id].get(user_id)
+        return await self.store.load_assignment(experiment_id, user_id)
 
     async def get_experiment_assignments(
         self,
@@ -319,7 +287,7 @@ class ABTestManager:
         Returns:
             Dictionary mapping user_id to assigned version
         """
-        return self._user_assignments.get(experiment_id, {})
+        return await self.store.load_assignments(experiment_id)
 
     async def delete_experiment(
         self,
@@ -333,25 +301,35 @@ class ABTestManager:
             experiment_id: Experiment ID
 
         Returns:
-            True if deleted, False if not found
+            True if deleted, False if not found. The store removes the
+            assignments with it, so neither outlives the other.
         """
-        if experiment_id not in self._experiments:
-            return False
-
-        # Remove experiment
-        del self._experiments[experiment_id]
-
-        # Remove user assignments
-        if experiment_id in self._user_assignments:
-            del self._user_assignments[experiment_id]
-
-        # Persist deletion if backend available
-        if hasattr(self.storage, "delete"):
-            await self.storage.delete(f"experiment:{experiment_id}")
-
-        return True
+        return await self.store.delete_experiment(experiment_id)
 
     # ===== Helper Methods =====
+
+    async def _running_experiment(self, experiment_id: str) -> PromptExperiment:
+        """Load an experiment that is accepting traffic, or explain why not.
+
+        Args:
+            experiment_id: Experiment ID
+
+        Returns:
+            The experiment, with status ``"running"``
+
+        Raises:
+            VersioningError: If the experiment is absent or is not running
+        """
+        experiment = await self.store.load_experiment(experiment_id)
+        if not experiment:
+            raise VersioningError(f"Experiment not found: {experiment_id}")
+
+        if experiment.status != "running":
+            raise VersioningError(
+                f"Experiment {experiment_id} is not running (status: {experiment.status})"
+            )
+
+        return experiment
 
     def _hash_based_assignment(
         self,
@@ -388,12 +366,6 @@ class ABTestManager:
         # Fallback to last version (handles floating point errors)
         return versions[-1]
 
-    async def _persist_experiment(self, experiment: PromptExperiment):
-        """Persist experiment to backend storage."""
-        if hasattr(self.storage, "set"):
-            key = f"experiment:{experiment.experiment_id}"
-            await self.storage.set(key, experiment.to_dict())
-
     async def get_variant_distribution(
         self,
         experiment_id: str,
@@ -409,11 +381,11 @@ class ABTestManager:
         Raises:
             VersioningError: If experiment not found
         """
-        experiment = self._experiments.get(experiment_id)
+        experiment = await self.store.load_experiment(experiment_id)
         if not experiment:
             raise VersioningError(f"Experiment not found: {experiment_id}")
 
-        assignments = self._user_assignments.get(experiment_id, {})
+        assignments = await self.store.load_assignments(experiment_id)
         distribution: Dict[str, int] = {v.version: 0 for v in experiment.variants}
 
         for version in assignments.values():

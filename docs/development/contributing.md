@@ -12,6 +12,7 @@ We welcome contributions to the Dataknobs project! This guide will help you get 
 - [Testing Guidelines](#testing-guidelines)
 - [Documentation](#documentation)
 - [Submitting Changes](#submitting-changes)
+- [Licensing of Contributions](#licensing-of-contributions)
 - [Review Process](#review-process)
 - [Community](#community)
 
@@ -678,6 +679,35 @@ Fixes #45"
    Fixes #123
    Closes #456
    ```
+
+## Licensing of Contributions
+
+DataKnobs is released under the [Apache License, Version 2.0](../license.md).
+Unless you state otherwise in writing, any contribution you intentionally
+submit for inclusion is submitted under that same license, with no additional
+terms — this is the default Apache-2.0 §5 establishes, written down here
+so that nobody has to go and read §5 to find it out.
+
+Practically, that means:
+
+- **You do not sign anything.** There is no separate contributor licence
+  agreement; opening a pull request is the submission §5 describes.
+- **New source files carry the SPDX header** the rest of the tree does, which
+  `tests/test_licensing.py` checks on every shipped file:
+
+  ```python
+  # SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+  # SPDX-License-Identifier: Apache-2.0
+  ```
+
+- **Third-party code is not a contribution.** If you want to bring in code
+  you did not write, say so in the pull request and name its license: it has
+  to clear the project's dependency bar — permissive licenses only for
+  anything we import — and ship its own license text alongside ours.
+
+Versions published before the relicense remain available under the MIT
+License, on the terms they were published under. See the
+[License](../license.md) page.
 
 ## Review Process
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Test utilities for dataknobs packages.
 
 This package provides pytest utilities for service availability checking,
@@ -87,6 +90,11 @@ from dataknobs_common.testing.blocking import (
     no_blocking,
     requires_blockbuster,
 )
+from dataknobs_common.testing.dataclass_sweep import (
+    DataclassSweep,
+    Supplied,
+    UnbuildableError,
+)
 from dataknobs_common.testing.dotted_imports import (
     CANONICAL_MODULE,
     AdHocImportFinding,
@@ -147,6 +155,9 @@ __all__ = [
     "DK_SYNC_BRIDGE_THREAD",
     "AdHocImportFinding",
     "BroadExceptFinding",
+    "DataclassSweep",
+    "Supplied",
+    "UnbuildableError",
     "assert_config_attribute_access_matches_dataclass",
     "assert_ctor_reads_documented_keys",
     "assert_dataclass_config_matches_ctor",

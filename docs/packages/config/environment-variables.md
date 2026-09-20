@@ -7,10 +7,12 @@ The DataKnobs Config package provides comprehensive environment variable support
 Environment variables can override any configuration value using a structured naming convention. The system supports:
 
 - Automatic type conversion
-- Nested attribute access
-- Default values
-- Variable substitution in configuration files
 - Both named and indexed access
+- Variable substitution in configuration files
+
+Overrides address a **top-level attribute** of a configuration item. Reaching
+into a nested mapping is not supported -- see [Nesting](#nesting) below for
+what happens if you try.
 
 ## Naming Convention
 
@@ -20,25 +22,68 @@ Environment variables follow this pattern:
 DATAKNOBS_<TYPE>__<NAME_OR_INDEX>__<ATTRIBUTE>
 ```
 
-- **DATAKNOBS**: Default prefix (configurable)
-- **TYPE**: Configuration type (e.g., DATABASE, CACHE, SERVICE)
-- **NAME_OR_INDEX**: Item name or numeric index
-- **ATTRIBUTE**: Configuration attribute (supports nesting)
+- **DATAKNOBS**: The prefix. The default, not a fixed one; see
+  [Prefix and Selection](#prefix-and-selection)
+- **TYPE**: The configuration type, **spelled exactly as the config file's
+  top-level key is**, upper-cased. A file declaring `databases:` is addressed
+  by `DATAKNOBS_DATABASES__`, not `DATAKNOBS_DATABASE__` -- the name is matched
+  verbatim, with no singular/plural reconciliation, and a variable naming a
+  type that does not exist is logged at WARNING and skipped
+- **NAME_OR_INDEX**: The item's `name`, or a numeric index (negative allowed)
+- **ATTRIBUTE**: One top-level attribute of that item. Not a path -- see
+  [Nesting](#nesting)
 
 ### Examples
 
+These address a file declaring `databases:` and `caches:`:
+
 ```bash
 # Override database host by name
-DATAKNOBS_DATABASE__PRIMARY__HOST=prod.example.com
+DATAKNOBS_DATABASES__PRIMARY__HOST=prod.example.com
 
 # Override database port by index
-DATAKNOBS_DATABASE__0__PORT=5433
-
-# Override nested attribute
-DATAKNOBS_DATABASE__PRIMARY__CONNECTION__TIMEOUT=60
+DATAKNOBS_DATABASES__0__PORT=5433
 
 # Override cache TTL
-DATAKNOBS_CACHE__REDIS__TTL=7200
+DATAKNOBS_CACHES__REDIS__TTL=7200
+```
+
+### Nesting
+
+Everything after the second separator is folded back into a single attribute
+name, and that name is then walked one segment at a time. So
+`DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT` reaches
+`connection.timeout`:
+
+```python
+# config.yaml has databases[primary].connection.timeout: 30
+os.environ["DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT"] = "60"
+
+config = Config.from_file("config.yaml")
+print(config.get("databases", "primary"))
+# {'name': 'primary', 'connection': {'timeout': 60}, 'type': 'databases'}
+```
+
+Every segment but the last has to name something that is already there -- a
+key of a mapping, or an in-range index of a list. The last segment is written,
+and a mapping gains it if it is absent, which is the rule a single-segment
+attribute has always followed.
+
+A path that does not resolve is logged and dropped. Nothing is written
+anywhere, which is the part worth relying on: an override that misses leaves
+no trace in the configuration rather than a key beside the value you meant to
+change.
+
+```python
+os.environ["DATAKNOBS_DATABASES__PRIMARY__NOPE__TIMEOUT"] = "60"
+
+config = Config.from_file("config.yaml")
+# WARNING  Failed to apply environment override
+#          xref:databases[primary].nope__timeout: 'nope__timeout' does not
+#          resolve in databases[primary], so nothing was written
+
+print(config.get("databases", "primary"))
+# {'name': 'primary', 'connection': {'timeout': 30}, 'type': 'databases'}
 ```
 
 ## Type Conversion
@@ -47,55 +92,69 @@ Values are automatically converted to appropriate types:
 
 ```bash
 # String (default)
-DATAKNOBS_DATABASE__PRIMARY__HOST=localhost
+DATAKNOBS_DATABASES__PRIMARY__HOST=localhost
 
 # Integer
-DATAKNOBS_DATABASE__PRIMARY__PORT=5432
+DATAKNOBS_DATABASES__PRIMARY__PORT=5432
 
 # Float
-DATAKNOBS_SERVICE__API__TIMEOUT=30.5
+DATAKNOBS_SERVICES__API__TIMEOUT=30.5
 
 # Boolean (true, false, yes, no, 1, 0)
-DATAKNOBS_DATABASE__PRIMARY__SSL_ENABLED=true
-DATAKNOBS_SERVICE__API__DEBUG=1
+DATAKNOBS_DATABASES__PRIMARY__SSL_ENABLED=true
+DATAKNOBS_SERVICES__API__DEBUG=1
 ```
 
 ## Applying Environment Overrides
 
 ### During Configuration Load
 
+Overrides are applied **at construction, automatically**. There is no
+`apply_env_overrides()` to call afterwards and no flag to switch it on:
+
 ```python
 from dataknobs_config import Config
 
-# Apply environment overrides automatically
-config = Config.from_file("config.yaml", apply_env_overrides=True)
-
-# Or apply manually
+# Environment overrides are already applied
 config = Config.from_file("config.yaml")
-config.apply_env_overrides()
 ```
 
-### Custom Prefix
+### Opting Out
+
+Pass `use_env=False`. The constructor and both classmethods take it:
 
 ```python
-# Use custom prefix
-config.apply_env_overrides(prefix="MYAPP_")
+from dataknobs_config import Config
 
-# Now use: MYAPP_DATABASE__PRIMARY__HOST=localhost
+config = Config("config.yaml", use_env=False)
+config = Config.from_file("config.yaml", use_env=False)
+config = Config.from_dict(declared, use_env=False)
 ```
 
-### Selective Application
+It is a declared keyword, so a misspelling raises `TypeError` rather than
+leaving the overrides silently on.
+
+### Prefix and Selection
+
+`DATAKNOBS_` is the default prefix, not a fixed one. The source `Config` reads
+is the `env_overrides` parameter, and it takes any `EnvironmentOverrides`:
 
 ```python
-# Apply only to specific types
-config.apply_env_overrides(types=["databases", "caches"])
+from dataknobs_config import Config
+from dataknobs_config.environment import EnvironmentOverrides
 
-# Apply with filter function
-def filter_func(var_name, value):
-    return not var_name.endswith("__PASSWORD")
-
-config.apply_env_overrides(filter_func=filter_func)
+config = Config("config.yaml", env_overrides=EnvironmentOverrides(prefix="MYAPP_"))
 ```
+
+`from_file` and `from_dict` take it as well. Whatever the source hands over is
+applied by the same loop as the default one, so changing where the values are
+read from does not change how they are assigned — see
+[Custom Override Logic](#custom-override-logic) for filtering.
+
+A variable the source hands over is either named so that it addresses an
+existing item or it is logged at WARNING and skipped. Passing `env_overrides`
+together with `use_env=False` raises `ValueError` rather than building a
+source nothing will read.
 
 ## Variable Substitution in Files
 
@@ -200,7 +259,7 @@ Use the configuration item's name:
 #   - name: primary
 #     host: localhost
 
-DATAKNOBS_DATABASE__PRIMARY__HOST=prod.example.com
+DATAKNOBS_DATABASES__PRIMARY__HOST=prod.example.com
 ```
 
 ### Indexed Access
@@ -209,46 +268,57 @@ Use numeric indices (0-based):
 
 ```bash
 # First database
-DATAKNOBS_DATABASE__0__HOST=prod.example.com
+DATAKNOBS_DATABASES__0__HOST=prod.example.com
 
 # Second database
-DATAKNOBS_DATABASE__1__HOST=analytics.example.com
+DATAKNOBS_DATABASES__1__HOST=analytics.example.com
 
 # Last database (negative indexing)
-DATAKNOBS_DATABASE__-1__HOST=backup.example.com
+DATAKNOBS_DATABASES__-1__HOST=backup.example.com
 ```
 
-## Nested Attributes
+## Nested Attributes and List Elements
 
-Access deeply nested configuration attributes:
+Both are addressable, and by the same walk -- this is the
+[Nesting](#nesting) rule seen from the two directions people most often try.
+
+A nested mapping:
 
 ```bash
 # config.yaml:
 # databases:
 #   - name: search
-#     backend: elasticsearch
 #     settings:
 #       number_of_shards: 3
-#       refresh_interval: 1s
 
-DATAKNOBS_DATABASE__SEARCH__SETTINGS__NUMBER_OF_SHARDS=5
-DATAKNOBS_DATABASE__SEARCH__SETTINGS__REFRESH_INTERVAL=30s
+# settings.number_of_shards becomes 5.
+DATAKNOBS_DATABASES__SEARCH__SETTINGS__NUMBER_OF_SHARDS=5
 ```
 
-## Lists and Arrays
-
-Override list values using indexed notation:
+A list element, addressed by index:
 
 ```bash
 # config.yaml:
-# service:
-#   allowed_origins:
-#     - http://localhost:3000
-#     - http://localhost:8080
+# services:
+#   - name: api
+#     allowed_origins:
+#       - http://localhost:3000
 
-DATAKNOBS_SERVICE__API__ALLOWED_ORIGINS__0=https://app.example.com
-DATAKNOBS_SERVICE__API__ALLOWED_ORIGINS__1=https://www.example.com
+# allowed_origins becomes ['https://app.example.com'].
+DATAKNOBS_SERVICES__API__ALLOWED_ORIGINS__0=https://app.example.com
 ```
+
+A list is never extended to make an override fit. An absent mapping key is
+created, because there is somewhere obvious to put it; an absent list position
+is not, because appending would put the value somewhere you did not name. So
+`ALLOWED_ORIGINS__7` against a one-element list is logged and dropped, and the
+list is the one from the file.
+
+Substituting the value in the file itself with
+[`${VAR}`](#variable-substitution-in-files) remains the other way to reach a
+nested value, and is still the only one that works on a document whose shape
+is not known in advance -- it is applied to the file's own text before the
+config is built.
 
 ## Complex Examples
 
@@ -256,45 +326,45 @@ DATAKNOBS_SERVICE__API__ALLOWED_ORIGINS__1=https://www.example.com
 
 ```bash
 # Development
-export DATAKNOBS_DATABASE__PRIMARY__HOST=localhost
-export DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-export DATAKNOBS_DATABASE__PRIMARY__USERNAME=dev_user
-export DATAKNOBS_DATABASE__PRIMARY__PASSWORD=dev_pass
+export DATAKNOBS_DATABASES__PRIMARY__HOST=localhost
+export DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+export DATAKNOBS_DATABASES__PRIMARY__USERNAME=dev_user
+export DATAKNOBS_DATABASES__PRIMARY__PASSWORD=dev_pass
 
 # Production
-export DATAKNOBS_DATABASE__PRIMARY__HOST=prod-db.example.com
-export DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-export DATAKNOBS_DATABASE__PRIMARY__USERNAME=prod_user
-export DATAKNOBS_DATABASE__PRIMARY__PASSWORD=${SECRET_DB_PASSWORD}
-export DATAKNOBS_DATABASE__PRIMARY__SSL_ENABLED=true
-export DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE=50
+export DATAKNOBS_DATABASES__PRIMARY__HOST=prod-db.example.com
+export DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+export DATAKNOBS_DATABASES__PRIMARY__USERNAME=prod_user
+export DATAKNOBS_DATABASES__PRIMARY__PASSWORD=${SECRET_DB_PASSWORD}
+export DATAKNOBS_DATABASES__PRIMARY__SSL_ENABLED=true
+export DATAKNOBS_DATABASES__PRIMARY__POOL_SIZE=50
 ```
 
 ### Service Configuration
 
 ```bash
 # API Service
-export DATAKNOBS_SERVICE__API__PORT=8000
-export DATAKNOBS_SERVICE__API__HOST=0.0.0.0
-export DATAKNOBS_SERVICE__API__DEBUG=false
-export DATAKNOBS_SERVICE__API__LOG_LEVEL=INFO
-export DATAKNOBS_SERVICE__API__RATE_LIMIT=1000
+export DATAKNOBS_SERVICES__API__PORT=8000
+export DATAKNOBS_SERVICES__API__HOST=0.0.0.0
+export DATAKNOBS_SERVICES__API__DEBUG=false
+export DATAKNOBS_SERVICES__API__LOG_LEVEL=INFO
+export DATAKNOBS_SERVICES__API__RATE_LIMIT=1000
 
 # Worker Service
-export DATAKNOBS_SERVICE__WORKER__CONCURRENCY=10
-export DATAKNOBS_SERVICE__WORKER__QUEUE_NAME=tasks
-export DATAKNOBS_SERVICE__WORKER__RETRY_ATTEMPTS=3
+export DATAKNOBS_SERVICES__WORKER__CONCURRENCY=10
+export DATAKNOBS_SERVICES__WORKER__QUEUE_NAME=tasks
+export DATAKNOBS_SERVICES__WORKER__RETRY_ATTEMPTS=3
 ```
 
 ### Cache Configuration
 
 ```bash
 # Redis Cache
-export DATAKNOBS_CACHE__REDIS__HOST=redis.example.com
-export DATAKNOBS_CACHE__REDIS__PORT=6379
-export DATAKNOBS_CACHE__REDIS__DB=0
-export DATAKNOBS_CACHE__REDIS__TTL=3600
-export DATAKNOBS_CACHE__REDIS__MAX_CONNECTIONS=100
+export DATAKNOBS_CACHES__REDIS__HOST=redis.example.com
+export DATAKNOBS_CACHES__REDIS__PORT=6379
+export DATAKNOBS_CACHES__REDIS__DB=0
+export DATAKNOBS_CACHES__REDIS__TTL=3600
+export DATAKNOBS_CACHES__REDIS__MAX_CONNECTIONS=100
 ```
 
 ## Docker and Container Usage
@@ -307,12 +377,12 @@ services:
   app:
     image: myapp:latest
     environment:
-      - DATAKNOBS_DATABASE__PRIMARY__HOST=db
-      - DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-      - DATAKNOBS_DATABASE__PRIMARY__USERNAME=postgres
-      - DATAKNOBS_DATABASE__PRIMARY__PASSWORD=${DB_PASSWORD}
-      - DATAKNOBS_CACHE__REDIS__HOST=redis
-      - DATAKNOBS_SERVICE__API__PORT=8000
+      - DATAKNOBS_DATABASES__PRIMARY__HOST=db
+      - DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+      - DATAKNOBS_DATABASES__PRIMARY__USERNAME=postgres
+      - DATAKNOBS_DATABASES__PRIMARY__PASSWORD=${DB_PASSWORD}
+      - DATAKNOBS_CACHES__REDIS__HOST=redis
+      - DATAKNOBS_SERVICES__API__PORT=8000
 ```
 
 ### Kubernetes ConfigMap
@@ -323,10 +393,10 @@ kind: ConfigMap
 metadata:
   name: app-config
 data:
-  DATAKNOBS_DATABASE__PRIMARY__HOST: "postgres-service"
-  DATAKNOBS_DATABASE__PRIMARY__PORT: "5432"
-  DATAKNOBS_CACHE__REDIS__HOST: "redis-service"
-  DATAKNOBS_SERVICE__API__LOG_LEVEL: "INFO"
+  DATAKNOBS_DATABASES__PRIMARY__HOST: "postgres-service"
+  DATAKNOBS_DATABASES__PRIMARY__PORT: "5432"
+  DATAKNOBS_CACHES__REDIS__HOST: "redis-service"
+  DATAKNOBS_SERVICES__API__LOG_LEVEL: "INFO"
 ```
 
 ### Kubernetes Secret
@@ -338,8 +408,8 @@ metadata:
   name: app-secrets
 type: Opaque
 stringData:
-  DATAKNOBS_DATABASE__PRIMARY__PASSWORD: "secret-password"
-  DATAKNOBS_SERVICE__API__SECRET_KEY: "secret-api-key"
+  DATAKNOBS_DATABASES__PRIMARY__PASSWORD: "secret-password"
+  DATAKNOBS_SERVICES__API__SECRET_KEY: "secret-api-key"
 ```
 
 ## .env File Support
@@ -348,14 +418,14 @@ Use .env files for local development:
 
 ```bash
 # .env
-DATAKNOBS_DATABASE__PRIMARY__HOST=localhost
-DATAKNOBS_DATABASE__PRIMARY__PORT=5432
-DATAKNOBS_DATABASE__PRIMARY__USERNAME=dev_user
-DATAKNOBS_DATABASE__PRIMARY__PASSWORD=dev_password
-DATAKNOBS_CACHE__REDIS__HOST=localhost
-DATAKNOBS_CACHE__REDIS__PORT=6379
-DATAKNOBS_SERVICE__API__DEBUG=true
-DATAKNOBS_SERVICE__API__LOG_LEVEL=DEBUG
+DATAKNOBS_DATABASES__PRIMARY__HOST=localhost
+DATAKNOBS_DATABASES__PRIMARY__PORT=5432
+DATAKNOBS_DATABASES__PRIMARY__USERNAME=dev_user
+DATAKNOBS_DATABASES__PRIMARY__PASSWORD=dev_password
+DATAKNOBS_CACHES__REDIS__HOST=localhost
+DATAKNOBS_CACHES__REDIS__PORT=6379
+DATAKNOBS_SERVICES__API__DEBUG=true
+DATAKNOBS_SERVICES__API__LOG_LEVEL=DEBUG
 ```
 
 Load with python-dotenv:
@@ -364,28 +434,42 @@ Load with python-dotenv:
 from dotenv import load_dotenv
 from dataknobs_config import Config
 
-# Load .env file
+# Load .env file FIRST -- Config reads the environment as it is built, so a
+# .env loaded afterwards arrives too late to override anything.
 load_dotenv()
 
-# Apply environment overrides
-config = Config.from_file("config.yaml", apply_env_overrides=True)
+config = Config.from_file("config.yaml")
 ```
 
 ## Debugging Environment Variables
 
 ### List Applied Overrides
 
+`Config` does not report what it applied. Ask the override reader the same
+question it asks the environment, before building the config:
+
 ```python
-# Enable debug logging
+from dataknobs_config.environment import EnvironmentOverrides
+
+overrides = EnvironmentOverrides().get_overrides()
+
+print("Overrides visible in the environment:")
+for ref, value in overrides.items():
+    print(f"  {ref}: {value!r}")
+# xref:databases[primary].host: 'db.prod.internal'
+# xref:databases[primary].pool_size: 20
+```
+
+That lists what the environment *offers*. An entry naming a type or item the
+config does not contain is logged at WARNING and skipped, so turn logging on
+to see the difference between offered and applied:
+
+```python
 import logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.WARNING)
 
 config = Config.from_file("config.yaml")
-overrides = config.apply_env_overrides(return_applied=True)
-
-print("Applied overrides:")
-for key, value in overrides.items():
-    print(f"  {key}: {value}")
+# WARNING  Failed to apply environment override xref:caches[redis].ttl: ...
 ```
 
 ### Validate Environment Variables
@@ -394,8 +478,8 @@ for key, value in overrides.items():
 def validate_env_overrides(config):
     """Validate that required environment variables are set."""
     required = [
-        "DATAKNOBS_DATABASE__PRIMARY__PASSWORD",
-        "DATAKNOBS_SERVICE__API__SECRET_KEY",
+        "DATAKNOBS_DATABASES__PRIMARY__PASSWORD",
+        "DATAKNOBS_SERVICES__API__SECRET_KEY",
     ]
     
     missing = []
@@ -406,9 +490,10 @@ def validate_env_overrides(config):
     if missing:
         raise ValueError(f"Missing required environment variables: {missing}")
 
-# Use before applying overrides
+# Use BEFORE building the config -- by the time you hold one, the overrides
+# have already been applied.
 validate_env_overrides(config)
-config.apply_env_overrides()
+config = Config.from_file("config.yaml")
 ```
 
 ## Best Practices
@@ -449,53 +534,84 @@ Create an environment variable reference:
 # Environment Variables Reference
 
 ## Database Configuration
-- `DATAKNOBS_DATABASE__PRIMARY__HOST`: Database host (default: localhost)
-- `DATAKNOBS_DATABASE__PRIMARY__PORT`: Database port (default: 5432)
-- `DATAKNOBS_DATABASE__PRIMARY__USER`: Database user (required)
-- `DATAKNOBS_DATABASE__PRIMARY__PASSWORD`: Database password (required)
+- `DATAKNOBS_DATABASES__PRIMARY__HOST`: Database host (default: localhost)
+- `DATAKNOBS_DATABASES__PRIMARY__PORT`: Database port (default: 5432)
+- `DATAKNOBS_DATABASES__PRIMARY__USER`: Database user (required)
+- `DATAKNOBS_DATABASES__PRIMARY__PASSWORD`: Database password (required)
 
 ## Cache Configuration
-- `DATAKNOBS_CACHE__REDIS__HOST`: Redis host (default: localhost)
-- `DATAKNOBS_CACHE__REDIS__PORT`: Redis port (default: 6379)
+- `DATAKNOBS_CACHES__REDIS__HOST`: Redis host (default: localhost)
+- `DATAKNOBS_CACHES__REDIS__PORT`: Redis port (default: 6379)
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Variables Not Applied**: Ensure `apply_env_overrides=True` or call `apply_env_overrides()`
-2. **Wrong Type**: Check automatic type conversion is working as expected
-3. **Name Mismatch**: Verify configuration item names match environment variable names
-4. **Case Sensitivity**: Environment variable names are case-sensitive
+1. **Variables Not Applied**: They are applied at construction -- check the
+   variable was set *before* the `Config` was built, that `use_env=False` was
+   not passed, and that the TYPE segment matches the config file's top-level
+   key exactly (`databases:` is `DATAKNOBS_DATABASES__`, never
+   `DATAKNOBS_DATABASE__`)
+2. **Wrong Type**: Check automatic type conversion is working as expected.
+   Note that `0` and `1` become booleans, not integers
+3. **Name Mismatch**: Verify configuration item names match environment
+   variable names. A variable naming an item that does not exist is skipped
+   with a WARNING, not an error
+4. **Nothing Beyond the Second Separator**: `A__B__C__D` sets an attribute
+   literally named `c__d`; see [Nesting](#nesting)
+5. **Case Sensitivity**: The variable name is upper-case by convention; the
+   type and attribute are lower-cased when parsed, so the config keys they
+   address are matched in lower case
 
 ### Debug Mode
 
-```python
-# Enable detailed logging
-config.apply_env_overrides(debug=True)
+There is no debug flag. Failures to apply an override are logged at WARNING by
+`dataknobs_config.config`:
 
-# Or set environment variable
-os.environ["DATAKNOBS_DEBUG"] = "true"
+```python
+import logging
+logging.basicConfig(level=logging.WARNING)
+
+config = Config.from_file("config.yaml")
 ```
 
 ## Advanced Usage
 
 ### Custom Override Logic
 
+Which variables reach configuration is a property of the source, so it belongs
+to a subclass of the source. Override `get_overrides` and hand back less than
+you were given:
+
 ```python
 from dataknobs_config import Config
+from dataknobs_config.environment import EnvironmentOverrides
 
-class CustomConfig(Config):
-    def apply_env_overrides(self, **kwargs):
-        # Custom preprocessing
-        self.preprocess_env_vars()
-        
-        # Apply standard overrides
-        super().apply_env_overrides(**kwargs)
-        
-        # Custom postprocessing
-        self.validate_overrides()
+
+class SkipSecrets(EnvironmentOverrides):
+    """Apply every override except the ones naming a secret."""
+
+    SECRETS = ("password", "api_key", "token")
+
+    def get_overrides(self):
+        return {
+            ref: value
+            for ref, value in super().get_overrides().items()
+            if self.parse_env_reference(ref)[2] not in self.SECRETS
+        }
+
+
+config = Config("config.yaml", env_overrides=SkipSecrets(prefix="MYAPP_"))
 ```
+
+The guide used to answer this with a function that drove `EnvironmentOverrides`
+itself and assigned each value with `item[attr] = value`. That is the override
+loop rewritten by hand, and it did not survive the loop learning to walk a
+`__`-joined attribute into the value it names: a recipe written that way
+applies `MYAPP_DB__0__CONNECTION__TIMEOUT` as a flat `connection__timeout` key
+beside the `connection` it was aimed at. Subclassing the source keeps one
+implementation of the assignment, which is the half that has the sharp edges.
 
 ### Dynamic Environment Variables
 
@@ -505,12 +621,13 @@ import os
 def set_dynamic_env_vars(environment):
     """Set environment variables based on deployment environment."""
     if environment == "production":
-        os.environ["DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE"] = "50"
-        os.environ["DATAKNOBS_SERVICE__API__WORKERS"] = "4"
+        os.environ["DATAKNOBS_DATABASES__PRIMARY__POOL_SIZE"] = "50"
+        os.environ["DATAKNOBS_SERVICES__API__WORKERS"] = "4"
     else:
-        os.environ["DATAKNOBS_DATABASE__PRIMARY__POOL_SIZE"] = "10"
-        os.environ["DATAKNOBS_SERVICE__API__WORKERS"] = "1"
+        os.environ["DATAKNOBS_DATABASES__PRIMARY__POOL_SIZE"] = "10"
+        os.environ["DATAKNOBS_SERVICES__API__WORKERS"] = "1"
 
+# Again: set the variables first, then build.
 set_dynamic_env_vars("production")
-config = Config.from_file("config.yaml", apply_env_overrides=True)
+config = Config.from_file("config.yaml")
 ```

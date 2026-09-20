@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Async SQLite backend implementation using aiosqlite."""
 
 from __future__ import annotations
@@ -31,8 +34,12 @@ from .vector_config_mixin import VectorConfigMixin
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from typing import ClassVar
+
+    import numpy as np
+
     from ..records import Record
     from ..streaming import StreamConfig, StreamResult
+    from ..vector.types import DistanceMetric, VectorSearchResult
 
 
 logger = logging.getLogger(__name__)
@@ -619,38 +626,26 @@ class AsyncSQLiteDatabase(
             config=config,
         )
 
-    async def vector_search(
+    async def _vector_search(
         self,
-        query_vector,
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter=None,
-        metric=None,
-        **kwargs,
-    ):
-        """Perform async vector similarity search using Python-based calculations.
+        query_vector: np.ndarray | list[float],
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
+    ) -> list[VectorSearchResult]:
+        """Raw k-NN over every record, in Python.
 
-        Delegates to PythonVectorSearchMixin for the implementation.
-
-        Args:
-            query_vector: Query vector
-            vector_field: Name of the vector field to search
-            k: Number of results to return
-            filter: Optional filter conditions
-            metric: Distance metric (uses instance default if not specified)
-            **kwargs: Additional arguments for compatibility
-
-        Returns:
-            List of VectorSearchResult objects with scores
+        SQLite has no vector operators, so the similarity is computed here
+        rather than in the query.
         """
         self._check_connection()
 
-        # Delegate to the mixin's implementation
         return await self.python_vector_search_async(
             query_vector=query_vector,
             vector_field=vector_field,
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )

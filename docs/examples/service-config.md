@@ -501,7 +501,8 @@ import sys
 
 async def main():
     # Load configuration
-    config = Config.from_file("config/services.yaml", apply_env_overrides=True)
+    # Environment overrides are applied during the load, automatically.
+    config = Config.from_file("config/services.yaml")
     
     # Create service manager
     manager = ServiceManager(config)

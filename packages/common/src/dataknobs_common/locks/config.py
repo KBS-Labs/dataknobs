@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Structured configuration dataclass for the Postgres advisory lock.
 
 Mirrors :class:`dataknobs_common.events.config.PostgresEventBusConfig`:

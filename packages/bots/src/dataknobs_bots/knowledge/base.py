@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base knowledge base interface for DynaBot."""
 
 from abc import ABC, abstractmethod

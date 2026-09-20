@@ -251,7 +251,8 @@ from managers.database import DatabaseManager
 
 def main():
     # Load configuration
-    config = Config.from_file("config/databases.yaml", apply_env_overrides=True)
+    # Environment overrides are applied during the load, automatically.
+    config = Config.from_file("config/databases.yaml")
     
     # Create database manager
     with DatabaseManager(config) as db_manager:
@@ -286,7 +287,8 @@ from managers.database import DatabaseManager
 
 async def main():
     # Load configuration
-    config = Config.from_file("config/databases.yaml", apply_env_overrides=True)
+    # Environment overrides are applied during the load, automatically.
+    config = Config.from_file("config/databases.yaml")
     
     # Mark databases as async
     for db in config.get("databases"):
@@ -373,17 +375,17 @@ def load_database_config():
     """Load database configuration based on environment."""
     env = os.getenv("APP_ENV", "development")
     
-    # Load base configuration
+    # Load base configuration. Environment variable overrides are applied
+    # here, as part of construction -- there is no separate step for them.
     config = Config.from_file("config/database.yaml")
-    
-    # Merge environment-specific configuration
+
+    # Layer the environment-specific file on top. `load` reads another source
+    # into this same Config; `merge` takes an already-built Config and a
+    # precedence rule. There is no merge_file.
     env_config_file = f"config/database.{env}.yaml"
     if os.path.exists(env_config_file):
-        config.merge_file(env_config_file)
-    
-    # Apply environment variable overrides
-    config.apply_env_overrides()
-    
+        config.load(env_config_file)
+
     return config
 ```
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Stage-synthesizer registry for wizard stage primitives.
 
 Lets dataknobs and consumers ship higher-level stage primitives that

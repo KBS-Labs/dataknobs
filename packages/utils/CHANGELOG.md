@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **the JSON index tree binds `children` once rather than re-reading it.**
+  `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
+  than the list the node holds, so each read allocates one. The path builder
+  in `json_utils` tested it and then indexed it, which is two reads per element
+  of every indexed path; it now reads once. No behaviour changed.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-utils` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ### Security
 
 - Bumped minimum `nltk` requirement from `>=3.10.2` to `>=3.10.3` to exclude

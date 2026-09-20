@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared Postgres pytest fixtures for dataknobs integration tests.
 
 This module is a pytest11 plugin (registered in ``packages/common/pyproject.toml``)

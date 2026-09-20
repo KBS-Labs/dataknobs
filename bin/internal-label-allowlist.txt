@@ -74,6 +74,7 @@ packages/llm/tests/prompts/test_composite_library.py	{"template": "D4"}	fourth t
 packages/llm/tests/prompts/test_composite_library.py	["template"] == "D4"	the assertion on that same A1/B2/C3/D4 fixture series
 tests/test_internal_label_scope.py	"Criterion 20"	synthetic criterion spellings the catching test matches against — asserting the branch catches them requires writing them
 tests/test_internal_label_scope.py	"D5", "D2"	synthetic decision-code spellings the catching test matches against — same reason
+tests/test_internal_label_scope.py	"D80", "D12"	synthetic two-digit decision-code spellings the same test matches against — the widened branch cannot be asserted without writing one
 packages/xization/examples/markdown/constructs_example.md	- Item 	markdown list-item content in an example document about parsing markdown -- the same shape as the test fixture entries above, arriving through the prose half of the scope
 tests/test_internal_label_scope.py	PR7	synthetic planning pull-request labels the catching test matches against — asserting the branch catches a spelling requires writing it
 tests/test_internal_label_scope.py	PR5A	the lettered variant of the same synthetic label, on its own line so the suppression does not work by proximity

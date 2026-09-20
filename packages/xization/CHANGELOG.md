@@ -7,6 +7,183 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`AuthoritySignal` and `AsyncAuthoritySignal` --- the authority stack as a
+  resolution rung.** `dataknobs_common`'s rungs match text a vocabulary
+  *enumerates*; these match text it *describes* as well, so a declared pattern
+  --- a chip number, an account code, a date --- resolves where no enumeration
+  could have carried it. They implement
+  `dataknobs_common.entity_resolution.MatchSignal` over any `Authority`, hold
+  no entity source, and publish `narrows() is False` because an authority
+  stack has no declared types to filter against.
+
+  ```python
+  from dataknobs_xization import AuthoritySignal
+
+  rung = AuthoritySignal(AuthoritiesBundle("clinic", auths=[breeds, chips]))
+  rung.candidates("my golden retriever K-901 has been limping", k=5)
+  ```
+
+  Importing `dataknobs_xization` registers both flavours under
+  `kind: "authority"`, which is also what clears the mark `dataknobs_common`
+  leaves for the key it declares and cannot implement. The metadata that
+  registration carries is built by `declared_signal_metadata()` rather than
+  written out here, so `reads_surface_forms` and `bounded_by_longest_form` are
+  the rung's own answer — both False, because an authority stack holds no
+  folded form table and enumerates no window — and a door refusing a
+  composition before it builds anything gets an answer rather than a missing
+  key.
+
+  **The evidence is `DECLARED` at 1.0**, like every rung over forms a
+  vocabulary carries, and the entity id is the authority's own value id ---
+  a regex arm's `canonical_fn` answer, a dictionary arm's frame **index**. A
+  frame left on its default `RangeIndex` therefore resolves to row numbers,
+  which the guide states plainly because no layer above can detect it.
+
+  **It keeps less overlap than the `common` default and the guide says so.**
+  An authority suppresses a form contained by one it already matched, so a
+  vocabulary loaded as one authority per axis returns `golden_retriever` where
+  `ScanningSignal` returns `golden_retriever` and `retriever` both. One
+  authority per form keeps them. Both directions are pinned by tests.
+
+  Each row is read through the column vocabulary of the authority that *wrote*
+  it, so a bundle whose members were built with their own metadata answers
+  correctly rather than reading `NaN` through the bundle's names. The order ---
+  start ascending, end descending --- is the rung's own rather than a shared
+  frame's sort, which can only order by one vocabulary.
+
+  The registration leaves a key alone if something already holds it, so a
+  consumer who registered their own `authority` rung keeps it and importing
+  this package does not raise out of the import statement.
+
+  The candidates are assembled by `dataknobs_common`'s `declared_candidates`
+  rather than here, so a declared hit's evidence has one definition across both
+  distributions.
+
+- **`Authority.finders()` --- the authorities whose column vocabulary a row
+  may be written in.** The read-back counterpart to
+  `find_matches_with_finders`, for the point after a match's rows have been
+  added to a shared `Annotations` and the boundaries are gone. A leaf answers
+  with itself; an `AuthoritiesBundle` answers with its members' finders,
+  recursively, because both of its annotation paths leave a member's rows in
+  the member's own columns. An `AnnotatedText` carries one `Annotations` with
+  one metadata while the rows in it may be in several vocabularies, and this is
+  what lets a reader tell which.
+
+### Fixed
+
+- **A configured annotation column name no longer breaks reading the rows
+  back.** `AnnotationsMetaData.sort_fields` holds col *types*, as its own
+  parameter documents, and `sort_df` handed them to pandas as though they were
+  col *names* --- so an authority built with, say, `start_pos_col="begin"` had
+  its frame sorted on `start_pos`, and `KeyError` came out of the `df`
+  accessor several frames below anything naming an authority. Each field is now
+  translated through `get_col`, and one matching no col type is passed through
+  unchanged so a caller who put an actual column name there keeps sorting by
+  it. Invisible until something configured a name, because the two
+  vocabularies agree for every default --- the feature the parameter exists for
+  was the only thing that could reach it.
+
+- **A named or numbered regex group that did not participate in a match is no
+  longer annotated.** `RegexAuthority.build_match_annotations` walked the
+  *pattern's* groups rather than the match's, so an optional group that matched
+  nothing produced a row carrying a null text at span `(-1, -1)`, with
+  `canonical_fn` called on `None` to name it. Reachable from any pattern
+  written to match two spellings of one thing --- an account code with an
+  optional prefix --- where the shorter spelling gained a phantom second
+  annotation. Both loops now skip a group whose text is `None`; a group that
+  legitimately matched the empty string has real offsets and keeps its row.
+
+- **`Authority.annotate_input` no longer raises for input carrying no text.**
+  `None` reached the return with its local never bound, for an
+  `UnboundLocalError`; an empty or all-whitespace string failed the wrapping
+  guard, stayed a `str`, and was handed to `add_annotations`, which asks it
+  for `.annotations`. All three now answer with empty `Annotations`. A
+  resolution rung is called with whatever a consumer typed, so every one of
+  these was reachable from a cascade rather than only from a test. The
+  parameter now declares the domain it accepts. The abstract `Annotator` base
+  is deliberately left narrower: its other implementations dereference the
+  argument and would raise, so widening the declared type there without
+  widening the behaviour would publish a promise three classes do not keep.
+
+### Changed
+
+- **`DirectoryProcessor.process()` no longer refuses a caller already on an
+  event loop.** The sync wrapper collected `process_async()` through
+  `asyncio.run`, which raises `RuntimeError: asyncio.run() cannot be called
+  from a running event loop`; it now goes through `run_coro_sync`, so the walk
+  runs on a private loop and never on the caller's. The limitation is gone
+  from the module docstring, the method docstring and the ingestion guides
+  along with it. `process_directory()` carried the same limitation by
+  delegation and loses it the same way. What is unchanged: the call still
+  blocks the calling thread for the whole walk — `process_async()` is still
+  the right call from async code — and it still collects before returning, so
+  `files_skipped` is final when it returns.
+
+- **`DirectoryProcessor.process()` and `process_directory()` take a
+  keyword-only `timeout=`.** Both block the calling thread for a walk whose
+  size they do not know in advance, and a caller inside a `def` has no
+  cancellation of its own — so a source that stops answering was an unbounded
+  block with nothing to interrupt it. `timeout=` bounds the whole walk and
+  raises `TimeoutError` on expiry. It is keyword-only on `process_directory()`
+  so it cannot be mistaken for a third positional argument. The default,
+  `None`, waits for as long as the walk takes, so nothing changes for existing
+  callers. The bound is on the **walk**: the throwaway loop is torn down
+  afterwards and waits up to five seconds for a cancelled walk to unwind
+  rather than destroying its cleanup mid-flight, so the worst case is
+  `timeout` plus that. Documented in the directory-processor guide.
+
+- **The sequence defaults on `get_lexical_variations` and
+  `get_hyphen_slash_expansions_fn` are annotated `Sequence[str]`.** Each was
+  declared `List[str]` while defaulting to a tuple, so the annotation
+  described neither the default it carried nor what the body does with the
+  value, which is iterate it. Callers passing a list are unaffected; a caller
+  passing a tuple now type-checks, as it always ran.
+
+### Fixed
+
+- **`BackendDocumentSource` yields `-1` for a size a backend reports as
+  `None`.** `DocumentFileRef` documents `-1` as the size "when the source
+  cannot report size cheaply"; a file record with no size attribute already
+  landed there, but one carrying the attribute as `None` — a remote backend
+  that lists without stat-ing — reached `int(None)` and raised `TypeError`
+  mid-enumeration. Both mean the same thing and both now answer `-1`.
+
+- **`DocumentSource` declares its two streaming members as async generators.**
+  `iter_files` and `read_streaming` were spelled `async def` returning an
+  `AsyncIterator`, which describes a coroutine that *resolves* to an iterator
+  — a shape every caller would have to `await` before iterating, and one
+  neither shipped implementation has. Declared `def` returning an
+  `AsyncIterator`, the protocol now matches `LocalDocumentSource` and
+  `BackendDocumentSource`, which structurally conformed to it in neither
+  direction before. No runtime behaviour changes; what changes is that a third
+  implementation written to the declaration can no longer be one that breaks
+  `async for` at every call site.
+
+- **Dropping parentheticals no longer takes the text between two of them.**
+  `PARENTHETICAL_RE` was `\(.*\)`, which is greedy: it matched from the first
+  opening parenthesis to the last closing one, so `drop_parentheticals_fn` on
+  `'AI (Artificial Intelligence) and ML (Machine Learning)'` answered `'AI '`,
+  losing two words that were never inside a parenthetical. The class is now
+  negated, `\([^)]*\)`, so two parentheticals are two matches. Negating the
+  class rather than making the quantifier lazy: both stop at the first `)`,
+  but `[^)]*` also cannot span one. `get_lexical_variations` drops
+  parentheticals by default, so the truncated string was among the variations
+  a caller matches against.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-xization` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ### Fixed
 
 - **`DataframeAuthority` annotates text.** The dictionary half of the

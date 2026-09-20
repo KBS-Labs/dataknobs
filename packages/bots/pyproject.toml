@@ -7,6 +7,8 @@ authors = [
     { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "dataknobs-common>=3.2.0",
     "dataknobs-config>=0.7.1",
@@ -93,7 +95,10 @@ dataknobs-xization = { workspace = true }
 dataknobs-fsm = { workspace = true }
 
 [build-system]
-requires = ["hatchling"]
+# hatchling gained PEP 639 support (a bare-string `license` and a list-form
+# `license-files`) in 1.27; both are declared above, so an older backend
+# rejects this manifest rather than silently dropping the metadata.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [dependency-groups]

@@ -638,9 +638,15 @@ only the collaborators it declares (or all of them, if it declares
 never crashed by an undeclared injected collaborator — that collaborator
 stays reachable on `self.components`. An override that consumes a
 collaborator declares it keyword-only with a default:
-`async def _ainit(self, *, dep=None)`. A collaborator parameter *without*
+`async def _ainit(self, *, dep=None, **_: Any)`. A collaborator parameter *without*
 a default (or a required positional) still breaks the zero-injection call
 and is rejected by `assert_structured_config_consumer`.
+
+Close the parameter list with `**_: Any`. Delivery tolerates the narrowed
+signature, but the *declared* hook takes `**components`, so a type checker
+reads the narrowing as an override refusing keywords the base accepts — a
+finding about the declaration, on a hook whose narrowing is the documented
+way to use it.
 
 ### Cooperative multiple inheritance
 
@@ -779,8 +785,10 @@ declares `**kwargs`), so a no-arg or narrowly-typed override is never
 crashed by an undeclared injected collaborator — it stays reachable on
 `self.components`. An `_ainit` (or `_adopt_components`) override that
 consumes a collaborator declares it **keyword-only with a default** so
-the zero-injection path stays safe; a parameter without a default (or a
-required positional) is rejected by `assert_structured_config_consumer`.
+the zero-injection path stays safe, and closes the list with `**_: Any` so
+the narrowing stays compatible with the `**components` the base declares; a
+parameter without a default (or a required positional) is rejected by
+`assert_structured_config_consumer`.
 
 #### Dual input: `from_components`
 
@@ -792,12 +800,12 @@ When the parent already holds fully-built collaborators (and so should
 class Bot(StructuredConfigConsumer[BotConfig]):
     CONFIG_CLS: ClassVar[type[BotConfig]] = BotConfig
 
-    def _adopt_components(self, *, llm=None, memory=None) -> None:
+    def _adopt_components(self, *, llm=None, memory=None, **_) -> None:
         # Bind pre-built collaborators (the config-driven build is skipped).
         self._llm = llm
         self._memory = memory
 
-    async def _ainit(self, *, llm=None, memory=None) -> None:
+    async def _ainit(self, *, llm=None, memory=None, **_) -> None:
         if self._prebuilt:
             return  # already wired by from_components — don't rebuild
         self._llm = await build_llm(self.config.llm)
@@ -956,6 +964,44 @@ A composing parent (e.g. `WizardReasoning`) forwards collaborators to its
 children opaquely via `forwardable_components()` and does **not** yet
 auto-enforce a child's declared `EXPECTED_COMPONENTS` — enforcement is the
 consumer's own opt-in call.
+
+#### Declaring optional collaborators: `OPTIONAL_COMPONENTS`
+
+Not every injection point is a requirement. A consumer that *accepts* a
+collaborator but resolves its own when none arrives declares it in
+`OPTIONAL_COMPONENTS` instead:
+
+```python
+class Registry(StructuredConfigConsumer[RegistryConfig]):
+    CONFIG_CLS: ClassVar[type[RegistryConfig]] = RegistryConfig
+    OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset({"database", "event_bus"})
+```
+
+A name belongs here when both halves hold: `from_components` really takes
+it and the object behaves differently when it arrives, **and** the object is
+complete without it. Declared under `EXPECTED_COMPONENTS` instead, such a
+name makes a correctly built consumer report itself under-wired —
+`missing_components()` names it and `require_components()` raises, on an
+object with nothing wrong with it. That reading is what `OntologyRegistry` in
+`dataknobs-data` ran into, and this field is what it produced — which is why
+the two halves above are a rule rather than a preference.
+
+`OPTIONAL_COMPONENTS` is read by **one** helper, and deliberately not by the
+diffs:
+
+```python
+Registry.expected_components()   # frozenset()                      — what it requires
+Registry.optional_components()   # {"database", "event_bus"}        — what it accepts
+Registry.accepted_components()   # {"database", "event_bus"}        — the union
+
+Registry.from_config({...}).missing_components()   # frozenset() — nothing is required
+```
+
+`missing_components()`, `missing_from()` and `require_components()` read
+`EXPECTED_COMPONENTS` only: an optional collaborator can never be *missing*,
+and a second field feeding those diffs would be the first field again under a
+new name. Write a `from_components(...)` call against `accepted_components()`;
+check whether you can satisfy a child against `expected_components()`.
 
 #### Async registry dispatch: `create_async`
 

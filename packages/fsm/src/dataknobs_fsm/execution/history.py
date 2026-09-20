@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Execution history tracking for FSM state machines."""
 
 import time
@@ -374,8 +377,8 @@ class ExecutionHistory:
         if not self.current_node:
             return []
 
-        path = []
-        node = self.current_node
+        path: List[ExecutionStep] = []
+        node: Tree | None = self.current_node
         while node:
             path.insert(0, node.data)
             node = node.parent
@@ -390,15 +393,16 @@ class ExecutionHistory:
         """
         paths = []
 
-        def collect_paths(node: Tree, current_path: List[ExecutionStep]):
+        def collect_paths(node: Tree, current_path: List[ExecutionStep]) -> None:
             current_path.append(node.data)
 
-            if not node.children:
+            children = node.children
+            if not children:
                 # Leaf node - save path
                 paths.append(current_path.copy())
             else:
                 # Continue down each branch
-                for child in node.children:
+                for child in children:
                     collect_paths(child, current_path.copy())
 
         for root in self.tree_roots:
@@ -415,10 +419,11 @@ class ExecutionHistory:
         """
         all_steps = []
 
-        def collect_steps(node: Tree):
+        def collect_steps(node: Tree) -> None:
             all_steps.append(node.data)
-            if node.children:
-                for child in node.children:
+            children = node.children
+            if children:
+                for child in children:
                     collect_steps(child)
 
         for root in self.tree_roots:
@@ -437,11 +442,12 @@ class ExecutionHistory:
         """
         steps = []
 
-        def collect_steps(node: Tree):
+        def collect_steps(node: Tree) -> None:
             if node.data.state_name == state_name:
                 steps.append(node.data)
-            if node.children:
-                for child in node.children:
+            children = node.children
+            if children:
+                for child in children:
                     collect_steps(child)
 
         for root in self.tree_roots:
@@ -466,21 +472,22 @@ class ExecutionHistory:
         Returns:
             Resource usage summary.
         """
-        usage = {}
+        usage: Dict[str, Dict[str, Any]] = {}
 
-        def aggregate_usage(node: Tree):
+        def aggregate_usage(node: Tree) -> None:
             step = node.data
             for resource_type, metrics in step.resource_usage.items():
                 if resource_type not in usage:
                     usage[resource_type] = {"total_calls": 0, "total_duration": 0, "steps": []}
 
-                usage[resource_type]["total_calls"] += 1  # type: ignore
+                usage[resource_type]["total_calls"] += 1
                 if "duration" in metrics:
                     usage[resource_type]["total_duration"] += metrics["duration"]
                 usage[resource_type]["steps"].append(step.step_id)
 
-            if node.children:
-                for child in node.children:
+            children = node.children
+            if children:
+                for child in children:
                     aggregate_usage(child)
 
         for root in self.tree_roots:
@@ -497,14 +504,15 @@ class ExecutionHistory:
         total_chunks = 0
         total_records = 0
 
-        def aggregate_stream(node: Tree):
+        def aggregate_stream(node: Tree) -> None:
             nonlocal total_chunks, total_records
             step = node.data
             total_chunks += step.chunks_processed
             total_records += step.records_processed
 
-            if node.children:
-                for child in node.children:
+            children = node.children
+            if children:
+                for child in children:
                     aggregate_stream(child)
 
         for root in self.tree_roots:
@@ -629,8 +637,9 @@ class ExecutionHistory:
         def search_node(node: Tree) -> Tree | None:
             if node.data.step_id == step_id:
                 return node
-            if node.children:
-                for child in node.children:
+            children = node.children
+            if children:
+                for child in children:
                     result = search_node(child)
                     if result:
                         return result
@@ -676,12 +685,13 @@ class ExecutionHistory:
         """
         max_depth = 0
 
-        def get_depth(node: Tree, depth: int = 0):
+        def get_depth(node: Tree, depth: int = 0) -> None:
             nonlocal max_depth
             depth += 1
             max_depth = max(max_depth, depth)
-            if node.children:
-                for child in node.children:
+            children = node.children
+            if children:
+                for child in children:
                     get_depth(child, depth)
 
         for root in self.tree_roots:

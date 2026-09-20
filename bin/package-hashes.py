@@ -100,6 +100,7 @@ get_transitive_dependents = _changed_packages.get_transitive_dependents
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = _changed_packages.WORKSPACE_QUALITY_INPUTS
 GLOBAL_SCOPES: frozenset[str] = _changed_packages.GLOBAL_SCOPES
 PACKAGE_TEST_DOC_INPUTS: dict[str, str] = _changed_packages.PACKAGE_TEST_DOC_INPUTS
+PACKAGE_TEST_FIXTURE_DIRS: tuple[str, ...] = _changed_packages.PACKAGE_TEST_FIXTURE_DIRS
 strip_release_noise = _changed_packages.strip_release_noise
 
 
@@ -134,6 +135,31 @@ def _hash_files(files: list[Path], base: Path) -> str:
     return hasher.hexdigest()
 
 
+#: Directory names a tree accumulates beneath a fixture directory that CI's
+#: checkout does not have. Both are measured in this tree rather than
+#: anticipated: 4,514 ``__pycache__`` files sit under ``packages/*/tests`` after
+#: one test run, and two editor backups (``*~``, gitignored) sit there now. A
+#: fixture directory holds none of either today; these are what a walk would
+#: start collecting the day one appears, and a file only the developer has is
+#: their hash disagreeing with CI's for the length of that file's life.
+_TREE_ARTEFACT_DIRS = frozenset({"__pycache__", ".pytest_cache"})
+
+
+def _is_fixture_input(path: Path) -> bool:
+    """Whether a file beneath a declared fixture directory is one of its inputs.
+
+    Stated as a rejection rather than a suffix allowlist, which is the opposite
+    of the choice ``_is_quality_input`` makes one tier up, and for a reason that
+    only holds here. That predicate reads whole source trees, where the question
+    "does this kind of file feed a check" has an answer per kind. A fixture
+    directory's contents are arbitrary by nature — today's ten are ``.md``,
+    ``.json``, ``.yaml`` and one gzipped ``.json`` — so a suffix list would be
+    deciding a future fixture's fate by a rule nobody consulted when writing it,
+    and failing closed there means failing silent: the file is simply not hashed.
+    """
+    return not (_TREE_ARTEFACT_DIRS & set(path.parts)) and not path.name.endswith("~")
+
+
 def package_hash_files(package_name: str) -> list[Path]:
     """Every file one package's hash is computed over.
 
@@ -166,7 +192,38 @@ def package_hash_files(package_name: str) -> list[Path]:
         for document, owner in PACKAGE_TEST_DOC_INPUTS.items()
         if owner == package_name and (_ROOT / document).is_file()
     )
+
+    # What the suite reads but pytest does not collect. The pattern above takes
+    # tests/**/*.py, which is the suite; a golden answer, a YAML configuration
+    # and the markdown a knowledge source ingests are what decides whether it
+    # passes, and they were in no hash at all.
+    #
+    # The owner is derived from the path rather than declared beside it, because
+    # unlike a document a fixture directory has only one possible reader: it
+    # sits inside the suite it feeds, and no package's pytest invocation
+    # collects another's tests — measured at zero by
+    # test_no_package_suite_reads_another_packages_tests. A second field that
+    # can only ever hold one value is a second place for it to be wrong.
+    prefix = f"packages/{package_name}/tests/"
+    found.extend(
+        path
+        for entry in PACKAGE_TEST_FIXTURE_DIRS
+        if entry.startswith(prefix)
+        for path in fixture_dir_files(entry)
+    )
     return found
+
+
+def fixture_dir_files(entry: str) -> list[Path]:
+    """Every file one declared test fixture directory contributes to a hash.
+
+    Split out for the reason ``scope_entry_files`` is: the guard that checks CI
+    starts on a change to these files has to ask the question the hash asks,
+    and a restatement answers it for a rule the hasher does not follow. That is
+    not a hypothetical here — the filter and the hash disagreeing about a test
+    input is the second half of the defect this directory list closes.
+    """
+    return [p for p in sorted((_ROOT / entry).rglob("*")) if p.is_file() and _is_fixture_input(p)]
 
 
 def compute_package_hash(package_name: str) -> str:
@@ -190,8 +247,21 @@ def scope_entry_files(entry: str) -> list[Path]:
     A directory entry may name several directories through a "*", which is how
     ``packages/*/docs/`` reaches all seven without listing them — a list would
     leave the eighth package's documentation silently unhashed.
+
+    A *file* entry may do the same, and for exactly that argument rather than by
+    analogy with it. ``packages/*/LICENSE`` is one file per package, and they
+    all have to stay one statement; spelled as a list, the next package's copy
+    is unhashed the day it is created and the declaration still reads like
+    coverage. Globbing here is also what keeps the suffix predicate out of the
+    way: these two names carry no extension, and ``_is_quality_input`` — which
+    only a *directory* entry expands through — would reject them.
+
+    ``Path.glob`` does not let a "*" cross a separator, so ``packages/*/LICENSE``
+    reaches a package's own copy and nothing nested deeper.
     """
     if not entry.endswith("/"):
+        if "*" in entry:
+            return sorted(p for p in _ROOT.glob(entry) if p.is_file())
         target = _ROOT / entry
         return [target] if target.is_file() else []
 
@@ -396,10 +466,21 @@ def validate_artifacts() -> dict[str, Any]:
             if digest != stored_workspace.get(scope)
         }
 
-    # A global scope changes lint, type, or test results everywhere, so every
-    # package needs re-validation. A workspace-only scope moves no package's
-    # result, so it invalidates the artifacts without dirtying a single suite —
-    # that asymmetry is the whole reason the scopes are declared separately.
+    # A global scope changes a recorded result everywhere, so every package
+    # needs re-validation. *Which* result is the scope's name: the global tier
+    # is partitioned by the step its members move, so a moved "toolchain_lint"
+    # says every package's validation row is stale and its test rows are not.
+    #
+    # The dirty set neither widens nor narrows on that — it is one list per
+    # package, not one per step — so all ten are named whichever global scope
+    # moved, and that is the right width either way: a lint-only input really
+    # does move every package's recorded validation result. The scope name is
+    # where the narrower fact is legible, to a reader of the failure report and
+    # of the gate's end-of-run re-check.
+    #
+    # A workspace-only scope moves no package's result at all, so it
+    # invalidates the artifacts without dirtying a single suite — that
+    # asymmetry is the whole reason the scopes are declared separately.
     if changed_scopes & GLOBAL_SCOPES:
         changed |= set(ALL_PACKAGES)
 

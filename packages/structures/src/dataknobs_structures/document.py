@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Text and metadata containers for document processing.
 
 This module provides classes for managing text documents with associated metadata,

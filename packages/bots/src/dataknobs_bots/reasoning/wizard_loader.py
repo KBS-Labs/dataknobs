@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """WizardConfigLoader for translating wizard YAML to FSM configuration.
 
 This module provides the translation layer between user-friendly wizard

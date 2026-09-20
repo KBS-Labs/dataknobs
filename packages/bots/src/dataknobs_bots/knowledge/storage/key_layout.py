@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Key-layout vocabulary for knowledge resource backends.
 
 Names the three classes of keys every in-tree backend uses so external

@@ -9,12 +9,19 @@ This guide demonstrates text normalization and processing using the `dataknobs-x
 ```python
 from dataknobs_xization import normalize
 
-# Basic normalization
+# Whitespace squashing is not a function of its own: it is an opt-in flag on
+# basic_normalization_fn, whose other three transforms are on by default. Turn
+# those off to squash and nothing else.
 text = "  Hello   World!   "
-normalized = normalize.normalize_whitespace_fn(text)
-print(f"Original: '{text}'")
-print(f"Normalized: '{normalized}'")
-# Output: 'Hello World!'
+normalized = normalize.basic_normalization_fn(
+    text, squash_whitespace=True, lowercase=False, expand_camelcase=False
+)
+print(f"Original:   '{text}'")    # Original:   '  Hello   World!   '
+print(f"Normalized: '{normalized}'")  # Normalized: 'Hello World!'
+
+# Left at its defaults it also lowercases and expands camelCase.
+print(normalize.basic_normalization_fn(text, squash_whitespace=True))
+# hello world!
 ```
 
 ### Expanding CamelCase
@@ -71,7 +78,7 @@ def full_normalization(text):
     text = normalize.expand_ampersand_fn(text)
     
     # Step 3: Normalize whitespace
-    text = normalize.normalize_whitespace_fn(text)
+    text = normalize.SQUASH_WS_RE.sub(' ', text).strip()
     
     # Step 4: Convert to lowercase (optional)
     text = text.lower()
@@ -107,7 +114,7 @@ def custom_normalize(text):
     text = re.sub(r'\d+', '', text)
     
     # Clean up whitespace
-    text = normalize.normalize_whitespace_fn(text)
+    text = normalize.SQUASH_WS_RE.sub(' ', text).strip()
     
     return text
 
@@ -147,19 +154,15 @@ code_text = "getUserNameById"
 features = TextFeatures(code_text, split_camelcase=True)
 tokens = features.get_tokens()
 
-print("CamelCase tokens:")
-for token in tokens:
-    print(f"  '{token.token_text}'")
-# Output: 'get', 'User', 'Name', 'By', 'Id'
+print([token.token_text for token in tokens])
+# ['get', 'User', 'Name', 'By', 'Id']
 
 # Without camelCase splitting
 features_no_split = TextFeatures(code_text, split_camelcase=False)
 tokens_no_split = features_no_split.get_tokens()
 
-print("\nWithout splitting:")
-for token in tokens_no_split:
-    print(f"  '{token.token_text}'")
-# Output: 'getUserNameById'
+print([token.token_text for token in tokens_no_split])
+# ['getUserNameById']
 ```
 
 ### Tokenization with Normalization
@@ -280,7 +283,7 @@ def normalize_code(code):
     code = code.replace('==', ' equal ')
     
     # Normalize whitespace
-    code = normalize.normalize_whitespace_fn(code)
+    code = normalize.SQUASH_WS_RE.sub(' ', code).strip()
     
     return code
 
@@ -328,7 +331,7 @@ def normalize_for_nlp(text):
     text = re.sub(r'[^\w\s]', ' ', text)
     
     # Normalize whitespace
-    text = normalize.normalize_whitespace_fn(text)
+    text = normalize.SQUASH_WS_RE.sub(' ', text).strip()
     
     return text
 
@@ -384,7 +387,7 @@ def normalize_large_text(text):
     """Normalize large text with all steps."""
     text = normalize.expand_camelcase_fn(text)
     text = normalize.expand_ampersand_fn(text)
-    text = normalize.normalize_whitespace_fn(text)
+    text = normalize.SQUASH_WS_RE.sub(' ', text).strip()
     return text
 
 def parallel_normalize(texts, max_workers=4):

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Typed configuration for the per-user cross-session state coordinator.
 
 The coordinator (:class:`~dataknobs_data.user.store.UserStateStore` and its

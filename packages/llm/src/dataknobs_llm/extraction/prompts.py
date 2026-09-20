@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Default extraction prompts as PromptTemplateDict constants.
 
 This module stores the default extraction prompts that were previously

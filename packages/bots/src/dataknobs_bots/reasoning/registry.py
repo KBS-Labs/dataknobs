@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Strategy registry for reasoning strategy discovery and construction.
 
 Provides a plugin registry that allows 3rd parties to register custom

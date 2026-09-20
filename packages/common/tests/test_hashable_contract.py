@@ -30,15 +30,17 @@ either direction. That makes a new instance of the shape distinguishable from
 the ones already known, which is the part that does not need the ruling and
 should not wait for it.
 
-The sweep itself lives in ``_dataclass_sweep``, beside the reasons it builds a
-value rather than reading an annotation.
+The sweep itself is ``DataclassSweep`` in ``dataknobs_common.testing``, beside
+the reasons it builds a value rather than reading an annotation;
+``_dataclass_sweep`` here is the one-line binding that points it at this
+package, so this suite and the relation-spelling one share a walk.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from _dataclass_sweep import every_dataclass, import_failures, probe_hashability
+from _dataclass_sweep import SWEEP
 
 #: Types that claim ``Hashable`` and raise on a constructed instance.
 #:
@@ -74,11 +76,21 @@ OPEN: frozenset[str] = frozenset(
 #: Types the builder cannot construct, so the contract is unmeasured for them.
 #:
 #: A hole in the sweep rather than a verdict, declared so it cannot grow
-#: quietly. This one rejects the generic witness in ``__post_init__`` because
-#: it validates a value out of a vocabulary the annotation does not carry:
-#: the field is a plain ``str`` and only certain strings are accepted.
+#: quietly. Both reject the generic witness in ``__post_init__`` for the same
+#: reason: they validate a value out of a vocabulary the annotation does not
+#: carry, so the field is a plain ``str`` and only certain strings are
+#: accepted. The index source takes ``fields``, and ``"x"`` is not one of the
+#: two attributes an entity carries free text in.
+#:
+#: Unmeasured is not unanswered, and the two answer differently. The index
+#: source is ``frozen=True, eq=False``: it hashes by identity, which cannot
+#: raise whatever the fields hold, so the sweep's reach costs nothing there.
+#: The resolver is frozen with equality on and its three fields are each a
+#: ``str``, so it hashes today by what it happens to hold --- which is the
+#: reading the sweep exists to take rather than one to leave declared here.
 UNCONSTRUCTIBLE: frozenset[str] = frozenset(
     {
+        "ontology.index_source.EntitySourceIndexSource",
         "resolver.TemporalPartitionResolver",
     }
 )
@@ -88,8 +100,8 @@ UNCONSTRUCTIBLE: frozenset[str] = frozenset(
 def swept() -> dict[str, tuple[str, str]]:
     """Every dataclass this package defines whose type claims to be hashable."""
     return {
-        name: probe_hashability(cls)
-        for name, cls in sorted(every_dataclass().items())
+        name: SWEEP.probe_hashability(cls)
+        for name, cls in sorted(SWEEP.every_dataclass().items())
         if cls.__hash__ is not None
     }
 
@@ -139,7 +151,9 @@ def test_the_sweep_reaches_every_type_it_claims_to(
     above could shrink to nothing one unconstructible type at a time and stay
     green the whole way down.
     """
-    assert import_failures() == [], f"modules the sweep could not import: {import_failures()}"
+    assert SWEEP.import_failures() == [], (
+        f"modules the sweep could not import: {SWEEP.import_failures()}"
+    )
     unreached = {name for name, (verdict, _) in swept.items() if verdict == "unconstructible"}
     assert unreached - UNCONSTRUCTIBLE == set(), (
         "type(s) the builder can no longer construct, so the contract is "

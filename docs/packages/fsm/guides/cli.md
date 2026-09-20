@@ -303,11 +303,12 @@ For debugging, the CLI uses AdvancedFSM:
 from dataknobs_fsm.api.advanced import AdvancedFSM, FSMDebugger
 
 fsm = AdvancedFSM(config)
-fsm.set_breakpoint(state_name)
+fsm.add_breakpoint(state_name)
 
-# Interactive debugging
-debugger = FSMDebugger(fsm, config)
-await debugger.start_session(input_data)
+# Interactive debugging -- the debugger wraps the FSM and nothing else; the
+# input goes to start(), not to the constructor. start() is synchronous.
+debugger = FSMDebugger(fsm)
+debugger.start(input_data)
 ```
 
 ### Async Operations

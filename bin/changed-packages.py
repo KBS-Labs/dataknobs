@@ -10,8 +10,10 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
+from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 # Root of the repository
 _ROOT = Path(__file__).resolve().parent.parent
@@ -88,12 +90,20 @@ _GLOBAL_QUALITY_INPUTS = [
     # inputs every package result depends on.
     "bin/validate.sh",  # the validation step: ruff, mypy, import checks
     "bin/test.sh",  # the test step: selection, markers, coverage flags
-    # Sourced by both of the above, and it answers the two questions that decide
-    # what they act on: which packages exist, and which code belongs to none of
-    # them. It sits in this tier rather than the workspace one for the same
+    # Sourced by validate.sh, and it answers the two questions that decide what
+    # that script acts on: which packages exist, and which code belongs to none
+    # of them. It sits in this tier rather than the workspace one for the same
     # reason validate.sh does — it moves every package's recorded result, not
     # just the artifact, and the "bin/" entry in the workspace tier would put it
     # in the wrong tier rather than in none.
+    #
+    # This said "sourced by both of the above" until the step classification
+    # below went looking. bin/test.sh does not source it — it has its own
+    # discover_test_packages loop over packages/* — and the difference is not a
+    # nicety: it is the whole reason this entry and validate.sh are classified
+    # lint-only, so the sentence that was wrong is the one a reader would have
+    # used to argue they are not.
+    # test_the_test_step_does_not_read_the_lint_only_inputs holds it.
     "bin/package-discovery.sh",  # which packages exist, and what else to check
 ]
 
@@ -169,6 +179,55 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
     "bin/internal-label-allowlist.txt",  # suppressions the lint step honours
     ".dataknobs/quality-contract.json",  # the ceilings the contract check compares against
     ".dataknobs/release-readiness.json",  # the pointers release-helper.sh reads and verifies
+    # The licensing surface, read by test_licensing.py: the root LICENSE and
+    # NOTICE, each package's copy of the pair pinned byte-for-byte against
+    # them, and the historical MIT text whose per-package version list that
+    # guard checks against packages.json. Editing one moves that guard's verdict and
+    # no package's, which is what this tier is for.
+    #
+    # File entries rather than a "LICENSES/" directory entry, for the reason the
+    # workflows note above gives in the other direction: a directory entry
+    # expands through the suffix predicate in package-hashes.py, and ".txt" is
+    # not a quality-input suffix, so it would expand to nothing and read exactly
+    # like coverage. A file entry is tested with is_file() and never consults
+    # that predicate, which is also what lets the extensionless names here be
+    # declared at all.
+    #
+    # The copies are globbed rather than listed one per package, for the
+    # reason scope_entry_files gives about "packages/*/docs/": a list leaves
+    # the next package's copy unhashed the day it is created, while still
+    # reading like coverage. They are the guard's actual subject, so leaving
+    # them out is the whole of what it asserts about.
+    "LICENSE",
+    "NOTICE",
+    "LICENSES/MIT-historical.txt",
+    "packages/*/LICENSE",
+    "packages/*/NOTICE",
+    # The two module docstrings that pay for one family being split across two
+    # packages: the four identity keys in common, the fifth embedder key in
+    # data, and a cross-reference in each direction so a reader who reaches
+    # either module finds the other. A workspace guard asserts both directions,
+    # because a guard inside packages/common/tests asserting anything about
+    # dataknobs_data would import the package two guards there exist to keep
+    # out of common's import graph.
+    #
+    # The first entries in this tier that DO move a package's result, so the
+    # sentence every note above ends with does not apply to them and is not
+    # repeated. They are declared anyway, and the reason is the one this whole
+    # mechanism is about: a package scope covering the source looks like
+    # coverage of the workspace guard that reads it, and those are different
+    # sets. The cost of the redundancy is a gate run that was not needed, which
+    # is the direction _QUALITY_INPUT_SUFFIXES already says to err in.
+    "packages/common/src/dataknobs_common/ontology/tags.py",
+    "packages/data/src/dataknobs_data/vector/content.py",
+    # The same sentence one module over, and the reason is sharper there. The
+    # two heights of the vocabulary measure live in two distributions, and the
+    # counting half names the narrowing half *by symbol* -- a name it cannot
+    # import, so nothing in its own package can resolve it. A workspace guard
+    # does, and reads this file as text to do it. Only the common side is
+    # declared: the guard's other two inputs are guides, which ride the docs
+    # scope already.
+    "packages/common/src/dataknobs_common/ontology/ascent.py",
     # The root README, read by the documented-import guard along with every
     # package README and the site tree. The per-package copies ride their own
     # package scope and docs/ rides the docs scope; this one is reached by no
@@ -193,19 +252,29 @@ _WORKSPACE_ONLY_QUALITY_INPUTS = [
 # mechanisms agreed to check nothing. Reproduced with a broken intra-doc link,
 # which `mkdocs build --strict` rejects and both paths passed.
 #
-# Deliberately NOT added to _WORKSPACE_ONLY_QUALITY_INPUTS, though they are
-# workspace-only in blast radius. That list is also what change detection
-# matches, and map_files_to_packages tests it *before* DOCS_PATTERNS and stops
-# at the first hit — so filing them there would stop setting docs_changed,
-# which is what makes the gate re-run the very checks this scope exists to keep
-# honest.
+# Kept out of _WORKSPACE_ONLY_QUALITY_INPUTS, though they are workspace-only in
+# blast radius. The reason used to be an ordering: that list is also what change
+# detection matches, every branch ended in `continue`, and the workspace tier was
+# tested first — so filing them there stopped them setting docs_changed, which is
+# what makes the gate re-run the very checks this scope exists to keep honest.
+#
+# That ordering is gone: map_files_to_packages accumulates, so a file declared in
+# two tiers now contributes to both and filing an entry here is no longer a way
+# to un-declare it there. What remains is a plain scoping question — these feed
+# the three recorded documentation checks, so they are hashed under "docs" where
+# a docs-only change invalidates them without dirtying the guard suite's scope.
 #
 # Note what the hazard is and is not. A docs edit *is* a workspace-guard change
 # and the mapping now says so: the guards under tests/ read every document.
 # What must not happen is that becoming the *only* thing it says, because the
 # two facts have different populations — a changelog re-runs the documentation
-# checks and is read by no guard. Setting both flags in the DOCS_PATTERNS
+# checks and does not dirty a package. Setting both flags in the DOCS_PATTERNS
 # branch keeps them independent; moving the entry would collapse them.
+#
+# A changelog *is* read by a guard now, which is a hashing question rather than
+# a tier one: `packages/*/CHANGELOG.md` is in the docs hash scope below, so
+# editing one invalidates the artifact, while the tier it matches is unchanged
+# and it still re-runs the documentation checks.
 #
 # Two file entries rather than ".dataknobs/", which also holds notes and an
 # example workflow that feed no check.
@@ -215,12 +284,129 @@ _DOCS_QUALITY_INPUTS = [
     "packages/*/docs/",  # symlinked and transcluded into the tree above
     ".dataknobs/docs-mirror-manifest.json",  # what documentation_mirrors reads
     ".dataknobs/packages.json",  # what documentation_versions compares against
+    # Read by a workspace guard, which is why it is hashed: a release note
+    # counting the names on a package door is checked against that door by
+    # test_the_changelog_door_count_matches_the_door. Hashed *here* rather
+    # than in the workspace-only tier for the reason the note above gives --
+    # which is now a scoping one rather than an ordering one, since the mapping
+    # accumulates and a second tier no longer silences the first.
+    #
+    # Named individually rather than as "packages/*/CHANGELOG.md", because a
+    # "*" expands only in a *directory* entry: scope_entry_files tests a file
+    # entry with is_file(), so the glob would resolve to nothing and read
+    # exactly like coverage -- the hazard the workflows note above describes.
+    # The guard that found this derives its population from the guards' own
+    # source, so a guard reading a second package's changelog fails until that
+    # one is named too.
+    "packages/common/CHANGELOG.md",
 ]
 
 # Files that trigger testing all packages. Only the global tier: a workspace-only
 # input still invalidates the artifacts, but through the workspace hash scope
 # rather than by dirtying every package. See bin/package-hashes.py.
 GLOBAL_TRIGGERS = list(_GLOBAL_QUALITY_INPUTS)
+
+# ---------------------------------------------------------------------------
+# Which recorded step a global input can move
+# ---------------------------------------------------------------------------
+#
+# The gate records two per-package results, produced by two different scripts:
+# the validation row comes from bin/validate.sh, the unit and integration rows
+# from bin/test.sh. "Global" says a change can invalidate a result no package's
+# own content explains. It does not say *which* result, and most of these
+# inputs feed exactly one of the two.
+#
+# 09e1dbc5 is the commit that put the step scripts in this tier, and it argued
+# the point rather than assuming it: "bin/validate.sh and bin/test.sh ARE the
+# lint and test steps, so every package's recorded result is whatever they
+# produced", demonstrated on a branch fixing a runner that exited 0 on its
+# second target. Read precisely, that sentence is per step — each script owns
+# the results *it* produced — and the tier had no way to say so, so both landed
+# on everything. This table is that sentence with the step named.
+#
+# The split is checkable rather than asserted, which is what makes it safe to
+# act on: bin/test.sh has its own discover_test_packages loop over packages/*
+# and neither sources bin/package-discovery.sh nor invokes bin/validate.sh, so
+# no edit to either can reach a test result.
+# test_the_test_step_does_not_read_the_lint_only_inputs fails if that stops
+# being true, and the gate never passes -f, so validate.sh cannot rewrite the
+# tree the tests then run against either.
+LINT_STEP = "lint"
+TEST_STEP = "test"
+BOTH_STEPS = frozenset({LINT_STEP, TEST_STEP})
+
+#: Every entry in GLOBAL_TRIGGERS, by the step it can move. Checked for
+#: exhaustiveness against that list by the toolchain guards, so a new global
+#: input fails the build until the decision is made — the same shape 09e1dbc5
+#: chose when it scoped its coverage guard to force the tiering decision in
+#: review "instead of leaving it to whoever edits the script next".
+GLOBAL_TRIGGER_STEPS: dict[str, frozenset[str]] = {
+    # The linters' configuration and the resolved versions both steps run
+    # against. pyproject.toml is read further than the path: see
+    # pyproject_steps_changed for the sections that move only the lint half.
+    "pyproject.toml": BOTH_STEPS,
+    "uv.lock": BOTH_STEPS,
+    # The interpreter: mypy's target version and the runtime under test.
+    ".python-version": BOTH_STEPS,
+    # Test-step inputs. None of the three has fired in the last 150 merged
+    # pull requests, so this classification buys nothing measurable today; it
+    # is here because the table is a declaration of what is true, and a table
+    # that records only the profitable half is one nobody can check.
+    "conftest.py": frozenset({TEST_STEP}),
+    "pytest.ini": frozenset({TEST_STEP}),
+    "bin/test.sh": frozenset({TEST_STEP}),
+    # The lint step, and the discovery it sources. This is where the measured
+    # return is: 39 of the 61 test suite-runs this change removes.
+    "bin/validate.sh": frozenset({LINT_STEP}),
+    "bin/package-discovery.sh": frozenset({LINT_STEP}),
+}
+
+#: The hash-scope name for each step set a global input can declare. The widest
+#: one keeps the name "toolchain": the scope predates the step classification,
+#: and renaming it would move a stored digest for every global input rather
+#: than only for the ones leaving it.
+_GLOBAL_SCOPE_NAMES: dict[frozenset[str], str] = {
+    BOTH_STEPS: "toolchain",
+    frozenset({LINT_STEP}): "toolchain_lint",
+    frozenset({TEST_STEP}): "toolchain_test",
+}
+
+
+def _global_scopes_by_step() -> dict[str, list[str]]:
+    """Partition the global inputs into one hash scope per step they move.
+
+    The scope is what the artifact stores and package-hashes.py compares, so
+    while there was one of them a moved digest could say only that *something*
+    global had changed -- over inputs whose recorded consequences the table
+    above had already been made to tell apart. An edited bin/validate.sh and an
+    edited conftest.py produced identical evidence, under a comment claiming
+    both moved "lint, type, or test results everywhere", which stopped being
+    true of the lint-only pair on the day that table was written.
+
+    Derived rather than declared again. A hand-kept list here would be a fifth
+    reader of the blast-radius question, and the four that already existed
+    disagreeing is the defect this declaration was built to end. A new global
+    input reaches the right scope by declaring its step, and declaring one is
+    not optional -- the toolchain guards fail on a trigger missing from the
+    table.
+
+    Fails closed at both lookups. An undeclared input takes BOTH_STEPS, the
+    same default map_files_to_packages applies, and an unrecognised step set
+    takes the widest scope: a gap here over-dirties and the guard names it,
+    rather than raising at import time in a module four programs load.
+    """
+    grouped: dict[str, list[str]] = {}
+    for entry in GLOBAL_TRIGGERS:
+        steps = GLOBAL_TRIGGER_STEPS.get(entry, BOTH_STEPS)
+        grouped.setdefault(_GLOBAL_SCOPE_NAMES.get(steps, "toolchain"), []).append(entry)
+    return grouped
+
+
+#: The global tier, split by the recorded step its members move. A step nothing
+#: declares contributes no scope rather than an empty one: an empty scope hashes
+#: to the same digest every run and compares equal forever, which is what a
+#: scope being checked also looks like.
+_GLOBAL_SCOPE_INPUTS: dict[str, list[str]] = _global_scopes_by_step()
 
 # The workspace-only tier, matched rather than merely declared. Three readers
 # consulted the list above and a fourth — the mapping below — did not, which is
@@ -234,15 +420,23 @@ WORKSPACE_ONLY_TRIGGERS = list(_WORKSPACE_ONLY_QUALITY_INPUTS)
 #: directories through a "*"; what "beneath" covers differs by reader — hashing
 #: takes the files that feed a check, change detection takes every path under
 #: the prefix. See the caveat on _WORKSPACE_ONLY_QUALITY_INPUTS.
+#:
+#: The global tier arrives already split by step, so the key that moved names
+#: which recorded result went stale rather than only that one did.
 WORKSPACE_QUALITY_INPUTS: dict[str, list[str]] = {
-    "toolchain": _GLOBAL_QUALITY_INPUTS,
+    **_GLOBAL_SCOPE_INPUTS,
     "workspace_tests": _WORKSPACE_ONLY_QUALITY_INPUTS,
     "docs": _DOCS_QUALITY_INPUTS,
 }
 
 #: Scopes whose change invalidates every package's result rather than only the
 #: workspace guard suite. package-hashes.py reads this to size the dirty set.
-GLOBAL_SCOPES = frozenset({"toolchain"})
+#:
+#: Every member of the split global tier is one, and the width is unchanged by
+#: the split: a lint-only input moves every package's recorded validation
+#: result, so all ten are still dirty. What the split changes is which claim a
+#: moved digest carries, not how many packages it names.
+GLOBAL_SCOPES = frozenset(_GLOBAL_SCOPE_INPUTS)
 
 # ---------------------------------------------------------------------------
 # Release-time noise
@@ -304,10 +498,39 @@ def strip_release_noise(content: bytes) -> bytes:
 #: that would make that safe is a docs-scope one, not this.
 _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 
+#: The licensing files every package carries a copy of. Not documentation —
+#: no recorded documentation check reads either — but like the set above they
+#: sit at a package root and belong to no package's suite, so the generic
+#: path-to-package rule must not claim them. The guard that does read them is
+#: tests/test_licensing.py, which the workspace-only tier schedules.
+_PACKAGE_LICENSE_FILES = frozenset({"LICENSE", "NOTICE"})
+
+#: Directories directly under a package whose contents that package's own suite
+#: reads and no other package can. A change to one schedules that package and
+#: stops there, rather than dragging the dependents the transitive closure
+#: exists to reach.
+#:
+#: The closure earns its cost on a change to what a package *exports*: edit
+#: common's source and the other nine are running against different code, so
+#: their recorded results say nothing until they re-run. A test file is not
+#: that. The gate runs each package's suite as its own pytest invocation, so no
+#: other package's run collects these files at all — and that is checked rather
+#: than assumed, by test_no_package_suite_reads_another_packages_tests, because
+#: it is not true by construction: a tests directory goes on sys.path under
+#: pytest's default import mode, so two packages could share a helper through a
+#: bare import that spells neither package's name. Measured at zero, out of 995
+#: test modules offering 935 importable names.
+#:
+#: ``pyproject.toml`` is the case that shows this is about ``tests/`` rather
+#: than about "not src": it sits at the package root, no suite reads it as a
+#: test input, and a dependency constraint or a version in it is read by every
+#: dependent's resolution. It exports, so it is not here.
+_LOCAL_ONLY_PACKAGE_DIRS = frozenset({"tests"})
+
 #: Package documentation that a test in that package's own suite reads, mapped
 #: to the package whose result it decides.
 #:
-#: Almost no package document is one of these. 139 of the 144 are read only by
+#: Almost no package document is one of these. 141 of the 152 are read only by
 #: the workspace guards — which check every document's imports, configuration
 #: keys, tool names and fenced samples against the code — and by the three
 #: documentation checks the gate records. None of that is a package's suite, so
@@ -316,9 +539,10 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: repair touching two packages' docs ran two full test suites and no guard that
 #: reads a link.
 #:
-#: The five below are the exception and they are a real one: each is read by a
+#: The eleven below are the exception and they are a real one: each is read by a
 #: test *in* the package, comparing a published table against the code it
-#: describes, so the document genuinely decides whether that suite passes. They
+#: describes --- or, for the last of them, checking that no such comparison is
+#: owed --- so the document genuinely decides whether that suite passes. They
 #: keep scheduling their package, and package-hashes.py folds them into that
 #: package's hash for the same reason — a verdict recorded before an edit to one
 #: must not validate after it.
@@ -327,16 +551,104 @@ _PACKAGE_DOC_FILES = frozenset({"CHANGELOG.md"})
 #: from a path. What keeps the list honest is
 #: ``test_every_package_document_a_package_suite_reads_is_declared``, which finds
 #: them structurally — a ``Path(__file__)`` expression divided by ``"docs"`` —
-#: and fails on a sixth. A naive search for the string is not available: 192
+#: and fails on one this list does not carry. A naive search is not available: 192
 #: lines under ``packages/*/tests`` mention ``"docs"``, and all but these name a
 #: knowledge source or a RAG adapter.
 PACKAGE_TEST_DOC_INPUTS: dict[str, str] = {
     "packages/bots/docs/multi-tenant.md": "bots",
     "packages/bots/docs/behavior-packs.md": "bots",
     "packages/common/docs/guides/packs.md": "common",
+    # Both publish a `worked-input` fence holding a vocabulary the common suite
+    # also carries as a conftest constant, and test_worked_input_fences.py is
+    # what stops the two copies parting. Read from the package side rather than
+    # from tests/ deliberately: the comparison needs the conftest constant, and
+    # a workspace guard reading a package's test file sits in no workspace hash
+    # scope. The second half of that argument has expired — filing the conftest
+    # in the workspace-only tier used to stop it scheduling its own package,
+    # because the mapping tested that tier first and stopped, and it no longer
+    # does. Reading from this side still costs nothing and covers both halves
+    # with rules that already exist, so the placement stands on the first half
+    # alone; see test_a_file_can_feed_more_than_one_tier for what is now legal.
+    "packages/common/docs/guides/ontology.md": "common",
+    "packages/common/docs/guides/entity-resolution.md": "common",
+    # A third `worked-input` fence, and half of a pair: `MAMMALS_GUIDE_DOCUMENT`
+    # holds this vocabulary, and content-tags.md below publishes it too, so the
+    # common suite reads this one for the comparison. It said the opposite until
+    # recently -- that no constant held it -- and predicted its own expiry in
+    # the saying: the day a constant does hold this document, a comparison row
+    # is owed and `UNPAIRED` in test_worked_input_fences.py has gone stale. That
+    # day was the change that added content-tags.md, which added the row and
+    # corrected `UNPAIRED` and left this sentence claiming what it had just
+    # falsified. That read is what earns the entry; an unread document would
+    # not want one.
+    "packages/common/docs/guides/anchored-view.md": "common",
+    # The fourth `worked-input` fence, and the only one that is not half of a
+    # pair: it publishes the smallest of the four vocabularies and no constant
+    # holds it. Read by the common suite to check that claim against the tree
+    # rather than take the declaration's word for it -- which is the read
+    # anchored-view.md above earned until a constant came to hold its
+    # vocabulary, and the reason `UNPAIRED` now names this document alone.
+    "packages/common/docs/guides/hierarchy.md": "common",
+    # The fifth `worked-input` fence, and the second half of a pair whose first
+    # half used to be a single copy: it publishes the same vocabulary
+    # anchored-view.md does, deliberately, so a second service-free acceptance
+    # runs against one substrate rather than two. Read by the common suite for
+    # the comparison, and by the workspace runner that executes the call site.
+    "packages/common/docs/guides/content-tags.md": "common",
+    # The sixth `worked-input` fence, and the third row naming one constant:
+    # this page publishes the same vocabulary anchored-view.md and
+    # content-tags.md do, so a third service-free acceptance runs against one
+    # substrate rather than three. Read by the common suite for the comparison,
+    # and by the workspace runner that executes the roll-up call site.
+    "packages/common/docs/guides/roll-up.md": "common",
     "packages/data/docs/batch-processing-guide.md": "data",
     "packages/data/docs/vector-store-capabilities.md": "data",
 }
+
+
+#: Directories beneath a package's ``tests/`` holding what its suite reads
+#: rather than what pytest collects: a golden answer, a YAML configuration, the
+#: markdown a knowledge source ingests. ``_HASH_PATTERNS`` in package-hashes.py
+#: reaches ``tests/**/*.py``, which is the suite and not the suite's inputs, so
+#: editing one of these changed what the tests assert while every stored hash
+#: stayed intact — a recorded ``pass`` surviving an edit to the thing it was a
+#: verdict about. The golden file is the case that names itself: its entire
+#: purpose is to be the expected answer.
+#:
+#: Unlike the declaration above, this one buys no scheduling and needs none. A
+#: file under ``packages/<p>/tests/`` already maps to ``<p>`` by the generic
+#: rule in map_files_to_packages, so the edit was already running that suite;
+#: what was missing is only the stored verdict moving with it. Hashing these
+#: therefore costs no gate run that the edit does not already cause, which is
+#: the whole of why they may be taken a directory at a time where a document
+#: had to be argued for one at a time. There, the cost of being wrong was a
+#: suite scheduled for prose; here there is no such cost.
+#:
+#: Directories for a second reason too: the files are not all nameable. config
+#: and llm do name theirs — ``Path(__file__).parent / "fixtures" /
+#: "test_config.yaml"``, and the golden answer beside it — but bots hands the
+#: whole ``packages/bots/tests/test_docs/`` directory to a knowledge source and
+#: never names a document inside it, and utils names three of its four through a
+#: conftest helper composed with a module constant. The fourth, a gzipped
+#: ``.json``, appears in no test at all: it is read by the one that walks the
+#: directory asking which of its files are gzipped. So a list of files would be
+#: hand-maintained for two of the four packages and would have missed that one
+#: outright. The directory is what every reader does name, which is also what
+#: lets one be checked against the tree rather than believed.
+#:
+#: Deliberately absent: a README beside a test package. Two exist under
+#: packages/data/tests/ and no test reads either, so neither moves a verdict
+#: and hashing one would dirty a package for prose. They are named one at a
+#: time rather than left to a rule about the word README, and
+#: ``test_every_test_input_a_suite_reads_is_in_that_packages_hash`` is what
+#: holds the exception to exactly those two: a third file feeding nothing
+#: fails there on arrival instead of joining a pattern.
+PACKAGE_TEST_FIXTURE_DIRS: tuple[str, ...] = (
+    "packages/bots/tests/test_docs",
+    "packages/config/tests/fixtures",
+    "packages/llm/tests/golden",
+    "packages/utils/tests/resources",
+)
 
 
 # Paths whose change means the gate should re-run the documentation checks.
@@ -465,6 +777,339 @@ def drop_release_noise_only(files: list[str], resolved_ref: str) -> list[str]:
     return material
 
 
+# ---------------------------------------------------------------------------
+# What a lock change actually moved
+# ---------------------------------------------------------------------------
+#
+# uv.lock is a global trigger because a resolution change really can reach
+# every package: a bumped third-party version is installed for all ten, and
+# the path says nothing about which. But the file is not opaque, and the
+# blast radius it carries is written inside it. Each workspace member is its
+# own ``[[package]]`` block marked ``source = { editable = "packages/<name>" }``,
+# so a diff confined to those blocks names the packages it moved.
+#
+# This is the same move drop_release_noise_only above already makes — read the
+# content rather than trusting the path — one step further. That filter drops
+# uv.lock when the *whole* diff is release noise; measured over 150 merged
+# pull requests it did so twice, while uv.lock still reached the global
+# trigger ten times and was the sole trigger in eight of them. The remainder
+# is not noise, so dropping the file would be wrong; it is a real change that
+# names the packages it reaches.
+#
+# Kept here rather than widened into strip_release_noise deliberately. That
+# function is shared with the hasher (package-hashes.py imports it by name, so
+# the two cannot disagree about what a change *is*), and uv.lock is hashed in
+# the "toolchain" scope — so teaching it the lock's spellings would move every
+# stored workspace hash for a scheduling fix. Scheduling is the question here,
+# so the reading stays on the scheduling side.
+class TriggerScan(NamedTuple):
+    """What reading a global input said it actually moved.
+
+    Two axes, because the two readable inputs narrow different ones. ``uv.lock``
+    names *packages* and leaves both steps in range; the root ``pyproject.toml``
+    names *steps* and leaves every package in range. One type carrying both
+    rather than one parameter each, so a third reader is a row in
+    :data:`_TRIGGER_READERS` instead of a fourth keyword argument threaded
+    through three functions — the shape this module would otherwise grow one
+    special case at a time.
+
+    ``packages`` is ``None`` when the content said nothing about which packages
+    are affected, which is not the same as saying none are. An *empty* set is
+    the reading a silently-broken parser produces for every input, so the
+    caller treats it as unattributed too — see map_files_to_packages, which is
+    the one place that rule is written.
+    """
+
+    #: The recorded steps this change can have moved.
+    steps: frozenset[str]
+    #: The packages it moved, or None for "the content did not say".
+    packages: frozenset[str] | None
+
+
+_LOCK_FILE = "uv.lock"
+
+#: The marker that makes a ``[[package]]`` block a workspace member, and names
+#: the directory it is. Read from the block rather than derived from the
+#: distribution name, because the two do not match: ``name = "dataknobs"`` is
+#: ``packages/legacy``. ``source = { editable = "." }`` is the workspace root,
+#: which owns no package's code and so matches this deliberately-narrow pattern
+#: not at all — it is unattributable, and handled as such below.
+_LOCK_MEMBER_RE = re.compile(r'^source = \{ editable = "packages/([^"/]+)" \}\s*$', re.M)
+
+#: The block header of one locked distribution, and the name line that follows.
+_LOCK_BLOCK = "[[package]]"
+_LOCK_NAME_RE = re.compile(r'^name = "([^"]+)"\s*$')
+
+#: ``resolution-markers`` is a set that the format writes as a list, and uv
+#: reorders it on its own. Three of the release pull requests measured differed
+#: from their base in nothing else at the top of the file — the same reordering
+#: each time, an identical set of markers — which is a diff that means nothing
+#: and, read literally, made those releases behave differently from the two
+#: that happened not to get reordered. Compared as the set it is, so one PR
+#: class gets one answer.
+_LOCK_MARKERS_RE = re.compile(r"^(resolution-markers = \[\n)(.*?)(^\]$)", re.M | re.S)
+
+
+def _canonical_lock(text: str) -> str:
+    """Sort the one list in a lock file whose order carries no meaning."""
+
+    def _sorted_markers(match: re.Match[str]) -> str:
+        entries = sorted(line for line in match.group(2).splitlines() if line.strip())
+        return match.group(1) + "".join(f"{line}\n" for line in entries) + match.group(3)
+
+    return _LOCK_MARKERS_RE.sub(_sorted_markers, text)
+
+
+def _toml_blocks(text: str, opens: Callable[[str], bool]) -> list[list[str]]:
+    """Split a TOML file into blocks, each opened by a line ``opens`` accepts.
+
+    The line walk both readers below need, and the only thing they share: what
+    a block *means* is the part that differs, so the callers key the blocks and
+    this returns them in file order. Block 0 is whatever precedes the first
+    opener, which both callers treat as the preamble and neither lets a package
+    or a section claim.
+
+    ``opens`` sees the line with its newline stripped and nothing else, so a
+    line's indentation is what keeps a bracketed value inside a multi-line
+    array from reading as a table header — a top-level header is at column
+    zero, and TOML does not require the contents of an array to be.
+    """
+    blocks: list[list[str]] = [[]]
+    for line in text.splitlines(keepends=True):
+        if opens(line.rstrip("\n")):
+            blocks.append([])
+        blocks[-1].append(line)
+    return blocks
+
+
+def _opens_lock_region(stripped: str) -> bool:
+    """A ``[[package]]`` block, or any top-level table that is not its subtable."""
+    if stripped == _LOCK_BLOCK:
+        return True
+    return stripped.startswith("[") and not stripped.startswith("[package.")
+
+
+def _lock_regions(text: str) -> dict[str, str]:
+    """Every top-level region of a lock file, keyed by what identifies it.
+
+    A ``[[package]]`` block is keyed by its ``name``; every other top-level
+    table by its header; everything before the first of either by "". Tables
+    spelled ``[package.*]`` are sub-tables and stay with the block they
+    qualify, which is what keeps a dependency edit inside its own package
+    rather than reading as a region of its own.
+
+    Two blocks may share a name — uv emits one per resolution fork — so a
+    repeated key accumulates rather than overwriting. A change in either half
+    then still shows up as a difference in the whole, which is the answer that
+    keeps this safe rather than the one that makes it precise.
+
+    A block whose name cannot be read keys on its position. It is then its own
+    region either way, and position is the stabler of the two spellings: keying
+    on a running count made an unnamed block's key depend on how many regions
+    happened to precede it.
+    """
+    regions: dict[str, str] = {}
+    for index, block in enumerate(_toml_blocks(text, _opens_lock_region)):
+        if not block:
+            continue
+        head = block[0].rstrip("\n")
+        if index == 0:
+            key = ""
+        elif head == _LOCK_BLOCK:
+            key = next(
+                (
+                    match.group(1)
+                    for line in block
+                    if (match := _LOCK_NAME_RE.match(line.rstrip("\n")))
+                ),
+                f"\x00unnamed:{index}",
+            )
+        else:
+            key = head
+        regions[key] = regions.get(key, "") + "".join(block)
+    return regions
+
+
+def lock_members_changed(before: bytes, after: bytes) -> frozenset[str] | None:
+    """Which workspace members' resolutions moved between two lock files.
+
+    Returns ``None`` when the answer is "more than the workspace can account
+    for" — a third-party block moved, the preamble moved, the manifest moved,
+    a block could not be attributed to a package directory. That is the honest
+    reading of a bumped shared dependency: it is installed for every package
+    and the lock does not say which of them care.
+
+    **The empty set is also ``None``'s answer at the call site, and
+    deliberately so.** A lock that survived drop_release_noise_only and then
+    named no member at all is a file this reader did not account for, and the
+    shape of that mistake is the dangerous one: a parser that silently matched
+    nothing would return an empty set for every input, which reads as "no
+    package is affected" and — when the lock is the only material file —
+    becomes an empty schedule and a skipped test suite reporting success. This
+    module's own history has that failure twice over. So the caller treats
+    empty as unattributed; see map_files_to_packages.
+    """
+    try:
+        before_text = _canonical_lock(before.decode("utf-8", errors="surrogateescape"))
+        after_text = _canonical_lock(after.decode("utf-8", errors="surrogateescape"))
+    except (UnicodeDecodeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+    before_regions = _lock_regions(before_text)
+    after_regions = _lock_regions(after_text)
+
+    moved: set[str] = set()
+    for name in set(before_regions) | set(after_regions):
+        old = before_regions.get(name)
+        new = after_regions.get(name)
+        if old == new:
+            continue
+        member = _LOCK_MEMBER_RE.search(new if new is not None else old or "")
+        if member is None:
+            return None
+        package = member.group(1)
+        if package not in DEPENDENCIES:
+            return None
+        moved.add(package)
+
+    return frozenset(moved)
+
+
+def lock_scan_for(resolved_ref: str) -> TriggerScan | None:
+    """Read the lock at both ends and say which members it moved.
+
+    Separated from the decision so plan_for_files stays a function of its
+    arguments: this is the half that touches git, and it is the half a test
+    cannot pin without a repository.
+
+    An empty answer is passed along rather than converted to ``None`` here.
+    Both mean "unattributed" and the caller is where that is decided, so this
+    stays a reader and the rule keeps one home.
+    """
+    before = _blob_at(resolved_ref, _LOCK_FILE)
+    after = _worktree_bytes(_LOCK_FILE)
+    if before is None or after is None:
+        return None
+    members = lock_members_changed(before, after)
+    if members is None:
+        return None
+    # Both steps: a member's resolution decides what its dependents lint
+    # against and what they run against, and the lock says nothing that
+    # separates the two.
+    return TriggerScan(steps=BOTH_STEPS, packages=members)
+
+
+# ---------------------------------------------------------------------------
+# What a pyproject change actually moved
+# ---------------------------------------------------------------------------
+#
+# The root pyproject.toml is a global trigger because it carries the dependency
+# set and the uv workspace declaration, and a change to either really does
+# reach every package through both steps. It also carries the ruff and mypy
+# configuration, which is the whole of what most changes to it touch: measured
+# over 150 merged pull requests it moved ten times, and nine of those ten were
+# confined to [tool.ruff] or [tool.mypy].
+#
+# A linter's configuration decides what the *validation* step reports and
+# nothing a test can observe. So a diff confined to those tables keeps its full
+# width on the lint side — every package is re-validated under the new rules —
+# and schedules no package test suite.
+#
+# Read by region rather than by diff hunk, the same way the lock is: comparing
+# whole top-level tables needs no hunk parser and no line arithmetic, and it
+# cannot mis-attribute a line to the table above it.
+_PYPROJECT_FILE = "pyproject.toml"
+
+#: The tables whose content only the lint step reads. Deliberately the two
+#: tool configurations and nothing else — [project], [dependency-groups] and
+#: [tool.uv] decide what is installed, which both steps run against, and
+#: [tool.pytest.ini_options] would be the test step's alone if this file
+#: carried one (pytest.ini does).
+_LINT_ONLY_TABLES = frozenset({"tool.ruff", "tool.mypy"})
+
+
+def _opens_toml_table(stripped: str) -> bool:
+    """A top-level table header, at column zero."""
+    return stripped.startswith("[")
+
+
+def _pyproject_table(header: str) -> str:
+    """The region a table header belongs to.
+
+    ``[tool.ruff.lint.per-file-ignores]`` is part of ``tool.ruff``: a tool's
+    configuration is one document however deeply it is spelled, and grouping
+    by the first two components is what makes a per-file-ignore edit read as
+    the ruff change it is rather than as a table of its own.
+    """
+    parts = header.strip().strip("[]").split(".")
+    return ".".join(parts[:2]) if parts[0] == "tool" else parts[0]
+
+
+def _pyproject_regions(text: str) -> dict[str, str]:
+    """Every top-level region of a pyproject file, keyed by the table it is.
+
+    Everything before the first header keys on "", like the lock reader: the
+    preamble is a region nobody's table may claim, so an edit to it is a
+    difference the caller cannot attribute — which is the answer that keeps
+    this fail-closed.
+    """
+    regions: dict[str, str] = {}
+    for index, block in enumerate(_toml_blocks(text, _opens_toml_table)):
+        if not block:
+            continue
+        key = "" if index == 0 else _pyproject_table(block[0].rstrip("\n"))
+        regions[key] = regions.get(key, "") + "".join(block)
+    return regions
+
+
+def pyproject_steps_changed(before: bytes, after: bytes) -> TriggerScan | None:
+    """Which recorded steps a root pyproject diff can have moved.
+
+    Returns ``None`` for anything this cannot place in a linter's table — a
+    dependency bump, a workspace member added, the preamble, a table it does
+    not recognise. ``None`` means the entry keeps the blast radius its path has
+    always carried, which is both steps over every package.
+
+    **An empty answer is ``None``'s answer too**, for the reason
+    lock_members_changed states at length: a reader that silently matched
+    nothing returns "no table moved" for every input, and "no table moved"
+    would otherwise read as "no step moved" and schedule nothing at all.
+    """
+    try:
+        before_regions = _pyproject_regions(before.decode("utf-8", errors="surrogateescape"))
+        after_regions = _pyproject_regions(after.decode("utf-8", errors="surrogateescape"))
+    except (UnicodeDecodeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+    moved = {
+        table
+        for table in set(before_regions) | set(after_regions)
+        if before_regions.get(table) != after_regions.get(table)
+    }
+    if not moved or not moved <= _LINT_ONLY_TABLES:
+        return None
+    # Every package, still: a ruff or mypy rule change is re-validated across
+    # the whole tree. What it cannot move is any package's test result.
+    return TriggerScan(steps=frozenset({LINT_STEP}), packages=None)
+
+
+def pyproject_scan_for(resolved_ref: str) -> TriggerScan | None:
+    """Read the root pyproject at both ends and say which steps it moved."""
+    before = _blob_at(resolved_ref, _PYPROJECT_FILE)
+    after = _worktree_bytes(_PYPROJECT_FILE)
+    if before is None or after is None:
+        return None
+    return pyproject_steps_changed(before, after)
+
+
+#: The global inputs that can report on themselves, and what reads each. A
+#: third readable input is a row here; nothing else in the module changes.
+_TRIGGER_READERS: dict[str, Callable[[str], TriggerScan | None]] = {
+    _LOCK_FILE: lock_scan_for,
+    _PYPROJECT_FILE: pyproject_scan_for,
+}
+
+
 def get_changed_files(base_ref: str) -> list[str]:
     """Get all changed files: committed on branch, staged, and unstaged.
 
@@ -520,39 +1165,132 @@ def _is_workspace_only_input(filepath: str) -> bool:
     """Whether a path is a workspace-only quality input.
 
     Directory entries end in "/" and cover everything beneath them; file
-    entries match exactly. Spelled to the same convention
-    WORKSPACE_QUALITY_INPUTS documents, so the list stays the declaration.
+    entries match exactly, or segment-wise when they carry a "*". Spelled to
+    the same convention WORKSPACE_QUALITY_INPUTS documents, so the list stays
+    the declaration.
+
+    The "*" is matched per segment rather than with a bare fnmatch over the
+    whole path, because fnmatch's "*" crosses a separator: it would read
+    ``packages/a/b/LICENSE`` as a match for ``packages/*/LICENSE``, which is
+    neither what scope_entry_files hashes nor what the CI filter triggers on.
+    Three readers of one entry disagreeing about which files it names is the
+    defect this whole declaration exists to prevent.
     """
-    return any(
-        filepath.startswith(entry) if entry.endswith("/") else filepath == entry
-        for entry in WORKSPACE_ONLY_TRIGGERS
+    return any(_entry_matches(filepath, entry) for entry in WORKSPACE_ONLY_TRIGGERS)
+
+
+def _entry_matches(filepath: str, entry: str) -> bool:
+    """Whether one declared entry names ``filepath``."""
+    if entry.endswith("/"):
+        return filepath.startswith(entry)
+    if "*" not in entry:
+        return filepath == entry
+    parts, pattern = filepath.split("/"), entry.split("/")
+    return len(parts) == len(pattern) and all(
+        fnmatchcase(part, glob) for part, glob in zip(parts, pattern, strict=True)
     )
 
 
-def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]:
-    """Map changed files to affected packages.
+def _is_local_only_package_input(filepath: str) -> bool:
+    """Whether a package file is read only by its own package's suite.
 
-    Returns:
-        (directly_changed_packages, docs_changed, all_packages_triggered,
-         workspace_only_changed)
+    Asked of a path already known to map to a package, so the question is
+    narrow: which directory under the package holds it. See
+    _LOCAL_ONLY_PACKAGE_DIRS for what makes a directory answer yes and why
+    pyproject.toml, which is also not source, answers no.
+    """
+    parts = filepath.split("/")
+    return len(parts) > 3 and parts[2] in _LOCAL_ONLY_PACKAGE_DIRS
+
+
+class FileScan(NamedTuple):
+    """What one change set's files were mapped to.
+
+    Named rather than positional because two of the five members are sets of
+    package names that differ by a subset relation, and the whole decision
+    below turns on which of them reaches the closure. Swapped, the mistake is
+    silent in both directions: the closure over *changed* schedules exactly
+    what it used to, and reporting only *exporting* under-reports what changed.
+    """
+
+    #: Every package a file in the change set belongs to. Each runs its suite.
+    changed_packages: set[str]
+    #: The subset whose change is observable from outside the package, so its
+    #: dependents' recorded results no longer describe what they run against.
+    #: Always a subset of changed_packages; only this reaches the closure.
+    exporting_packages: set[str]
+    #: Whether to recompute the three recorded documentation checks.
+    docs_changed: bool
+    #: Which recorded steps a global quality input moved, which dirties every
+    #: package for that step. Empty when no global input fired. A set rather
+    #: than a flag because the gate records two per-package results from two
+    #: different scripts, and most global inputs feed exactly one of them —
+    #: see GLOBAL_TRIGGER_STEPS.
+    triggered_steps: frozenset[str]
+    #: Whether an input the guards under tests/ read moved.
+    workspace_changed: bool
+
+
+def map_files_to_packages(
+    files: list[str], scans: Mapping[str, TriggerScan] | None = None
+) -> FileScan:
+    """Map changed files to affected packages. See FileScan.
+
+    ``scans`` is what the readable global inputs reported about themselves,
+    keyed by path — see :data:`_TRIGGER_READERS`. A path absent from it is one
+    nothing read, so it keeps the blast radius it has always carried.
     """
     changed_packages: set[str] = set()
+    exporting_packages: set[str] = set()
     docs_changed = False
-    all_triggered = False
+    triggered_steps: set[str] = set()
     workspace_changed = False
 
     for filepath in files:
-        # Check for global triggers
+        # Every tier that matches contributes. The tiers are not a partition
+        # and the declarations never said they were: a file can be a package's
+        # test input *and* something a workspace guard reads, and three pairs
+        # genuinely overlap on the tree today. Each branch used to end in
+        # `continue`, so the first match was the only one that spoke and the
+        # rest of the file's blast radius was dropped in silence — which made
+        # declaring a file in a second tier a way to *un*-declare it from the
+        # first. Four comments in this module warned about that ordering; they
+        # describe the shape below instead.
         if filepath in GLOBAL_TRIGGERS:
-            all_triggered = True
-            continue
+            # One of these can say what it moved. A lock diff confined to
+            # workspace-member blocks names the packages whose resolution
+            # changed, and their dependents follow through the closure like
+            # any other exporting change — a member's resolution is exactly
+            # what its dependents build against. Every other global input,
+            # and a lock this reader could not account for, keeps the blast
+            # radius the path carries. An *empty* scan counts as unaccounted
+            # for: see lock_members_changed for why that direction is the
+            # safe one.
+            scan = scans.get(filepath) if scans else None
+            if scan is not None and scan.packages:
+                changed_packages.update(scan.packages)
+                exporting_packages.update(scan.packages)
+            else:
+                # What the content said, or — for an input nothing read, or one
+                # whose reader could not place the change — what the table
+                # declares. BOTH_STEPS is the fallback for a global input the
+                # table does not carry, so a new entry behaves exactly as it
+                # would have before the table existed until someone classifies
+                # it. The guards fail first, but not at the moment it runs.
+                triggered_steps |= (
+                    scan.steps
+                    if scan is not None
+                    else GLOBAL_TRIGGER_STEPS.get(filepath, BOTH_STEPS)
+                )
 
-        # Check for workspace-only inputs. These belong to no package, so they
-        # move no package's result — but they are still a quality input, and
-        # the guards under tests/ are the ones that check the toolchain.
+        # Workspace-only inputs belong to no package, so they move no package's
+        # result — but they are still a quality input, and the guards under
+        # tests/ are the ones that check the toolchain. "Belongs to no package"
+        # is a property of the entries filed here, not of the branch: a file
+        # that does belong to one and is also read by a guard reaches the
+        # package mapping below as well.
         if _is_workspace_only_input(filepath):
             workspace_changed = True
-            continue
 
         # Documentation. Two flags, because two different things read it and
         # they disagree about a changelog: docs_changed re-runs the three
@@ -565,39 +1303,77 @@ def map_files_to_packages(files: list[str]) -> tuple[set[str], bool, bool, bool]
         if any(filepath.startswith(pattern) for pattern in DOCS_PATTERNS):
             docs_changed = True
             workspace_changed = True
-            continue
 
-        # Package documentation. It belongs to no package's suite unless a test
-        # in that suite reads it — see PACKAGE_TEST_DOC_INPUTS, which is the
-        # whole of the exception and is checked against the tree rather than
-        # trusted. Without the `continue` every package document mapped to its
-        # package below, which ran that suite and its dependents for a prose
-        # edit while running none of the four workspace guards that read it.
-        if "/docs/" in filepath and filepath.startswith("packages/"):
-            docs_changed = True
-            workspace_changed = True
-            owner = PACKAGE_TEST_DOC_INPUTS.get(filepath)
-            if owner is not None:
-                changed_packages.add(owner)
-            continue
-
-        # Package-root documentation, which the mapping below would otherwise
-        # read as a change to the package itself — scheduling its whole suite
-        # to publish a release note. See _PACKAGE_DOC_FILES for why nothing
-        # about a package's recorded verdict depends on one.
-        if filepath.startswith("packages/") and filepath.rsplit("/", 1)[-1] in _PACKAGE_DOC_FILES:
-            docs_changed = True
-            continue
-
-        # Map to package
         if filepath.startswith("packages/"):
-            parts = filepath.split("/")
-            if len(parts) >= 2:
-                pkg_name = parts[1]
-                if pkg_name in DEPENDENCIES:
-                    changed_packages.add(pkg_name)
+            # What the generic rule below must not map to its package. A
+            # package *document* is the bulk of it: 159 files match both — 149
+            # under docs/ and ten changelogs — and mapping them ran a whole
+            # suite and its dependents for a prose edit while running none of
+            # the four guards that actually read the file. A document reaches
+            # its package only by being declared in PACKAGE_TEST_DOC_INPUTS.
+            #
+            # The flag is named for what it gates rather than for that majority
+            # case, because the licensing copies below are the member that is
+            # not a document at all — and under the narrower name they read like
+            # a category error rather than like the third thing the rule covers.
+            belongs_to_no_suite = False
 
-    return changed_packages, docs_changed, all_triggered, workspace_changed
+            # Package documentation. It belongs to no package's suite unless a
+            # test in that suite reads it — see PACKAGE_TEST_DOC_INPUTS, which
+            # is the whole of the exception and is checked against the tree
+            # rather than trusted.
+            if "/docs/" in filepath:
+                docs_changed = True
+                workspace_changed = True
+                belongs_to_no_suite = True
+                # Declared because a test *in* that package reads it, which
+                # is also why it does not export: the document decides one
+                # suite's result, and no dependent's run opens it.
+                owner = PACKAGE_TEST_DOC_INPUTS.get(filepath)
+                if owner is not None:
+                    changed_packages.add(owner)
+
+            # Package-root documentation, which the mapping below would
+            # otherwise read as a change to the package itself — scheduling its
+            # whole suite to publish a release note. See _PACKAGE_DOC_FILES for
+            # why nothing about a package's recorded verdict depends on one.
+            if filepath.rsplit("/", 1)[-1] in _PACKAGE_DOC_FILES:
+                docs_changed = True
+                belongs_to_no_suite = True
+
+            # A package's LICENSE and NOTICE copy. Read by one workspace guard
+            # and by no package's suite, so mapping one to its package is wrong
+            # in both directions at once: it schedules that suite and — the
+            # path being three segments, so _is_local_only_package_input says
+            # no — the whole dependent closure behind it, while making
+            # classify_test_scope answer "packages" and skip the only suite
+            # that opens the file.
+            #
+            # No docs_changed here, unlike the two cases above. The three
+            # recorded documentation checks read neither file: docs/license.md
+            # links to them on GitHub rather than including them.
+            if filepath.rsplit("/", 1)[-1] in _PACKAGE_LICENSE_FILES:
+                belongs_to_no_suite = True
+
+            # Map to package, and decide separately whether the change is
+            # one a dependent's run can see. Only the second drives the
+            # closure — see _LOCAL_ONLY_PACKAGE_DIRS for which it is.
+            if not belongs_to_no_suite:
+                parts = filepath.split("/")
+                if len(parts) >= 2:
+                    pkg_name = parts[1]
+                    if pkg_name in DEPENDENCIES:
+                        changed_packages.add(pkg_name)
+                        if not _is_local_only_package_input(filepath):
+                            exporting_packages.add(pkg_name)
+
+    return FileScan(
+        changed_packages=changed_packages,
+        exporting_packages=exporting_packages,
+        docs_changed=docs_changed,
+        triggered_steps=frozenset(triggered_steps),
+        workspace_changed=workspace_changed,
+    )
 
 
 def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
@@ -625,60 +1401,97 @@ def classify_test_scope(packages: list[str], workspace_changed: bool) -> str:
     return "none"
 
 
-def plan_for_files(files: list[str]) -> dict[str, Any]:
+def plan_for_files(
+    files: list[str], scans: Mapping[str, TriggerScan] | None = None
+) -> dict[str, Any]:
     """Decide what a change set needs tested, without consulting git.
 
     Split out from detect_changes so the decision is reachable from a test
     with a literal file list. The git half is what made the previous
     behaviour awkward to pin, and it is the decision that was wrong.
 
+    ``scans`` keeps that split intact now that some inputs have to be *read* to
+    be sized: detect_changes does the reading and passes the answers in, so
+    this stays a function of its arguments. See map_files_to_packages.
+
     Returns dict with:
-        packages: sorted list of package names that need testing
+        packages: sorted list of packages affected in any way — unchanged in
+            meaning, so a reader that knows only this key over-tests at worst
+        test_packages: the subset whose *test* result can have moved
         docs_changed: whether docs-related files changed
         directly_changed: packages with direct file changes
+        exporting: the subset of those whose change their dependents can see
         mode: "all" if global trigger hit, "changed" otherwise
         workspace_changed: whether a workspace-only quality input changed
         test_scope: "packages", "workspace" or "none" (see classify_test_scope)
+
+    **``packages`` deliberately keeps its old meaning rather than becoming the
+    lint list.** The two differ only when a global input moves one step and not
+    the other, and the direction of that difference is what matters: a consumer
+    reading ``packages`` alone schedules everything it would have scheduled
+    before, so the narrowing is something a reader opts into rather than
+    something it can miss. Spelled the other way — ``packages`` narrowed, a
+    wider list beside it — the same consumer silently under-tests.
     """
     if not files:
         return {
             "packages": [],
+            "test_packages": [],
             "docs_changed": False,
             "directly_changed": [],
+            "exporting": [],
             "mode": "none",
             "workspace_changed": False,
             "test_scope": "none",
         }
 
-    (
-        directly_changed,
-        docs_changed,
-        all_triggered,
-        workspace_changed,
-    ) = map_files_to_packages(files)
+    scan = map_files_to_packages(files, scans)
 
-    if all_triggered:
-        packages = list(ALL_PACKAGES)
-        mode = "all"
-    else:
-        # Compute transitive dependents, filtered to packages that exist
-        all_affected = get_transitive_dependents(directly_changed)
-        packages = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
-        mode = "changed"
+    # Only what a package *exports* reaches its dependents. Their recorded
+    # results describe running against this package, so a change they can
+    # see is what makes those results stop describing anything — and a
+    # change they cannot see is one their suites would re-confirm
+    # unchanged. Every directly changed package still runs its own suite;
+    # the union is what keeps a local-only change scheduling one.
+    all_affected = get_transitive_dependents(scan.exporting_packages) | scan.changed_packages
+    closure = sorted(pkg for pkg in all_affected if pkg in DEPENDENCIES)
+
+    # One closure, two overrides. A global input widens the list for the steps
+    # it moves and leaves the other at whatever the files themselves said,
+    # which is the whole of the difference between these two lines.
+    packages = list(ALL_PACKAGES) if scan.triggered_steps else closure
+    test_packages = list(ALL_PACKAGES) if TEST_STEP in scan.triggered_steps else closure
+    mode = "all" if scan.triggered_steps else "changed"
 
     return {
         "packages": packages,
-        "docs_changed": docs_changed,
-        "directly_changed": sorted(directly_changed),
+        "test_packages": test_packages,
+        "docs_changed": scan.docs_changed,
+        "directly_changed": sorted(scan.changed_packages),
+        "exporting": sorted(scan.exporting_packages),
         "mode": mode,
-        "workspace_changed": workspace_changed,
-        "test_scope": classify_test_scope(packages, workspace_changed),
+        "workspace_changed": scan.workspace_changed,
+        "test_scope": classify_test_scope(packages, scan.workspace_changed),
     }
 
 
 def detect_changes(base_ref: str = "main") -> dict[str, Any]:
-    """Detect changed packages and docs status. See plan_for_files."""
-    return plan_for_files(get_changed_files(base_ref))
+    """Detect changed packages and docs status. See plan_for_files.
+
+    Reads a global input only when it is in the material change set, so the two
+    extra git object reads per reader are paid on the change sets that can
+    benefit and on no others.
+    """
+    files = get_changed_files(base_ref)
+    resolved = _resolve_base_ref(base_ref)
+    scans: dict[str, TriggerScan] = {}
+    for path, read in _TRIGGER_READERS.items():
+        if path not in files:
+            continue
+        scan = read(resolved)
+        if scan is not None:
+            scans[path] = scan
+    return plan_for_files(files, scans)
 
 
 def main() -> None:

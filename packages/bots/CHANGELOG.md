@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Documentation
+
+- **`VectorKnowledgeSource.query` names the symbol it takes its filter-slice
+  convention from.** The comment cited `database.py:300` — a file that does not
+  exist in this package, in a line range that had drifted off the statement it
+  meant. It now names `DatabaseSource._build_structural_filters` and says which
+  package that lives in.
+
+### Changed
+
+- **`HeadingTreeIndex` expands a region through the shared hierarchy walks.**
+  The selection lives in `dataknobs-data` and the change is recorded in full
+  there; this entry is what a consumer of this package sees. On a well-formed
+  heading tree, nothing changes — the same chunks in the same order, so
+  `max_expanded_results` truncates exactly as it did.
+
+  On a heading tree whose nodes do **not** form one, three things do. A
+  `children` list that closes a cycle is walked to its end instead of raising
+  `RecursionError` or answering on the repeat. A node several headings reach
+  contributes its chunks once rather than once per route. And
+  `max_expansion_depth` measures distance from the matched heading, rather than
+  the length of whichever route happened to reach a node first.
+
+  `expansion_mode: "leaves"` also now agrees with itself at a bound that
+  reaches the whole region. Its bounded arm decided leaf-ness from the raw
+  `children` list, which still holds an edge the walk does not take, so it
+  could report a node as a leaf that the unbounded arm did not — making
+  `max_expansion_depth` a mode switch as well as a bound on exactly the trees
+  where that is hardest to notice.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-bots` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ## v0.13.1 - 2026-09-03
 
 #### Changed

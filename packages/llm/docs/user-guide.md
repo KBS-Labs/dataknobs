@@ -217,6 +217,77 @@ composite = CompositePromptLibrary(
 prompt = composite.get_system_prompt("helpful_assistant")
 ```
 
+<!-- --8<-- [start:library-flavours] -->
+### Two Flavours of Library
+
+A library that answers from memory — a config dictionary, a directory read at
+construction — implements `AbstractPromptLibrary`, whose accessors are `def`.
+A library that has to reach a store to answer implements `AsyncPromptLibrary`
+instead, whose accessors are coroutines. The two surfaces are otherwise
+identical member for member, with one stated exception: `get_metadata` is
+synchronous on both, because it answers from the library's own configuration
+rather than from its content.
+
+`VersionedPromptLibrary` is the async one — every answer it gives comes from a
+version manager that awaits:
+
+```python
+from dataknobs_llm.prompts import VersionedPromptLibrary
+
+versioned = VersionedPromptLibrary()
+
+await versioned.create_version(
+    name="helpful_assistant",
+    prompt_type="system",
+    template="You are a helpful assistant specializing in {{domain}}.",
+    version="1.0.0",
+)
+
+template = await versioned.get_system_prompt("helpful_assistant")
+```
+
+When the consumer holds one flavour and the library is the other, convert it at
+the door. The two directions do **not** cost the same, and that asymmetry is
+the thing to design around:
+
+```python
+from dataknobs_llm.prompts import as_async, as_sync
+
+# Cheap. A synchronous library, for an asynchronous consumer. Each call is
+# offloaded to a worker thread, so a library that reads a file to answer cannot
+# stall the consumer's loop. Nothing is owned and there is nothing to close.
+async_view = as_async(library)
+
+# Expensive. An asynchronous library, for a `def` consumer. Owns a private
+# event loop on a daemon thread until it is closed, and blocks the calling
+# thread for the whole of every call.
+with as_sync(versioned, timeout=30) as sync_view:
+    template = sync_view.get_system_prompt("helpful_assistant")
+```
+
+`as_sync` makes an async library *reachable* from a `def` site — including one
+already inside a running loop, where the old synchronous accessors raised
+`RuntimeError: This event loop is already running`. It does not make it cheap:
+the calling thread waits on the bridge for the whole call, so if that thread is
+running an event loop, every other task on it is stalled meanwhile.
+
+!!! warning "`as_sync` into `AsyncPromptBuilder` pays twice for one read"
+
+    `AsyncPromptBuilder` is still typed to the synchronous interface, so an
+    asynchronous library reaches it only through `as_sync` — and the builder
+    then puts that synchronous view straight back through `as_async`. Each
+    template fetch crosses to a worker thread, blocks *it* on the bridge, and
+    crosses back. The builder's own loop is not stalled, but the round trip
+    buys nothing, and the bridge `as_sync` opens is one the builder will never
+    close because `AbstractPromptLibrary` has no `close()` to call.
+
+    Where the consumer is asynchronous, reach the versioned library's own
+    `await get_system_prompt(...)` directly and skip both hops. Widening the
+    builder to accept either flavour is the open follow-up; it needs an
+    asynchronous twin of the shared `BasePromptBuilder.get_required_parameters`,
+    which fetches templates the same way and is inherited by both builders.
+<!-- --8<-- [end:library-flavours] -->
+
 ### Using Prompt Builder
 
 ```python
@@ -325,10 +396,12 @@ config_adapter = AsyncDictResourceAdapter(config_data)
 # Database adapter
 docs_db = AsyncMemoryDatabase()
 # ... populate database with documents ...
+# One metadata field, named singular: the adapter reads a single record field
+# holding the metadata, not a list of fields to collect.
 docs_adapter = AsyncDataknobsBackendAdapter(
     docs_db,
     text_field="content",
-    metadata_fields=["title", "category"]
+    metadata_field="metadata",
 )
 
 # Create builder with adapters
@@ -1986,7 +2059,7 @@ async def create_analysis_assistant():
     docs_adapter = AsyncDataknobsBackendAdapter(
         docs_db,
         text_field="content",
-        metadata_fields=["category"]
+        metadata_field="metadata",
     )
 
     # Load prompts (with RAG config)

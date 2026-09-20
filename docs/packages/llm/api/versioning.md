@@ -22,10 +22,11 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
         - create_version
         - get_version
         - list_versions
+        - list_names
         - update_status
         - tag_version
         - untag_version
-        - get_version_by_tag
+        - get_version_history
 
 ### PromptVersion
 
@@ -56,7 +57,7 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
         - get_variant_for_user
         - get_random_variant
         - update_experiment_status
-        - get_active_experiments
+        - get_variant_distribution
 
 ### PromptExperiment
 
@@ -100,7 +101,116 @@ The versioning API provides comprehensive tools for tracking prompt versions, ru
       show_source: true
       heading_level: 3
 
+## Storage
+
+Where the three managers keep what they are given. The default is in memory;
+`DatabaseVersionStore` puts everything into any dataknobs `AsyncDatabase`.
+
+Each manager declares only the part of the surface it uses, so a store written
+for one need not implement the others. `VersioningStore` is all three at once,
+which is what `VersionedPromptLibrary` asks for.
+
+Two members of `MetricsStore` carry a guarantee a caller could not reconstruct
+from the others. `record_event` appends an event and folds it into the
+version's aggregate in one operation, so concurrent recordings cannot lose an
+increment between a read and a write; `load_events` orders newest first and
+takes a `limit` the query applies, so an unbounded stream is never fully
+materialized. Implement both if you write your own store.
+
+### VersionStore
+
+::: dataknobs_llm.prompts.VersionStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### ExperimentStore
+
+::: dataknobs_llm.prompts.ExperimentStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### MetricsStore
+
+::: dataknobs_llm.prompts.MetricsStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### VersioningStore
+
+::: dataknobs_llm.prompts.VersioningStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### InMemoryVersionStore
+
+::: dataknobs_llm.prompts.InMemoryVersionStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### DatabaseVersionStore
+
+::: dataknobs_llm.prompts.DatabaseVersionStore
+    options:
+      show_source: false
+      heading_level: 3
+
+### require_store
+
+The check each manager runs on the store it is handed. Exported because a
+consumer writing their own store wants the same answer before wiring it in.
+
+::: dataknobs_llm.prompts.require_store
+    options:
+      show_source: false
+      heading_level: 3
+
 ## Usage Examples
+
+### Persisting to a Backend
+
+```python
+from dataknobs_data import async_database_factory
+from dataknobs_llm.prompts import (
+    ABTestManager,
+    DatabaseVersionStore,
+    MetricsCollector,
+    VersionManager,
+)
+
+# "memory", "file", "sqlite", "postgres", "s3", "duckdb", "elasticsearch".
+# The factory builds the database; it does not connect it.
+db = async_database_factory.create(backend="sqlite", path="./prompts.db")
+await db.connect()
+
+# One store for all three managers, so they share a database rather than
+# three configurations of one.
+store = DatabaseVersionStore(db)
+vm = VersionManager(store)
+ab = ABTestManager(store)
+mc = MetricsCollector(store)
+
+# ... use them ...
+
+# The store does not own the database. You opened it; you close it.
+await db.close()
+```
+
+A load hands back a value rather than a handle, so an in-place change is not
+stored until it is saved:
+
+```python
+version = await store.load_version(version_id)
+version.tags.append("production")
+await store.save_version(version)
+```
+
+That holds for `InMemoryVersionStore` too, so code developed against it
+behaves the same against a database.
 
 ### Version Management
 
@@ -412,17 +522,43 @@ await library.create_experiment(
     ]
 )
 
-# Use with prompt builder (automatically selects variant)
-from dataknobs_llm.prompts import AsyncPromptBuilder
+# Pick the variant for a user, then fetch that version. Selection is explicit
+# -- the prompt builder has no user_id and does not choose for you.
+experiment = await library.get_experiment(experiment_id)
+version = await library.get_variant_for_user(experiment.experiment_id, "user123")
 
-builder = AsyncPromptBuilder(
-    library=library,
-    user_id="user123"  # For sticky assignment
-)
-
-result = await builder.render_system_prompt("greeting", {"name": "Alice"})
-# Uses versioned prompt based on A/B test
+# Sticky: the same user gets the same variant on every later turn.
+template = await library.get_version("greeting", "system", version)
 ```
+
+!!! note "This library is the asynchronous flavour"
+
+    `VersionedPromptLibrary` implements `AsyncPromptLibrary`, not
+    `AbstractPromptLibrary`: every answer it gives comes from a version
+    manager that awaits, so its accessors are coroutines like its writers.
+
+    ```python
+    template = await library.get_system_prompt("greeting")
+    names = await library.list_system_prompts()
+    ```
+
+    A `def` caller reaches it through `as_sync`, which runs the coroutine on a
+    private event loop — so the call returns rather than raising, at the cost
+    of a daemon thread and a blocked calling thread for the whole call:
+
+    ```python
+    from dataknobs_llm.prompts import as_sync
+
+    with as_sync(library, timeout=30) as view:
+        template = view.get_system_prompt("greeting")
+    ```
+
+    The accessors were synchronous before, because the only library protocol
+    available said so. They reached the async version manager with
+    `loop.run_until_complete`, which raises `RuntimeError: This event loop is
+    already running` for a caller already on one — and a running loop is the
+    only place this library can be populated from, because `create_version`
+    and `create_experiment` are coroutines.
 
 ## Best Practices
 

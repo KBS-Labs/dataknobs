@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Base SQL functionality shared between SQL database backends."""
 
 from __future__ import annotations
@@ -62,11 +65,41 @@ def validate_field_name(field: str) -> None:
     Valid names match ``[A-Za-z_][A-Za-z0-9_]*``.  This check guards
     string-literal positions in SQL (e.g. JSONB key slots) where
     ``quote_ident()`` does not apply.
+
+    This is the **single-segment** check, for a position that takes one JSON
+    key and gives a dot no special meaning — ``get_vector_extraction_sql`` and
+    ``_build_text_field_concat``.  A *filter field* is a dot-separated path, and
+    applying this check to one rejects every nested field; use
+    :func:`validate_field_path` there.
     """
     if not _FIELD_NAME_RE.match(field):
         raise ValueError(
             f"Invalid field name: {field!r}. Field names must match [A-Za-z_][A-Za-z0-9_]*."
         )
+
+
+def validate_field_path(field: str) -> None:
+    """Raise ValueError if any dot-separated segment of *field* is unsafe.
+
+    The grammar for a **query field path**, where a dot is a path separator and
+    each segment reaches a JSONB key in SQL string-literal position.  It is one
+    function because it has two callers that must not drift:
+    :meth:`SQLQueryBuilder._build_json_field_expr`, which validates at the point
+    of interpolation, and the Postgres ``stream_read`` twins, which pre-flight
+    the query so a malformed field is refused before a connection is acquired.
+
+    Those two were separate implementations once, and they disagreed: the
+    pre-flight applied :func:`validate_field_name` to the whole dotted string,
+    so ``metadata.work_order_id`` raised there while ``search`` over the same
+    ``Query`` answered rows through the builder.  Anything that needs this
+    grammar calls this function; nothing re-spells it.
+    """
+    for part in field.split("."):
+        if not _FIELD_NAME_RE.match(part):
+            raise ValueError(
+                f"Invalid field name segment {part!r} in {field!r}. "
+                f"Field segments must match [A-Za-z_][A-Za-z0-9_]*."
+            )
 
 
 def escape_like_prefix(prefix: str) -> str:
@@ -257,8 +290,11 @@ class SQLRecordSerializer:
         data = json.loads(data_json) if data_json else {}
         metadata = json.loads(metadata_json) if metadata_json and metadata_json != "null" else {}
 
-        # Reconstruct fields properly, especially VectorFields
-        fields = {}
+        # Reconstruct fields properly, especially VectorFields. Annotated to
+        # the base: the first branch assigns a ``VectorField`` and the second a
+        # plain ``Field``, and an unannotated dict takes its value type from
+        # whichever it sees first.
+        fields: dict[str, Field] = {}
         for field_name, field_value in data.items():
             # Check if this is a serialized VectorField
             if isinstance(field_value, dict) and field_value.get("type") == "vector":
@@ -991,14 +1027,11 @@ class SQLQueryBuilder:
         if column not in _allowed_columns:
             raise ValueError(f"column must be one of {_allowed_columns!r}, got {column!r}")
 
-        # Validate field path segments to prevent SQL injection
+        # Validate field path segments to prevent SQL injection. The same
+        # function the Postgres ``stream_read`` twins pre-flight, so what they
+        # accept and what this interpolates cannot drift apart.
+        validate_field_path(field)
         parts = field.split(".")
-        for part in parts:
-            if not _FIELD_NAME_RE.match(part):
-                raise ValueError(
-                    f"Invalid field name segment {part!r} in {field!r}. "
-                    f"Field segments must match [A-Za-z_][A-Za-z0-9_]*."
-                )
 
         if self.dialect == "postgres":
             # Build chained extraction operators

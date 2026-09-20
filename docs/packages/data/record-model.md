@@ -25,18 +25,32 @@ The `Record` class represents a data entity:
 from dataknobs_data import Record, Field, FieldType
 from datetime import datetime
 
-# Create a record with fields
+# The first argument is `data`, and a plain dict is enough -- Record wraps
+# each value in a Field and infers its FieldType.
 record = Record(
-    fields={
-        "name": Field(name="name", type=FieldType.STRING, value="John Doe"),
-        "age": Field(name="age", type=FieldType.INTEGER, value=30),
-        "email": Field(name="email", type=FieldType.STRING, value="john@example.com")
+    {
+        "name": "John Doe",
+        "age": 30,
+        "email": "john@example.com",
     },
     metadata={
         "source": "api",
         "version": "1.0",
         "created_at": datetime.now()
     }
+)
+print(record.fields["age"].type)     # FieldType.INTEGER
+
+# Pass Field objects when you need to pin the type or attach field metadata.
+# They go in the same `data` argument, keyed by name.
+from collections import OrderedDict
+
+record = Record(
+    OrderedDict(
+        name=Field(name="name", type=FieldType.STRING, value="John Doe"),
+        age=Field(name="age", type=FieldType.INTEGER, value=30),
+    ),
+    metadata={"source": "api"},
 )
 
 print(record.id)  # Auto-generated UUID

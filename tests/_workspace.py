@@ -20,6 +20,7 @@ merely *named* the other copy while the correctness fix landed only here.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import re
@@ -537,3 +538,92 @@ def code_fences(path: Path) -> list[Fence]:
     if inside:
         found.append(Fence(lang, opened, "\n".join(body), marker))
     return found
+
+
+def published_fence(path: Path, marker: str) -> str:
+    """The body of ``path``'s fence carrying ``marker``.
+
+    **Refuses rather than returning empty**, which is the whole reason this is
+    a function. A marker that has been renamed or deleted would otherwise hand
+    every assertion downstream an empty string, and two empty strings compare
+    equal -- a guard reporting green because it read nothing, over the one page
+    it exists to read.
+
+    Shared by the worked-call-site guards rather than copied into each --- one
+    per guide that publishes a call site, so the population grows with the
+    guides and is deliberately not counted here; a count in this docstring
+    went stale the first time a sixth guide shipped. The failure mode above is
+    exactly the kind a second copy loses silently: a guard that stopped
+    refusing still passes every test written for the guard that did.
+    :func:`door_imports` is shared by the same set for the same reason, and
+    its docstring records what the copies had already lost.
+    """
+    fences = [f for f in code_fences(path) if f.marker == marker]
+    if len(fences) != 1:
+        raise LookupError(
+            f"{rel(path)} carries {len(fences)} fences marked <!-- {marker} -->, "
+            f"expected exactly one. The guide and its guard agree on these "
+            f"markers and on nothing else."
+        )
+    body = fences[0].body
+    if not body.strip():
+        raise LookupError(f"the <!-- {marker} --> fence in {rel(path)} is empty")
+    return body
+
+
+def door_imports(fence: str, package: str = "dataknobs_common") -> set[str]:
+    """Every module of ``package`` that ``fence`` imports, however it spells it.
+
+    Shared by the worked-call-site guards for :func:`published_fence`'s reason
+    at one remove. Each of the three that existed when this was extracted
+    carried its own copy, differing only in the ``doors`` set it compared
+    against -- and the copies read
+    ``line.startswith("from ...")``, which is a prefix scan over source text
+    rather than a reading of it.
+
+    **The prefix scan had a hole, and it was the shape the guard exists to
+    catch.** ``import dataknobs_common.ontology.taxonomy`` reaches past a door
+    exactly as the ``from`` spelling does and does not begin with ``from``, so
+    it was invisible: a call site carrying one door import and one module path
+    passed. Parsing closes that, and closes it in one place rather than in
+    whichever copy is edited next.
+
+    Relative imports are not doors and are skipped; a fence that is not
+    parseable Python raises, which is what a guard over an executed copy
+    should do.
+    """
+    reached: set[str] = set()
+    for node in ast.walk(ast.parse(fence)):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:  # `from . import x` reaches no door
+                continue
+            named = [node.module or ""]
+        elif isinstance(node, ast.Import):
+            named = [alias.name for alias in node.names]
+        else:
+            continue
+        reached.update(name for name in named if name == package or name.startswith(f"{package}."))
+    return reached
+
+
+def executed_source(path: Path) -> str:
+    """An executed copy of a fence, less its own docstring header.
+
+    The boundary is the end of the module docstring, taken from the parsed
+    tree rather than by finding a closing ``\"\"\"`` in the text. Those are not
+    the same place: a published fence containing a triple-quoted string
+    followed by a blank line carries an earlier one, and splitting there
+    silently truncates the comparison to the tail of the file.
+
+    Anything above that boundary is the executed copy's own preamble, which a
+    reader of the guide never sees; everything below it is the fence.
+    """
+    text = path.read_text(encoding="utf-8")
+    body = ast.parse(text).body
+    if not (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)):
+        raise LookupError(
+            f"{rel(path)} opens with no module docstring. An executed copy "
+            f"carries one saying it is a transcription and where the fence "
+            f"begins, and this function has nothing to split on without it."
+        )
+    return "\n".join(text.splitlines()[body[0].end_lineno :]).strip("\n")

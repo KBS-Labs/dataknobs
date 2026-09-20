@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Backend registry and config-driven construction for knowledge bases.
 
 Provides a plugin registry that lets 3rd parties register custom

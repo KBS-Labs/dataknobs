@@ -11,6 +11,95 @@ package, which for most of them was nothing but the version number.
 
 ## Unreleased
 
+### Changed
+
+- **`Tree.children` returns a tuple, not the live list** — a snapshot of the
+  node's children rather than the list the node is holding. Reading, indexing,
+  iterating, slicing and `len()` are unaffected; a caller that *mutated* what it
+  got back — `node.children.append(x)`, `.remove(x)`, `.sort()` — now gets an
+  `AttributeError` at that line, and the remedy is `add_child` / `prune`, or an
+  explicit `list(node.children)` where a mutable copy was what was wanted.
+
+  In-place mutation walked past every check `add_child` performs, so it could
+  give a node two parents that disagreed about it, or leave a child listed under
+  a parent it had already been pruned from. Neither is reachable now. A tuple
+  was chosen over a defensive list copy because a copy accepts the write and
+  silently discards it, which turns a corruption into a corruption with no
+  diagnostic.
+
+  This package ships `py.typed`, so the annotation change — `Optional[List[Tree]]`
+  to `Optional[Tuple[Tree, ...]]` — is visible to downstream type checkers as
+  well as at runtime.
+
+### Fixed
+
+- **A tree can no longer be made its own ancestor.** `add_child`, the `parent`
+  setter and `add_edge` now refuse a child that is the node itself or one of its
+  ancestors, raising `ValidationError` and leaving the tree exactly as it was.
+  Nothing can have depended on the old behaviour deliberately: the object it
+  produced is one that ten of this class's twelve traversals spin on forever —
+  `root`, `depth`, `get_path`, `find_nodes`, `get_edges`, `get_deepest_left`,
+  `get_deepest_right`, `find_deepest_common_ancestor`, `build_dot` and
+  `is_ancestor` — while `collect_terminal_nodes` and `as_string` raise
+  `RecursionError`. (`is_ancestor` is the one with a caveat: it answers when the
+  node asking is itself on the cycle, and circles forever when it is not.) `add_edge` was the worst of the three entrances: asked for an
+  edge inverting one already present, it built the cycle *and* emptied the tree,
+  because the node it moved was pruned from its parent on the way.
+
+  This is the first exception this package raises. `ValidationError` comes from
+  `dataknobs_common.exceptions`, already a declared dependency, and carries the
+  two nodes' data in its `context` rather than rendering them into the message.
+
+- **Setting `parent` now maintains both halves of the link.** It previously
+  assigned the node's parent reference and nothing else, so the new parent never
+  gained the child and the old one never lost it — a node that named a parent
+  which did not list it, which `sibnum`, `prune` and every edge walk then
+  answered wrongly about. `node.parent = other` is now `other.add_child(node)`,
+  and `node.parent = None` detaches the node from both sides rather than one.
+
+  A tree made cyclic under an earlier release and carried across — unpickled, or
+  assembled through the private attributes — is not repaired by any of this.
+  Writing to one now reports it instead of hanging; reading from one was never
+  supported and still is not.
+
+- **A link only one side agrees with no longer breaks the node that meets it.**
+  The old `parent` setter left exactly that behind — a node naming a parent
+  whose child list never gained it — and every re-parent now routes through
+  `prune`, which removes by value. Meeting one raised `ValueError` from a node
+  the caller had not named, and left the *new* parent holding an empty child
+  list from a call that had failed. `prune` now checks before removing, so a
+  tree carried across from an earlier release can still be rearranged; the
+  detach it was asked for happens either way.
+
+### Documentation
+
+- **The basic-tree examples page runs.** It described a `Tree` that was never
+  implemented — a container object built with `Tree()`, populated through
+  `add_root` and `tree.add_child(node, data)`, walked with `tree.traverse()`
+  and read through `node.value` and `node.level`. None of those exist on the
+  shipped class, so every block on the page raised on its first line touching
+  the tree; its opening example was quieter and worse, feeding arrow syntax to
+  `build_tree_from_string`, which returns a single node holding the whole input
+  string as its data whenever the input does not start with an open paren. The
+  page is now written against the real surface — the node *is* the tree — and
+  every fenced block was executed, with the printed values in the comments taken
+  from that run rather than written by hand.
+
+  Four other pages on the site still teach the same imagined class. They were
+  left out of this change deliberately, and are recorded as outstanding.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-structures` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ## v1.0.17 - 2026-08-26
 
 ### Changed

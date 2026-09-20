@@ -12,7 +12,13 @@ from dataknobs_llm.fsm_integration import (
     AsyncLLMResource,
 )
 from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMResponse
+from dataknobs_llm.llm.providers import (
+    LLMProviderFactory,
+    SyncProviderAdapter,
+    _provider_registry,
+)
 from dataknobs_llm.llm.providers.echo import ErrorResponse
+from dataknobs_common.testing import live_dk_daemon_threads
 from dataknobs_llm.testing import text_response
 from dataknobs_common.ratelimit import InMemoryRateLimiter
 from dataknobs_fsm.functions.base import ResourceError
@@ -500,10 +506,13 @@ class TestSyncResourceEmbedDoesNotInvent:
         """
         resource = LLMResource("r", provider="anthropic", model="claude-3-5-sonnet", api_key="k")
 
-        with pytest.raises(ResourceError) as excinfo:
-            resource.embed(["hello world"])
+        try:
+            with pytest.raises(ResourceError) as excinfo:
+                resource.embed(["hello world"])
 
-        assert isinstance(excinfo.value.__cause__, NotImplementedError)
+            assert isinstance(excinfo.value.__cause__, NotImplementedError)
+        finally:
+            resource.close()
 
     def test_a_provider_the_enum_does_not_know_is_still_delegated_to(self):
         """``echo`` is a real provider that the FSM-side enum has no member for.
@@ -513,36 +522,48 @@ class TestSyncResourceEmbedDoesNotInvent:
         """
         resource = LLMResource("r", provider="echo", model="embed-test")
 
-        vectors = resource.embed(["hello world"])
+        try:
+            vectors = resource.embed(["hello world"])
 
-        assert len(vectors) == 1
-        assert len(set(vectors[0])) > 1, "a constant vector is a fabricated one"
+            assert len(vectors) == 1
+            assert len(set(vectors[0])) > 1, "a constant vector is a fabricated one"
+        finally:
+            resource.close()
 
     def test_two_texts_do_not_embed_identically(self):
         """The sharpest tell of fabrication: every text got the same vector."""
         resource = LLMResource("r", provider="echo", model="embed-test")
 
-        first, second = resource.embed(["alpha", "beta"])
+        try:
+            first, second = resource.embed(["alpha", "beta"])
 
-        assert first != second
+            assert first != second
+        finally:
+            resource.close()
 
     def test_a_single_string_still_returns_a_list_of_vectors(self):
         """The signature promises ``List[List[float]]`` for either input shape."""
         resource = LLMResource("r", provider="echo", model="embed-test")
 
-        vectors = resource.embed("just one")
+        try:
+            vectors = resource.embed("just one")
 
-        assert len(vectors) == 1
-        assert isinstance(vectors[0], list)
-        assert all(isinstance(value, float) for value in vectors[0])
+            assert len(vectors) == 1
+            assert isinstance(vectors[0], list)
+            assert all(isinstance(value, float) for value in vectors[0])
+        finally:
+            resource.close()
 
     def test_a_configured_width_reaches_the_provider(self):
         """The width rule holds through this class too, or it holds nowhere."""
         resource = LLMResource("r", provider="echo", model="embed-test", dimensions=16)
 
-        vectors = resource.embed(["hello world"])
+        try:
+            vectors = resource.embed(["hello world"])
 
-        assert len(vectors[0]) == 16
+            assert len(vectors[0]) == 16
+        finally:
+            resource.close()
 
     def test_the_openai_path_does_not_import_a_module_that_moved(self):
         """``dataknobs_fsm.llm.base`` has not existed since the migration.
@@ -559,10 +580,13 @@ class TestSyncResourceEmbedDoesNotInvent:
             endpoint=CLOSED_ENDPOINT,
         )
 
-        with pytest.raises(ResourceError) as excinfo:
-            resource.embed(["hello world"])
+        try:
+            with pytest.raises(ResourceError) as excinfo:
+                resource.embed(["hello world"])
 
-        assert not isinstance(excinfo.value.__cause__, ModuleNotFoundError)
+            assert not isinstance(excinfo.value.__cause__, ModuleNotFoundError)
+        finally:
+            resource.close()
 
 
 class TestSyncResourceCompleteDoesNotInvent:
@@ -582,8 +606,11 @@ class TestSyncResourceCompleteDoesNotInvent:
             endpoint=CLOSED_ENDPOINT,
         )
 
-        with pytest.raises(ResourceError):
-            resource.complete("Say hello")
+        try:
+            with pytest.raises(ResourceError):
+                resource.complete("Say hello")
+        finally:
+            resource.close()
 
     def test_the_configured_credentials_are_the_ones_used(self):
         """The method read ``kwargs`` then the environment, never the config.
@@ -599,21 +626,27 @@ class TestSyncResourceCompleteDoesNotInvent:
             endpoint=CLOSED_ENDPOINT,
         )
 
-        with pytest.raises(ResourceError) as excinfo:
-            resource.complete("Say hello")
+        try:
+            with pytest.raises(ResourceError) as excinfo:
+                resource.complete("Say hello")
 
-        # Reaching the transport at all means the key was accepted upstream
-        # of it; failing on the key would mean it was never read.
-        assert "API key not provided" not in str(excinfo.value.__cause__)
+            # Reaching the transport at all means the key was accepted upstream
+            # of it; failing on the key would mean it was never read.
+            assert "API key not provided" not in str(excinfo.value.__cause__)
+        finally:
+            resource.close()
 
     def test_a_provider_the_enum_does_not_know_completes(self):
         """``_custom_complete`` refused every provider outside the enum."""
         resource = LLMResource("r", provider="echo", model="echo-test")
 
-        response = resource.complete("Say hello")
+        try:
+            response = resource.complete("Say hello")
 
-        assert response["choices"][0]["text"]
-        assert response["choices"][0]["finish_reason"] != "error"
+            assert response["choices"][0]["text"]
+            assert response["choices"][0]["finish_reason"] != "error"
+        finally:
+            resource.close()
 
     def test_an_unknown_provider_is_refused_by_both_operations(self):
         """One name nothing can serve, and two operations that must agree.
@@ -705,3 +738,102 @@ class TestAsyncResourceInheritsTheSyncPath:
             assert response["choices"][0]["text"]
         finally:
             resource.close()
+
+
+class _InitializeFailsProvider(EchoProvider):
+    """A real provider whose ``initialize()`` fails, as an unreachable one does.
+
+    Registered through ``LLMProviderFactory.register_provider`` --- the
+    documented extension point, and the shape ``test_providers.py`` and
+    ``test_provider_name_contract.py`` already use --- so the failure travels
+    the production construction path rather than being simulated beside it.
+    """
+
+    async def initialize(self) -> None:  # type: ignore[override]
+        raise ConnectionError("provider unreachable")
+
+
+class TestResourceTeardownReleasesItsThreads:
+    """Every adapter this resource builds owns a daemon thread until close().
+
+    The adapters were cheap to strand before they held one. They are not
+    any more, and the two paths that strand them are a failed ``initialize``
+    --- where the adapter is never stored, so ``close()`` cannot reach it ---
+    and ``AsyncLLMResource``, whose ``aclose()`` never looked at the map the
+    inherited sync methods fill.
+    """
+
+    def test_a_failed_initialize_leaves_no_bridge_thread_behind(self):
+        """The adapter that failed to initialize is still the resource's to close.
+
+        ``_sync_provider`` builds the adapter --- which starts a loop thread
+        the moment it reaches the provider --- and only records it in
+        ``_providers`` *after* ``initialize()`` returns. An ``initialize``
+        that raises therefore leaves an adapter nothing holds and nothing can
+        close, and the ``ResourceError`` the caller catches carries a
+        traceback holding it, so the finalizer that would have rescued it
+        never runs either. A service that catches this and retries accumulates
+        one thread and two descriptors per attempt, silently.
+        """
+        watched = [SyncProviderAdapter.BRIDGE_THREAD_NAME]
+        before = set(live_dk_daemon_threads(watched))
+
+        # Unregistered in the `finally` for the reason `test_providers.py`
+        # gives: the registry is a module-level singleton, and a parity audit
+        # elsewhere asserts it holds only built-ins.
+        LLMProviderFactory.register_provider("echo-initialize-fails", _InitializeFailsProvider)
+        try:
+            resource = LLMResource("r", provider="echo-initialize-fails", model="m")
+            try:
+                with pytest.raises(ResourceError) as excinfo:
+                    resource.complete("hello")
+
+                assert isinstance(excinfo.value.__cause__, ConnectionError)
+                assert set(live_dk_daemon_threads(watched)) == before
+            finally:
+                resource.close()
+        finally:
+            _provider_registry.unregister("echo-initialize-fails")
+
+    def test_close_releases_the_thread_of_the_adapter_it_built(self):
+        """The ordinary path, which nothing asserted: the thread comes back.
+
+        ``test_llm_resource_completes_from_inside_a_running_loop`` proves the
+        call works. That the resource's own ``close()`` releases what the call
+        allocated is a separate claim, and it is the one a consumer holding a
+        resource per tenant depends on.
+        """
+        watched = [SyncProviderAdapter.BRIDGE_THREAD_NAME]
+        before = set(live_dk_daemon_threads(watched))
+
+        resource = LLMResource("r", provider="echo", model="test")
+        try:
+            resource.complete("hello")
+
+            assert len(live_dk_daemon_threads(watched)) == len(before) + 1
+        finally:
+            resource.close()
+
+        assert set(live_dk_daemon_threads(watched)) == before
+
+    async def test_aclose_releases_the_adapters_the_async_class_inherited(self):
+        """``AsyncLLMResource`` does not override ``complete``.
+
+        So the inherited **sync** ``complete`` runs on the async class, fills
+        ``_providers`` with bridge-owning adapters, and ``aclose()`` --- which
+        closes the async provider and the rate limiter --- never looks at
+        them. One leaked daemon thread per model key, per resource.
+        """
+        watched = [SyncProviderAdapter.BRIDGE_THREAD_NAME]
+        before = set(live_dk_daemon_threads(watched))
+
+        resource = AsyncLLMResource("r", provider="echo", model="test")
+        await resource.ainitialize()
+        try:
+            result = resource.complete("hello")
+
+            assert "Echo: hello" in result["choices"][0]["text"]
+        finally:
+            await resource.aclose()
+
+        assert set(live_dk_daemon_threads(watched)) == before

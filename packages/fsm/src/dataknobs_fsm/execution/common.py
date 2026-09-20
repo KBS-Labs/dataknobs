@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Common utilities shared across the execution engine and its helpers.
 
 This module provides shared logic used by the async execution engine and the

@@ -210,9 +210,14 @@ none and inherit the repository default.
 
 Your committed artifacts do not match the code in the pull request. The job
 output names either the packages needing re-validation, or the workspace scope
-(`toolchain`, `workspace_tests`, `docs`) that changed. The last two dirty no
-individual package, so those cases report a changed scope and an empty package
-list.
+that changed. The global scopes are split by the recorded step their inputs
+move — `toolchain` for the inputs that move both, `toolchain_lint` for
+`bin/validate.sh` and the discovery helper it sources, `toolchain_test` for
+`conftest.py`, `pytest.ini` and `bin/test.sh` — and any of the three dirties
+every package, since the step it names is recorded once per package. Which one
+moved is how you tell whether the validation rows or the test rows went stale.
+`workspace_tests` and `docs` dirty no individual package, so those cases report
+a changed scope and an empty package list.
 
 ```bash
 bin/dk pr

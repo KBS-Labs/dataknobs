@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Artifact management tools for conversational workflows.
 
 Context-aware tools for managing artifacts within conversations.

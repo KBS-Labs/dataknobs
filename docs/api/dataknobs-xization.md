@@ -196,9 +196,11 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 from dataknobs_xization import normalize
 
 # Basic text normalization
+# Whitespace squashing is opt-in; by default only lowercasing, camelCase
+# expansion and quote simplification are applied.
 text = "  Hello,    WORLD!  \n\t How   are you?  "
-normalized = normalize.basic_normalization_fn(text)
-print(normalized)  # "hello, world! how are you?"
+normalized = normalize.basic_normalization_fn(text, squash_whitespace=True)
+print(normalized)  # hello, world! how are you?
 
 # CamelCase expansion
 camel_text = "firstName"
@@ -364,7 +366,7 @@ class TextProcessingPipeline:
         self.normalize_config = normalize_config or {}
         self.analysis_config = analysis_config or {}
     
-    def process_document(self, doc: dk_doc.Document) -> dict:
+    def process_document(self, doc: dk_doc.Text) -> dict:
         """Process a document through the complete pipeline."""
         original_text = doc.text
         results = {
@@ -455,16 +457,17 @@ config = {
 
 pipeline = TextProcessingPipeline(normalize_config=config)
 
-# Create sample documents
+# Create sample documents. The class is Text, and the id belongs to its
+# metadata rather than to a keyword on the constructor.
 documents = [
-    dk_doc.Document(
-        "getUserName() & validateInput (required)", 
-        text_id="tech_doc_1"
+    dk_doc.Text(
+        "getUserName() & validateInput (required)",
+        dk_doc.TextMetaData("tech_doc_1"),
     ),
-    dk_doc.Document(
+    dk_doc.Text(
         "Machine Learning (ML) & Artificial Intelligence",
-        text_id="ai_doc_1" 
-    )
+        dk_doc.TextMetaData("ai_doc_1"),
+    ),
 ]
 
 # Process documents

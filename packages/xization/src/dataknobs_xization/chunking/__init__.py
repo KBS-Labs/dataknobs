@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Pluggable document chunking for RAG applications.
 
 This module provides a ``Chunker`` abstraction, a ``ChunkTransform``

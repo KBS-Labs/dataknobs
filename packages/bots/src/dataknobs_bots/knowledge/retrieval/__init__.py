@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Retrieval utilities for RAG knowledge bases.
 
 This module provides post-retrieval processing for improving RAG quality,

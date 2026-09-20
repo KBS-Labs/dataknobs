@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Resolve a dotted path from configuration to a live Python object.
 
 Four functions, one policy. ``resolve_dotted`` imports a module and returns one

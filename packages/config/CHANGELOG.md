@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`Config` takes the environment source it reads, as `env_overrides`.** It
+  constructed its own `EnvironmentOverrides()` and offered no way to pass one,
+  so the `prefix` that class has always declared was unreachable for every
+  `Config` caller. The guide said as much, and answered "custom prefix" with a
+  recipe that drove `EnvironmentOverrides` directly and assigned each value
+  with `item[attr] = value` — the override loop rewritten by hand, which did
+  not survive that loop learning to walk a `__`-joined attribute into the
+  value it names. A caller who took that recipe applies
+  `MYAPP_DB__0__CONNECTION__TIMEOUT` as a flat `connection__timeout` key
+  beside the `connection` it was aimed at, which is the defect fixed below
+  reintroduced one layer out. The parameter takes any `EnvironmentOverrides`
+  — one built with a different prefix, or a subclass whose `get_overrides`
+  hands back less than it was given — and `from_file` and `from_dict` forward
+  it. Whatever the source returns is applied by the same loop as the default
+  source, so choosing where values are read from no longer means
+  reimplementing how they are assigned. Passing it with `use_env=False` raises
+  `ValueError` rather than building a source nothing would read.
+
+### Changed
+
+- **`use_env` is a declared parameter, and `from_file`/`from_dict` forward it.**
+  The switch that decides whether `DATAKNOBS_`-prefixed environment values
+  reach configuration was read as `kwargs.get("use_env", True)`, so it existed
+  only on `__init__` — the documented classmethods could not decline the
+  environment at all — and every misspelling was absorbed by `**kwargs`,
+  leaving the overrides silently on. It is now a keyword parameter on the
+  constructor and both classmethods, so opting out works through the
+  documented door and a typo raises `TypeError` rather than failing open.
+  `**kwargs` is gone from `Config.__init__`; nothing else was ever read from
+  it, so a call passing anything else was already a no-op and is now an error.
+
+### Fixed
+
+- **An environment override naming a nested value now reaches it, or is
+  refused.** The attribute field of a `DATAKNOBS_` variable is everything past
+  the second separator, so
+  `DATAKNOBS_DATABASES__PRIMARY__CONNECTION__TIMEOUT=60` arrived as the single
+  name `connection__timeout` and was assigned flat. Against a configuration
+  holding `connection: {timeout: 30}` that produced both keys — the junk one
+  carrying the operator's value and the real one still at `30` — and nothing
+  warned, because the guard around the assignment fires only when the lookup
+  raises, and this lookup succeeds. The path is now walked: each leading
+  segment must name an existing dict key or an in-range list index (negative
+  included, that being the notation the reference's own index field already
+  accepts), and the final segment is then written. A dict gains that key if it
+  is absent, as a single-segment name always has; a list does not gain a
+  position, because there is none to create and appending would put the value
+  somewhere the operator did not name. A path that does not resolve is logged
+  and dropped rather than written beside its target, as is a reference that
+  names no attribute at all.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-config` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ## v0.7.1 - 2026-09-02
 
 ### Changed

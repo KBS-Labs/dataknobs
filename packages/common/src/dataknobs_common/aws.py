@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared boto3 / aioboto3 AWS session construction for dataknobs.
 
 Single source of truth for how dataknobs initializes AWS clients (S3,

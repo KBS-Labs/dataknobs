@@ -47,8 +47,10 @@ config = Config({
     ]
 })
 
-# Load with environment overrides
-config = Config.from_file("config.yaml", apply_env_overrides=True)
+# Environment overrides are applied as the Config is built, every time --
+# there is no flag to enable them. Pass use_env=False to opt out; the
+# constructor and both classmethods take it.
+config = Config("config.yaml", use_env=False)
 ```
 
 ### Accessing Configuration
@@ -272,24 +274,47 @@ db = config.construct("databases", "primary")
 
 Configure global settings and type-specific defaults:
 
+A default is a *setting*, keyed by name. `<type>.<attribute>` defaults one
+type; a bare `<attribute>` defaults every type. There is no separate
+defaults API, and no `settings=` argument on the loaders -- the usual door is
+a `settings:` block in the file itself:
+
+```yaml
+settings:
+  # Type-specific defaults
+  databases.port: 5432
+  databases.pool_size: 20
+  # Global default, applied to every type
+  timeout: 30
+
+databases:
+  - name: primary
+    host: localhost
+```
+
+```python
+from dataknobs_config import Config
+
+config = Config.from_file("config.yaml")
+
+print(config.get("databases", "primary"))
+# {'name': 'primary', 'host': 'localhost', 'type': 'databases',
+#  'timeout': 30, 'port': 5432, 'pool_size': 20}
+```
+
+To build the same defaults from code, set them by key and apply them yourself:
+
 ```python
 from dataknobs_config.settings import SettingsManager
 
 settings = SettingsManager()
+settings.set_setting("databases.port", 5432)
+settings.set_setting("databases.pool_size", 20)
+settings.set_setting("timeout", 30)
 
-# Set type-specific defaults
-settings.set_defaults("databases", {
-    "port": 5432,
-    "pool_size": 20
-})
-
-# Set global defaults
-settings.set_global_defaults({
-    "timeout": 30
-})
-
-# Apply to config
-config = Config.from_file("config.yaml", settings=settings)
+print(settings.apply_defaults({"name": "primary", "host": "localhost"}, "databases"))
+# {'name': 'primary', 'host': 'localhost', 'timeout': 30,
+#  'port': 5432, 'pool_size': 20}
 ```
 
 ## Merging Configurations
@@ -306,9 +331,10 @@ env_config = Config.from_file("production.yaml")
 # Merge configurations
 base_config.merge(env_config)
 
-# Or during construction
-config = Config.from_file("base.yaml")
-config.merge_file("production.yaml")
+# Or load both sources into one Config. There is no merge_file: a path is
+# loaded with `load`, and passing every source to the constructor is what
+# applies environment overrides once, after the last of them.
+config = Config("base.yaml", "production.yaml")
 ```
 
 ## Validation

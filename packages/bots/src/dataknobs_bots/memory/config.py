@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Typed configuration dataclasses for the memory backends.
 
 Each concrete memory backend documents a small set of configuration keys.

@@ -16,7 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from tests._workspace import ROOT, Fence, code_fences, documentation_files, rel
+from tests._workspace import (
+    ROOT,
+    Fence,
+    code_fences,
+    documentation_files,
+    door_imports,
+    rel,
+)
 
 
 @pytest.fixture
@@ -169,3 +176,74 @@ def test_the_reader_finds_fences_across_the_documentation() -> None:
 
     assert total > 2000, f"only {total} fences found across {len(counts)} documents"
     assert counts[rel(ROOT / "README.md")] > 0, "the root README reads as having no code"
+
+
+class TestDoorImports:
+    """What a worked call site is read to have imported.
+
+    The three worked-call-site guards each carried this inline, as a scan for
+    lines beginning ``from dataknobs_common``. The scan is what these pin
+    against: it read source text rather than parsing it, and the spellings it
+    could not see are the ones a guard about *spelling* most needs.
+    """
+
+    @staticmethod
+    def _prefix_scan(fence: str) -> set[str]:
+        """The extraction the three guards used to carry, for comparison."""
+        return {
+            line.split()[1]
+            for line in fence.splitlines()
+            if line.startswith("from dataknobs_common")
+        }
+
+    def test_a_plain_import_of_a_module_path_is_seen(self) -> None:
+        """The hole. One door import made the guard pass over both lines.
+
+        ``assert reached`` was satisfied by the ``from`` line, and the module
+        path never entered the set that ``reached <= doors`` compared -- so a
+        call site reaching past a door passed the guard written to refuse it.
+        """
+        fence = (
+            "from dataknobs_common import ancestors\nimport dataknobs_common.ontology.taxonomy\n"
+        )
+
+        assert self._prefix_scan(fence) == {"dataknobs_common"}
+        assert door_imports(fence) == {
+            "dataknobs_common",
+            "dataknobs_common.ontology.taxonomy",
+        }
+
+    def test_a_door_import_is_seen_the_same_way_it_always_was(self) -> None:
+        """The cases the scan did read, unchanged, so the swap is not a rewrite."""
+        fence = (
+            "from dataknobs_common import ancestors\nfrom dataknobs_common.ontology import Entity\n"
+        )
+
+        assert door_imports(fence) == self._prefix_scan(fence)
+
+    def test_an_import_under_an_indent_is_still_reached(self) -> None:
+        """A call site importing inside a function is importing all the same.
+
+        The scan anchored to column zero, so it read an indented import as no
+        import at all -- the same failure the fence reader has its own test for.
+        """
+        fence = "def main():\n    from dataknobs_common.ontology import Entity\n"
+
+        assert self._prefix_scan(fence) == set()
+        assert door_imports(fence) == {"dataknobs_common.ontology"}
+
+    def test_another_package_is_not_a_door_of_this_one(self) -> None:
+        fence = "import json\nfrom dataknobs_data.sources import TopicNode\n"
+
+        assert door_imports(fence) == set()
+        assert door_imports(fence, package="dataknobs_data") == {"dataknobs_data.sources"}
+
+    def test_a_relative_import_reaches_no_door(self) -> None:
+        fence = "from . import sibling\nfrom dataknobs_common import ancestors\n"
+
+        assert door_imports(fence) == {"dataknobs_common"}
+
+    def test_an_unparseable_fence_refuses_rather_than_reading_nothing(self) -> None:
+        """``published_fence``'s rule, at the next step of the same pipeline."""
+        with pytest.raises(SyntaxError):
+            door_imports("from dataknobs_common import (\n")

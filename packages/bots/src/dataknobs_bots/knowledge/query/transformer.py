@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Query transformation using LLM for improved retrieval.
 
 This module provides LLM-based query transformation to generate

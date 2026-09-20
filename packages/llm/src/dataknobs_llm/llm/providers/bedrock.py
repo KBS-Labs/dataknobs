@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Amazon Bedrock LLM provider implementation.
 
 This module provides Amazon Bedrock integration for dataknobs-llm, serving

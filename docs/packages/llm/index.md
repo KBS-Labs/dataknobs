@@ -26,7 +26,7 @@ from dataknobs_llm.prompts import FileSystemPromptLibrary, AsyncPromptBuilder
 from pathlib import Path
 
 # Initialize LLM provider
-config = LLMConfig(provider="openai", api_key="your-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
 llm = create_llm_provider(config)
 
 # Create prompt library
@@ -367,7 +367,10 @@ Contributions are welcome! Please see the [Contributing Guide](../../development
 
 ## License
 
-MIT License - see [LICENSE](../../license.md) for details.
+Licensed under the [Apache License, Version 2.0](../../license.md); see the
+NOTICE file in the repository root for attribution requirements.
+
+Versions released before this change remain available under the MIT License.
 
 ## Related Packages
 

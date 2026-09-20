@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Configuration binding resolver for resource instantiation.
 
 This module provides the ConfigBindingResolver class that resolves logical

@@ -157,10 +157,11 @@ graph LR
 from dataknobs_utils import file_utils
 from dataknobs_xization import normalize
 from dataknobs_structures import Text, TextMetaData, Tree
-from dataknobs_utils import elasticsearch_utils
+from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
-# 1. Read input
-content = file_utils.read_file("input.txt")
+# 1. Read input. file_utils streams a file by line (gzip included); joining
+# the generator is how you get the whole text from it.
+content = "".join(file_utils.fileline_generator("input.txt"))
 
 # 2. Normalize text
 normalized = normalize.basic_normalization_fn(content)
@@ -169,12 +170,15 @@ normalized = normalize.basic_normalization_fn(content)
 doc = Text(normalized, TextMetaData(text_id="input.txt"))
 tree = Tree(doc)
 
-# 4. Process (application-specific)
-tree.process_nodes(custom_function)
+# 4. Process (application-specific). There is no process_nodes hook; find the
+# nodes you want and walk them -- find_nodes answers a materialised list.
+for node in tree.find_nodes(lambda n: True):
+    custom_function(node)
 
-# 5. Index for search
-index = elasticsearch_utils.ElasticsearchIndex(...)
-index.index_document(doc)
+# 5. Index for search. SimplifiedElasticsearchIndex is the one-index door;
+# `index` takes the document body as a dict.
+index = SimplifiedElasticsearchIndex("documents")
+index.index({"text": doc.text, "text_id": doc.text_id})
 ```
 
 ### FSM-Based Processing Pipeline

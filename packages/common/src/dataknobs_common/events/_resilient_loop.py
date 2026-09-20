@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared resilient supervised-loop helper for event-bus backends.
 
 An event-bus listener is an *infinite supervised loop*: it must survive

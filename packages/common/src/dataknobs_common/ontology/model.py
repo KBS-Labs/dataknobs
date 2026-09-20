@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """The ontology value types: entities, relations, assertions and their axes.
 
 Pure data. Nothing here opens a connection, reads a file or awaits, which is
@@ -17,17 +20,27 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, Protocol, runtime_checkable
 
 # Re-exported, not used here: this module is a published import path for these
 # three and stayed one when they moved. The redundant-alias spelling of a
 # re-export is what `PLC0414` declines, so the directive names `F401` instead.
+from dataknobs_common.exceptions import ValidationError
+
 from dataknobs_common.entity_resolution.values import (  # noqa: F401
     CompatibilityVerdict,
     ResolutionRef,
     Scoring,
 )
 from dataknobs_common.fields import Field, FieldType
+
+# The *same* key parameter the structure axis takes, imported rather than
+# declared again. Two ``TypeVar``s with one bound and one default behave
+# identically, and a second one would say that the two axes merely happen to
+# agree; this says they are one key. The import runs this way only --
+# ``hierarchy`` names no ontology type in either position, which is what keeps
+# the general module free of the specific package.
+from dataknobs_common.hierarchy import K
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
@@ -92,8 +105,12 @@ class SourceRef:
 
 
 @dataclass(eq=True, frozen=False)
-class Provenance:
+class Provenance(Generic[K]):
     """Who said a thing, on what evidence, and when.
+
+    Generic in the entity key through one field: a resolution names the entity
+    it resolved to, so a provenance carried by an ``Assertion[K]`` records one
+    in that assertion's space rather than in ``str``.
 
     Compared field-wise, and unhashable, for the reason :class:`SourceRef`
     gives -- which is also why it is *this* record rather than a further one:
@@ -103,7 +120,7 @@ class Provenance:
 
     source: SourceRef | None = None
     extraction_confidence: float | None = None
-    resolution: ResolutionRef | None = None
+    resolution: ResolutionRef[K] | None = None
     asserted_by: str | None = None
     asserted_at: datetime | None = None
     derivation: str | None = None
@@ -127,15 +144,30 @@ class AttributeDef:
 
 
 @dataclass
-class Entity:
+class Entity(Generic[K]):
     """A thing the vocabulary names.
 
     ``type`` is itself an entity id, so the type system lives in the graph
     rather than beside it. An empty ``name`` means *use the id*, resolved once
     at construction so no reader has to remember the rule.
+
+    **Generic in the key, defaulted to ``str``**, so a bare ``Entity`` is
+    ``Entity[str]`` and every call site written before the parameter existed
+    means what it meant. The key is what an ``EntitySource`` is addressed by,
+    and it is this field that made the structure axis's genericity incoherent
+    while it stayed ``str``: a hierarchy over a caller's own key beside an
+    entity lookup that could not be asked about one.
+
+    **``type`` is *not* the key**, and the asymmetry is the design rather than
+    an omission. An entity's type is a row in ``entity_types:`` -- an authored
+    declaration whose id the document writes as a string -- while an entity's
+    *own* id may be whatever the consumer's records are keyed by. So
+    :class:`EntityType` and :class:`RelationType` below bind the parameter to
+    ``str`` outright: a schema id is a string wherever the instances came
+    from.
     """
 
-    id: str
+    id: K
     type: str
     name: str = ""
     aliases: list[str] = field(default_factory=list)
@@ -144,13 +176,34 @@ class Entity:
     source: SourceRef | None = None
 
     def __post_init__(self) -> None:
+        """Default the name to the id, rendered.
+
+        **``str()`` here, and this is the one place in the package that renders
+        a key without a codec.** The rule that forbids a default rendering
+        elsewhere is about *identity*: a key is addressed by equality, a
+        default ``__repr__`` is a function of identity, and two equal keys
+        rendering differently would make one node address two entities. None of
+        that reaches a **label**. ``name`` addresses nothing, nothing parses it
+        back, and two equal keys yielding two spellings of a display string is
+        a cosmetic oddity rather than a lost entity -- which is why the rule
+        that needs an inverse needs a codec and this does not.
+
+        For ``K = str`` -- every caller today -- ``str(self.id)`` *is*
+        ``self.id``, so nothing observable moves. For a key whose repr is its
+        identity the name is unhelpful and the caller supplies one, which the
+        field already lets them do.
+        """
         if not self.name:
-            self.name = self.id
+            self.name = str(self.id)
 
 
 @dataclass
-class EntityType(Entity):
+class EntityType(Entity[str]):
     """An entity that describes a kind of entity.
+
+    **Binds the key to ``str``**, because a type declaration is authored: its
+    id is written in ``entity_types:`` and is a string whatever the instances
+    it describes are keyed by. See :class:`Entity` for the asymmetry.
 
     The ``isa`` lattice between *types* is the config's ``isa:`` field and is a
     different store from the ``isa`` assertions between instances.
@@ -158,11 +211,35 @@ class EntityType(Entity):
 
     type: str = DK_ENTITY_TYPE
     attributes: list[AttributeDef] = field(default_factory=list)
+    isa: str | None = None
+    """The type this one specialises, or ``None`` for a root of the lattice.
+
+    **A declared field rather than a documented key in** :attr:`metadata`,
+    which is where it was parked while nothing read it. The parking was
+    defensible then and is not now, for a reason measured rather than
+    anticipated: ``metadata`` is an open dict a loader copies **wholesale**
+    from the document, so while the parent lived in it a row could write one
+    the loader's own check never saw -- that check reads the declared ``isa:``,
+    and a parent written a level down inside ``metadata:`` reached the lattice
+    without passing it. A field is the fix at the source: there is no second
+    place a parent can be written, so there is nothing for a check to miss.
+
+    Same shape and same reason as :attr:`RelationType.inverse_of` one class
+    down -- a scalar reference to another declaration in the same section,
+    validated by the loader when the document is read.
+
+    Scalar rather than a collection: a type has at most one parent, which is
+    what lets
+    :meth:`~dataknobs_common.ontology.taxonomy.Taxonomy.inherited_attributes`
+    walk without choosing an order between branches.
+    """
 
 
 @dataclass
-class RelationType(Entity):
+class RelationType(Entity[str]):
     """An entity that describes a kind of edge.
+
+    Binds the key to ``str`` for :class:`EntityType`'s reason.
 
     ``domain`` and ``range`` empty mean unconstrained rather than empty -- a
     relation that permits nothing would be unusable, so the absent case is the
@@ -201,10 +278,15 @@ def relation_id(relation: RelationRef) -> str:
 
 
 @dataclass(frozen=True)
-class EntityRef:
-    """An assertion object that points at another entity."""
+class EntityRef(Generic[K]):
+    """An assertion object that points at another entity.
 
-    entity_id: str
+    Generic for :class:`Assertion`'s sake: an assertion whose subject is a
+    caller's key and whose object is a ``str`` would be an edge between two
+    different spaces, which is not an edge.
+    """
+
+    entity_id: K
 
 
 @dataclass(eq=True, frozen=False)
@@ -245,7 +327,11 @@ class Literal:
 
 
 #: What an assertion's object may be.
-Term = EntityRef | Literal
+#:
+#: Generic in the key through its first member: ``Term[Sku]`` is a reference to
+#: a ``Sku``-keyed entity or a literal, and a bare ``Term`` is ``Term[str]``. A
+#: :class:`Literal` carries a value rather than a key and takes no parameter.
+Term = EntityRef[K] | Literal
 
 
 class Polarity(Enum):
@@ -266,8 +352,15 @@ class Polarity(Enum):
 
 
 @dataclass
-class Assertion:
+class Assertion(Generic[K]):
     """One stated fact: a subject, a relation, and what it relates to.
+
+    **Generic in the entity key**, which reaches two of its fields and none of
+    the others: ``subject`` names an entity and ``object`` may, so both move
+    with the key. ``id`` and ``derived_from`` name *assertions*, which are
+    minted where the assertion is written rather than supplied by a consumer,
+    and ``relation`` names a declaration -- all three stay ``str`` for
+    :class:`EntityType`'s reason.
 
     ``derived_from`` is empty for an authored assertion and carries the
     supporting ids for an inferred one, so a consumer can tell the two apart
@@ -279,11 +372,11 @@ class Assertion:
     """
 
     id: str
-    subject: str
+    subject: K
     relation: RelationRef
-    object: Term
+    object: Term[K]
     metadata: dict[str, Any] = field(default_factory=dict)
-    provenance: Provenance | None = None
+    provenance: Provenance[K] | None = None
     derived_from: tuple[str, ...] = ()
     stale: bool = False
     #: Appended **last**, and that is load-bearing rather than tidy: this class
@@ -334,6 +427,26 @@ def qualify(ontology_id: str, local_id: str, source_id: str | None = None) -> st
     if source_id is None:
         return f"{ontology_id}:{local_id}"
     return f"{ontology_id}:{source_id}:{local_id}"
+
+
+def _refuse_colon(what: str, value: str) -> None:
+    """``value`` carries no ``:``, or a refusal naming what it was.
+
+    The enforcement of the invariant :func:`split_qualified` documents and
+    :func:`qualify` composes against: *ontology and source ids reject ``:``,
+    so the head of each split is unambiguous*. Written here rather than in
+    either caller because there are two of them and they hold the same
+    invariant at different moments --- the loader over an authored document,
+    and :func:`~dataknobs_common.ontology.tags.read_node_tags` over a value
+    off a row this package did not write. A second copy would be the second
+    place the rule could stop being true.
+    """
+    if ":" in value:
+        raise ValidationError(
+            f"{what} {value!r} contains ':', which separates the parts of a "
+            f"qualified id. Remove it",
+            context={what.replace(" ", "_"): value},
+        )
 
 
 def split_qualified(qualified_id: str, source_ids: Collection[str] = ()) -> QualifiedId:
@@ -389,7 +502,7 @@ class SiblingOrder(Enum):
 
 
 @dataclass(eq=True, frozen=False)
-class ProjectionContext:
+class ProjectionContext(Generic[K]):
     """Everything a :class:`ParentChoice` may consult, gathered before it runs.
 
     This is why ``choose`` can be synchronous. Both taxonomy flavours share one
@@ -404,9 +517,12 @@ class ProjectionContext:
 
     taxonomy_id: str
     relation: RelationRef
-    roots: frozenset[str]
-    depths: Mapping[str, int]
-    types: Mapping[str, str]
+    roots: frozenset[K]
+    depths: Mapping[K, int]
+    #: Node key to entity **type** id. The one mixed annotation here, and
+    #: mixed for :class:`Entity`'s reason: the node is the consumer's key and
+    #: the type is the schema's string.
+    types: Mapping[K, str]
 
     def __post_init__(self) -> None:
         """Canonicalise the relation, so two spellings of one relation compare equal.
@@ -421,23 +537,33 @@ class ProjectionContext:
 
 
 @runtime_checkable
-class ParentChoice(Protocol):
+class ParentChoice(Protocol[K]):
     """Picks one parent for a node that declares several.
 
     Returning ``None`` means *this policy has no opinion*, which is what lets
     policies compose without each having to know the others.
+
+    Generic in the node key, defaulted to ``str``: a policy written before the
+    parameter existed is a ``ParentChoice[str]`` and satisfies the protocol
+    unchanged.
     """
 
-    def choose(
-        self, node_id: str, parents: Sequence[str], ctx: ProjectionContext
-    ) -> str | None: ...
+    def choose(self, node_id: K, parents: Sequence[K], ctx: ProjectionContext[K]) -> K | None: ...
 
 
 @dataclass(frozen=True)
-class TreeProjection:
-    """How a multi-parent axis is narrowed to a tree."""
+class TreeProjection(Generic[K]):
+    """How a multi-parent axis is narrowed to a tree.
 
-    choice: ParentChoice
+    **Generic in the node key**, like the two types it is written over:
+    :class:`ParentChoice` picks a parent from ``Sequence[K]`` and
+    :class:`ProjectionContext` carries the roots and depths in the same space,
+    so a holder that named the policy *bare* pinned both to ``str`` and left a
+    consumer's non-``str`` axis unable to declare a projection over itself. The
+    default keeps every existing spelling meaning what it meant.
+    """
+
+    choice: ParentChoice[K]
     on_cycle: CyclePolicy = CyclePolicy.REPORT
     order: SiblingOrder = SiblingOrder.BY_NAME
     order_key: str | None = None
@@ -493,7 +619,12 @@ class TaxonomyDefinition:
     name: str = ""
     description: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    projection: TreeProjection | None = None
+    #: ``TreeProjection[Any]`` rather than a bare one: this definition is the
+    #: authored half of an axis and is ``str``-keyed whatever the *instances*
+    #: are keyed by, so it cannot name the key its policy is written over.
+    #: ``Any`` admits a projection over any of them; a bare name would admit
+    #: only ``str``.
+    projection: TreeProjection[Any] | None = None
     materialization: Materialization = Materialization()
 
     def __post_init__(self) -> None:

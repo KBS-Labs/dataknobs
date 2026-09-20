@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Source guard against ad-hoc dotted-path resolution.
 
 Turning a dotted string from configuration into a live Python object is one

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Factory for creating and configuring ExecutionContext instances.
 
 This module provides a centralized factory for creating execution contexts,

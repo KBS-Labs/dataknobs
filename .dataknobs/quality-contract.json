@@ -210,31 +210,31 @@
         {
           "path": "packages/bots/src",
           "tier": "transitional",
-          "ceiling": 72,
+          "ceiling": 71,
           "reason": "ratchet group"
         },
         {
           "path": "packages/xization/src",
           "tier": "transitional",
-          "ceiling": 168,
+          "ceiling": 159,
           "reason": "ratchet group"
         },
         {
           "path": "packages/llm/src",
           "tier": "transitional",
-          "ceiling": 74,
+          "ceiling": 52,
           "reason": "ratchet group"
         },
         {
           "path": "packages/fsm/src",
           "tier": "transitional",
-          "ceiling": 411,
+          "ceiling": 396,
           "reason": "ratchet group"
         },
         {
           "path": "packages/data/src",
           "tier": "transitional",
-          "ceiling": 347,
+          "ceiling": 271,
           "reason": "ratchet group"
         },
         {

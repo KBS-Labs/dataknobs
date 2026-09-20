@@ -131,11 +131,11 @@ assert ids == ["k1", "k2"]
 ```python
 from dataknobs_data.pandas import BatchConfig, ChunkedProcessor
 
-# Configure batch processing for DataFrames
+# Configure batch processing for DataFrames. `parallel` and `max_workers`
+# are stored by BatchConfig and read nowhere -- the work is sequential
+# whatever they say -- so chunk size is the knob that has an effect.
 config = BatchConfig(
     chunk_size=1000,
-    parallel=True,
-    max_workers=4,
     error_handling="skip"  # Skip failed chunks
 )
 
@@ -222,12 +222,12 @@ batched = StreamProcessor.batch_iterator(record_iterator, batch_size=100)
    )
    ```
 
-2. **Use parallel processing for CPU-intensive operations**:
+2. **Do not reach for `parallel` / `max_workers`**: both are stored by
+   `BatchConfig` and read nowhere, so setting them changes nothing. Chunk
+   size is what governs throughput here:
    ```python
-   config = BatchConfig(
-       parallel=True,
-       max_workers=cpu_count() - 1  # Leave one CPU free
-   )
+   # Larger chunks, fewer round trips -- against the memory ceiling above.
+   config = BatchConfig(chunk_size=10000)
    ```
 
 3. **Handle errors appropriately**:

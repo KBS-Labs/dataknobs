@@ -43,10 +43,10 @@ from dataknobs_data.pandas import ConversionOptions, MetadataStrategy
 
 options = ConversionOptions(
     preserve_types=True,           # Maintain field types
-    include_metadata=True,          # Include metadata columns
-    metadata_strategy=MetadataStrategy.SEPARATE,  # How to handle metadata
+    include_metadata=True,         # Carry record metadata into the frame
+    metadata_strategy=MetadataStrategy.ATTRS,  # ATTRS | COLUMNS | MULTI_INDEX | NONE
     flatten_nested=True,           # Flatten nested structures
-    parse_json=True,               # Parse JSON fields
+    flatten_json=True,             # Flatten JSON fields
     datetime_format="%Y-%m-%d",    # Date format
     null_handling="preserve"       # How to handle nulls
 )
@@ -134,79 +134,199 @@ converter = DataFrameConverter(type_converter=CustomTypeConverter())
 
 ### Metadata Strategies
 
-Different strategies for handling record metadata:
+`include_metadata` is what decides whether metadata travels with the frame.
+The converter carries it in a single `_metadata` column of dicts, and uses the
+record ids as the frame's index:
 
 ```python
-from dataknobs_data.pandas import MetadataStrategy
+from dataknobs_data import Record
+from dataknobs_data.pandas import ConversionOptions, DataFrameConverter
 
-# Strategy 1: Include metadata as columns
-options = ConversionOptions(
-    metadata_strategy=MetadataStrategy.COLUMNS
-)
-df = converter.records_to_dataframe(records, options=options)
-# DataFrame includes: _id, _metadata_created, _metadata_updated, etc.
+converter = DataFrameConverter()
+records = [
+    Record({"name": "alice", "score": 100}, metadata={"source": "a"}, id="r1"),
+    Record({"name": "bob", "score": 95}, metadata={"source": "b"}, id="r2"),
+]
 
-# Strategy 2: Separate metadata DataFrame
-options = ConversionOptions(
-    metadata_strategy=MetadataStrategy.SEPARATE
+df = converter.records_to_dataframe(
+    records, options=ConversionOptions(include_metadata=True)
 )
-df, metadata_df = converter.records_to_dataframe(records, options=options)
-# df: Contains only field data
-# metadata_df: Contains record IDs and metadata
+print(list(df.columns))            # ['name', 'score', '_metadata']
+print(list(df.index))              # ['r1', 'r2']
+print(df["_metadata"].iloc[0])     # {'source': 'a'}
 
-# Strategy 3: Ignore metadata
-options = ConversionOptions(
-    metadata_strategy=MetadataStrategy.IGNORE
+# Left off, the frame carries the fields alone.
+plain = converter.records_to_dataframe(records)
+print(list(plain.columns))         # ['name', 'score']
+```
+
+### Choosing where metadata lands
+
+`include_metadata` writes one `_metadata` column holding each record's
+metadata dict. `ConversionOptions.metadata_strategy` is the separate question
+of *where* metadata goes, and it names four placements:
+
+```python
+from dataknobs_data.pandas.metadata import MetadataStrategy
+
+# ATTRS (the default): on the frame, not in the data.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.ATTRS)
 )
-df = converter.records_to_dataframe(records, options=options)
-# DataFrame contains only field values
+print(list(df.columns))                  # ['name', 'score']
+print(df.attrs["record_metadata"])       # [{'source': 'a'}, {'source': 'b'}]
+
+# COLUMNS: one prefixed column per metadata key.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.COLUMNS)
+)
+print(list(df.columns))                  # ['name', 'score', '_meta_source']
+
+# MULTI_INDEX: the field type becomes a second column level.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.MULTI_INDEX)
+)
+print(df.columns.names)                  # ['field_name', 'field_type']
+
+# NONE: neither.
+df = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.NONE)
+)
+print(list(df.columns))                  # ['name', 'score']
+print(df.attrs)                          # {}
+```
+
+Pass the same options back to `dataframe_to_records` and the placement is
+undone rather than read as data — under `COLUMNS` the `_meta_` columns return
+as record metadata, and under `MULTI_INDEX` the field names come back as
+names rather than as `(name, type)` tuples.
+
+`MetadataHandler` is the same machinery under its own name, for when you want
+a placement applied to a frame you already have, or want to vary the settings
+the converter leaves at their defaults — the `_meta_` prefix among them:
+
+```python
+from dataknobs_data.pandas import ConversionOptions, MetadataHandler
+from dataknobs_data.pandas.metadata import MetadataConfig, MetadataStrategy
+
+# A prefix of your own. `ConversionOptions` carries no field for it, so this
+# is a placement only the handler can reach.
+handler = MetadataHandler(
+    MetadataConfig(strategy=MetadataStrategy.COLUMNS, metadata_prefix="meta.")
+)
+
+# The frame you already have -- built here with no placement of its own, so
+# the handler's is the only one applied.
+frame = converter.records_to_dataframe(
+    records, ConversionOptions(metadata_strategy=MetadataStrategy.NONE)
+)
+frame = handler.apply_metadata_to_dataframe(
+    frame, handler.extract_metadata_from_records(records), records
+)
+
+print(list(frame.columns))              # ['name', 'score', 'meta.source']
 ```
 
 ### ID Preservation
 
 Preserve record IDs during conversion:
 
-```python
-# Convert with ID preservation
-df = converter.records_to_dataframe(records, preserve_ids=True)
-print(df.index)  # Record IDs as index
+Both directions take a `ConversionOptions`, not loose keywords. Record ids
+become the frame's index by default — `preserve_index` is True — and
+`use_index_as_id` puts them back on the way out:
 
-# Convert back preserving IDs
-records = converter.dataframe_to_records(df, use_index_as_id=True)
-for record in records:
-    print(record.id)  # Original IDs preserved
+```python
+# Record ids are the index already, under the default options.
+df = converter.records_to_dataframe(records)
+print(list(df.index))    # ['r1', 'r2']
+print(df.index.name)     # record_id
+
+# Convert back preserving ids.
+back = converter.dataframe_to_records(
+    df, ConversionOptions(use_index_as_id=True)
+)
+print([record.id for record in back])   # ['r1', 'r2']
 ```
 
 ## Batch Operations
+
+### Async databases and the event loop
+
+`BatchOperations` fronts either flavour of database. A `SyncDatabase` is
+called directly. An `AsyncDatabase` is reached through a
+[`SyncLoopBridge`](https://kbs-labs.github.io/dataknobs/packages/common/sync-bridge/)
+— a private event loop on a daemon thread — so **every method is callable
+from plain synchronous code and from inside a running event loop alike**.
+
+It still *blocks*: the calling thread waits for the whole operation, so
+from async code you stall every other task on your loop for its duration.
+`await` the database directly where you can; this class is for the `def`
+sites that cannot. `timeout=` is the only upper bound a synchronous caller
+has on that wait, and it bounds the **work**: when the operation opens its own
+loop, closing it afterwards can add up to five seconds letting a cancelled
+round trip's cleanup unwind rather than destroying it mid-flight. A `bridge=`
+you supply is not closed here and adds nothing.
+
+The loop is **operation-scoped** — one public call gets one loop, shared by
+every chunk and every row that call touches, and the thread ends with the
+call. There is nothing to `close()`, and a synchronous database never
+allocates a thread at all.
+
+#### Pooled backends need a bridge you supply
+
+`AsyncPostgresDatabase` acquires its `asyncpg` pool in `connect()`, and
+that pool belongs to the loop that acquired it. `BatchOperations` does not
+own the database, so it cannot own that loop: whichever loop **you**
+connected on is the one every later operation must use. Pass it in:
+
+```python
+from dataknobs_common import SyncLoopBridge
+
+with SyncLoopBridge() as bridge:
+    bridge.run(database.connect())
+    batch_ops = BatchOperations(database, bridge=bridge)
+    batch_ops.bulk_insert_dataframe(df)
+```
+
+A bridge given this way belongs to the caller: it is shared with whatever
+else uses it, and nothing in `BatchOperations` closes it. Without one,
+each operation runs on a loop of its own and a pooled backend raises
+`InterfaceError: cannot perform operation: another operation is in
+progress` — from synchronous code, with no running loop anywhere, because
+`connect()`'s loop is already gone. Backends that hold no loop-bound state
+(memory, file) are unaffected either way.
 
 ### Bulk Insert from DataFrame
 
 Efficiently insert DataFrame data into database:
 
 ```python
-from dataknobs_data.pandas import BatchOperations
+from dataknobs_data.pandas import BatchConfig, BatchOperations
 
 # Create batch operations handler
 batch_ops = BatchOperations(database)
 
-# Bulk insert from DataFrame
+# Bulk insert from DataFrame. Every batch knob lives on BatchConfig; there is
+# no schema-validation flag here, and `parallel` / `max_workers` are stored
+# but read nowhere -- the insert is sequential whatever they say.
 df = pd.read_csv("large_dataset.csv")
 result = batch_ops.bulk_insert_dataframe(
     df,
-    batch_size=1000,
-    parallel=True,
-    validate=True  # Validate against schema
+    config=BatchConfig(chunk_size=1000, error_handling="log"),
 )
 
-print(f"Inserted: {result.successful}")
-print(f"Failed: {result.failed}")
-if result.errors:
-    print("Errors:", result.errors)
+# Statistics come back as a dict, not an object
+print(f"Inserted: {result['inserted']}")
+print(f"Failed: {result['failed']}")
+if result["errors"]:
+    print("Errors:", result["errors"])
 ```
 
 ### Bulk Update
 
-Update existing records from DataFrame:
+Update existing records from DataFrame. The method is
+`update_from_dataframe`, and IDs come either from the index or from a
+named column — there is no merge-strategy knob:
 
 ```python
 # Update records matching DataFrame index
@@ -215,28 +335,38 @@ df_updates = pd.DataFrame({
     "last_login": [datetime.now()] * 3
 }, index=["id1", "id2", "id3"])  # Record IDs as index
 
-result = batch_ops.bulk_update_dataframe(
+result = batch_ops.update_from_dataframe(
     df_updates,
-    id_column=None,  # Use index as ID
-    merge_strategy="update"  # or "replace"
+    id_column=None,             # None = use the index as the ID
+    config=BatchConfig(chunk_size=500, error_handling="log"),
 )
+
+print(f"Updated: {result['updated']}")
+print(f"Not found: {result['not_found']}")
+print(f"Failed: {result['failed']}")
 ```
+
+Rows whose ID is not in the database count as `not_found` rather than
+being inserted: `update_from_dataframe` updates, it does not upsert.
 
 ### Upsert Operations
 
-Insert or update based on existence:
+`BatchOperations` has no upsert method. Insert-or-update goes through the
+database's own `upsert_batch`, with the converter supplying the records:
 
 ```python
-# Upsert: Update if exists, insert if new
-result = batch_ops.bulk_upsert_dataframe(
-    df,
-    id_column="user_id",  # Column to use as record ID
-    batch_size=500
-)
+from dataknobs_data.pandas import DataFrameConverter
 
-print(f"Inserted: {result.inserted}")
-print(f"Updated: {result.updated}")
+converter = DataFrameConverter()
+records = converter.dataframe_to_records(df)
+
+ids = database.upsert_batch(records)     # sync database
+print(f"Upserted: {len(ids)}")
 ```
+
+Each record's ID is taken from the record itself, so set it in the
+DataFrame — as the index, or through the converter's ID options — before
+converting.
 
 ## Query Integration
 
@@ -247,8 +377,11 @@ print(f"Updated: {result.updated}")
 Perform aggregations with pandas:
 
 ```python
+from dataknobs_data.pandas import BatchOperations
+from dataknobs_data.query import Query
+
 # Get all data as DataFrame
-df = pandas_db.all_as_dataframe()
+df = BatchOperations(database).query_as_dataframe(Query())
 
 # Complex aggregation
 result = df.groupby(["category", "status"]).agg({
@@ -277,13 +410,13 @@ class DataPipeline:
     """ETL pipeline using pandas"""
     
     def __init__(self, source_db, target_db):
-        self.source_db = PandasDatabase(source_db)
-        self.target_db = PandasDatabase(target_db)
+        self.source_db = BatchOperations(source_db)
+        self.target_db = BatchOperations(target_db)
         self.converter = DataFrameConverter()
     
     def run(self, query=None):
         # Extract
-        df = self.source_db.search_dataframe(query or Query())
+        df = self.source_db.query_as_dataframe(query or Query())
         
         # Transform
         df = self.transform(df)
@@ -327,8 +460,8 @@ def clean_dataset(database):
     """Clean and validate dataset"""
     
     # Load data
-    pandas_db = PandasDatabase(database)
-    df = pandas_db.all_as_dataframe()
+    batch_ops = BatchOperations(database)
+    df = batch_ops.query_as_dataframe(Query())
     
     # Remove duplicates
     df = df.drop_duplicates(subset=["email"], keep="first")
@@ -353,8 +486,8 @@ def clean_dataset(database):
     })
     
     # Save cleaned data
-    batch_ops = BatchOperations(database)
-    batch_ops.bulk_upsert_dataframe(df, id_column="id")
+    converter = DataFrameConverter()
+    database.upsert_batch(converter.dataframe_to_records(df))
     
     return df
 ```
@@ -367,8 +500,8 @@ Perform statistical analysis on data:
 def analyze_dataset(database):
     """Statistical analysis of dataset"""
     
-    pandas_db = PandasDatabase(database)
-    df = pandas_db.all_as_dataframe()
+    batch_ops = BatchOperations(database)
+    df = batch_ops.query_as_dataframe(Query())
     
     # Basic statistics
     print("Dataset Overview:")
@@ -434,7 +567,7 @@ def process_large_dataset(database, chunk_size=10000):
         df = process_chunk(df)
         
         # Save results
-        batch_ops.bulk_upsert_dataframe(df)
+        database.upsert_batch(converter.dataframe_to_records(df))
         
         processed += len(records)
         print(f"Processed {processed}/{total} records")
@@ -526,8 +659,8 @@ def export_data(database, format="csv", query=None):
     """Export data in various formats"""
     
     # Get data as DataFrame
-    pandas_db = PandasDatabase(database)
-    df = pandas_db.search_dataframe(query or Query())
+    batch_ops = BatchOperations(database)
+    df = batch_ops.query_as_dataframe(query or Query())
     
     if format == "csv":
         df.to_csv("export.csv", index=False)
@@ -592,7 +725,7 @@ class RealTimeAnalytics:
     """Real-time analytics using pandas"""
     
     def __init__(self, database):
-        self.db = PandasDatabase(database)
+        self.db = BatchOperations(database)
         self.cache = {}
         self.cache_ttl = 60  # seconds
     
@@ -611,7 +744,7 @@ class RealTimeAnalytics:
             Filter("created_at", ">=", cutoff)
         ])
         
-        df = self.db.search_dataframe(query)
+        df = self.db.query_as_dataframe(query)
         
         # Calculate metrics
         metrics = {

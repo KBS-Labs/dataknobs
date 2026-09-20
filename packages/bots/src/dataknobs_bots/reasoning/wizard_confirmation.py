@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Confirmation decision logic for wizard stages.
 
 Owns the confirmation gate (should we confirm?) and the snapshot

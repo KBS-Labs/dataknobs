@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Data models for knowledge resource storage.
 
 These models represent metadata about files and knowledge bases stored

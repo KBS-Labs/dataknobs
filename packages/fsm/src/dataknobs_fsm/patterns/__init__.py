@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Pre-configured FSM patterns for common workflow use cases.
 
 This package provides ready-to-use FSM patterns implementing common

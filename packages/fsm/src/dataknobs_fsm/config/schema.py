@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Configuration schema definitions for FSM using Pydantic.
 
 This module defines the schema for FSM configuration files, including:

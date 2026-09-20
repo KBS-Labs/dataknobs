@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """S3 backend implementation with proper connection management."""
 
 from __future__ import annotations
@@ -614,21 +617,20 @@ class SyncS3Database(
             config=config,
         )
 
-    def vector_search(
+    def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
-        vector_field: str = "embedding",
-        k: int = 10,
-        filter: Query | None = None,
-        metric: DistanceMetric | str | None = None,
-        **kwargs: Any,
+        *,
+        vector_field: str,
+        k: int,
+        metric: DistanceMetric,
+        filter: Query | None,
     ) -> list[VectorSearchResult]:
-        """Perform vector similarity search using Python calculations.
+        """Raw k-NN over every record, in Python.
 
-        WARNING: This implementation downloads all records from S3 to perform
-        the search locally. This is inefficient for large datasets. Consider
-        using a vector-enabled backend like PostgreSQL or Elasticsearch for
-        production use with large datasets.
+        WARNING: this downloads all records from S3 to search locally, which
+        is inefficient for large datasets. Consider a vector-enabled backend
+        such as PostgreSQL or Elasticsearch for production use at scale.
         """
         return self.python_vector_search_sync(
             query_vector=query_vector,
@@ -636,7 +638,6 @@ class SyncS3Database(
             k=k,
             filter=filter,
             metric=metric,
-            **kwargs,
         )
 
 

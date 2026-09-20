@@ -7,6 +7,1165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`OntologyRegistry.ontologies_in_play(tagged)` --- which of the vocabularies
+  a registry holds a page of tagged rows is about, ranked.** It takes the tags a
+  corpus carries, one row's per position as `read_node_tags_many` reads them,
+  and answers one `OntologySupport` per held vocabulary the rows named, ranked
+  by how many rows named each with ties in the order the corpus first named
+  them. The rows travel with each entry, positionally, so picking one and using
+  its evidence costs no second pass over the corpus. A deployment holding one
+  vocabulary names it and needs none of this; a deployment holding several has
+  to pick, and picking by rank is what this is.
+
+  **It narrows and does not count.** The measure is `ontology_support` in
+  `dataknobs_common.ontology`, which counts over the tags alone and holds no
+  registry; this member filters that answer to the ids it carries. Filtering a
+  ranked tuple preserves both the ranking and the tie-break, so there is no
+  second ordering to disagree with the first and no second implementation of the
+  measure to drift from it.
+
+  **What it drops is recoverable and is not reported.** A tag naming a
+  vocabulary this registry never loaded is gone from the answer and nothing
+  says it was there; `ontology_support` over the same tags answers every
+  vocabulary the rows named, held or not, so the residue is one set difference.
+  `()` therefore has more than one producer -- a corpus carrying no tags, a
+  corpus naming only vocabularies you do not hold, and a registry holding
+  nothing. The tags separate the first two and say nothing about the third, so
+  `list_ids()` is what answers that one. It matters because the answer is over
+  what a registry has *loaded* rather than over what its config names, and the
+  synchronous `from_config` door loads nothing: a registry built through it
+  answers `()` for every corpus until a `load()` has been awaited. Every other
+  member you would reach for that early is a coroutine and forces the await;
+  this one is not.
+
+  It opens nothing, awaits nothing and has no asynchronous twin: the tags are
+  the caller's and the held ids are a mapping the registry already has, so there
+  is nothing to await.
+
+- **`SemanticSignal`**, in `dataknobs_data.entity_resolution`, and the
+  `kind: "semantic"` rung a `resolver:` section can now name. It proposes
+  entities whose indexed text sits nearest a query, as `INFERRED` evidence with
+  a `NATIVE` score and **no span** -- a cosine neighbour has no position in the
+  query and one invented for it would be a lie a consumer could not tell from a
+  located match.
+
+  It takes the **vocabulary** as well as the index, and that is the id space:
+  every row an ontology index holds is a qualified id, a cascade's candidates
+  are in the resolver's ontology's space, and the rung localizes on the way out
+  through the one published door. Without that, an entity two rungs both
+  reached comes back twice under two keys and nothing between them can tell
+  they are one entity.
+
+  It **declines a scope and sends one filter of its own**, which are different
+  questions over different keys. A scope is rendered as a metadata filter
+  naming an axis key, a store fails a row that is missing the key a filter
+  names, and no row an ontology index writes carries one -- so a rung that
+  forwarded a scope would answer nothing under every scope, which reads
+  downstream as *not in the corpus*. Declining means the cascade rules on what
+  comes back, which is one authority instead of two. It becomes per-axis
+  narrowing when a row carries an axis key.
+
+  What it always sends is `dk_ontology_id`, the key the index source writes on
+  every row and the one `declares()` is documented as the translation target
+  for. A vector store is cached on its resolved `store:` block alone, so two
+  documents writing the same block share one, and a table or collection two
+  deployments name is shared by construction -- an unscoped read over such a
+  store answers rows this vocabulary never declared, whose ids the ontology
+  then refuses. The constructor's guard cannot reach that: it asks whether the
+  index holds this ontology's ids, which is membership, and this is
+  exclusivity.
+
+  A `k` below zero is refused, as it is by every rung assembled through
+  `declared_candidates`.
+
+  Batches go through the index's `search_batch`, so *n* queries reach the
+  embedder as one ask rather than *n*. There is no synchronous form, here or
+  anywhere: every member of a vector store is awaitable, so a rung taking a
+  query *string* cannot be natively synchronous.
+
+  Importing `dataknobs_data.entity_resolution` registers it. A consumer
+  reaching it through `OntologyRegistry` never imports it by hand.
+
+- **`OntologyRegistry.resolver(id)` answers the cascade the document wrote**,
+  where it used to answer `None` for every id. A `resolver:` section is read at
+  load and built beside the index, because a semantic rung is constructed over
+  the index that same load assembled. Absence is still a configuration answer:
+  a document declaring no section answers `None` for good, and an explicit
+  `rungs: []` is a composition somebody chose and resolves nothing. An empty
+  `resolver: {}` is read as `rungs: []` rather than as absence, which is where
+  this block differs from `index:`, whose empty `{}` means *no index*.
+
+  Every refusal that needs no index runs **before** the store is opened, which
+  is the `index:` block's own rule: a document that cannot build a cascade must
+  not leave a vector store behind proving it tried, and `from_config_async`
+  never returns the object whose `close()` would release one.
+
+- **The empty-index report tells two states apart.** A rung that finds nothing
+  counts rows once per instance and says either *nothing is indexed* -- the
+  first-run case, where `build()` has not been called -- or *this store holds
+  rows and none of them are yours*, which is a store two documents share and
+  this vocabulary's index was never built into it. The count is cached whatever
+  it finds, so a populated store is not re-counted on every empty answer.
+
+  The block reads one key, `rungs:`, and **refuses any other** -- sharper than
+  the sibling `index:` check, because a section with no `rungs:` is read one
+  layer down as a composition of *nothing*, so `rung:` would build a cascade
+  that matches nothing and report success. A rung kind nothing registers, and a
+  rung whose handles the document did not declare, are both refused at load as
+  the documents they are, naming what was missing.
+
+- **`SemanticIndex`**, in `dataknobs_data.vector.semantic_index`. Binds a
+  text-producing view of some data to a vector store: `build()` embeds
+  everything the source streams and writes it, `search()` and `search_batch()`
+  read it back. It holds no storage of its own and is filed away from
+  `stores/` deliberately -- a class under `stores/` invites a caller to reach
+  for the store handle, and the whole value of this one is not having to know
+  which backend is underneath.
+
+  The build streams and writes in batches rather than collecting the source
+  first, and it passes the source's ids to the store: without that every
+  backend mints a uuid per row and the id the source took care to emit is
+  discarded one call below the decision to emit it.
+
+  `metric=` is a **claim about the store, not a setting on it** -- the store
+  resolves its own metric at construction and its search takes no such
+  argument. Naming one refuses a store that is serving a different family,
+  compared in canonical form so two spellings of one metric agree. No default:
+  cosine would refuse every euclidean store somebody configured on purpose.
+
+- **`RecordFieldSource` and `MultiFieldSource`**, index sources over a database
+  table -- one text per row from one field, or composed from several. They emit
+  **local** ids, which is correct for a table read on its own terms and is a
+  boundary rather than an oversight.
+
+- **`SemanticIndexSource`**, a `GroundedSource` over a `SemanticIndex`. An
+  adapter rather than a base class, so the index stays usable without the
+  retrieval stack. Results are merged across query phrasings by id, keeping the
+  best score.
+
+- **`OntologyRegistry` reads an `index:` section.** `registry.index(id)` now
+  returns the `SemanticIndex` the load built, or `None` where the document
+  declared no section -- absence is still a configuration answer rather than an
+  error. The store is opened from its `$resource` block off the event loop,
+  cached on the resolved block, and released by `close()`; the index is dropped
+  by `unload()` with the vocabulary's other per-id state and rebuilt by
+  `reload()`.
+
+  **The embedder is injected and a configured one is refused.** An `embedder:`
+  block resolves to a provider-and-model pair whose only builder lives in a
+  package that depends on this one, and an embedder holds no closeable resource
+  of its own -- so a registry that built one would claim a responsibility it
+  could not discharge. `embedder` joins the collaborators a caller may inject,
+  and a document naming an `embedder:` block with nothing injected is refused
+  at load, naming what to pass. Refused rather than dropped: a section parsed
+  into a field and discarded leaves a registry reporting success while holding
+  no store, no embedder and no index.
+
+- **The `index:` section configures its source.** `fields:` names which entity
+  fields compose the embedded text, `join:` what goes between two of them, and
+  `aliases: true` wraps the source so each surface form is indexed as its own
+  item. The block built `EntitySourceIndexSource(ontology)` with its default
+  single field and nothing else, so `AliasSource` -- a published class -- was
+  reachable only from Python, and a document could not ask for `description` in
+  the text it embeds. See the guide's warning before setting `aliases:`: the
+  forms collide in a store keyed on id.
+
+  **A key the block does not read is now refused**, which is the same
+  silent-drop failure the `embedder:` refusal exists for: `metirc: l2` used to
+  build an index with no metric check and report success. A malformed value is
+  refused too, and as a `ValidationError` like every other refusal in the block:
+  `fields: name` is what YAML gives a bare scalar, and `tuple("name")` is four
+  one-character field names, so the error named `'a', 'e', 'm', 'n'` rather than
+  the mistake. `aliases:` is checked for being a boolean rather than for
+  truthiness, since `aliases: "no"` is truthy.
+
+- **`bulk_embed_and_store` takes a keyword-only `source_field=`**, so the store
+  writes the source-field pair its own contract says is written together or not
+  at all. It wrote `source_text` unconditionally and `source_field` never, so a
+  caller needing both had to write half of it into the metadata dict by hand.
+  Default `None` writes nothing, which is what every existing caller gets.
+
+- **A hashable-contract census**, in `packages/data/tests`, over every
+  dataclass this package defines. A type that answers `Hashable` and raises at
+  the call is worse than one that never claimed the capability, because the
+  check is how a caller is supposed to ask -- and this package had no census,
+  so the two index sources fixed above reached a review rather than a guard.
+  Twenty types are recorded as open, seventeen of them one defect inherited
+  seventeen times: `DatabaseConfig` is frozen with equality on and carries a
+  `DatabaseSchema`, which is a plain dataclass. Recorded rather than fixed:
+  each is a ruling about a published type, and the census exists so the
+  twenty-first is visible without waiting for the twenty.
+
+### Fixed
+
+- **A record binding's `entity_projection.type: {const: ...}` must name an
+  entity type the document declares.** It is the ninth member of the
+  reference family `build_ontology` refuses eight of, and the one that cannot
+  live beside them: `entity_projection:` is this package's schema and
+  `dataknobs_common` has no notion of it, so the rule travels and the reading
+  stays here. It is also the member with the worst consequence -- an
+  `entities:` row whose `type:` names nothing mistypes one entity, while a
+  projection's `const:` types **every row of the table**, so an index
+  enumerating the vocabulary by type silently finds none of them. The refusal
+  names the binding, the type it declared, and what the document does
+  declare. The guard the other eight carry applies here too: an empty
+  `entity_types:` is no schema rather than an empty one, and a document
+  declaring `imports:` is exempt as it is from the other eight, so a document
+  binding a live table while leaving its type vocabulary elsewhere is
+  unaffected.
+
+- **A vector store now accepts every distance-metric spelling the enum
+  publishes.** `VectorStore._setup` parsed a configured metric with
+  `DistanceMetric(...)`, which knows member values only, so six of the twelve
+  published spellings -- `cos`, `manhattan`, `euclidean_distance`,
+  `cosine_similarity`, `l1_distance`, `ip` -- raised at this door while being
+  accepted at every other one. It resolves through the enum and settles on the
+  canonical member, which is what the database vector lane already did.
+
+- **`ChromaVectorStore` refuses a metric chromadb cannot serve instead of
+  answering cosine.** Its metric map ended in a cosine default over a table
+  with no `L1` entry, so a store configured for Manhattan distance reported
+  `DistanceMetric.L1` and built and queried a **cosine** `hnsw:space`, with no
+  error and no log line. chromadb validates `hnsw:space` against
+  `l2|cosine|ip`, so there is no arm to add: the fix is a refusal at
+  construction, which is what the sibling Elasticsearch door already does.
+
+- **`OntologyRegistry` can open a vector store.** Its connect-or-close helper
+  called `resource.connect()` outright, and a `VectorStore` spells that step
+  `initialize()` and has no `connect` at all -- so the helper raised
+  `AttributeError` on the first store it was handed. It probes by member
+  presence now, as the matching close helper already did.
+
+- **`FaissVectorStore` refuses a metric FAISS cannot serve here instead of
+  building an L2 index and calling it something else.** `_faiss_metric` ended
+  in a bare `return faiss.METRIC_L2`, so a store configured for `l1` built an
+  `IndexFlatL2` while `store.metric` reported `L1` -- the chroma defect, in the
+  same directory, in the lane the metric sweep declared it was covering.
+  `_score_from_raw` compounded it: with no `L1` arm the raw L2 **distance** came
+  back as the similarity score, so lower was better while every reader above a
+  store, and every `threshold` filter, reads higher as better. FAISS defines
+  `METRIC_L1`, but the index builder branches only inner-product against
+  `IndexFlatL2`, so a refusal at construction is the honest fix rather than a
+  table entry nothing would honour. Widened reach made it worse: the metric
+  door now accepts `manhattan` and `l1_distance` as well as `l1`.
+
+- **`build_script_score_query` is keyed on the metric family and refuses `L1`.**
+  The mapping door (`get_similarity_for_metric`) was fixed to do this and its
+  query-side twin was not, so it still branched on the **member** and ended in
+  `else: # Default to cosine`. `DistanceMetric.L2` -- which is what a consumer
+  configuring `metric="l2"` holds -- built an `l2_norm` mapping at one door and
+  was queried with `cosineSimilarity` at the other, with nothing reporting that
+  the pair disagreed about the same field. It also accepts any published
+  spelling now, as its twin does.
+
+- **`MultiFieldSource.source_field` is spelled the way its reader parses it.**
+  The key has an established grammar -- written `",".join(text_fields)` and read
+  back with `.split(",")`, and used in the store lane as a record field name --
+  and this composed it with the *display* separator, so `"title — summary"` went
+  into a key that is neither. It also tied the key's encoding to a cosmetic
+  choice: restyling the text rewrote it. Comma-joined now, independent of
+  `join`. The same fix landed on the ontology adapter's `source_field`.
+
+- **`RecordFieldSource` and `MultiFieldSource` hash by identity.** Frozen with
+  equality left on, both claimed `Hashable` and raised at the call --
+  `MultiFieldSource` declares `fields: Sequence[str]` and every example passes a
+  list, and `RecordFieldSource` has the same shape through `Query`, which holds
+  `filters: list[Filter]`. That is the one combination worse than never claiming
+  the capability, because the check is how a caller is supposed to ask. The
+  three pure sources in `dataknobs-common` already carried `eq=False`; these are
+  the half of the family that did not get it.
+
+- **`SemanticIndexSource` applies the `score_threshold` it documents.** Written
+  `score_threshold or None`, the parameter turned the filter **off** for exactly
+  one value -- `0.0`, which is both the documented default and a meaningful cut,
+  since cosine similarity runs to `-1` and zero means *drop anything pointing
+  the wrong way*. A caller who said nothing got the opposite of what the
+  signature says they asked for.
+
+- **A `SemanticIndex.build()` that fails partway says how far it got.** The
+  docstring promised an all-or-nothing build -- *"what the source streams now is
+  what the store holds after"* -- and batches are written as they fill, so a
+  raise from the embedder or the store left earlier batches committed with the
+  count in a local and nothing on the exception. A caller could not tell a store
+  holding nothing from one holding most of the corpus, and the two want opposite
+  responses. It now raises `OperationError` with `context["written"]`, chaining
+  the original failure, and the docstring states the partial-write semantics.
+  `build()`'s return is documented as items handed to the store rather than rows
+  written, which a decorator that emits several items per id makes observable.
+
+- **A declared `embedder:` beside an injected one is refused.** The block read
+  `block["embedder"]` only when nothing was injected, so with an embedder in
+  hand the document's section was never read, compared or logged -- a YAML
+  naming one model and a process injecting another indexed under the injected
+  one, recorded it on every row, and left the staleness contract
+  self-consistent while the document was untrue.
+
+- **Nothing that can be refused before the store opens is refused after it.**
+  The comment above the embedder refusal promises that a document which cannot
+  build an index leaves no opened store behind, and two refusals ran after the
+  open: the source the document configures and the spelling of `metric:`. Both
+  moved ahead of it. The one check that cannot move is the metric *claim*, which
+  is a comparison against the store's own metric.
+
+- **Every `index:` refusal raises `ValidationError`.** A misspelled `metric:`
+  reached `DistanceMetric.resolve` and a disagreeing one reached the index's own
+  claim check, and both escaped as bare `ValueError`s past a docstring naming
+  only `ValidationError` -- so a caller catching what was documented caught
+  neither. What is being refused in each case is a document.
+
+### Changed
+
+- **A vector store reports its metric's canonical member.** The spelling fix
+  above settles a configured metric onto the family member, so `store.metric`,
+  `get_stats()["metric"]` and `__repr__` answer `euclidean` where `l2` was
+  configured and `dot_product` where `inner_product` was. Observable on a
+  released surface, and listed here rather than only under Fixed for that
+  reason: the two spellings were always one metric, but a consumer asserting on
+  the string they configured will see the other one.
+
+- **`Filter` is frozen, and hashes.** It describes a condition rather than
+  accumulating one, and nothing here has ever assigned to a field of one after
+  construction -- but it was a mutable dataclass with equality, so `__hash__`
+  was `None` and a filter could not sit in a set, key a cache, or be a field of
+  another frozen value. The last of those is how it surfaced: a
+  `ColumnHierarchy` narrowed by one answered `isinstance(axis, Hashable)` with
+  `True` and then raised on the call, which is the combination that is worse
+  than never claiming the capability, because the check is how a caller is
+  supposed to ask.
+
+  `__hash__` is written out rather than generated, over a value projected onto
+  a hashable shape -- lists and tuples to tuples, sets to frozensets, mappings
+  to frozensets of items, recursively. The generated one would have raised for
+  `IN`, `NOT_IN`, `BETWEEN` and `NOT_BETWEEN`, whose value *is* a list, which is
+  the common case rather than a corner. Equality is still the generated one over
+  the value as held, so equal filters hash equal; a list value and the
+  equivalent tuple are unequal filters that collide, which the contract allows.
+
+  The stored value is untouched: `to_dict()` answers in the shape `from_dict()`
+  takes, and every backend reads the list it was given. **Assigning to a
+  filter's field now raises `FrozenInstanceError`** -- build a new one, or
+  `dataclasses.replace()` it.
+
+  **`SortSpec` is frozen too**, for the same reason and with none of the
+  difficulty: it is the other spec a `Query` holds, it describes a sort rather
+  than accumulating one, and both its fields are hashable on their own, so the
+  generated hash is correct without a projection. The two are done together
+  because they break in the same way, and one release that freezes both costs a
+  consumer one migration rather than two. `Query` itself stays mutable: it is a
+  builder, its fluent members assign, and `__hash__` being `None` is the honest
+  answer for it.
+
+- **A `taxonomy.rebuilt` payload is a delta over the axis's own nodes,
+  whatever backs them.** The three sets used to be computed from the
+  *declared* assertions on either side of a rebuild, which is empty for every
+  vocabulary a registry binds -- so the payload reported `gone`, `arrived` and
+  `renamed` all empty however much the axis had changed, and "an empty payload
+  means a genuine no-op" was false in the common case. Each axis's population
+  is now read once when the vocabulary is built and compared against the next
+  build's, which is the only comparison a live axis can answer: re-reading the
+  outgoing axis at the rebuild asks the same rows the same question twice.
+
+  The read is one query per column axis per load, held as a set of ids until
+  the next load replaces it, and happens only where the registry holds an event
+  bus -- the population is a delta's input, and there is nobody to tell
+  otherwise.
+
+  Where a population is **not known** the payload carries
+  `axis_unenumerable: true` and none of the three sets -- the shape an unload
+  payload already takes when it cannot carry the departing ids, and a
+  subscriber reading `payload["gone"]` gets a `KeyError` rather than an empty
+  list. The case that reaches it is a registry that acquired its bus *between*
+  two loads: any document may declare an `event_bus:` block, so any load may be
+  the one that brings it, and the load before it recorded nothing. Read as an
+  empty population instead, the next rebuild reported every node on the axis as
+  `arrived` with nothing having changed.
+
+- **`RecordEntitySource.entity_filters` is published**, and a `kind: column`
+  axis over the same binding is narrowed by it. Over a shared store --
+  `memory`, `file`, `s3`, `elasticsearch`, where the handle *is* the store --
+  the entity reads exclude surface-form rows with an explicit filter, and the
+  axis excluded them only by relying on a property of the data: that a form row
+  carries no parent column. Nothing declares that, and a denormalised side
+  table generated by a join carries whatever it was joined from -- so the axis
+  read edges out of rows the entity source refuses to project, and `parents()`
+  disagreed with `entity()` about one id. The discriminator is a property of
+  the binding, so both readers take it from the same place.
+  `ColumnHierarchy` takes it as a fifth constructor argument, `narrowing=`.
+
+- **`ColumnHierarchy.contains` bounds its reads at one edge.** Both reads
+  materialised every matching row before testing it for truth, so the second --
+  *the rows whose parent column is this node* -- was the node's whole fan-out:
+  a root with two hundred thousand children streamed two hundred thousand rows
+  to answer `True`. `AsyncHierarchyView.exists` asks this and `Taxonomy.walk`
+  checks its anchor with it, so `at(root)` paid the fan-out before the walk
+  began.
+
+- **A `kind: column` row refuses any key nothing reading it reads.** `kind:`
+  was refused and every other key on the same row was dropped in silence: a
+  misspelt `parent_col:` was caught only by the coincidence that the canonical
+  spelling was then absent and required. `child:` carries its own message,
+  since the child column is the source's projection `id:` and an author who
+  writes `child:` has read that and disagreed.
+
+- **BREAKING: a backend implements `_vector_search`, not `vector_search`.**
+  `vector_search` is now a concrete method on `SyncVectorOperationsMixin` and
+  `AsyncVectorOperationsMixin`, over a new abstract `_vector_search` hook that
+  carries the raw k-nearest-neighbour search and nothing else. An out-of-tree
+  backend migrates by renaming its method to `_vector_search`, making
+  everything after `query_vector` keyword-only, and deleting `include_source`,
+  `score_threshold` and any `**kwargs` from the signature — the mixin owns
+  those now.
+
+- **BREAKING: everything after `query_vector` is keyword-only, on every
+  backend.** The mixin has declared it so since the twelve implementations were
+  found to disagree about positional order — most spelled it `(..., k, filter,
+  metric)` where the declaration says `(..., k, metric, filter)`, so a fourth
+  positional argument meant the metric on some backends and the filter on
+  others. That declaration was not enforced, because each backend redeclared
+  the signature. Now there is one signature, and it refuses the form that was
+  never portable: `db.vector_search(q, "embedding", 5)` becomes a `TypeError`,
+  and `db.vector_search(q, vector_field="embedding", k=5)` is what it always
+  should have been.
+
+- **BREAKING: `vector_search` no longer swallows an unrecognised keyword.**
+  Eight of the twelve backends declared `**kwargs: Any` and forwarded it to a
+  helper that reads it nowhere, so a misspelled or unsupported keyword bound at
+  the signature and vanished. It is now a `TypeError`, which is what the two
+  Postgres backends always did.
+
+- **BREAKING: `create_vector_index` no longer takes `**kwargs`.** It was
+  declared for "backend-specific index parameters" on both mixins and both
+  Elasticsearch backends and read in none of the four. A backend-specific
+  parameter is a named parameter on that backend, as
+  `AsyncPostgresDatabase`'s `lists` already is.
+
+- **`metric` is settled once, above all twelve backends.** Eight of them
+  defaulted it to `None` and resolved that against the database's configured
+  `vector_metric`; the four with native vector support — both Postgres and
+  both Elasticsearch backends — defaulted it to cosine and never consulted the
+  configuration at all. So a database built with `vector_metric="euclidean"`
+  searched under euclidean on memory, file, SQLite and S3, and under cosine on
+  the four backends that could actually have used it. `vector_search` now
+  accepts a `DistanceMetric`, its string value, any alias
+  `DistanceMetric.get_aliases()` publishes, or `None` — and `None`, which is
+  the new default, means the metric the database was configured with.
+
+- **`SyncElasticsearchDatabase` has the vector surface its async twin has.**
+  It inherited neither vector mixin and defined `vector_search` and
+  `create_vector_index` from nowhere, so the other eight members of that
+  surface were absent: `bulk_embed_and_store`, `update_vector`,
+  `delete_from_index`, `drop_vector_index`, `get_vector_index_stats` and
+  `hybrid_search` raised `AttributeError` there and answered on
+  `AsyncElasticsearchDatabase`, along with the two private helpers
+  `hybrid_search` calls. It now mixes in `SyncVectorOperationsMixin` and
+  `BulkEmbedMixin`; all eight arrive with the one `vector_search` that
+  occasioned the change.
+
+- **`DistanceMetric` owns its own vocabulary.** Two new members: `canonical()`
+  returns the member standing for a metric's family, so `INNER_PRODUCT`
+  canonicalises to `DOT_PRODUCT` and `L2` to `EUCLIDEAN` — a fact that was
+  written in a trailing comment on each member and nowhere a program could
+  read; and `resolve()` settles a member, a member value or any published
+  alias into a member, case-insensitively, and raises `ValueError` naming the
+  accepted vocabulary for anything else. Every metric lookup in the package
+  now goes through them.
+
+- **`get_vector_operator` takes a metric and raises on one it does not know.**
+  It took a `str` and returned the cosine operator for anything unrecognised.
+  It now accepts a `DistanceMetric` or any name `resolve()` accepts, and
+  raises `ValueError` otherwise. Two new siblings keep the pgvector
+  vocabularies in one place: `get_vector_opclass` (the index operator class,
+  previously an inline table in `build_vector_index_sql` and another in
+  `PgVectorStore`) and `distance_to_score` (the distance-to-similarity
+  conversion, previously four inline copies). `build_vector_index_sql` and
+  `drop_vector_index` canonicalise the metric before naming an index, so the
+  two spellings of one metric no longer produce two index names.
+
+- **BREAKING: `build_vector_column_expression` is replaced by
+  `build_vector_value_expression(field, dimensions=None)`.** The old function
+  took a `for_index` flag whose two branches returned the same string, and
+  produced an expression neither Postgres search used. The new one produces
+  the expression both searches and index creation use, which is what makes an
+  index reachable for a query.
+
+- **BREAKING: `AsyncPostgresDatabase` no longer maintains a `vector_<field>`
+  column.** `_ensure_vector_column`, `_collect_vector_inserts` and
+  `_build_vector_params` are gone, and `create`/`update`/`upsert` no longer
+  issue `ALTER TABLE` on the write path. Vectors live in the JSON `data`
+  column, where every write path on both twins has always put them. An
+  existing table keeps its `vector_<field>` column; nothing reads or writes it
+  any more, and it can be dropped.
+
+- **`SyncPostgresDatabase` implements the three index methods.** It inherited
+  the mixin's defaults for `create_vector_index`, `drop_vector_index` and
+  `get_vector_index_stats`, which return `True`, `True` and an empty report —
+  so it said it had built an index and built nothing. All three now do the
+  work its async twin does.
+
+- **BREAKING: `python_vector_search_sync` / `python_vector_search_async` take
+  keyword arguments after `query_vector`, and no `**kwargs`.** Both declared a
+  `**kwargs` neither body read — the same silent bind removed from the twelve
+  backend signatures, one frame down. They also resolve `metric` through
+  `resolve_metric` rather than re-implementing it, so they accept everything
+  the rest of the package accepts.
+
+- **BREAKING: `hybrid_search`, `create_vector_index` and `drop_vector_index`
+  default `metric` to `None` too.** `vector_search` was the only method on
+  this surface that deferred to the database's configuration; its neighbours
+  kept the hardcoded `DistanceMetric.COSINE` that this release removes
+  everywhere else. So a database built with `vector_metric="euclidean"`
+  searched under euclidean, built a **cosine** index by default, and ran its
+  hybrid search's vector arm under cosine — and an index under a metric the
+  searches do not use is one the planner declines. A caller who passed the
+  metric explicitly is unaffected; one who relied on the cosine default now
+  gets the database's metric, which for `drop_vector_index` means it drops
+  the index `create_vector_index` would have built.
+
+- **BREAKING: `resolve_metric` returns the canonical member.** `"l2"` used to
+  arrive at a backend as `DistanceMetric.L2` and now arrives as `EUCLIDEAN`;
+  `"inner_product"` arrives as `DOT_PRODUCT`. A table keyed on the member had
+  to restate the aliasing, which is the divergence `canonical()` exists to
+  end, and two tables were still restating it — see *Fixed*. Visible in
+  `VectorSearchResult.metadata["metric"]`, which now reports the family rather
+  than the spelling the caller used.
+
+- **BREAKING: `get_similarity_for_metric` refuses a metric Elasticsearch
+  cannot serve.** It ended in `mapping.get(metric, "cosine")`, so
+  `DistanceMetric.L1` — which Elasticsearch has no `dense_vector` similarity
+  for — produced a cosine mapping and reported success. It now raises
+  `ValueError` naming what Elasticsearch does offer. `l1` remains a valid
+  `vector_metric` for every other backend — and on Postgres it needs pgvector
+  0.7.0+, which is where `<+>` and `vector_l1_ops` arrived. An L1 request used
+  to be answered in cosine distances on any server; it now errors on an older
+  one. Which backend serves which metric is tabulated in the API reference.
+
+- **BREAKING: `get_index_check_sql` matches the index names this class
+  builds.** It matched `indexname LIKE '%<field>%'`, which also matches
+  `idx_<table>_"vector_<field>"_cosine` — the index the removed
+  `_ensure_vector_column` built over the `vector_<field>` column. On a table
+  written by an earlier release, `get_vector_index_stats` therefore reported
+  `indexed: True` for a field whose searches now run a sequential scan. It
+  also claimed `embedding_v2`'s index when asked about `embedding`. The
+  parameter is now the list of names `get_vector_index_name` produces, one per
+  metric family. That orphaned index can be dropped by hand; nothing reads it.
+
+- **`get_vector_index_stats` reports a failed lookup.** Its body is wrapped in
+  `except Exception`, so a query that failed returned the same
+  `{"indexed": False, "vector_count": 0}` as a field with no index and no
+  vectors. A failure now also sets `error`.
+
+- **Elasticsearch's `metric` does not choose its ranking, and both twins now
+  say so.** Elasticsearch ranks k-NN by the `similarity` in the field's
+  *mapping*, fixed at index creation, and `build_knn_query` carries no metric
+  at all — so the resolved metric is recorded on each hit and changes nothing
+  about the order. On a field whose mapping was built under another metric,
+  that record is what the caller asked for rather than what ran. Honouring a
+  per-query metric needs either a `script_score` query, which gives up the
+  approximate-nearest-neighbour index, or a mapping round trip; the falsehood
+  worth removing now is the silent one.
+
+- **`score_threshold` is compared against the backend's own scale.** The ten
+  Python-path and Postgres backends report a raw similarity; Elasticsearch
+  reports its `_score`, which for a `cosine` mapping is `(1 + cos) / 2`. One
+  threshold constant therefore does not cut at the same place everywhere.
+  `distance_to_score` used to claim its scores were comparable "across
+  backends"; that was one backend too many, and both it and `vector_search`
+  now say which.
+
+### Fixed
+
+- **A vector field name no longer reaches SQL unvalidated.**
+  `get_vector_count_sql` interpolated it straight into a SQL *string literal*
+  — `WHERE data ? '{field_name}'` — where `quote_ident` does not apply and
+  `validate_field_name` is the check that does. It had one caller; this
+  release gave it two more on `SyncPostgresDatabase`, and in
+  `get_vector_index_stats` nothing else validates and the whole body is
+  wrapped in `except Exception`, so a statement that ran and a statement that
+  failed were reported identically. Both it and `get_index_check_sql` — whose
+  arguments are bound, so it was never exposed — validate now.
+
+- **A record whose vector field holds `null` no longer breaks the search.**
+  `WHERE data ? 'embedding'` is a key-*presence* test and `record_to_json`
+  writes `{"embedding": null}` for a record carrying `None`. The async twin's
+  predicate used to be `WHERE vector_<field> IS NOT NULL`, which a column type
+  makes total; moving both twins onto the `data` column lost that. Such a row
+  yields `distance = NULL`, sorts last, and so surfaces only when the corpus
+  holds fewer than `k` real vectors — at which point `float(None)` fails the
+  whole search rather than the one row. A non-vector string under the key
+  failed it inside Postgres instead. Both searches and both hybrid arms now
+  require `jsonb_typeof` to be `array` or `object`.
+
+- **Each arm of the native Postgres hybrid search orders itself before it
+  truncates.** Both CTEs computed a `ROW_NUMBER()` over the whole set and then
+  took a bare `LIMIT fetch_k`, so the ranks were right and the rows they were
+  attached to were an arbitrary sample. It was masked while the vector arm
+  read the `vector_<field>` column only three of fourteen write paths filled —
+  usually fewer rows than `fetch_k`, so the `LIMIT` never bound. Reading the
+  column every write path fills is what made it reachable.
+
+- **`hybrid_search`'s `filter` reaches the native path.** It was declared,
+  never consulted, and the parameter list was built as `[text, vector, field]`
+  and stopped — so a filtered hybrid search read the whole table and reported
+  no error, while the client-side fallback one branch above it applied the
+  filter correctly. The same call answered differently depending on a fusion
+  strategy the caller may not have set. It is applied to both arms.
+
+- **`_compute_similarity` scores every metric.** It branched on the member
+  rather than the family, so `DistanceMetric.L2` and `INNER_PRODUCT` fell into
+  its `else` and raised `Unsupported metric` — and it is what
+  `PythonVectorSearchMixin` calls for all eight backends with no native k-NN,
+  on every search. A database configured `vector_metric="l2"`, a member value
+  the config parser accepts without a warning, could not run a search at all.
+  `L1` is computed rather than refused; only the absence of a branch made the
+  Manhattan distance unavailable.
+
+- **A configured metric accepts every spelling the enum publishes.**
+  `_apply_vector_config` used `DistanceMetric(name.lower())`, which knows only
+  member values, so six of the eight names `get_aliases()` publishes reached
+  its fallback and were configured as cosine under a warning calling them
+  invalid — `vector_metric: "manhattan"` was a documented setting that
+  silently did something else.
+
+- **`include_source` no longer reports text the vector was not made from.**
+  `derive_source_text` reproduced the assembly from the record's *current*
+  field values, which is the embedded text only while nothing has edited the
+  record since. Updating a title without re-embedding returned a `source_text`
+  that provably was not embedded, with no signal — the one failure the
+  parameter exists to prevent, since the id round-trip it replaced would have
+  read the same current values. `content_hash_metadata` writes the digest of
+  the embedded text onto the same dict as the field list, so the check costs
+  no query; a record that has moved on now yields `None`, which is what the
+  function already returned for "the record does not say". A vector carrying
+  no digest is still assembled, so nothing written before the digest existed
+  loses the feature.
+
+- **`_vector_search` on `AsyncPostgresDatabase` no longer rewrites
+  placeholders it does not have.** The class builds its query builder without
+  a `param_style`, which defaults to numeric, so the filter clause already
+  carried `$3`, `$4`, … and a loop replacing `%s` was a no-op — under a
+  comment asserting the opposite.
+
+- **Both Elasticsearch twins ask for the source the same way.** One passed
+  `source=True` and the other `_source=True`. Both reach the transport,
+  because elasticsearch-py rewrites body-field aliases before dispatch, so no
+  runtime check could tell them apart — but only `source` is a parameter of
+  `search`, and `_source` is a `call-arg` error wherever the client is typed.
+
+- **A search asking for dot product or L1 is no longer answered in cosine
+  distances.** `get_vector_operator` mapped five spellings and returned the
+  cosine operator for everything else, and `DistanceMetric.DOT_PRODUCT` and
+  `DistanceMetric.L1` were not among the five — so both were silently ranked
+  by cosine, with no error and no log line. `INNER_PRODUCT` *was* mapped, so
+  the two spellings of one metric answered differently, and the same method
+  contradicted itself: its score conversion twenty lines below knew
+  `dot_product` names the inner-product metric. `PgVectorStore` carried the
+  same fallback twice more, in its operator-class and distance-operator
+  chains, so `DistanceMetric.L1` was cosine there too. Eight sites read a
+  metric across the package — two choosing an operator, two an index operator
+  class, four converting a distance to a score — and none knew all six
+  members. They are now three functions keyed on `canonical()`, which has
+  four keys and covers all six.
+
+- **The two Postgres backends store and search vectors in the same place, and
+  every write path is visible to both.** The async twin searched a dedicated
+  `vector_<field>` pgvector column; the sync twin extracted the vector from
+  the JSON `data` column. Each was internally consistent, so the divergence
+  only showed when one wrote and the other read. The column was the narrower
+  of the two: it was filled by three of the fourteen write paths across the two
+  classes — `create`, `update` and `upsert` on the async twin — so
+  `create_batch` and `upsert_batch` produced records **that twin's own
+  `vector_search` could not find**, and a corpus written by the sync twin was
+  invisible to the async one entirely: `UndefinedColumnError` where no async
+  single-write had ever created the column, and an empty result list with no
+  error where one had. Both twins read `data` now, which every write path
+  fills, so no backfill is needed and no row is orphaned.
+
+- **The index `create_vector_index` builds is one the search can use.** It
+  built its index over `(data->'embedding'->>'value')::vector(n)` while both
+  searches asked a `CASE` expression that also tolerates a bare array. A
+  pgvector expression index serves only a query whose expression matches
+  exactly, so the one implementation of index creation produced an index no
+  query could reach — measured with `EXPLAIN` and sequential scans disabled,
+  the planner fell back to a sequential scan rather than use it. Both now come
+  from `build_vector_value_expression`.
+
+- **Both Postgres twins score a hit the same way.** Each carried its own
+  distance-to-score conversion and they disagreed: for cosine the sync twin
+  returned `1 - distance` — the cosine similarity, and the number the ten
+  Python-path backends return — and the async twin returned
+  `1 - min(distance, 2) / 2`. Two numbers for one corpus and one query, which
+  nothing compared until `score_threshold` arrived to compare either against a
+  constant. `distance_to_score` is now the only conversion.
+
+- **`AsyncPostgresDatabase.hybrid_search` contributes a vector half for every
+  record.** Its native-strategy CTE read the same `vector_<field>` column, so
+  a batch-written or sync-written corpus matched nothing there and the search
+  silently degraded to its text half. It also hardcoded `1.0 - distance` as
+  the vector score — the cosine formula, applied whichever metric the caller
+  asked for.
+
+- **`score_threshold` drops the hits it says it drops.** It was declared on
+  both vector mixins and implemented on two of the twelve backends. Eight
+  swallowed it into `**kwargs` and two raised `TypeError`. On
+  `AsyncMemoryDatabase`, three records scoring 1.0, 0.994 and 0.0 all came
+  back from `vector_search(q, k=10, score_threshold=0.99)` — the same three,
+  in the same order, as the call with no threshold. It is now applied once,
+  in the mixin, for every backend. It is a **post-filter**: a call carrying a
+  threshold may return fewer than `k` results, which is what the Elasticsearch
+  implementation always did and is now the stated contract. Pushing the
+  threshold into the query itself remains available to a backend and needs no
+  further break.
+
+- **`include_source` populates `VectorSearchResult.source_text`, and both
+  Elasticsearch backends stop returning an empty list when it is `False`.**
+  The parameter had no working implementation anywhere. `record` is a required
+  field, so a hit without one cannot be constructed — which is why both
+  Elasticsearch twins forwarded `include_source` straight into the client's
+  source parameter (spelled `source` on one twin and `_source` on the other),
+  found `_doc_to_record` had nothing to read, and skipped every hit.
+  The knob never decided whether the record comes back; it decides whether the
+  text the vector was made from is assembled onto the result. That assembly
+  needs no query and no id round-trip: the vector field already stores its
+  ordered source-field list and separator, and `derive_source_text` reads them
+  back. A vector written before those descriptions existed yields `None`.
+
+- **Three index methods on `AsyncPostgresDatabase` accept the call the mixin
+  declares.** `drop_vector_index()` and `get_vector_index_stats()` made
+  `vector_field` required where the mixin defaults it, and
+  `create_vector_index()` made both `vector_field` and `dimensions` required —
+  so a call written against the mixin raised `TypeError` on Postgres and
+  answered everywhere else. pgvector does still need the dimensions to build
+  an index; that is now a `ValueError` naming the reason rather than a
+  signature that turns the caller away.
+
+
+- **`enable_vector_support()` on both Postgres backends says the database is
+  not connected, instead of answering as though it had looked.** Every other
+  public method on these classes refuses an unconnected database with
+  `RuntimeError: Database not connected. Call connect() first.` This one
+  reached `_detect_vector_support()` without a check on either side, and each
+  twin then failed in its own way. The async twin dereferenced the absent pool
+  — `AttributeError: 'NoneType' object has no attribute 'acquire'`, naming
+  neither the class nor the missing `connect()`. The sync twin caught that same
+  dereference in the `except Exception` that exists so a database genuinely
+  lacking pgvector can answer `False`, logged it as "Could not install pgvector
+  extension", and returned `False` — reporting no vector support for a database
+  whose extensions it never read. A missing extension is still `False`; a
+  missing connection now raises on both.
+
+  Every acquire in `AsyncPostgresDatabase` reaches the pool through one
+  accessor, `_require_pool()`, which is what makes that invariant checkable:
+  `_check_async_connection` tests the pool through `getattr(self, "_pool",
+  None)` on a mixin that never declares it, so no narrowing reached the use
+  sites and a site that checked was indistinguishable from one that did not.
+
+- **`stream_read` on both Postgres backends accepts the nested field names
+  `search` accepts.** Each twin pre-flighted its filter fields against
+  `validate_field_name`, which reads a field as one SQL identifier and so
+  rejects any dot in it. The builder those methods now call reads a dot as a
+  JSON *path separator* and validates each segment. So one backend answered
+  one `Query` two ways: `search(Query(filters=[Filter("metadata.work_order_id",
+  EQ, "W-1")]))` returned rows through `metadata->>'work_order_id'`, and
+  `stream_read` over the same `Query` raised `ValueError`. No other backend's
+  `stream_read` validated at all, so the same field streamed on SQLite and
+  DuckDB and raised on Postgres.
+
+  The grammar is now one function — `validate_field_path` in `sql_base` —
+  called both by `SQLQueryBuilder._build_json_field_expr` at the point of
+  interpolation and by the two `stream_read` twins, which still pre-flight it
+  so a malformed field is refused before a connection is acquired. Field names
+  that are unsafe in a JSONB key position are refused exactly as before;
+  `validate_field_name` keeps the single-segment positions that have no path
+  to parse (`get_vector_extraction_sql`, `_build_text_field_concat`).
+
+- **`stream_read` on both Postgres backends applies the filters it was
+  given.** Each twin open-coded its own WHERE construction and emitted a
+  clause only for `Operator.EQ`, so every other operator was dropped in
+  silence and a caller who swapped `search` for `stream_read` to bound
+  memory got back rows it had filtered out. The async twin carried a second,
+  louder half: its placeholder counter advanced once per *filter* while its
+  argument list grew only for EQ, so one non-EQ filter ahead of an EQ one
+  shifted every later placeholder past its argument and the SQL named a `$N`
+  nothing had bound.
+
+  Both now route through `SQLQueryBuilder.build_where_clause` — the builder
+  each class already held and `search` already used, which is why the two
+  doors disagreed at all. `search` and `stream_read` over one `Query` now
+  return the same rows. Verified against a real server.
+
+- **The user-state store connects the database it builds.** `close()`
+  released the backing handle when the store owned it; nothing opened it.
+  Every existing test names `backend: "memory"`, where `connect()` is a
+  no-op — so the gap cost nothing there and every backend that *has* a
+  connection raised *Database not connected* on first use. Both twins now
+  open what they own, and both still leave an injected handle alone, which
+  is the boundary the teardown half already respected.
+
+- **`AsyncDatabase.from_backend` resolves and builds off the event loop.**
+  Resolving a backend name imports its implementation through
+  `PluginRegistry`'s `on_first_access` hook, which reads the module off
+  disk, and a file backend's config normalizes a path as it is built — both
+  ran on the caller's loop, stalling every other task on it. The
+  synchronous work moves into `asyncio.to_thread`, which is what
+  `OntologyRegistry._database_handle` already does with the same resolution.
+  A refusal for an unrecognised backend still surfaces unchanged.
+
+- **A failed batch insert is no longer reported as a success when
+  `error_handling="raise"`.** `BatchOperations.bulk_insert_dataframe` retries a
+  failed `create_batch` one row at a time — which is what identifies *which*
+  rows are bad, and is unchanged — but it re-raised only if a **row** then
+  failed too. A backend whose batch write refuses while its individual writes
+  succeed (a batch size limit, a transient, a timed-out batch) therefore
+  reported every row inserted and raised nothing, having been asked by default
+  to stop. The row-by-row retry still runs and still writes the rows; what is
+  new is that a batch failure every row survives is raised under `"raise"` and
+  recorded under `"log"` instead of vanishing. `"skip"` is unchanged. Callers
+  that relied on the batch error being absorbed should pass
+  `error_handling="log"`, which is what that now says.
+
+- **`ConversionOptions.metadata_strategy` now selects where the metadata
+  goes.** The option names four placements and `records_to_dataframe` never
+  read it, so all four answered the same frame: the record fields as columns
+  and the metadata nowhere. The placements were implemented in
+  `MetadataHandler`, which the converter did not call. It now does, in both
+  directions. **`ATTRS` is the declared default, so a caller who never set the
+  option sees a change**: `records_to_dataframe` populates `df.attrs` where it
+  previously left it empty. `COLUMNS` writes the prefixed columns it always
+  documented, and `dataframe_to_records` reads those back as metadata rather
+  than returning them as ordinary fields; a `MULTI_INDEX` frame's column
+  labels are flattened on the way back, so field names return as names rather
+  than as `(name, type)` tuples. `validate_conversion` takes the prefix it
+  filters from `MetadataConfig` instead of repeating `_meta_` literally, so a
+  changed `metadata_prefix` is reflected there too.
+
+### Documentation
+
+- **`OntologyRegistry._database_handle` no longer explains itself by something
+  that stopped being true.** Its docstring closed by saying it does not use
+  `AsyncDatabase.from_backend` because that method "resolves and builds on the
+  caller's loop" — which `from_backend` stopped doing in the same release that
+  paragraph shipped in, and whose own comment now names `_database_handle` as
+  the precedent for offloading. The reasons that survive are named instead:
+  `from_backend` has nowhere to put the table `_keyed_block` writes into the
+  resolved block, it builds an instance per call where a handle here is cached
+  and shared, and it connects without owning a mid-connect failure.
+
+- **Two source comments name a symbol rather than a line number.**
+  `AsyncPostgresDatabase.update_batch` cited `sql_base.py:559-561` for the
+  `RETURNING id` it must not append twice; that range had drifted into
+  `build_search_query`'s ORDER BY construction, ~200 lines from the append,
+  which is in `SQLQueryBuilder.build_batch_update_query`. A line number is a
+  citation that goes stale on the next edit above it and says nothing when it
+  does.
+
+### Changed
+
+- **`BatchOperations` reaches an async database through one loop per operation,
+  and takes a `bridge=` for a database that needs one loop for its life.** It
+  drove the async half with `asyncio.run` at six sites, so every public method
+  — `bulk_insert_dataframe`, `query_as_dataframe`, `update_from_dataframe`,
+  and `aggregate`, `transform_and_save`, `export_to_csv` and
+  `export_to_parquet` behind them — raised `RuntimeError: asyncio.run() cannot
+  be called from a running event loop` for a caller already on a loop. They no
+  longer do. Each public call now holds one `SyncLoopBridge` for its duration,
+  so a chunked insert runs every chunk and every row of its per-record
+  fallback on the same loop, and `transform_and_save` runs its read and its
+  write-back on one. The bridge ends with the call: there is no `close()` to
+  add to your code, and a `SyncDatabase` still allocates no thread at all.
+
+  A backend that binds loop state to its connection needs more than that, and
+  gets it from the new keyword-only `bridge=`. `AsyncPostgresDatabase`
+  acquires its `asyncpg` pool in `connect()`, and the pool belongs to the loop
+  that acquired it — so against a pooled backend this class never worked, in
+  either direction: the *first* operation after `connect()` raised
+  `InterfaceError: cannot perform operation: another operation is in
+  progress`, from synchronous code with no running loop anywhere. Connect on
+  a bridge you own and pass it in, and every operation lands on that loop:
+
+  ```python
+  with SyncLoopBridge() as bridge:
+      bridge.run(database.connect())
+      BatchOperations(database, bridge=bridge).bulk_insert_dataframe(df)
+  ```
+
+  A bridge passed this way belongs to the caller; nothing here closes it. The
+  new `timeout=` bounds the **operation** — one public call, however many
+  database round trips it makes — which is the only upper bound a blocked
+  synchronous caller has; a round trip that finds the deadline already past
+  raises `TimeoutError` without reaching the database at all. Signatures are
+  otherwise unchanged, and `converter` remains the second positional
+  parameter. The `TimeoutError` it raises is now `OperationTimeoutError`
+  (`dataknobs-common`), a subclass, so `except TimeoutError` is unaffected and
+  a caller that wants to tell the operation's deadline apart from a timeout the
+  database itself raised now can.
+
+  **The deadline reaches the caller under every `error_handling` mode.** The
+  per-row handlers in `bulk_insert_dataframe` and `update_from_dataframe`
+  exist to absorb one row's failure and keep going; past the deadline every
+  remaining row is refused pre-flight, so on `"log"` and `"skip"` they absorbed
+  one refusal per row and returned `{"inserted": 0, "failed": n}` — a timed-out
+  operation reported as a dataframe of unwritable rows. `OperationTimeoutError`
+  now passes through all five of them. The wall-clock bound held either way;
+  what was lost was the report.
+
+  `timeout=` bounds the **work**, not the call: when an operation opens its own
+  loop, closing it afterwards waits up to five seconds for a cancelled round
+  trip to unwind rather than destroying its cleanup mid-flight, so the worst
+  case is `timeout` plus that. A `bridge=` you supply is not closed and adds
+  nothing.
+
+- **`SyncTextEmbedder` takes `bridge=` and answers `aclose()`, and builds its
+  loop thread on first use.** It is now a `SyncBridgeAdapter` from
+  `dataknobs-common`. Hand several embedders — or an embedder and any other
+  adapter on that base — the same bridge and they share one thread; a bridge
+  passed in belongs to the caller, so `close()` leaves it running. `aclose()`
+  and `async with` are the teardown forms for a holder that is itself on a
+  loop; since this class does not close the embedder it was handed, what they
+  change is only which thread waits for the bridge to stop. Constructing one
+  no longer allocates a thread, so reading `model_id` or `dimensions` off one
+  is free; the thread is allocated on the first `embed`. `embed`, `embed_one`,
+  their signatures, and the fact that it does not close the embedder handed to
+  it are all unchanged.
+
+- **`TopicNode`'s five walk methods now share one implementation.** `flatten`,
+  `leaves`, `children_at_depth`, `descendants_to_depth` and
+  `descendant_chunk_ids` are each a single call into the generic hierarchy
+  walks in `dataknobs-common`, over a new adapter. Their signatures, their
+  parameter names and the orders they return are unchanged: each still emits
+  pre-order by discovery, and the order a retrieval reads when
+  `max_expanded_results` truncates its region is the same order it was.
+
+  Two behaviours do change, and both are on trees that were never well formed:
+
+  - A `children` list that forms a **cycle** is now walked to its end. It
+    previously raised `RecursionError` from `flatten()`, `leaves()` and
+    `descendant_chunk_ids()`; the two bounded walks terminated instead and
+    answered on the repeat, `children_at_depth(n)` returning whichever of a
+    two-node cycle the parity of `n` selected and `descendants_to_depth(n)`
+    the same nodes once per level, until the depth bound ran out. Both bounded
+    walks now stop at the projection's edge and return what is below it.
+  - A subtree hung under **two parents** is now walked once rather than once
+    per route, at the **shortest** route that reaches it. A caller reading
+    `flatten()` or `descendant_chunk_ids()` directly saw the repeat and no
+    longer does; `expand_region` already deduplicated chunks by id, so a
+    region built from such a tree is unaffected.
+
+    Shortest matters because every depth bound is a bound on the route the
+    walk recorded. `children_at_depth`, `descendants_to_depth` and
+    `expand_region`'s `max_expansion_depth` therefore measure distance from
+    the anchor, as their docstrings say, rather than the length of whichever
+    route happened to be found first.
+
+### Added
+
+- **`ColumnHierarchy` --- a taxonomy whose edges are a `parent_id` column.**
+  A `taxonomies:` row declaring `kind: column` names a source and the column
+  holding each row's parent, and the axis it binds walks the way an axis over
+  authored assertions walks: `onto.taxonomy("categories").at(sku).ancestors()`
+  answers the chain, and the taxonomy is an `AsyncTaxonomy` either way.
+
+  ```yaml
+  taxonomies:
+    - id: categories
+      kind: column
+      source: products        # a `kind: record` source THIS document declares
+      parent_key: parent_sku  # the column holding the parent's key
+      relation: parent        # required -- what these edges MEAN
+  ```
+
+  The child column is the source's own `id:`, so a walk answers in the space
+  `entity()` takes. `parent_key:` is checked at load against the same
+  `schema:` the projection is checked against, and the axis reads through the
+  handle the source already holds -- binding one opens nothing and closes
+  nothing.
+
+  It carries the two optional hierarchy protocols rather than the four
+  singular members alone: a frontier costs one query per level, and
+  `parent_edges()` answers the whole axis in one read, which is what lets a
+  `materialization.structure: materialized` copy of it be taken in one query
+  and be complete -- a cyclic component with nothing above it is unreachable
+  by descending from the roots.
+
+  A node is in the axis if an edge names it, which is the hierarchy protocol's
+  own rule: a row whose parent column is null and that nothing names as a
+  parent is not in the axis at all, so `contains()` is False and a cursor over
+  it reports `exists()` False.
+
+- **`ColumnAxisBinding`**, the parsed axis row, exported beside it.
+
+- **`refuse_undeclared_columns`**, the check `validate_against_schema` is the
+  projection's caller of --- *are these columns in the binding's declared
+  `schema:`* --- for every other reader of one. A `kind: column` taxonomy names
+  a `parent_key:`, which is one more column over the same declaration, and a
+  second checker for it would be two copies of one rule a function apart.
+
+- **`dataknobs_data.ontology` --- an ontology over a table you already have.**
+  `OntologyRegistry` loads an ontology document, binds its declared source to a
+  configured database, and closes what it opened. It is the object the
+  `dataknobs-common` loaders point at when they refuse a live source: binding
+  one creates something that must be closed, and a module-level function owns
+  no lifecycle to do that with.
+
+  ```python
+  from dataknobs_config import EnvironmentAwareConfig
+  from dataknobs_data.ontology import OntologyRegistry
+
+  cfg = EnvironmentAwareConfig.load_app("catalog")
+  registry = await OntologyRegistry.from_config_async(
+      cfg.resolve_for_build("ontology")
+  )
+  onto = registry.get("catalog")
+  entity = await onto.entity(onto.localize("catalog:sku-4471"))
+  entity.name                                     # "Beagle"
+  await registry.close()
+  ```
+
+  Two doors, and which config form each takes is the distinction between them:
+  `from_config_async` takes the **resolved** form, `load()` takes the
+  **portable** one --- `$resource` references intact and `${VAR}` unexpanded,
+  which is the form a deployment stores --- and resolves it through the
+  registry's own `environment=` and `strict_resources=`. `from_components`
+  takes handles already built, for a caller with no environment and no file.
+  A `$resource` this environment does not define **raises** by default:
+  the reference block carries no inline defaults to degrade to, so leniency
+  over it produces an entity source built over an empty config rather than one
+  reading the wrong catalogue. Pass `strict_resources=None` to hand the level
+  back to the environment's own setting.
+
+  `RecordEntitySource` projects rows through an `EntityProjection` that is
+  **configuration, not a callable** --- which is what keeps the mapping
+  invertible. Every bare scalar names a column and may be a dotted path into a
+  JSON value; the braced forms are the ones that do something else. A binding
+  declares the columns it projects and is rejected at load without them, and a
+  projection naming a column that declaration lacks is rejected naming the
+  column. Nothing here interpolates a name into a query.
+
+  A binding read by a rung that *reads folded forms* also declares **where
+  those forms live**, and is rejected at load without that. Which rungs those
+  are is read from what each kind declares about itself --- `exact`, `scan`
+  and `lexical` today, and a rung a consumer registers without an edit here:
+
+  ```yaml
+  entity_projection:
+    table: products
+    id: sku
+    name: title
+    aliases: {column: alt_names, split: ","}
+    surface_forms:                # one row per (folded form, entity)
+      table: product_forms
+      form: folded_form           # holds normalizer(form)
+      entity: sku
+  ```
+
+  A `scan` rung additionally needs `surface_forms.longest_form_tokens:`, and a
+  document declaring one over a binding without it is rejected at load. A
+  scanning rung probes every window of a query and bounds that enumeration by
+  the vocabulary's longest declared form; an authored index counts its own
+  keys, and a live table cannot be counted --- a count taken at load is stale
+  as soon as a row is written. Unbounded the scan spends *n(n+1)/2* reads per
+  query, each one a round trip. No default is invented, because a bound
+  shorter than a real form makes that form silently unfindable.
+
+  The fold a surface-form lookup compares by is `str.casefold`, and no engine
+  performs it at query time --- so the fold happens before the row is written
+  or it does not happen at all. A source with no declared lookup **refuses**
+  `by_surface_form` rather than answering over the unfolded column, because an
+  unfolded answer is indistinguishable from a genuine miss and a cascade falls
+  through to a guessing rung on exactly that reading. The same callable folds
+  both halves: `normalizer=` is the parameter the in-memory source already
+  carries.
+
+  **How many handles a binding needs is the backend's answer.** `sqlite`,
+  `postgres` and `duckdb` declare a `table` on their config, so a projection
+  naming two tables gets a handle each. On `memory`, `file`, `s3` and
+  `elasticsearch` the handle *is* the store: both kinds of row live in one, the
+  form column tells them apart, and an entity row must therefore not carry it.
+  Through `from_components` the handles are injected rather than opened, and a
+  binding needing two takes `forms_database=` beside `database=` --- a handle
+  that addresses one table, handed a projection naming two, is refused at load
+  rather than answering `frozenset()` from the wrong table.
+
+  **Two bindings may not share a store they cannot be told apart in.** Because
+  `table:` decides whether a second handle is opened rather than narrowing any
+  read, two ontologies in one registry binding one `$resource` on those four
+  backends and projecting different tables would get one store and no
+  separation --- `by_type` answering with the other binding's ids, `get()`
+  answering with its row under the wrong type, `by_surface_form` matching its
+  form rows, none of it an error. The second load is refused instead, naming
+  both bindings and the ontology already holding the store. Two bindings
+  declaring the *same* tables are left alone, since reading one table two ways
+  is a decision. The question is asked of the handle rather than of the backend,
+  which is what also covers the injected door: one handle serves every document
+  loaded through `from_components`, and where that handle is itself
+  table-addressed it is fixed on the one table it was built for.
+
+  `get()` is a query rather than a read, because the projection's `id:` is not
+  the storage id. `get_many` and `fetch_origins` are one `IN` filter rather
+  than a round trip per id, split into batches so no single read exceeds what a
+  backend will answer or how many parameters it will bind. `fetch_origins`
+  answers one slot per ref, in order, so a miss is read in the slot it was
+  asked about. `by_type` streams. The registry is an async context manager, so
+  `async with registry:` closes what it opened.
+
+  Loading, unloading and rebuilding are announced on an injected or configured
+  `EventBus` as a topic and a type, with nothing added to `EventType`. A
+  rebuild carries three sets --- gone, arrived, and *changed name while keeping
+  its id* --- because a two-set delta reports a rename as no change at all, and
+  each axis topic carries the delta over *its own* nodes so a subscriber to
+  `taxonomy:colours` is not told about a rename in `taxonomy:sizes`. The
+  whole-population delta is the ontology's own topic. A registry holds **one**
+  bus for every vocabulary it loads, so the first one wins --- an injected bus
+  over a configured block, and the first configured block over a later one ---
+  and a document whose `event_bus:` is passed over is reported at `INFO`
+  naming which kind of bus is already held, rather than left to read as a bus
+  that never publishes.
+  `close()` releases every handle the registry opened and leaves every handle
+  it was handed; it does not unload, and `unload()` does not close, because the
+  vocabulary `get()` hands back is a value that outlives its entry.
+
+- **`known_backend_classes`**, on `dataknobs_data.backend_selection` with
+  `KnownBackend`, for a caller that wants to read something off every backend
+  class rather than build one. `available_backends` answers "what can I build
+  here?" and is the wrong list for that: a backend behind a missing driver is
+  declared unavailable and drops out of it, so a structural check written over
+  it covers fewer classes on a lean machine and reports the same green. This
+  reports every backend the registry knows of, one entry per backend with
+  aliases collapsed, carrying the class where its module imports and the
+  reason where it does not — so a caller can skip one by name, but cannot
+  fail to notice it.
+
+  Most classes stay reachable even without their driver, because a backend
+  importing it lazily imports fine without it. Which ones is a property of
+  each backend rather than something a caller should have to model, and is
+  discovered here.
+
+- **`TopicNodeHierarchy`**, a `Hierarchy` over a `TopicNode` subtree, on the
+  `dataknobs_data.sources` door with `TopicKey`. It keys nodes by position —
+  `()` is the anchor, `(0, 1)` the second child of the first — because
+  `TopicNode` has no id and its labels repeat. Build one per call and discard
+  it: the map is a snapshot, and `build_heading_tree` grows a tree by appending
+  to `children`.
+
+  What it gives a consumer is the rest of the walk family over a topic tree:
+  `ancestors`, `paths_to_root` and `deepest_common_ancestor`, none of which
+  `TopicNode` carries. `key_of` is how a node becomes a key for them; it
+  refuses an unknown node with `NotFoundError`, which is what the walks raise
+  for an unknown anchor, so one `except NotFoundError` covers both.
+
+### Licensing
+
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-data` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
+
 ### Security
 
 - Recorded three further `chromadb` advisories against the existing

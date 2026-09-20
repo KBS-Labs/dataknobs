@@ -242,7 +242,9 @@ With LLM support (required for `LLM_DECODE` scoring and LLM-enhanced feedback):
 ```python
 from dataknobs_llm import OllamaProvider
 
-llm = OllamaProvider(model="llama3.2")
+# Every provider takes one config object -- an LLMConfig, a Config, or a plain
+# dict -- rather than the config's fields as keywords.
+llm = OllamaProvider({"provider": "ollama", "model": "llama3.2"})
 executor = RubricExecutor(function_registry=func_registry, llm=llm)
 ```
 

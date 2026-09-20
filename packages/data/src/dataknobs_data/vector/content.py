@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """How source fields become the text a vector was built from.
 
 A vector is stale when the text that produced it is no longer the text the
@@ -25,6 +28,22 @@ Records written before that description existed carry no such keys. Callers
 pass their own configuration as the fallback, which is what those records were
 digested under, so no stored hash is invalidated and nothing re-embeds on
 upgrade.
+
+The other half of the keys on an indexed row
+--------------------------------------------
+
+``MODEL_NAME_KEY`` below is one of five keys written onto a single stored row,
+and the other four --- which vocabulary, which axis, which node, which surface
+forms --- live in ``dataknobs_common.ontology.tags``. The split is by subject
+rather than by accident: this one is about the **embedder** that produced the
+vector, and is half of the staleness contract the digest above is the other
+half of; those four are about **identity**, and belong beside the vocabulary
+that mints the ids.
+
+So the two modules name each other, in both directions, because four keys
+declared in two modules is otherwise a reader reaching for one module and
+finding one of four --- which is this module's own stated defect, one level
+up. See ``dataknobs_common/ontology/tags.py``.
 
 Two questions, two functions
 ----------------------------
@@ -197,6 +216,87 @@ def stored_assembly(
             )
 
     return source_fields, separator
+
+
+def derive_source_text(record: Record, vector_field: str) -> str | None:
+    """The text a record's vector was made from, read off the record itself.
+
+    What ``include_source`` always meant. The original design spells it
+    *"automatic source retrieval"* --- not records-versus-ids, since the
+    record is returned either way, but whether the search result carries the
+    text beside the score. No query and no id round-trip is needed: the
+    vector field already describes its own assembly, which is the purpose
+    :func:`content_hash_metadata` was written for.
+
+    Three answers, in order of how much the record says about itself:
+
+    - it names its fields and separator, so the text is reproduced exactly;
+    - it names only the legacy scalar ``source_field``, which is a single
+      field name when one was embedded and a comma-joined list when several
+      were --- so the lookup succeeds for the first and correctly misses for
+      the second, rather than reading a field called ``"title,body"``;
+    - it says nothing, which is every vector written before descriptions
+      existed. ``None``, gracefully.
+
+    **Past tense, and it is checked.** Reproducing the assembly from the
+    record's *current* values gives the text the vector was made from only
+    while nothing has edited the record since --- and the vector field already
+    carries the answer to that, because :func:`content_hash_metadata` writes
+    the digest of the embedded text onto the same dict, in the same call, as
+    the field list and the separator. Without the check, updating a title and
+    not re-embedding returned a ``source_text`` that provably was not
+    embedded, with no signal: a consumer citing it, reranking on it or showing
+    it as a snippet is handed text that does not correspond to the vector that
+    retrieved it, which is the one failure the parameter exists to prevent.
+    The staleness answer is ``None``, which is what this function already
+    returns for "the record does not say" --- and a record that has moved on
+    since it was embedded does not say.
+
+    A vector carrying no digest is still assembled. Absence of a digest is
+    not evidence of staleness, and refusing there would withdraw the
+    parameter from every corpus written before the digest existed.
+
+    Args:
+        record: The search hit's record.
+        vector_field: The field the vector lives on.
+
+    Returns:
+        The text the vector was made from, or ``None`` where the record does
+        not say --- including where it says the text has changed since.
+    """
+    vector = record.fields.get(vector_field)
+    if vector is None:
+        return None
+
+    metadata = getattr(vector, "metadata", None)
+    source_fields, separator = stored_assembly(metadata)
+    if source_fields:
+        # `separator or DEFAULT` would be wrong here: an empty string is a
+        # legitimate separator and only absence may fall back, which is the
+        # distinction `stored_assembly` reports by returning `None`.
+        text = assemble_source_text(
+            record,
+            source_fields,
+            DEFAULT_FIELD_SEPARATOR if separator is None else separator,
+        )
+        stored_hash = (metadata or {}).get(CONTENT_HASH_KEY)
+        if isinstance(stored_hash, str) and compute_content_hash(text) != stored_hash:
+            logger.debug(
+                "Not deriving source text for %r on record %s: the assembled text "
+                "no longer digests to the stored hash, so the vector was made "
+                "from something else",
+                vector_field,
+                record.id,
+            )
+            return None
+        return text
+
+    source_field = getattr(vector, "source_field", None)
+    if source_field and source_field in record.fields:
+        value = record.get_value(source_field)
+        return None if value is None else str(value)
+
+    return None
 
 
 def describes_its_assembly(metadata: dict[str, Any] | None) -> bool:

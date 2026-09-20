@@ -359,7 +359,8 @@ def process_documents(input_dir: str, es_index: str):
                     continue
     
     # Step 2: Process with LLM utils for configuration
-    config = json_utils.load_json_file("config.json")
+    with open("config.json") as handle:
+        config = json.load(handle)
     es_config = llm_utils.get_value_by_key(
         config, "elasticsearch.settings", {}
     )

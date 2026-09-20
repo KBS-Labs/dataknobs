@@ -23,10 +23,10 @@ The conversations API provides a powerful system for managing multi-turn convers
         - scoped_middleware
         - switch_to_node
         - branch_from
-        - get_tree_structure
+        - get_branches
         - get_rag_metadata
         - save
-        - load
+        - resume
 
 ## Conversation Types
 
@@ -111,7 +111,7 @@ from dataknobs_data.backends import AsyncMemoryDatabase
 from pathlib import Path
 
 # Setup
-config = LLMConfig(provider="openai", api_key="your-key")
+config = LLMConfig(provider="openai", model="gpt-4", api_key="your-key")
 llm = create_llm_provider(config)
 library = FileSystemPromptLibrary(prompt_dir=Path("prompts/"))
 builder = AsyncPromptBuilder(library=library)

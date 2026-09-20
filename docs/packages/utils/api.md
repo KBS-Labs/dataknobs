@@ -76,13 +76,25 @@ if file_utils.is_gzip_file("data.gz"):
 ```
 
 ### JSON Processing
+
+Reading and writing whole files is `json` from the standard library; what this
+module adds is addressing *into* a structure and flattening one.
+
 ```python
+import json
+
 from dataknobs_utils import json_utils
 
-# Process JSON files
-data = json_utils.load_json_file("config.json")
-processed = json_utils.process_json_data(data)
-json_utils.save_json_file(processed, "output.json")
+data = json.loads('{"models": {"gpt4": {"temperature": 0.7}}, "tags": ["a", "b"]}')
+
+# Address a nested value by path. List elements are indexed with [n], not .n
+print(json_utils.get_value(data, "models.gpt4.temperature"))   # 0.7
+print(json_utils.get_value(data, "tags[1]"))                   # b
+print(json_utils.get_value(data, "tags.1", default="absent"))  # absent
+
+# Flatten to path -> value, and rebuild from it
+squashed = json_utils.collect_squashed(json.dumps(data))
+print(squashed[".models.gpt4.temperature"])                    # 0.7
 ```
 
 ### LLM Integration
@@ -124,13 +136,26 @@ results = elasticsearch_utils.decode_results(query_result)
 ```python
 from dataknobs_utils import pandas_utils, stats_utils
 
-# DataFrame utilities
-df = pandas_utils.process_dataframe(raw_data)
-summary = pandas_utils.generate_summary(df)
+# DataFrame utilities. Each element is a GROUP of records, and `item_id`
+# carries the group's index into every row it contributed.
+df = pandas_utils.dicts2df([
+    [{"name": "alpha", "n": 1}, {"name": "b", "n": 2}],
+    [{"name": "gamma", "n": 3}],
+])
+print(list(df.columns))                 # ['name', 'n', 'item_id']
+print(list(df["item_id"]))              # [0, 0, 1]
 
-# Statistical analysis
-stats = stats_utils.calculate_statistics(data)
-distribution = stats_utils.analyze_distribution(values)
+# Longest text first -- the order a greedy matcher wants.
+print(list(pandas_utils.sort_by_strlen(df, "name")["name"]))
+# ['alpha', 'gamma', 'b']
+
+# Statistical analysis accumulates rather than taking a batch: one pass, and
+# two accumulators combine without revisiting their values.
+stats = stats_utils.StatsAccumulator("latency")
+for value in (12.0, 15.0, 9.0, 14.0):
+    stats.add(value)
+print(stats.n, stats.mean, stats.min, stats.max)   # 4 12.5 9.0 15.0
+print(round(stats.std, 4))                        # 2.6458
 ```
 
 ## Module Details
@@ -261,8 +286,10 @@ distribution = stats_utils.analyze_distribution(values)
 
 ### Data Pipeline Integration
 ```python
+import json
+
 from dataknobs_utils import (
-    file_utils, json_utils, pandas_utils, 
+    file_utils, pandas_utils,
     elasticsearch_utils, stats_utils
 )
 
@@ -275,14 +302,16 @@ def process_data_pipeline(input_dir, output_dir):
     all_data = []
     for filepath in data_files:
         if filepath.endswith('.json'):
-            # Load and validate JSON
-            data = json_utils.load_json_file(filepath)
-            if json_utils.validate_schema(data, schema):
-                all_data.extend(data)
+            # Reading a whole file is stdlib json; this module addresses into
+            # the result. There is no schema VALIDATOR here -- JsonSchemaBuilder
+            # infers a schema from data rather than checking data against one.
+            with open(filepath) as handle:
+                all_data.extend(json.load(handle))
     
-    # Convert to DataFrame and analyze
-    df = pandas_utils.create_dataframe(all_data)
-    summary = stats_utils.generate_summary(df)
+    # Convert to DataFrame and analyze. dicts2df takes groups of records.
+    df = pandas_utils.dicts2df([all_data])
+    summary = stats_utils.StatsAccumulator("rows")
+    summary.add(len(df))
     
     # Index in Elasticsearch
     with open(f"{output_dir}/batch.jsonl", "w") as f:
@@ -295,11 +324,14 @@ def process_data_pipeline(input_dir, output_dir):
 
 ### Configuration Management
 ```python
-from dataknobs_utils import llm_utils, json_utils
+import json
+
+from dataknobs_utils import llm_utils
 
 class ConfigManager:
     def __init__(self, config_path):
-        self.config = json_utils.load_json_file(config_path)
+        with open(config_path) as handle:
+            self.config = json.load(handle)
     
     def get_setting(self, path, default=None):
         return llm_utils.get_value_by_key(self.config, path, default)
@@ -321,14 +353,16 @@ class ConfigManager:
 
 ### Error Handling Patterns
 ```python
-from dataknobs_utils import file_utils, requests_utils
 import logging
+from pathlib import Path
+
+from dataknobs_utils import file_utils, requests_utils
 
 def safe_data_processing(input_path, output_path):
     """Process data with comprehensive error handling."""
     try:
-        # Check input exists
-        if not file_utils.filepath_exists(input_path):
+        # There is no filepath_exists here; pathlib answers this one.
+        if not Path(input_path).exists():
             raise FileNotFoundError(f"Input path not found: {input_path}")
         
         processed_lines = []
@@ -388,11 +422,16 @@ def test_json_operations():
         temp_path = f.name
     
     try:
-        # Test save/load
-        json_utils.save_json_file(test_data, temp_path)
-        loaded_data = json_utils.load_json_file(temp_path)
+        # Whole-file read and write are stdlib json, not this module.
+        with open(temp_path, "w") as handle:
+            json.dump(test_data, handle)
+        with open(temp_path) as handle:
+            loaded_data = json.load(handle)
         assert loaded_data == test_data
-        
+
+        # What json_utils adds is addressing into the result.
+        assert json_utils.get_value(loaded_data, "nested.inner") == "data"
+
         print("JSON operations test passed")
     finally:
         os.unlink(temp_path)

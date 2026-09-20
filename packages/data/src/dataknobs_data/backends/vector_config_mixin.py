@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared mixin for vector configuration across all backends."""
 
 import logging
@@ -41,7 +44,7 @@ class VectorConfigMixin:
     def _apply_vector_config(
         self,
         vector_enabled: bool,
-        vector_metric: str | DistanceMetric,
+        vector_metric: object,
     ) -> None:
         """Set vector state from already-resolved config values.
 
@@ -50,17 +53,39 @@ class VectorConfigMixin:
         (typed path). An unrecognized metric string falls back to cosine
         with a warning.
 
+        The name is settled by :meth:`DistanceMetric.resolve`, which is the
+        library's one vocabulary, rather than by ``DistanceMetric(...)``,
+        which knows only member values. Six of the eight names
+        :meth:`DistanceMetric.get_aliases` publishes reached the fallback
+        below and were configured as cosine under a warning calling them
+        invalid --- so ``vector_metric: "manhattan"`` was a documented
+        setting that silently did something else. The answer is canonical for
+        the same reason :func:`~dataknobs_data.vector.mixins.resolve_metric`'s
+        is: every table that reads it keys on the family.
+
+        Declared ``object`` rather than ``str | DistanceMetric``, which is
+        what :meth:`_parse_vector_config` can actually supply: it reads
+        ``vector_metric`` out of an untyped configuration dict, so the value
+        is whatever a consumer's YAML held. Under the narrower annotation the
+        final ``else`` was unreachable *by declaration* while being the branch
+        that catches a number or a list --- and deleting it, which is what
+        clearing that finding by hand would mean, would leave
+        ``self.vector_metric`` unset and fail later somewhere else.
+        ``object`` also keeps the two ``isinstance`` narrowings working, which
+        ``Any`` would not.
+
         Args:
             vector_enabled: Whether vector operations are enabled.
             vector_metric: Distance metric as a name or ``DistanceMetric``.
+                Anything else falls back to cosine with a warning.
         """
         self._vector_enabled = vector_enabled
 
         if isinstance(vector_metric, DistanceMetric):
-            self.vector_metric = vector_metric
+            self.vector_metric = vector_metric.canonical()
         elif isinstance(vector_metric, str):
             try:
-                self.vector_metric = DistanceMetric(vector_metric.lower())
+                self.vector_metric = DistanceMetric.resolve(vector_metric).canonical()
             except ValueError:
                 logger.warning(f"Invalid vector metric '{vector_metric}', using cosine")
                 self.vector_metric = DistanceMetric.COSINE

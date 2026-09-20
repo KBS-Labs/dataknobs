@@ -233,4 +233,6 @@ We welcome contributions! Dataknobs is open-source to democratize access to prod
 
 ## License
 
-Dataknobs is released under the MIT License. See [License](license.md) for details.
+Dataknobs is released under the Apache License, Version 2.0. See [License](license.md) for details.
+
+Versions released before this change remain available under the MIT License.

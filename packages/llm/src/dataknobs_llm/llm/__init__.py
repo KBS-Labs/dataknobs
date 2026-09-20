@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """LLM abstraction layer for FSM patterns.
 
 This module provides a unified abstraction layer for working with various LLM providers

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """How an ``embedding_fn`` gets called.
 
 Every class in this package that embeds text asks the same question first --- is

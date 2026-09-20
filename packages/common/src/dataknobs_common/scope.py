@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Runtime-state projection Protocol and reference implementations.
 
 A :class:`ScopeProjector` transforms a source value (typically a runtime

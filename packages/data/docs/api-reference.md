@@ -91,7 +91,16 @@ backends share one `FileDatabaseConfig`.
 - `search(query: Query) -> List[Record]`: Search for records
 - `count(query: Query | None) -> int`: Count matching records
 - `clear() -> int`: Delete all records
-- `stream_read(query, config) -> Iterator[Record]`: Stream records
+- `stream_read(query, config) -> Iterator[Record]`: Stream records, applying the
+  same `query` filters `search` applies — the two doors over one `Query` return
+  the same rows. **How much is resident at once is the backend's answer, not the
+  door's.** Postgres streams by cursor, S3 by paginator, and SQLite, DuckDB and
+  asynchronous Elasticsearch a page at a time, so the footprint there is the
+  batch rather than the result. `memory`, `file` and *synchronous*
+  Elasticsearch call `search` first and hand its result out in batches: the
+  rows are materialised whether they are streamed or not, so the iterator is
+  the shape of the read rather than a bound on it, and a query too large to
+  hold is too large on those three either way.
 - `stream_write(records, config) -> StreamResult`: Stream write records
 
 #### Create semantics (atomic create-if-absent)
@@ -895,10 +904,43 @@ db = factory.create(
     path="/data/vector.db",
     table="records",
     vector_enabled=True,
-    vector_metric="cosine"  # Options: cosine, euclidean, dot_product
+    vector_metric="cosine"  # cosine, euclidean, dot_product, l1 (aliases accepted)
 )
 db.connect()
 ```
+
+#### Which metrics a backend can actually serve
+
+Four metrics, six spellings: `inner_product` and `dot_product` name one
+metric, as do `l2` and `euclidean`. `DistanceMetric.resolve()` settles any of
+them, plus the aliases `DistanceMetric.get_aliases()` publishes (`cos`, `ip`,
+`manhattan`, …), and refuses anything else rather than falling back to cosine.
+What a backend does with the result is not uniform:
+
+| Backend | `cosine` | `euclidean` | `dot_product` | `l1` |
+|---|---|---|---|---|
+| memory, file, SQLite, S3 (both lanes) | ✅ | ✅ | ✅ | ✅ |
+| Postgres (both lanes) | ✅ | ✅ | ✅ | ✅ pgvector ≥ 0.7.0 |
+| Elasticsearch (both lanes) | ✅ | ✅ `l2_norm` | ✅ | ❌ raises |
+
+Elasticsearch has no `dense_vector` similarity for L1, so asking for it on
+`create_vector_index` raises `ValueError` rather than quietly building a
+cosine mapping.
+
+Two further Elasticsearch-specific notes, because neither is guessable:
+
+- **`metric` on `vector_search` does not choose the ranking there.**
+  Elasticsearch ranks k-NN by the `similarity` recorded in the field's
+  *mapping*, fixed when the index was created. The metric passed to a search
+  is recorded on each hit and changes nothing about the order, so on a field
+  whose mapping was built under a different metric it reports what was asked
+  for rather than what ran. `create_vector_index` is where the choice is made.
+- **`score_threshold` is compared against each backend's own scale.** The ten
+  Python-path and Postgres backends report a raw similarity; Elasticsearch
+  passes its own `_score` through unconverted. Elasticsearch defines that
+  score per similarity — `(1 + cos) / 2` for `cosine`, `1 / (1 + l2²)` for
+  `l2_norm` — so one threshold constant does not cut at the same place on
+  both.
 
 ### DuckDB Backend
 

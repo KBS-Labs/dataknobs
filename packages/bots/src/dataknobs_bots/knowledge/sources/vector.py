@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Vector knowledge base grounded source.
 
 Wraps an existing :class:`KnowledgeBase` as a :class:`GroundedSource`,
@@ -268,9 +271,10 @@ class VectorKnowledgeSource(GroundedSource):
         seen: set[Hashable] = set()
 
         # Pick up the filter slice keyed by our source name, matching the
-        # convention DatabaseSource uses (database.py:300). Empty slice
-        # or missing slice both mean "no filter" — fall through to the
-        # KB's no-filter path so existing consumers see unchanged
+        # convention ``DatabaseSource._build_structural_filters`` uses
+        # (``dataknobs_data.sources.database`` -- a different package).
+        # Empty slice or missing slice both mean "no filter" — fall through
+        # to the KB's no-filter path so existing consumers see unchanged
         # behavior.
         source_filters = intent.filters.get(self._name) or None
 

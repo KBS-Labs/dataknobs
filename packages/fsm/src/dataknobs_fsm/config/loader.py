@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Configuration loader for FSM configurations.
 
 This module provides functionality to load FSM configurations from various sources:

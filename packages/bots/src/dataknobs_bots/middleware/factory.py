@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Build middleware instances from declarative specs.
 
 A middleware spec is a plain mapping — the same shape the bot config

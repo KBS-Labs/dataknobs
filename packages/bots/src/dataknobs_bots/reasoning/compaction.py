@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """In-loop history-compaction strategies for the ReAct reasoning loop.
 
 The *mechanism* (a pairing-aware re-root of the conversation path) lives on

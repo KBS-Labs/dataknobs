@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """ArtifactBank — composition layer over MemoryBank sections and scalar fields.
 
 ArtifactBank ties together top-level fields (e.g. ``recipe_name``) and named

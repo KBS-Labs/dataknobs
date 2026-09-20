@@ -268,12 +268,17 @@ from dataknobs_common.testing import assert_no_ad_hoc_dotted_import
 def test_no_ad_hoc_dotted_path_resolution():
     assert_no_ad_hoc_dotted_import(
         *(ROOT / "packages").glob("*/src"),
-        allow={
-            # Reviewed and deliberately left; adoption tracked separately.
-            "fsm/src/dataknobs_fsm/config/builder.py:357",
-        },
+        allow=DEFERRED,
     )
 ```
 
+An `allow` entry is a `package/path.py:line` site, reviewed and deliberately
+left. They are declared beside the guard rather than inline —
+`tests/test_dotted_import_consolidation.py` holds the live set, each with the
+reason it is deferred — and this page names none of them, because a line number
+transcribed into prose stops being true the first time anything is inserted
+above it. This page carried one for exactly that long.
+
 An `allow` entry matching nothing is an error. A suppression whose site moved
-is a hole, and a silent one reads as a clean scan.
+is a hole, and a silent one reads as a clean scan — so expect to re-read the
+line numbers after any edit above one of them.

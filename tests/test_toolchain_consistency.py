@@ -34,7 +34,15 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._workspace import ROOT, load_bin_module, load_toml, pyprojects, python_floor
+from tests._workspace import (
+    ROOT,
+    load_bin_module,
+    load_toml,
+    pyprojects,
+    python_floor,
+    tracked_files,
+)
+from tests._workspace import tracked_and_new_files as _tracked_and_new_files
 from tests._workspace import rel as _rel
 from tests._workspace import workspace_targets as _workspace_targets
 from tests._workspace import version_pair as _version_pair
@@ -244,11 +252,20 @@ def test_a_change_to_these_guards_still_schedules_them() -> None:
     assert _scopes.plan_for_files(["bin/run-quality-checks.sh"])["test_scope"] == "workspace"
 
     # The other two answers, so the fix cannot be "always run everything".
-    # LICENSE rather than README.md: the root README used to be the inert file
-    # here, and stopped being one when the documented-import guard started
-    # reading it. A negative control has to name something that feeds no check
-    # *today*, or it silently becomes an assertion that a real input is ignored.
-    assert _scopes.plan_for_files(["LICENSE"])["test_scope"] == "none"
+    # A negative control has to name something that feeds no check *today*, or
+    # it silently becomes an assertion that a real input is ignored. This one
+    # has now moved twice for exactly that reason: README.md stopped being inert
+    # when the documented-import guard started reading it, and LICENSE stopped
+    # being inert when test_licensing.py started reading it and the relicense
+    # declared it in _WORKSPACE_ONLY_QUALITY_INPUTS.
+    #
+    # .nojekyll should be the last move. The two files it replaced were inert by
+    # accident — ordinary repository content nothing happened to read yet — so
+    # each was one new guard away from inverting this assertion. This one is
+    # inert by construction: a zero-byte marker whose only consumer is GitHub
+    # Pages' own build (see .github/GITHUB_PAGES_SETUP.md), with no content for
+    # a local check to have an opinion about.
+    assert _scopes.plan_for_files([".nojekyll"])["test_scope"] == "none"
     assert _scopes.plan_for_files(["packages/common/src/x.py"])["test_scope"] == "packages"
 
 
@@ -284,28 +301,839 @@ def test_a_release_bump_schedules_no_package_suite() -> None:
     assert plan["docs_changed"] is True
 
 
-def test_an_unhashed_test_input_still_schedules_its_package() -> None:
-    """Change detection shares the hasher's definition, not its blind spot.
+def test_a_file_no_hash_reaches_still_schedules_its_package() -> None:
+    """Change detection schedules on path; hash membership is a narrower set.
 
-    The hasher decides *membership* as well — ``_HASH_PATTERNS`` reaches the
-    ``.py`` files under ``src/`` and ``tests/`` and nothing else. Deferring to
-    that wholesale would be the unsafe half of the unification: these files
-    decide whether a suite passes while moving no stored hash, so a golden
-    file regenerated wrongly would stop scheduling the suite that would have
-    caught it. Over-scheduling here is the deliberate asymmetry.
+    Deferring change detection to hash membership is the unsafe half of the
+    unification, and it stayed unsafe after the fixtures were hashed. What the
+    hasher reaches is a *declaration* — ``_HASH_PATTERNS`` takes the ``.py``
+    files under ``src/`` and ``tests/`` and the package's ``pyproject.toml``,
+    and the test documents are named one at a time in ``changed-packages.py``
+    while the fixture directories are declared whole — and a declaration lags
+    the tree it describes. Mapping a package's files to that package by path is
+    what stops the lag being a blind spot: a file the declaration has not
+    reached still schedules the suite that would notice it change.
+
+    **The anchors are derived rather than named, and this test is why.** It
+    used to name a golden JSON and a config YAML as its instances of an input
+    no hash reaches. The change that put both into their package's hash left
+    it green, because the weaker claim it still made — that those files
+    schedule their package — is true of hashed and unhashed files alike. So
+    nothing went red while its name, its docstring and its stated purpose all
+    went false. A named instance of a property nothing re-checks is how a
+    guard outlives its subject, which is why every premise below is asserted
+    rather than described.
     """
-    unhashed_inputs = (
-        "packages/llm/tests/golden/anthropic_profile_golden.json",
-        "packages/config/tests/fixtures/test_config.yaml",
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        package: {_rel(p) for p in hashes.package_hash_files(package)}
+        for package in hashes.ALL_PACKAGES
+    }
+    # Positive control. A coverage lookup asking the wrong question answers
+    # "nothing is hashed", and every assertion below then passes for that
+    # reason rather than for its own. This file is one the declaration names.
+    control = "packages/config/tests/fixtures/test_config.yaml"
+    assert control in covered["config"], (
+        f"{control} reads as unhashed, so this guard is measuring something "
+        "other than what package_hash_files returns"
     )
 
-    for path in unhashed_inputs:
-        assert (ROOT / path).exists(), (
-            f"{path} was this test's real instance of an unhashed test input; "
-            "if it moved, re-anchor on another rather than deleting the case"
+    # Derived: what the declaration does not reach inside a tests tree. Today
+    # that is the prose _TEST_TREE_PROSE holds unhashed on purpose; when the
+    # declaration grows, this set shrinks with no edit here.
+    unhashed = [
+        path
+        for path in _tracked_and_new_files()
+        if (parts := path.split("/"))[:1] == ["packages"]
+        and len(parts) >= 4
+        and parts[2] == "tests"
+        and not path.endswith(".py")
+        and path not in covered.get(parts[1], set())
+    ]
+    assert unhashed, (
+        "every file under a tests tree is now in its package's hash, so this "
+        "half has no instance and would pass without asserting anything. That "
+        "is also the state in which deferring change detection to hash "
+        "membership stops being unsafe for this tree — decide that here, "
+        "rather than leaving a case that reads as a check and is not one"
+    )
+    for path in unhashed:
+        plan = _scopes.plan_for_files([path])
+        assert plan["test_scope"] == "packages", (
+            f"{path} is in no hash, so nothing else will notice it change; "
+            f"it must still schedule its package, got {plan['test_scope']}"
         )
-        assert _scopes.plan_for_files([path])["test_scope"] == "packages", (
-            f"{path} feeds a test result — it must still schedule its package"
+        assert path.split("/")[1] in plan["packages"], (
+            f"{path} scheduled {plan['packages']}, which does not include the "
+            "package whose tree it sits in"
+        )
+
+    # The sharper case, and the one the asymmetry exists for: a file a suite
+    # loads by name that no hash reaches. An edit to it changes what that
+    # suite asserts and moves no stored hash, so membership alone would drop
+    # the result. The tests-tree half above cannot carry this claim — what is
+    # unhashed there is prose that no test reads, which is why it is exempt.
+    read_by_a_suite = "packages/llm/src/dataknobs_llm/llm/providers/data/bedrock_models.yaml"
+    readers = [
+        path
+        for path in _tracked_and_new_files()
+        if path.startswith("packages/llm/tests/")
+        and path.endswith(".py")
+        and "data/bedrock_models.yaml" in (ROOT / path).read_text()
+    ]
+    assert readers, (
+        f"no suite names {read_by_a_suite} any more, so it is no longer this "
+        "case's instance of an input a test result depends on; re-anchor on a "
+        "file some suite does read rather than dropping the case"
+    )
+    assert read_by_a_suite not in covered["llm"], (
+        f"{read_by_a_suite} is named here as an input no hash reaches, and the "
+        f"hasher now reaches it. That is progress, not a regression: re-anchor "
+        f"on another file a suite reads that no hash covers, and if there is "
+        f"none left, say so here — it is the condition under which change "
+        f"detection could safely defer to hash membership"
+    )
+    plan = _scopes.plan_for_files([read_by_a_suite])
+    assert plan["test_scope"] == "packages"
+    assert "llm" in plan["packages"], (
+        f"{read_by_a_suite} decides what {readers[0]} asserts and is in no "
+        f"hash, so it must schedule llm; got {plan['packages']}"
+    )
+
+
+def test_a_file_can_feed_more_than_one_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file declared in two tiers contributes to both, rather than the first.
+
+    The tiers are not a partition and the declarations never claimed to be
+    one: a file can be a package's test input *and* something a workspace
+    guard reads. The mapping read them as a partition anyway — each branch
+    ended in ``continue``, so the first tier that matched was the only one
+    that spoke, and the rest of the file's blast radius was dropped in
+    silence.
+
+    ``packages/common/tests/conftest.py`` is the case that is not
+    hypothetical. It is the common suite's own conftest, and a workspace
+    guard reads it — ``test_worked_input_fences`` compares a vocabulary
+    published in a package document against the constant this file carries.
+    Declaring it in the workspace tier so the guard is scheduled used to
+    stop the common suite being scheduled by its own conftest.
+
+    Asserted with the declaration patched rather than by filing the entry,
+    because what is being pinned is the mapping's arithmetic: two tiers, two
+    contributions. Which files are *declared* in which tier is a separate
+    decision that this guard must keep legal rather than make.
+    """
+    dual = "packages/common/tests/conftest.py"
+    assert (ROOT / dual).exists(), (
+        f"{dual} was this test's real instance of a file two tiers can claim; "
+        "if it moved, re-anchor on another rather than deleting the case"
+    )
+
+    # Both halves run against a *patched* tier list, including the half that
+    # leaves the entry out. Reading the real declaration for the baseline would
+    # make this guard's control case depend on a decision it exists to keep
+    # legal: file the entry for real and the baseline stops holding, so the
+    # guard fails on the change it was written to permit.
+    tiers = [t for t in _scopes.WORKSPACE_ONLY_TRIGGERS if t != dual]
+
+    # Undeclared, it is exactly what it looks like: an input to one package.
+    # Asserted on directly_changed rather than packages, which also carries
+    # common's transitive dependents — nine more names that say nothing about
+    # what this file was mapped to.
+    monkeypatch.setattr(_scopes, "WORKSPACE_ONLY_TRIGGERS", tiers)
+    before = _scopes.plan_for_files([dual])
+    assert before["directly_changed"] == ["common"]
+    assert before["workspace_changed"] is False
+
+    monkeypatch.setattr(_scopes, "WORKSPACE_ONLY_TRIGGERS", [*tiers, dual])
+
+    both = _scopes.plan_for_files([dual])
+    assert both["workspace_changed"] is True, (
+        "a file declared in the workspace tier must schedule the guards that "
+        "read it — that is what the declaration is for"
+    )
+    assert both["directly_changed"] == ["common"], (
+        "declaring a file in a second tier must not un-declare the first: "
+        f"{dual} is the common suite's own conftest and still feeds it, "
+        f"got directly_changed={both['directly_changed']}"
+    )
+    assert both["test_scope"] == "packages"
+
+
+def test_a_test_only_change_stops_at_its_own_package() -> None:
+    """A package's own tests decide that package's result and no other's.
+
+    The transitive closure earns its cost on a change to a package's
+    *exported* surface: edit ``common``'s source and the other nine packages
+    are running against different code, so their suites have to re-run to say
+    anything. A change under ``packages/common/tests/`` is not that. Nothing
+    outside the common suite reads those files, and nothing outside it can:
+    the gate runs each package's suite as its own pytest invocation, so no
+    other package's run collects them at all. What holds that true rather
+    than assuming it is ``test_no_package_suite_reads_another_packages_tests``
+    below, which is this test's other half.
+
+    Scheduled as an export anyway, ``common`` is both the worst case and the
+    ordinary one — nine dependents — so a one-line edit to a common test ran
+    every suite in the workspace to re-confirm nine results that could not
+    have moved.
+
+    ``pyproject.toml`` is the control in the other direction, and the reason
+    this is about ``tests/`` rather than about "not source": a dependency
+    constraint or a version is read by every dependent's resolution, so it
+    exports and must keep dragging the closure.
+    """
+    local_only = "packages/common/tests/test_registry.py"
+    exports_source = "packages/common/src/dataknobs_common/__init__.py"
+    exports_metadata = "packages/common/pyproject.toml"
+
+    for path in (local_only, exports_source, exports_metadata):
+        assert (ROOT / path).exists(), (
+            f"{path} anchors this guard in a real file; if it moved, "
+            "re-anchor on another rather than deleting the case"
+        )
+
+    local = _scopes.plan_for_files([local_only])
+    assert local["packages"] == ["common"], (
+        "a change to a package's own tests is read by that package's suite "
+        "and by nothing else, so it schedules that suite and nothing else; "
+        f"got {local['packages']}"
+    )
+    assert local["directly_changed"] == ["common"]
+    assert local["exporting"] == [], (
+        "a test file is not part of what a package exports to its dependents"
+    )
+    assert local["test_scope"] == "packages"
+
+    # Both halves of the control, because the closure is what is being
+    # narrowed and a narrowing that took everything with it would pass the
+    # assertion above. common has nine dependents; each of these must still
+    # reach all ten.
+    for path in (exports_source, exports_metadata):
+        exporting = _scopes.plan_for_files([path])
+        assert exporting["packages"] == sorted(_scopes.ALL_PACKAGES), (
+            f"{path} changes what common's dependents build and run against, "
+            f"so it must still schedule them; got {exporting['packages']}"
+        )
+        assert exporting["exporting"] == ["common"]
+
+
+def test_no_package_suite_reads_another_packages_tests() -> None:
+    """The premise the narrowing above rests on, checked against the tree.
+
+    "A package's tests are local to that package" is true of this tree and is
+    not true by construction: ``packages/*/tests`` directories go on
+    ``sys.path`` under pytest's default import mode, so a bare
+    ``from _vocabularies import ...`` resolves to whichever tests directory
+    was inserted. Two packages sharing a helper that way would be a real
+    coupling, invisible in the imports (nothing spells the other package's
+    name) and silently un-scheduled by the change above.
+
+    Measured when this was written: **zero** cross-package test imports, out
+    of 995 test modules offering 935 bare-importable names.
+
+    The count below is the positive control, and this guard is worth nothing
+    without it. A reader that resolved no imports at all — a parse that threw,
+    a name table built wrong — reports zero violations for the same reason a
+    correct one does. Asserting that same-package bare imports are still
+    *found* is what tells the two apart.
+    """
+    tests_dirs = {
+        path.relative_to(ROOT).parts[1]: path
+        for path in sorted(ROOT.glob("packages/*/tests"))
+        if path.is_dir()
+    }
+    assert len(tests_dirs) > 1, "nothing to compare across"
+
+    # Which packages' tests offer each bare-importable top-level name. A file
+    # is importable as its own stem, and a subdirectory as its own name, once
+    # the tests directory holding it is on sys.path.
+    offered: dict[str, set[str]] = {}
+    sources: list[tuple[str, Path]] = []
+    for package, tests_dir in tests_dirs.items():
+        for source in sorted(tests_dir.rglob("*.py")):
+            sources.append((package, source))
+            relative = source.relative_to(tests_dir)
+            if relative.name != "__init__.py":
+                offered.setdefault(source.stem, set()).add(package)
+            if len(relative.parts) > 1:
+                offered.setdefault(relative.parts[0], set()).add(package)
+
+    foreign: list[str] = []
+    local_hits = 0
+    for package, source in sources:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                # A relative import cannot leave the package it is written in,
+                # so only absolute ones can reach another package's tests.
+                imported = [node.module.split(".")[0]]
+            else:
+                continue
+            for name in imported:
+                owners = offered.get(name)
+                if owners is None:
+                    continue
+                if package in owners:
+                    local_hits += 1
+                else:
+                    foreign.append(
+                        f"{_rel(source)}:{node.lineno} imports {name!r}, which "
+                        f"only {sorted(owners)} provide"
+                    )
+
+    assert local_hits, (
+        "this guard resolved no bare test-module import anywhere in the "
+        "workspace, which is what a broken reader and a clean tree both look "
+        "like. There are such imports — _vocabularies, _anthropic_stubs — so "
+        "finding none means the name table or the parse is wrong, not that "
+        "nothing is coupled"
+    )
+    assert not foreign, (
+        "a package's tests are scheduled by a change to that package alone "
+        "(see test_a_test_only_change_stops_at_its_own_package), so a test "
+        "reaching into another package's tests directory is a coupling the "
+        "gate would stop scheduling:\n  " + "\n  ".join(foreign)
+    )
+
+
+def test_a_lock_change_maps_to_the_members_whose_resolution_moved() -> None:
+    """``uv.lock`` says which packages it moved; the path alone does not.
+
+    The entry is in the global tier because a resolution change really can
+    reach every package -- a bumped third-party version is installed for all
+    ten, and nothing in the path says which. But the file is not opaque. Each
+    workspace member is its own ``[[package]]`` block, marked
+    ``source = { editable = "packages/<name>" }``, so a diff confined to those
+    blocks names the packages it moved and stops there.
+
+    That is the common shape rather than a corner: measured over 150 merged
+    pull requests, ``uv.lock`` was the single most frequent global trigger at
+    12, and 7 of those 12 touched workspace-member blocks only -- release
+    version bumps, and one package gaining a dependency.
+
+    The closure still runs from whatever moved, which is what keeps a real
+    dependency change reaching the packages that build against it.
+    """
+    moved = _scopes.plan_for_files(
+        ["uv.lock"],
+        {"uv.lock": _scopes.TriggerScan(steps=_scopes.BOTH_STEPS, packages=frozenset({"llm"}))},
+    )
+    assert moved["mode"] == "changed", (
+        "a lock diff that named the members it moved has a blast radius the "
+        f"file itself reported; got mode={moved['mode']}"
+    )
+    assert moved["packages"] == sorted(
+        _scopes.get_transitive_dependents({"llm"}) & set(_scopes.DEPENDENCIES)
+    ), (
+        "a resolution change to one member reaches that member and the "
+        f"packages that build against it; got {moved['packages']}"
+    )
+    assert moved["exporting"] == ["llm"], (
+        "a member's resolution is exactly what its dependents build against, "
+        "so a lock change to it exports"
+    )
+
+
+def test_an_unreadable_lock_change_keeps_the_global_blast_radius() -> None:
+    """The fail-closed half: no scan means the old answer, not a smaller one.
+
+    A lock diff that moved a third-party block, a lock the base ref does not
+    carry, a parse that failed -- each is a case where the file did not say
+    which packages it moved, and the only safe reading of that silence is the
+    one the path has always carried. A narrowing that treated "I could not
+    tell" as "nothing" would schedule fewer suites for exactly the changes
+    that most need them.
+    """
+    # None is "nothing read the file"; the empty set is "a reader ran and
+    # placed nothing", which is the shape a silently-broken parser produces for
+    # every input. Both must keep the full blast radius.
+    unattributed: tuple[frozenset[str] | None, ...] = (None, frozenset())
+    for members in unattributed:
+        scans = (
+            {}
+            if members is None
+            else {"uv.lock": _scopes.TriggerScan(steps=_scopes.BOTH_STEPS, packages=members)}
+        )
+        plan = _scopes.plan_for_files(["uv.lock"], scans)
+        assert plan["mode"] == "all", (
+            f"a lock scan of {members!r} names no member, so nothing "
+            f"narrowed the path's own blast radius; got mode={plan['mode']}"
+        )
+        assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), plan["packages"]
+
+    assert _scopes.plan_for_files(["uv.lock"])["packages"] == sorted(_scopes.ALL_PACKAGES), (
+        "the default must be the global answer: a caller that does not supply "
+        "a scan has not narrowed anything"
+    )
+
+
+def test_every_package_is_attributable_in_the_real_lock() -> None:
+    """The premise the narrowing rests on, checked against the tree.
+
+    ``lock_members_changed`` narrows a global trigger by finding workspace
+    members inside ``uv.lock``. A reader that found *none* would return the
+    empty set for every diff -- which the caller treats as unattributed, so
+    the failure is safe, but it is also silent: the narrowing would simply
+    stop paying while every test above still passed, because each supplies
+    its own scan rather than reading the file.
+
+    So this reads the real lock and asserts the marker accounts for every
+    package, which is what makes a uv format change fail here rather than
+    quietly switch the optimisation off.
+    """
+    lock = (ROOT / "uv.lock").read_bytes()
+    text = lock.decode("utf-8", errors="surrogateescape")
+    attributed = set(_scopes._LOCK_MEMBER_RE.findall(text))
+
+    assert attributed == set(_scopes.ALL_PACKAGES), (
+        "every workspace package is an editable block in uv.lock, and the "
+        "narrowing can only attribute a change to a package it can find. "
+        f"missing from the lock: {sorted(set(_scopes.ALL_PACKAGES) - attributed)}; "
+        f"found but not a package: {sorted(attributed - set(_scopes.ALL_PACKAGES))}"
+    )
+
+    # The workspace root is an editable member too and owns no package's code,
+    # so it must NOT be attributed -- a pattern loose enough to catch it would
+    # map a root-only change onto some package.
+    assert 'editable = "." }' in text, (
+        "the workspace root block anchors the case below; if uv stopped "
+        "emitting it, re-anchor rather than dropping the assertion"
+    )
+    assert _scopes._LOCK_MEMBER_RE.search('source = { editable = "." }\n') is None
+
+
+def test_the_lock_reader_resolves_a_real_edit_and_refuses_what_it_cannot_place() -> None:
+    """Both directions, against the real file rather than a fixture.
+
+    The positive half is the one that matters: a reader that resolved nothing
+    reports "no member moved" for the same reason a correct one reports it of
+    an unchanged file, and this module's history is full of guards that
+    reported green because they read nothing.
+    """
+    lock = (ROOT / "uv.lock").read_bytes()
+    assert _scopes.lock_members_changed(lock, lock) == frozenset(), (
+        "a file compared with itself moved no member"
+    )
+
+    marker = b'source = { editable = "packages/llm" }'
+    assert lock.count(marker) == 1, "the llm block anchors this case"
+    edited = lock.replace(marker, marker + b"\nbuild-constraint-dependencies = []")
+    assert edited != lock
+    assert _scopes.lock_members_changed(lock, edited) == frozenset({"llm"}), (
+        "an edit inside one member's block is attributable to that member, "
+        f"got {_scopes.lock_members_changed(lock, edited)}"
+    )
+
+    # A third-party block is what the workspace cannot account for: the bumped
+    # version is installed for every package and the lock does not say which
+    # of them care.
+    third_party = b'\nname = "jinja2"\nversion = '
+    assert lock.count(third_party) == 1, (
+        "the jinja2 block anchors this case; spelled with its surrounding "
+        "newlines because the bare name also appears in every dependency list"
+    )
+    bumped = lock.replace(third_party, b'\nname = "jinja2"\nx-probe = 1\nversion = ')
+    assert _scopes.lock_members_changed(lock, bumped) is None, (
+        "a change this reader cannot place must keep the global blast radius"
+    )
+
+    # And the preamble, which is every package's resolution at once.
+    repython = b'requires-python = ">=3.12"'
+    assert lock.count(repython) == 1
+    assert (
+        _scopes.lock_members_changed(lock, lock.replace(repython, b'requires-python = ">=3.13"'))
+        is None
+    )
+
+
+def test_a_resolution_marker_reorder_is_not_a_change() -> None:
+    """Uv reorders that list on its own; the set it denotes is what matters.
+
+    Left literal, the same release-helper run behaved differently depending on
+    whether uv happened to reorder -- measured across the release pull requests
+    in the last 150, three were reordered and two were not, and only the
+    unreordered two could ever narrow. One PR class, one answer.
+    """
+    lock = (ROOT / "uv.lock").read_bytes()
+    text = lock.decode("utf-8", errors="surrogateescape")
+    match = _scopes._LOCK_MARKERS_RE.search(text)
+    assert match is not None, (
+        "uv.lock carries a resolution-markers list; if the format changed, "
+        "this canonicalisation needs re-reading rather than deleting"
+    )
+    entries = [line for line in match.group(2).splitlines() if line.strip()]
+    assert len(entries) > 1, "a one-entry list cannot be reordered"
+
+    shuffled = text.replace(
+        match.group(0),
+        match.group(1) + "".join(f"{line}\n" for line in reversed(entries)) + match.group(3),
+    )
+    assert shuffled != text, "the reorder must actually change the bytes"
+    reordered = shuffled.encode("utf-8", errors="surrogateescape")
+
+    assert _scopes.lock_members_changed(lock, reordered) == frozenset(), (
+        "reordering a set changes nothing about the resolution it denotes"
+    )
+
+    # The control in the other direction: a marker whose *text* changed is a
+    # real resolution change and must still be unattributable.
+    # Altered mechanically rather than by editing a version inside it: every
+    # entry is a quoted string, and nothing here should depend on which
+    # markers uv happens to emit today.
+    altered = text.replace(entries[0], entries[0].replace('"', '"x-probe and ', 1), 1)
+    assert altered != text, "the control must actually alter a marker"
+    assert (
+        _scopes.lock_members_changed(lock, altered.encode("utf-8", errors="surrogateescape"))
+        is None
+    ), "a changed marker is a changed resolution, not a reordering"
+
+
+def test_a_lint_only_input_does_not_schedule_package_test_suites() -> None:
+    """``bin/validate.sh`` is the lint step, so it moves no package's test result.
+
+    The entry is global for a reason ``09e1dbc5`` argued and demonstrated: the
+    script *is* a step, so every package's recorded result for that step is
+    whatever it produced, and the branch that introduced it fixed a runner
+    exiting 0 on its second target. That argument is about the step the script
+    runs. ``bin/test.sh`` produced the test results; ``bin/validate.sh``
+    produced the validation ones, and neither can move the other's.
+
+    So the blast radius keeps its full width on the side the script owns --
+    ``packages`` is still all ten, and the validation step still re-runs over
+    every one of them -- while the ten package test suites it cannot have
+    moved stop being scheduled.
+    """
+    lint_only = sorted(
+        name
+        for name, steps in _scopes.GLOBAL_TRIGGER_STEPS.items()
+        if steps == frozenset({_scopes.LINT_STEP})
+    )
+    # Driven off the table rather than naming one file, so every entry
+    # classified lint-only is pinned by this. Reclassifying one back to both
+    # steps -- the silent way to lose the narrowing -- then fails here instead
+    # of passing because the guard happened to probe a different entry.
+    assert lint_only == ["bin/package-discovery.sh", "bin/validate.sh"], (
+        f"the lint-only classification changed to {lint_only}; that is a "
+        f"scheduling decision, so it belongs in a diff that argues it"
+    )
+
+    for path in lint_only:
+        plan = _scopes.plan_for_files([path])
+
+        assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), (
+            f"the lint step's own blast radius is undiminished: a change to "
+            f"{path} makes every package's recorded validation result stale, "
+            f"exactly as before; got {plan['packages']}"
+        )
+        # Read with a fallback rather than by key, so this fails against a tree
+        # without the capability by naming the packages it would have tested --
+        # the defect -- rather than by raising KeyError, which only says "absent".
+        assert plan.get("test_packages", plan["packages"]) == [], (
+            f"{path} feeds the lint step; no package's *test* result can have "
+            f"moved, so no package suite is scheduled. Got "
+            f"{plan.get('test_packages', plan['packages'])}"
+        )
+
+
+def test_every_global_trigger_declares_which_step_it_moves() -> None:
+    """The classification is exhaustive, so a new global input forces the call.
+
+    ``09e1dbc5`` scoped its coverage guard for this reason exactly -- to make a
+    new workflow step "force the tiering decision in review, where the blast
+    radius is already being considered, instead of leaving it to whoever edits
+    the script next". A global input added without a step is the same omission
+    one layer in: the mapper falls back to both steps, which is safe and
+    silent, and silent is what makes it permanent.
+    """
+    declared = set(_scopes.GLOBAL_TRIGGER_STEPS)
+    triggers = set(_scopes.GLOBAL_TRIGGERS)
+
+    assert declared == triggers, (
+        "every global input declares the recorded step it can move:\n"
+        f"  undeclared: {sorted(triggers - declared)}\n"
+        f"  declared but not a trigger: {sorted(declared - triggers)}"
+    )
+    for name, steps in _scopes.GLOBAL_TRIGGER_STEPS.items():
+        assert steps and steps <= _scopes.BOTH_STEPS, (
+            f"{name} declares {sorted(steps)}; a global input moves at least "
+            f"one of {sorted(_scopes.BOTH_STEPS)} or it is not global"
+        )
+
+
+def test_a_global_hash_scope_groups_inputs_that_move_the_same_step() -> None:
+    """A scope's members agree about what they move, or its digest cannot say.
+
+    ``validate_artifacts`` widens the dirty set to every package when a global
+    scope moves, under a comment claiming such a scope "changes lint, type, or
+    test results everywhere". That held while the global inputs were
+    undifferentiated. ``GLOBAL_TRIGGER_STEPS`` then classified three of them
+    test-only and two lint-only, and one digest was left standing for three
+    different claims -- so a moved ``toolchain`` hash could report only that
+    *something* global had changed, and the sentence above the widening became
+    false for the lint-only pair.
+
+    Partitioning by the declared step gives the name its meaning back: a moved
+    ``toolchain_lint`` says every package's validation row is stale and its
+    test rows are not, in the one field a reader of the artifact -- or of the
+    gate's end-of-run re-check -- actually sees.
+
+    The dirty set is unchanged and deliberately so. A lint-only input does move
+    every package's recorded validation result, so all ten are still named;
+    what the step split made wrong was the declaration, not the width.
+    """
+    for scope in sorted(_scopes.GLOBAL_SCOPES):
+        entries = WORKSPACE_QUALITY_INPUTS[scope]
+        assert entries, (
+            f"the {scope} scope is global and declares no inputs, so nothing "
+            f"it is supposed to catch can move its digest"
+        )
+
+        by_entry = {entry: _scopes.GLOBAL_TRIGGER_STEPS[entry] for entry in entries}
+        assert len(set(by_entry.values())) == 1, (
+            f"the {scope} scope holds inputs that move different recorded "
+            f"steps, so a change to its digest cannot say which result went "
+            f"stale: " + ", ".join(f"{name} -> {sorted(steps)}" for name, steps in by_entry.items())
+        )
+
+
+def test_the_global_hash_scopes_partition_the_global_triggers() -> None:
+    """Splitting the scope must not drop an input out of the global tier.
+
+    The widening in ``validate_artifacts`` is keyed on the scope rather than on
+    the trigger list, so an entry that falls out of every global scope is still
+    scheduled by change detection while its digest stops dirtying a single
+    package. That is the same two-readers-one-question shape the split is
+    fixing, reintroduced by the fix and pointing the unsafe way.
+
+    Disjointness is asserted within the global tier for the opposite reason:
+    one entry hashed into two *global* scopes moves both digests, which reads
+    as two independent facts about one edit.
+
+    Across tiers it is not a defect and is not asserted. ``bin/validate.sh`` is
+    hashed in ``toolchain_lint`` and again under the ``bin/`` entry of the
+    workspace-only tier, and both are true of it -- it is the lint step, and it
+    is also a file the guards under ``tests/`` read. Two tiers saying so is the
+    accumulation ``map_files_to_packages`` was fixed to allow, not a double
+    count.
+    """
+    seen: dict[str, str] = {}
+    for scope in sorted(_scopes.GLOBAL_SCOPES):
+        for entry in WORKSPACE_QUALITY_INPUTS[scope]:
+            assert entry not in seen, (
+                f"{entry} is hashed in both {seen[entry]} and {scope}, so one "
+                f"edit moves two global digests"
+            )
+            seen[entry] = scope
+
+    triggers = set(_scopes.GLOBAL_TRIGGERS)
+    assert sorted(seen) == sorted(triggers), (
+        "the global hash scopes and the global trigger list disagree:\n"
+        f"  scheduled, hashed in no global scope: {sorted(triggers - set(seen))}\n"
+        f"  hashed globally, not a trigger: {sorted(set(seen) - triggers)}"
+    )
+
+
+def test_the_test_step_does_not_read_the_lint_only_inputs() -> None:
+    """The premise under the split, checked against the script rather than assumed.
+
+    ``bin/validate.sh`` and ``bin/package-discovery.sh`` are classified
+    lint-only because the test step cannot reach them: ``bin/test.sh`` has its
+    own ``discover_test_packages`` loop over ``packages/*`` and neither sources
+    the discovery helper nor invokes the validator. That is a property of the
+    file today, not a law -- one ``source`` line would make every lint-only
+    classification wrong and every narrowed schedule unsound, with nothing else
+    in the tree reporting it.
+
+    Comments are stripped first, because ``bin/test.sh`` mentions
+    ``bin/validate.sh`` twice in prose -- it mirrors its argument parsing -- and
+    a guard that could not tell a mention from a use would have to be weakened
+    to a substring nobody trusts.
+    """
+    source = (ROOT / "bin" / "test.sh").read_text(encoding="utf-8")
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+
+    lint_only = sorted(
+        name
+        for name, steps in _scopes.GLOBAL_TRIGGER_STEPS.items()
+        if steps == frozenset({_scopes.LINT_STEP})
+    )
+    assert lint_only, "the classification declares no lint-only input to check"
+
+    for path in lint_only:
+        basename = path.rsplit("/", 1)[-1]
+        assert basename not in code, (
+            f"bin/test.sh reaches {basename}, so it is an input to the test "
+            f"step and cannot be classified lint-only. Either the reference is "
+            f"new -- in which case {path} belongs in BOTH_STEPS and every "
+            f"narrowed schedule since is unsound -- or it is a comment this "
+            f"strip did not catch."
+        )
+
+    # The control: a reader that stripped the whole file, or looked in the
+    # wrong one, finds nothing for the same reason a correct one does. test.sh
+    # does discover packages -- just not through the helper validate.sh uses.
+    assert "discover_test_packages" in code, (
+        "bin/test.sh discovers its own packages; finding no trace of that "
+        "means this guard is reading the wrong file or stripping too much"
+    )
+
+
+def test_no_package_suite_reads_the_root_pyproject() -> None:
+    """A package's tests read their own manifest, never the root one.
+
+    The root ``pyproject.toml`` carries ``[tool.ruff]`` and ``[tool.mypy]``,
+    and a diff confined to those schedules no package test suite. That is only
+    true while no package suite *reads* them -- a guard asserting a ruff
+    setting from inside ``packages/*/tests`` would be a test whose result the
+    root manifest decides, and it would stop being scheduled.
+
+    Checked by how far up each reader reaches rather than by the string, since
+    two package suites legitimately read a manifest: from
+    ``packages/<pkg>/tests/x.py``, ``parents[1]`` is the package and
+    ``parents[2]`` is ``packages/``. Anything higher has left the package.
+    """
+    readers: dict[str, int] = {}
+    for source in sorted(ROOT.glob("packages/*/tests/**/*.py")):
+        text = source.read_text(encoding="utf-8")
+        if "pyproject.toml" not in text:
+            continue
+        depths = [int(m) for m in re.findall(r"parents\[(\d+)\]", text)]
+        readers[str(source.relative_to(ROOT))] = max(depths, default=0)
+
+    # Positive control: there IS such a reader, so an empty result means the
+    # glob or the pattern is wrong rather than that nothing reads a manifest.
+    assert readers, (
+        "no package test mentions pyproject.toml at all -- there is at least "
+        "one (test_record_core_independence.py reads its own), so this guard "
+        "is looking in the wrong place"
+    )
+
+    escaped = {path: depth for path, depth in readers.items() if depth > 2}
+    assert not escaped, (
+        "a package suite reaches above packages/ while reading a "
+        "pyproject.toml, so the root manifest may decide its result and a "
+        "lint-table change would stop scheduling it:\n  "
+        + "\n  ".join(f"{path}: parents[{depth}]" for path, depth in sorted(escaped.items()))
+    )
+
+
+def test_a_pyproject_change_outside_the_linter_tables_stays_global() -> None:
+    """The fail-closed half of the pyproject reader, against the real file.
+
+    Three silences that must all read as "the path keeps its blast radius": a
+    table this does not recognise as a linter's, the preamble, and -- the one
+    that matters most -- a diff in which nothing moved at all. A reader that
+    silently matched nothing would report "no table moved" for every input,
+    and that must never become "no step moved", which is an empty schedule.
+    """
+    original = (ROOT / "pyproject.toml").read_bytes()
+    text = original.decode("utf-8")
+
+    assert _scopes.pyproject_steps_changed(original, original) is None, (
+        "an unchanged file moved no table, which is exactly what a reader "
+        "that matched nothing also reports -- so it must read as unattributed"
+    )
+
+    # A dependency change: both steps, every package, as the path has always said.
+    marker = "[dependency-groups]"
+    assert marker in text, "the real manifest no longer carries the table this probes"
+    widened = text.replace(marker, marker + "\n# x-probe\n", 1)
+    assert _scopes.pyproject_steps_changed(original, widened.encode("utf-8")) is None, (
+        "a change outside the linter tables keeps the global blast radius"
+    )
+
+
+def test_the_pyproject_reader_resolves_a_real_edit_and_places_it_on_the_lint_step() -> None:
+    """The positive half: an edit inside [tool.ruff] narrows, and to lint only.
+
+    Without this, the guard above passes just as well against a reader that
+    returns ``None`` unconditionally -- which is a reader that has quietly
+    switched the optimisation off while every fail-closed test still agrees
+    with it.
+    """
+    original = (ROOT / "pyproject.toml").read_bytes()
+    text = original.decode("utf-8")
+
+    for table in sorted(_scopes._LINT_ONLY_TABLES):
+        header = f"[{table}]"
+        assert header in text, (
+            f"the real manifest no longer carries {header}; the reader is "
+            f"declared to narrow on it and nothing would exercise that"
+        )
+        edited = text.replace(header, header + "\n# x-probe\n", 1)
+        scan = _scopes.pyproject_steps_changed(original, edited.encode("utf-8"))
+
+        assert scan is not None, f"an edit confined to {header} is attributable"
+        assert scan.steps == frozenset({_scopes.LINT_STEP}), (
+            f"{header} decides what the validation step reports and nothing a "
+            f"test can observe; got {sorted(scan.steps)}"
+        )
+        assert scan.packages is None, (
+            "a rule change is re-validated across every package -- the reader "
+            "narrows the step, not the package set"
+        )
+
+    # A *subtable*, which is what the measured cases actually edit: eight of
+    # the nine lint-only pull requests in the window touched [tool.ruff.lint]
+    # or deeper, never the bare [tool.ruff] header. Keying a subtable on its
+    # own header instead of its tool leaves every one of them unattributable,
+    # which fails closed -- so the optimisation switches itself off and every
+    # other test in this file still agrees with it.
+    subtable = "[tool.ruff.lint.per-file-ignores]"
+    assert subtable in text, (
+        f"the real manifest no longer carries {subtable}; the grouping this "
+        f"probes is what makes a per-file-ignore edit read as the ruff change "
+        f"it is"
+    )
+    edited = text.replace(subtable, subtable + "\n# x-probe\n", 1)
+    scan = _scopes.pyproject_steps_changed(original, edited.encode("utf-8"))
+    assert scan is not None and scan.steps == frozenset({_scopes.LINT_STEP}), (
+        "a tool's configuration is one document however deeply it is spelled; "
+        f"an edit inside {subtable} is a ruff change, not a table of its own"
+    )
+
+    # And the plan that answer produces: lint everything, test nothing.
+    plan = _scopes.plan_for_files(
+        ["pyproject.toml"],
+        {
+            "pyproject.toml": _scopes.TriggerScan(
+                steps=frozenset({_scopes.LINT_STEP}), packages=None
+            )
+        },
+    )
+    assert plan["packages"] == sorted(_scopes.ALL_PACKAGES), plan["packages"]
+    assert plan["test_packages"] == [], plan["test_packages"]
+
+
+def test_the_test_list_never_exceeds_the_package_list() -> None:
+    """``test_packages`` is a subset of ``packages``, on every shape.
+
+    The compatibility claim in one assertion: a consumer that knows only
+    ``packages`` schedules a superset of what the test stage runs, so reading
+    the old key alone can over-test and can never skip a suite the new key
+    would have run. Spelled the other way round, that consumer under-tests in
+    silence.
+    """
+    shapes = [
+        ["bin/validate.sh"],
+        ["bin/test.sh"],
+        ["pyproject.toml"],
+        ["uv.lock"],
+        ["packages/common/src/x.py"],
+        ["packages/common/tests/test_x.py"],
+        ["tests/test_toolchain_consistency.py"],
+        ["bin/validate.sh", "packages/llm/src/x.py"],
+        ["LICENSE"],
+        [],
+    ]
+    for files in shapes:
+        plan = _scopes.plan_for_files(files)
+        assert set(plan["test_packages"]) <= set(plan["packages"]), (
+            f"{files}: test_packages {plan['test_packages']} is not a subset "
+            f"of packages {plan['packages']}"
         )
 
 
@@ -383,16 +1211,17 @@ def _divided_constants(node: ast.BinOp) -> list[str]:
 def test_every_package_document_a_package_suite_reads_is_declared() -> None:
     """The list that decides scheduling is checked against the tree, not trusted.
 
-    A package document belongs to no package's suite by default: 139 of the
-    144 here are read only by the workspace guards, and scheduling their
+    A package document belongs to no package's suite by default: 141 of the
+    152 here are read only by the workspace guards, and scheduling their
     package for one is what ran two full suites for a link repair. The other
-    five are read by a test *in* that package, so they do decide whether it
+    eleven are read by a test *in* that package, so they do decide whether it
     passes, and they have to keep scheduling and dirtying it.
 
     Which of the two a document is cannot be inferred from its path, so it is
     declared. This is the guard that stops the declaration from being a list
-    somebody remembered to update: a sixth such test fails here on arrival,
-    naming itself, rather than being scheduled by nothing until it goes stale.
+    somebody remembered to update: a test reading an undeclared document fails
+    here on arrival, naming itself, rather than being scheduled by nothing
+    until it goes stale.
     """
     declared = _scopes.PACKAGE_TEST_DOC_INPUTS
     found = _documents_a_package_suite_reads()
@@ -411,6 +1240,98 @@ def test_every_package_document_a_package_suite_reads_is_declared() -> None:
         "asserting that two empty sets agree. If that is genuinely the end "
         "state, delete the declaration and the branch that reads it rather "
         "than leaving a guard that cannot distinguish anything."
+    )
+
+
+#: Calls that reach a file's contents. A package test performing none of these
+#: cannot be reading a document whatever its string literals say, and the two
+#: literals in this tree that name a document without reading it — a Jinja
+#: variable value and an assertion about an error message — are both in files
+#: that open nothing at all. Gating on the file rather than the expression is
+#: what keeps this guard from modelling construction, which is the thing the
+#: detector above already does as well as it can be done.
+_FILE_READ_CALLS = frozenset({"read_text", "read_bytes", "open", "glob", "rglob", "iterdir"})
+
+
+def test_a_package_test_naming_its_own_document_declares_it() -> None:
+    """The reader above models one syntax; this one models none.
+
+    ``_documents_a_package_suite_reads`` finds a read structurally, as an
+    expression containing ``__file__`` divided by ``"docs"``, and
+    reconstructing the path is what lets it say *which* document. The cost of
+    that precision is that every other route to the same file is invisible:
+    ``os.path.join(os.path.dirname(__file__), "..", "docs", "x.md")`` opens the
+    document and divides nothing, so the declaration and the tree agree about
+    a reader neither can see, and the document decides a suite's result while
+    scheduled by nothing and hashed by nothing. A chain that guard can see but
+    cannot resolve already fails loudly there; this is the other half.
+
+    So this one models no construction at all. It asks a weaker question that
+    no syntax dodges — does a package test that opens files anywhere name one
+    of its own package's documents? — and requires the answer to be declared.
+    It cannot say which expression does the reading and does not try, because
+    naming the document is the part a reader cannot avoid writing.
+
+    Matched on the basename rather than the path for the same reason. bots
+    carries both ``docs/multi-tenant.md`` and ``docs/knowledge/multi-tenant.md``,
+    and a literal naming one is indistinguishable from a literal naming the
+    other — so asking whether *a* document of that name is declared is a
+    question the ambiguity does not reach, while asking which file it was
+    invents an answer.
+    """
+    documents: dict[str, set[str]] = {}
+    for document in ROOT.glob("packages/*/docs/**/*.md"):
+        package = document.relative_to(ROOT).parts[1]
+        documents.setdefault(package, set()).add(document.name)
+
+    named: set[tuple[str, str]] = set()
+    for source in sorted(ROOT.glob("packages/*/tests/**/*.py")):
+        package = source.relative_to(ROOT).parts[1]
+        here = documents.get(package)
+        if not here:
+            continue
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        reads_files = any(
+            isinstance(node, ast.Call)
+            and (
+                getattr(node.func, "attr", None) in _FILE_READ_CALLS
+                or getattr(node.func, "id", None) == "open"
+            )
+            for node in ast.walk(tree)
+        )
+        if not reads_files:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                basename = node.value.rsplit("/", 1)[-1]
+                if basename in here:
+                    named.add((package, basename))
+
+    declared = {
+        (package, document.rsplit("/", 1)[-1])
+        for document, package in _scopes.PACKAGE_TEST_DOC_INPUTS.items()
+    }
+
+    # The control, derived rather than named: every declared document is read
+    # by a test in its package -- that is what the guard above asserts -- so
+    # every one of them must also be *named* by one. A scan that has stopped
+    # seeing string literals, or an IO gate that has stopped matching, reports
+    # an empty set, and an empty set trivially declares everything.
+    unseen = sorted(declared - named)
+    assert not unseen, (
+        "these documents are declared as read by their package's suite and no "
+        f"test in it names them: {unseen}. The scan is not reading what it "
+        "thinks it is, so its silence about anything else means nothing"
+    )
+
+    undeclared = sorted(named - declared)
+    assert not undeclared, (
+        "a package test that opens files names one of its own package's "
+        f"documents, and the document is not declared: {undeclared}.\n"
+        "If the test reads it, declare it in PACKAGE_TEST_DOC_INPUTS — "
+        "undeclared, editing that document neither runs the test that reads "
+        "it nor invalidates that test's recorded verdict. If the name is a "
+        "coincidence and nothing opens it, say so here."
     )
 
 
@@ -478,6 +1399,181 @@ def test_every_package_document_a_package_suite_reads_is_in_that_package_hash() 
             f"{document} decides whether the {package} suite passes but is in "
             f"no hash scope, so a {package} verdict recorded before an edit to "
             "it still validates after one"
+        )
+
+
+#: Tracked files beneath ``packages/*/tests/`` that no test reads, and so enter
+#: no package's hash. Every other non-Python file there is a fixture: something
+#: a test opens, whose edit changes what that suite asserts.
+#:
+#: Both are prose sitting beside a test package rather than inside a fixture
+#: directory — ``packages/data/tests/examples/`` and
+#: ``packages/data/tests/integration/`` hold collected test modules, and these
+#: describe them to a developer. Hashing one would dirty ``data`` for an edit
+#: that moves no verdict.
+#:
+#: Named individually on purpose. The rule-shaped version of this exemption is
+#: "a README is prose", and it would be wrong the first time a test reads one —
+#: silently, because an unhashed input has no symptom until a stale verdict is
+#: accepted. A list of two fails the guard below when it becomes a list of
+#: three, which is the moment the question is worth asking.
+_TEST_TREE_PROSE = (
+    "packages/data/tests/examples/README.md",
+    "packages/data/tests/integration/README.md",
+)
+
+
+def test_every_test_input_a_suite_reads_is_in_that_packages_hash() -> None:
+    """A fixture decides whether its suite passes, so it has to dirty the package.
+
+    ``_HASH_PATTERNS`` reaches ``tests/**/*.py``, which is the suite and not
+    everything the suite reads. The files it misses are the ones a test opens:
+    a golden JSON, a YAML configuration, the markdown a knowledge source
+    ingests. Editing one changes what the tests assert while every stored hash
+    stays intact, so a recorded ``pass`` survives an edit to the thing it was a
+    verdict about — and it is the golden file, whose entire purpose is to be
+    the expected answer, that shows what that is worth.
+
+    Scheduling was never the missing half here, which is what makes this the
+    mirror of the package-document case above rather than a repeat of it. A
+    file under ``packages/<p>/tests/`` already maps to ``<p>`` by the generic
+    rule, so a run triggered by the edit does test it; only the stored verdict
+    fails to move. Hashing one therefore costs no gate run that the edit does
+    not already cause.
+
+    ``_TEST_TREE_PROSE`` is the whole of the exception, and naming it rather
+    than spelling it as a rule is what makes this guard exhaustive: a third
+    file that feeds nothing fails here on arrival, and somebody decides which
+    of the two it is instead of a pattern deciding for them.
+    """
+    hashes = load_bin_module("package-hashes")
+    covered = {
+        package: {_rel(p) for p in hashes.package_hash_files(package)}
+        for package in hashes.ALL_PACKAGES
+    }
+    # A src .py is the positive control: if the coverage lookup above is asking
+    # the wrong question, everything reads as uncovered and the assertion below
+    # passes for a reason that has nothing to do with fixtures.
+    control = "packages/common/src/dataknobs_common/__init__.py"
+    assert control in covered["common"], (
+        f"{control} reads as unhashed, so this guard is measuring something "
+        "other than what package_hash_files returns"
+    )
+
+    unhashed = []
+    for path in _tracked_and_new_files():
+        parts = path.split("/")
+        if len(parts) < 4 or parts[0] != "packages" or parts[2] != "tests":
+            continue
+        if path.endswith(".py") or path in _TEST_TREE_PROSE:
+            continue
+        if path not in covered.get(parts[1], set()):
+            unhashed.append(path)
+
+    assert not unhashed, (
+        "a test input is in no package's hash, so a verdict recorded before an "
+        "edit to it still validates after one:\n  " + "\n  ".join(sorted(unhashed))
+    )
+
+    for exempt in _TEST_TREE_PROSE:
+        assert exempt in _tracked_and_new_files(), (
+            f"{exempt} is declared as prose no test reads and is no longer "
+            "there — an exemption outliving its file exempts nothing and reads "
+            "like a decision somebody made"
+        )
+        assert exempt not in covered.get(exempt.split("/")[1], set()), (
+            f"{exempt} is hashed and also declared as feeding nothing; one of "
+            "the two is wrong, and the declaration is the one a reader trusts"
+        )
+
+
+def test_a_declared_fixture_directory_expands_to_exactly_what_is_tracked_in_it() -> None:
+    """The walk and the checkout have to agree, or two hashes of one tree differ.
+
+    A fixture directory is hashed by walking it rather than by naming suffixes,
+    which is only safe while the walk finds what a fresh checkout would. The
+    failure it would otherwise have is quiet and one-sided: a developer's tree
+    accumulates ``__pycache__`` and ``*~`` backups that CI never has, so their
+    hash for an untouched package stops matching the stored one and their
+    artifacts read dirty forever, with nothing naming the file responsible.
+
+    Comparing against ``git ls-files`` is what turns ``_is_fixture_input`` from
+    an argument into a measurement — and it fails on a kind of stray nobody
+    anticipated, rather than only on the two kinds that have appeared so far.
+    """
+    hashes = load_bin_module("package-hashes")
+    declared = hashes.PACKAGE_TEST_FIXTURE_DIRS
+    assert declared, "no fixture directory is declared, so this guard checks nothing"
+
+    tracked = _tracked_and_new_files()
+    for entry in declared:
+        parts = entry.split("/")
+        assert parts[0] == "packages" and parts[2] == "tests" and len(parts) > 3, (
+            f"{entry} is declared as a package test fixture directory but is not "
+            "beneath packages/<package>/tests/, so no package's hash claims it"
+        )
+        package = parts[1]
+        assert (ROOT / entry).is_dir(), (
+            f"{entry} is declared and is not a directory — a stale entry hashes "
+            "nothing while reading like coverage"
+        )
+
+        expected = {name for name in tracked if name.startswith(f"{entry}/")}
+        covered = {_rel(p) for p in hashes.package_hash_files(package)}
+        walked = {name for name in covered if name.startswith(f"{entry}/")}
+        assert walked == expected, (
+            f"the hash of {entry} disagrees with what is checked out there.\n"
+            f"  walked but not tracked: {sorted(walked - expected)}\n"
+            f"  tracked but not walked: {sorted(expected - walked)}"
+        )
+        assert any(not name.endswith(".py") for name in expected), (
+            f"{entry} holds only Python, which tests/**/*.py already covers — "
+            "declaring it adds nothing and hides that the inputs moved elsewhere"
+        )
+
+    # The stripper is written for source: it drops a `version = "..."` line so a
+    # release does not dirty every package. A fixture is not source, and one of
+    # these is gzipped, so the bytes it returns have to be the bytes that went
+    # in — otherwise an edit to a line it happens to match moves no hash.
+    scopes = load_bin_module("changed-packages")
+    for entry in declared:
+        for path in sorted((ROOT / entry).rglob("*")):
+            if not path.is_file():
+                continue
+            raw = path.read_bytes()
+            assert scopes.strip_release_noise(raw) == raw, (
+                f"{_rel(path)} loses content on its way into the hash, so an "
+                "edit to the part that is dropped moves no recorded verdict"
+            )
+
+
+def test_a_test_fixture_already_schedules_the_suite_that_reads_it() -> None:
+    """The half that was never missing, pinned because the fix leans on it.
+
+    Hashing a fixture directory wholesale is cheap only because the edit that
+    dirties the package was already running that package's suite: a path under
+    ``packages/<p>/tests/`` maps to ``<p>`` by the generic rule, with no
+    declaration involved. Narrow that rule and the argument for taking a whole
+    directory quietly stops holding — the hash would then be scheduling runs
+    rather than following them.
+    """
+    scopes = load_bin_module("changed-packages")
+    hashes = load_bin_module("package-hashes")
+
+    for entry in hashes.PACKAGE_TEST_FIXTURE_DIRS:
+        package = entry.split("/")[1]
+        sample = next(
+            (
+                _rel(p)
+                for p in sorted((ROOT / entry).rglob("*"))
+                if p.is_file() and not p.name.endswith(".py")
+            ),
+            None,
+        )
+        assert sample is not None, f"{entry} holds no fixture to test with"
+        plan = scopes.plan_for_files([sample])
+        assert plan["packages"] == [package], (
+            f"{sample} must schedule {package} and nothing else; got {plan['packages']}"
         )
 
 
@@ -1028,6 +2124,26 @@ def _workspace_input_probes() -> list[str]:
     return probes
 
 
+def _fixture_input_probes() -> list[str]:
+    """Every declared test fixture, for coverage checking.
+
+    All of them rather than one per directory, which is where the workspace
+    probe above stops: those entries expand to whole source trees, these to ten
+    files between them. And the suffixes are the question — ``**/*.py`` already
+    covers a directory's Python, so a probe that happened to land on a helper
+    would report the directory covered while its ``.json`` and ``.yaml`` matched
+    nothing.
+    """
+    hashes = load_bin_module("package-hashes")
+    probes = [
+        _rel(path)
+        for entry in hashes.PACKAGE_TEST_FIXTURE_DIRS
+        for path in hashes.fixture_dir_files(entry)
+    ]
+    assert probes, "no declared fixture directory resolved to a file"
+    return probes
+
+
 def test_ci_runs_the_gate_when_a_guarded_file_changes() -> None:
     """A guard that CI never starts is the same as a guard that does not exist.
 
@@ -1053,6 +2169,7 @@ def test_ci_runs_the_gate_when_a_guarded_file_changes() -> None:
     """
     guarded = [_rel(path) for path in (*_pyprojects(), *_mypy_inis(), *_interpreter_pins())]
     guarded += _workspace_input_probes()
+    guarded += _fixture_input_probes()
     guarded.append(str(CI_WORKFLOW))
 
     patterns = _ci_code_filter_patterns()
@@ -2386,3 +3503,198 @@ def test_every_state_that_should_validate_something_does() -> None:
     assert not wrong, "bin/run-quality-checks.sh decides the wrong validation scope:\n" + "\n".join(
         f"  - {item}" for item in wrong
     )
+
+
+#: Where the size of ``PACKAGE_TEST_DOC_INPUTS`` is stated in prose, and the
+#: shape each statement takes. Two files say it four times between them, in
+#: sentences whose whole job is to convince a reader the exception is rare --
+#: so a stale number does not merely age, it argues for the opposite of what
+#: the tree contains.
+_COUNT_CLAIMS = (
+    ("bin/changed-packages.py", r"(?P<rest>\d+) of the (?P<total>\d+) are read only by"),
+    ("bin/changed-packages.py", r"The (?P<declared>\w+) below are the exception"),
+    (
+        "tests/test_toolchain_consistency.py",
+        r"default: (?P<rest>\d+) of the\n\s*(?P<total>\d+) here",
+    ),
+    ("tests/test_toolchain_consistency.py", r"The other\n\s*(?P<declared>\w+) are read by a test"),
+)
+
+#: Spelled out in the prose, so the comparison has to cross the same gap a
+#: reader does. Only as far as the list can plausibly grow.
+_WORDS = {
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def _declared_door_names(package: str) -> int:
+    """How many names ``packages/<package>``'s door declares in ``__all__``."""
+    door = ROOT / "packages" / package / "src" / f"dataknobs_{package}" / "__init__.py"
+    tree = ast.parse(door.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
+        ):
+            return len(node.value.elts)  # type: ignore[attr-defined]
+    raise AssertionError(f"{door} declares no __all__")
+
+
+def test_the_changelog_door_count_matches_the_door() -> None:
+    """A release note counting the door's names is checked against the door.
+
+    The same shape as the guard above and a different denominator, which is
+    why it is a second test rather than a row in ``_COUNT_CLAIMS``. The claim
+    is in ``packages/common/CHANGELOG.md``: an entry announcing that a family
+    reached the package door, and saying how many names that left there.
+
+    **Stale twice over before this existed.** The sentence said 315 while the
+    tree said 319, and the change that found it added two more without
+    touching the sentence. A count in a release note ages exactly like a count
+    in a comment -- every later change to the same unreleased section moves it
+    -- and this one is worse than a comment, because a consumer reads it as a
+    description of what they will get.
+
+    Scheduling runs the right way round. Editing the door maps to the common
+    package and runs its suite; this guard lives here, where the workspace
+    tier reaches it, so the case that matters -- a name added to ``__all__``
+    without the note being corrected -- is the case that fails.
+    """
+    declared = _declared_door_names("common")
+    changelog = (ROOT / "packages" / "common" / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    match = re.search(
+        r"(?P<added>\d+) names, taking the package's `__all__` to (?P<total>\d+)", changelog
+    )
+    assert match is not None, (
+        "packages/common/CHANGELOG.md no longer carries the sentence counting "
+        "the door's names. Either it was rewritten -- in which case update "
+        "this pattern -- or it was deleted, and this guard now checks nothing."
+    )
+
+    assert int(match.group("total")) == declared, (
+        f"the CHANGELOG says the door carries {match.group('total')} names and "
+        f"it carries {declared}. The entry describes what a consumer gets, so "
+        f"a stale total there is a promise about a surface that is not the "
+        f"one shipping."
+    )
+
+
+def _is_package_document(path: str) -> bool:
+    """``packages/<pkg>/docs/**/*.md``, spelled against a root-relative path.
+
+    The segment test rather than :func:`fnmatch.fnmatch`, whose ``*`` crosses
+    ``/`` and would count every nested guide a second time under the
+    top-level pattern.
+    """
+    parts = path.split("/")
+    return len(parts) > 3 and parts[0] == "packages" and parts[2] == "docs" and path.endswith(".md")
+
+
+def test_the_declarations_prose_counts_match_the_tree() -> None:
+    """A count in a comment is a claim, and this is what makes it checkable.
+
+    ``PACKAGE_TEST_DOC_INPUTS`` went from five entries to seven in the change
+    that added the two guide rows, and all four sentences describing its size
+    stayed behind -- in the same pull request that corrected an identical
+    staleness two files away and wrote down the rule it was breaking: *"A count
+    in a comment is a claim about the rest of the file, so it is corrected in
+    the change that falsifies it rather than left to be noticed."*
+
+    Noticing is what this replaces. The rule is right and it is not
+    self-enforcing, and a claim about a number the tree already knows is the
+    kind a test can hold.
+    """
+    declared = len(_scopes.PACKAGE_TEST_DOC_INPUTS)
+    # Tracked rather than globbed. The claim is about the documents the
+    # repository has, and a glob also counts an untracked scratch file left
+    # under a package's ``docs/`` -- which would fail this guard with a
+    # message about stale prose for a reason that has nothing to do with the
+    # prose. ``tracked_files`` is what the guards either side of this one use.
+    total = sum(1 for path in tracked_files() if _is_package_document(path))
+    expected = {"declared": declared, "total": total, "rest": total - declared}
+
+    for name, pattern in _COUNT_CLAIMS:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        match = re.search(pattern, text)
+        assert match is not None, (
+            f"{name} no longer carries a sentence matching {pattern!r}. Either "
+            f"the prose was rewritten -- in which case update this pattern -- "
+            f"or the claim was deleted, and this guard is now checking one "
+            f"file where it used to check two."
+        )
+        for group, claimed in match.groupdict().items():
+            actual = _WORDS.get(claimed) if not claimed.isdigit() else int(claimed)
+            assert actual == expected[group], (
+                f"{name} says {claimed!r} where the tree says {expected[group]}: "
+                f"PACKAGE_TEST_DOC_INPUTS declares {declared} of {total} package "
+                f"documents. The sentence argues the exception is rare, so a "
+                f"stale number there argues from the wrong figure."
+            )
+
+
+#: The transcribed-fence waivers, spelled as the table spells them. Every file
+#: whose text is a published guide fence is named ``worked_<page>_call_site``;
+#: the ones reaching ``per-file-ignores`` are the subset whose fence contains a
+#: statement ruff flags, which is the population the prose above them counts.
+_TRANSCRIBED_FENCE_WAIVER = re.compile(r"^tests/worked_\w+_call_site\.py$")
+
+#: ``_WORDS`` starts at three because the population it serves cannot be
+#: smaller. This claim counts a subset of itself, and the subset is one.
+_SMALL_WORDS = {"one": 1, "two": 2, **_WORDS}
+
+
+def test_the_transcribed_fence_waiver_counts_match_the_table() -> None:
+    """The count in the comment, read out of the table the comment describes.
+
+    A third guard of this shape and a third denominator, for the reason the
+    two above it give: the claim is a number, the tree already knows it, and
+    the sentence carrying it argues that the exception is rare -- so a stale
+    figure argues from the wrong one.
+
+    **This block states the rule and has twice broken it.** Its closing
+    paragraph says a count in a comment *"is corrected in the change that
+    falsifies it rather than left to be noticed"*, and records that the entry
+    taking the count from two to three did not carry the correction. Neither
+    did the entry taking it from three to four, in a change whose author had
+    that paragraph open. Two misses against a written rule is the case a guard
+    exists for; noticing is what this replaces.
+    """
+    table = _load(ROOT / "pyproject.toml")["tool"]["ruff"]["lint"]["per-file-ignores"]
+    waivers = {
+        name: codes for name, codes in table.items() if _TRANSCRIBED_FENCE_WAIVER.match(name)
+    }
+    assert waivers, (
+        "no per-file-ignores entry names a transcribed doc fence any more. "
+        "Either the files were renamed -- in which case update the pattern -- "
+        "or the waivers are gone, and this guard now checks nothing."
+    )
+    expected = {"total": len(waivers), "b015": sum("B015" in codes for codes in waivers.values())}
+
+    for pattern in (
+        r"The (?P<total>\w+) entries below are the only ones here waiving a rule",
+        r"(?P<b015>\w+) of the (?P<total>\w+) also waives B015",
+    ):
+        match = re.search(pattern, (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        assert match is not None, (
+            f"pyproject.toml no longer carries a sentence matching {pattern!r}. "
+            f"Either the prose was rewritten -- in which case update this "
+            f"pattern -- or the claim was deleted, and this guard is now "
+            f"checking one sentence where it used to check two."
+        )
+        for group, claimed in match.groupdict().items():
+            assert _SMALL_WORDS.get(claimed.lower()) == expected[group], (
+                f"pyproject.toml says {claimed!r} where the table holds "
+                f"{expected[group]}: {expected['total']} entries waive a rule "
+                f"over a file whose text is not its own, and {expected['b015']} "
+                f"of them waives B015. The paragraph under those entries rules "
+                f"that this correction belongs to the change that falsifies it."
+            )

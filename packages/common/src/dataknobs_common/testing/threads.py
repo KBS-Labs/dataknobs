@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Detect leaked dataknobs daemon threads in tests.
 
 Two dataknobs constructs put work on a private daemon thread so that

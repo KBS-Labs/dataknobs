@@ -121,7 +121,8 @@ def test_a_source_ref_travels_out_intact_while_the_origin_does_not(
         locator={"table": "species", "key": "sp-2291"},
     )
     assert onto.entities.fetch_origin(beagle.source) is None
-    assert onto.entities.fetch_origins([beagle.source]) == {}
+    assert onto.entities.fetch_origins([beagle.source]) == [None]
+    assert onto.entities.fetch_origins([beagle.source, beagle.source]) == [None, None]
 
 
 def test_describe_says_the_origins_are_unfetchable(mammals_path: Path) -> None:
@@ -253,3 +254,33 @@ def test_every_source_side_protocol_is_reachable_beside_the_required_one() -> No
     assert not owed - set(door.__all__)
     assert not not_source_side & set(door.__all__)
     assert all(getattr(door, name) is getattr(protocols, name) for name in owed)
+
+
+def test_declares_has_no_default_so_a_source_must_answer_the_question() -> None:
+    """*Has not said* and *holds nothing* were one value, and they are not one thing.
+
+    ``declares`` defaulted to ``frozenset()``, so a source that omitted the
+    field claimed to hold **no types at all** -- which is a complete, closed
+    answer that a reader is entitled to act on. A source that cannot
+    enumerate its own types is making no claim, and the two were
+    indistinguishable at the one field that carries the answer.
+
+    Removing the default is what forces the distinction to be written down:
+    ``None`` is *cannot enumerate*, ``frozenset()`` is *holds none*, and a
+    source that says neither no longer constructs.
+    """
+    import pytest
+
+    from dataknobs_common.ontology.sources import SourceDescription
+
+    with pytest.raises(TypeError, match="declares"):
+        SourceDescription("catalog", "memory", None, {}, frozenset())  # type: ignore[call-arg]
+
+    cannot_enumerate = SourceDescription("catalog", "memory", None, {}, frozenset(), None)
+    holds_none = SourceDescription("catalog", "memory", None, {}, frozenset(), frozenset())
+
+    assert cannot_enumerate.declares is None
+    assert holds_none.declares == frozenset()
+    assert cannot_enumerate != holds_none, (
+        "the two states must not compare equal, or the field is back to carrying one value"
+    )

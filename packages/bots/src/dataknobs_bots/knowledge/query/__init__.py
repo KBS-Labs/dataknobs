@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Query transformation utilities for RAG knowledge bases.
 
 This module provides query preprocessing to improve retrieval quality

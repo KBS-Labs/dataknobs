@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Core converter between DataKnobs Records and Pandas DataFrames."""
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from dataknobs_config import deep_merge
 from dataknobs_data.fields import Field
 from dataknobs_data.records import Record
 
-from .metadata import MetadataStrategy
+from .metadata import MetadataConfig, MetadataHandler, MetadataStrategy
 from .type_mapper import TypeMapper
 
 
@@ -38,7 +41,7 @@ class ConversionOptions:
     handle_missing: str = "preserve"  # "preserve", "drop", "fill"
     fill_value: Any = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize default values for mutable parameters."""
         if self.metadata_columns is None:
             self.metadata_columns = []
@@ -168,6 +171,16 @@ class DataFrameConverter:
                 df.index = record_ids
                 df.index.name = "record_id"
 
+        # Place the metadata where `metadata_strategy` says it goes. This
+        # method used not to read the option at all -- the four placements were
+        # implemented in `MetadataHandler`, which nothing called -- so every
+        # member answered the same frame and a consumer selecting one got the
+        # declared default in silence.
+        handler = MetadataHandler(MetadataConfig(strategy=options.metadata_strategy))
+        df = handler.apply_metadata_to_dataframe(
+            df, handler.extract_metadata_from_records(records), records
+        )
+
         return df
 
     def dataframe_to_records(
@@ -184,12 +197,42 @@ class DataFrameConverter:
         """
         options = options or ConversionOptions()
 
+        metadata_config = MetadataConfig(strategy=options.metadata_strategy)
+
+        # A frame this converter wrote under MULTI_INDEX carries the field type
+        # in a second column level, so each column label is a tuple. The field
+        # names are the first level; without this they would come back as
+        # tuples, which is not a field name.
+        if metadata_config.strategy == MetadataStrategy.MULTI_INDEX and isinstance(
+            df.columns, pd.MultiIndex
+        ):
+            df = df.copy()
+            df.columns = df.columns.get_level_values(0)
+
+        # Under COLUMNS the metadata is in prefixed columns. They are metadata
+        # on the way back too -- otherwise the placement the forward direction
+        # now honours would return as ordinary fields.
+        prefix = (
+            metadata_config.metadata_prefix
+            if metadata_config.strategy == MetadataStrategy.COLUMNS
+            else ""
+        )
+
+        def _is_metadata_column(col: Any) -> bool:
+            # An empty prefix means no placement was asked for. Testing it
+            # first matters: `"".startswith("")` is True, so every column would
+            # read as metadata otherwise.
+            return bool(prefix) and isinstance(col, str) and col.startswith(prefix)
+
         records = []
 
         # Convert each row to a Record
         for idx, row in df.iterrows():
             # Extract metadata for this row from metadata columns
             row_metadata = {}
+            for col in row.index:
+                if _is_metadata_column(col):
+                    row_metadata[col[len(prefix) :]] = row[col]
             if options.metadata_columns:
                 for col in options.metadata_columns:
                     if col in row.index:
@@ -204,6 +247,8 @@ class DataFrameConverter:
             # Prepare row data (excluding metadata columns)
             row_data = {}
             for col in row.index:
+                if _is_metadata_column(col):
+                    continue
                 if options.metadata_columns is None or col not in options.metadata_columns:
                     row_data[col] = row[col]
 
@@ -377,13 +422,14 @@ class DataFrameConverter:
         }
 
         # Check field preservation
-        original_fields = set()
+        original_fields: set[str] = set()
         for record in records:
             original_fields.update(record.fields.keys())
 
         df_columns = set(df.columns)
         if options.metadata_strategy == MetadataStrategy.COLUMNS:
-            df_columns = {col for col in df_columns if not col.startswith("_meta_")}
+            prefix = MetadataConfig(strategy=options.metadata_strategy).metadata_prefix
+            df_columns = {col for col in df_columns if not col.startswith(prefix)}
 
         report["field_preservation"] = {
             "original_fields": sorted(original_fields),

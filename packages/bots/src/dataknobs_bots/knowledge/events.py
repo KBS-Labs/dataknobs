@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
+# SPDX-License-Identifier: Apache-2.0
+
 """Knowledge-layer event topic constants and consumer-extensibility helpers.
 
 The four topic constants below are the canonical names knowledge-layer

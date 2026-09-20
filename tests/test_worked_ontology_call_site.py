@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from dataknobs_common.capabilities import Capability
-from tests._workspace import ROOT, code_fences
+from tests._workspace import ROOT, door_imports, executed_source, published_fence
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -56,41 +56,6 @@ INPUT_MARKER = "worked-input"
 CALL_SITE_MARKER = "worked-call-site"
 
 
-def _fence(marker: str) -> str:
-    """The body of the guide's fence carrying ``marker``.
-
-    Refuses rather than returns empty. A marker that has been renamed or
-    deleted would otherwise hand every assertion below an empty string, and
-    two empty strings compare equal -- a guard reporting green because it read
-    nothing, over the one page it exists to read.
-    """
-    fences = [f for f in code_fences(GUIDE) if f.marker == marker]
-    if len(fences) != 1:
-        pytest.fail(
-            f"{GUIDE.relative_to(ROOT)} carries {len(fences)} fences marked "
-            f"<!-- {marker} -->, expected exactly one. The guide and this guard "
-            f"agree on these markers and on nothing else."
-        )
-    body = fences[0].body
-    if not body.strip():
-        pytest.fail(f"the <!-- {marker} --> fence is empty")
-    return body
-
-
-def _executed_source() -> str:
-    """The executed copy, less its own docstring header.
-
-    The split is on the first blank line after the closing ``\"\"\"``, which is
-    the boundary the executed module's own docstring describes. Anything else
-    in that file would be an assertion a reader of the guide never sees.
-    """
-    text = EXECUTED.read_text(encoding="utf-8")
-    _, _, after = text.partition('"""\n\n')
-    if not after:
-        pytest.fail(f"{EXECUTED.relative_to(ROOT)} has no docstring to split on")
-    return after.rstrip("\n")
-
-
 @pytest.fixture
 def vocabulary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """``mammals.yaml`` on disk, written from the guide, and made the cwd.
@@ -99,7 +64,9 @@ def vocabulary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path
     reader would type. Honouring that means giving it a directory rather than
     rewriting the line to suit the harness.
     """
-    (tmp_path / "mammals.yaml").write_text(_fence(INPUT_MARKER) + "\n", encoding="utf-8")
+    (tmp_path / "mammals.yaml").write_text(
+        published_fence(GUIDE, INPUT_MARKER) + "\n", encoding="utf-8"
+    )
     monkeypatch.chdir(tmp_path)
     yield tmp_path
 
@@ -117,8 +84,8 @@ def test_the_executed_copy_is_the_published_one() -> None:
     intention. Without it the guide could drift from the code, or the code from
     the guide, and every other assertion in this file would keep passing.
     """
-    published = _fence(CALL_SITE_MARKER)
-    executed = _executed_source()
+    published = published_fence(GUIDE, CALL_SITE_MARKER)
+    executed = executed_source(EXECUTED)
 
     assert executed == published, (
         "the executed call site and the one the guide publishes have diverged. "
@@ -137,11 +104,7 @@ def test_the_call_site_imports_only_through_the_doors() -> None:
     is the subject and not an incidental.
     """
     doors = {"dataknobs_common", "dataknobs_common.hierarchy", "dataknobs_common.ontology"}
-    reached = {
-        line.split()[1]
-        for line in _fence(CALL_SITE_MARKER).splitlines()
-        if line.startswith("from dataknobs_common")
-    }
+    reached = door_imports(published_fence(GUIDE, CALL_SITE_MARKER))
 
     assert reached, "the call site imports nothing from this package"
     assert reached <= doors, (
