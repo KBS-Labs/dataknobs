@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **A width stated once reaches both the store and the embedder.**
+  `RAGKnowledgeBase` and `VectorMemory` each build a vector store *and* an
+  embedding provider, and each took the width twice — for the store as
+  `vector_store.dimensions` / `dimension`, for the embedder as `dimensions`
+  or `dimensions` inside a nested `embedding:` section. Nothing compared
+  them, and the embedder's output goes straight into the store, so a config
+  naming only the store's width left the embedder on its own default and
+  wrote vectors of a width the store had declared it would not hold.
+
+  Both now hand the store's declared width to `build_embedding_config`,
+  which supplies it when the config gave the embedder none. A width stated
+  for the embedder still wins, in either config form; a config that already
+  named both is unaffected.
+
+  A config that named only the store's width changes behaviour, and only in
+  the direction of what it asked for: an echo or OpenAI embedder now
+  produces that width instead of its model default, and an Ollama model,
+  whose width is fixed, reports the disagreement through the check
+  `OllamaProvider.embed` already performs rather than silently returning
+  another width.
+
 ### Documentation
+
+- **The embedding-model table said `nomic-embed-text` was 384-wide.** It is
+  768, as `dataknobs-llm`'s own provider guide states and as two other
+  examples on the same page already assumed. Seven `knowledge_base` and
+  `memory: type: vector` examples paired that model with a 384-wide store;
+  they now read 768, and the width rule above is stated once beside the
+  table rather than implied by a `# Must match` comment.
 
 - **`VectorKnowledgeSource.query` names the symbol it takes its filter-slice
   convention from.** The comment cited `database.py:300` — a file that does not

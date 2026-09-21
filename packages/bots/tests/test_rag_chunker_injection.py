@@ -69,7 +69,11 @@ async def _make_kb(
     await vector_store.initialize()
 
     llm_factory = LLMProviderFactory(is_async=True)
-    provider = llm_factory.create({"provider": "echo", "model": "test"})
+    provider = llm_factory.create(
+        # The store's width, not a second copy of the number: an embedder
+        # left on its own default emits vectors the store refuses.
+        {"provider": "echo", "model": "test", "dimensions": vector_store.dimensions}
+    )
     await provider.initialize()
 
     config: dict[str, Any] = {}

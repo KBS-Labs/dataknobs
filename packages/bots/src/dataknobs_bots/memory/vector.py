@@ -124,6 +124,10 @@ class VectorMemory(StructuredConfigConsumer[VectorMemoryConfig], Memory):
                 embedding_provider=self.config.embedding_provider,
                 embedding_model=self.config.embedding_model,
                 dimensions=self.config.dimensions,
+                # Read off the dict the factory was handed, not off
+                # ``config.dimension``: ``store_params`` may have overridden
+                # it, and the width that matters is the one the store got.
+                store_dimensions=store_config.get("dimensions"),
                 api_base=self.config.api_base,
                 api_key=self.config.api_key,
             )

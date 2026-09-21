@@ -232,13 +232,21 @@ class TestBufferMemoryHistoryRedaction:
         assert context[0]["content"] == ("See [prior citation] and also [prior citation].")
 
 
-def _echo_embedding_provider() -> EchoProvider:
+#: The width the store below declares and the embedder below produces.
+#:
+#: Stated once because the two helpers are independent and their outputs are
+#: handed to one ``VectorMemory``: an embedder left on its own default emits
+#: vectors of a width the store has declared it will not hold.
+_EMBEDDING_WIDTH = 384
+
+
+def _echo_embedding_provider(dimensions: int = _EMBEDDING_WIDTH) -> EchoProvider:
     """Build an initialized EchoProvider for deterministic embeddings."""
     llm_factory = LLMProviderFactory(is_async=True)
-    return llm_factory.create({"provider": "echo", "model": "test"})
+    return llm_factory.create({"provider": "echo", "model": "test", "dimensions": dimensions})
 
 
-async def _memory_vector_store(dimensions: int = 384):
+async def _memory_vector_store(dimensions: int = _EMBEDDING_WIDTH):
     """Build an initialized in-memory vector store."""
     store = VectorStoreFactory().create(backend="memory", dimensions=dimensions)
     await store.initialize()
@@ -774,7 +782,9 @@ class TestVectorMemory:
 
         # Create Echo provider for embeddings (deterministic for testing)
         llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create({"provider": "echo", "model": "test"})
+        embedding_provider = llm_factory.create(
+            {"provider": "echo", "model": "test", "dimensions": vector_store.dimensions}
+        )
         await embedding_provider.initialize()
 
         # Create vector memory
@@ -804,7 +814,9 @@ class TestVectorMemory:
         await vector_store.initialize()
 
         llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create({"provider": "echo", "model": "test"})
+        embedding_provider = llm_factory.create(
+            {"provider": "echo", "model": "test", "dimensions": vector_store.dimensions}
+        )
         await embedding_provider.initialize()
 
         # Create memory with high threshold
@@ -1181,7 +1193,9 @@ class TestVectorMemoryPopMessages:
         await vector_store.initialize()
 
         llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create({"provider": "echo", "model": "test"})
+        embedding_provider = llm_factory.create(
+            {"provider": "echo", "model": "test", "dimensions": vector_store.dimensions}
+        )
         await embedding_provider.initialize()
 
         memory = VectorMemory.from_components(

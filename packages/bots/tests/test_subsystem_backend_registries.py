@@ -64,7 +64,9 @@ async def _make_store_and_embedder() -> tuple[Any, Any]:
     """Build an initialized in-memory vector store + echo embedder."""
     store = VectorStoreFactory().create(backend="memory", dimensions=8)
     await store.initialize()
-    provider = LLMProviderFactory(is_async=True).create({"provider": "echo", "model": "test"})
+    provider = LLMProviderFactory(is_async=True).create(
+        {"provider": "echo", "model": "test", "dimensions": store.dimensions}
+    )
     await provider.initialize()
     return store, provider
 

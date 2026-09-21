@@ -959,7 +959,7 @@ memory:
   embedding_provider: ollama
   embedding_model: nomic-embed-text
   backend: faiss
-  dimension: 384      # Must match embedding model dimension
+  dimension: 768      # The width nomic-embed-text produces
   metric: cosine      # Optional: cosine, l2, ip
 ```
 
@@ -967,10 +967,25 @@ memory:
 
 | Provider | Model | Dimension | Use Case |
 |----------|-------|-----------|----------|
-| Ollama | nomic-embed-text | 384 | General purpose, fast |
+| Ollama | nomic-embed-text | 768 | General purpose, fast |
 | OpenAI | text-embedding-3-small | 1536 | High quality |
 | OpenAI | text-embedding-3-large | 3072 | Best quality |
 | OpenAI | text-embedding-ada-002 | 1536 | Legacy |
+
+**State the width once.** `dimension` (singular, for `memory: type: vector`)
+and `vector_store.dimensions` (for `knowledge_base`) configure the *store*.
+The embedder's own width is `dimensions` — top-level for the legacy flat
+keys, or inside the `embedding:` section when you use the nested form — and
+leaving it unset hands the embedder the width the store declared, because
+the embedder's output is written straight into that store and the two are
+one number. Set it explicitly only when you mean the two to differ.
+
+The width still has to be one the model can produce. An Ollama model's
+width is fixed and `OllamaProvider.embed` checks a stated one rather than
+ignoring it, so pairing the 384 of `all-minilm` with `nomic-embed-text`
+raises instead of quietly writing 768-wide vectors into a store that
+declared 384. OpenAI's `text-embedding-3-*` models accept a width and will
+return the one you asked for.
 
 **Characteristics:**
 - Semantic understanding
@@ -1032,7 +1047,7 @@ out of `get_context()`:
 memory:
   type: vector
   backend: faiss
-  dimension: 384
+  dimension: 768
   embedding_provider: ollama
   embedding_model: nomic-embed-text
   history_redactions:
@@ -1063,7 +1078,7 @@ memory:
       recent_window: 10
     - type: vector
       backend: memory
-      dimension: 384
+      dimension: 768
       embedding_provider: ollama
       embedding_model: nomic-embed-text
       max_results: 5
@@ -1476,7 +1491,7 @@ knowledge_base:
   documents_path: ./docs
   vector_store:
     backend: faiss
-    dimensions: 384
+    dimensions: 768
   embedding_provider: ollama
   embedding_model: nomic-embed-text
 ```
@@ -1592,7 +1607,7 @@ knowledge_base:
   # Vector store configuration
   vector_store:
     backend: faiss          # faiss, chroma, pinecone, weaviate
-    dimensions: 384          # Must match embedding dimension
+    dimensions: 768         # The width nomic-embed-text produces
     # collection_name: knowledge   # chroma only
     metric: cosine         # Similarity metric
 

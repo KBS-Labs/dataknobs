@@ -35,7 +35,11 @@ async def _make_shared_store() -> Any:
 
 
 async def _make_shared_provider() -> Any:
-    provider = LLMProviderFactory(is_async=True).create({"provider": "echo", "model": "test"})
+    provider = LLMProviderFactory(is_async=True).create(
+        # 384, the width ``_make_shared_store`` above declares: an embedder
+        # on its own default emits 768 and the store refuses the batch.
+        {"provider": "echo", "model": "test", "dimensions": 384}
+    )
     await provider.initialize()
     return provider
 

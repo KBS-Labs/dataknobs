@@ -41,7 +41,11 @@ async def _kb(config: dict[str, Any] | None, *, store_domain: str | None = None)
     store = VectorStoreFactory().create(**kwargs)
     await store.initialize()
     embedder = await create_embedding_provider(
-        build_embedding_config(embedding_provider="echo", embedding_model="test")
+        build_embedding_config(
+            embedding_provider="echo",
+            embedding_model="test",
+            store_dimensions=store.dimensions,
+        )
     )
     return RAGKnowledgeBase.from_components(config, vector_store=store, embedding_provider=embedder)
 

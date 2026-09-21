@@ -402,7 +402,9 @@ class TestCompositeMemoryClosesChildren:
 
         store = MemoryVectorStore(dimensions=8)
         await store.initialize()
-        embedder = EchoProvider({"provider": "echo", "model": "test"})
+        embedder = EchoProvider(
+            {"provider": "echo", "model": "test", "dimensions": store.dimensions}
+        )
         vec = VectorMemory.from_components(vector_store=store, embedding_provider=embedder)
         composite = CompositeMemory.from_components(strategies=[vec])
 
