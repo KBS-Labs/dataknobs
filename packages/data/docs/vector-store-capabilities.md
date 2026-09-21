@@ -189,6 +189,35 @@ these vectors stale against the current model?", because nothing wrote
 down which model it was — whereas `bulk_embed_and_store` records the
 model identity in each row's metadata.
 
+The **width** goes the same way, and it is the half that bites soonest.
+The caller does not choose it either, so `dimensions` cannot be compared
+to a batch on this path — there is no batch. `add_vectors` refuses a
+mis-sized write and `add_documents` has nothing to measure, and that
+asymmetry is worse than no check at all: a caller who has watched one
+door refuse reasonably believes the declaration is enforced.
+
+So the store compares against its **collection** instead, at the two
+moments a width is knowable without running the embedding function:
+
+| When | What it compares |
+|---|---|
+| `initialize()` | a row the collection already holds, if it holds one |
+| after `add_documents()` | a row that call just wrote |
+
+Both raise on disagreement, naming both widths. Nothing is compared for
+a store that declared no width, and nothing is compared twice — Chroma
+fixes a collection's width at its first write and enforces it from
+there, across both doors, so one agreement settles it for that
+collection's life. That last fact is also the shape of the hazard: a
+collection whose *first* write arrives as documents is pinned to the
+embedding function's width permanently, and the declaration can never be
+met afterwards.
+
+This is the check `pgvector` already made, comparing the table's
+declared column against the store's configuration at initialize. The
+gap in coverage between those two backends is what let one config read
+as portable and not be.
+
 So the capability is worth advertising in both directions. A consumer
 that wants the convenience can find the one backend offering it; a
 consumer that needs provenance can tell it is about to lose it.

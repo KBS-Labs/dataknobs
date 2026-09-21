@@ -677,8 +677,7 @@ async def main():
             "documents_path": "./my_docs",
             "vector_store": {
                 "backend": "faiss",
-                "dimension": 384,
-                "collection": "my_knowledge"
+                "dimensions": 768
             },
             "embedding_provider": "ollama",
             "embedding_model": "nomic-embed-text",

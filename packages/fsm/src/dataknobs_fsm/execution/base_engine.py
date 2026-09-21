@@ -11,15 +11,14 @@ implementations, reducing code duplication and ensuring feature parity.
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
-from types import SimpleNamespace
 
-from dataknobs_fsm.core.data_wrapper import ensure_dict, wrap_for_lambda
+from dataknobs_fsm.core.data_wrapper import StateDataWrapper, ensure_dict, wrap_for_lambda
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.functions.base import FunctionContext, normalize_record_callable
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelector,
@@ -151,8 +150,14 @@ class BaseExecutionEngine(ABC):
 
     def prepare_state_transform(
         self, state_def: Any, context: ExecutionContext
-    ) -> Tuple[List[Any], SimpleNamespace]:
+    ) -> Tuple[List[Any], StateDataWrapper]:
         """Prepare state transform execution (common logic).
+
+        The second element is what ``wrap_for_lambda`` builds --- a
+        :class:`~dataknobs_fsm.core.data_wrapper.StateDataWrapper` over the
+        record, which is a mapping and reaches the record through ``.data``.
+        It was annotated ``SimpleNamespace``, which this has never returned
+        and which offers neither of those.
 
         Args:
             state_def: State definition.
@@ -213,6 +218,20 @@ class BaseExecutionEngine(ABC):
         ``context.failed_states`` so :meth:`finalize_single_result` can surface
         it as a record-level failure rather than silently reporting success.
 
+        ``error`` used to be accepted and dropped. This is the single sink
+        every state-transform failure reaches --- the async engine's transform
+        loop, ``AdvancedFSM``'s stepped runner, and
+        :meth:`process_transform_result` when a transform *returns* a failed
+        ``ExecutionResult`` --- so dropping it here meant the reason existed
+        nowhere afterwards: not on the record, not in the result, not in a log.
+        The caller was told the state and the state alone, which is the one
+        part of it the caller already knew.
+
+        The exception is kept on ``context.transform_errors``, keyed by state,
+        and read back by :meth:`transform_failure_message`. The **first**
+        exception for a state is the one kept: a later transform in a
+        ``run_on_failure`` state fails because of the first, not alongside it.
+
         Args:
             error: Exception that occurred.
             context: Execution context.
@@ -220,7 +239,62 @@ class BaseExecutionEngine(ABC):
         """
         if not hasattr(context, "failed_states"):
             context.failed_states = set()
+        if not hasattr(context, "transform_errors"):
+            context.transform_errors = {}
         context.failed_states.add(state_name)
+        context.transform_errors.setdefault(state_name, error)
+        logger.error("State transform failed in '%s': %s", state_name, error, exc_info=error)
+
+    @staticmethod
+    def describe_transform_error(error: Exception) -> str:
+        """Name an exception the way a caller reading a result needs it.
+
+        The type as well as the message, because a bare message is often
+        ambiguous about what raised it and sometimes empty --- ``KeyError`` and
+        ``ConnectionError`` are the two shapes this sees most, and one of them
+        stringifies to nothing but a quoted key.
+
+        Args:
+            error: The exception a transform raised, or the one built from the
+                message a transform returned.
+
+        Returns:
+            ``"TypeName: message"``, or just ``"TypeName"`` for an exception
+            carrying no message.
+        """
+        message = str(error).strip()
+        return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+    def transform_failure_message(
+        self, context: ExecutionContext, states: List[str] | None = None
+    ) -> str:
+        """The sentence every surface reports a transform failure with.
+
+        One reading, because there were two: this method's caller
+        :meth:`finalize_single_result` and ``AdvancedFSM._step_transform_failure``
+        each built the string themselves, so a change to what a failure says
+        had to be made twice or say two things.
+
+        A state with no recorded reason is named alone, which is what a state
+        added to ``failed_states`` by something other than
+        :meth:`handle_transform_error` looks like.
+
+        Args:
+            context: Execution context for the in-flight record.
+            states: The states to describe, defaulting to every state that
+                failed for this record. A step passes the single state it
+                entered, since that is the failure it is reporting.
+
+        Returns:
+            ``"State transform failed in: <state> (<Type>: <message>), ..."``
+        """
+        names = self.failed_states_sorted(context) if states is None else states
+        errors: Dict[str, Exception] = getattr(context, "transform_errors", None) or {}
+        described = [
+            f"{name} ({self.describe_transform_error(errors[name])})" if name in errors else name
+            for name in names
+        ]
+        return "State transform failed in: " + ", ".join(described)
 
     def record_has_failed(self, context: ExecutionContext) -> bool:
         """Whether a prior state transform already failed for this record.
@@ -321,7 +395,7 @@ class BaseExecutionEngine(ABC):
         """
         failed = self.failed_states_sorted(context)
         if failed:
-            return False, ("State transform failed in: " + ", ".join(failed))
+            return False, self.transform_failure_message(context, failed)
         return True, context.data
 
     def apply_data_mapping(self, data: Any, mapping: Dict[str, str]) -> Dict[str, Any]:
@@ -621,15 +695,32 @@ class BaseExecutionEngine(ABC):
                 resources={},
             )
 
-            # Try different function signatures
-            try:
-                # Try with data and context
-                return bool(arc.condition(context.data, func_context))
-            except TypeError:
-                # Try with just data
-                return bool(arc.condition(context.data))
-        except Exception:
-            # Condition evaluation failed - arc is not valid
+            # Arity- and await-normalized through the one reading this
+            # package has, rather than discovered by calling and catching.
+            # This was `try (data, context) / except TypeError: (data)`, and
+            # an `except TypeError` cannot tell a failed argument binding
+            # from a failed body -- so a condition with a bug in it ran
+            # twice, and the enclosing `except Exception` below then turned
+            # the second failure into a quiet "no", making a broken condition
+            # read as a condition that declined the arc.
+            condition = normalize_record_callable(arc.condition, coerce=bool)
+            return bool(condition(context.data, func_context))
+        except Exception as exc:
+            # Condition evaluation failed - arc is not valid. Which reads, from
+            # everywhere downstream, as a condition that declined the arc: the
+            # record is routed as if the answer were a considered "no" and the
+            # exception that produced it is gone. The outcome is unchanged
+            # here -- see AsyncExecutionEngine._evaluate_arc_pre_test, which
+            # raises instead on the argument that an outage must not be
+            # reported as a data-quality drop; the two disagree, and
+            # reconciling them changes routing rather than reporting.
+            logger.warning(
+                "Arc condition raised and the arc is treated as declined (arc %s -> %s): %s",
+                getattr(arc, "name", "?"),
+                getattr(arc, "target_state", "?"),
+                exc,
+                exc_info=exc,
+            )
             return False
 
     def get_execution_statistics(self) -> Dict[str, Any]:

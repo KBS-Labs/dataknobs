@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 # Re-export from the canonical location in dataknobs-llm.
-from dataknobs_llm import create_embedding_provider
+from dataknobs_llm import create_embedding_provider, reads_nested_embedding
 
 
 def build_embedding_config(
@@ -79,12 +79,14 @@ def build_embedding_config(
         A dict containing only the keys whose values are not ``None``.
     """
     config: dict[str, Any] = {}
-    # ``create_embedding_provider`` takes its nested branch only for a
-    # *non-empty* section — an empty one falls through to the flat keys.
-    # Reusing that exact condition is what decides where a supplied width
-    # goes, so the two cannot drift into disagreeing about which form is in
-    # play and writing the width where nothing will read it.
-    nested = bool(embedding)
+    # Which branch `create_embedding_provider` will take decides where a
+    # supplied width goes, so it is *asked* rather than predicted. Writing
+    # the condition out a second time here is what let the two drift: this
+    # kept the truthy half and dropped the `isinstance` half, which is the
+    # only half that can disagree, and the width then went where nothing
+    # would read it -- or the copy below raised on a section that is not a
+    # mapping, which the helper itself accepts and ignores.
+    nested = reads_nested_embedding(embedding)
     if embedding is not None:
         if nested and store_dimensions is not None and "dimensions" not in embedding:
             # Copied, not mutated: this section is a live field on the

@@ -11,12 +11,15 @@ This module defines the interfaces for:
 - Resources (external systems and services)
 """
 
+import inspect
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Tuple, TypeVar
+from typing import Any, Dict, List, Tuple, TypeAlias, TypeVar
 
+from dataknobs_common.callbacks import is_async_callable
 from dataknobs_common.exceptions import (
     ConfigurationError as BaseConfigurationError,
     DataknobsError,
@@ -188,19 +191,42 @@ class FunctionContext:
         return self.require_resource(name)
 
 
+#: What a validator may hand back. ``False`` fails the record; a dict is merged
+#: into the record; ``True`` and ``None`` pass it unchanged. That is the whole
+#: of what the engines read --- ``AsyncExecutionEngine._run_pre_validators``
+#: tests ``result is False`` and ``isinstance(result, dict)``, and nothing else.
+#:
+#: ``ExecutionResult`` is deliberately **not** a member, although this method
+#: was declared to return one until it was measured: neither validator path
+#: unwraps it, so a *failing* ``ExecutionResult`` is neither ``False`` nor a
+#: dict and the record passes the gate. An implementation written to the old
+#: declaration produced a validator that could never reject.
+ValidationOutcome: TypeAlias = bool | Dict[str, Any] | None
+
+
 class IValidationFunction(ABC):
     """Interface for validation functions."""
 
     @abstractmethod
-    def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
+    def validate(
+        self,
+        data: Any,
+        context: "FunctionContext | Dict[str, Any] | None" = None,
+    ) -> ValidationOutcome | Awaitable[ValidationOutcome]:
         """Validate data according to function logic.
+
+        May be written ``def`` or ``async def``: the engines await an awaitable
+        result rather than requiring one flavour.
 
         Args:
             data: The data to validate.
-            context: Optional execution context.
+            context: Optional execution context, of the same shape
+                :meth:`ITransformFunction.transform` receives.
 
         Returns:
-            ExecutionResult with validation outcome.
+            ``False`` to fail the record, a dict to merge into it, or ``True`` /
+            ``None`` to pass it unchanged --- see :data:`ValidationOutcome`,
+            which records why an ``ExecutionResult`` is not among them.
         """
         pass
 
@@ -214,6 +240,15 @@ class IValidationFunction(ABC):
         pass
 
 
+#: What a transform may hand back. The two engines agree on all three members
+#: --- ``BaseExecutionEngine.process_transform_result`` and
+#: ``AsyncExecutionEngine._coalesce_transform_result`` both unwrap an
+#: ``ExecutionResult`` (a failing one is raised as the transform's error),
+#: treat ``None`` as "the record was mutated in place", and otherwise take the
+#: returned value as the new record.
+TransformOutcome: TypeAlias = ExecutionResult | Dict[str, Any] | None
+
+
 class ITransformFunction(ABC):
     """Interface for transform functions."""
 
@@ -222,8 +257,13 @@ class ITransformFunction(ABC):
         self,
         data: Any,
         context: "FunctionContext | Dict[str, Any] | None" = None,
-    ) -> ExecutionResult:
+    ) -> TransformOutcome | Awaitable[TransformOutcome]:
         """Transform data according to function logic.
+
+        May be written ``def`` or ``async def``. The engines route every
+        invocation through ``run_callback_off_loop``, which awaits an async
+        implementation and offloads a sync one, so neither flavour is the
+        privileged one and an implementation picks whichever its work needs.
 
         Args:
             data: The data to transform.
@@ -233,7 +273,9 @@ class ITransformFunction(ABC):
                 lightweight/standalone invocation.
 
         Returns:
-            ExecutionResult with transformed data.
+            The transformed record, an :class:`ExecutionResult` wrapping it, or
+            ``None`` to mean the record was mutated in place --- see
+            :data:`TransformOutcome`.
         """
         pass
 
@@ -285,13 +327,16 @@ class IEndStateTestFunction(ABC):
 
     @abstractmethod
     def should_end(
-        self, data: Any, context: Dict[str, Any] | None = None
+        self,
+        data: Any,
+        context: "FunctionContext | Dict[str, Any] | None" = None,
     ) -> Tuple[bool, str | None]:
         """Test if processing should end.
 
         Args:
             data: The current data.
-            context: Optional execution context.
+            context: Optional execution context, of the same shape
+                :meth:`ITransformFunction.transform` receives.
 
         Returns:
             Tuple of (should_end, reason).
@@ -308,6 +353,261 @@ class IEndStateTestFunction(ABC):
         pass
 
 
+#: What may be handed to an FSM by name --- the ``custom_functions=`` channel
+#: on every engine and façade, and :meth:`FSMBuilder.register_function`.
+#:
+#: A bare interface *instance* is not a ``Callable``: it carries its logic on
+#: ``transform`` / ``validate`` / ``test`` / ``should_end``, which is why the
+#: tree has three entry points for finding that method ---
+#: ``FunctionWrapper._normalize_interface_callable``,
+#: :func:`as_state_test_callable`, and
+#: ``AsyncExecutionEngine._is_interface_transform``. Which method belongs to
+#: which interface is :data:`INTERFACE_METHODS`, read by all of them and by the
+#: config builder's resolved adapter rather than spelled out at each site.
+#: Declaring the channel as ``dict[str, Callable]`` excluded the shape it
+#: exists to carry; under that annotation mypy read all four ``isinstance``
+#: arms of ``_normalize_interface_callable`` as unreachable, which is the type
+#: checker saying the same thing.
+RegisteredFunction: TypeAlias = (
+    Callable[..., Any]
+    | ITransformFunction
+    | IValidationFunction
+    | IStateTestFunction
+    | IEndStateTestFunction
+)
+
+
+#: The interface method that carries each interface's logic. One mapping, read
+#: by everything that has to find that method on an instance --- the wrapper in
+#: :mod:`dataknobs_fsm.functions.manager`, the config builder's resolved
+#: adapter, and :func:`as_state_test_callable`.
+INTERFACE_METHODS: Dict[type, str] = {
+    ITransformFunction: "transform",
+    IValidationFunction: "validate",
+    IStateTestFunction: "test",
+    IEndStateTestFunction: "should_end",
+}
+
+
+def interface_method_of(func: Any) -> str | None:
+    """The name of the interface method ``func`` implements, or ``None``.
+
+    ``None`` means the object is not one of the four FSM function interfaces:
+    an ordinary callable, an already-normalized bound method, or one of the
+    wrappers. Callers use the answer to decide what an object *is*, not merely
+    what it looks like --- which is the distinction arity alone cannot draw.
+    """
+    for interface, method in INTERFACE_METHODS.items():
+        if isinstance(func, interface):
+            return method
+    return None
+
+
+def accepts_context(func: Callable[..., Any], *, default: bool = True) -> bool:
+    """Whether a record callable takes the execution context beyond the record.
+
+    The engines invoke every record step as ``func(record, context)``, and both
+    conventions in the tree are live: the FSM function library is a mix of
+    ``transform(self, data)`` and ``transform(self, data, context=None)``, and a
+    consumer's callable may be either. One reading of that question, because
+    the tree previously held three and they did not agree.
+
+    **Positional parameters only.** ``*args`` counts --- such a callable can
+    receive the context. ``**kwargs`` does not: the context is passed
+    *positionally*, so ``def fn(data, **kwargs)`` raises ``TypeError`` when
+    called with two. The copy in the config builder counted ``**kwargs`` and
+    produced exactly that crash for a ``(data, **kwargs)`` implementation.
+
+    Args:
+        func: The callable to read. A bound method, so ``self`` is already
+            excluded; an unintrospectable builtin answers ``default``.
+        default: The answer when the signature cannot be read. ``True`` (the
+            default) for an interface implementation, whose declaration says it
+            takes the context. ``False`` for an arbitrary record callable,
+            where the bare ``record -> X`` shape is the common one and passing
+            an argument the callable cannot take is the worse failure.
+
+    Returns:
+        ``True`` when the callable can receive the context positionally.
+    """
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return default
+    positional = [
+        p
+        for p in params
+        if p.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        )
+    ]
+    if any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in positional):
+        return True
+    return len(positional) >= 2
+
+
+def accepts_one_argument(func: Any, *, default: bool = True) -> bool:
+    """Whether ``func`` can be called with exactly one positional argument.
+
+    The sibling question to :func:`accepts_context`, and a different one. That
+    one asks whether a callable *wants* the context; this one asks whether it
+    will accept the state object *alone* --- which a ``(record, context=None)``
+    callable will and a ``(record, context)`` callable will not. The two
+    disagree on exactly that shape, and both answers are needed, because the
+    engine's state-step sites and its arc-condition site have opposite
+    preferences: a state step is offered the state object first and a
+    condition is offered the context first.
+
+    It exists because those sites used to answer this by *calling* the
+    function and catching the failure. Argument binding raises ``TypeError``
+    before the callable's frame exists, which is the case they were written
+    for --- but a ``TypeError`` from inside the body, after the work has been
+    done, is indistinguishable from outside, so a transform with an ordinary
+    bug in it was run a second time with different arguments. Reading the
+    signature answers the same question without running anything.
+
+    **Positional parameters only**, and required ones are what decide it: a
+    callable is asked for one argument, so it must have somewhere to put it
+    and nothing else it insists on. ``*args`` satisfies both. A *required*
+    keyword-only parameter cannot be filled by a positional call at all, so
+    such a callable answers ``False`` here and is given ``(record, context)``,
+    where a keyword ``context`` at least has a chance of being bound by name
+    --- which is more than the one-argument call could offer it.
+
+    Args:
+        func: The callable to read. An unintrospectable builtin answers
+            ``default``.
+        default: The answer when the signature cannot be read. ``True``, which
+            is the historical first attempt at every site that asks.
+
+    Returns:
+        ``True`` when a one-positional-argument call would bind.
+    """
+    try:
+        params = list(inspect.signature(func).parameters.values())
+    except (TypeError, ValueError):
+        return default
+    slots = 0
+    required = 0
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            return required <= 1
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            slots += 1
+            if param.default is inspect.Parameter.empty:
+                required += 1
+        elif (
+            param.kind is inspect.Parameter.KEYWORD_ONLY
+            and param.default is inspect.Parameter.empty
+        ):
+            return False
+    return slots >= 1 and required <= 1
+
+
+def state_step_args(
+    func: Any,
+    *,
+    state_obj: Any,
+    record: Dict[str, Any],
+    context: Any,
+) -> Tuple[Any, ...]:
+    """The positional arguments a state transform or validator should receive.
+
+    One reading for the three sites that dispatch a state step --- the async
+    engine's transform and validator loops, and ``AdvancedFSM``'s own copy of
+    the transform loop. Each previously carried its own ``try`` / ``except
+    (TypeError, AttributeError)`` pair, which is three chances to fix a bug
+    in one of them and two places for it to survive.
+
+    The preference is the historical one and deliberately unchanged: a
+    callable that will take the state object alone gets the state object, so
+    an inline ``lambda state: ...`` keeps reading ``state.data``; anything
+    else gets ``(record, context)``. Only the way the question is answered
+    changed.
+
+    Args:
+        func: The callable about to be invoked.
+        state_obj: The ``StateDataWrapper`` for a one-argument callable.
+        record: The raw record for a ``(record, context)`` callable.
+        context: The ``FunctionContext`` for a ``(record, context)`` callable.
+
+    Returns:
+        The positional arguments to splat into the call.
+    """
+    return (state_obj,) if accepts_one_argument(func) else (record, context)
+
+
+def normalize_record_callable(
+    fn: Callable[..., Any],
+    *,
+    coerce: Callable[[Any], Any] | None = None,
+) -> Callable[..., Any]:
+    """Arity- and await-normalize a record callable to ``(record, context)``.
+
+    The FSM engine always invokes a record step as ``fn(record, context)``. A
+    supplied callable may be a bare ``record -> X`` callable, a
+    ``(record, context) -> X`` callable, or an
+    :class:`~dataknobs_fsm.functions.base.ITransformFunction`'s bound method
+    (sync ``(data)`` or async ``(data, context)``). The returned callable always
+    accepts ``(record, context)``, forwards the right number of arguments, and is
+    a coroutine function iff calling ``fn`` produces an awaitable — so the
+    caller's ``iscoroutinefunction`` / ``isawaitable`` check routes it correctly.
+    Note the second half of that: a callable *object* with an ``async def``
+    ``__call__`` is not itself a coroutine function, and normalizing it yields
+    one, which is the point. The judgement is
+    :func:`~dataknobs_common.callbacks.is_async_callable`'s.
+
+    Arity detection is :func:`~dataknobs_fsm.functions.base.accepts_context`,
+    shared with the config builder's resolved adapter and the function wrapper
+    so all three doors into an FSM read one signature the same way. It counts
+    positional parameters only: a callable declaring two or more positionals (or
+    ``*args``) receives ``(record, context)``; otherwise it receives ``record``
+    alone. A predicate that declares ``context`` as a *required keyword-only*
+    argument (``def fn(record, *, context): ...``) is therefore called with the
+    record alone and raises ``TypeError`` at evaluation time — write
+    ``(record, context)`` or ``(record, context=None)`` instead.
+
+    Args:
+        fn: The user callable to normalize.
+        coerce: Optional terminal coercion applied to the callable's result
+            (e.g. ``bool`` for a gate). ``None`` (the default) returns the
+            result unchanged (the enricher form).
+
+    Returns:
+        A ``(record, context)`` callable (a coroutine function when ``fn`` is).
+    """
+    # Builtins / C-callables with no introspectable signature: be permissive and
+    # pass only the record (the common ``record -> X`` shape), which is what
+    # ``default=False`` asks of the shared reading.
+    wants_context = accepts_context(fn, default=False)
+
+    # `is_async_callable` rather than `inspect.iscoroutinefunction`: the latter
+    # answers for functions and reports a callable *object* with an `async def`
+    # __call__ as synchronous. Such a callable would take `sync_call` below,
+    # where `coerce` is applied to the coroutine rather than to the answer ---
+    # and the gate's `coerce` is `bool`, so a predicate that said no becomes a
+    # gate that says yes, uniformly, for every record.
+    if is_async_callable(fn):
+
+        async def async_call(data: dict, context: Any = None) -> Any:
+            out = await (fn(data, context) if wants_context else fn(data))
+            return coerce(out) if coerce is not None else out
+
+        return async_call
+
+    def sync_call(data: dict, context: Any = None) -> Any:
+        out = fn(data, context) if wants_context else fn(data)
+        return coerce(out) if coerce is not None else out
+
+    return sync_call
+
+
 def as_state_test_callable(func: Any) -> Any:
     """Return the callable form of a resolved arc-condition / pre-test function.
 
@@ -319,11 +619,15 @@ def as_state_test_callable(func: Any) -> Any:
     predicates, :class:`FunctionWrapper`/``InterfaceWrapper``, and the config
     builder's resolved adapters — passes through unchanged.
 
-    This mirrors ``FunctionWrapper._normalize_interface_callable`` for the one
-    path that bypasses it: the async engine's ``custom_functions`` merge
-    (``AsyncExecutionEngine._get_merged_functions``) stores engine-injected
-    functions raw. It is deliberately scoped to ``IStateTestFunction`` only —
-    the transform path has its own deterministic ``ITransformFunction`` dispatch
+    This mirrors ``FunctionWrapper._normalize_interface_callable`` for the two
+    paths that bypass it, both of which store engine-injected functions raw:
+    the async engine's ``custom_functions`` merge
+    (``AsyncExecutionEngine._get_merged_functions``), and
+    ``AdvancedFSM._resolve_test_function`` — ``AdvancedFSM`` calls
+    ``FSMBuilder.build`` itself rather than ``build_fsm``, so nothing
+    normalizes what it was handed. It is deliberately scoped to
+    ``IStateTestFunction`` only — the transform path has its own deterministic
+    ``ITransformFunction`` dispatch
     (``_is_interface_transform``/``_invoke_state_transform``), so normalizing
     other interfaces here would convert a bare transform instance into a bound
     method and silently bypass that resource-injecting dispatch.
@@ -336,9 +640,18 @@ def as_state_test_callable(func: Any) -> Any:
     non-callable and surfaces as a record error rather than being silently
     reinterpreted as a condition.
     """
-    if isinstance(func, IStateTestFunction):
-        return func.test
-    return func
+    resolved = func.test if isinstance(func, IStateTestFunction) else func
+    if not callable(resolved) or accepts_context(resolved, default=True):
+        return resolved
+    # A one-argument condition, arity-normalized rather than returned raw: both
+    # call sites invoke a pre-test as ``func(data, context)``, and
+    # ``test(self, data)`` is a shape the tree ships. Calling it with two
+    # arguments raises ``TypeError``, and the arc-skipping ``except`` reads
+    # that as the condition saying no --- so the arc silently disappears with
+    # the step still reporting success. The wrappers are unaffected: their
+    # ``__call__`` is ``(*args, **kwargs)``, which accepts the context, so they
+    # take the early return above and keep doing their own shaping.
+    return normalize_record_callable(resolved)
 
 
 class ResourceStatus(Enum):
@@ -683,7 +996,7 @@ class Function(ABC):
 class FunctionRegistry:
     """Registry for managing FSM functions."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize function registry."""
         self.functions: Dict[str, Any] = {}
         self.validators: Dict[str, IValidationFunction] = {}
@@ -750,7 +1063,7 @@ class FunctionRegistry:
         Returns:
             List of function names.
         """
-        all_names = []
+        all_names: List[str] = []
         all_names.extend(self.functions.keys())
         all_names.extend(self.validators.keys())
         all_names.extend(self.transforms.keys())

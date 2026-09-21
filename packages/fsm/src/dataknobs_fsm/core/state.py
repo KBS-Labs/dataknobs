@@ -228,9 +228,8 @@ from uuid import uuid4
 from dataknobs_data import Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
 from dataknobs_fsm.functions.base import (
-    IValidationFunction,
-    ITransformFunction,
     IEndStateTestFunction,
+    RegisteredFunction,
     ResourceConfig,
 )
 
@@ -521,10 +520,15 @@ class StateDefinition:
     # Resource requirements
     resource_requirements: List[ResourceConfig] = dataclass_field(default_factory=list)
 
-    # Functions
-    pre_validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
-    validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
-    transform_functions: List[ITransformFunction] = dataclass_field(default_factory=list)
+    # Functions. ``RegisteredFunction`` rather than the interface types: what
+    # the builder puts here is whatever ``_resolve_function`` returned --- a
+    # ``FunctionWrapper``, an ``InterfaceWrapper``, a resolved library adapter
+    # or a plain callable --- and the engines invoke them as
+    # ``func(data, context)``. Naming the interfaces described the intent and
+    # not the contents, so every assignment the builder made was a finding.
+    pre_validation_functions: List[RegisteredFunction] = dataclass_field(default_factory=list)
+    validation_functions: List[RegisteredFunction] = dataclass_field(default_factory=list)
+    transform_functions: List[RegisteredFunction] = dataclass_field(default_factory=list)
     end_test_function: IEndStateTestFunction | None = None
 
     # Arc references (will be populated when building network)
@@ -614,7 +618,7 @@ class StateDefinition:
             return True, []
         return self.schema.validate(data)
 
-    def add_pre_validation_function(self, func: IValidationFunction) -> None:
+    def add_pre_validation_function(self, func: RegisteredFunction) -> None:
         """Add a pre-validation function.
 
         Args:
@@ -622,7 +626,7 @@ class StateDefinition:
         """
         self.pre_validation_functions.append(func)
 
-    def add_validation_function(self, func: IValidationFunction) -> None:
+    def add_validation_function(self, func: RegisteredFunction) -> None:
         """Add a validation function.
 
         Args:
@@ -630,7 +634,7 @@ class StateDefinition:
         """
         self.validation_functions.append(func)
 
-    def add_transform_function(self, func: ITransformFunction) -> None:
+    def add_transform_function(self, func: RegisteredFunction) -> None:
         """Add a transform function.
 
         Args:

@@ -980,6 +980,24 @@ leaving it unset hands the embedder the width the store declared, because
 the embedder's output is written straight into that store and the two are
 one number. Set it explicitly only when you mean the two to differ.
 
+**Stating it nowhere is a third answer, not the first one repeated.** There
+is then no declared width to hand over: the store declares none and the
+embedder stays on its provider's default, so the two are again two numbers
+— and nothing compares them, because a store that declared nothing has made
+no claim a write could contradict. That is a supported configuration, and
+it is what an empty `vector_store:` section falls back to.
+
+Two backends cannot serve it. `faiss` and `pgvector` each build a
+fixed-width structure before the first write, so they need the number up
+front and refuse an undeclared width at construction:
+
+> `FaissVectorStore requires a declared vector width: set 'dimensions' in the store config.`
+
+The key that message names is the *store's*, which is what you write under
+`vector_store:`. Under `memory: type: vector` the same number is spelled
+`dimension` — the singular is this config's name for the store's width, and
+`dimensions` beside it belongs to the embedder.
+
 The width still has to be one the model can produce. An Ollama model's
 width is fixed and `OllamaProvider.embed` checks a stated one rather than
 ignoring it, so pairing the 384 of `all-minilm` with `nomic-embed-text`

@@ -9,7 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A width stated once reaches both the store and the embedder.**
+- **Two classes that answer `obj['key']` now answer `in`, `len` and
+  iteration.** A type that defines `__getitem__` and no `__iter__` is still
+  iterable: Python falls back to the protocol that predates `__iter__` and
+  asks for index `0`. On a class forwarding to a string-keyed dict the answer
+  is `KeyError: 0`, naming a key the caller never wrote.
+
+  `ResolvedConfig` had it outright --- `"llm" in resolved`, `list(resolved)`
+  and `dict(resolved)` all raised `KeyError: 0`, and `len(resolved)` and
+  `{**resolved}` raised `TypeError`. It is a `Mapping` now, so it goes
+  wherever a configuration mapping is expected. Read-only, and deliberately:
+  `get_or_create` hands the same instance to every caller while it is
+  cached, so a write through one would land in another's configuration.
+  `to_dict()` remains the deep copy to take when you need one you can
+  change. It also prints its sections now instead of an address.
+
+  `BotContext` had the same gap one step further in. It has `__contains__`,
+  so the membership test everyone writes first worked and the trap stayed
+  hidden until something iterated: `dict(context)` to log the request
+  metadata and `{**context}` to merge it both raised `KeyError: 0`. It now
+  answers `__iter__`, `__len__`, `keys`, `values` and `items` over
+  `request_metadata`.
+
+  `BotContext` is deliberately **not** registered as a `Mapping`. Its
+  subscript surface is a convenience over one field while its identity is
+  `conversation_id` / `client_id` / `user_id`, and anything reading "a
+  mapping" as the whole object would drop all three without saying so. For
+  the same reason `copy()` keeps its own meaning (clone the context, with
+  field overrides) and `bool(context)` stays `True` for a context with no
+  request metadata --- `__len__` would otherwise have reversed every
+  `if context:` written before it existed. Ask `len(context)` about the
+  metadata.
+
+  A workspace guard, `tests/test_integer_index_protocol_fallback.py`, now
+  fails on any shipped class that answers a subscript without `__iter__`.
+
+- **The registry adapter's `stream` closes the read it opened.** Three links
+  carry one page --- `DataKnobsRegistryAdapter.stream`, the keyed store's
+  `stream`, and the database's `stream_read` --- and the adapter drove the
+  one below it with a bare `async for`, which does not close what it was
+  iterating. So a caller taking a page and stopping, which is what this
+  member is for, left every link suspended until the interpreter finalized
+  them: a later turn of the loop, unordered against whatever the caller does
+  next. On a Postgres-backed registry the read at the bottom holds a pooled
+  connection inside an open transaction, so that is a connection per
+  abandoned page. It drives the store's stream under `aclosing_iter` now,
+  and the two links below it were fixed with it.
+
+- **BREAKING: a width stated once reaches both the store and the embedder.**
   `RAGKnowledgeBase` and `VectorMemory` each build a vector store *and* an
   embedding provider, and each took the width twice — for the store as
   `vector_store.dimensions` / `dimension`, for the embedder as `dimensions`
@@ -23,12 +70,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the embedder still wins, in either config form; a config that already
   named both is unaffected.
 
+  Which form is in play decides where that width is written, and
+  `build_embedding_config` now **asks** `create_embedding_provider` through
+  the predicate that package publishes for it — `reads_nested_embedding()` —
+  rather than restating the condition. A restatement is what an
+  `embedding:` section that is not a mapping travels through: the helper
+  ignores such a section and reads the flat keys, so the width belongs at
+  the top level, and a copy of the condition missing its `isinstance` half
+  put it inside instead. Measured on the copy: `embedding: ollama` and
+  `embedding: 768` raised `TypeError`, and a section the copy's membership
+  test happened to satisfy raised nothing and lost the width outright.
+
   A config that named only the store's width changes behaviour, and only in
   the direction of what it asked for: an echo or OpenAI embedder now
   produces that width instead of its model default, and an Ollama model,
   whose width is fixed, reports the disagreement through the check
   `OllamaProvider.embed` already performs rather than silently returning
-  another width.
+  another width. That last one is where an embed that succeeded now raises,
+  and it is the disagreement surfacing one layer earlier than the store
+  would surface it: the remedy either way is to state the width the model
+  actually produces, or to state none and leave both halves on their own
+  defaults.
+
+- **BREAKING: `VectorMemoryConfig.dimension` no longer spells a default of
+  1536.** It is `int | None = None`, and `_ainit` forwards it to the store
+  only when the config named one — the same reason `backend` above it is
+  optional. A spelled default is indistinguishable from a consumer's choice
+  once it leaves the dataclass, and this one left it twice: into the store's
+  config *and* into `build_embedding_config` as `store_dimensions`, whose
+  contract is that it carries the width **the config gave the store**. So the
+  argument was never absent, and the width supply above handed every config
+  that named no width at all an embedder told to emit 1536 — silently for a
+  provider that honours the request, and fatally for `OllamaProvider`, whose
+  `embed` refuses a stated width its model cannot produce. Measured on
+  `origin/main` the same config produced a store declaring 1536 and an
+  embedder emitting 768; it now declares and supplies neither, leaving both
+  halves on their own defaults. `RAGKnowledgeBase`, the other caller of that
+  helper, already read `vector_store.get("dimensions")` and so supplied only a
+  stated width; the two callers now mean the same thing by "declared".
+
+  A `VectorMemory` config that named no `dimension` and used a backend
+  needing one up front (`faiss`, `pgvector`) is now refused at construction
+  naming the key, where before it built a 1536-wide structure that only a
+  1536-emitting embedder could write to. Such a config states the width it
+  means; there is no spelling that restores the old default, because the
+  old default was the thing nobody had asked for.
 
 ### Documentation
 
@@ -38,6 +124,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `memory: type: vector` examples paired that model with a 384-wide store;
   they now read 768, and the width rule above is stated once beside the
   table rather than implied by a `# Must match` comment.
+
+- **Ten documented vector stores declared no width at all.** Nine spelled the
+  key `dimension`, which is `memory: type: vector`'s name for it and not a
+  `vector_store` field under any backend, so `from_dict` dropped it and the
+  384 beside it configured nothing; the tenth named `backend: faiss` and no
+  width. The misspelling was inert for as long as nothing compared the field
+  to a vector — a store that takes its width from the vectors behaves
+  identically either way — and both changes above end that, so every one of
+  those samples now raises `FaissVectorStore requires a declared vector
+  width` before its first write. They are corrected across `README.md`,
+  `user-guide.md`, the bots API reference, the quickstart and two examples
+  pages, and `tests/test_documented_vector_store_width.py` is what keeps them
+  corrected: it reads every documented `vector_store` block in the
+  repository, refuses the singular spelling, and requires a width wherever
+  the named backend cannot take one from the vectors.
+
+- **The width rule now says what happens when nobody states a width.** *State
+  the width once* described the case where one half names it and left the case
+  where neither does to be inferred — and the inference is wrong. There is
+  then no declared width to hand over: the store declares none, the embedder
+  stays on its provider's default, and nothing compares them. The block now
+  says so, names the two backends that refuse that configuration at
+  construction, and quotes the message they refuse it with — including which
+  key it means, since it names the store's `dimensions` and a
+  `memory: type: vector` consumer writes `dimension`.
 
 - **`VectorKnowledgeSource.query` names the symbol it takes its filter-slice
   convention from.** The comment cited `database.py:300` — a file that does not

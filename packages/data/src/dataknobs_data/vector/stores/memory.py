@@ -229,15 +229,10 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore[MemoryVectorSt
         if not self._initialized:
             await self.initialize()
 
-        # An empty batch is a no-op, not an error: see
-        # ``VectorStoreBase._is_empty_batch``.
-        if self._is_empty_batch(vectors):
+        # An empty batch is a no-op and a mis-sized one is an error, in
+        # that order: see ``VectorStoreBase._guard_batch``.
+        if self._guard_batch(vectors):
             return []
-
-        # The batch's width against the one this store declares: see
-        # ``VectorStoreBase._check_batch_width``. After the emptiness
-        # guard, because an empty batch has no first vector.
-        self._check_batch_width(vectors)
 
         # Convert to numpy array
         if isinstance(vectors, list):

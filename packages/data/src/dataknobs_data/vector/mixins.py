@@ -16,6 +16,7 @@ from .content import (
     assemble_source_text,
     current_content_hash,
     derive_source_text,
+    is_foreign_model,
     stored_assembly,
 )
 from .embedding import default_model_name, embed_texts, require_embedding_source
@@ -1146,12 +1147,13 @@ class VectorSyncMixin:
         incompatible vector spaces, so a swap is invisible to a check that
         only reads the text.
         """
+        # Two-sided, and the same rule `_has_current_vector` applies -- now
+        # by calling it rather than by restating it. A stored nothing means
+        # the vector predates anything recording a name, not that it
+        # disagrees; calling those stale would re-embed a whole corpus on the
+        # first sweep after upgrading.
         stored_name = getattr(record.fields[vector_field], "model_name", None)
-        # Two-sided, and the same rule `_has_current_vector` applies: a stored
-        # `None` means the vector predates anything recording a name, not that
-        # it disagrees. Calling those stale would re-embed a whole corpus on
-        # the first sweep after upgrading.
-        if model_name is not None and stored_name is not None and stored_name != model_name:
+        if is_foreign_model(stored_name, model_name):
             return True
 
         metadata = getattr(record.fields[vector_field], "metadata", None) or {}

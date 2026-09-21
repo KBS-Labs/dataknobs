@@ -9,9 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A vector store compares a write's width against its declared
-  `dimensions`.** The field is required on every store config and its range is
-  validated at construction, and nothing had ever compared it to a vector.
+- **Every consumer of `stream_read` closes the read it opened.** An async
+  generator a consumer walks away from --- a `break`, a raise, an early
+  return --- is left suspended at its `yield`, and its `finally` runs only
+  when the interpreter finalizes it: a later turn of the loop, unordered
+  against whatever the consumer does next. `AsyncPostgresDatabase.stream_read`
+  yields from inside an acquired pool connection and an open transaction, and
+  `AsyncElasticsearchDatabase.stream_read` from inside a scroll cleared in a
+  `finally`, so on those two backends that gap is a connection the pool does
+  not have back.
+
+  The rule is one sentence --- **a frame closes the stream it opened, and a
+  generator closes the stream it drives** --- and five places in this package
+  did not. `AsyncDatabase.stream_transform` and `AsyncKeyedRecordStore.stream`
+  are generators over a read, so closing them has to reach it.
+  `ColumnHierarchy._edges` and `Migrator.migrate_async` open a read and give
+  up on it: `contains()` is bounded at one edge, so it breaks on the ordinary
+  path and on *success*, and a bound on the query does not finish the
+  generator either --- it is suspended at the row it was asked for rather than
+  past it; `async_run_stream_write` stops consuming on a failed batch, which
+  is the ordinary way a migration ends badly, and the source read is the
+  migration's rather than the target's. `RecordEntitySource.by_type` exhausts
+  its read on every path it has a say in and is closed for the one it does not
+  --- a row whose id will not read or will not `str`. All five drive the read
+  under `aclosing_iter`.
+
+  **The sync siblings are unaffected, and were measured rather than assumed.**
+  CPython closes an abandoned *synchronous* generator when the last reference
+  to it drops, which for `for record in db.stream_read(...)` is at the `break`:
+  `SyncDatabase.stream_transform` and `SyncKeyedRecordStore.stream` each
+  released at the abandon with no change. The asymmetry is the language's ---
+  an async generator's close is a coroutine, so it cannot run at a refcount
+  drop and is scheduled on the loop instead.
+
+- **BREAKING: a vector store compares a write's width against its declared
+  `dimensions`.** Nothing had ever compared that field to a vector.
   Measured on the memory backend: 768-wide vectors into a store declaring 32,
   and 32-wide into one declaring 768, both wrote fifteen rows, both resolved,
   and neither raised --- the searches even answered correctly, because both
@@ -28,6 +60,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still reported by the backend's own conversion, which can say which row is
   wrong.
 
+  **A width nobody declared is not compared to anything.** `dimensions`
+  defaults to `0`, and that value is the absence of a declaration rather than
+  a declaration of zero --- the default since the backend was written, under
+  the comment *"required for most stores"*, with the method that would have
+  refused it (`_validate_dimensions`) called from nowhere in the repository
+  for its whole life. A guard reading the sentinel as a claim refuses *every*
+  write to such a store and reports `expected 0`, which names neither the
+  config key nor the cause; that reached `MemoryVectorStore({})`, which
+  carries its own smoke test, and the in-process store
+  `RAGKnowledgeBaseConfig` documents its empty `vector_store:` section as
+  falling back to.
+
+  **A write that succeeded now raises**, which is the point and is also the
+  migration. `ValueError: Vector dimension mismatch: expected <declared>,
+  got <written>`, from `add_vectors` and from every door that ends there:
+  `update_vectors`, `add_records`, `bulk_embed_and_store` and so
+  `SemanticIndex.build`, and `DedupChecker`. The check is the opening
+  statement, so nothing is written and nothing is coerced. Which side is
+  wrong is not something the guard can know, which is why it prints both
+  numbers: correct `dimensions` if the vectors are right, and look at
+  whatever produces the vectors if `dimensions` is. Declaring no width opts
+  out --- `0` is compared to nothing --- on every backend but `faiss` and
+  `pgvector`, which need the number before the first write.
+
+  **Expect one cause at config-layer scale.** Measured by landing this guard
+  against the rest of this repository unchanged: **147** tests in
+  `dataknobs-bots` went red, across 25 files, and every width message in the
+  run read `expected 384, got 768`. One cause, not 147 --- a store declared
+  384, an embedder was left on its own default, and nothing had compared the
+  two because nothing compared either to a vector. **94 of the 147 cleared
+  when the store's declared width was handed to the embedder** in the one
+  function that already built both, with no test edited; the 53 that
+  remained wire a store and an embedder up separately and state the width at
+  the call site. A consumer meeting a wall of these is most likely looking
+  at one number stated twice, and the repair is upstream of every site that
+  reports it.
+
+- **BREAKING: the width guard reaches Chroma's second write door, and a
+  collection that disagrees with its config is refused at `initialize`.**
+  `add_vectors` measures the batch the caller passed, so a path where the
+  caller passes no vectors was outside it --- and there is one:
+  `ChromaVectorStore.add_documents` hands text to an embedding function,
+  which chooses the width. Measured on one store declaring 8 whose
+  embedding function makes 384: `add_vectors` was refused and
+  `add_documents` wrote two rows, leaving the store declaring a width its
+  own collection did not hold. That asymmetry is worse than no
+  check, because a caller who has watched one door refuse reasonably
+  believes the declaration is enforced.
+
+  Chroma offers no way to declare a width up front, and asking an embedding
+  function its width means running it --- billable, for a hosted one. So the
+  comparison happens against a row the collection already holds:
+  `ChromaVectorStore._check_stored_width` runs at `initialize` and again
+  after `add_documents`, raising and naming both widths. **This is the
+  check `pgvector` already made** against its table's declared column, so
+  it is parity rather than a new idea, and it is where a store that opened
+  now fails to open: a chroma store whose collection disagrees with its
+  config is refused at `initialize` rather than quietly serving rows of the
+  other width. The message names both widths and the only three ways out,
+  which is the migration --- correct `dimensions`, point the store at a
+  collection written at that width, or declare no width. It is silent for a
+  store that declared nothing, for an empty collection, and after one
+  agreement --- chroma fixes a collection's width at its first write and
+  enforces it across both doors, so an agreement established once cannot
+  come untrue, and a disagreement `add_documents` creates is reported after
+  that write rather than instead of it.
+
+  The two opening guards are now one call, `VectorStoreBase._guard_batch`,
+  replacing four copies of the same two calls under four copies of the same
+  eight-line comment. Emptiness before width was a property each backend
+  re-established by hand; it is now structural. Not hoisted into a concrete
+  `add_vectors` on the base: that method is `@abstractmethod` and shipped,
+  so giving it a body renames the abstract half, and an out-of-tree store
+  implementing the published name then cannot be instantiated at all.
+
+- **A chroma store that states no width no longer invents one.**
+  `ChromaVectorStoreConfig` resolved the `0` sentinel to `384` --- chroma's
+  default embedding function's width --- introduced *"matching the legacy
+  backend"*. In the legacy backend the number was **inert**: `dimensions`
+  appeared three times in that whole file, all three in the assignment
+  itself, and nothing compared it to a vector. The new guard is what turned
+  an inert default into a refusal, so keeping the value stopped preserving
+  the legacy behaviour and inverted it: a caller who declared nothing and
+  wrote their own 768-wide vectors was told `expected 384, got 768`, citing
+  a number nobody typed, on the config that states the least. `0` now means
+  undeclared here as on every other backend, and a store wanting 384
+  compared against its writes says 384. Chroma needs no declaration of its
+  own --- it pins the collection's width at the first write. The number a
+  caller reads back moves with it: `ChromaVectorStoreConfig(...).dimensions`
+  and `store.dimensions` answer `0` rather than `384` where nothing was
+  declared. Nothing inside the store read it before and nothing compares it
+  now, so that is the whole of the difference.
+
+- **BREAKING: `VectorStoreBase._validate_dimensions` now runs.** It is
+  called from `_setup`, so a width that is not a width is refused when the
+  config is read rather than at the first write. Negative and above-65536
+  are refused for every backend. `0` is refused only by a backend that
+  cannot take the width from the vectors, which says so with the new
+  `VectorStoreBase.REQUIRES_DECLARED_DIMENSIONS` class attribute: `faiss`,
+  whose index is built at `initialize` and whose `IndexFlatL2(0)` constructs
+  and then raises a bare messageless `AssertionError` on the first `add`, and
+  `pgvector`, which writes `vector(0)` into a `CREATE TABLE` and has Postgres
+  refuse the column type. Both were already failures; both now name the
+  config key instead.
+
+  Negative and above-65536 are where this refuses something that worked. On
+  the memory backend a store declaring `-1`, and one declaring `70000`,
+  each constructed, wrote three rows and searched them correctly, because
+  nothing downstream read the number; each now raises a `ValueError` naming
+  the value, at construction rather than at the first write. There is no
+  reading under which either was a width, so the migration is to state the
+  one that was meant.
+
 - **A declared `index.embedder:` beside an injected embedder is now a claim
   the registry checks, not a refusal.** The block's `model:` is compared
   against the injected embedder's `model_id` and a disagreement is refused at
@@ -38,25 +183,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `threshold:` is a raw distance in one particular model's geometry.
   Measured with the identical document either side, `threshold: 0.4` fires on
   2 of 31 rows under a fence embedder and 30 of 31 under `nomic-embed-text`.
-  The matching rule allows two omissions, because `model_id` is
-  `provider:model` and an Ollama model name carries its own tag: a document
-  may omit the provider prefix and either side may omit the `:tag`, while a
-  provider the document *does* state must agree. A block naming no `model:` is
-  refused as an unreadable claim; an embedder publishing no `model_id` warns
-  and loads, because the document is not what is wrong there.
+  The matching rule allows two omissions and **either side may make either
+  one**: the provider is a prefix and the tag is a suffix, and requiring any
+  of the four would refuse a correctly configured deployment. A provider
+  *both* sides state must agree. A block naming no `model:` is refused as an
+  unreadable claim; an embedder publishing no `model_id` warns and loads,
+  because the document is not what is wrong there.
 
-- **`SemanticIndex` reports once when a search returns a row another model
-  wrote.** The embedder's `model_id` is written on every row and the parameter
-  says what for --- *"which is what makes a stored vector's staleness judgeable
-  by something that never saw this object"* --- and no read path compared it.
-  Measured: a store built under one model and searched through another
-  returned three ranked hits, raised nothing and logged nothing at warning or
-  above. The report fires on the first disagreeing hit and once per index
-  thereafter. Its limit is stated rather than hidden: the key is legible in the
-  metadata *of a hit*, so this can only fire after a query a mismatch would
-  already have spoiled, and only on one that returned something.
+  **The published side is read every way it could be parsed, not split.**
+  `model_id` promises no format — `TextEmbedder.model_id` says so — and of
+  the three implementations here only `LLMProviderEmbedder` spells
+  `provider:model`; the knowledge-base adapter publishes `kb:<name>` and
+  `DeterministicEmbedder` a bare word. So `nomic-embed-text:latest` is a
+  tagged model under one reading and a provider and a model under another,
+  and nothing in the string decides. The document agrees when *any* reading
+  agrees. The cost of deciding, measured: a document naming the published
+  identity **verbatim** was refused for every `model_id` carrying a colon —
+  the published side was split and the document's side was not, so the two
+  halves of an identical pair were compared against each other and the
+  refusal said *"one of them is wrong about what this index holds"* of two
+  identical strings. That was the repair its own message printed.
+
+  *May omit* is not *is always ignored*: where **both** sides state a tag the
+  tags are compared. Stripping the tag from both before comparing — which is
+  how this first shipped — made `nomic-embed-text:v1.5` agree with
+  `nomic-embed-text:latest`, and those are different weights. A version bump
+  is the likeliest single change to invalidate a `threshold:` calibrated in
+  one model's geometry, so it was the one disagreement the check could not
+  see, and it is the one the check exists for.
+
+  **The block reads `model:` and `provider:`, and refuses anything else** —
+  `index:`'s own rule one level in. It bites harder here, because this block
+  is a claim rather than a spec: the registry cannot build an embedder and
+  does not try, so `dimensions: 256` or `api_base:` written here configures
+  nothing whatsoever, and a block whose `model:` is visibly checked invites
+  the reader to assume the keys beside it are too. The pair goes flat or
+  under **one** named nesting, `embedding:`, which is how `dataknobs-llm`
+  spells its own configuration; splitting it across both levels is refused,
+  since only one level is read and the other half would be dropped in
+  silence. That nesting is named rather than searched for: reading a `model:`
+  out of whichever sub-block happened to carry one made
+  `embedder: {retry: {model: ...}}` refuse a correctly configured deployment,
+  naming as the document's declared model one the document never declared.
+
+- **`SemanticIndex` compares the staleness key a search brings back, and
+  publishes what it finds as `mismatched_model_ids`.** The embedder's
+  `model_id` is written on every row and the parameter says what for ---
+  *"which is what makes a stored vector's staleness judgeable by something
+  that never saw this object"* --- and no read path compared it. Measured: a
+  store built under one model and searched through another returned three
+  ranked hits, raised nothing and logged nothing at warning or above.
+
+  **The comparison runs on what the store answered with, before any
+  `threshold`.** That ordering is the whole reach of the check rather than a
+  detail: a threshold is applied to scores, and scores computed across two
+  embedding spaces are the thing a mismatch corrupts, so an empty result list
+  is the *likeliest* presentation --- filtering first would silence the check
+  on its own headline case and hand a caller nothing but an empty list.
+
+  **The fact is handed back as well as logged**, under the name its sibling
+  already uses: `DedupResult.mismatched_model_ids` carries the same fact for
+  the same stated reason, and one name for one fact is what lets a consumer
+  who found the check on one reader find it on the other. The warning fires
+  once per index --- a mismatch is a property of the store and the embedder,
+  not of the query --- while the member accumulates every foreign name seen,
+  because *which* models wrote the rows is what decides what to re-embed.
+
+  Its limit is stated rather than hidden: the key is legible in the metadata
+  *of a hit*, so nothing can be said about a query the **store** answered with
+  nothing. Answering *what model wrote the rows in this store* without a query
+  is a larger question --- a scan on some backends, and not well posed over a
+  store several vocabularies share.
+
+- **One rule for "is this the same model?", and one reader per shape it is
+  stored in.** Publishing `MODEL_NAME_KEY` fixed the *key* being spelled at
+  each of its sites. The rule for comparing what it holds was left at each
+  site, and drifted the same way: measured against two copies of *absent is
+  unknown, otherwise exact equality*, `DedupChecker` and `SemanticIndex`
+  disagreed on two of five cases, both times on the dedup side and both times
+  into a false alarm. A row recording an empty name was named as a foreign
+  model --- an identity a caller cannot look up or re-embed against --- and an
+  embedder publishing no `model_id` reported **every** row in the store stale
+  rather than recognising it had one side of a comparison, which is the case
+  the registry handles explicitly one module over.
+
+  `is_foreign_model` is now that rule, and every site calls it: both store-row
+  readers, both `VectorTextSynchronizer` lanes and
+  `VectorSyncMixin._text_vector_is_stale`. Empty counts as unnamed on either
+  side, since `""` is what an embedder publishing nothing writes --- so a
+  sidecar or `VectorField` recording an empty `model_name` now reads as
+  unknown where it used to read as disagreement.
+
+  The shapes it is read out of stay three, because they are three: a stored
+  row's flat metadata (`row_model_name`), a `{field}_metadata` sidecar's
+  nested-or-flat one (`sidecar_model_name`, `sidecar_model_version`, moved
+  here from `vector.sync`), and a `VectorField`'s attribute. `add_records`
+  writes the flat key onto the row while the same field's own metadata carries
+  the nested one *in a single call*, so the two spellings are not alternatives
+  --- and a store row's metadata is the caller's namespace besides, with
+  `search_similar_records` promoting every unreserved key to a field of the
+  record it synthesises. A corpus of vehicles carries `model`; reading that as
+  an embedding model would warn a correctly built index that its own rankings
+  are meaningless.
+
+  `MODEL_NAME_KEY` now reaches the package door, where its declared sibling
+  `CONTENT_HASH_KEY` already was, and `MODEL_VERSION_KEY` joins it --- the
+  version key was still a literal at every site, and the reader whose
+  mis-spelling of it prompted publishing the name key in the first place was
+  spelling *that* one.
+
+  The ontology registry's `index.embedder:` comparison is deliberately not
+  this rule, and both sides now say so. There a name a person typed is on one
+  side, so the provider prefix and the version tag are things the document may
+  omit; here both sides are `model_id` values from the same mechanism, where
+  an omission is two embedders disagreeing and softening it would miss the
+  version bump a calibrated `threshold:` cannot survive.
 
 ### Documentation
+
+- **The registry guide states what happens when a `fields:` names a column
+  the rows do not fill.** The key is checked at load for *naming* something
+  an entity carries and cannot be checked for being *filled* --- a live
+  binding's projection fills whatever columns the consumer's table has, so
+  `fields: [description]` over a table without that column is a legitimate
+  document right up until the rows arrive. The page now says the stream
+  reports it instead, that the report follows the stream's close so a build
+  failing partway carries it too, and that a binding filling the field on
+  *some* rows is ordinary and is not reported.
 
 - **The registry guide names what a blank parent cell does.** `ColumnHierarchy`
   spells an edge as two `EXISTS` filters, which mean *is not null* on every
@@ -80,6 +333,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both embedders.
 
 ### Added
+
+- **`HoldingStreamDatabase`**, in `dataknobs_data.testing` -- an
+  `AsyncDatabase` whose `stream_read` acquires something at the top and
+  releases it in a `finally`, so a test can assert that a consumer closed the
+  read it opened. `held` is `1` while a read is open and `0` once it is
+  closed, which makes the assertion *at the close* rather than eventually ---
+  and eventually is what an unfixed consumer already does, so a test that
+  settles the loop first passes either way. The two backends whose reads hold
+  a real resource cannot stand in for themselves in a unit test and no other
+  backend can stand in for them: a memory backend holds nothing, so against
+  one the defect and the fix measure the same. Filters are not applied, so
+  every row reaches the consumer and a break is the consumer's own decision;
+  `limit` is, because a bounded read is where a caller most expects the
+  generator to have finished on its own.
 
 - **`OntologyRegistry.ontologies_in_play(tagged)` --- which of the vocabularies
   a registry holds a page of tagged rows is about, ranked.** It takes the tags a
@@ -366,6 +633,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the original failure, and the docstring states the partial-write semantics.
   `build()`'s return is documented as items handed to the store rather than rows
   written, which a decorator that emits several items per id makes observable.
+
+  **It also closes the stream it opened.** Every exit from the build loop but
+  the last one left the source's generator suspended, so whatever the source
+  was holding was still held while the caller decided what to do about the
+  failure, and whatever the source reports at its close arrived after the
+  caller had moved on. Both are real: `RecordFieldSource` over PostgreSQL
+  yields from inside an acquired pool connection and an open transaction, and
+  `EntitySourceIndexSource` reports an all-empty stream from a `finally`. The
+  read is driven under `aclosing_iter` now.
+
+- **`RecordFieldSource` and `MultiFieldSource` close the read they opened.**
+  The same defect one frame down, and the frame that actually holds the
+  backend's resource: a bare `async for` over `stream_read` leaves it
+  suspended when the source is closed, so the connection and its open
+  transaction -- or, on Elasticsearch, a scroll cleared in a `finally` -- are
+  released when the interpreter finalizes the generator rather than when the
+  build that opened it gave up. Closing at the build only reaches the
+  database if the source closes in turn.
 
 - **A declared `embedder:` beside an injected one is refused.** The block read
   `block["embedder"]` only when nothing was injected, so with an embedder in

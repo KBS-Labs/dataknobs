@@ -1193,3 +1193,129 @@ def test_an_evidence_free_loser_is_left_out_rather_than_given_an_invented_rung()
     ref = result.ref()
 
     assert tuple(runner.entity_id for runner in ref.runners_up) == ("b",)
+
+
+def _mixed_corpus_candidate(key: str, score: float) -> EntityCandidate[str]:
+    """One vector hit, of the kind an ``INCOMPATIBLE`` corpus is made of.
+
+    ``NORMALIZED`` and ``INFERRED``: a cosine against a stored embedding, which
+    is the only sort of number whose comparability a compatibility verdict is
+    about. A ``DECLARED`` ``1.0`` would make the same assertions pass for the
+    wrong reason -- a form either is in the vocabulary or is not, and no
+    embedder mix changes that.
+    """
+    return EntityCandidate(
+        entity_id=key,
+        score=score,
+        evidence=(
+            MatchEvidence(
+                signal="semantic",
+                kind=EvidenceKind.INFERRED,
+                score=score,
+                scoring=Scoring.NORMALIZED,
+                matched_text="gear pump",
+            ),
+        ),
+    )
+
+
+def test_a_reference_refuses_to_promote_an_order_the_result_says_is_an_artifact() -> None:
+    """``ref()``'s default subject is ``candidates[0]``, and that order is conditional.
+
+    ``ranked()`` says so in as many words -- the order *"does not survive an
+    ``INCOMPATIBLE`` corpus, where it is an artifact of the embedder mix"* --
+    and instructs a caller putting candidates in front of a person to read
+    ``compatibility`` first. ``ref()`` is the one door that reads the order
+    *for* the caller, and it reads it into something durable: a stored
+    reference names one entity as the subject and demotes the rest to
+    runners-up, which is a stronger claim than the ranking it came from.
+
+    Measured before this refusal, over the two candidates below:
+    ``as_distribution()`` answered ``None`` and ``ref()`` recorded
+    ``bilge_pump`` with nothing said. The same numbers were too incomparable
+    to divide and comparable enough to rank.
+
+    The **implicit** subject is what is refused; the explicit one is not.
+    A caller who knows which candidate they mean names it, and no order is
+    being promoted when they do.
+    """
+    mixed = ResolutionResult(
+        candidates=(
+            _mixed_corpus_candidate("bilge_pump", 0.91),
+            _mixed_corpus_candidate("gear_pump", 0.88),
+        ),
+        query="gear pump",
+        compatibility=CompatibilityVerdict.INCOMPATIBLE,
+    )
+
+    # The two readers that hand the order back rather than act on it are
+    # unchanged -- each travels beside the verdict that qualifies it.
+    assert [c.entity_id for c in mixed.ranked()] == ["bilge_pump", "gear_pump"]
+    assert mixed.as_distribution() is None
+
+    with pytest.raises(ValueError, match="INCOMPATIBLE"):
+        mixed.ref()
+
+    named = mixed.ref(entity_id="gear_pump")
+    assert named.entity_id == "gear_pump"
+    assert named.compatibility is CompatibilityVerdict.INCOMPATIBLE
+    assert tuple(runner.entity_id for runner in named.runners_up) == ("bilge_pump",)
+
+
+def test_a_sole_candidate_is_not_an_order_and_is_not_refused() -> None:
+    """One candidate under an ``INCOMPATIBLE`` corpus still answers implicitly.
+
+    The refusal above is about **promoting an order**, and a single candidate
+    is not one: nothing was ranked above anything, so the default chooses
+    nothing and the reference asserts nothing the result does not hold. The
+    verdict travels on the reference either way.
+
+    Refusing here would cost the one thing the refusal is for. The only way
+    past it would be ``ref(entity_id=result.candidates[0].entity_id)``, which
+    is the artifact spelled out longhand -- and a caller who learns that
+    incantation on a result where it is harmless will reach for it on one
+    where it is not.
+    """
+    alone = ResolutionResult(
+        candidates=(_mixed_corpus_candidate("gear_pump", 0.88),),
+        query="gear pump",
+        compatibility=CompatibilityVerdict.INCOMPATIBLE,
+    )
+
+    ref = alone.ref()
+
+    assert ref.entity_id == "gear_pump"
+    assert ref.runners_up == ()
+    assert ref.compatibility is CompatibilityVerdict.INCOMPATIBLE
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        CompatibilityVerdict.COMPATIBLE,
+        CompatibilityVerdict.UNVERIFIABLE,
+        CompatibilityVerdict.UNKNOWN,
+    ],
+)
+def test_the_other_three_verdicts_still_answer_without_being_asked_twice(
+    verdict: CompatibilityVerdict,
+) -> None:
+    """The line is at ``INCOMPATIBLE``, and this is what pins it there.
+
+    ``as_distribution()`` draws it in the same place and for the same reason:
+    ``UNKNOWN`` means nobody looked, ``UNVERIFIABLE`` means nobody could, and
+    neither is a finding that the numbers were produced by different models.
+    A refusal that fired on all three would refuse every resolution the
+    shipped cascade produces, since ``finish()`` passes ``compatibility=None``
+    and that becomes ``UNKNOWN``.
+    """
+    result = ResolutionResult(
+        candidates=(
+            _mixed_corpus_candidate("bilge_pump", 0.91),
+            _mixed_corpus_candidate("gear_pump", 0.88),
+        ),
+        query="gear pump",
+        compatibility=verdict,
+    )
+
+    assert result.ref().entity_id == "bilge_pump"

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from itertools import batched
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.hierarchy import dedupe_ordered, nodes_of, parent_edges_of
 from dataknobs_common.ontology import TAXONOMY_ROW_KEYS
@@ -312,6 +313,17 @@ class ColumnHierarchy:
         before it: the filters do the work, and the check below is what keeps
         the answer's type honest rather than a second opinion about which rows
         are edges.
+
+        **Driven under :func:`~dataknobs_common.async_iter.aclosing_iter`,
+        because the bounded branch breaks on the ordinary path.** ``limit``
+        means :meth:`contains` stops at the first edge and stops on *success*,
+        so a bare ``async for`` would leave a read suspended on every True
+        this class answers --- and a bound on the query does not finish the
+        generator either, since it is suspended at the row it was asked for
+        rather than past it. On the backends whose ``stream_read`` holds a
+        real resource across its yields that is a pooled connection inside an
+        open transaction, released when the interpreter finalizes the
+        abandoned read.
         """
         query = Query(
             filters=[
@@ -324,14 +336,15 @@ class ColumnHierarchy:
         if limit is not None:
             query = query.limit(limit)
         edges: list[_Edge] = []
-        async for record in self.database.stream_read(query):
-            child = record.get_value(self.child)
-            parent = record.get_value(self.parent)
-            if child is None or parent is None:
-                continue
-            edges.append((str(child), str(parent)))
-            if limit is not None and len(edges) >= limit:
-                break
+        async with aclosing_iter(self.database.stream_read(query)) as records:
+            async for record in records:
+                child = record.get_value(self.child)
+                parent = record.get_value(self.parent)
+                if child is None or parent is None:
+                    continue
+                edges.append((str(child), str(parent)))
+                if limit is not None and len(edges) >= limit:
+                    break
         return edges
 
     async def _edges_for(self, column: str, node_ids: Sequence[str]) -> list[_Edge]:

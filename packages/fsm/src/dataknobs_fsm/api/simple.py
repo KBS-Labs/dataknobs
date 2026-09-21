@@ -207,7 +207,7 @@ See Also:
 """
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, TypeVar
@@ -215,6 +215,7 @@ from typing import Any, Self, TypeVar
 from dataknobs_data import Record
 
 from ..core.data_modes import DataHandlingMode
+from ..functions.base import RegisteredFunction
 from ._resource_surface import ResourceSurface
 from .async_simple import AsyncSimpleFSM
 
@@ -410,7 +411,7 @@ class SimpleFSM(ResourceSurface):
         config: str | Path | dict[str, Any],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
         resources: dict[str, Any] | None = None,
-        custom_functions: dict[str, Callable] | None = None,
+        custom_functions: Mapping[str, RegisteredFunction] | None = None,
     ):
         """Initialize SimpleFSM from configuration.
 
@@ -632,7 +633,7 @@ class SimpleFSM(ResourceSurface):
 
     def process_batch(
         self,
-        data: list[dict[str, Any] | Record],
+        data: Sequence[dict[str, Any] | Record],
         batch_size: int = 10,
         max_workers: int = 4,
         on_progress: Callable | None = None,
@@ -640,8 +641,12 @@ class SimpleFSM(ResourceSurface):
     ) -> list[dict[str, Any]]:
         """Process multiple records in parallel batches synchronously.
 
+        ``data`` is a ``Sequence`` for the reason its asynchronous twin's is,
+        and because a twin pair that takes different types is one a caller
+        cannot move between.
+
         Args:
-            data: List of input records to process
+            data: Input records to process
             batch_size: Number of records per batch
             max_workers: Maximum parallel workers
             on_progress: Optional callback for progress updates
@@ -819,7 +824,7 @@ class SimpleFSM(ResourceSurface):
 
 def create_fsm(
     config: str | Path | dict[str, Any],
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
     **kwargs: Any,
 ) -> SimpleFSM:
     """Factory function to create a SimpleFSM instance.
@@ -850,7 +855,7 @@ def process_file(
     csv_has_header: bool = True,
     skip_empty_lines: bool = True,
     use_streaming: bool = False,
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
 ) -> dict[str, Any]:
     """Process a file through an FSM with automatic format detection.
 
@@ -941,7 +946,7 @@ def batch_process(
     batch_size: int = 10,
     max_workers: int = 4,
     timeout: float | None = None,
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
 ) -> list[dict[str, Any]]:
     """Process multiple records in parallel.
 

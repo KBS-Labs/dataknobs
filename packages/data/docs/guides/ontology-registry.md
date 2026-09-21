@@ -469,16 +469,27 @@ Nothing constructs an `Assertion` for a row: the edges are two columns, and the
 axis is a different backing under one taxonomy rather than a second kind of
 taxonomy.
 
-**So `parent_edges()` on this axis is always `()`, and the member that says so
-is `has_edge_annotations()`.** Not `assertions is None` — a registry builds an
-assertion source for *every* vocabulary it loads, so a column axis's source is
-empty rather than absent, and the field answers `False` for an annotated axis
-and an unannotatable one alike. Measured over one five-row tree on both
-backings, `assertions is None` is `False` both times while the edge read
-answers 0 and 1. The distinction matters to any consumer who reads the walk and
+**So `parent_edges()` on this axis is `()` unless the document also asserts
+that edge, and the member that says which is `has_edge_annotations()`.** Not
+`assertions is None` — a registry builds an assertion source for *every*
+vocabulary it loads, so a column axis's source is empty rather than absent,
+and the field answers `False` for an annotated axis and an unannotatable one
+alike. Measured over one five-row tree on both backings, `assertions is None`
+is `False` both times while the edge read answers 0 and 1. The distinction
+matters to any consumer who reads the walk and
 `ontology.assertions.find(subject=...)` together, which the anchored view's own
 published call site does: over a live binding the second half answers nothing,
 with no error between the two answers.
+
+A column axis is not, however, one on which nothing *can* be written. Its
+edges come from the table, and an assertion under the axis's relation that
+lands on one of them annotates it — measured, `parent_edges("mid")` answers 1
+for a document carrying both the parent column and `mid --parent--> root`. So
+`has_edge_annotations()` is not *is this axis column-backed*, and it is not
+*does this vocabulary hold the relation* either: two axes may share a relation,
+and a stated negation is not an annotation. It asks whether an **asserted**
+edge under this axis's relation lands on an edge of *this* axis, which is what
+`parent_edges()` reads, so the two agree by construction.
 
 **There is no `child:`.** The child column is the source's own `id:`, which is
 what keeps the axis and the entity source keyed alike by construction — the ids
@@ -835,28 +846,95 @@ model's geometry and had nowhere to name the model it was calibrated against.
 The refusal's stated reason — *cannot build the declared one to compare* — is
 about **building**, and the injected embedder already publishes `model_id`.
 
-**The matching rule is two omissions, both allowed.** `model_id` is
-`provider:model`, and an Ollama model name carries its own `:tag`, so an
-embedder publishes `ollama:nomic-embed-text:latest` where a document naturally
-writes `nomic-embed-text`. The **provider** is a prefix the document may omit;
-the **tag** is a suffix either side may omit. A provider the document *does*
-state must agree, because two providers serving a same-named model are not the
-same weights and a threshold calibrated against one means nothing against the
-other.
+**The matching rule is two omissions, and either side may make either one.**
+`LLMProviderEmbedder.model_id` is `provider:model` and an Ollama model name
+carries its own `:tag`, so that embedder publishes
+`ollama:nomic-embed-text:latest` where a document naturally writes
+`nomic-embed-text`. The **provider** is a prefix and the **tag** is a suffix,
+and requiring either of them of either side would refuse a correctly
+configured deployment.
+
+**`model_id` promises no format**, and the other two implementations in this
+workspace do not use that one: the bots knowledge-base adapter publishes
+`kb:<name>` and `DeterministicEmbedder` publishes a bare word. A consumer
+implementation wrapping an Ollama client publishes `nomic-embed-text:latest`
+— a tagged model with no provider, and the same shape as a provider and a
+model. Nothing in the string tells the two apart, so the comparison reads the
+published identity **both ways** and the document agrees when either reading
+does. A provider **both** sides state must agree, because two providers
+serving a same-named model are not the same weights and a threshold
+calibrated against one means nothing against the other; a provider only the
+document states contradicts nothing, because the embedder published none.
+
+*May omit* is not *is always ignored*. Where **both** sides state a tag the
+tags are compared, because `:v1.5` beside `:latest` is two sets of weights —
+and a version bump is the likeliest single change to invalidate a `threshold:`
+calibrated in one model's geometry, which is what this comparison is for. So
+the one disagreement a both-sides strip cannot see is the one most worth
+seeing.
 
 | The document writes | Injected `model_id` | Verdict |
 |---|---|---|
-| `model: nomic-embed-text` | `ollama:nomic-embed-text:latest` | agrees |
+| `model: nomic-embed-text` | `ollama:nomic-embed-text:latest` | agrees — the document omits the tag |
+| `model: nomic-embed-text:latest` | `ollama:nomic-embed-text` | agrees — the embedder omits it |
+| `model: nomic-embed-text` | `nomic-embed-text:latest` | agrees — the embedder publishes no provider |
+| whatever the embedder publishes, verbatim | that same `model_id` | agrees — always |
+| `model: nomic-embed-text:v1.5` | `ollama:nomic-embed-text:v1.5` | agrees — both state it, and they match |
+| `model: nomic-embed-text:v1.5` | `ollama:nomic-embed-text:latest` | **refused** — both state a tag and they differ |
 | `provider: ollama`, `model: nomic-embed-text` | `ollama:nomic-embed-text:latest` | agrees |
+| `provider: ollama`, `model: nomic-embed-text` | `nomic-embed-text:latest` | agrees — no published provider to contradict |
 | `model: mxbai-embed-large` | `ollama:nomic-embed-text:latest` | **refused** — different model |
 | `provider: openai`, `model: nomic-embed-text` | `ollama:nomic-embed-text` | **refused** — different provider |
 | `provider: ollama` alone | anything | **refused** — a claim with no model in it cannot be checked |
+
+One case the reading rule cannot judge, stated rather than left to be found:
+a document naming the published id **minus its last colon-segment** agrees —
+`model: ollama` against `ollama:nomic-embed-text`, where the whole-string
+reading treats `nomic-embed-text` as an omitted tag. That document is wrong
+and nothing here catches it, because catching it means assuming the format
+`model_id` declines to promise. Two genuinely different model names still
+disagree under every reading, which is what the comparison is for.
 
 The last row is the `metric:` precedent again: a claim the registry cannot read
 is not a claim it may pass over. An injected embedder publishing **no**
 `model_id` is the one case that warns instead of raising — the document is not
 what is wrong, `model_id` is optional on the protocol, and refusing would make
 a legitimate embedder unusable with a legitimate document.
+
+#### What the `embedder:` block reads
+
+`model:` and `provider:`, **and a key that is not one of them is refused** —
+`index:`'s own rule one level in, and it bites harder here because this block
+is a *claim* rather than a spec. The registry cannot build an embedder and
+does not try, so `dimensions: 256` or `api_base:` written here configures
+nothing whatsoever. Reading two keys and passing over the rest is the same
+silent drop the no-`model:` refusal above names as its own reason for
+existing; and a block whose `model:` is visibly checked invites the reader to
+assume the keys beside it are too.
+
+The pair may be written flat or under **one** named nesting, `embedding:`,
+which is how `dataknobs-llm` spells its own configuration:
+
+```yaml
+  index:
+    embedder:                       # flat
+      provider: ollama
+      model: nomic-embed-text
+
+  index:
+    embedder:
+      embedding:                    # or nested, and nothing beside it
+        provider: ollama
+        model: nomic-embed-text
+```
+
+One level or the other, not both. Splitting the pair —
+`embedder: {provider: ollama, embedding: {model: nomic-embed-text}}` — is
+refused, because only one level is read and the other half would be dropped
+in silence. That nesting is also named rather than searched for: reading a
+`model:` out of *whichever* sub-block happened to carry one made
+`embedder: {retry: {model: ...}}` refuse a correctly configured deployment,
+naming as the document's declared model one the document never declared.
 
 `model_id` also survives wrapping: it is a `TextEmbedder` protocol member and
 both shipped decorators forward it unchanged — the cache so a vector stored
@@ -891,7 +969,7 @@ success.
 | Key | What it does |
 |---|---|
 | `store:` | Where the vectors go. No default; resolved through `$resource` and released by `close()`. |
-| `embedder:` | A claim, checked against the injected embedder's `model_id` rather than built. Refused with nothing injected — see above. |
+| `embedder:` | A claim, checked against the injected embedder's `model_id` rather than built. Reads `model:` and `provider:`, and refuses anything else — see [what the block reads](#what-the-embedder-block-reads). Refused with nothing injected — see above. |
 | `metric:` | A claim about the store, checked rather than applied. |
 | `fields:` | Which entity fields compose the embedded text, in order. `name` and `description` are the two an entity carries free text in; anything else is refused at load. Defaults to `[name]`. |
 | `join:` | What goes between two non-empty field values. Applied *between* them, so an entity carrying one of two produces no dangling separator. Defaults to ` -- `. |
@@ -915,6 +993,25 @@ success.
     rows should take is not settled by any ruling this layer can read. Use it
     where the reader de-duplicates by id, or where the store is keyed on
     something else, until it is.
+
+!!! note "A `fields:` the rows do not fill is reported at the build, not at load"
+
+    `fields:` is checked at load for *naming* something an entity carries —
+    `name` and `description`, and nothing else. It cannot be checked for being
+    *filled*: a live binding's projection fills whatever columns the consumer's
+    table has, so `fields: [description]` over a table without that column is a
+    legitimate document right up until the rows arrive.
+
+    The stream reports it instead. Where every item a build streamed composed
+    empty text, `EntitySourceIndexSource` logs a warning naming the ontology,
+    the count, the fields and the source. What that configuration produces is
+    not an empty index — it is an index of rows equidistant from every query,
+    which is worse, because an empty index has a report and this has an answer.
+
+    **The report follows the stream's close rather than its end**, so a build
+    that fails partway carries it too and the message says the stream did not
+    finish. A binding filling the field on *some* rows is not reported: that is
+    ordinary, and so is a vocabulary holding no entities at all.
 
 **Nothing that can be refused before the store opens is refused after it.** The
 unread-key check, both embedder refusals, the source the block configures and

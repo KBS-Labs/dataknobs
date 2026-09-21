@@ -12,7 +12,7 @@ result shape.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -21,12 +21,12 @@ from dataknobs_common.records import Record
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.sources import RetrievalIntent, SemanticIndexSource
-from dataknobs_data.testing import DeterministicEmbedder
+from dataknobs_data.testing import DeterministicEmbedder, HoldingStreamDatabase
 from dataknobs_data.vector import MultiFieldSource, RecordFieldSource, SemanticIndex
 from dataknobs_data.vector.stores.memory import MemoryVectorStore
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 DIMENSIONS = 16
 
@@ -321,3 +321,41 @@ async def test_the_documented_default_threshold_is_applied_rather_than_discarded
         assert all(result.relevance >= 0.0 for result in results)
     finally:
         await store.close()
+
+
+# --------------------------------------------------------------------------
+# A source that drives a database closes what it opened
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda db: RecordFieldSource(db, "title"), id="RecordFieldSource"),
+        pytest.param(lambda db: MultiFieldSource(db, ["title", "summary"]), id="MultiFieldSource"),
+    ],
+)
+async def test_a_source_over_a_database_closes_the_read_it_opened(
+    build: Callable[[Any], Any],
+) -> None:
+    """Closing the source has to reach the read, or the connection outlives the build.
+
+    ``SemanticIndex.build`` closes the stream it opens, which is what makes
+    a failed build release what the source was holding. That only reaches
+    the database if the source closes the read it opened in turn: a bare
+    ``async for`` over ``stream_read`` leaves it suspended, so the pooled
+    connection and its open transaction are released when the interpreter
+    finalizes the generator rather than when the build gave up.
+
+    Asserted **at the close** rather than after it, because "released
+    eventually" is what the unfixed code already does.
+    """
+    from contextlib import aclosing
+
+    database = HoldingStreamDatabase(ROWS)
+    async with aclosing(build(database).stream_items()) as items:
+        async for _item in items:
+            break
+        assert database.held == 1, "the read is open while the source is being read"
+
+    assert database.held == 0, "closing the source did not close the read"

@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Union, AsyncIterator, Iterator
 import aiofiles
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_data import AsyncDatabase, Record, Query
 
 from .base import IOConfig, IOMode, IOFormat, IOProvider, AsyncIOProvider, SyncIOProvider, IOAdapter
@@ -130,14 +131,22 @@ class AsyncFileProvider(AsyncIOProvider):
             await self.file_handle.write(content + "\n")
 
     async def batch_read(self, batch_size: int | None = None, **kwargs) -> AsyncIterator[List[Any]]:
-        """Read file in batches."""
+        """Read file in batches.
+
+        Drives ``stream_read`` under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`, so closing this
+        generator closes that one. ``stream_read`` is an override point, and
+        the database sibling's holds a database read --- a rule the twins
+        state differently is one a reader cannot rely on.
+        """
         batch_size = batch_size or self.config.batch_size
         batch = []
-        async for item in self.stream_read(**kwargs):
-            batch.append(item)
-            if len(batch) >= batch_size:
-                yield batch
-                batch = []
+        async with aclosing_iter(self.stream_read(**kwargs)) as items:
+            async for item in items:
+                batch.append(item)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
         if batch:
             yield batch
 
@@ -324,13 +333,22 @@ class AsyncDatabaseProvider(AsyncIOProvider):
     async def stream_read(
         self, query: Union[str, Query] = None, **kwargs
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Stream read from database."""
+        """Stream read from database.
+
+        The database read is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`, so closing this
+        generator closes it. A consumer that takes a prefix and breaks leaves
+        this one suspended, and a bare ``async for`` does not close what it
+        was iterating --- which on a Postgres source is a pooled connection
+        inside an open transaction.
+        """
         if not self.db:
             await self.open()
         if isinstance(query, str):
             query = Query(query)  # type: ignore
-        async for record in self.db.stream_read(query):
-            yield record.to_dict()
+        async with aclosing_iter(self.db.stream_read(query)) as records:
+            async for record in records:
+                yield record.to_dict()
 
     async def stream_write(
         self, data_stream: AsyncIterator[Any], table: str = None, **kwargs
@@ -344,14 +362,20 @@ class AsyncDatabaseProvider(AsyncIOProvider):
     async def batch_read(
         self, query: Union[str, Query] = None, batch_size: int | None = None, **kwargs
     ) -> AsyncIterator[List[Dict[str, Any]]]:
-        """Read from database in batches."""
+        """Read from database in batches.
+
+        Two delegating frames over one read --- this one and ``stream_read``
+        --- so both close what they drive, or the chain breaks at whichever
+        one does not.
+        """
         batch_size = batch_size or self.config.batch_size
         batch = []
-        async for item in self.stream_read(query, **kwargs):
-            batch.append(item)
-            if len(batch) >= batch_size:
-                yield batch
-                batch = []
+        async with aclosing_iter(self.stream_read(query, **kwargs)) as items:
+            async for item in items:
+                batch.append(item)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
         if batch:
             yield batch
 

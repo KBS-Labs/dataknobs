@@ -62,7 +62,6 @@ def _build_etl(
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -234,7 +233,6 @@ async def test_gate_infrastructure_error_counts_as_error_not_reject(
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -285,7 +283,6 @@ async def test_resource_backed_gate_via_validation_resources(tmp_path: Path) -> 
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,

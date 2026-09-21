@@ -69,7 +69,6 @@ async def test_raising_transformation_counts_as_error(tmp_path: Path) -> None:
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -100,7 +99,6 @@ async def test_non_dict_transformation_return_counts_as_error(tmp_path: Path) ->
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -131,7 +129,6 @@ async def test_error_threshold_trips_on_transform_failures(tmp_path: Path) -> No
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -170,7 +167,6 @@ async def test_failed_transform_record_not_loaded_to_target(tmp_path: Path) -> N
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -233,7 +229,6 @@ async def test_checkpoint_load_failure_still_closes_fsm(tmp_path: Path) -> None:
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,

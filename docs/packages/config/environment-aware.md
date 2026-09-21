@@ -16,7 +16,8 @@ database:
 
 vector_store:
   backend: faiss
-  path: ~/data/vectors  # Local path doesn't exist in production
+  dimensions: 768
+  persist_path: ~/data/vectors  # Local path doesn't exist in production
 ```
 
 When these configs are stored and then loaded in production:

@@ -118,11 +118,10 @@ Both types can be defined as:
 3. Inline lambdas for simple checks
 
 ```python
-# Class-based validator (IValidationFunction)
-def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
-    # Validate data
-    # Return ExecutionResult with success/failure
-    return ExecutionResult.success_result(validated_data)
+# Class-based validator (IValidationFunction). `def` or `async def`.
+def validate(self, data: Any, context: FunctionContext | None = None) -> bool:
+    # False fails the record; a dict merges into it; True passes it unchanged.
+    return data.get("age", 0) >= 18
 
 # Function-based validator
 def validate(data: Dict[str, Any], context: FunctionContext) -> Dict[str, Any]:
@@ -144,22 +143,68 @@ lambda state: state.data.get('field') > threshold
   - `metadata`: State and execution metadata
   - `resources`: Available resource handles
 
-**Expected output**:
-- ExecutionResult object (for IValidationFunction)
-- Dictionary with validation results (for functions)
+**Arity**: `context` is forwarded only when the implementation declares a
+second positional parameter — so `def validate(self, data)` and
+`def validate(self, data, context=None)` both run. One reading answers that
+for every door into an FSM (`functions.base.accepts_context`), which counts
+positional parameters only: `**kwargs` is not a second positional, because the
+context is passed positionally.
+
+**Which object arrives as `data`** depends on the step, and the two are not
+the same (measured, for a *registered* implementation):
+
+| Step | receives |
+|---|---|
+| interface transform (`ITransformFunction`) | the raw record (`dict`) |
+| interface validator (`IValidationFunction`), either arity | a `StateDataWrapper` |
+| inline `lambda state: ...` | a `StateDataWrapper` |
+| plain `def fn(record, context=None)` / `def fn(record, context)` | the raw record (`dict`) |
+
+An interface transform is dispatched deterministically as `(record, context)`
+so its injected resources reach it. A validator is not, which is why the
+wrapper reaches it — harmless, since the wrapper answers as the record it
+holds, but worth knowing if the implementation is shared with a transform.
+
+A *plain* callable reached without a wrapper — one handed to
+`StateDefinition.add_transform_function` while building an FSM in code — gets
+the `StateDataWrapper` whenever it will accept a single argument, which
+includes `def fn(record, context=None)`. That question is
+`functions.base.accepts_one_argument`, and it is read from the signature. It
+used to be answered by *calling* the function and catching the failure, which
+could not distinguish a failed argument binding from a `TypeError` or
+`AttributeError` raised inside the body — so a transform with an ordinary bug
+in it was run a second time, with different arguments, after its first run had
+already done whatever it does.
+
+**What the `StateDataWrapper` is.** `state.data` is the raw record — the same
+dict the FSM holds, so mutating it mutates the record — and that is the form
+every example here uses. The wrapper is *also* a `MutableMapping` over that
+record, so `'field' in state`, `len(state)`, `for key in state`,
+`dict(state)`, `state == {...}` and `bool(state)` all answer about the record.
+Attribute access reaches the record object's own attributes, not its fields:
+`state.get(...)` and `state.keys()` are the dict's, and a field is read as
+`state.data['field']` or `state['field']`, never `state.field`.
+
+**Expected output** (`ValidationOutcome`, in `functions.base`):
+- `False` to fail the record — the only value that does
+- A dictionary, which merges into `context.data`
+- `True` or `None` to pass the record unchanged
 - Boolean or truthy value (for lambdas)
-- Returned data merges into `context.data`
 - Exceptions halt processing
+
+Not an `ExecutionResult`. Neither validator path unwraps one, so a *failing*
+`ExecutionResult` is neither `False` nor a dict and the record passes the
+gate — a validator written that way can never reject.
 
 #### Transform Functions
 
 Transforms execute after validation to modify data. Like validators, they support multiple forms:
 
 ```python
-# Class-based transform (ITransformFunction)
-def transform(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
-    # Transform data
-    return ExecutionResult.success_result(transformed_data)
+# Class-based transform (ITransformFunction). `def` or `async def`.
+def transform(self, data: Any, context: FunctionContext | None = None) -> Dict[str, Any]:
+    # The record, an ExecutionResult wrapping it, or None for "mutated in place".
+    return transformed_data
 
 # Function-based transform with state resources
 def transform(data: Dict[str, Any], context: FunctionContext) -> Dict[str, Any]:
@@ -188,11 +233,15 @@ lambda state: {**state.data, 'new_field': 'value'}
 - For inline lambdas: `state` (StateDataWrapper)
 - `context`: FunctionContext containing state-allocated resources
 
-**Expected output**:
-- ExecutionResult object (for ITransformFunction)
-- Dictionary with transformed data (for functions)
+**Arity**: as for validators above — the record is always the plain record, and
+`context` is forwarded only to an implementation that declares a second
+positional parameter.
+
+**Expected output** (`TransformOutcome`, in `functions.base`):
+- A dictionary, which becomes `context.data`
+- An `ExecutionResult`, unwrapped to its `.data` (a failing one raises)
+- `None`, meaning the record was mutated in place and is preserved
 - Dictionary or modified data (for lambdas)
-- Result replaces or updates `context.data`
 - Exceptions may trigger retry logic
 
 ### 3. Arc Evaluation and Selection
@@ -677,7 +726,7 @@ The FSM is flexible about data formats but internally ensures consistency:
 - This conversion handles:
   - Plain dictionaries → passed through unchanged
   - FSMData/StateDataWrapper → converted via `.to_dict()`
-  - Objects with `._data` or `.data` → extracted and converted
+  - Objects with a `._data` or `.data` holding a dict → that dict is extracted
   - Other objects → converted via `dict(obj)` if possible, else empty dict
 
 **Data Flow**:
@@ -694,7 +743,7 @@ def my_function(data: Dict[str, Any], context: FunctionContext):
     return {'processed': True, **data}
 ```
 
-**Important**: While the FSM accepts various input formats, functions always receive data as a **dictionary** (except inline lambdas which receive a StateDataWrapper). This ensures consistent behavior regardless of input type.
+**Important**: While the FSM accepts various input formats, functions always receive data as a **dictionary** (except inline lambdas, which receive a `StateDataWrapper` — a `MutableMapping` over that same dictionary, reachable either as `state` or as `state.data`). This ensures consistent behavior regardless of input type.
 
 ### Data in Different Execution Modes
 
@@ -967,8 +1016,11 @@ def arc_transform(data: Dict[str, Any], context: FunctionContext) -> Dict[str, A
 ```
 
 **Important Notes**:
-- The `context` parameter for class-based functions (IValidationFunction, etc.) is a plain `Dict[str, Any]` or None
-- The `context` parameter for regular functions is always a `FunctionContext` dataclass instance
+- The `context` parameter is a `FunctionContext` dataclass instance, for
+  class-based and regular functions alike — the engines build one either way.
+  The interfaces annotate it `FunctionContext | Dict[str, Any] | None` so a
+  plain dict is accepted for standalone invocation, which is what a caller
+  outside the engines may pass
 - Resources must be defined in configuration and requested by states/arcs to be available
 - Resource acquisition failures will prevent state/arc execution
 
@@ -1256,9 +1308,9 @@ The FSM supports four primary function types:
 
 **Purpose**: Verify data integrity and business rules
 
-**Interface**:
+**Interface** (`def` or `async def`; the engines await either):
 ```python
-def validate(data: Dict[str, Any], context: FunctionContext) -> Dict[str, Any]
+def validate(data: Dict[str, Any], context: FunctionContext) -> ValidationOutcome
 ```
 
 **Available Information**:
@@ -1276,9 +1328,9 @@ def validate(data: Dict[str, Any], context: FunctionContext) -> Dict[str, Any]
 
 **Purpose**: Modify, enrich, or restructure data
 
-**Interface**:
+**Interface** (`def` or `async def`; the engines await either):
 ```python
-def transform(data: Dict[str, Any], context: FunctionContext) -> Dict[str, Any]
+def transform(data: Dict[str, Any], context: FunctionContext) -> TransformOutcome
 ```
 
 **Available Information**:
@@ -1523,39 +1575,79 @@ stateDiagram-v2
 
 ### Function Error Handling
 
-Functions may encounter errors during execution:
+Functions may encounter errors during execution. Where the failure lands
+depends on which kind of function it was, because only the arc path retries:
 
 ```mermaid
 flowchart TD
-    Exec[Execute Function] --> Try[Try Execution]
-    Try --> Success{Success?}
-    Success -->|Yes| Continue[Continue]
-    Success -->|No| Retry{Retry Available?}
-    Retry -->|Yes| Delay[Delay]
-    Delay --> Try
-    Retry -->|No| HandleError[Error Handler]
-    HandleError --> Rollback{Rollback?}
-    Rollback -->|Yes| RollbackTx[Rollback Transaction]
-    Rollback -->|No| LogError[Log Error]
+    Exec[Function raises] --> Kind{Which function?}
+    Kind -->|state transform| Record[Record state + exception<br/>on the context]
+    Record --> Skip[Skip this record's<br/>remaining transforms]
+    Skip --> Traverse[Traverse on to a final state]
+    Traverse --> Fail[Report success=False<br/>with the reason]
+    Kind -->|arc transform| Deterministic{Deterministic type?}
+    Deterministic -->|yes| NoArc[Transition fails, no retry]
+    Deterministic -->|no| Retry{Attempts left?}
+    Retry -->|yes| Delay[Wait retry_delay x attempt]
+    Delay --> Exec
+    Retry -->|no| NoArc
+    Kind -->|gate: condition,<br/>pre_validator| Declined[Treated as a refusal<br/>+ logged with traceback]
+    Kind -->|validator| Continue[Run continues unchecked<br/>+ logged with traceback]
 ```
 
-**Error Categories**:
+**What actually happens, per failure site.** Measured, because the engine
+treats the sites differently and the differences matter more than the
+similarities:
 
-1. **Validation Errors**: Data doesn't meet requirements
-   - Logged and processing halts
-   - No retry attempted
+| Site | Outcome | Retried? | Written down |
+|---|---|---|---|
+| **state transform** raises | recorded against the state; traversal continues to a final state; the record reports `success: False` | no — one invocation | `ERROR` with the traceback |
+| **state transform** returns `ExecutionResult.failure_result(msg)` | same as raising, with `msg` as the reason | no | `ERROR` |
+| **arc transform** raises `TypeError` / `AttributeError` / `ValueError` / `SyntaxError` / `FunctionError` | transition fails, arc not taken | no — deterministic | error hooks fire |
+| **arc transform** raises anything else | transition fails after the last attempt | yes — `max_retries` (3) more attempts, `retry_delay × attempt` apart (**linear**, 1s / 2s / 3s by default) | error hooks fire per attempt |
+| **`pre_test`** raises `FSMValidationError` | arc unavailable — a soft reject, by design | no | — |
+| **`pre_test`** raises anything else | propagates; the record is a failed record | no | `WARNING` with the traceback |
+| **`pre_validators`** entry raises | state entry refused, exactly as a rejection | no | `WARNING` with the traceback |
+| **arc `condition`** raises | arc treated as declined | no | `WARNING` with the traceback |
+| **`validation_functions`** entry raises | run continues; the record went unchecked | no | `WARNING` with the traceback |
 
-2. **Transform Errors**: Processing failures
-   - Retry with exponential backoff
-   - Resource re-allocation attempted
+Four rows there answer `False` where the record cannot tell the difference
+between a decision and a crash, and the two `pre_test` rows disagree with
+each other about whether that is acceptable. The reasoning is written at
+`AsyncExecutionEngine._evaluate_arc_pre_test`: an infrastructure outage
+reported as a data-quality drop routes every record to the reject terminal
+and reports a clean run. That argument applies to the three rows above it
+too; they keep their current outcome, and log, so the difference is at least
+visible.
 
-3. **Resource Errors**: External system failures
-   - Circuit breaker patterns
-   - Fallback to alternate resources
+**A failing state transform does not halt the FSM.** The record still
+traverses to a final state, which is how it gets counted. What it does stop
+is *further transforms for that record*: the remaining transforms of the
+failing state and every downstream state's transforms are skipped, so an
+ETL `load` step does not upsert the record the `transform` step left
+half-built. A state declared `run_on_failure: true` is exempt — that is the
+recovery / compensation / dead-letter hook, and its transforms run anyway.
 
-4. **System Errors**: Infrastructure issues
-   - Transaction rollback
-   - State recovery attempted
+**The reason survives.** `context.failed_states` is the set of states that
+failed and `context.transform_errors` maps each to the exception that failed
+it, and both are unioned into the parent when a parallel sub-path merges.
+Every surface that reports the failure names the reason with it:
+
+```python
+result = await fsm.process(record)
+# {'success': False,
+#  'error': "State transform failed in: work (ValueError: no 'name' column)",
+#  'final_state': 'done', ...}
+```
+
+**What the engine does not do.** There is no circuit breaker and no fallback
+to an alternate resource in the execution path — `patterns.error_recovery`
+ships a `CircuitBreaker` a configuration opts into, and it is not wired into
+state or arc execution. `ExecutionContext.rollback_transaction()` is not
+called by the engine on failure; the context's transaction methods maintain
+an in-memory logical record and atomicity belongs to the backend (see the
+method's own docstring). A failed *push arc* is the exception: it is rolled
+back, by `rollback_push`.
 
 ### Transaction Management
 

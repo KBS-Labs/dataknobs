@@ -8,6 +8,7 @@ from __future__ import annotations
 import concurrent.futures
 from typing import TYPE_CHECKING
 
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.callbacks import run_callback
 
 from dataknobs_data.query import Query
@@ -370,48 +371,58 @@ class Migrator:
         async def transform_stream(
             records: AsyncIterator[Record],
         ) -> AsyncIterator[Record]:
-            """Apply transformation to async streaming records."""
-            async for record in records:
-                # Count `processed` exactly once per record, at the point its
-                # outcome is decided: a yield below (pass-through), record_skip
-                # (filtered), or record_failure (transform error). record_skip
-                # and record_failure both increment `processed`, so a
-                # pre-increment here double-counted filtered / errored records.
-                try:
-                    if transform is not None:
-                        if isinstance(transform, Transformer):
-                            original_id = record.id  # Preserve ID before transformation
-                            transformed = transform.transform(record)
-                            if transformed:
+            """Apply transformation to async streaming records.
+
+            Drives *records* under
+            :func:`~dataknobs_common.async_iter.aclosing_iter`, so closing
+            this generator closes the source read below it. Two paths walk
+            away from the read: the re-raise below, and a target that stops
+            consuming --- ``async_run_stream_write`` breaks out on a failed
+            batch, which is the ordinary way a migration ends badly.
+            """
+            async with aclosing_iter(records) as source_records:
+                async for record in source_records:
+                    # Count `processed` exactly once per record, at the point its
+                    # outcome is decided: a yield below (pass-through), record_skip
+                    # (filtered), or record_failure (transform error). record_skip
+                    # and record_failure both increment `processed`, so a
+                    # pre-increment here double-counted filtered / errored records.
+                    try:
+                        if transform is not None:
+                            if isinstance(transform, Transformer):
+                                original_id = record.id  # Preserve ID before transformation
+                                transformed = transform.transform(record)
+                                if transformed:
+                                    progress.processed += 1
+                                    yield transformed
+                                else:
+                                    progress.record_skip("Filtered by transformer", original_id)
+                            elif isinstance(transform, Migration):
+                                applied = transform.apply(record)
                                 progress.processed += 1
-                                yield transformed
-                            else:
-                                progress.record_skip("Filtered by transformer", original_id)
-                        elif isinstance(transform, Migration):
-                            applied = transform.apply(record)
+                                yield applied
+                        else:
                             progress.processed += 1
-                            yield applied
-                    else:
-                        progress.processed += 1
-                        yield record
-                except Exception as e:
-                    if config.on_error and config.on_error(e, record):
-                        progress.record_failure(
-                            str(e), record.id if hasattr(record, "id") else None, e
-                        )
-                        continue
-                    else:
-                        progress.record_failure(
-                            str(e), record.id if hasattr(record, "id") else None, e
-                        )
-                        raise
+                            yield record
+                    except Exception as e:
+                        if config.on_error and config.on_error(e, record):
+                            progress.record_failure(
+                                str(e), record.id if hasattr(record, "id") else None, e
+                            )
+                            continue
+                        else:
+                            progress.record_failure(
+                                str(e), record.id if hasattr(record, "id") else None, e
+                            )
+                            raise
 
-        # Stream from source through transformation to target
-        source_stream = source.stream_read(query, config)
-        transformed_stream = transform_stream(source_stream)
-
-        # Write stream to target
-        result = await target.stream_write(transformed_stream, config)
+        # Stream from source through transformation to target. The source read
+        # is this frame's, so this frame is what closes it: `stream_write` is
+        # handed an iterator it did not open, and it stops consuming on a
+        # failed batch.
+        async with aclosing_iter(transform_stream(source.stream_read(query, config))) as stream:
+            # Write stream to target
+            result = await target.stream_write(stream, config)
 
         # Update progress from result
         # Note: processed was already tracked in transform_stream

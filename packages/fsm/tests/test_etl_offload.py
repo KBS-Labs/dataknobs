@@ -55,7 +55,6 @@ def _etl(src: Path, tgt: Path) -> DatabaseETL:
         ETLConfig(
             source_db={"type": "file", "path": str(src)},
             target_db={"type": "file", "path": str(tgt)},
-            source_query=None,  # -> Query() (all rows); the default is a SQL string
             target_table="t",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,

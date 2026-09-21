@@ -52,6 +52,8 @@ from .providers import (
     LLMProviderFactory,
     create_llm_provider,
     create_embedding_provider,
+    FLAT_EMBEDDING_PASSTHROUGHS,
+    reads_nested_embedding,
     create_caching_provider,
 )
 from .utils import (
@@ -106,6 +108,8 @@ __all__ = [
     "LLMProviderFactory",
     "create_llm_provider",
     "create_embedding_provider",
+    "reads_nested_embedding",
+    "FLAT_EMBEDDING_PASSTHROUGHS",
     "create_text_embedder",
     "LLMProviderEmbedder",
     "create_caching_provider",

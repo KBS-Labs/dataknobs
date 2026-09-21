@@ -30,6 +30,7 @@ from dataknobs_common.capabilities import (
     CapabilityNotSupportedError,
     DynamicCapabilityMixin,
 )
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import Entity, SourceDescription, SourceRef
 from dataknobs_common.text import default_normalizer
@@ -824,18 +825,28 @@ class RecordEntitySource(DynamicCapabilityMixin):
         would not have served: past ``index.max_result_window`` a ``from``/
         ``size`` page *errors* rather than truncating, which is why that
         backend's streaming door does not use one.
+
+        **Driven under :func:`~dataknobs_common.async_iter.aclosing_iter`**,
+        which is the rule for a read this frame opened rather than a claim
+        that this scan gives up often. It exhausts the read on every path it
+        has a say in; what it does not have a say in is a row that will not
+        project --- an id whose value raises on read or on ``str`` --- and
+        that abandons the generator mid-scan, leaving whatever it held until
+        the interpreter finalizes it. Cancellation does not: it lands inside
+        the read's own ``await``, so the read runs its own cleanup.
         """
         if type_id != self._projection.const_type:
             return frozenset()
         narrowing = self.entity_filters()
         query = Query(filters=narrowing) if narrowing else None
-        return frozenset(
-            {
-                str(local_id)
-                async for record in self._db.stream_read(query)
-                if (local_id := record.get_value(self._projection.id)) is not None
-            }
-        )
+        async with aclosing_iter(self._db.stream_read(query)) as records:
+            return frozenset(
+                {
+                    str(local_id)
+                    async for record in records
+                    if (local_id := record.get_value(self._projection.id)) is not None
+                }
+            )
 
     def longest_form_tokens(self) -> int | None:
         """What the binding declared, or None where it declared nothing.

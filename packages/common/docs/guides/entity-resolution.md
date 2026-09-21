@@ -213,6 +213,14 @@ cascade positions by rung rather than by number. It does *not* survive an
 `INCOMPATIBLE` corpus, so a caller putting candidates in front of a person
 reads `compatibility` first.
 
+`ResolutionResult.ref()` is where that stops being advice. It is the one
+member that *acts* on the order rather than handing it back — its default
+subject is the first candidate — and what it produces is a stored
+`ResolutionRef` that outlives the result and names one entity while demoting
+the rest. So over an `INCOMPATIBLE` corpus there is no default: it raises, and
+asks for `entity_id=` naming which candidate the reference is of. One
+candidate is not an order and is not refused.
+
 ## When the query does not spell the form
 
 Every rung above answers a **lookup**: the form is in the vocabulary or it is

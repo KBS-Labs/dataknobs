@@ -148,6 +148,12 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
 
     CONFIG_CLS: ClassVar[type[PgVectorStoreConfig]] = PgVectorStoreConfig
 
+    # ``CREATE TABLE ... embedding vector(N)`` runs at ``initialize`` and N
+    # is ``self.dimensions``. Left undeclared it is ``vector(0)``, which
+    # Postgres refuses as a column type --- the right verdict, reported
+    # against the generated DDL rather than against the config key.
+    REQUIRES_DECLARED_DIMENSIONS: ClassVar[bool] = True
+
     # Invariant, so a ClassVar rather than the per-instance computation the
     # persisted backends need: :meth:`create_index` is a real verb on every
     # pgvector store. A store configured ``index_type: none`` still honours
@@ -868,15 +874,10 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
         """
         pool = await self._ready_pool()
 
-        # An empty batch is a no-op, not an error: see
-        # ``VectorStoreBase._is_empty_batch``.
-        if self._is_empty_batch(vectors):
+        # An empty batch is a no-op and a mis-sized one is an error, in
+        # that order: see ``VectorStoreBase._guard_batch``.
+        if self._guard_batch(vectors):
             return []
-
-        # The batch's width against the one this store declares: see
-        # ``VectorStoreBase._check_batch_width``. After the emptiness
-        # guard, because an empty batch has no first vector.
-        self._check_batch_width(vectors)
 
         # Prepare vectors
         vectors = self._prepare_vector(vectors, normalize=(self.metric == DistanceMetric.COSINE))

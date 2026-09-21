@@ -17,6 +17,7 @@ raw configuration with optional custom functions.
 import importlib
 import inspect
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Callable, Dict, List, Type
 
 from dataknobs_common.callbacks import is_async_callable
@@ -40,23 +41,16 @@ from dataknobs_fsm.core.state import StateDefinition, StateSchema, StateType
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import (
-    IEndStateTestFunction,
+    INTERFACE_METHODS,
     IStateTestFunction,
     ITransformFunction,
     IValidationFunction,
+    RegisteredFunction,
+    accepts_context,
 )
 from dataknobs_fsm.resources.base import IResourceProvider
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.functions.manager import FunctionManager, FunctionSource
-
-
-# Interface -> the method the engine ultimately invokes on a function instance.
-_INTERFACE_METHODS: Dict[type, str] = {
-    ITransformFunction: "transform",
-    IValidationFunction: "validate",
-    IStateTestFunction: "test",
-    IEndStateTestFunction: "should_end",
-}
 
 
 class _ResolvedLibraryFunction:
@@ -85,31 +79,12 @@ class _ResolvedLibraryFunction:
         # Read by AsyncExecutionEngine._is_interface_transform to dispatch the
         # deterministic (dict, context) signature for transforms.
         self.interface = interface
-        self._method_name = _INTERFACE_METHODS[interface]
+        self._method_name = INTERFACE_METHODS[interface]
         self._impl = getattr(instance, self._method_name)
-        self._accepts_context = self._impl_accepts_context(self._impl)
+        self._accepts_context = accepts_context(self._impl)
         self.__name__ = type(instance).__name__
         # Tell FSMBuilder._resolve_function not to re-wrap this object.
         self._is_wrapped = True
-
-    @staticmethod
-    def _impl_accepts_context(impl: Callable) -> bool:
-        """Whether the library method takes the execution context beyond ``data``.
-
-        Library functions are a mix of ``transform(self, data)`` (1-arg) and
-        ``transform(self, data, context=None)`` (2-arg). ``impl`` is a bound
-        method, so ``self`` is already excluded from the signature.
-        """
-        try:
-            params = list(inspect.signature(impl).parameters.values())
-        except (TypeError, ValueError):
-            return True
-        if any(
-            p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-            for p in params
-        ):
-            return True
-        return len(params) >= 2
 
     def _invoke(self, data: Any, context: Any) -> Any:
         plain = ensure_dict(data)
@@ -199,7 +174,7 @@ class _AsyncResolvedLibraryFunction(_ResolvedLibraryFunction):
 class FSMBuilder:
     """Build executable FSM instances from configuration."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the FSMBuilder."""
         self._resource_manager = ResourceManager()
         self._function_manager = FunctionManager()
@@ -275,7 +250,7 @@ class FSMBuilder:
         # Return the core FSM directly
         return fsm
 
-    def register_function(self, name: str, func: Callable) -> None:
+    def register_function(self, name: str, func: RegisteredFunction) -> None:
         """Register a custom function.
 
         Args:
@@ -487,19 +462,19 @@ class FSMBuilder:
             schema = self._build_schema(state_config.data_schema)
 
         # Resolve pre-validators
-        pre_validators = []
+        pre_validators: List[RegisteredFunction] = []
         for func_ref in state_config.pre_validators:
             pre_validator = self._resolve_function(func_ref, IValidationFunction)
             pre_validators.append(pre_validator)
 
         # Resolve validators
-        validators = []
+        validators: List[RegisteredFunction] = []
         for func_ref in state_config.validators:
             validator = self._resolve_function(func_ref, IValidationFunction)
             validators.append(validator)
 
         # Resolve transforms
-        transforms = []
+        transforms: List[RegisteredFunction] = []
         for func_ref in state_config.transforms:
             transform = self._resolve_function(func_ref, ITransformFunction)
             transforms.append(transform)
@@ -757,7 +732,7 @@ class FSMBuilder:
             an instance of ``expected_type`` (caller falls back to its standard
             wrapper path).
         """
-        if expected_type not in _INTERFACE_METHODS:
+        if expected_type not in INTERFACE_METHODS:
             return None
         kwargs = params or {}
         if inspect.isclass(raw):
@@ -768,7 +743,7 @@ class FSMBuilder:
             # A keyword factory function (e.g. transformers.map_fields). Calling
             # it with the configured params yields the FSM-function instance.
             instance = raw(**kwargs)
-        if not isinstance(instance, tuple(_INTERFACE_METHODS)):
+        if not isinstance(instance, tuple(INTERFACE_METHODS)):
             return None
         # A custom class may implement the interface method as ``async def``;
         # pick the async adapter so the engine awaits it rather than storing an
@@ -781,7 +756,7 @@ class FSMBuilder:
         # synchronous. That is the sync adapter over an async implementation,
         # which is exactly the un-awaited coroutine this branch exists to
         # prevent. A missing method answers `False` either way.
-        impl = getattr(instance, _INTERFACE_METHODS[expected_type], None)
+        impl = getattr(instance, INTERFACE_METHODS[expected_type], None)
         adapter_cls = (
             _AsyncResolvedLibraryFunction if is_async_callable(impl) else _ResolvedLibraryFunction
         )
@@ -1002,7 +977,7 @@ class FSMBuilder:
 
 def build_fsm(
     config: str | Path | dict[str, Any],
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
 ) -> CoreFSMClass:
     """Build an FSM from configuration with custom functions registered.
 

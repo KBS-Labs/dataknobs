@@ -54,6 +54,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from dataknobs_common.async_iter import aclosing_iter
+
 from .query import Filter, Operator, Query
 from .records import Record
 
@@ -304,17 +306,28 @@ class AsyncKeyedRecordStore(Generic[T]):
         filter_metadata: Mapping[str, Any] | None = None,
         config: StreamConfig | None = None,
     ) -> AsyncIterator[T]:
-        """Stream values matching the supplied filters one at a time."""
+        """Stream values matching the supplied filters one at a time.
+
+        The read is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`, so closing this
+        generator closes the database's. A consumer that takes a prefix and
+        breaks leaves this one suspended, and a bare ``async for`` does not
+        close what it was iterating --- which on a backend whose
+        ``stream_read`` holds a pooled connection across its yields is the
+        connection held until the interpreter finalizes the abandoned read.
+        """
         q: Query | None = None
         if filter_data or filter_metadata:
             q = _build_query(filter_data=filter_data, filter_metadata=filter_metadata)
-        async for record in self._db.stream_read(q, config):
-            # async-dispatch-exempt: the deserializer is half of a sync-only pair shared
-            # with SyncKeyedRecordStore. Both stores route every write through the module-
-            # level `_build_record`, which is a plain `def` and so pins the serializer
-            # synchronous; a consumer's `deserializer=from_record` has to work unchanged in
-            # the twin that cannot await. Widening only this half would split one contract.
-            yield self._deserializer(record)
+        async with aclosing_iter(self._db.stream_read(q, config)) as records:
+            async for record in records:
+                # async-dispatch-exempt: the deserializer is half of a sync-only pair shared
+                # with SyncKeyedRecordStore. Both stores route every write through the
+                # module-level `_build_record`, which is a plain `def` and so pins the
+                # serializer synchronous; a consumer's `deserializer=from_record` has to
+                # work unchanged in the twin that cannot await. Widening only this half
+                # would split one contract.
+                yield self._deserializer(record)
 
     async def search(self, query: Query) -> Sequence[Record]:
         """Escape hatch for ``Query`` / ``ComplexQuery`` / vector scores.

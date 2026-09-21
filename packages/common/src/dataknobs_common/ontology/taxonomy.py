@@ -444,28 +444,54 @@ class Taxonomy(Generic[K]):
 
         **Named for what it measures, not for how the axis was bound.** The
         provenance question --- *was this bound live or derived from
-        assertions* --- is the tempting one and it is the wrong one: a
-        ``materialization.structure: materialized`` copy of an assertion axis
-        is *bound*, and its edges are still assertions. What decides whether
-        an edge here can ever carry an annotation is whether this vocabulary
-        holds an assertion under this axis's **relation**, which is what this
-        asks.
+        assertions* --- is the tempting one and it is the wrong one, in both
+        directions. A ``materialization.structure: materialized`` copy of an
+        assertion axis is *bound*, and its edges are still assertions; and a
+        ``kind: column`` axis is **not** an axis on which nothing can be
+        written --- its edges come from the table, but an assertion landing
+        on one of them annotates it, measured at 1. So the backing does not
+        decide this and neither does the relation alone.
+
+        **What decides it is what :meth:`TaxonomyView.parent_edges` reads**,
+        so this is defined by asking that, and the two cannot drift. An
+        annotated edge needs an **asserted** assertion under this relation
+        whose subject is a node of *this axis* and whose object is a parent
+        of that subject *here*. Narrowing only by relation missed both
+        halves, and each miss was the wrong answer in the direction the
+        member exists to prevent --- ``True`` for an axis whose every edge
+        is bare:
+
+        - **Polarity.** The bare ``relation=`` read counted a ``NEGATED``
+          assertion, which states that an edge does *not* hold.
+          :func:`~dataknobs_common.ontology.hierarchy.edge_criteria` exists
+          to stop exactly that, warning that *"a query that does not narrow
+          returns a stated negation as an edge"*; this read was the reader
+          added later that omitted it.
+        - **The axis.** Two axes may share a relation --- a live column axis
+          landing beside a legacy assertion axis over the same edge name is
+          what a migration looks like --- and an assertion belonging to the
+          other one answered for this one.
 
         It is a **read**, and a diagnostic rather than a hot path: a caller
-        asks it once about an axis, not once per edge. The protocol offers no
-        cheaper probe than ``find(relation=...)``, and an assertion source is
-        the document's own assertions in every door this package ships.
+        asks it once about an axis, not once per edge. The scan is over the
+        assertions under this relation rather than over the axis's nodes,
+        because the former is the smaller set wherever the question is
+        interesting, and it stops at the first annotated edge it finds.
 
         Returns:
             ``False`` when this axis carries no assertion source at all, and
-            when the source holds nothing under :attr:`definition`'s relation.
-            ``True`` when it holds at least one --- which does not promise
-            that any *particular* edge is annotated, only that the axis is the
-            kind of axis on which one could be.
+            when no asserted edge under :attr:`definition`'s relation lands
+            on an edge of this axis. ``True`` when one does --- which does
+            not promise that any *particular* edge is annotated, only that
+            this is an axis on which one is.
         """
         if self.assertions is None:
             return False
-        return bool(self.assertions.find(relation=self.definition.relation))
+        written = self.assertions.find(**edge_criteria(self.definition.relation))
+        for subject in dict.fromkeys(assertion.subject for assertion in written):
+            if self.structure.contains(subject) and self.at(subject).parent_edges():
+                return True
+        return False
 
     def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
         """Every attribute declaration ``entity_type`` may be asked for, nearest first.
@@ -558,28 +584,54 @@ class AsyncTaxonomy(Generic[K]):
 
         **Named for what it measures, not for how the axis was bound.** The
         provenance question --- *was this bound live or derived from
-        assertions* --- is the tempting one and it is the wrong one: a
-        ``materialization.structure: materialized`` copy of an assertion axis
-        is *bound*, and its edges are still assertions. What decides whether
-        an edge here can ever carry an annotation is whether this vocabulary
-        holds an assertion under this axis's **relation**, which is what this
-        asks.
+        assertions* --- is the tempting one and it is the wrong one, in both
+        directions. A ``materialization.structure: materialized`` copy of an
+        assertion axis is *bound*, and its edges are still assertions; and a
+        ``kind: column`` axis is **not** an axis on which nothing can be
+        written --- its edges come from the table, but an assertion landing
+        on one of them annotates it, measured at 1. So the backing does not
+        decide this and neither does the relation alone.
+
+        **What decides it is what :meth:`TaxonomyView.parent_edges` reads**,
+        so this is defined by asking that, and the two cannot drift. An
+        annotated edge needs an **asserted** assertion under this relation
+        whose subject is a node of *this axis* and whose object is a parent
+        of that subject *here*. Narrowing only by relation missed both
+        halves, and each miss was the wrong answer in the direction the
+        member exists to prevent --- ``True`` for an axis whose every edge
+        is bare:
+
+        - **Polarity.** The bare ``relation=`` read counted a ``NEGATED``
+          assertion, which states that an edge does *not* hold.
+          :func:`~dataknobs_common.ontology.hierarchy.edge_criteria` exists
+          to stop exactly that, warning that *"a query that does not narrow
+          returns a stated negation as an edge"*; this read was the reader
+          added later that omitted it.
+        - **The axis.** Two axes may share a relation --- a live column axis
+          landing beside a legacy assertion axis over the same edge name is
+          what a migration looks like --- and an assertion belonging to the
+          other one answered for this one.
 
         It is a **read**, and a diagnostic rather than a hot path: a caller
-        asks it once about an axis, not once per edge. The protocol offers no
-        cheaper probe than ``find(relation=...)``, and an assertion source is
-        the document's own assertions in every door this package ships.
+        asks it once about an axis, not once per edge. The scan is over the
+        assertions under this relation rather than over the axis's nodes,
+        because the former is the smaller set wherever the question is
+        interesting, and it stops at the first annotated edge it finds.
 
         Returns:
             ``False`` when this axis carries no assertion source at all, and
-            when the source holds nothing under :attr:`definition`'s relation.
-            ``True`` when it holds at least one --- which does not promise
-            that any *particular* edge is annotated, only that the axis is the
-            kind of axis on which one could be.
+            when no asserted edge under :attr:`definition`'s relation lands
+            on an edge of this axis. ``True`` when one does --- which does
+            not promise that any *particular* edge is annotated, only that
+            this is an axis on which one is.
         """
         if self.assertions is None:
             return False
-        return bool(await self.assertions.find(relation=self.definition.relation))
+        written = await self.assertions.find(**edge_criteria(self.definition.relation))
+        for subject in dict.fromkeys(assertion.subject for assertion in written):
+            if await self.structure.contains(subject) and await self.at(subject).parent_edges():
+                return True
+        return False
 
     async def walk(
         self,

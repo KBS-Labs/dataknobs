@@ -7,7 +7,7 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Dict, List, Tuple
 
 from dataknobs_common.callbacks import run_callback_off_loop
@@ -28,6 +28,8 @@ from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
 from dataknobs_fsm.functions.base import as_state_test_callable
+from dataknobs_fsm.functions.base import state_step_args
+from dataknobs_fsm.functions.base import RegisteredFunction
 from dataknobs_fsm.core.data_wrapper import ensure_dict
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         max_retries: int = 3,
         retry_delay: float = 1.0,
         enable_hooks: bool = True,
-        custom_functions: dict[str, Callable] | None = None,
+        custom_functions: Mapping[str, RegisteredFunction] | None = None,
     ):
         """Initialize async execution engine.
 
@@ -69,7 +71,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         self._pre_transition_hooks: list[Callable] = []
         self._post_transition_hooks: list[Callable] = []
         self._error_hooks: list[Callable] = []
-        self._custom_functions: dict[str, Callable] = custom_functions or {}
+        self._custom_functions: Mapping[str, RegisteredFunction] = custom_functions or {}
 
     async def _fire_hooks(self, hooks: list[Callable], *args: Any) -> None:
         """Fire a list of hooks, awaiting async hooks.
@@ -87,8 +89,17 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 result = hook(*args)
                 if inspect.isawaitable(result):
                     await result
-            except Exception:
-                pass  # Hooks must not break execution
+            except Exception as exc:
+                # Hooks must not break execution, and this one still does not.
+                # It is written down because a monitoring hook that has
+                # silently stopped working is indistinguishable from a run
+                # with nothing to report.
+                logger.warning(
+                    "Execution hook %s raised and was ignored: %s",
+                    getattr(hook, "__name__", hook),
+                    exc,
+                    exc_info=exc,
+                )
 
     def _get_merged_functions(self) -> dict[str, Any]:
         """Return FSM function registry merged with custom functions.
@@ -1059,8 +1070,23 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     return False
                 if isinstance(result, dict):
                     context.data.update(result)
-            except Exception:
-                # Any error in a pre-validator fails validation (parity w/ sync).
+            except Exception as exc:
+                # Any error in a pre-validator fails validation (parity w/ sync),
+                # which makes a gate with a bug in it indistinguishable from a
+                # gate that rejected the record: a valid record is turned away
+                # and the reason is the validator, not the data. The outcome is
+                # left as it is -- propagating instead would change what happens
+                # to every record a broken gate sees -- but the reason is now
+                # written down, as _evaluate_arc_pre_test already does for the
+                # same shape one layer out.
+                logger.warning(
+                    "Pre-validator %s raised in state '%s'; the record is "
+                    "refused entry as if it had been rejected: %s",
+                    getattr(validator_func, "__name__", validator_func),
+                    state_name,
+                    exc,
+                    exc_info=exc,
+                )
                 return False
         return True
 
@@ -1103,22 +1129,36 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     # arm, because the async judgement was made above it.
                     # `run_callback_off_loop` makes that judgement inside the
                     # dispatch, so the state-object-first / (data, context)
-                    # fallback is written once and cannot drift between the
-                    # two shapes of validator.
-                    try:
-                        result = await run_callback_off_loop(validator.validate, state_obj)
-                    except (TypeError, AttributeError):
-                        # Fall back to standard signature
-                        result = await run_callback_off_loop(
-                            validator.validate, ensure_dict(context.data), context
-                        )
+                    # choice is written once and cannot drift between the two
+                    # shapes of validator. `state_step_args` then makes that
+                    # choice by reading the signature: this loop swallows every
+                    # exception, so a body that raised `TypeError` used to be
+                    # re-run with other arguments and fail again in silence,
+                    # with the record still reported as a success.
+                    args = state_step_args(
+                        validator.validate,
+                        state_obj=state_obj,
+                        record=ensure_dict(context.data),
+                        context=context,
+                    )
+                    result = await run_callback_off_loop(validator.validate, *args)
 
                     if isinstance(result, dict):
                         # Merge validation results into context data
                         context.data.update(result)
-                except Exception:
-                    # Log but don't fail - validators are optional
-                    pass
+                except Exception as exc:
+                    # Validators are optional, so this does not fail the run.
+                    # It is logged because a validator that raised is not a
+                    # validator that passed: the record it was written to
+                    # check went unchecked, and without this the two outcomes
+                    # are indistinguishable from anywhere.
+                    logger.warning(
+                        "Validation function failed in state '%s'; the record "
+                        "was not checked by it: %s",
+                        state_name,
+                        exc,
+                        exc_info=exc,
+                    )
 
         if not transform_functions:
             return
@@ -1251,11 +1291,18 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             data = ensure_dict(context.data)
             return await run_callback_off_loop(actual_func, data, func_context)
 
-        # Non-interface callable: state_obj first, fall back to (data, context).
-        try:
-            return await run_callback_off_loop(actual_func, state_obj)
-        except (TypeError, AttributeError):
-            return await run_callback_off_loop(actual_func, ensure_dict(context.data), func_context)
+        # Non-interface callable: the state object when it will take it alone,
+        # otherwise (record, context). Read from the signature rather than
+        # discovered by calling and catching: an `except TypeError` cannot tell
+        # a failed *binding* from a failed *body*, so a transform with an
+        # ordinary bug in it was run a second time with different arguments.
+        args = state_step_args(
+            actual_func,
+            state_obj=state_obj,
+            record=ensure_dict(context.data),
+            context=func_context,
+        )
+        return await run_callback_off_loop(actual_func, *args)
 
     def _build_function_context(
         self,

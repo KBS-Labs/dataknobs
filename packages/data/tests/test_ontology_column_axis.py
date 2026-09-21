@@ -1107,6 +1107,92 @@ async def test_an_axis_whose_document_declares_no_assertion_for_it_says_so() -> 
         await registry.close()
 
 
+async def test_an_assertion_elsewhere_under_the_same_relation_is_not_this_axis_edge() -> None:
+    """Two axes may share a relation, and then the relation alone decides nothing.
+
+    The pair above uses a *different* relation for each axis, so a member
+    reading the whole source narrowed only by relation answers correctly
+    there by luck. Share the relation --- which is the shape a migration
+    takes, a live column axis landing beside a legacy assertion axis over
+    the same edge name --- and the relation probe answers ``True`` for an
+    axis on which ``parent_edges()`` is ``()`` for every node and always
+    will be. That is the exact wrong answer the member exists to prevent,
+    now given by the member itself.
+
+    The assertion here names entities that are not an edge of this axis at
+    all, so nothing about this vocabulary makes an annotated edge reachable.
+    """
+    document = _document(
+        assertions=[{"subject": "unrelated", "relation": "parent", "object": "elsewhere"}],
+    )
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=await _store()
+    )
+    try:
+        axis = (await registry.load()).taxonomy("categories")
+        assert await axis.at("mid").parent_edges() == ()
+        assert await axis.at("leaf").parent_edges() == ()
+        assert await axis.has_edge_annotations() is False
+    finally:
+        await registry.close()
+
+
+async def test_a_stated_negation_is_not_an_annotation() -> None:
+    """``edge_criteria`` narrows on polarity and this read did not.
+
+    An axis is made of edges that are **asserted**: ``edge_criteria`` pins
+    that in one place precisely because *"writing ``polarity=`` at each site
+    is how a reader added later omits it silently, and a query that does not
+    narrow returns a stated negation as an edge."* This member was that
+    reader. A document whose only assertion under the relation is a
+    ``NEGATED`` one --- *this edge does not hold*, a fact in its own right
+    --- has nothing written on any edge, and ``parent_edges()`` agrees; the
+    probe answered ``True``.
+    """
+    document = _document(
+        assertions=[
+            {"subject": "mid", "relation": "parent", "object": "root", "polarity": "negated"}
+        ],
+    )
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=await _store()
+    )
+    try:
+        axis = (await registry.load()).taxonomy("categories")
+        assert await axis.at("mid").parent_edges() == ()
+        assert await axis.has_edge_annotations() is False
+    finally:
+        await registry.close()
+
+
+async def test_a_column_axis_whose_edge_is_annotated_says_yes() -> None:
+    """The positive control, and the reason the fix is not *is it column-backed*.
+
+    A ``kind: column`` axis is **not** an axis on which nothing can be
+    written. Its edges come from the table, but an assertion lining up with
+    one of them annotates it, and ``parent_edges()`` returns it --- measured
+    here at 1. So deciding the question on the axis's backing would answer
+    ``False`` for an axis that demonstrably carries an annotation, which is
+    the same class of wrong answer in the other direction.
+
+    What decides it is whether an asserted edge under this relation lands on
+    a structural edge *of this axis*, which is what ``parent_edges()`` reads
+    and therefore what this must agree with.
+    """
+    document = _document(
+        assertions=[{"subject": "mid", "relation": "parent", "object": "root"}],
+    )
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=await _store()
+    )
+    try:
+        axis = (await registry.load()).taxonomy("categories")
+        assert len(await axis.at("mid").parent_edges()) == 1
+        assert await axis.has_edge_annotations() is True
+    finally:
+        await registry.close()
+
+
 def test_the_synchronous_twin_answers_the_same_question() -> None:
     """A sync vocabulary is the flavour a consumer reaches first, and it has axes too."""
     from dataknobs_common.ontology import load_ontology

@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and dropped rather than written beside its target, as is a reference that
   names no attribute at all.
 
+- **The environment-aware guide's non-portable sample now fails only in the
+  way it says it does.** Its opening `vector_store:` block illustrates a
+  local path that will not exist in production, and carried two keys the
+  store does not read: `path`, where the field is `persist_path`, and no
+  `dimensions` at all beside `backend: faiss`. `dataknobs-data` now refuses
+  an undeclared width on that backend at construction, so the sample raised
+  before the configuration could be loaded, let alone deployed — a portable
+  config that does not start locally teaches neither half of its lesson.
+  Checked by `tests/test_documented_vector_store_width.py`.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

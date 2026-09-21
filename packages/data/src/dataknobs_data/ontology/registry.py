@@ -103,6 +103,26 @@ INDEX_BLOCK_KEYS = frozenset({"store", "embedder", "metric", "fields", "join", "
 #: build a cascade that matches nothing and report success.
 RESOLVER_BLOCK_KEYS = frozenset({"rungs"})
 
+#: The one nesting an ``index.embedder:`` block accepts.
+#:
+#: ``dataknobs-llm`` spells its own configuration ``embedding: {provider, model}``
+#: and that is the spelling this repository's worked examples use, so the block
+#: is read at that level when it is there. **Named rather than searched for**:
+#: scanning every nested mapping for a ``model`` key made any sub-block the
+#: claim, so a ``retry:`` block naming a model refused a correctly configured
+#: deployment over a model the document never declared.
+EMBEDDER_NESTING_KEY = "embedding"
+
+#: Every key a level of an ``index.embedder:`` block is read for.
+#:
+#: :data:`INDEX_BLOCK_KEYS`'s argument, one level in, and it bites harder here
+#: because the block is a **claim** rather than a spec: the registry cannot
+#: build an embedder and does not try, so ``dimensions:`` or ``api_base:``
+#: written here configures nothing at all. Reading two keys and passing over
+#: the rest is the silent drop this block's own no-``model:`` refusal names as
+#: its reason for existing.
+EMBEDDER_CLAIM_KEYS = frozenset({"model", "provider"})
+
 if TYPE_CHECKING:
     from types import TracebackType
 
@@ -1647,13 +1667,26 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         ``LLMProviderEmbedder.model_id`` is ``provider:model``, and an Ollama
         model name carries its own ``:tag`` --- so a document declaring
         ``nomic-embed-text`` sits beside an embedder publishing
-        ``ollama:nomic-embed-text:latest``. The provider is a prefix the
-        document may omit and the tag is a suffix either side may omit;
-        requiring either would refuse every correctly configured deployment.
-        A provider the document *does* state must agree, because ``model_id``
+        ``ollama:nomic-embed-text:latest``. The provider is a prefix and the
+        tag is a suffix, and **either side may omit either one**; requiring
+        any of the four would refuse a correctly configured deployment.
+        *May omit* is not *is always ignored*: where both sides state a tag
+        the tags are compared, because ``:v1.5`` beside ``:latest`` is two
+        sets of weights and a version bump is the likeliest thing to
+        invalidate a calibrated ``threshold:``. See :func:`_same_model`.
+        A provider **both** sides state must agree, because ``model_id``
         carries one *"so that two embedders reaching the same model agree,
         and two reaching different models do not"* and two providers serving
         a same-named model are not the same weights.
+
+        **Whether the published side states a provider is not knowable from
+        it**, which is why the comparison is over readings rather than over
+        one split. ``model_id`` promises no format --- its own docstring says
+        so --- and ``nomic-embed-text:latest`` is a tagged model under one
+        reading and a provider-and-model under another. Splitting on the
+        first colon chose, and chose wrong often enough to refuse a document
+        that named the published identity **verbatim**, which is the repair
+        the refusal's own message prints. See :func:`_model_id_readings`.
 
         **The comparison cannot be defeated by wrapping.** ``model_id`` is a
         ``TextEmbedder`` protocol member and both shipped decorators forward
@@ -1665,19 +1698,48 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             ontology_id: Named in every message, as every sibling refusal
                 in this block names it.
             declared: The ``embedder:`` block as the document wrote it.
-                ``model`` and ``provider`` are read from it directly or from
-                a nested mapping, which is the shape ``dataknobs-llm``'s own
-                configuration takes (``embedder: {embedding: {...}}``).
+                ``model`` and ``provider`` are read from it directly, or from
+                its ``embedding:`` sub-block where it has one --- the shape
+                ``dataknobs-llm``'s own configuration takes. One level, not
+                both: see :func:`_embedder_claim_level`.
 
         Raises:
             ValidationError: When the block names a model the injected
                 embedder is not, when it names a provider the embedder is
-                not, or when no model name can be read out of it at all. The
-                last is the ``metric:`` precedent: a claim the registry
-                cannot read is not a claim it may pass over, because
-                accepting a block and acting on it in no way is the silent
-                drop this whole section exists to prevent.
+                not, when it carries a key this block does not read, or when
+                no model name can be read out of it at all. All of them are
+                the ``metric:`` precedent: a claim the registry cannot read
+                is not a claim it may pass over, because accepting a block
+                and acting on it in no way is the silent drop this whole
+                section exists to prevent. The unread-key refusal is that
+                same sentence applied to the block's *own* keys, which
+                reading two of them and passing over the rest had exempted.
         """
+        level = _embedder_claim_level(declared)
+        if level is not None:
+            claim, section = level
+            if claim is not declared:
+                _refuse_undeclared_keys(
+                    declared,
+                    ontology_id=ontology_id,
+                    section="index.embedder",
+                    allowed=frozenset({EMBEDDER_NESTING_KEY}),
+                    why=(
+                        "a claim written half at this level and half inside "
+                        "`embedding:` has one half read and the other dropped"
+                    ),
+                )
+            _refuse_undeclared_keys(
+                claim,
+                ontology_id=ontology_id,
+                section=section,
+                allowed=EMBEDDER_CLAIM_KEYS,
+                why=(
+                    "`dimensions:` here configures nothing, because this block is "
+                    "checked against an embedder the caller injected rather than "
+                    "used to build one"
+                ),
+            )
         stated = _stated_model(declared)
         if stated is None:
             raise ValidationError(
@@ -1707,23 +1769,16 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             )
             return
 
-        provider, model = _split_model_id(published)
-        if stated_provider is not None and provider is not None:
-            if stated_provider.casefold() != provider.casefold():
-                raise ValidationError(
-                    f"ontology {ontology_id!r} declares `index.embedder:` with provider "
-                    f"{stated_provider!r}, and the injected embedder publishes "
-                    f"{published!r}. Both name the model every row is written and judged "
-                    f"stale against, and a `threshold:` calibrated against one provider's "
-                    f"geometry means nothing against another's. Correct the document, or "
-                    f"inject the embedder it names",
-                    context={
-                        "ontology_id": ontology_id,
-                        "declared": stated_provider,
-                        "published": published,
-                    },
-                )
-        if _untagged(stated_model) != _untagged(model):
+        # The model decides first, and the provider only among the readings
+        # whose model already agreed. Reversing that order would compare the
+        # document's provider against the head of a published id that is not
+        # a provider at all.
+        agreeing = [
+            reading
+            for reading in _model_id_readings(published)
+            if _same_model(stated_model, reading[1])
+        ]
+        if not agreeing:
             raise ValidationError(
                 f"ontology {ontology_id!r} declares `index.embedder:` naming model "
                 f"{stated_model!r}, and the injected embedder publishes {published!r}. "
@@ -1733,6 +1788,23 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 context={
                     "ontology_id": ontology_id,
                     "declared": stated_model,
+                    "published": published,
+                },
+            )
+        if stated_provider is not None and all(
+            provider is not None and provider.casefold() != stated_provider.casefold()
+            for provider, _ in agreeing
+        ):
+            raise ValidationError(
+                f"ontology {ontology_id!r} declares `index.embedder:` with provider "
+                f"{stated_provider!r}, and the injected embedder publishes "
+                f"{published!r}. Both name the model every row is written and judged "
+                f"stale against, and a `threshold:` calibrated against one provider's "
+                f"geometry means nothing against another's. Correct the document, or "
+                f"inject the embedder it names",
+                context={
+                    "ontology_id": ontology_id,
+                    "declared": stated_provider,
                     "published": published,
                 },
             )
@@ -2753,55 +2825,150 @@ def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
 __all__ = ["OntologyRegistry"]
 
 
-def _stated_model(declared: Any) -> tuple[str | None, str] | None:
-    """The provider and model an ``embedder:`` block names, or ``None``.
+def _embedder_claim_level(declared: Any) -> tuple[Mapping[str, Any], str] | None:
+    """The one level of an ``embedder:`` block the claim is read from.
 
-    Read from the block directly and from one level of nesting, because
-    ``dataknobs-llm``'s own configuration nests them under ``embedding:``
-    and that is the spelling this repository's worked examples use. One
-    level rather than a recursive search: a block whose model name is three
-    mappings down is not a shape anything here publishes, and finding one
-    there would be guessing at what a consumer meant.
+    ``dataknobs-llm``'s own configuration nests the pair under
+    ``embedding:`` and that is the spelling this repository's worked
+    examples use, so a block carrying that sub-block is read there and a
+    block without one is read directly.
+
+    **One level, chosen by name.** This used to collect the block *and every
+    nested mapping in it*, taking the first that carried a ``model`` key, so
+    any sub-block could supply the claim: measured, an
+    ``embedder: {retry: {model: ...}}`` refused a correctly configured
+    deployment, naming as *the model the document declares* a model the
+    document had not declared. Reading one named level makes every other key
+    an unread key, which :data:`EMBEDDER_CLAIM_KEYS` then refuses rather than
+    passing over --- including a claim split across the two levels, where
+    whichever half is not read is dropped in silence.
 
     Returns:
-        ``(provider, model)`` with the provider ``None`` where the block
-        states none, or ``None`` when no model name is there to read.
+        The level and the section name a message should spell it with, or
+        ``None`` when the block is not a mapping at all and there is no
+        level to read.
     """
     if not isinstance(declared, Mapping):
         return None
-    candidates: list[Mapping[str, Any]] = [declared]
-    candidates.extend(value for value in declared.values() if isinstance(value, Mapping))
-    for level in candidates:
-        model = level.get("model")
-        if isinstance(model, str) and model:
-            provider = level.get("provider")
-            return (provider if isinstance(provider, str) and provider else None), model
-    return None
+    nested = declared.get(EMBEDDER_NESTING_KEY)
+    if isinstance(nested, Mapping):
+        return nested, f"index.embedder.{EMBEDDER_NESTING_KEY}"
+    return declared, "index.embedder"
 
 
-def _split_model_id(published: str) -> tuple[str | None, str]:
-    """``provider:model`` into its two halves, tolerating a tagged model.
+def _stated_model(declared: Any) -> tuple[str | None, str] | None:
+    """The provider and model an ``embedder:`` block names, or ``None``.
 
-    ``LLMProviderEmbedder.model_id`` is ``f"{provider_name}:{model}"`` and an
-    Ollama model name carries its own ``:tag``, so ``ollama:nomic-embed-text:latest``
-    is a provider and a two-colon model rather than three fields. The split
-    is therefore on the **first** colon only.
+    Two keys off the one level :func:`_embedder_claim_level` chose.
 
-    An id with no colon at all is a model with no provider ---
-    ``DeterministicEmbedder`` publishes ``deterministic`` --- and answers
-    ``(None, published)`` so that a document naming only a model can still
-    agree with it.
+    Returns:
+        ``(provider, model)`` with the provider ``None`` where the level
+        states none, or ``None`` when no model name is there to read.
     """
+    level = _embedder_claim_level(declared)
+    if level is None:
+        return None
+    model = level[0].get("model")
+    if not (isinstance(model, str) and model):
+        return None
+    provider = level[0].get("provider")
+    return (provider if isinstance(provider, str) and provider else None), model
+
+
+def _model_id_readings(published: str) -> list[tuple[str | None, str]]:
+    """Every ``(provider, model)`` pair *published* could be, literal first.
+
+    **This does not choose, on purpose.** ``TextEmbedder.model_id`` promises
+    no format --- its docstring says so in those words, and names this
+    function's caller as the one reader taking the value apart. So a colon in
+    it is not evidence of a provider prefix. ``LLMProviderEmbedder`` does
+    publish ``f"{provider}:{model}"``, and an Ollama model carries its own
+    ``:tag``, which makes ``ollama:nomic-embed-text:latest`` one provider and
+    a two-colon model. But ``nomic-embed-text:latest`` from a consumer
+    implementation is a tagged model with **no** provider, and the two
+    strings have the same shape. Of the three implementations in this
+    workspace only one spells ``provider:model``: the bots knowledge-base
+    adapter publishes ``kb:<name>`` and ``DeterministicEmbedder`` publishes a
+    bare word.
+
+    Splitting on the first colon chose between those readings, and choosing
+    refused a document that named the published identity **verbatim** --- the
+    document's side was not split, so the two halves of an identical pair
+    were compared against each other. That held for every id carrying a
+    colon, which is every shipped implementation but one, and it is the
+    repair the refusal's own message prints.
+
+    So both readings are returned and :meth:`~OntologyRegistry._check_declared_model`
+    accepts the document when **any** of them agrees with it. The whole
+    string is always first, because it is the reading that assumes nothing.
+
+    **What this widens, stated.** A document naming the published id minus
+    its last colon-segment now agrees --- ``model: ollama`` against an
+    embedder publishing ``ollama:nomic-embed-text``, where the whole-string
+    reading treats ``nomic-embed-text`` as an omitted tag. That document is
+    wrong, and the old behaviour caught it as a by-product of the format
+    assumption rather than by design; nothing can catch it without assuming
+    the format the protocol declines to promise. Two genuinely different
+    model names still disagree under every reading, which is what this
+    comparison exists for.
+    """
+    readings: list[tuple[str | None, str]] = [(None, published)]
     provider, separator, model = published.partition(":")
-    return (provider, model) if separator else (None, published)
+    if separator and provider and model:
+        readings.append((provider, model))
+    return readings
 
 
-def _untagged(model: str) -> str:
-    """A model name with a trailing ``:tag`` removed, casefolded.
+def _split_tag(model: str) -> tuple[str, str | None]:
+    """A model name into its base and its trailing ``:tag``, casefolded.
 
-    The tag is a suffix either side may omit --- a document declares
-    ``nomic-embed-text`` where a registry publishes ``nomic-embed-text:latest``
-    --- and comparing with it in place would refuse a correctly configured
-    deployment over a default nobody typed.
+    The tag is the part after the **last** colon, because under the reading
+    being compared any provider prefix has already been taken off by
+    :func:`_model_id_readings` and what remains is an Ollama-style
+    ``name:tag``. ``None`` where the name carries no tag at all, which is
+    the distinction the comparison turns on --- an absent tag and a tag that
+    happens to read ``latest`` are not the same thing to say.
     """
-    return model.rsplit(":", 1)[0].casefold() if ":" in model else model.casefold()
+    base, separator, tag = model.rpartition(":")
+    return (base.casefold(), tag.casefold()) if separator else (model.casefold(), None)
+
+
+def _same_model(stated: str, published: str) -> bool:
+    """Whether two model names name one model, under the omission rule.
+
+    The rule is that the tag is a suffix **either side may omit** --- a
+    document declares ``nomic-embed-text`` where a registry publishes
+    ``nomic-embed-text:latest``, and requiring it either place would refuse
+    a correctly configured deployment over a default nobody typed.
+
+    *May omit* is not *is always ignored*, and the difference is the whole
+    of this function. Stripping the tag from both sides before comparing
+    --- which is what this did --- makes ``nomic-embed-text:v1.5`` and
+    ``nomic-embed-text:latest`` agree, and those are different weights. A
+    version bump is precisely the change that invalidates a ``threshold:``
+    calibrated in one model's geometry, which is this comparison's stated
+    reason for existing, so it was the one disagreement the check could not
+    see.
+
+    So the tag decides only when **both** sides state one. Where either
+    omits it there is nothing to compare and the base names answer alone.
+
+    **This rule is for a document, and deliberately does not travel.** The
+    same question --- *is this the same model?* --- is asked of a stored
+    vector by ``dataknobs_data.vector.content.is_foreign_model``, under
+    exact equality, and the difference is what each side of the comparison
+    is. Here one side is a name a person typed, so a provider prefix and a
+    version tag are things they may reasonably leave off. There both sides
+    are ``model_id`` values produced by the same mechanism, so an omission
+    is two embedders disagreeing --- and softening it would make the
+    staleness guard miss exactly the version bump that invalidates a
+    ``threshold:`` calibrated in one model's geometry, which is this
+    function's own stated reason for comparing tags at all.
+    """
+    stated_base, stated_tag = _split_tag(stated)
+    published_base, published_tag = _split_tag(published)
+    if stated_base != published_base:
+        return False
+    if stated_tag is None or published_tag is None:
+        return True
+    return stated_tag == published_tag

@@ -287,11 +287,23 @@ assert axis.has_edge_annotations()                          # and the other answ
     annotations*, which makes `()` read as *nothing is written on this edge*
     when the truth is *nothing can be*.
 
-    `has_edge_annotations()` asks what this vocabulary holds under the axis's
-    **relation**, which is what actually decides it. It is named for that
-    rather than for provenance on purpose: a `materialization.structure:
-    materialized` copy of an assertion axis is *bound*, and its edges are
-    still assertions, so *was this bound live* answers the wrong question.
+    `has_edge_annotations()` asks whether an **asserted** edge under this
+    axis's relation lands on an edge *of this axis* — which is exactly what
+    `parent_edges()` reads, so the two cannot disagree. It is named for what
+    it measures rather than for provenance on purpose, and provenance is the
+    wrong question in *both* directions: a `materialization.structure:
+    materialized` copy of an assertion axis is *bound* and its edges are
+    still assertions, and a `kind: column` axis is not one where nothing can
+    be written — its edges come from the table, but an assertion landing on
+    one of them annotates it.
+
+    Narrowing by relation alone is not enough either, and it is the narrower
+    mistake. Two axes may share a relation — a live column axis beside a
+    legacy assertion axis over the same edge name is what a migration looks
+    like — and an assertion belonging to the other axis would answer for
+    this one. A stated **negation** would count too, which is the failure
+    `edge_criteria` exists to prevent.
+
     `assertions` itself stays what it is — the source, or `None` for an axis
     built with none — and is still the thing the edge members read.
 

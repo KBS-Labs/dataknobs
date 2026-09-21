@@ -41,6 +41,8 @@ from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from dataknobs_common.async_iter import aclosing_iter
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 
@@ -219,13 +221,22 @@ class CallableSource:
         return self.declared
 
     async def stream_items(self) -> AsyncIterator[IndexItem]:
-        """Drive the callable, whichever of the four shapes it has."""
+        """Drive the callable, whichever of the four shapes it has.
+
+        The async shape is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter` --- see
+        :meth:`AliasSource.stream_items`, which states why for the whole
+        family. It applies here most of all: the documented use is *"a
+        generator over an API, a file being parsed, a queue being drained"*,
+        and all three hold something a close is what returns.
+        """
         produced = self.fn()
         if hasattr(produced, "__await__"):
             produced = await produced
         if hasattr(produced, "__aiter__"):
-            async for item in produced:
-                yield item
+            async with aclosing_iter(produced) as rows:
+                async for item in rows:
+                    yield item
             return
         for item in produced:
             yield item
@@ -297,13 +308,28 @@ class AliasSource:
         The canonical text first, so a reader that keeps the first of a
         collision keeps the entity's own name rather than whichever alias the
         source happened to list last.
+
+        **Driven under :func:`~dataknobs_common.async_iter.aclosing_iter`,
+        which is the rule for every source in this family that drives
+        another.** A bare ``async for`` leaves the inner iterator suspended
+        when this one is closed, so the inner's cleanup waits for the
+        interpreter to finalize it --- a later turn of the loop, unordered
+        against whatever the consumer does next. Both things a leaf reaches at its close are then lost to
+        that gap: ``EntitySourceIndexSource`` reports an all-empty stream
+        from a ``finally``, and ``RecordFieldSource`` over PostgreSQL yields
+        from inside an acquired connection and an open transaction.
+        Measured with this class in front of the ontology adapter --- the
+        composition an ``index:`` block with ``aliases: true`` builds --- the
+        leaf's report arrived after the consumer had already handled the
+        failure instead of with it.
         """
-        async for item in self.inner.stream_items():
-            yield item
-            for form in self._forms_of(item):
-                if not form or form == item.text:
-                    continue
-                yield IndexItem(id=item.id, text=form, metadata=dict(item.metadata))
+        async with aclosing_iter(self.inner.stream_items()) as items:
+            async for item in items:
+                yield item
+                for form in self._forms_of(item):
+                    if not form or form == item.text:
+                        continue
+                    yield IndexItem(id=item.id, text=form, metadata=dict(item.metadata))
 
     def _forms_of(self, item: IndexItem) -> tuple[str, ...]:
         """The surface forms on one item, reading the key's published rule.

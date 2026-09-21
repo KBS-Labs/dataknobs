@@ -7,7 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`Taxonomy.has_edge_annotations()` asks about this axis's edges, not the
+  vocabulary's relation.** It narrowed the assertion source by relation alone,
+  which answered `True` in two cases where every edge of the axis is bare and
+  always will be — the exact wrong answer the member was added to prevent, and
+  one now reachable through the member itself rather than through
+  `assertions is None`.
+
+  - **A stated negation counted.** The read passed a bare `relation=` where
+    `edge_criteria()` exists to pin `polarity=Polarity.ASSERTED`, whose own
+    docstring names this failure: *"a query that does not narrow returns a
+    stated negation as an edge."* A document whose only assertion under the
+    relation is `NEGATED` has nothing written on any edge, and
+    `parent_edges()` agreed while this answered `True`.
+  - **An assertion belonging to another axis counted.** Two axes may share a
+    relation — a live column axis landing beside a legacy assertion axis over
+    the same edge name is what a migration looks like — and the probe read
+    the whole vocabulary.
+
+  It now asks what `parent_edges()` reads: an **asserted** edge under this
+  axis's relation whose subject is a node of this axis and whose object is a
+  parent of it here. Defined by calling `parent_edges()`, so the two cannot
+  drift.
+
+  Note what this is *not*. A `kind: column` axis is **not** an axis on which
+  nothing can be written: its edges come from the table, but an assertion
+  landing on one of them annotates it, measured at 1. Deciding the question
+  on the axis's backing would answer `False` for an axis demonstrably
+  carrying an annotation — the same class of wrong answer in the other
+  direction.
+
 ### Added
+
+- **`aclosing_iter`**, in `dataknobs_common.async_iter` -- `contextlib.aclosing`
+  for the population where *is it closable* is not answerable at the call
+  site. An abandoned async generator runs its `finally` when the interpreter
+  finalizes it, so anything it holds is held across that gap and anything it
+  reports there arrives after the consumer has moved on; both are real here,
+  in `AsyncPostgresDatabase.stream_read` and `EntitySourceIndexSource`.
+  `contextlib.aclosing` cannot express the fix, because it requires an
+  `aclose` member and the protocols in this workspace declare `AsyncIterator`
+  deliberately -- an `async def` generator function returns its iterator
+  without awaiting, so the plain iterator is the signature a structural
+  implementation actually has, and one carrying only `__aiter__` and
+  `__anext__` makes `contextlib.aclosing` raise `AttributeError` **at the
+  exit**, replacing whatever the block was already failing with. So the close
+  is conditional on there being one, and nothing is lost where there is not:
+  an iterator with no `aclose` has no cleanup to run at a close.
 
 - **`Taxonomy.has_edge_annotations()` and its asynchronous twin --- which kind
   of axis this is.** An empty `parent_edges()` has two readings: *nothing is
@@ -42,7 +90,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the docstring says so -- `RunnerUp.evidence` is one required piece, and the
   alternatives are inventing a rung or widening a shipped value type.
 
+  **There is no default subject over an `INCOMPATIBLE` corpus**, and naming
+  one is then required. `ranked()` already says the order there is *an
+  artifact of the embedder mix* and sends a caller to `compatibility` before
+  showing candidates to anyone; this is the one member that reads that order
+  *for* the caller, and it reads it into a record that outlives the result and
+  demotes every other candidate to a runner-up. Left implicit, the same two
+  numbers were too incomparable for `as_distribution()` to divide and
+  comparable enough to store as a ranking. The line is drawn at the verdict
+  `as_distribution()` draws it at, and for its reason: `UNKNOWN` means nobody
+  looked, `UNVERIFIABLE` means nobody could, and neither is a finding that the
+  numbers came from different models. A **sole** candidate is not an order and
+  is not refused -- the only way past a refusal there is
+  `ref(entity_id=candidates[0].entity_id)`, the artifact spelled longhand.
+  `ResolutionRef.runners_up` carries the same conditionality in its own
+  docstring, where no refusal is available: a list of alternatives has to come
+  back in some order, and inventing a different one is a second artifact
+  rather than none. The entity-resolution guide's *What a score is, and what
+  it is not* says it beside `ranked()`.
+
 ### Changed
+
+- **An index source that drives another closes it.** `AliasSource` and
+  `CallableSource` each drive an inner async iterator and forward what it
+  yields, with a bare `async for`. That leaves the inner iterator suspended
+  when the outer is closed, so its cleanup waits for the interpreter to
+  finalize it -- a later turn of the loop, unordered against whatever the
+  consumer does next. Both things a leaf reaches at its close are lost to
+  that gap. Measured with `AliasSource` in front of the ontology adapter ---
+  the composition an `index:` block with `aliases: true` builds --- the
+  leaf's all-empty report arrived after the consumer had already handled the
+  failure instead of with it; `CallableSource`'s documented use is *"a
+  generator over an API, a file being parsed, a queue being drained"*, all
+  three of which hold something a close is what returns. Both now drive the
+  inner iterator under `aclosing_iter`.
 
 - **An index build whose every row composes empty text is reported.**
   `EntitySourceIndexSource` validated `fields` against `TEXT_FIELDS` at
@@ -56,6 +137,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   some: a binding holding the field on a third of its rows is legitimate, and a
   stream that yields nothing is the empty-index condition the construction
   refusals already speak for.
+
+  **The report follows the stream's close rather than its end**, so the two
+  consumers that most need it get it: one stopping on a failure and one
+  stopping on purpose. A build that fails partway is exactly where *every row
+  composed empty text* is worth knowing, because it is a candidate cause and
+  the caller is about to decide whether to retry. The message says which of
+  the two happened, since a count off an unfinished stream describes what was
+  consumed rather than what the vocabulary holds. The stated cost: a caller
+  sampling a short prefix can now be warned about a binding that fills the
+  field on most of its rows but not its first few.
 
 ### Documentation
 
@@ -405,6 +496,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a source answering a set at construction and `None` at the read produced
   exactly the empty index the refusal exists to prevent -- and skipped the
   undeclared-type refusal on the same path. Both refusals now bind the read.
+
+  The **whole description** is read once, at construction, and every later use
+  reads what was kept -- `source_id` included, which the all-empty report
+  above would otherwise have re-asked for. `describe()` builds a fresh value
+  on every call and the protocol promises nothing about two of them agreeing,
+  so a report naming the id read the second time names a source no refusal
+  ever looked at.
 
 - **`EntitySourceIndexSource.source_field` is spelled the way its reader parses
   it.** Composed with the display separator, it wrote a grammar nothing parses
@@ -1412,10 +1510,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 352,
-  the twelve beyond them being the operation family, the near-spelling rung,
-  the surface-form catalogue and the index-source family, each added by its own
-  entry above. `declared_candidates` is inside the 134 rather than beyond
+  the resolution cascade — 134 names, taking the package's `__all__` to 353,
+  the thirteen beyond them being the operation family, the near-spelling rung,
+  the surface-form catalogue, the index-source family and `aclosing_iter`,
+  each added by its own entry above. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

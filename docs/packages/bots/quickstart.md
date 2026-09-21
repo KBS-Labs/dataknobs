@@ -246,7 +246,7 @@ async def main():
             "documents_path": str(docs_dir),
             "vector_store": {
                 "backend": "faiss",
-                "dimension": 384
+                "dimensions": 768
             },
             "embedding_provider": "ollama",
             "embedding_model": "nomic-embed-text"

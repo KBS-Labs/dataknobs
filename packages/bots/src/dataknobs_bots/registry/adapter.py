@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_data import (
     AsyncDatabase,
@@ -532,6 +533,13 @@ class DataKnobsRegistryAdapter:
         delivers batches; suitable for large tenant populations that
         won't fit in memory.
 
+        The store's stream is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`, so closing this
+        generator closes it, and the database read below that. A caller that
+        takes a page and stops is the expected use, and a bare ``async for``
+        would leave every link suspended --- on a Postgres-backed registry,
+        a pooled connection inside an open transaction per abandoned page.
+
         Args:
             status: Optional equality filter on the ``status`` data
                 column.  ``None`` means no status filter.
@@ -541,12 +549,14 @@ class DataKnobsRegistryAdapter:
         """
         store = self._require_store()
         filter_data = {"status": status} if status is not None else None
-        async for reg in store.stream(
+        streamed = store.stream(
             filter_data=filter_data,
             filter_metadata=filter_metadata,
             config=config,
-        ):
-            yield reg
+        )
+        async with aclosing_iter(streamed) as registrations:
+            async for reg in registrations:
+                yield reg
 
     async def clear(self) -> None:
         """Clear all registrations.

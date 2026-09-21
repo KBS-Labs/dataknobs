@@ -543,6 +543,43 @@ print(f"Successful: {result.successful}")
 print(f"Failed: {result.failed}")
 ```
 
+#### A read you stop early has to be closed
+
+The loop above runs to exhaustion, which finishes the generator and needs
+nothing more. A consumer that stops before the end — a `break`, a raise, an
+early return — leaves it suspended at its `yield`, and its `finally` runs only
+when the interpreter finalizes it: a later turn of the loop, unordered against
+whatever the consumer does next. `AsyncPostgresDatabase.stream_read` yields
+from inside an acquired pool connection and an open transaction, and
+`AsyncElasticsearchDatabase.stream_read` from inside a scroll cleared in a
+`finally`, so on those two backends that gap is a connection the pool does not
+have back.
+
+Drive such a read under `aclosing_iter`:
+
+```python
+from dataknobs_common import aclosing_iter
+
+async with aclosing_iter(db.stream_read(query)) as records:
+    async for record in records:
+        if seen_enough(record):
+            break   # the connection goes back here, not at finalization
+```
+
+Two rules follow from it, and together they are the whole convention:
+
+- **A frame closes the stream it opened.** `db.stream_read(...)` written in
+  your own function is yours to close if you might not exhaust it.
+- **A generator closes the stream it drives.** An `async def` generator that
+  forwards another's items is closed *by its own consumer*, and the
+  `GeneratorExit` that arrives leaves its `async for` without closing what it
+  was iterating — so a chain of forwarding generators releases nothing unless
+  every link says it.
+
+The second is why passing a stream *into* something does not transfer the
+obligation: `db.stream_write(records)` stops consuming on a failed batch, and
+`records` stays yours.
+
 `StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
 it loads from a plain dict via `StreamConfig.from_dict({"batch_size":
 100})` and is immutable — build a modified copy with
@@ -1127,7 +1164,8 @@ pre-filters agree:
 
 `dataknobs_data.testing` provides deterministic vector draws — for this
 package's own tests, and for consumers testing their own implementations of the
-`VectorStore` protocol.
+`VectorStore` protocol — plus `HoldingStreamDatabase`, for testing that a
+consumer of `stream_read` closes the read it opened.
 
 Each helper builds its own `numpy.random.Generator`. Nothing here touches the
 process-global RNG, so a draw in one test cannot shift what any later test
@@ -1154,6 +1192,50 @@ that where a test needs N vectors that differ, they have to be drawn together
 with `vectors(n, dim)` and indexed into — calling `vector(dim)` once per loop
 iteration passes the same default seed every time and returns N copies of one
 vector.
+
+### `HoldingStreamDatabase`
+
+An `AsyncDatabase` whose `stream_read` acquires something at the top and
+releases it in a `finally`. `held` is `1` while a read is open and `0` once it
+is closed, so a test asserts at the close rather than eventually:
+
+```python
+from dataknobs_common import aclosing_iter
+from dataknobs_data.testing import HoldingStreamDatabase
+
+walked_away = HoldingStreamDatabase([{"id": "a"}, {"id": "b"}])
+async for _record in walked_away.stream_read():
+    break
+assert walked_away.held == 1        # the read is suspended, holding
+
+closed = HoldingStreamDatabase([{"id": "a"}, {"id": "b"}])
+async with aclosing_iter(closed.stream_read()) as records:
+    async for _record in records:
+        break
+assert closed.held == 0             # the close reached it
+```
+
+Asserting *eventually* is what an unfixed consumer already satisfies: an async
+generator left suspended runs its `finally` when the interpreter finalizes it,
+so a test that settles the loop first passes either way.
+
+Use it wherever the code under test consumes `stream_read` and can stop early.
+`AsyncPostgresDatabase.stream_read` yields from inside an acquired pool
+connection and an open transaction and `AsyncElasticsearchDatabase.stream_read`
+from inside a scroll, so for those two the gap is a real resource — and neither
+can stand in for itself in a unit test, while a memory backend holds nothing
+and so measures the same before and after a fix.
+
+| Member | Meaning |
+|---|---|
+| `HoldingStreamDatabase(rows)` | a database whose every read yields `rows`, one `Record` per mapping |
+| `held` | how many reads are open right now; `0` at rest |
+| `opens` | how many reads have been started, ever |
+
+Filters are not applied, so every row reaches the consumer and a break is the
+consumer's own decision rather than an empty read's. `limit` is applied,
+because a bounded read is where a caller most expects the generator to have
+finished on its own — and it has not, which is usually the point.
 
 ## Exceptions
 

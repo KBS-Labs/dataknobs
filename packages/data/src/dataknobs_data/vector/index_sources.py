@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.index import IndexItem, join_non_empty
 
 if TYPE_CHECKING:
@@ -104,13 +105,25 @@ class RecordFieldSource:
         rather than yielded empty: an embedded empty string is a vector that
         matches everything weakly and nothing well, which is worse in a corpus
         than an absence.
+
+        **The read is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`** --- the rule
+        stated for the whole family on ``AliasSource.stream_items``, and the
+        one this class is the strongest case for. A bare ``async for``
+        leaves ``stream_read`` suspended when this source is closed, and
+        what that read is holding is a backend's: on PostgreSQL an acquired
+        pool connection inside an open transaction, on Elasticsearch a
+        scroll cleared in a ``finally``. Both are then released when the
+        interpreter finalizes the generator rather than when the build that
+        opened it gave up.
         """
-        async for record in self.database.stream_read(self.query):
-            if record.id is None:
-                continue
-            text = join_non_empty([record.get_value(self.field)], DEFAULT_JOIN)
-            if text:
-                yield IndexItem(id=str(record.id), text=text)
+        async with aclosing_iter(self.database.stream_read(self.query)) as records:
+            async for record in records:
+                if record.id is None:
+                    continue
+                text = join_non_empty([record.get_value(self.field)], DEFAULT_JOIN)
+                if text:
+                    yield IndexItem(id=str(record.id), text=text)
 
 
 @dataclass(frozen=True, eq=False)
@@ -169,13 +182,19 @@ class MultiFieldSource:
         return self.declared
 
     async def stream_items(self) -> AsyncIterator[IndexItem]:
-        """One item per row whose chosen fields compose to something."""
-        async for record in self.database.stream_read(self.query):
-            if record.id is None:
-                continue
-            text = join_non_empty(
-                [record.get_value(name) for name in self.fields],
-                self.join,
-            )
-            if text:
-                yield IndexItem(id=str(record.id), text=text)
+        """One item per row whose chosen fields compose to something.
+
+        Under :func:`~dataknobs_common.async_iter.aclosing_iter` for the reason
+        its single-field
+        sibling states.
+        """
+        async with aclosing_iter(self.database.stream_read(self.query)) as records:
+            async for record in records:
+                if record.id is None:
+                    continue
+                text = join_non_empty(
+                    [record.get_value(name) for name in self.fields],
+                    self.join,
+                )
+                if text:
+                    yield IndexItem(id=str(record.id), text=text)
