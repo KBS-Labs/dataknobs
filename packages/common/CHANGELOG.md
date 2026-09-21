@@ -7,7 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`ResolutionResult.ref()` -- the door onto `ResolutionRef`.** The stored
+  form of a resolution was a published type that nothing produced: no signature
+  in any package returned one, and a consumer wanting the value four of the
+  ontology use cases take as their input assembled ten fields at a time off
+  three published types. `ref()` answers one for the winner, or for whichever
+  candidate is named, with the rest reshaped as `RunnerUp`s each keeping its
+  rung of record's evidence whole. `corpus` is an empty mapping and takes no
+  argument: its neighbour `compatibility` already publishes the discriminator,
+  so `UNKNOWN` beside `{}` means *nobody looked* and a searched-and-silent
+  corpus is a verdict beside an empty mapping. `KeyError` for an id no
+  candidate carries, on `explain()`'s precedent; `ValueError` for a resolution
+  with no candidates, because a miss has no subject and a reference identifies
+  one. A losing candidate carrying no evidence is left out of `runners_up` and
+  the docstring says so -- `RunnerUp.evidence` is one required piece, and the
+  alternatives are inventing a rung or widening a shipped value type.
+
+### Changed
+
+- **An index build whose every row composes empty text is reported.**
+  `EntitySourceIndexSource` validated `fields` against `TEXT_FIELDS` at
+  construction so that a *misspelled* name was refused while the caller still
+  held the mistake -- and could not catch a correctly spelled one the entities
+  carry nothing under, which is the ordinary case for a live binding whose
+  projection fills whatever columns the table has. That built an index that is
+  not empty but full of rows equidistant from every query, which is worse,
+  because an empty index has a report and this has an answer. `stream_items`
+  now warns once per build, naming the fields and the source. Every row, not
+  some: a binding holding the field on a third of its rows is legitimate, and a
+  stream that yields nothing is the empty-index condition the construction
+  refusals already speak for.
+
 ### Documentation
+
+- **The entity-resolution guide separates a spelling *convention* from a
+  *typo*, and routes each to the thing that can answer it.** *When the query
+  does not spell the form* taught rungs that probe the index as it is, and the
+  index is keyed on folded declared forms -- so no rewriting of the query
+  reaches a form whose own spelling has to be rewritten too. Both sides have to
+  be folded by one function and the only place that happens is
+  `load_ontology(..., normalizer=...)`, which the section now names and links
+  to. Reaching for `LexicalSignal` on a convention returns an answer often
+  enough to matter and the wrong one often enough to matter more: measured over
+  sixteen multi-word names, folding at the index ranks the intended entity
+  first 16 of 16 and the rung ranks it first 10 of 16, every miss being a
+  compound whose head noun is itself a declared entity. The behaviour is not
+  the defect and nothing changed in the rung; the routing was.
+
+- **The ontology guide's `normalizer=` keyword gains the worked fold.** Two
+  sentences became a runnable block contrasting the default with a
+  convention-folding one over three spellings of one name, and the paragraph
+  that says why this is the only place a convention can be answered.
+
+- **The roll-up guide says what `unplaced` means on a vocabulary with two
+  axes.** The field docstring and the guide's summary table were already exact
+  -- *nodes this axis does not carry* -- and only on a single-axis vocabulary
+  does that coincide with *nodes this vocabulary does not carry*. With two axes
+  they are two populations with opposite remedies: a declared entity tagged on
+  the wrong axis, where the entity is fine, and a node id carried nowhere,
+  where the tag is wrong. A new section carries a two-axis worked case, the
+  table of remedies, and the one lookup that separates them --
+  `ontology.entity(node_id)`. Measured over a thirty-one-row corpus on a
+  six-type vocabulary, four of five unplaced nodes are of the first kind, which
+  a single-axis worked case cannot exhibit. The worked fence is unchanged.
 
 - **The roll-up guide's narrowing paragraph names the member that narrows.**
   `ontology_support` counts every vocabulary a corpus names, held or not, and

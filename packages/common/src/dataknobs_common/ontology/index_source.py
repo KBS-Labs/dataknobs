@@ -253,8 +253,31 @@ class EntitySourceIndexSource(Generic[K]):
         the entity source, which is a protocol change rather than something
         this adapter can arrange; until there is one, the claim above is about
         entity objects and this paragraph is the part it does not cover.
+
+        **A build whose every row composes empty text is reported, once.**
+        :data:`TEXT_FIELDS`' construction check catches a *misspelled* field
+        name for the reason it states --- *"the alternative is a stream that
+        yields empty text for every row and looks like an empty
+        vocabulary"* --- and cannot catch a correctly spelled one the
+        entities carry nothing under, which is the ordinary case for a live
+        binding whose projection fills whatever columns the table has. The
+        result is not an empty index: it is an index full of rows
+        equidistant from every query, which is worse, because an empty index
+        has a report and this has an answer. So this reports it, at the same
+        level and for the same reason as the partial-coverage warning at
+        construction --- and needs no live-binding restriction as that one
+        has, because an authored document whose every entity yields empty
+        text under ``fields:`` is a document with no names either.
+
+        **Every row, not some.** A binding holding the field on a third of
+        its rows is legitimate and common, and reporting there would fire on
+        the ordinary case. A stream that yields nothing reports nothing
+        either: that is the empty-index condition, which the construction
+        refusals already speak for.
         """
         entities = self.ontology.entities
+        yielded = 0
+        with_text = 0
         for type_id in sorted(self._declared):
             ids = sorted(await entities.by_type(type_id), key=str)
             cursor = iter(ids)
@@ -264,14 +287,28 @@ class EntitySourceIndexSource(Generic[K]):
                     entity = found.get(entity_id)
                     if entity is None:
                         continue
+                    text = self._text_for(entity)
+                    yielded += 1
+                    with_text += bool(text)
                     yield IndexItem(
                         id=self.ontology.qualify(entity.id),
-                        text=self._text_for(entity),
+                        text=text,
                         metadata={
                             ONTOLOGY_ID_KEY: self.ontology.id,
                             self.aliases_key: list(entity.aliases),
                         },
                     )
+        if yielded and not with_text:
+            logger.warning(
+                "index source over ontology %s streamed %d entit%s and every one composed "
+                "empty text from field(s) %s of source %s; the index this builds is not "
+                "empty, it is full of rows equidistant from every query",
+                self.ontology.id,
+                yielded,
+                "y" if yielded == 1 else "ies",
+                ", ".join(self._fields),
+                self.ontology.entities.describe().source_id,
+            )
 
     def _text_for(self, entity: object) -> str:
         """The chosen fields' values, non-empty ones only, joined.

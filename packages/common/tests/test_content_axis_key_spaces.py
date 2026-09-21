@@ -446,6 +446,8 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("ResolutionResult", "explain", "entity_id", "key"),
     ("ResolutionResult", "matched_text", "->", "text"),
     ("ResolutionResult", "ranked", "->", "key"),
+    ("ResolutionResult", "ref", "->", "key"),
+    ("ResolutionResult", "ref", "entity_id", "key"),
     ("ResolutionResult", "unmatched_text", "->", "text"),
     ("RunnerUp", "<field>", "entity_id", "key"),
     ("SourceDescription", "<field>", "backend", "payload"),
@@ -514,7 +516,7 @@ _REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 355
+_ROWS = 357
 
 
 def _modules() -> Iterator[ast.Module]:

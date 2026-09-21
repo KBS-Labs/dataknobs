@@ -521,6 +521,92 @@ class ResolutionResult(Generic[K]):
                 return candidate.evidence
         raise KeyError(entity_id)
 
+    def ref(self, entity_id: K | None = None) -> ResolutionRef[K]:
+        """This resolution in its **stored** form -- the door onto :class:`ResolutionRef`.
+
+        A reference records a resolution; this is where one comes from. The
+        class's own docstring names
+        :class:`~dataknobs_common.ontology.model.SourceRef` as its model, and
+        a consumer never assembles a ``SourceRef`` -- the loader builds one
+        and every entity carries it. Ten fields off three published types is
+        the assembly this replaces, and the reshape it hides is the whole of
+        why it is a method rather than a constructor call: each losing
+        candidate becomes a :class:`RunnerUp` keeping its rung of record's
+        evidence whole.
+
+        ``corpus`` is an empty mapping and there is no argument for it. Its
+        neighbour :attr:`compatibility` already publishes the discriminator:
+        ``UNKNOWN`` beside ``{}`` means *nobody looked*, and a searched
+        corpus that returned nothing is a verdict beside an empty mapping. A
+        third sentinel would name a distinction the pair already draws. A
+        caller with a corpus description to record assigns it -- the class is
+        ``frozen=False``, deliberately and for this.
+
+        The three fields taken off the **rung of record** -- ``signal``,
+        ``kind`` and ``span`` -- come from ``evidence[0]``, the first rung
+        that produced the id, which is what :attr:`RunnerUp.evidence`
+        documents itself as carrying. A candidate whose match was *inherited*
+        carries no evidence at all; there the signal is empty, the kind is
+        ``INFERRED`` and the scoring is ``NATIVE``, because inventing a rung
+        name or claiming ``DECLARED`` would attribute a match to a rung that
+        did not make one.
+
+        Args:
+            entity_id: Which candidate the reference is *of*. The default is
+                the winner. Naming one is for the caller storing the
+                candidate a person chose rather than the one that ranked
+                first -- everything else becomes a runner-up, in this
+                result's own order with the subject removed.
+
+        A losing candidate that carries **no** evidence is left out of
+        ``runners_up``, and that is a stated limit rather than a silent one:
+        :attr:`RunnerUp.evidence` is one required piece, so the only ways to
+        include such a candidate are to invent a rung for it -- which the
+        paragraph above refuses for the subject and refuses here for the same
+        reason -- or to make that field optional, which puts a shipped value
+        type's shape inside a convenience door's remit. Nothing in this
+        package produces an evidence-free candidate; a phase-3 subclass
+        would, and widening the field is the change that would admit it.
+
+        Returns:
+            A reference to one candidate, carrying the rest as runners-up.
+
+        Raises:
+            KeyError: If ``entity_id`` names no candidate -- ``explain()``'s
+                precedent and its reason.
+            ValueError: If the resolution produced no candidates. A miss has
+                no subject, and a reference identifies one.
+        """
+        if not self.candidates:
+            raise ValueError(
+                f"a resolution with no candidates has nothing to reference: {self.query!r}"
+            )
+        subject = self.candidates[0]
+        if entity_id is not None:
+            for candidate in self.candidates:
+                if candidate.entity_id == entity_id:
+                    subject = candidate
+                    break
+            else:
+                raise KeyError(entity_id)
+        record = subject.evidence[0] if subject.evidence else None
+        return ResolutionRef(
+            query=self.query,
+            entity_id=subject.entity_id,
+            score=subject.score,
+            scoring=record.scoring if record else Scoring.NATIVE,
+            signal=record.signal if record else "",
+            kind=record.kind if record else EvidenceKind.INFERRED,
+            compatibility=self.compatibility,
+            corpus={},
+            span=record.span if record else None,
+            runners_up=tuple(
+                RunnerUp(entity_id=other.entity_id, evidence=other.evidence[0])
+                for other in self.candidates
+                if other is not subject and other.evidence
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class RunnerUp(Generic[K]):

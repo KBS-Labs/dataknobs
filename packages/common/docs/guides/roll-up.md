@@ -294,6 +294,85 @@ The same split governs `unplaced`. A node id the axis does not carry is
 *reported* rather than refused, because a corpus tagged before a vocabulary was
 reorganised is the ordinary case rather than a bug.
 
+## `unplaced` on a vocabulary with two axes
+
+`unplaced` is **nodes this axis does not carry** — not *nodes this vocabulary
+does not carry*. On the worked vocabulary above the two readings coincide,
+because it declares one axis and its single unplaced node is genuinely
+undeclared. On a vocabulary with two, they come apart, and the loose reading is
+wrong about most of what it is looking at.
+
+The vocabulary below declares `kind` (what a thing *is*) and `location` (where
+it *sits*). Roll a page of `kind`-tagged rows up onto `kind`:
+
+```python
+from dataknobs_common.ontology import NodeTag, load_ontology, roll_up
+
+plant = load_ontology(
+    {
+        "id": "plant",
+        "entity_types": [{"id": "Thing"}],
+        "relation_types": [
+            {"id": "isa", "transitive": True},
+            {"id": "part_of", "transitive": True},
+        ],
+        "entities": [
+            {"id": "pump", "type": "Thing", "name": "Pump"},
+            {"id": "gear_pump", "type": "Thing", "name": "Gear Pump"},
+            {"id": "seal_leak", "type": "Thing", "name": "Seal Leak"},
+            {"id": "coolant_loop", "type": "Thing", "name": "Coolant Loop"},
+        ],
+        "assertions": [
+            {"subject": "gear_pump", "relation": "isa", "object": "pump"},
+            {"subject": "pump", "relation": "part_of", "object": "coolant_loop"},
+            {"subject": "seal_leak", "relation": "part_of", "object": "pump"},
+        ],
+        "taxonomies": [
+            {"id": "kind", "name": "Kind", "relation": "isa"},
+            {"id": "location", "name": "Location", "relation": "part_of"},
+        ],
+    }
+)
+
+tagged = [
+    [NodeTag(ontology_id="plant", taxonomy_id="kind", node_id=node)]
+    for node in ("gear_pump", "seal_leak", "sealleak")
+]
+
+for support in roll_up(plant, "kind", tagged).unplaced:
+    carried = plant.entity(support.node_id) is not None
+    print(f"{support.node_id:11} rows={support.rows}  in the vocabulary: {carried}")
+```
+
+```
+seal_leak   rows=(1,)  in the vocabulary: True
+sealleak    rows=(2,)  in the vocabulary: False
+```
+
+**Two populations, and their remedies are opposites:**
+
+| | `seal_leak` | `sealleak` |
+|---|---|---|
+| What it is | a declared entity, on the **other** axis — `part_of`, not `isa` | a node id this vocabulary carries nowhere |
+| Why it is here | the row was tagged on the wrong axis, or you are asking the wrong axis of a right tag | the tagger wrote an id that does not exist |
+| The remedy | re-tag onto `location`, or roll up onto `location` instead — **the entity is fine** | fix the tagger, or declare the entity — **the tag is wrong** |
+
+**`ontology.entity(node_id)` is the lookup that separates them**, and it is one
+call: `None` is *undeclared*, anything else is *declared and elsewhere*. Nothing
+in `SupportSet` draws this distinction, deliberately — the roll-up asks an axis
+a question and reports what the axis said, and reaching for the entity source
+to classify the residue is an entity read, which is the thing this call does
+not do (see [No entity reads](#what-this-is-not)).
+
+The proportions are why this matters rather than being a footnote. Measured
+over a thirty-one-row corpus rolled onto the `isa` axis of a six-type
+vocabulary: **five unplaced nodes, of which four are declared entities** —
+faults and procedures, perfectly good, simply not on that axis — and one is
+genuinely undeclared. A reader taking `unplaced` to mean *not in the
+vocabulary* acts wrongly on four of the five. A single-axis corpus produces
+none of the first kind, which is exactly why the worked case above cannot show
+this and this section exists.
+
 ## Which vocabularies are even in play
 
 ```python

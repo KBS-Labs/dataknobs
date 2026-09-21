@@ -38,11 +38,13 @@ from dataknobs_common.entity_resolution import (
     CascadingResolver,
     CompatibilityVerdict,
     DeclaredSignal,
+    EntityCandidate,
     EvidenceKind,
     ExactNormalizedSignal,
     FormHit,
     MatchEvidence,
     ResolutionRef,
+    ResolutionResult,
     RunnerUp,
     ScanningSignal,
     Scoring,
@@ -981,3 +983,213 @@ async def test_the_async_scan_spends_the_bound_it_was_given() -> None:
         f"{tokens}-token query over a one-token vocabulary. Unbounded that is "
         f"{tokens * (tokens + 1) // 2}, and every one of them is a round trip"
     )
+
+
+def test_a_result_hands_back_the_reference_a_consumer_would_have_assembled() -> None:
+    """The stored form of a resolution comes off the result, not off ten literals.
+
+    ``ResolutionRef`` is what four of v1's use cases mean by *a hit*, and
+    until now nothing in ``packages/*/src`` returned one: the only
+    construction anywhere was a test assembling one field at a time, and a
+    consumer driving the use cases had to do the same. The class's own
+    docstring names ``SourceRef`` as its model, and a consumer never
+    assembles a ``SourceRef`` -- the loader builds one and every ``Entity``
+    carries it.
+
+    ``corpus`` is the field that made the door conditional on itself: it is
+    required, has no default, and nothing determined its value. It takes an
+    empty mapping, on the published argument its neighbour ``compatibility``
+    already makes -- ``UNKNOWN`` with ``{}`` means nobody looked, and a
+    searched-and-silent corpus is a verdict beside an empty mapping. No third
+    sentinel is needed because the thing that knows the difference already
+    travels beside the value.
+    """
+    winner = EntityCandidate(
+        entity_id="golden_retriever",
+        score=1.0,
+        evidence=(
+            MatchEvidence(
+                signal="scan",
+                kind=EvidenceKind.DECLARED,
+                score=1.0,
+                scoring=Scoring.DECLARED,
+                matched_text="golden retriever",
+                span=(3, 19),
+            ),
+        ),
+    )
+    loser = EntityCandidate(
+        entity_id="retriever",
+        score=0.83,
+        evidence=(
+            MatchEvidence(
+                signal="semantic",
+                kind=EvidenceKind.INFERRED,
+                score=0.83,
+                scoring=Scoring.NORMALIZED,
+                matched_text="golden retriever",
+                span=None,
+            ),
+        ),
+    )
+    result = ResolutionResult(
+        candidates=(winner, loser),
+        query="my golden retriever has been limping",
+        compatibility=CompatibilityVerdict.UNKNOWN,
+    )
+
+    ref = result.ref()
+
+    assert isinstance(ref, ResolutionRef)
+    assert ref.entity_id == "golden_retriever"
+    assert ref.query == result.query
+    assert ref.score == 1.0
+    assert ref.scoring is Scoring.DECLARED
+    assert ref.signal == "scan"
+    assert ref.kind is EvidenceKind.DECLARED
+    assert ref.span == (3, 19)
+    assert ref.compatibility is CompatibilityVerdict.UNKNOWN
+    assert ref.corpus == {}
+
+    # The losing candidates, reshaped -- each carrying its rung of record's
+    # evidence whole, which is what ``RunnerUp`` holds rather than a float.
+    assert len(ref.runners_up) == 1
+    assert ref.runners_up[0].entity_id == "retriever"
+    assert ref.runners_up[0].evidence.kind is EvidenceKind.INFERRED
+    assert ref.runners_up[0].evidence.score == 0.83
+
+
+def test_a_reference_can_be_taken_for_a_candidate_that_did_not_win() -> None:
+    """``entity_id=`` names the subject; everything else becomes a runner-up.
+
+    A consumer storing *the one a person chose* rather than *the one that
+    ranked first* is the case this argument exists for, and it is the reason
+    the parameter is not simply ``ranked()[0]`` spelled shorter. Order among
+    the runners-up is the result's own, with the named subject removed.
+    """
+    candidates = tuple(
+        EntityCandidate(
+            entity_id=key,
+            score=score,
+            evidence=(
+                MatchEvidence(
+                    signal="scan",
+                    kind=EvidenceKind.DECLARED,
+                    score=score,
+                    scoring=Scoring.DECLARED,
+                    matched_text=key,
+                    span=None,
+                ),
+            ),
+        )
+        for key, score in (("a", 1.0), ("b", 0.7), ("c", 0.4))
+    )
+    result = ResolutionResult(candidates=candidates, query="a b c")
+
+    ref = result.ref(entity_id="b")
+
+    assert ref.entity_id == "b"
+    assert ref.score == 0.7
+    assert tuple(runner.entity_id for runner in ref.runners_up) == ("a", "c")
+
+
+def test_a_reference_refuses_the_two_things_it_cannot_identify() -> None:
+    """An id no candidate carries, and a result with no candidates at all.
+
+    ``KeyError`` for the first, on ``explain()``'s own precedent and for its
+    reason: *not a candidate* and *a candidate with nothing to say* must not
+    be the same answer. ``ValueError`` for the second, because a miss has no
+    subject to name and a reference identifies one -- returning something for
+    a resolution that resolved nothing is the failure the whole family is
+    built to refuse.
+    """
+    resolved = ResolutionResult(
+        candidates=(
+            EntityCandidate(
+                entity_id="a",
+                score=1.0,
+                evidence=(
+                    MatchEvidence(
+                        signal="scan",
+                        kind=EvidenceKind.DECLARED,
+                        score=1.0,
+                        scoring=Scoring.DECLARED,
+                        matched_text="a",
+                    ),
+                ),
+            ),
+        ),
+        query="a",
+    )
+    with pytest.raises(KeyError):
+        resolved.ref(entity_id="nobody")
+
+    missed = ResolutionResult(candidates=(), query="a")
+    with pytest.raises(ValueError, match="no candidates"):
+        missed.ref()
+
+
+def test_a_reference_carries_the_rung_of_record_when_a_candidate_has_none() -> None:
+    """An inherited match has no evidence, and the reference says so rather than lying.
+
+    ``EntityCandidate.evidence`` is empty *"only where a match was inherited
+    rather than made"*. The three fields taken off the rung of record have no
+    source in that case, and inventing a ``signal`` string or claiming
+    ``DECLARED`` would put a rung's name on a match no rung made. The
+    reference reports the empty signal and ``INFERRED`` -- the kind that
+    means *this was not found in the surface* -- and takes its ``scoring``
+    from the candidate rather than from a rung.
+    """
+    inherited = EntityCandidate(entity_id="mammal", score=0.5, evidence=())
+    result = ResolutionResult(candidates=(inherited,), query="cat")
+
+    ref = result.ref()
+
+    assert ref.signal == ""
+    assert ref.kind is EvidenceKind.INFERRED
+    assert ref.scoring is Scoring.NATIVE
+    assert ref.span is None
+
+
+def test_an_evidence_free_loser_is_left_out_rather_than_given_an_invented_rung() -> None:
+    """The one lossy edge of the door, asserted so it is a limit and not a surprise.
+
+    ``RunnerUp.evidence`` is one required ``MatchEvidence``, so a losing
+    candidate that carries none cannot be represented. Inventing a rung name
+    for it is what the subject path refuses; widening the field is a change
+    to a shipped value type and outside a convenience door's remit. So it is
+    dropped, and this pins that -- the winner still resolves, the
+    evidence-bearing loser still appears, and the count says which.
+    """
+    winner = EntityCandidate(
+        entity_id="a",
+        score=1.0,
+        evidence=(
+            MatchEvidence(
+                signal="scan",
+                kind=EvidenceKind.DECLARED,
+                score=1.0,
+                scoring=Scoring.DECLARED,
+                matched_text="a",
+            ),
+        ),
+    )
+    spoken_for = EntityCandidate(
+        entity_id="b",
+        score=0.6,
+        evidence=(
+            MatchEvidence(
+                signal="semantic",
+                kind=EvidenceKind.INFERRED,
+                score=0.6,
+                scoring=Scoring.NORMALIZED,
+                matched_text="a",
+            ),
+        ),
+    )
+    inherited = EntityCandidate(entity_id="c", score=0.3, evidence=())
+    result = ResolutionResult(candidates=(winner, spoken_for, inherited), query="a")
+
+    ref = result.ref()
+
+    assert tuple(runner.entity_id for runner in ref.runners_up) == ("b",)

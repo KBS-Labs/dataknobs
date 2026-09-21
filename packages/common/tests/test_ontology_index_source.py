@@ -337,3 +337,118 @@ async def test_the_enumeration_streamed_is_the_one_validated_at_construction(
         "catalog:sku-4471",
         "catalog:sku-8802",
     ]
+
+
+# --------------------------------------------------------------------------
+# An index full of empty rows, which is worse than an empty index
+# --------------------------------------------------------------------------
+
+#: A vocabulary whose entities carry a name and no description.
+#:
+#: The ordinary shape of a live binding read through a projection that fills
+#: one column and not another --- and the shape ``fields: ["description"]``
+#: turns into a stream of empty text. Every entity here is perfectly good;
+#: the *request* is what holds nothing.
+NAMES_ONLY = """\
+ontology:
+  id: parts
+  version: "1.0"
+
+  entity_types:
+    - id: Part
+
+  entities:
+    - {id: p1, type: Part, name: Gear Pump}
+    - {id: p2, type: Part, name: Gate Valve}
+    - {id: p3, type: Part, name: Check Valve}
+"""
+
+
+async def test_a_build_whose_every_row_is_empty_text_is_reported_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A correctly spelled field the entities carry nothing under.
+
+    :data:`TEXT_FIELDS`' construction check catches a *misspelled* name and
+    says why --- *"the alternative is a stream that yields empty text for
+    every row and looks like an empty vocabulary"*. It cannot catch a
+    correctly spelled one, which is the ordinary case for a live binding: a
+    projection fills whatever columns the consumer's table has.
+
+    What that produces is not an empty index. It is an index full of rows
+    equidistant from every query forever, which is worse, because an empty
+    index has a report and this has an answer. So the stream reports it ---
+    once per build, naming the fields and the source, at the level the
+    neighbouring partial-coverage case already uses.
+    """
+    path = tmp_path / "parts.yaml"
+    path.write_text(NAMES_ONLY)
+    ontology = await async_load_ontology(path)
+    source = EntitySourceIndexSource(ontology, fields=("description",))
+
+    with caplog.at_level("WARNING"):
+        items = [item async for item in source.stream_items()]
+
+    assert len(items) == 3
+    assert all(item.text == "" for item in items)
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1, "reported once per build, not once per row"
+    message = warnings[0].getMessage()
+    assert "description" in message
+    assert "parts" in message
+
+
+async def test_one_row_carrying_text_is_enough_to_report_nothing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The report is about *every* row, and a partial fill is not this defect.
+
+    The positive control for the test above: a vocabulary where one of three
+    entities carries a description is a binding that holds the field on some
+    rows, which is legitimate and common. Reporting there would fire on the
+    ordinary case and say nothing true --- the same argument the
+    partial-coverage warning one level up makes for excluding authored
+    sources.
+    """
+    path = tmp_path / "some.yaml"
+    path.write_text(
+        NAMES_ONLY.replace(
+            "{id: p2, type: Part, name: Gate Valve}",
+            "{id: p2, type: Part, name: Gate Valve, description: a gate valve}",
+        )
+    )
+    ontology = await async_load_ontology(path)
+    source = EntitySourceIndexSource(ontology, fields=("description",))
+
+    with caplog.at_level("WARNING"):
+        items = [item async for item in source.stream_items()]
+
+    assert [item.text for item in items] == ["", "a gate valve", ""]
+    assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+
+
+async def test_a_vocabulary_holding_no_entities_at_all_is_not_reported_here(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Nothing streamed is a different condition, and it already has a report.
+
+    *Every row is empty* needs a row. A source enumerating nothing yields
+    nothing, and the state that produces --- an empty index --- is the one
+    the construction refusals and the coverage warning are about. Firing here
+    too would attach this message to a condition it does not describe.
+    """
+    ontology = await _catalog(tmp_path)
+    source = EntitySourceIndexSource(
+        _with_source(ontology, _Unenumerable(frozenset())), fields=("description",)
+    )
+    # The construction-time coverage warning is a different report about a
+    # different condition, and it legitimately fires here: a schema naming
+    # three types over a binding holding none. This test is about what the
+    # *stream* says, so the construction's record is dropped first.
+    caplog.clear()
+
+    with caplog.at_level("WARNING"):
+        items = [item async for item in source.stream_items()]
+
+    assert items == []
+    assert [record for record in caplog.records if record.levelname == "WARNING"] == []
