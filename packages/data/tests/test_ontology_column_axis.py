@@ -1030,3 +1030,120 @@ async def test_an_attribute_on_the_entity_type_does_not_refuse_the_axis() -> Non
         assert [view.node for view in await axis.at("leaf").ancestors()] == ["mid", "root"]
     finally:
         await registry.close()
+
+
+# --------------------------------------------------------------------------
+# Which kind of axis this is
+# --------------------------------------------------------------------------
+
+
+async def test_the_axis_says_whether_anything_can_be_written_on_its_edges() -> None:
+    """`()` from `parent_edges()` has two meanings and only one member separates them.
+
+    ``anchored-view.md`` names ``assertions is None`` as *the question to
+    ask*, and the one shipped producer of a live axis makes that question
+    unanswerable: ``OntologyRegistry`` constructs an
+    ``AsyncMappingAssertionSource`` **unconditionally**, so a ``kind: column``
+    axis has an assertion source that is *empty* rather than *absent*.
+    Measured over the same five-row tree on both backings, ``assertions is
+    None`` answers ``False`` **both times** while ``parent_edges()`` answers
+    0 and 1. The structure agrees and the edge read does not, which is
+    correct and is what both guides say --- and the consumer following the
+    instruction gets the *wrong* answer rather than no answer, because
+    ``False`` reads as *this axis does carry annotations*, so ``()`` reads as
+    *nothing is written on this edge* when the truth is *nothing can be*.
+
+    ``has_edge_annotations()`` is the member that separates them, and it is
+    named for what it measures rather than for how the axis was bound: a
+    materialized copy of an assertion axis is *bound* and its edges are still
+    assertions, so provenance would answer the wrong question.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=await _store()
+    )
+    try:
+        column = (await registry.load()).taxonomy("categories")
+        assert await column.at("mid").parent_edges() == ()
+        # The instruction the guide gives, and the answer it gets here.
+        assert column.assertions is not None
+        assert await column.has_edge_annotations() is False
+    finally:
+        await registry.close()
+
+    authored = (await async_load_ontology(_as_assertions())).taxonomy("categories")
+    assert len(await authored.at("mid").parent_edges()) == 1
+    assert await authored.has_edge_annotations() is True
+
+
+async def test_an_axis_whose_document_declares_no_assertion_for_it_says_so() -> None:
+    """Per axis, not per vocabulary, which is the whole point of the member.
+
+    One document, two axes: one made of assertions and one made of a column.
+    A member reading the ontology's single assertion source would answer the
+    same for both, which is exactly the conflation being repaired.
+    """
+    document = _document(
+        taxonomies=[
+            {
+                "id": "categories",
+                "kind": "column",
+                "source": "products",
+                "parent_key": "parent_sku",
+                "relation": "parent",
+            },
+            {"id": "lineage", "relation": "derived_from"},
+        ],
+        relation_types=[{"id": "parent"}, {"id": "derived_from"}],
+        assertions=[{"subject": "leaf", "relation": "derived_from", "object": "mid"}],
+    )
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=await _store()
+    )
+    try:
+        onto = await registry.load()
+        assert await onto.taxonomy("categories").has_edge_annotations() is False
+        assert await onto.taxonomy("lineage").has_edge_annotations() is True
+    finally:
+        await registry.close()
+
+
+def test_the_synchronous_twin_answers_the_same_question() -> None:
+    """A sync vocabulary is the flavour a consumer reaches first, and it has axes too."""
+    from dataknobs_common.ontology import load_ontology
+
+    authored = load_ontology(_as_assertions()).taxonomy("categories")
+    assert authored.has_edge_annotations() is True
+
+    bare = load_ontology(
+        {
+            "id": "bare",
+            "entity_types": [{"id": "Product"}],
+            "entities": [{"id": "only", "type": "Product", "name": "Only"}],
+            "relation_types": [{"id": "parent"}],
+            "taxonomies": [{"id": "categories", "relation": "parent"}],
+        }
+    ).taxonomy("categories")
+    assert bare.has_edge_annotations() is False
+
+    # Per **relation**, not per vocabulary: one document, two axes, and only
+    # one of them has assertions behind it. Without this case a reader of the
+    # whole source rather than of this axis's relation answers correctly here
+    # by accident.
+    two_axes = load_ontology(
+        {
+            "id": "two",
+            "entity_types": [{"id": "Product"}],
+            "entities": [
+                {"id": "a", "type": "Product", "name": "A"},
+                {"id": "b", "type": "Product", "name": "B"},
+            ],
+            "relation_types": [{"id": "parent"}, {"id": "derived_from"}],
+            "assertions": [{"subject": "b", "relation": "derived_from", "object": "a"}],
+            "taxonomies": [
+                {"id": "categories", "relation": "parent"},
+                {"id": "lineage", "relation": "derived_from"},
+            ],
+        }
+    )
+    assert two_axes.taxonomy("categories").has_edge_annotations() is False
+    assert two_axes.taxonomy("lineage").has_edge_annotations() is True

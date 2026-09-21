@@ -469,6 +469,17 @@ Nothing constructs an `Assertion` for a row: the edges are two columns, and the
 axis is a different backing under one taxonomy rather than a second kind of
 taxonomy.
 
+**So `parent_edges()` on this axis is always `()`, and the member that says so
+is `has_edge_annotations()`.** Not `assertions is None` — a registry builds an
+assertion source for *every* vocabulary it loads, so a column axis's source is
+empty rather than absent, and the field answers `False` for an annotated axis
+and an unannotatable one alike. Measured over one five-row tree on both
+backings, `assertions is None` is `False` both times while the edge read
+answers 0 and 1. The distinction matters to any consumer who reads the walk and
+`ontology.assertions.find(subject=...)` together, which the anchored view's own
+published call site does: over a live binding the second half answers nothing,
+with no error between the two answers.
+
 **There is no `child:`.** The child column is the source's own `id:`, which is
 what keeps the axis and the entity source keyed alike by construction — the ids
 a walk answers with are the ids `entity()` takes. A `child:` key would be the

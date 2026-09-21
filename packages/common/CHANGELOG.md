@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Taxonomy.has_edge_annotations()` and its asynchronous twin --- which kind
+  of axis this is.** An empty `parent_edges()` has two readings: *nothing is
+  written on this edge*, which is a fact about one node, and *nothing can be
+  written on any edge here*, which is a fact about the axis. The documented
+  way to tell them apart was `assertions is None`, and that does not survive a
+  live binding: a registry constructs an assertion source for every vocabulary
+  it loads, so a `kind: column` axis has one that is **empty rather than
+  absent** and the field answers `False` for both kinds. Measured over one
+  five-row tree on both backings, `assertions is None` is `False` both times
+  while the edge read answers 0 and 1 --- so a consumer following the
+  instruction got the *wrong* answer rather than no answer. The member asks
+  what the vocabulary holds under the axis's **relation**, which is what
+  actually decides it, and is named for that rather than for provenance: a
+  `materialization.structure: materialized` copy of an assertion axis is
+  *bound* and its edges are still assertions, so *was this bound live* answers
+  a different question. `assertions` is unchanged.
+
 - **`ResolutionResult.ref()` -- the door onto `ResolutionRef`.** The stored
   form of a resolution was a published type that nothing produced: no signature
   in any package returned one, and a consumer wanting the value four of the
@@ -41,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusals already speak for.
 
 ### Documentation
+
+- **The anchored-view and hierarchy guides stop teaching `assertions is
+  None`.** Both named it as *the question to ask*, and neither is wrong about
+  its own half --- which is why this could not be fixed by editing either
+  alone: the field really is `None` for an axis built with no source, and the
+  one shipped producer of a live axis really does always construct one. They
+  now point at `has_edge_annotations()`, and the registry guide's *Nothing
+  constructs an `Assertion` for a row* says the same thing from the other
+  side, where a reader of that page will meet it.
 
 - **The entity-resolution guide separates a spelling *convention* from a
   *typo*, and routes each to the thing that can answer it.** *When the query

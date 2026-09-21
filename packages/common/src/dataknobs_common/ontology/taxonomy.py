@@ -422,6 +422,51 @@ class Taxonomy(Generic[K]):
             return list(flatten(self.structure, from_id=root_id, cache=cache))
         return list(descendants_to_depth(self.structure, root_id, depth, cache=cache))
 
+    def has_edge_annotations(self) -> bool:
+        """Whether **anything can be written** on this axis's edges.
+
+        The member that separates the two readings of an empty
+        ``parent_edges()``. ``()`` means *nothing is written on any edge
+        here*, which is true of a root, of an absent node, of a parent
+        nothing annotates --- **and** of an axis that has no annotations to
+        give at all, because its edges are rows rather than assertions. The
+        first three are a fact about one node; the last is a fact about the
+        axis, and a caller who reads it as the first acts on the wrong one.
+
+        **``assertions is None`` was the documented question and it does not
+        survive a live binding.** A registry constructs an assertion source
+        for every vocabulary it loads, whether or not any axis of that
+        vocabulary is made of assertions --- so a ``kind: column`` axis has a
+        source that is *empty* rather than *absent*, and the documented check
+        answers ``False``, which reads as *this axis does carry annotations*.
+        Measured over one five-row tree on both backings: ``assertions is
+        None`` is ``False`` both times while the edge read answers 0 and 1.
+
+        **Named for what it measures, not for how the axis was bound.** The
+        provenance question --- *was this bound live or derived from
+        assertions* --- is the tempting one and it is the wrong one: a
+        ``materialization.structure: materialized`` copy of an assertion axis
+        is *bound*, and its edges are still assertions. What decides whether
+        an edge here can ever carry an annotation is whether this vocabulary
+        holds an assertion under this axis's **relation**, which is what this
+        asks.
+
+        It is a **read**, and a diagnostic rather than a hot path: a caller
+        asks it once about an axis, not once per edge. The protocol offers no
+        cheaper probe than ``find(relation=...)``, and an assertion source is
+        the document's own assertions in every door this package ships.
+
+        Returns:
+            ``False`` when this axis carries no assertion source at all, and
+            when the source holds nothing under :attr:`definition`'s relation.
+            ``True`` when it holds at least one --- which does not promise
+            that any *particular* edge is annotated, only that the axis is the
+            kind of axis on which one could be.
+        """
+        if self.assertions is None:
+            return False
+        return bool(self.assertions.find(relation=self.definition.relation))
+
     def inherited_attributes(self, entity_type: str) -> list[AttributeDef]:
         """Every attribute declaration ``entity_type`` may be asked for, nearest first.
 
@@ -490,6 +535,51 @@ class AsyncTaxonomy(Generic[K]):
 
     #: :attr:`Taxonomy.entity_types`, unflavoured -- a mapping awaits nothing.
     entity_types: Mapping[str, EntityType] = field(default_factory=dict)
+
+    async def has_edge_annotations(self) -> bool:
+        """Whether **anything can be written** on this axis's edges.
+
+        The member that separates the two readings of an empty
+        ``parent_edges()``. ``()`` means *nothing is written on any edge
+        here*, which is true of a root, of an absent node, of a parent
+        nothing annotates --- **and** of an axis that has no annotations to
+        give at all, because its edges are rows rather than assertions. The
+        first three are a fact about one node; the last is a fact about the
+        axis, and a caller who reads it as the first acts on the wrong one.
+
+        **``assertions is None`` was the documented question and it does not
+        survive a live binding.** A registry constructs an assertion source
+        for every vocabulary it loads, whether or not any axis of that
+        vocabulary is made of assertions --- so a ``kind: column`` axis has a
+        source that is *empty* rather than *absent*, and the documented check
+        answers ``False``, which reads as *this axis does carry annotations*.
+        Measured over one five-row tree on both backings: ``assertions is
+        None`` is ``False`` both times while the edge read answers 0 and 1.
+
+        **Named for what it measures, not for how the axis was bound.** The
+        provenance question --- *was this bound live or derived from
+        assertions* --- is the tempting one and it is the wrong one: a
+        ``materialization.structure: materialized`` copy of an assertion axis
+        is *bound*, and its edges are still assertions. What decides whether
+        an edge here can ever carry an annotation is whether this vocabulary
+        holds an assertion under this axis's **relation**, which is what this
+        asks.
+
+        It is a **read**, and a diagnostic rather than a hot path: a caller
+        asks it once about an axis, not once per edge. The protocol offers no
+        cheaper probe than ``find(relation=...)``, and an assertion source is
+        the document's own assertions in every door this package ships.
+
+        Returns:
+            ``False`` when this axis carries no assertion source at all, and
+            when the source holds nothing under :attr:`definition`'s relation.
+            ``True`` when it holds at least one --- which does not promise
+            that any *particular* edge is annotated, only that the axis is the
+            kind of axis on which one could be.
+        """
+        if self.assertions is None:
+            return False
+        return bool(await self.assertions.find(relation=self.definition.relation))
 
     async def walk(
         self,

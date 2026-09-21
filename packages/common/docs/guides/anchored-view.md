@@ -266,9 +266,34 @@ assert axis.at("no_such_node").parent_edges() == () and not axis.at("no_such_nod
 
 unannotated = replace(axis, assertions=None)
 assert unannotated.at("beagle").parent_edges() == ()
-assert unannotated.assertions is None                       # the question to ask
+assert not unannotated.has_edge_annotations()               # the question to ask
 assert [above.node for above in unannotated.at("beagle").parents()] == ["dog"]
+
+assert axis.has_edge_annotations()                          # and the other answer
 ```
+
+!!! warning "Ask `has_edge_annotations()`, not `assertions is None`"
+
+    `assertions is None` was the documented question and **it does not
+    survive a live binding.** `OntologyRegistry` constructs an assertion
+    source for every vocabulary it loads, whether or not any axis of that
+    vocabulary is made of assertions — so a `kind: column` taxonomy over a
+    live table has a source that is *empty* rather than *absent*.
+
+    Measured, asked of both flavours of one five-row tree: `assertions is
+    None` answers `False` **both times**, while the edge read answers `0` and
+    `1`. So the consumer who follows the old instruction gets the **wrong**
+    answer rather than no answer — `False` reads as *this axis does carry
+    annotations*, which makes `()` read as *nothing is written on this edge*
+    when the truth is *nothing can be*.
+
+    `has_edge_annotations()` asks what this vocabulary holds under the axis's
+    **relation**, which is what actually decides it. It is named for that
+    rather than for provenance on purpose: a `materialization.structure:
+    materialized` copy of an assertion axis is *bound*, and its edges are
+    still assertions, so *was this bound live* answers the wrong question.
+    `assertions` itself stays what it is — the source, or `None` for an axis
+    built with none — and is still the thing the edge members read.
 
 The structure decides which parents there are; the edge members only read what
 is written on the edges to them. So an axis whose structure was copied at load
