@@ -576,33 +576,152 @@ async def test_the_forms_collide_in_a_store_keyed_on_id() -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_a_declared_embedder_beside_an_injected_one_is_refused() -> None:
-    """The refusal's other configuration, which was not refused at all.
+async def _loaded_with(document: dict[str, Any], embedder: Any) -> OntologyRegistry:
+    """A loaded registry whose embedder the caller chose.
 
-    ``block["embedder"]`` was read only inside ``and self._injected_embedder
-    is None``, so with an embedder injected the document's ``embedder:``
-    section was never read, never compared and never logged. The comment two
-    lines above names that exact failure --- *"a section parsed into a field
-    and quietly dropped is the failure that produces a registry reporting
-    success while holding no store, no embedder and no index"* --- and the
-    block did it in the other branch.
+    ``_registry`` above injects one of its own, so a test about *which*
+    embedder was injected cannot go through it.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), embedder=embedder
+    )
+    await registry.load()
+    return registry
 
-    What makes it invisible rather than merely wrong: every row written
-    records the **injected** model under ``MODEL_NAME_KEY``, so the staleness
-    contract stays self-consistent while the document, the runbook and every
-    reader of the configuration name a different model.
+
+def _declaring(model: str, provider: str | None = None) -> dict[str, Any]:
+    """:data:`CATALOG` with an ``index:`` section naming a model."""
+    embedding: dict[str, Any] = {"model": model}
+    if provider is not None:
+        embedding["provider"] = provider
+    return _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "embedder": {"embedding": embedding},
+        }
+    )
+
+
+async def test_a_declared_embedder_that_disagrees_with_the_injected_one_is_refused() -> None:
+    """The document and the process name different models, and it is said.
+
+    ``block["embedder"]`` was once read only inside ``and
+    self._injected_embedder is None``, so with an embedder injected the
+    document's ``embedder:`` section was never read, never compared and never
+    logged --- *"a section parsed into a field and quietly dropped is the
+    failure that produces a registry reporting success while holding no
+    store, no embedder and no index"*, in the other branch. What made it
+    invisible rather than merely wrong: every row written records the
+    **injected** model, so the staleness contract stays self-consistent while
+    the document, the runbook and every reader of the configuration name a
+    different model.
+    """
+    with pytest.raises(ValidationError, match="embedder") as refused:
+        await _loaded_with(
+            _declaring("mxbai-embed-large"),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text:latest"),
+        )
+
+    message = str(refused.value)
+    assert "mxbai-embed-large" in message and "nomic-embed-text" in message
+
+
+async def test_a_declared_embedder_that_agrees_is_a_claim_the_document_may_make() -> None:
+    """The repair, and the whole of what changed: agreement builds the index.
+
+    The refusal this replaces was added to *make the disagreement visible*,
+    and a comparison serves that intent more completely than a refusal does:
+    refusal left the document unable to state the model at all, while the
+    number a ``kind: semantic`` rung's ``threshold:`` means something against
+    is a property of that model. The refusal's own stated reason --- *"cannot
+    build the declared one to compare"* --- is about **building**, and the
+    injected embedder already publishes ``model_id``.
+
+    **The tag rule, measured.** A document declares ``nomic-embed-text`` and
+    an Ollama-backed embedder publishes ``ollama:nomic-embed-text:latest``:
+    the provider is a prefix the document may omit and the tag is a suffix it
+    may omit, and requiring either would refuse every correctly configured
+    deployment. Both spellings below name one model.
+    """
+    for document in (
+        _declaring("nomic-embed-text"),
+        _declaring("nomic-embed-text", provider="ollama"),
+        _declaring("nomic-embed-text:latest", provider="ollama"),
+    ):
+        registry = await _loaded_with(
+            document,
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text:latest"),
+        )
+        try:
+            assert registry.index("catalog") is not None
+        finally:
+            await registry.close()
+
+
+async def test_a_declared_provider_the_injected_embedder_is_not_is_refused() -> None:
+    """Right model name, wrong provider, is still two different geometries.
+
+    ``model_id`` is ``provider:model`` for the reason its own docstring gives
+    --- *"so that two embedders reaching the same model agree, and two
+    reaching different models do not"*. Two providers serving a same-named
+    model are not guaranteed to be the same weights, and a ``threshold:``
+    calibrated against one means nothing against the other.
+    """
+    with pytest.raises(ValidationError, match="embedder") as refused:
+        await _loaded_with(
+            _declaring("nomic-embed-text", provider="openai"),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text"),
+        )
+
+    assert "openai" in str(refused.value)
+
+
+async def test_an_embedder_block_naming_no_model_is_refused_as_an_unreadable_claim() -> None:
+    """A claim the registry cannot read is not a claim it may pass over.
+
+    This is the ``metric:`` precedent: a spelling the library cannot resolve
+    is refused rather than ignored, because accepting a block and acting on
+    it in no way is the silent drop the whole section exists to prevent.
     """
     document = _document(
         index={
             "store": {"backend": "memory", "dimensions": DIMENSIONS},
-            "embedder": {"embedding": {"provider": "ollama", "model": "nomic-embed-text"}},
+            "embedder": {"embedding": {"provider": "ollama"}},
         }
     )
 
     with pytest.raises(ValidationError, match="embedder") as refused:
-        await _registry(document)
+        await _loaded_with(document, DeterministicEmbedder(dimensions=DIMENSIONS))
 
-    assert "injected" in str(refused.value)
+    # Asserted on the *reason*, not on the word "model": the refusal this
+    # replaced also said "model", so a looser match would pass against the
+    # unfixed code and pin nothing.
+    assert "names no `model:`" in str(refused.value)
+
+
+async def test_an_embedder_with_no_identity_is_reported_rather_than_refused(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No ``model_id`` is no claim to check, and the document is not refused for it.
+
+    ``model_id`` is optional on the ``TextEmbedder`` protocol, and an
+    embedder publishing none leaves the comparison with one side. Refusing
+    would make a legitimate embedder unusable with a legitimate document;
+    saying nothing would make an unchecked claim look checked. So it is
+    reported and the load continues --- which is the one place this check
+    warns rather than raising, because the document is not what is wrong.
+    """
+    embedder = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="")
+
+    with caplog.at_level("WARNING"):
+        registry = await _loaded_with(_declaring("nomic-embed-text"), embedder)
+    try:
+        assert registry.index("catalog") is not None
+        reports = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(reports) == 1
+        assert "nomic-embed-text" in reports[0].getMessage()
+    finally:
+        await registry.close()
 
 
 async def test_a_key_the_index_block_does_not_declare_is_refused() -> None:
@@ -778,3 +897,153 @@ async def test_a_malformed_source_key_is_refused_as_a_validation_error(
 
     with pytest.raises(ValidationError, match=match):
         await _registry(document)
+
+
+# --------------------------------------------------------------------------
+# The staleness key, compared
+# --------------------------------------------------------------------------
+
+
+def _breeds() -> AsyncIndexSource:
+    """A corpus small enough to search exhaustively and real enough to rank."""
+
+    async def rows() -> AsyncIterator[IndexItem]:
+        for key, text in (
+            ("a", "a spaniel is a gundog"),
+            ("b", "a beagle is a hound"),
+            ("c", "a hound tracks by scent"),
+        ):
+            yield IndexItem(id=key, text=text)
+
+    return CallableSource(rows)
+
+
+async def test_a_hit_written_by_another_model_is_reported_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A build job and a service with a configuration change between them.
+
+    ``SemanticIndex`` writes the embedder's ``model_id`` on every row and
+    says what for --- *"which is what makes a stored vector's staleness
+    judgeable by something that never saw this object"*. Measured before
+    this report: a store built under one model and searched through
+    another returned three ranked hits, raised nothing, and logged nothing
+    at warning or above. The datum was recorded and there was nowhere to
+    stand to read it --- the key is legible in the metadata *of a hit*, so
+    the check a consumer would write can only run after the query it would
+    have invalidated, and only on a query that returned something.
+
+    Reported once per index instance, on the first hit that disagrees. The
+    read path had no report of any kind before this one: the empty-source
+    ``logger.info`` is on the **build** path and fires once per build, so
+    this is the first thing ``_search_many`` has ever said.
+    """
+    store = await _store()
+    try:
+        builder = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="build-v1")
+        await SemanticIndex(_breeds(), builder, store).build()
+
+        searcher = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2")
+        index = SemanticIndex(_breeds(), searcher, store)
+        with caplog.at_level("WARNING"):
+            first = await index.search("hound", k=3)
+            second = await index.search("gundog", k=3)
+
+        assert first and second, "the search still answers; the report is beside it"
+        reports = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(reports) == 1, "once per index, not once per hit and not once per query"
+        message = reports[0].getMessage()
+        assert "build-v1" in message and "serve-v2" in message
+
+    finally:
+        await store.close()
+
+
+async def test_a_hit_written_by_the_same_model_is_not_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The positive control: agreement is silent.
+
+    Without this, a report that fired unconditionally would pass the test
+    above and cry wolf on every correctly configured deployment.
+    """
+    store = await _store()
+    try:
+        embedder = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="v1")
+        await SemanticIndex(_breeds(), embedder, store).build()
+
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="v1"),
+            store,
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3)
+
+        assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    finally:
+        await store.close()
+
+
+async def test_a_row_carrying_no_model_name_is_not_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Absent is not disagreement.
+
+    ``add_records`` omits ``model_name`` entirely when the field carries no
+    name, so a store written before the key existed --- or through the raw
+    ``embedding_fn`` path, which has no identity to default from --- holds
+    rows with nothing to compare. Reporting there would fire on every
+    pre-existing store and say only that it is old.
+
+    The rows are written straight through ``add_vectors`` rather than through
+    a build, because every shipped embedder names itself:
+    ``DeterministicEmbedder`` defaults ``model_id`` to ``"deterministic"``
+    even when the caller passes none, so a build cannot produce this state.
+    """
+    import numpy as np
+
+    store = await _store()
+    try:
+        await store.add_vectors(np.ones((3, DIMENSIONS), dtype=np.float32), ids=["a", "b", "c"])
+
+        index = SemanticIndex(
+            _breeds(), DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2"), store
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3)
+
+        assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    finally:
+        await store.close()
+
+
+async def test_a_search_that_returns_nothing_reports_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The report is derived from hits, so no hits is no verdict.
+
+    This is the limit the finding named and the ruling accepted: the key is
+    legible in the metadata *of a hit*, so a threshold that filters every row
+    away leaves nothing to compare. Asserting it keeps the limit visible
+    instead of letting a later reader assume the check is unconditional.
+    """
+    store = await _store()
+    try:
+        await SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="build-v1"),
+            store,
+        ).build()
+
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2"),
+            store,
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3, threshold=2.0) == []
+
+        assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    finally:
+        await store.close()

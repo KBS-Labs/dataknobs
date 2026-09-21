@@ -234,6 +234,11 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore[MemoryVectorSt
         if self._is_empty_batch(vectors):
             return []
 
+        # The batch's width against the one this store declares: see
+        # ``VectorStoreBase._check_batch_width``. After the emptiness
+        # guard, because an empty batch has no first vector.
+        self._check_batch_width(vectors)
+
         # Convert to numpy array
         if isinstance(vectors, list):
             vectors = np.array(vectors, dtype=np.float32)

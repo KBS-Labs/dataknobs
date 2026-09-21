@@ -505,6 +505,32 @@ Referential integrity is not the axis's subject. A parent column naming a key
 no row carries places a node `entity()` will not find — exactly as an assertion
 may name an entity no `entities:` row declares.
 
+!!! warning "A **blank** parent cell is an edge, and a blank is not a null"
+
+    *Is not null* is the rule, not *is falsy* — so an empty string in the
+    parent column is an edge to a node whose id is `""`. Nothing raises: the
+    tree still walks and a roll-up still places every node. What is wrong is
+    that `roots()` answers with the absence of a key read as a key, and every
+    ancestor chain gains an element `entity()` returns `None` for.
+
+    This is not the referential-integrity case above. That one is somebody
+    writing an id and the id being wrong. **This is a blank read as a key,
+    which nobody wrote** — and it is the single most common origin of a
+    `parent_id` column: a CSV export writes `""` for an absent value, and so
+    does a form that stores a blank rather than a null.
+
+    The rule is not bent to accommodate it, and the file's own history is why.
+    `EXISTS` on the parent column was relied on once before to exclude a class
+    of row, which was *"a property of the data rather than of the declaration,
+    and nothing enforces it"*; the repair was a narrowing filter taken from the
+    binding, **not** a change to what `EXISTS` means. Treating `""` as null
+    would be that bend taken the second time, and it would quietly refuse a
+    legal key.
+
+    So the repair is at the source: make the column nullable and write `NULL`
+    for a root, or narrow the binding so the blank rows are not projected.
+    Until then, a root will show as a child of `""`.
+
 **The ids are read as strings**, which is the projection's own rule rather than
 this axis's: `RecordEntitySource` projects a row's id column through `str()`
 too, so the two agree. An integer `id:`/`parent_key:` pair therefore walks in
@@ -752,7 +778,7 @@ indexed. An empty schema section is no schema, not an empty one.
 index stores what it is given and returns what it stored, and never rewrites an
 id or infers a namespace. `localize` reads each one back.
 
-### The embedder is injected, and a configured one is refused
+### The embedder is injected, and a configured one is checked
 
 The store the registry opens itself — `store:` resolves through the same
 `$resource` mechanism a `database:` block uses, and the handle is released by
@@ -782,13 +808,49 @@ and a document declaring an `embedder:` block with nothing injected is
 section parsed into a field and discarded leaves a registry reporting success
 while holding no store, no embedder and no index, and no error anywhere.
 
-Declaring one **and** injecting one is refused too, for the same reason read
-the other way. Both name the model every row is written and judged stale
-against, this package cannot build the declared one to compare them, and the
-injected one wins silently — so a document naming `nomic-embed-text` beside a
-process injecting MiniLM would index under MiniLM and record MiniLM on every
-row, leaving the staleness contract self-consistent and the document untrue.
-Drop one.
+Declaring one **and** injecting one is a **claim the registry checks** — the
+same shape `metric:` takes one key along, a value a document may state that is
+compared rather than applied. The declared `model:` is compared against the
+injected embedder's `model_id`, and a disagreement is refused at load naming
+both sides. So a document naming `nomic-embed-text` beside a process injecting
+MiniLM no longer indexes under MiniLM while the document says otherwise; it
+does not load.
+
+This was a refusal, and the comparison serves that refusal's own intent more
+completely. The intent was to make the disagreement visible; a refusal also
+left the document unable to state the model **at all**, which matters because
+a `kind: semantic` rung's `threshold:` is a raw distance in one particular
+model's geometry and had nowhere to name the model it was calibrated against.
+The refusal's stated reason — *cannot build the declared one to compare* — is
+about **building**, and the injected embedder already publishes `model_id`.
+
+**The matching rule is two omissions, both allowed.** `model_id` is
+`provider:model`, and an Ollama model name carries its own `:tag`, so an
+embedder publishes `ollama:nomic-embed-text:latest` where a document naturally
+writes `nomic-embed-text`. The **provider** is a prefix the document may omit;
+the **tag** is a suffix either side may omit. A provider the document *does*
+state must agree, because two providers serving a same-named model are not the
+same weights and a threshold calibrated against one means nothing against the
+other.
+
+| The document writes | Injected `model_id` | Verdict |
+|---|---|---|
+| `model: nomic-embed-text` | `ollama:nomic-embed-text:latest` | agrees |
+| `provider: ollama`, `model: nomic-embed-text` | `ollama:nomic-embed-text:latest` | agrees |
+| `model: mxbai-embed-large` | `ollama:nomic-embed-text:latest` | **refused** — different model |
+| `provider: openai`, `model: nomic-embed-text` | `ollama:nomic-embed-text` | **refused** — different provider |
+| `provider: ollama` alone | anything | **refused** — a claim with no model in it cannot be checked |
+
+The last row is the `metric:` precedent again: a claim the registry cannot read
+is not a claim it may pass over. An injected embedder publishing **no**
+`model_id` is the one case that warns instead of raising — the document is not
+what is wrong, `model_id` is optional on the protocol, and refusing would make
+a legitimate embedder unusable with a legitimate document.
+
+`model_id` also survives wrapping: it is a `TextEmbedder` protocol member and
+both shipped decorators forward it unchanged — the cache so a vector stored
+through it carries the same staleness key, the bridge so a vector stored
+through it is indistinguishable.
 
 ### What `index()` answers, and what `unload()` does to it
 
@@ -818,7 +880,7 @@ success.
 | Key | What it does |
 |---|---|
 | `store:` | Where the vectors go. No default; resolved through `$resource` and released by `close()`. |
-| `embedder:` | Refused — see above. The embedder is injected. |
+| `embedder:` | A claim, checked against the injected embedder's `model_id` rather than built. Refused with nothing injected — see above. |
 | `metric:` | A claim about the store, checked rather than applied. |
 | `fields:` | Which entity fields compose the embedded text, in order. `name` and `description` are the two an entity carries free text in; anything else is refused at load. Defaults to `[name]`. |
 | `join:` | What goes between two non-empty field values. Applied *between* them, so an entity carrying one of two produces no dangling separator. Defaults to ` -- `. |
@@ -1073,6 +1135,39 @@ Sharing is the easy case to reach, not the exotic one. The registry caches a
 vector store on its resolved `store:` block alone, so two documents both
 writing `{backend: memory, dimensions: 384}` get one store, and a `table:` or a
 collection two deployments name is shared by construction.
+
+### `threshold:` is a number about a model, not about a vocabulary
+
+A `kind: semantic` rung takes a `threshold:` and drops every hit scoring below
+it. **The number means nothing on its own.** It is a raw distance in one
+particular model's geometry, and the same document under a different embedder
+is a different filter.
+
+Measured over a thirty-one-row corpus with the **identical document** either
+side: `threshold: 0.4` fires on **2 of 31** rows under the fence embedder every
+worked example here stands in with, and **30 of 31** under `nomic-embed-text`.
+One declared number, two behaviours, no error either way. A fence embedder's
+geometry is not a weak version of a model's — it is unrelated to it, so a
+threshold tuned against one carries no information about the other.
+
+Two things follow:
+
+- **Say which model the number is for.** `index.embedder:` is where, and it is
+  checked against the injected embedder rather than ignored — see *[The embedder is injected, and a configured one is
+  checked](#the-embedder-is-injected-and-a-configured-one-is-checked)* above. A
+  threshold and the model it means something against used to sit in different
+  places with nothing pairing them.
+- **Do not reach for a threshold to separate good hits from bad ones.** On that
+  same corpus the best precision **any** threshold reaches is `0.167`, at
+  `>= 0.55`, and it costs two of the three right answers. Filtering to the
+  candidates that carry a **declared** form restores `1.000` precision and
+  `1.000` recall, under both embedders. The discriminator that works already
+  ships, and it is `EvidenceKind.DECLARED` — not a number.
+
+Use `threshold:` for what it is: a floor that stops an unthresholded *k*-nearest
+search from returning the whole corpus when the query is about nothing in the
+vocabulary. `None` — the default — keeps every hit the store returns, which is
+what an unthresholded cosine search means.
 
 ### What the `resolver:` block reads
 

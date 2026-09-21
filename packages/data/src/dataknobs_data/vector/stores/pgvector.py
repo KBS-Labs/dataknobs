@@ -873,6 +873,11 @@ class PgVectorStore(VectorStore[PgVectorStoreConfig]):
         if self._is_empty_batch(vectors):
             return []
 
+        # The batch's width against the one this store declares: see
+        # ``VectorStoreBase._check_batch_width``. After the emptiness
+        # guard, because an empty batch has no first vector.
+        self._check_batch_width(vectors)
+
         # Prepare vectors
         vectors = self._prepare_vector(vectors, normalize=(self.metric == DistanceMetric.COSINE))
 

@@ -593,8 +593,15 @@ class TestTheVectorStoreFamily:
         ``add_records`` omits the key entirely when the field carries no name,
         and a metadata filter comparing against a stored ``None`` is a
         different query from one finding nothing at all.
+
+        The store declares **2** rather than the class's 8 because
+        ``_batch_sync`` produces 2-wide vectors, and a store now compares a
+        batch's width against its own declaration. This test wrote 2 into 8
+        for as long as it has existed and nothing said so, which is the
+        defect that guard was added for rather than an inconvenience it
+        causes.
         """
-        store = self._store()
+        store = MemoryVectorStore({"dimensions": 2})
         await store.initialize()
 
         [vector_id] = await store.bulk_embed_and_store(["alpha"], embedding_fn=_batch_sync)

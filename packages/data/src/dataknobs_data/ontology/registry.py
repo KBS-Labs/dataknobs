@@ -1566,17 +1566,22 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         # reported success. Every row records the injected model, so the
         # staleness contract stays self-consistent while the document is
         # silently untrue.
+        #
+        # With one injected the block is a **claim to check**, on `metric:`'s
+        # own precedent one section along -- a value a document may state
+        # that the registry compares rather than applies. It was a refusal,
+        # whose stated reason was that this registry "cannot build the
+        # declared one to compare"; that is about *building*, and the
+        # injected embedder already publishes `model_id`. Comparing serves
+        # the intent behind the refusal -- make the disagreement visible --
+        # more completely than refusing does, because a refusal also leaves
+        # the document unable to state the model at all, and the number a
+        # `kind: semantic` rung's `threshold:` means something against is a
+        # property of exactly that model.
         declared_embedder = block.get("embedder")
         if declared_embedder is not None and self._injected_embedder is not None:
-            raise ValidationError(
-                f"ontology {config.id!r} declares an `index:` section with an `embedder:` "
-                f"block **and** an embedder was injected. Both name the model every row is "
-                f"written and judged stale against, and this registry cannot build the "
-                f"declared one to compare -- so it would silently index under the injected "
-                f"model while the document named another. Drop one",
-                context={"ontology_id": config.id},
-            )
-        if declared_embedder is not None:
+            self._check_declared_model(config.id, declared_embedder)
+        elif declared_embedder is not None:
             raise ValidationError(
                 f"ontology {config.id!r} declares an `index:` section with an `embedder:` "
                 f"block, and no embedder was injected. An embedder is built in "
@@ -1618,6 +1623,119 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 f"disagrees with it: {exc}",
                 context={"ontology_id": config.id, "metric": metric},
             ) from exc
+
+    def _check_declared_model(self, ontology_id: str, declared: Any) -> None:
+        """Compare an ``index.embedder:`` block against the injected embedder.
+
+        **A claim, not a setting**, exactly as ``metric:`` is one section
+        along: the registry cannot build an embedder --- the construct that
+        takes a provider-and-model pair lives in ``dataknobs-llm``, which
+        depends on this package --- so a block here can only be checked. It
+        used to be *refused* for that reason, and the reason does not reach
+        this far: *cannot build the declared one to compare* is about
+        building, and the injected embedder already publishes ``model_id``.
+
+        **Why the claim is worth stating at all.** A ``kind: semantic`` rung
+        takes a ``threshold:``, which is a raw distance in one particular
+        model's geometry --- measured, ``threshold: 0.4`` fires on 2 of 31
+        rows under a fence embedder and 30 of 31 under ``nomic-embed-text``,
+        one declared number and two behaviours with no error either way. A
+        refusal left the number and the model it means something against in
+        different places with nothing pairing them.
+
+        **The tag rule, and it is one rule rather than a normalizer.**
+        ``LLMProviderEmbedder.model_id`` is ``provider:model``, and an Ollama
+        model name carries its own ``:tag`` --- so a document declaring
+        ``nomic-embed-text`` sits beside an embedder publishing
+        ``ollama:nomic-embed-text:latest``. The provider is a prefix the
+        document may omit and the tag is a suffix either side may omit;
+        requiring either would refuse every correctly configured deployment.
+        A provider the document *does* state must agree, because ``model_id``
+        carries one *"so that two embedders reaching the same model agree,
+        and two reaching different models do not"* and two providers serving
+        a same-named model are not the same weights.
+
+        **The comparison cannot be defeated by wrapping.** ``model_id`` is a
+        ``TextEmbedder`` protocol member and both shipped decorators forward
+        it unchanged for stated reasons: the cache so a vector stored through
+        it carries the same staleness key, the bridge so a vector stored
+        through it is indistinguishable.
+
+        Args:
+            ontology_id: Named in every message, as every sibling refusal
+                in this block names it.
+            declared: The ``embedder:`` block as the document wrote it.
+                ``model`` and ``provider`` are read from it directly or from
+                a nested mapping, which is the shape ``dataknobs-llm``'s own
+                configuration takes (``embedder: {embedding: {...}}``).
+
+        Raises:
+            ValidationError: When the block names a model the injected
+                embedder is not, when it names a provider the embedder is
+                not, or when no model name can be read out of it at all. The
+                last is the ``metric:`` precedent: a claim the registry
+                cannot read is not a claim it may pass over, because
+                accepting a block and acting on it in no way is the silent
+                drop this whole section exists to prevent.
+        """
+        stated = _stated_model(declared)
+        if stated is None:
+            raise ValidationError(
+                f"ontology {ontology_id!r} declares an `index:` section whose `embedder:` "
+                f"block names no `model:`. With an embedder injected the block is a claim "
+                f"this registry checks against the injected embedder's `model_id`, and a "
+                f"claim with no model name in it cannot be checked -- so it would be "
+                f"configuration the registry accepted and acted on in no way. Name the "
+                f"model, or drop the block",
+                context={"ontology_id": ontology_id, "embedder": declared},
+            )
+        stated_provider, stated_model = stated
+
+        published = getattr(self._injected_embedder, "model_id", "") or ""
+        if not published:
+            # One side of the comparison is missing and the document is not
+            # what is wrong: `model_id` is optional on the protocol. Refusing
+            # would make a legitimate embedder unusable with a legitimate
+            # document, and silence would make an unchecked claim look
+            # checked.
+            logger.warning(
+                "ontology %r declares `index.embedder:` naming model %r, and the injected "
+                "embedder publishes no `model_id` to compare it against; the claim is "
+                "recorded in the document and checked by nothing",
+                ontology_id,
+                stated_model,
+            )
+            return
+
+        provider, model = _split_model_id(published)
+        if stated_provider is not None and provider is not None:
+            if stated_provider.casefold() != provider.casefold():
+                raise ValidationError(
+                    f"ontology {ontology_id!r} declares `index.embedder:` with provider "
+                    f"{stated_provider!r}, and the injected embedder publishes "
+                    f"{published!r}. Both name the model every row is written and judged "
+                    f"stale against, and a `threshold:` calibrated against one provider's "
+                    f"geometry means nothing against another's. Correct the document, or "
+                    f"inject the embedder it names",
+                    context={
+                        "ontology_id": ontology_id,
+                        "declared": stated_provider,
+                        "published": published,
+                    },
+                )
+        if _untagged(stated_model) != _untagged(model):
+            raise ValidationError(
+                f"ontology {ontology_id!r} declares `index.embedder:` naming model "
+                f"{stated_model!r}, and the injected embedder publishes {published!r}. "
+                f"Both name the model every row is written and judged stale against, so "
+                f"one of them is wrong about what this index holds. Correct the document, "
+                f"or inject the embedder it names",
+                context={
+                    "ontology_id": ontology_id,
+                    "declared": stated_model,
+                    "published": published,
+                },
+            )
 
     async def _resolver_from(
         self,
@@ -2633,3 +2751,57 @@ def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
 
 
 __all__ = ["OntologyRegistry"]
+
+
+def _stated_model(declared: Any) -> tuple[str | None, str] | None:
+    """The provider and model an ``embedder:`` block names, or ``None``.
+
+    Read from the block directly and from one level of nesting, because
+    ``dataknobs-llm``'s own configuration nests them under ``embedding:``
+    and that is the spelling this repository's worked examples use. One
+    level rather than a recursive search: a block whose model name is three
+    mappings down is not a shape anything here publishes, and finding one
+    there would be guessing at what a consumer meant.
+
+    Returns:
+        ``(provider, model)`` with the provider ``None`` where the block
+        states none, or ``None`` when no model name is there to read.
+    """
+    if not isinstance(declared, Mapping):
+        return None
+    candidates: list[Mapping[str, Any]] = [declared]
+    candidates.extend(value for value in declared.values() if isinstance(value, Mapping))
+    for level in candidates:
+        model = level.get("model")
+        if isinstance(model, str) and model:
+            provider = level.get("provider")
+            return (provider if isinstance(provider, str) and provider else None), model
+    return None
+
+
+def _split_model_id(published: str) -> tuple[str | None, str]:
+    """``provider:model`` into its two halves, tolerating a tagged model.
+
+    ``LLMProviderEmbedder.model_id`` is ``f"{provider_name}:{model}"`` and an
+    Ollama model name carries its own ``:tag``, so ``ollama:nomic-embed-text:latest``
+    is a provider and a two-colon model rather than three fields. The split
+    is therefore on the **first** colon only.
+
+    An id with no colon at all is a model with no provider ---
+    ``DeterministicEmbedder`` publishes ``deterministic`` --- and answers
+    ``(None, published)`` so that a document naming only a model can still
+    agree with it.
+    """
+    provider, separator, model = published.partition(":")
+    return (provider, model) if separator else (None, published)
+
+
+def _untagged(model: str) -> str:
+    """A model name with a trailing ``:tag`` removed, casefolded.
+
+    The tag is a suffix either side may omit --- a document declares
+    ``nomic-embed-text`` where a registry publishes ``nomic-embed-text:latest``
+    --- and comparing with it in place would refuse a correctly configured
+    deployment over a default nobody typed.
+    """
+    return model.rsplit(":", 1)[0].casefold() if ":" in model else model.casefold()

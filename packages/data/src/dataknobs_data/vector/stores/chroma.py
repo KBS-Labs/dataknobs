@@ -456,6 +456,11 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
         if self._is_empty_batch(vectors):
             return []
 
+        # The batch's width against the one this store declares: see
+        # ``VectorStoreBase._check_batch_width``. After the emptiness
+        # guard, because an empty batch has no first vector.
+        self._check_batch_width(vectors)
+
         import numpy as np
 
         # Convert to list format for Chroma

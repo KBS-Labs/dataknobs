@@ -22,7 +22,7 @@ from dataknobs_common.locks import FileLock
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..exceptions import VectorDomainScopeError
-
+from ..operations import validate_vector_dimensions
 from ..types import DistanceMetric
 from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
@@ -648,6 +648,73 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
             return len(vectors) == 0
         except TypeError:
             return False
+
+    def _check_batch_width(self, vectors: Any) -> None:
+        """Refuse a batch whose vectors are not the width this store declares.
+
+        ``dimensions`` is required on every store config and validated for
+        range at construction, and until this guard **nothing compared it to
+        a vector**. Measured on the memory backend: 768-wide vectors into a
+        store declaring 32, and 32-wide into one declaring 768, both wrote
+        fifteen rows, both resolved, and neither raised --- the searches even
+        answered correctly, because both sides of the comparison used the
+        same wrong-width vectors. A required field whose wrongness is
+        unobservable from inside the deployment that wrote it is worse than
+        an absent one, and where it becomes observable is the *other*
+        backend: ``pgvector`` compares the **table's** declared column
+        against the store's configuration at initialize, which is a
+        different comparison in a different place. That is what made one
+        configuration silent on the backend everyone develops against and
+        fatal on the one they deploy to.
+
+        **Called as the opening statement of each backend's
+        ``add_vectors``, immediately after :meth:`_is_empty_batch`** --- the
+        position the shared emptiness guard already established, and the
+        only place a check belongs when the method it belongs in is abstract
+        with four implementations. Ordering against that guard is not
+        incidental: an empty batch has no vector to measure and is a no-op
+        rather than an error.
+
+        **Per write, not once per store.** A source that changes width
+        partway is what a rebuild under a swapped model produces, so
+        settling the question on the first batch a store is ever handed
+        would miss it.
+
+        The verdict is
+        :func:`~dataknobs_data.vector.operations.validate_vector_dimensions`
+        --- the helper ``dataknobs_data.vector`` exports, and **not** the
+        same-named function in ``elasticsearch_utils``, which logs a warning
+        and returns a bool. It reads a 2-D batch's last axis and a 1-D
+        input's own length, which is the right answer for both: every
+        backend reshapes a 1-D input to ``(1, -1)`` and treats it as one
+        row.
+
+        Args:
+            vectors: The batch about to be written, in any shape
+                ``add_vectors`` accepts.
+
+        Raises:
+            ValueError: If the batch's width is not :attr:`dimensions`.
+        """
+        import numpy as np
+
+        try:
+            batch = np.asarray(vectors, dtype=np.float32)
+        except (TypeError, ValueError):
+            # Not a rectangular numeric batch: a ragged list of rows, an
+            # object array, something not array-like at all. Every one of
+            # those is a real error and none of them is *this* one, and the
+            # backend's own conversion names which row is wrong where this
+            # could only say that the batch would not convert.
+            return
+        if batch.ndim == 0:
+            # A 0-d input is not a batch in any reading --- ``np.float32(1.0)``,
+            # ``np.array(5.0)``. :meth:`_is_empty_batch` answers ``False`` for
+            # it deliberately, "so that the caller sees the backend's dimension
+            # error, which can say what shape was expected"; measuring a width
+            # here would pre-empt that with a worse message.
+            return
+        validate_vector_dimensions(batch, self.dimensions)
 
     @property
     def _is_scoped(self) -> bool:

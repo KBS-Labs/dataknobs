@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **A vector store compares a write's width against its declared
+  `dimensions`.** The field is required on every store config and its range is
+  validated at construction, and nothing had ever compared it to a vector.
+  Measured on the memory backend: 768-wide vectors into a store declaring 32,
+  and 32-wide into one declaring 768, both wrote fifteen rows, both resolved,
+  and neither raised --- the searches even answered correctly, because both
+  sides of the comparison used the same wrong-width vectors. So the
+  declaration was not merely unchecked, it was *invisible*, and it became
+  visible only on `pgvector`, which compares the **table's** declared column
+  against the store's configuration at initialize: a different comparison in a
+  different place, which is what made one configuration silent on the backend
+  everyone develops against and fatal on the one they deploy to. The check is
+  `VectorStoreBase._check_batch_width`, called as the opening statement of all
+  four backends' `add_vectors` immediately after `_is_empty_batch`, and its
+  verdict is the exported `validate_vector_dimensions`. An empty batch is
+  still a no-op, a 1-D input is still one row, and a ragged or 0-d batch is
+  still reported by the backend's own conversion, which can say which row is
+  wrong.
+
+- **A declared `index.embedder:` beside an injected embedder is now a claim
+  the registry checks, not a refusal.** The block's `model:` is compared
+  against the injected embedder's `model_id` and a disagreement is refused at
+  load naming both sides --- `metric:`'s own shape, one key along. The refusal
+  this replaces was added to *make the disagreement visible*, and a comparison
+  serves that intent more completely: a refusal also left the document unable
+  to state the model at all, which matters because a `kind: semantic` rung's
+  `threshold:` is a raw distance in one particular model's geometry.
+  Measured with the identical document either side, `threshold: 0.4` fires on
+  2 of 31 rows under a fence embedder and 30 of 31 under `nomic-embed-text`.
+  The matching rule allows two omissions, because `model_id` is
+  `provider:model` and an Ollama model name carries its own tag: a document
+  may omit the provider prefix and either side may omit the `:tag`, while a
+  provider the document *does* state must agree. A block naming no `model:` is
+  refused as an unreadable claim; an embedder publishing no `model_id` warns
+  and loads, because the document is not what is wrong there.
+
+- **`SemanticIndex` reports once when a search returns a row another model
+  wrote.** The embedder's `model_id` is written on every row and the parameter
+  says what for --- *"which is what makes a stored vector's staleness judgeable
+  by something that never saw this object"* --- and no read path compared it.
+  Measured: a store built under one model and searched through another
+  returned three ranked hits, raised nothing and logged nothing at warning or
+  above. The report fires on the first disagreeing hit and once per index
+  thereafter. Its limit is stated rather than hidden: the key is legible in the
+  metadata *of a hit*, so this can only fire after a query a mismatch would
+  already have spoiled, and only on one that returned something.
+
+### Documentation
+
+- **The registry guide names what a blank parent cell does.** `ColumnHierarchy`
+  spells an edge as two `EXISTS` filters, which mean *is not null* on every
+  backend here --- so an empty string in the parent column is an edge to a node
+  whose id is `""`, `roots()` answers with the absence of a key read as a key,
+  and every ancestor chain gains an element `entity()` returns `None` for.
+  Nothing raises. It is not the referential-integrity case the page already
+  covers: that is somebody writing an id and the id being wrong, and this is a
+  blank nobody wrote, produced by the single most common origin of a
+  `parent_id` column. The rule is not bent to accommodate it --- the file's own
+  history records `EXISTS` being relied on once before for a property of the
+  data rather than of the declaration, and the repair being a narrowing filter
+  rather than a change to what `EXISTS` means.
+
+- **`threshold:` gets a section saying it is a number about a model.** Two
+  behaviours from one declared number, measured; and the discriminator that
+  does separate good hits from bad ones is `EvidenceKind.DECLARED`, not a
+  threshold --- the best precision any threshold reaches on that corpus is
+  0.167 and it costs two of the three right answers, while filtering to
+  candidates carrying a declared form restores 1.000 precision and recall under
+  both embedders.
+
 ### Added
 
 - **`OntologyRegistry.ontologies_in_play(tagged)` --- which of the vocabularies

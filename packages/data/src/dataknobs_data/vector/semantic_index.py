@@ -29,6 +29,7 @@ import numpy as np
 
 from dataknobs_common.exceptions import OperationError
 
+from dataknobs_data.vector.content import MODEL_NAME_KEY
 from dataknobs_data.vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -107,6 +108,15 @@ class SemanticIndex:
         self.embedder = embedder
         self.store = store
         self.metric = metric
+
+        #: Whether the staleness report has already fired on this instance.
+        #:
+        #: The read path carries no other once-per-instance state, and this
+        #: is why it has any: a mismatch is a property of the store and the
+        #: embedder, not of the query, so a caller running a thousand
+        #: searches against a stale store has one fact to be told and would
+        #: otherwise be told it a thousand times.
+        self._reported_stale = False
 
         if metric is not None:
             claimed = DistanceMetric.resolve(metric).canonical()
@@ -313,5 +323,55 @@ class SemanticIndex:
             )
             if threshold is not None:
                 hits = [hit for hit in hits if hit.score >= threshold]
+            self._report_stale_rows(hits)
             out.append(hits)
         return out
+
+    def _report_stale_rows(self, hits: list[VectorSearchResult]) -> None:
+        """Report once when a hit was written by a model this index is not using.
+
+        ``build`` writes the embedder's ``model_id`` onto every row, and the
+        docstring on that parameter says what for: *"which is what makes a
+        stored vector's staleness judgeable by something that never saw this
+        object"*. Nothing compared it. Measured: a store built under one
+        model and searched through another returned three ranked hits and
+        said nothing, at any level --- so the datum was recorded and there
+        was nowhere to stand to read it.
+
+        **Here, rather than anywhere better, and the limit is real.** The key
+        is legible in the metadata *of a hit*, so this can only fire after a
+        query that a mismatch would already have spoiled, and only on one
+        that returned something. Answering *what model wrote these rows*
+        without a search is the more general fix and a different shape: a
+        scan on some backends, and undefined over a store several
+        vocabularies share.
+
+        **Absent is not disagreement.** ``add_records`` omits the key when
+        the field carries no name, so a row written before the key existed,
+        or by an embedder with no ``model_id``, has nothing to compare and is
+        passed over. The same for an index whose own embedder is unnamed:
+        there is no claim to check against.
+
+        Args:
+            hits: One query's results, after any threshold filtering ---
+                the rows a caller is actually about to act on.
+        """
+        if self._reported_stale:
+            return
+        mine = getattr(self.embedder, "model_id", None)
+        if not mine:
+            return
+        for hit in hits:
+            theirs = hit.metadata.get(MODEL_NAME_KEY)
+            if theirs and theirs != mine:
+                self._reported_stale = True
+                logger.warning(
+                    "semantic index searched with embedder %r returned a row written by "
+                    "%r; the stored vectors and the query vector come from different "
+                    "models, so the ranking is arithmetic on incomparable quantities. "
+                    "Rebuild the index, or search with the model that wrote it. "
+                    "Reported once per index",
+                    mine,
+                    theirs,
+                )
+                return
