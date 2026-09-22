@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A state and an arc can say what they are, as data.**
+  `StateDefinition.to_dict()` / `from_dict()` round-trip the declarative
+  fields (name, type, description, metadata, timeout, retry, run-on-failure,
+  emit-output, data mode); functions, schemas and resource configs are objects
+  resolved against a registry and are deliberately not written.
+  `ArcDefinition.name` is `metadata['name']` or `source->target`,
+  `ArcDefinition.source_state` is stamped by `StateNetwork.add_arc`, and
+  `PushArc.parse_target()` is the one reader of the
+  `"network"` / `"network:initial_state"` syntax. `transform_function_names()`
+  answers what an arc's `transform` field refers to across all four of its
+  shapes, and `as_validation_callable()` is the validator counterpart of
+  `as_state_test_callable()`.
+
+- **An arc round-trips as the class it is.** `ArcDefinition.to_dict()` /
+  `from_dict()` and `PushArc`'s overrides carry the arc's own payload, tagged
+  with `ArcDefinition.kind`, and `arc_from_dict()` rebuilds whichever class
+  was recorded. `TransformSpec` gains `to_dict()` / `from_dict()`, and
+  `transform_to_data()` / `transform_from_data()` convert the `transform`
+  field's four shapes to and from plain data. Consumers with their own arc
+  subclass register it with `register_arc_type()` rather than losing it to the
+  base class on every round trip; an unregistered `kind` raises instead of
+  silently returning a base arc.
+
+- **`StateNetwork.arc_definitions`** lists every arc in the network. The
+  `arcs` mapping is keyed `"source:target"` and so cannot represent two arcs
+  between the same pair of states, which is the ordinary way to branch on a
+  condition.
+
+- **`StateNetwork.set_streaming_enabled()`** declares whether a network
+  streams, and the config builder now calls it from `streaming: {enabled: …}`.
+
+- **`StateNetwork.find_cycles()`** is public, under the name this changelog,
+  the construction API's documentation and its tests already gave it. It was
+  defined as `_find_cycles`.
+
 - **`FSM.execute()` takes `bridge=` and `timeout=`.** It is the remaining
   one-shot synchronous surface, drives the same engine the executors drive, and
   had neither: two calls ran on two throwaway loops, and neither was the FSM's
@@ -50,6 +85,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the operation's own, and an unbounded wait.
 
 ### Changed
+
+- **BREAKING: a network holds one kind of state, and it is `StateDefinition`.**
+  `State` --- a three-attribute class carrying `name`, `metadata` and
+  `resource_requirements` --- is removed, along with its export from
+  `dataknobs_fsm.core`. It could not produce a network the engines could run:
+  they ask a state for `outgoing_arcs` and `type` and it had neither, so
+  execution returned `(False, "'State' object has no attribute
+  'outgoing_arcs'")` --- a refusal, not a crash, so a caller saw a record that
+  simply did not process. `StateNetwork.from_dict` built one per state from
+  the name alone, discarding the rest of the payload. Migration is mechanical:
+  `State` becomes `StateDefinition`, and `type="start"` becomes
+  `type=StateType.START`. `dataknobs_fsm.core` now exports `StateDefinition`
+  and `StateType`, which it did not.
+
+- **BREAKING: a network holds one kind of arc, and it is `ArcDefinition`.**
+  `StateNetwork.Arc` is removed. The network kept its arcs as `Arc` in
+  `_arcs` / `_arc_index` while the engines read `ArcDefinition` off
+  `StateDefinition.outgoing_arcs`, populated by a different writer. The `arcs`
+  property existed to translate, rebuilding a lossy `ArcDefinition` per call
+  per arc with `priority`, `definition_order` and `required_resources`
+  dropped --- so the accessor answering "what arcs are here" answered with
+  arcs the engines would have ordered differently. `get_arcs_from_state`,
+  `get_arcs_to_state` and `arcs` now return the stored arcs themselves.
+
+- **BREAKING: `StateNetwork.add_arc` records the arc on the source state.**
+  It is now the single writer of every index the network keeps --- `_arcs`,
+  `_arc_index`, and `states[source].outgoing_arcs` --- storing one object in
+  all three rather than equal copies. It takes `definition=` for a caller that
+  has already built an arc, returns the stored `ArcDefinition` rather than an
+  `Arc`, and accepts the arc type's full `transform` union. `remove_arc` and
+  `remove_state` undo all three.
+
+- **BREAKING: a validator that raises refuses the record.** The two validator
+  lists a state carries sit five lines apart in the same state entry and gave
+  opposite answers to the same event: `pre_validation_functions` failed entry
+  ("the record is refused entry as if it had been rejected"), while
+  `validation_functions` swallowed the exception and reported the record as
+  validated --- the same outcome as a validator that could not run at all, and
+  as one whose rejection was discarded. Both now refuse, and the reason is
+  logged with its traceback, because a gate with a bug in it is otherwise
+  indistinguishable from a gate that rejected the record. The swallow began as
+  a bare `except Exception: pass`; the change that later gave it a log line
+  scoped itself to observability, with no outcome changed. Consumers relying
+  on a broken validator being ignored will now see those records fail --- which
+  is the point, but it is a change in what reaches the output.
+
+- **BREAKING: `StateNetwork.remove_arc` matches by identity.** It took any
+  arc `==` to a stored one; it now takes the stored object. A caller that
+  rebuilt an equivalent `ArcDefinition` to remove gets `ValueError` and should
+  pass the arc `add_arc` returned, or find it via `get_arcs_from_state`.
+
+- **BREAKING: a push arc naming an undefined target network is refused when
+  the FSM is built,** by the completeness check that was written to refuse it
+  and had never run. A typo in `target_network` is answered once, at build,
+  instead of once per record for the life of the run. The engine's own
+  runtime guard is unchanged, for a network removed after build.
 
 - **`FSMData.update` is `MutableMapping`'s.** The hand-written override did
   what the inherited one does, through the same `__setitem__`, and could not
@@ -149,6 +240,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uninferred dictionary is gone rather than left in place.
 
 ### Fixed
+
+- **A network built through `StateNetwork`'s own API can be executed.** That
+  API --- `add_state`, `add_arc`, `get_state`, `initial_states`, `validate`,
+  `find_cycles`, `to_dict` / `from_dict` --- is the only door into the FSM
+  that is not a YAML document, and it had never produced a runnable network.
+  It failed twice over, either half sufficient alone: `add_state` took a state
+  class the engines cannot read, and `add_arc` recorded the arc everywhere
+  except the one list they consult. Nothing inside the class could see it:
+  `validate()` passed, `find_cycles` answered and `get_arcs_from_state`
+  returned the arcs, because all of them read the index the engines do not.
+  The config path escaped because `FSMBuilder` did both jobs itself, reaching
+  past the API to hand-append an arc to the state one line before calling
+  `add_arc` --- so every test of the supported path exercised the copy that
+  was complete. The package's published data-pipeline example, which builds
+  its network this way, reported "Successfully processed 0 records"; it now
+  processes all of them.
+
+- **`execute(..., arc_name=...)` can match an arc.** The filter reads
+  `arc.name`, which only the network's retired `Arc` had, while the list it
+  filters holds `ArcDefinition` --- so no arc ever matched and the miss
+  reported as an ordinary "no arc by that name".
+
+- **A validator that is a plain callable runs.** `validation_functions` is a
+  list of `RegisteredFunction`, which includes plain callables, and the async
+  engine reached every entry as `validator.validate`. A function raises
+  `AttributeError` there, into a loop that swallows every exception --- so the
+  validator did not run and the record was reported as validated.
+  `as_validation_callable` prefers `.validate` where it exists, so the config
+  path invokes exactly what it invoked before.
+
+- **A validator that returns `False` fails the record.** Reaching the
+  callable was half the fix. The loop consumed only a `dict` result, so a
+  validator that ran and rejected was indistinguishable from one that passed
+  --- the same outcome as one that could not run at all, arrived at a
+  different way. `ValidationOutcome` states the contract in as many words
+  (`False` fails, a dict merges, `True` / `None` pass) and already carried a
+  note about the previous time it was not honoured.
+
+- **A state assembled before it is added keeps its arcs.**
+  `StateDefinition.add_outgoing_arc` writes `outgoing_arcs` --- the list the
+  engines read --- and nothing else, so a state built that way and then added
+  gave a network whose own accessors disagreed with the engine: `validate()`
+  reported "no outgoing arcs" and "unreachable" about a network that ran
+  correctly, `to_dict()` dropped the arc, and `remove_arc` could not remove
+  it. `add_state` now ingests what it finds, through the same single writer
+  `add_arc` uses. Arc targets are checked by `validate()`, which runs once the
+  network is whole, rather than at ingestion, where a forward reference is
+  ordinary.
+
+- **`remove_arc` and `remove_state` remove the arc they were given.**
+  Removal was by equality, and `ArcDefinition` is a dataclass: a freshly built
+  arc with the same fields is `==` to a stored one, so `remove_arc` accepted
+  an arc the network never held and removed a different one instead. Where two
+  equal arcs were both present, which one survived was decided by list order.
+  Both now match by identity, which is the guarantee `add_arc` was made the
+  single writer to provide.
+
+- **Two arcs between the same pair of states are both counted.**
+  `FSM.get_all_arcs()`, `get_resource_summary()["total_arcs"]` and the
+  function-reference scan behind `FSM.validate()` all read through the
+  `"source:target"`-keyed `arcs` mapping, which collapses them. A second
+  branch's `pre_test` was never collected, so `validate()` could not report it
+  unregistered. All three now read `arc_definitions`.
+
+- **A network's resource requirements are aggregated.**
+  `_update_resource_requirements` asked `state.resource_requirements` --- a
+  `List[ResourceConfig]` --- for `.databases`, `.filesystems`,
+  `.http_services` and `.llms`. A list has none of them, so every branch was
+  skipped and `get_resource_requirements()` answered empty for every network
+  ever built. Retyping the parameter from the retired `State` is what made the
+  mismatch visible; `analyze_dependencies`, directly above it, already read
+  the same field correctly.
+
+- **`supports_streaming` reflects the config that asks for streaming.**
+  `streaming: {enabled: true}` is a documented network-level key that nothing
+  read; the flag was fed instead by the dead branch above, so every network
+  answered `False`. The builder now wires it, and recalculating resource
+  totals no longer clears it.
+
+- **A serialized network keeps its transforms and its sub-network calls.**
+  `to_dict` wrote `arc.transform` whole, which stopped being JSON the moment
+  `add_arc` began storing the builder's own `TransformSpec` --- so any config
+  with transform `params` produced a dictionary `json.dumps` refuses. It also
+  recorded nothing about an arc's class or a push arc's
+  `target_network` / `return_state` / `isolation_mode` / `data_mapping` /
+  `result_mapping`, so a round-tripped sub-network call came back as an
+  ordinary transition to the state named in `target`: never entered, nothing
+  raised. Arcs now serialize themselves, and `from_dict` rebuilds them through
+  `add_arc`, so a restored network has the same single-writer guarantee a
+  freshly built one does.
+
+- **`FSM.get_start_state` no longer guards against shapes that cannot occur.**
+  The same search was written twice, each copy testing `hasattr` for
+  `states`, `is_start_state` and `type` --- shapes the annotations rule out,
+  and which the second state class that made them conceivable no longer exists
+  to supply. One `_first_start_state` helper, called from both places.
+
+- **A `target_network` of the documented `"network:initial_state"` form is
+  accepted by the build-time check.** It compared the whole string against the
+  known network names, so `"validation:deep_check"` reported as a missing
+  network. The syntax now has one reader, `PushArc.parse_target()`, which the
+  engine and the builder share.
+
+- **`FSM.get_all_functions()` no longer raises on an arc with chained
+  transforms.** It added `arc.transform` to a set whole, so a `TransformSpec`
+  went in as an object and a *list* went in as an unhashable value.
+
+- **`StateNetwork.analyze_dependencies()` returns the shape it declares.** It
+  is typed `Dict[str, Set[str]]` and keyed its result by the `ResourceConfig`
+  object, so no caller could look a resource up by the name it configured.
+
+- **A serialized network carries its states.** `StateNetwork.to_dict` asked
+  `hasattr(state, "to_dict")` and fell back to `str(state)`; since every
+  network the builder produces holds `StateDefinition`, which had no
+  `to_dict`, the fallback *was* the behaviour and a serialized network carried
+  a Python repr of each state. Arcs now also carry `priority`,
+  `definition_order` and `required_resources` through the round trip.
+
+- **`FunctionContext.function_name` is a string on every arc.** It is declared
+  `str` and received `None` for an arc with neither a transform nor a
+  pre-test, and a `TransformSpec` object where one was configured with params.
+
+- **`ExecutionContext` declares `last_error` and `_arc_acquired_resources`.**
+  Both were created on the instance by whoever wrote them first, so every
+  reader asked `hasattr` before reading --- a guard indistinguishable from one
+  guarding against a stale value. No behaviour changed.
+
+- **`AsyncStreamExecutor` and the engines find an initial state the same way.**
+  The executor held a near-verbatim copy of `find_initial_state_common`,
+  without its `fsm.name` fallback, so the two could answer differently for the
+  same FSM; it now delegates to the engine it already holds.
 
 - **A failing state transform says what went wrong, not only where.**
   `BaseExecutionEngine.handle_transform_error` is the single sink every state

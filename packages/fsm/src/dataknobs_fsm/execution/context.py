@@ -134,6 +134,23 @@ class ExecutionContext:
         self.subflow_frames: List[SubflowFrame] = []
         self.state_history: List[str] = []
 
+        # Why a record could not enter the state it was offered: the specific
+        # upstream reason, set by whichever gate refused, read by
+        # ``finalize_single_result`` when it would otherwise report only
+        # "could not enter <state>". Declared here because the engine set it
+        # on an undeclared attribute, so every reader had to ask
+        # ``hasattr(context, "last_error")`` first --- and a guard that exists
+        # because an attribute might not be there is indistinguishable from
+        # one that exists because it might be stale.
+        self.last_error: str | None = None
+
+        # ``{resource_name: owner_id}`` for resources an *arc* acquired, so the
+        # arc's cleanup releases exactly its own and not the state's. Declared
+        # for the same reason as ``last_error``: ``ArcExecution`` created it
+        # with ``if not hasattr(context, "_arc_acquired_resources")``, which
+        # reads as lazy initialisation and is indistinguishable from a typo.
+        self._arc_acquired_resources: Dict[str, Any] = {}
+
         # Data management
         self.data: Any = None
         self.metadata: Dict[str, Any] = {}

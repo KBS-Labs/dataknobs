@@ -663,6 +663,36 @@ def as_state_test_callable(func: Any) -> Any:
     return normalize_record_callable(resolved)
 
 
+def as_validation_callable(func: Any) -> Any:
+    """Return the callable form of a resolved state validator.
+
+    The sibling of :func:`as_state_test_callable`, for the other list a state
+    holds. ``StateDefinition.validation_functions`` is typed
+    ``List[RegisteredFunction]`` --- deliberately, because what the config
+    builder puts there is whatever ``_resolve_function`` returned: an
+    ``InterfaceWrapper``, a ``FunctionWrapper``, a resolved adapter or a plain
+    callable. The async engine reached every entry as ``validator.validate``,
+    which only two of those four answer.
+
+    The two that do keep answering it: a bare ``IValidationFunction`` carries
+    its logic on ``.validate`` and is not itself callable, and
+    ``InterfaceWrapper`` builds a ``.validate`` that routes through
+    ``FunctionWrapper``'s arity and resource shaping --- so preferring the
+    attribute where it exists leaves the config path invoking exactly what it
+    invoked before. The two that do not are returned unchanged, where
+    previously they raised ``AttributeError`` into a loop that swallows every
+    exception, so the record was reported as validated by a validator that
+    never ran.
+
+    Scoped to ``.validate`` only, for the reason its sibling is scoped to
+    ``IStateTestFunction``: a transform has its own resource-injecting
+    dispatch, and turning a bare transform instance into a bound method here
+    would silently bypass it.
+    """
+    validate = getattr(func, "validate", None)
+    return validate if callable(validate) else func
+
+
 class ResourceStatus(Enum):
     """Status of a resource."""
 

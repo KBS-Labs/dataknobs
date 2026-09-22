@@ -73,7 +73,7 @@ def arc_identity(source_stage: str, transition: Mapping[str, Any], idx: int) -> 
       (``SubflowManager.should_push``), so the arc's target is the source
       stage, not the ``_subflow`` sentinel.
     * The name is ``"<source>-><target>#<idx>"``.  That extends rather
-      than replaces what :attr:`dataknobs_fsm.core.network.Arc.name`
+      than replaces what :attr:`dataknobs_fsm.core.arc.ArcDefinition.name`
       generates for an unnamed arc (``"<source>-><target>"``), so a reader
       who knows the old form reads the prefix unchanged.  The index is the
       discriminator the old form lacks: two transitions may declare the

@@ -186,17 +186,23 @@ async def test_a_state_transform_that_cannot_take_the_state_object_still_gets_bo
 
 
 async def test_a_validator_whose_body_fails_is_not_run_again() -> None:
-    """The quietest of the four: the loop swallows the failure either way.
+    """The quietest of the four --- and it is no longer quiet.
 
-    So the run reports success while the consumer's validator has run twice
-    and raised twice, and nothing anywhere says so.
+    It was: the loop swallowed the failure either way, so the run reported
+    success while the consumer's validator had run twice and raised twice,
+    and nothing anywhere said so. The arity fix stopped the second run; the
+    swallow was settled separately, in favour of the answer
+    ``pre_validation_functions`` had always given. A record its gate could not
+    check is refused, with the traceback logged as the reason.
+
+    What this test is *for* is still the count: once, not twice.
     """
     validator = ShoutValidator()
 
     success = await _run_engine("validation_functions", validator, {"name": 5})
 
     assert validator.received == ["StateDataWrapper"], validator.received
-    assert success, "a failing validator does not fail the record — only the count changed"
+    assert not success, "a record a broken validator never checked is refused"
 
 
 async def test_a_working_validator_still_runs_exactly_once() -> None:
