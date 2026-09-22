@@ -24,7 +24,7 @@ SimpleFSM(
     config: Union[str, Path, Dict[str, Any]],
     data_mode: DataHandlingMode = DataHandlingMode.COPY,
     resources: Dict[str, Any] | None = None,
-    custom_functions: Dict[str, Callable] | None = None
+    custom_functions: Mapping[str, RegisteredFunction] | None = None
 )
 ```
 
@@ -32,7 +32,14 @@ SimpleFSM(
 - `config`: Path to YAML/JSON config file or config dictionary
 - `data_mode`: Default data handling mode (COPY, REFERENCE, or DIRECT)
 - `resources`: Optional resource configurations
-- `custom_functions`: Optional custom functions to register
+- `custom_functions`: Functions the config may reference by name. Each value is
+  a `RegisteredFunction` — a plain callable, or a bare instance of one of the
+  FSM function interfaces (`ITransformFunction`, `IValidationFunction`,
+  `IStateTestFunction`, `IEndStateTestFunction`). An interface instance is not
+  itself callable; the engines find its `transform` / `validate` / `test`
+  method, and pass the execution context to it only when it declares a second
+  positional parameter — so a one-argument implementation is called with the
+  record alone rather than failing.
 
 **Example:**
 ```python

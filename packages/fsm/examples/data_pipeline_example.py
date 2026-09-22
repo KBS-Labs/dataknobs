@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.state import State
+from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -173,9 +173,9 @@ def create_simple_pipeline_fsm() -> FSM:
     network = StateNetwork(name="main")
 
     # Create states
-    start_state = State(name="start", type="start")
-    process_state = State(name="process", type="normal")
-    end_state = State(name="end", type="end")
+    start_state = StateDefinition(name="start", type=StateType.START)
+    process_state = StateDefinition(name="process", type=StateType.NORMAL)
+    end_state = StateDefinition(name="end", type=StateType.END)
 
     # Add states to network
     network.add_state(start_state, initial=True)

@@ -61,7 +61,7 @@ config = {
         "documents_path": "./my_docs",  # Directory with markdown files
         "vector_store": {
             "backend": "faiss",         # FAISS vector database
-            "dimension": 384            # Embedding dimension
+            "dimensions": 768           # The width nomic-embed-text produces
         },
         "embedding_provider": "ollama",
         "embedding_model": "nomic-embed-text",
@@ -149,7 +149,7 @@ Bot: The Pro plan costs $50/month.
 ```python
 "vector_store": {
     "backend": "faiss",
-    "dimension": 384
+    "dimensions": 768
 }
 ```
 

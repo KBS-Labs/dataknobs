@@ -175,10 +175,11 @@ embedder anywhere: a `TextEmbedder` carries an identity and no version.
 
 The sidecar's nesting is worth reading twice if you write your own reader. It
 is `model.name`, not a flat `model_name`, and reaching for the flat spelling is
-not hypothetical — it shipped. `_stored_model_version` read only `model_version`
-while `VectorMetadata.to_dict` wrote only the nested form, so every record
-vectorized that way reported a version mismatch and was re-embedded on **every**
-sweep. Both helpers accept both shapes now; the nested one is the one that
+not hypothetical — it shipped. The sidecar's version reader read only
+`model_version` while `VectorMetadata.to_dict` wrote only the nested form, so
+every record vectorized that way reported a version mismatch and was
+re-embedded on **every** sweep. `sidecar_model_name` and
+`sidecar_model_version` accept both shapes now; the nested one is the one that
 exists.
 
 A stored `None` is deliberately not a mismatch, on either key. A vector written
@@ -186,6 +187,105 @@ before anything recorded a name says nothing about its model, and reading that
 silence as evidence of a *different* one would re-embed every pre-seam corpus
 on the first sweep after upgrading — the same trade `content_hash` makes one
 section above.
+
+### One rule, and a reader per shape
+
+Publishing `MODEL_NAME_KEY` fixed the *key* being spelled at each site. The
+rule for comparing what it holds was still spelled at each site, and drifted
+the same way: two copies of *absent is unknown, otherwise exact equality* came
+to disagree about an empty name on either side, in the direction that costs a
+caller a corpus re-embed. The rule now lives in one function:
+
+```python
+from dataknobs_data.vector import is_foreign_model
+
+is_foreign_model(stored, mine)   # True only when both name a model and differ
+```
+
+Both sides may have nothing to say, and both silences mean the same thing. A
+vector that recorded no name predates the key or came through the
+`embedding_fn` lane; an embedder publishing no `model_id` has one side of a
+comparison, not a grievance with every row in the store. Empty counts as
+unnamed either place, because `""` is what an embedder publishing nothing
+writes.
+
+Where the name is read *from* is genuinely three shapes, and those do not
+collapse into one reader:
+
+| Shape | Written by | Read with |
+|---|---|---|
+| a stored row's metadata, flat | `add_records`, `bulk_embed_and_store`, `DedupChecker.register` | `row_model_name` |
+| a `{field}_metadata` sidecar, nested or flat | `VectorMetadata.to_dict`, a hand-built dict | `sidecar_model_name` |
+| a `VectorField` | `VectorField(...)` | its `model_name` attribute |
+
+A reader that accepted every shape everywhere would be a defect rather than a
+tolerance. `add_records` writes the flat key onto the row while the *same
+field's own* metadata carries the nested one, in a single call — so the two
+spellings are not alternatives, they are two containers side by side. And a
+store row's metadata is your namespace: the store documents its own five keys
+and passes everything else through untouched, `search_similar_records`
+promoting each to a field of the record it synthesises. A corpus of vehicles
+carries `model`, and reading that as an embedding model would warn a correctly
+built index that its own rankings are meaningless.
+
+The same question is asked a fourth way, and that one is not this rule at all.
+An ontology document's `index.embedder:` block is checked against the injected
+embedder's `model_id` with the provider prefix and the version tag treated as
+things *either side* may omit — because one side there is a name a person
+typed, and because `model_id` promises no format, so a published
+`nomic-embed-text:latest` may be a tagged model with no provider at all. Both
+sides of the comparisons above are `model_id` values from the same mechanism,
+so an omission there is two embedders disagreeing, and softening it would miss
+exactly the version bump a calibrated `threshold:` cannot survive.
+
+### And two readers compare it
+
+Writing the name is half of it; something has to read it back. Two classes do,
+and both **carry on and tell you** rather than raising — every candidate is
+still the best answer available, and what changes is that you can tell the
+answer is untrustworthy.
+
+| Reader | What it compares | Where the fact lands |
+|---|---|---|
+| `DedupChecker.check` | each candidate's `model_name` against its own embedder | `DedupResult.mismatched_model_ids` |
+| `SemanticIndex.search` / `.search_batch` | each hit's `model_name` against its own embedder | `SemanticIndex.mismatched_model_ids` |
+
+One name for one fact, on purpose: a consumer who found the check on one of
+them does not have to discover that the other spells it differently.
+
+```python
+hits = await index.search("acme widget", k=5)
+if index.mismatched_model_ids:
+    logger.error(
+        "index holds vectors from %s but is searching with %s; the ranking is "
+        "arithmetic on incomparable quantities",
+        index.mismatched_model_ids,
+        index.embedder.model_id,
+    )
+```
+
+Both also log a warning, and `SemanticIndex` logs it **once per instance** —
+a mismatch is a property of the store and the embedder, not of the query, so a
+service running a thousand searches against a stale store has one fact to be
+told. The member is not capped that way: it accumulates every foreign name
+seen, because *which* models wrote the rows is what decides what to re-embed.
+
+Two limits, both real:
+
+- **The comparison needs a hit.** The name lives in a hit's metadata, so a
+  query the **store** answers with nothing leaves nothing to compare. Asking
+  *what model wrote the rows in this store* without a query is a different and
+  larger question — a scan on some backends, and not well posed over a store
+  several vocabularies share.
+- **It runs on what the store returned, not on what you kept.** A `threshold`
+  is applied after the comparison, deliberately: a mismatch corrupts exactly
+  the scores a threshold is compared against, so a filter that keeps nothing
+  is the *likeliest* symptom rather than a reason to stay quiet. Filtering
+  first silenced the check on its own headline case, and did so for as long as
+  the check existed.
+
+A vector carrying **no** name is not a mismatch on either reader, for the
+reason the section above gives.
 
 ### The digest survives storage
 

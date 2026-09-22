@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List
 
 from dataknobs_common import CapabilityNotSupportedError
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.database import SyncDatabase, AsyncDatabase
@@ -719,6 +720,14 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
     ) -> Any:
         """Read records from the backing async database.
 
+        The read is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`, because
+        ``fetch_one`` breaks at the first row --- on the ordinary path and on
+        success, not on an error path. A bare ``async for`` would leave a read
+        suspended on every ``fetch_one`` call this adapter answers, and on a
+        Postgres backend that read holds a pooled connection inside an open
+        transaction until the interpreter finalizes it.
+
         Args:
             query: A dataknobs :class:`~dataknobs_data.Query` (or ``None`` to
                 read all). Raw SQL strings are not supported by the
@@ -742,10 +751,11 @@ class AsyncDatabaseResourceAdapter(BaseResourceProvider):
         db = await self._ensure_db()
         search = query if isinstance(query, Query) else Query()
         results: list[Any] = []
-        async for record in db.stream_read(search):
-            results.append(record.to_dict() if as_dict else record)
-            if fetch_one:
-                break
+        async with aclosing_iter(db.stream_read(search)) as records:
+            async for record in records:
+                results.append(record.to_dict() if as_dict else record)
+                if fetch_one:
+                    break
 
         if fetch_one:
             return results[0] if results else None

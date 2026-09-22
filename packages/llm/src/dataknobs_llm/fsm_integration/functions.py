@@ -8,6 +8,15 @@ in FSM configurations for AI-powered workflows.
 
 Note: This module was migrated from dataknobs_fsm.functions.library.llm to
 consolidate all LLM functionality in the dataknobs-llm package.
+
+Every ``transform`` and ``validate`` here declares ``context`` and none of them
+reads it. The parameter is part of the FSM function interfaces
+(``ITransformFunction`` / ``IValidationFunction``) and the engines always pass
+it, so omitting it made the declaration and the
+implementation disagree --- which mypy reported as an ``override``
+incompatibility, and which produced a real failure through the
+``custom_functions=`` door, where a one-argument implementation was read as an
+inline lambda and handed a wrapper instead of the record.
 """
 
 import json
@@ -121,11 +130,12 @@ class PromptBuilder(ITransformFunction):
         self.variables = variables or []
         self.format_spec = format_spec
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by building prompt.
 
         Args:
             data: Input data containing variables for prompt.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with built prompt.
@@ -202,11 +212,12 @@ class LLMCaller(ITransformFunction):
         self.stream = stream
         self.response_field = response_field
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by calling LLM.
 
         Args:
             data: Input data containing prompt.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with LLM response.
@@ -302,11 +313,12 @@ class ResponseValidator(IValidationFunction):
         self.max_length = max_length
         self.required_fields = required_fields or []
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate LLM response.
 
         Args:
             data: Data containing LLM response.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid.
@@ -408,11 +420,12 @@ class FunctionCaller(ITransformFunction):
         self.function_registry = function_registry or {}
         self.result_field = result_field
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by calling function from LLM response.
 
         Args:
             data: Input data containing LLM response with function call.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with function result.
@@ -499,11 +512,12 @@ class ConversationManager(ITransformFunction):
         self.role_field = role_field
         self.content_field = content_field
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by managing conversation history.
 
         Args:
             data: Input data with new message.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with updated conversation history.
@@ -579,11 +593,12 @@ class EmbeddingGenerator(ITransformFunction):
         self.model = model
         self.batch_size = batch_size
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by generating embeddings.
 
         Args:
             data: Input data containing text.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with embeddings.

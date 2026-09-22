@@ -5,15 +5,26 @@
 
 This module provides commonly used transformation functions that can be
 referenced in FSM configurations.
+
+Every ``transform`` here declares ``context`` and none of them reads it. The
+parameter is part of :class:`~dataknobs_fsm.functions.base.ITransformFunction`
+and the engines always pass it, so omitting it made the declaration and the
+implementation disagree --- which mypy reported as an ``override``
+incompatibility, and which produced a real failure through the
+``custom_functions=`` door, where a one-argument implementation was read as an
+inline lambda and handed a wrapper instead of the record.
 """
 
 import copy
+import inspect
 import json
 import re
 from datetime import datetime
+from collections.abc import Mapping
 from typing import Any, Callable, Dict, List, Union
 
-from dataknobs_fsm.functions.base import ITransformFunction, TransformError
+from dataknobs_fsm.core.data_wrapper import ensure_dict
+from dataknobs_fsm.functions.base import ExecutionResult, ITransformFunction, TransformError
 
 
 def _enrichment_collides(result: Dict[str, Any], field: str, *, overwrite: bool) -> bool:
@@ -78,16 +89,17 @@ class FieldMapper(ITransformFunction):
         self.drop_unmapped = drop_unmapped
         self.copy_unmapped = copy_unmapped
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by mapping field names.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with mapped field names.
         """
-        result = {}
+        result: Dict[str, Any] = {}
 
         # Map specified fields
         for source, target in self.field_map.items():
@@ -146,13 +158,15 @@ class ValueNormalizer(ITransformFunction):
 
     def __init__(
         self,
-        normalizations: Dict[str, str],
+        normalizations: Mapping[str, Union[str, List[str]]],
         fields: List[str] | None = None,
     ):
         """Initialize the value normalizer.
 
         Args:
-            normalizations: Dictionary of normalization types:
+            normalizations: Field name (or ``"*"`` for every field) to the
+                normalization to apply, or a list of them applied in order.
+                The normalization types:
                 - "lowercase": Convert to lowercase
                 - "uppercase": Convert to uppercase
                 - "trim": Remove leading/trailing whitespace
@@ -166,11 +180,12 @@ class ValueNormalizer(ITransformFunction):
         self.normalizations = normalizations
         self.fields = fields
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by normalizing values.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with normalized values.
@@ -259,11 +274,12 @@ class TypeConverter(ITransformFunction):
         self.conversions = conversions
         self.strict = strict
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by converting field types.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with converted types.
@@ -303,7 +319,7 @@ class TypeConverter(ITransformFunction):
 
         # Handle type names
         if isinstance(target_type, str):
-            target_type = {
+            by_name: Dict[str, Union[type, Callable[..., Any]]] = {
                 "str": str,
                 "int": int,
                 "float": float,
@@ -312,7 +328,8 @@ class TypeConverter(ITransformFunction):
                 "dict": dict,
                 "datetime": datetime.fromisoformat,
                 "json": json.loads,
-            }.get(target_type, str)
+            }
+            target_type = by_name.get(target_type, str)
 
         # Special handling for bool conversion
         if target_type == bool and isinstance(value, str):
@@ -323,7 +340,7 @@ class TypeConverter(ITransformFunction):
             return datetime.fromisoformat(value)
 
         # Standard type conversion
-        return target_type(value)  # type: ignore
+        return target_type(value)
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -352,11 +369,12 @@ class DataEnricher(ITransformFunction):
         self.enrichments = enrichments
         self.overwrite = overwrite
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by adding enrichment fields.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with enrichments.
@@ -413,11 +431,12 @@ class FieldFilter(ITransformFunction):
         self.include = include
         self.exclude = exclude
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by filtering fields.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with filtered fields.
@@ -465,11 +484,12 @@ class ValueReplacer(ITransformFunction):
         self.replacements = replacements
         self.default_replacements = default_replacements or {}
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by replacing values.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with replaced values.
@@ -511,11 +531,12 @@ class ArrayFlattener(ITransformFunction):
         self.fields = fields
         self.depth = depth
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by flattening arrays.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with flattened arrays.
@@ -581,11 +602,12 @@ class DataSplitter(ITransformFunction):
         self.split_field = split_field
         self.output_field = output_field
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by splitting into multiple records.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data with split records.
@@ -624,19 +646,59 @@ class ChainTransformer(ITransformFunction):
         """
         self.transformers = transformers
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Apply all transformers in sequence.
 
         Args:
             data: Input data.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Transformed data after all transformers.
         """
         result = data
         for transformer in self.transformers:
-            result = transformer.transform(result)
+            result = self._coalesce(result, transformer.transform(result, context))
         return result
+
+    @staticmethod
+    def _coalesce(current: Dict[str, Any], answer: Any) -> Dict[str, Any]:
+        """The record a link produced, as the next link has to receive it.
+
+        A link may hand back any member of
+        :data:`~dataknobs_fsm.functions.base.TransformOutcome`, and the chain
+        reads them the way both engines do
+        (``BaseExecutionEngine.process_transform_result``): ``None`` means the
+        record was mutated in place, an ``ExecutionResult`` is unwrapped, and a
+        failing one is the chain's error. Feeding the raw answer to the next
+        link instead turned a mutate-in-place link into a ``None`` record --- so
+        the chain returned ``None``, the engine read *that* as mutate-in-place
+        against the original record, and every link in the chain was silently
+        discarded.
+
+        Raises:
+            TransformError: If the link is ``async def``. A synchronous chain
+                cannot await it, and passing the coroutine on made the record
+                a coroutine object with nothing raised and nothing awaited.
+        """
+        if inspect.isawaitable(answer):
+            # Close it rather than letting it be collected un-awaited: an
+            # abandoned coroutine warns at an unrelated point in the program,
+            # which is a worse report than the error raised here.
+            close = getattr(answer, "close", None)
+            if close is not None:
+                close()
+            raise TransformError(
+                "ChainTransformer is synchronous and cannot await an async link; "
+                "run async transforms as separate states, or chain them in an async context"
+            )
+        if answer is None:
+            return current
+        if isinstance(answer, ExecutionResult):
+            if not answer.success:
+                raise TransformError(answer.error or "Chained transform failed")
+            return ensure_dict(answer.data)
+        return ensure_dict(answer)
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -645,7 +707,7 @@ class ChainTransformer(ITransformFunction):
 
 
 # Convenience functions for creating transformers
-def map_fields(mapping: Dict[str, str], **kwargs) -> FieldMapper:
+def map_fields(mapping: Dict[str, str], **kwargs: Any) -> FieldMapper:
     """Create a FieldMapper."""
     return FieldMapper(mapping, **kwargs)
 

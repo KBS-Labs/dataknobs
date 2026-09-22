@@ -22,7 +22,7 @@ from dataknobs_common.locks import FileLock
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..exceptions import VectorDomainScopeError
-
+from ..operations import validate_vector_dimensions
 from ..types import DistanceMetric
 from .config import VectorStoreConfig, VectorStoreTimestampConfig
 
@@ -241,6 +241,21 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
 
     CONFIG_CLS: ClassVar[type[VectorStoreConfig]] = VectorStoreConfig
 
+    REQUIRES_DECLARED_DIMENSIONS: ClassVar[bool] = False
+    """Whether this backend must be told the vector width before a write.
+
+    ``False`` --- the default --- for a backend that can take the width
+    from the vectors it is handed, so an undeclared ``dimensions`` is an
+    ordinary configuration it serves. ``True`` for one that builds a
+    fixed-width structure at ``initialize``, where the number is needed
+    before any vector exists and a missing one surfaces as a failure from
+    the library underneath: ``faiss.IndexFlatL2(0)`` constructs and then
+    raises a bare ``AssertionError`` on the first ``add``, and
+    ``vector(0)`` is refused by Postgres as a column type. Both are the
+    same error as *you did not state the width*, reported somewhere the
+    reader cannot act on.
+    """
+
     def _setup(self) -> None:
         """Derive shared attributes from the typed config.
 
@@ -255,6 +270,11 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
         cfg = self.config
 
         self.dimensions = cfg.dimensions
+        # Refused here rather than at the first write: a width that is not
+        # a width is wrong the moment the config is read, and the message
+        # can still name the config key. See _validate_dimensions, which
+        # this is the only caller of and which had none at all before.
+        self._validate_dimensions()
 
         # Distance metric: keep the string in config, derive the enum here.
         #
@@ -353,15 +373,45 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
         self._save_lock = asyncio.Lock()
 
     def _validate_dimensions(self) -> None:
-        """Validate vector dimensions.
+        """Refuse a declared width that is not one, at the moment it is read.
+
+        **This method was dead from the commit that introduced it** until
+        :meth:`_setup` began calling it: ``grep`` found its definition and
+        no call site, in any package, for the whole life of the vector
+        backend. What that cost was not the range check --- nobody writes
+        ``dimensions: -1`` --- but the ``0`` beneath it. The field defaults
+        to ``0`` and the method that would have refused it never ran, so
+        ``0`` became a reachable, ordinary, *unvalidated* state rather than
+        the error the method's author took it for, and four years of
+        configs were written on top of it.
+
+        So ``0`` is now read as what it has always in fact meant --- **no
+        declaration** (see :attr:`VectorStoreConfig.dimensions`) --- and is
+        refused only by a backend that cannot defer the question, which
+        says so with :attr:`REQUIRES_DECLARED_DIMENSIONS`. Reading it as
+        *invalid* instead would refuse ``MemoryVectorStore({})``, which has
+        an explicit smoke test, and the in-process store
+        ``RAGKnowledgeBaseConfig`` documents its empty ``vector_store:``
+        section as falling back to.
+
+        Negative and above-65536 are refused for every backend, because
+        neither is a sentinel under any reading and neither is a width.
 
         Raises:
-            ValueError: If dimensions are invalid
+            ValueError: If the declared width is negative, exceeds 65536,
+                or is absent on a backend that requires one.
         """
-        if self.dimensions <= 0:
-            raise ValueError(f"Dimensions must be positive, got {self.dimensions}")
+        if self.dimensions < 0:
+            raise ValueError(f"dimensions must not be negative, got {self.dimensions}")
         if self.dimensions > 65536:
-            raise ValueError(f"Dimensions {self.dimensions} exceeds maximum (65536)")
+            raise ValueError(f"dimensions {self.dimensions} exceeds maximum (65536)")
+        if self.dimensions == 0 and self.REQUIRES_DECLARED_DIMENSIONS:
+            raise ValueError(
+                f"{type(self).__name__} requires a declared vector width: set "
+                f"'dimensions' in the store config. This backend builds a "
+                f"fixed-width structure before the first write, so it cannot "
+                f"take the width from the vectors."
+            )
 
     def _normalize_vector(self, vector: np.ndarray) -> np.ndarray:
         """Normalize a vector for cosine similarity.
@@ -639,15 +689,163 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
         out of an emptiness check. A predicate that raises on part of
         its input domain is not one a guard can be built from.
 
-        Left to each backend rather than hoisted into a concrete
-        ``add_vectors`` on the base: that method is abstract, and giving
-        it a body would rename the abstract half out from under every
-        out-of-tree store.
+        Reached through :meth:`_guard_batch`, which pairs it with the
+        width check in the order the two have to run. Still a helper each
+        backend calls rather than a concrete ``add_vectors`` on the base:
+        that method is abstract and shipped, and giving it a body would
+        rename the abstract half out from under every out-of-tree store.
         """
         try:
             return len(vectors) == 0
         except TypeError:
             return False
+
+    def _guard_batch(self, vectors: Any) -> bool:
+        """Both write-batch guards, in the order they have to run.
+
+        Every ``add_vectors`` implementation opens with the same two
+        questions --- *is there anything here?* and *is it the width this
+        store declares?* --- and they were asked separately at four call
+        sites, each preceded by the same eight lines of comment. This is
+        those two calls, once.
+
+        **The ordering is the reason it is one method rather than two.**
+        Emptiness comes first because an empty batch has no vector to
+        measure and is a no-op rather than an error, and that ordering was
+        previously a property each backend re-established by hand. A fifth
+        backend, or a reordering in one of the four, had nothing to
+        contradict it; now there is nothing to reorder.
+
+        **Not hoisted into a concrete ``add_vectors`` on the base**, which
+        is where a reader will reasonably ask why. ``VectorStore``'s is
+        ``@abstractmethod`` and shipped, so giving it a body means renaming
+        the abstract half --- and an out-of-tree store that implements the
+        published name then cannot be instantiated at all:
+        ``TypeError: Can't instantiate abstract class ... without an
+        implementation for abstract method '_add_vectors_impl'``. The
+        factory supports backends registered out of band, so those stores
+        are not hypothetical. A shared helper each backend calls buys the
+        same single implementation at no such cost; what it does not buy is
+        coverage for a store that never calls it, which is the honest limit
+        of this shape.
+
+        Args:
+            vectors: The batch about to be written, in any shape
+                ``add_vectors`` accepts.
+
+        Returns:
+            ``True`` when the batch is empty and the caller should return
+            ``[]`` without writing.
+
+        Raises:
+            ValueError: When the batch's width is not :attr:`dimensions`.
+        """
+        if self._is_empty_batch(vectors):
+            return True
+        self._check_batch_width(vectors)
+        return False
+
+    def _check_batch_width(self, vectors: Any) -> None:
+        """Refuse a batch whose vectors are not the width this store declares.
+
+        ``dimensions`` is validated for range at construction, and until
+        this guard **nothing compared it to a vector**. Measured on the
+        memory backend: 768-wide vectors into a
+        store declaring 32, and 32-wide into one declaring 768, both wrote
+        fifteen rows, both resolved, and neither raised --- the searches even
+        answered correctly, because both sides of the comparison used the
+        same wrong-width vectors. A required field whose wrongness is
+        unobservable from inside the deployment that wrote it is worse than
+        an absent one, and where it becomes observable is the *other*
+        backend: ``pgvector`` compares the **table's** declared column
+        against the store's configuration at initialize, which is a
+        different comparison in a different place. That is what made one
+        configuration silent on the backend everyone develops against and
+        fatal on the one they deploy to.
+
+        **Called as the opening statement of each backend's
+        ``add_vectors``** --- the position the shared emptiness guard
+        already established, and the only place a check belongs when the
+        method it belongs in is abstract with four implementations. It is
+        reached through :meth:`_guard_batch`, which is what makes the
+        ordering against that guard structural rather than a convention
+        four files keep: an empty batch has no vector to measure and is a
+        no-op rather than an error.
+
+        **It measures what the caller passed**, so a write path where the
+        caller passes no vectors is outside it. There is one:
+        ``ChromaVectorStore.add_documents`` hands text to an embedding
+        function, which chooses the width. That store compares the width
+        against its collection instead --- see
+        ``ChromaVectorStore._check_stored_width``.
+
+        **Per write, not once per store.** A source that changes width
+        partway is what a rebuild under a swapped model produces, so
+        settling the question on the first batch a store is ever handed
+        would miss it.
+
+        **A width nobody declared is not compared to anything.**
+        ``dimensions`` defaults to ``0`` and that value is the absence of
+        a declaration rather than a declaration of zero
+        (:attr:`VectorStoreConfig.dimensions`), so there is no claim here
+        to falsify --- and a guard reading the sentinel as a claim refuses
+        *every* write to such a store, reporting ``expected 0``, which
+        names neither the config key nor the cause. That is not a
+        hypothetical: it is the in-process store
+        ``RAGKnowledgeBaseConfig`` documents its empty ``vector_store:``
+        section as falling back to, and ``MemoryVectorStore({})``, which
+        carries its own smoke test. A backend that cannot serve an
+        undeclared width refuses it at construction instead, where the
+        message can name the key --- see
+        :attr:`VectorStoreBase.REQUIRES_DECLARED_DIMENSIONS`.
+
+        What this does *not* do is infer a width from the first batch and
+        hold later ones to it. That would check something real --- rows of
+        two widths in one store make its searches meaningless --- but it
+        is a different guarantee from *the declaration is true*, it is
+        state this class does not otherwise keep, and the two backends
+        that would most want it are exactly the two that refuse an
+        undeclared width anyway.
+
+        The verdict is
+        :func:`~dataknobs_data.vector.operations.validate_vector_dimensions`
+        --- the helper ``dataknobs_data.vector`` exports, and **not** the
+        same-named function in ``elasticsearch_utils``, which logs a warning
+        and returns a bool. It reads a 2-D batch's last axis and a 1-D
+        input's own length, which is the right answer for both: every
+        backend reshapes a 1-D input to ``(1, -1)`` and treats it as one
+        row.
+
+        Args:
+            vectors: The batch about to be written, in any shape
+                ``add_vectors`` accepts.
+
+        Raises:
+            ValueError: If the batch's width is not :attr:`dimensions`.
+        """
+        import numpy as np
+
+        try:
+            batch = np.asarray(vectors, dtype=np.float32)
+        except (TypeError, ValueError):
+            # Not a rectangular numeric batch: a ragged list of rows, an
+            # object array, something not array-like at all. Every one of
+            # those is a real error and none of them is *this* one, and the
+            # backend's own conversion names which row is wrong where this
+            # could only say that the batch would not convert.
+            return
+        if batch.ndim == 0:
+            # A 0-d input is not a batch in any reading --- ``np.float32(1.0)``,
+            # ``np.array(5.0)``. :meth:`_is_empty_batch` answers ``False`` for
+            # it deliberately, "so that the caller sees the backend's dimension
+            # error, which can say what shape was expected"; measuring a width
+            # here would pre-empt that with a worse message.
+            return
+        if self.dimensions == 0:
+            # No declaration was made; there is nothing to compare. See
+            # the docstring above -- this is the sentinel, not a width.
+            return
+        validate_vector_dimensions(batch, self.dimensions)
 
     @property
     def _is_scoped(self) -> bool:

@@ -222,13 +222,13 @@
         {
           "path": "packages/llm/src",
           "tier": "transitional",
-          "ceiling": 52,
+          "ceiling": 46,
           "reason": "ratchet group"
         },
         {
           "path": "packages/fsm/src",
           "tier": "transitional",
-          "ceiling": 396,
+          "ceiling": 244,
           "reason": "ratchet group"
         },
         {

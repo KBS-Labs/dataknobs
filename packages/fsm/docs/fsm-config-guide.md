@@ -45,6 +45,29 @@ config = {
 }
 ```
 
+### Names
+
+Every name a configuration writes must be at least one character: the FSM's,
+a network's, a state's, a resource's, and every reference to one --- an arc's
+`target`, a push arc's `target_network` and `return_state`, `main_network`,
+and the resource names a state, a network or an arc requires.
+
+An empty name used to load, and nothing downstream could tell it apart from an
+absent one. A state requiring a resource named `""` was skipped by the engine's
+acquisition loops and ran without it; an end state named `""` was invisible to
+the termination check; a main network named `""` reported no arcs out of any
+state. Each was silent, and each was the opposite of what the document said.
+The schema refuses an empty name now, naming the field:
+
+```text
+1 validation error for FSMConfig
+resources.0.name
+  String should have at least 1 character
+```
+
+Whitespace is still accepted. `"  "` is a poor name but not an absent one, and
+nothing downstream mistakes it for one.
+
 ## States
 
 States are the nodes in your FSM graph. Each state has a name and metadata that defines its behavior.
@@ -402,6 +425,34 @@ Functions define the processing logic for states and transitions. They receive s
 }
 ```
 
+A registered function is one passed to the FSM by name through
+`custom_functions=` (on `SimpleFSM`, `AsyncSimpleFSM`, `AdvancedFSM` and
+`build_fsm`) or `FSMBuilder.register_function`. Each value is a
+`RegisteredFunction` (`dataknobs_fsm.functions.base`):
+
+```python
+RegisteredFunction = (
+    Callable[..., Any]
+    | ITransformFunction
+    | IValidationFunction
+    | IStateTestFunction
+    | IEndStateTestFunction
+)
+```
+
+A bare interface **instance** is not itself callable — it carries its logic on
+`transform` / `validate` / `test` / `should_end`, and the engines find that
+method. Both shapes may be synchronous or `async def`.
+
+The interface method may declare `context` or omit it. The engines invoke every
+record step as `func(record, context)`, and a one-argument implementation is
+called with the record alone; the reading is
+`dataknobs_fsm.functions.base.accepts_context`, shared by the registration door
+and the config door so the same object behaves the same through both. It counts
+positional parameters only — `def transform(self, data, **kwargs)` is *not* a
+two-argument implementation, because the context is passed positionally.
+
+
 3. **Built-in Functions** - Framework-provided functions from the FSM library
 ```python
 {
@@ -458,8 +509,8 @@ in one of two shapes:
 - a **class** implementing an FSM function interface (`ITransformFunction`,
   `IValidationFunction`, `IStateTestFunction`) — constructed with `params` as
   constructor keyword arguments, exactly like a built-in class; or
-- a plain **function** with the `(data, context)` signature — resolved through
-  the standard wrapper path (it takes no `params`).
+- a plain **function** with the `(data, context)` — or `(data)` — signature,
+  resolved through the standard wrapper path (it takes no `params`).
 
 The interface method (`transform` / `validate` / `test`) may be **synchronous or
 `async def`** — async custom methods are awaited. Unlike built-ins, a custom
@@ -490,9 +541,14 @@ Validation functions check data validity and are called with:
   - `resources`: Available resources
   - `variables`: Shared variables
 
-**Return Value:**
-- Boolean: `True` if validation passes, `False` otherwise
-- OR ExecutionResult object with `success` property
+**Return Value** (`ValidationOutcome`):
+- Boolean: `False` fails the record, `True` passes it
+- OR a dict, which merges into the record
+- OR `None`, which passes it unchanged
+
+Not an `ExecutionResult`: neither validator path unwraps one, so a *failing*
+`ExecutionResult` is neither `False` nor a dict and the record passes the
+gate. A validator written that way can never reject.
 
 ```python
 # Example validation function
@@ -513,9 +569,10 @@ Transform functions modify data and are called with:
 - `data`: The current state data
 - `context`: Optional execution context (same as validation)
 
-**Return Value:**
-- Modified data (dict or object)
-- OR ExecutionResult object with `data` property
+**Return Value** (`TransformOutcome`):
+- Modified data (dict or object), which becomes the record
+- OR an ExecutionResult, unwrapped to its `data` (a failing one raises)
+- OR `None`, meaning the record was mutated in place and is preserved
 
 ```python
 # Example transform function

@@ -44,7 +44,11 @@ async def _shared_store() -> Any:
 
 async def _bound_kb(store: Any, binding: str | None, value: str | None) -> RAGKnowledgeBase:
     embedder = await create_embedding_provider(
-        build_embedding_config(embedding_provider="echo", embedding_model="test")
+        build_embedding_config(
+            embedding_provider="echo",
+            embedding_model="test",
+            store_dimensions=store.dimensions,
+        )
     )
     config = {binding: value} if binding else None
     return RAGKnowledgeBase.from_components(config, vector_store=store, embedding_provider=embedder)

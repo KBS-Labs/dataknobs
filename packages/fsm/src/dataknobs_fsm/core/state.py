@@ -228,9 +228,8 @@ from uuid import uuid4
 from dataknobs_data import Record
 from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
 from dataknobs_fsm.functions.base import (
-    IValidationFunction,
-    ITransformFunction,
     IEndStateTestFunction,
+    RegisteredFunction,
     ResourceConfig,
 )
 
@@ -521,10 +520,15 @@ class StateDefinition:
     # Resource requirements
     resource_requirements: List[ResourceConfig] = dataclass_field(default_factory=list)
 
-    # Functions
-    pre_validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
-    validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
-    transform_functions: List[ITransformFunction] = dataclass_field(default_factory=list)
+    # Functions. ``RegisteredFunction`` rather than the interface types: what
+    # the builder puts here is whatever ``_resolve_function`` returned --- a
+    # ``FunctionWrapper``, an ``InterfaceWrapper``, a resolved library adapter
+    # or a plain callable --- and the engines invoke them as
+    # ``func(data, context)``. Naming the interfaces described the intent and
+    # not the contents, so every assignment the builder made was a finding.
+    pre_validation_functions: List[RegisteredFunction] = dataclass_field(default_factory=list)
+    validation_functions: List[RegisteredFunction] = dataclass_field(default_factory=list)
+    transform_functions: List[RegisteredFunction] = dataclass_field(default_factory=list)
     end_test_function: IEndStateTestFunction | None = None
 
     # Arc references (will be populated when building network)
@@ -614,7 +618,7 @@ class StateDefinition:
             return True, []
         return self.schema.validate(data)
 
-    def add_pre_validation_function(self, func: IValidationFunction) -> None:
+    def add_pre_validation_function(self, func: RegisteredFunction) -> None:
         """Add a pre-validation function.
 
         Args:
@@ -622,7 +626,7 @@ class StateDefinition:
         """
         self.pre_validation_functions.append(func)
 
-    def add_validation_function(self, func: IValidationFunction) -> None:
+    def add_validation_function(self, func: RegisteredFunction) -> None:
         """Add a validation function.
 
         Args:
@@ -630,7 +634,7 @@ class StateDefinition:
         """
         self.validation_functions.append(func)
 
-    def add_transform_function(self, func: ITransformFunction) -> None:
+    def add_transform_function(self, func: RegisteredFunction) -> None:
         """Add a transform function.
 
         Args:
@@ -641,10 +645,71 @@ class StateDefinition:
     def add_outgoing_arc(self, arc: "ArcDefinition") -> None:
         """Add an outgoing arc.
 
+        Prefer :meth:`StateNetwork.add_arc`, which records the arc here *and*
+        in the network's own indexes. This appends to one of the two, which is
+        how they came apart; it remains for a state being assembled before it
+        is added to a network.
+
         Args:
             arc: Arc definition to add.
         """
         self.outgoing_arcs.append(arc)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The state's declarative fields, as a dictionary.
+
+        **Structure, not behaviour.** Functions, schemas and resource configs
+        are objects resolved against a registry at build time and have no
+        faithful dictionary form, so they are not written here and a state
+        rebuilt by :meth:`from_dict` does not carry them. What round-trips is
+        the shape of the network --- names, types, ordering, execution settings
+        --- which is what a caller serializing a network is asking for.
+
+        ``StateDefinition`` had no ``to_dict`` at all, and
+        ``StateNetwork.to_dict`` asked ``hasattr(state, "to_dict")`` before
+        falling back to ``str(state)``. Since every network the builder
+        produces holds ``StateDefinition``, that fallback was not a fallback:
+        it was the behaviour, and a serialized network carried a Python repr
+        of each state.
+        """
+        return {
+            "name": self.name,
+            "type": self.type.value,
+            "description": self.description,
+            "metadata": dict(self.metadata),
+            "timeout": self.timeout,
+            "retry_count": self.retry_count,
+            "retry_delay": self.retry_delay,
+            "run_on_failure": self.run_on_failure,
+            "emit_output": self.emit_output,
+            "data_mode": self.data_mode.value if self.data_mode is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StateDefinition":
+        """Rebuild a state from :meth:`to_dict`.
+
+        Args:
+            data: A mapping in the shape :meth:`to_dict` produces. Only
+                ``name`` is required; anything absent takes the field default.
+
+        Returns:
+            A state carrying the declarative fields, and none of the functions,
+            schema or resources --- see :meth:`to_dict` for why.
+        """
+        raw_mode = data.get("data_mode")
+        return cls(
+            name=data["name"],
+            type=StateType(data.get("type", StateType.NORMAL.value)),
+            description=data.get("description", ""),
+            metadata=dict(data.get("metadata") or {}),
+            timeout=data.get("timeout"),
+            retry_count=data.get("retry_count", 0),
+            retry_delay=data.get("retry_delay", 1.0),
+            run_on_failure=data.get("run_on_failure", False),
+            emit_output=data.get("emit_output", True),
+            data_mode=DataHandlingMode(raw_mode) if raw_mode is not None else None,
+        )
 
 
 @dataclass
@@ -991,30 +1056,6 @@ class StateInstance:
             "last_error": self.last_error,
             "executed_arcs": self.executed_arcs,
             "next_state": self.next_state,
-        }
-
-
-# Simplified State class for network usage
-class State:
-    """Simplified state class for use in state networks."""
-
-    def __init__(self, name: str, **kwargs: Any) -> None:
-        """Initialize state.
-
-        Args:
-            name: State name.
-            **kwargs: Additional state properties.
-        """
-        self.name = name
-        self.metadata = kwargs
-        self.resource_requirements = kwargs.get("resource_requirements", {})
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "name": self.name,
-            "metadata": self.metadata,
-            "resource_requirements": self.resource_requirements,
         }
 
 

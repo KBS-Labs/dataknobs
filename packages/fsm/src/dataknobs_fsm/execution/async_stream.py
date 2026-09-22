@@ -6,7 +6,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union, cast
+from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union
 
 from dataknobs_common.callbacks import run_callback_off_loop
 from dataknobs_fsm.core.fsm import FSM
@@ -328,28 +328,17 @@ class AsyncStreamExecutor:
     def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
 
+        Delegates to the engine this executor already holds. This was a
+        near-verbatim copy of ``find_initial_state_common``, carrying a
+        ``cast("str", ...)`` whose comment named the cause --- "`main_network`
+        came from `getattr`, so it is `Any`" --- rather than removing it. The
+        copy also lacked the shared version's ``fsm.name`` fallback, so the
+        two could answer differently for the same FSM.
+
         Returns:
             Initial state name or None.
         """
-        # Get main network
-        main_network = getattr(self.fsm, "main_network", None)
-        if isinstance(main_network, str):
-            if main_network in self.fsm.networks:
-                network = self.fsm.networks[main_network]
-                if hasattr(network, "initial_states") and network.initial_states:
-                    return next(iter(network.initial_states))
-        elif main_network and hasattr(main_network, "initial_states"):
-            if main_network.initial_states:
-                # `main_network` came from `getattr`, so it is `Any`; the
-                # attribute is `Set[str]` on every network type that has it.
-                return cast("str", next(iter(main_network.initial_states)))
-
-        # Fallback: check all networks
-        for network in self.fsm.networks.values():
-            if hasattr(network, "initial_states") and network.initial_states:
-                return next(iter(network.initial_states))
-
-        return None
+        return self.engine.find_initial_state_common()
 
     async def _fire_progress_callback(self, progress: StreamProgress) -> None:
         """Fire progress callback.

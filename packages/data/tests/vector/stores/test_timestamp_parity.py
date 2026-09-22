@@ -23,9 +23,14 @@ from typing import Any
 import pytest
 from dataknobs_common.testing import is_chromadb_available
 
+from dataknobs_data.testing import chroma_embedding_function
 from dataknobs_data.testing import vector as _vector
 
 from .conftest import running_vector_store
+
+#: The width the document tests declare *and* embed at, so the store's
+#: claim about its collection is one the collection can meet.
+_DOC_DIMENSIONS = 8
 
 # The backend roster, the availability marks, the per-backend construction
 # and the Chroma teardown all live in ``conftest.py``. This suite needs an
@@ -159,7 +164,19 @@ async def test_search_documents_exposes_timestamps(request: pytest.FixtureReques
     unexpected keyword argument, because the parameter reached ``search``
     and ``get_vectors`` and stopped there.
     """
-    async with running_vector_store("chroma", request, collection_prefix="test_docts_") as store:
+    async with running_vector_store(
+        "chroma",
+        request,
+        collection_prefix="test_docts_",
+        # The document door embeds text, so the store's declared width has
+        # to be a width something actually produces. Without this the
+        # fixture's 4 met chroma's default 384-wide embedding function and
+        # the collection held rows the store said it would not hold --- and
+        # the default also fetches ~166 MB of ONNX weights, which passes on
+        # a warm machine and fails on a cold runner.
+        embedding_function=chroma_embedding_function(_DOC_DIMENSIONS),
+        dimensions=_DOC_DIMENSIONS,
+    ) as store:
         await store.add_documents(["a small brown dog"], ids=["d1"], metadata=[{"k": "v"}])
 
         rows = await store.search_documents("dog", k=1, include_timestamps=True)
@@ -179,7 +196,19 @@ async def test_search_documents_omits_timestamps_by_default(
     request: pytest.FixtureRequest,
 ) -> None:
     """Default ``search_documents`` omits the keys, as the siblings do."""
-    async with running_vector_store("chroma", request, collection_prefix="test_docts_") as store:
+    async with running_vector_store(
+        "chroma",
+        request,
+        collection_prefix="test_docts_",
+        # The document door embeds text, so the store's declared width has
+        # to be a width something actually produces. Without this the
+        # fixture's 4 met chroma's default 384-wide embedding function and
+        # the collection held rows the store said it would not hold --- and
+        # the default also fetches ~166 MB of ONNX weights, which passes on
+        # a warm machine and fails on a cold runner.
+        embedding_function=chroma_embedding_function(_DOC_DIMENSIONS),
+        dimensions=_DOC_DIMENSIONS,
+    ) as store:
         await store.add_documents(["a small brown dog"], ids=["d1"], metadata=[{"k": "v"}])
 
         rows = await store.search_documents("dog", k=1)

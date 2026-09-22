@@ -53,7 +53,6 @@ async def test_etl_applies_user_transformations(tmp_path: Path) -> None:
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,
@@ -80,7 +79,6 @@ async def test_etl_applies_field_mappings(tmp_path: Path) -> None:
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,

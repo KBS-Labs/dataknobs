@@ -12,21 +12,20 @@ from dataknobs_fsm.core.arc import (
 )
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import (
-    Arc,
     NetworkResourceRequirements,
     StateNetwork,
 )
-from dataknobs_fsm.core.state import State, StateMode
+from dataknobs_fsm.core.state import StateDefinition, StateMode, StateType
 
 __all__ = [
     # FSM
     "FSM",
     # State
-    "State",
+    "StateDefinition",
+    "StateType",
     "StateMode",
     # Network
     "StateNetwork",
-    "Arc",
     "NetworkResourceRequirements",
     # Arc
     "ArcDefinition",

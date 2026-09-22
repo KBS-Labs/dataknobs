@@ -5,6 +5,13 @@
 
 This module provides commonly used validation functions that can be
 referenced in FSM configurations.
+
+Every ``validate`` here declares ``context`` and none of them reads it. The
+parameter is part of :class:`~dataknobs_fsm.functions.base.IValidationFunction`
+and the engines always pass it, so omitting it made the declaration and the
+implementation disagree --- which mypy reported as an ``override``
+incompatibility, and which produced a gate that refused every record when one
+of these validators was registered by name rather than named in the config.
 """
 
 import re
@@ -13,8 +20,11 @@ from typing import Any, Dict, List, Union
 
 from pydantic import BaseModel, ValidationError
 
-from dataknobs_fsm.functions.base import IValidationFunction, ValidationError as FSMValidationError
-from dataknobs_fsm.functions.library._callables import normalize_record_callable
+from dataknobs_fsm.functions.base import (
+    IValidationFunction,
+    ValidationError as FSMValidationError,
+    normalize_record_callable,
+)
 
 
 # Map a friendly schema ``type`` token to the Python type used for the
@@ -184,7 +194,7 @@ def _callable_predicate(fn: Callable[..., Any]) -> Callable[..., Any]:
     A consumer's predicate may be written as ``record -> bool`` or
     ``(record, context) -> bool``, and may be sync or async (an async predicate
     is what a resource-reading gate uses). Delegates to the shared
-    :func:`~dataknobs_fsm.functions.library._callables.normalize_record_callable`
+    :func:`~dataknobs_fsm.functions.base.normalize_record_callable`
     (the enrichment step uses the same normalizer) with ``coerce=bool`` so the
     gate always yields a boolean; the returned callable is a coroutine function
     iff ``fn`` is.
@@ -254,11 +264,12 @@ class RequiredFieldsValidator(IValidationFunction):
         self.fields = fields
         self.allow_none = allow_none
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate that all required fields are present.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -308,11 +319,12 @@ class SchemaValidator(IValidationFunction):
         else:
             self.schema = schema
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate data against the schema.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -356,11 +368,12 @@ class RangeValidator(IValidationFunction):
         """
         self.field_ranges = field_ranges
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate that values are within specified ranges.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -413,11 +426,12 @@ class PatternValidator(IValidationFunction):
         for field, pattern in field_patterns.items():
             self.field_patterns[field] = re.compile(pattern, flags)
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate that values match specified patterns.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -471,11 +485,12 @@ class TypeValidator(IValidationFunction):
         self.field_types = field_types
         self.strict = strict
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate that fields have expected types.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -518,7 +533,7 @@ class TypeValidator(IValidationFunction):
 
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
-        field_type_names = {}
+        field_type_names: Dict[str, Union[List[str], str]] = {}
         for field, ftype in self.field_types.items():
             if isinstance(ftype, list):
                 field_type_names[field] = [t.__name__ for t in ftype]
@@ -542,11 +557,12 @@ class LengthValidator(IValidationFunction):
         """
         self.field_lengths = field_lengths
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate that collections have expected lengths.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -605,11 +621,12 @@ class UniqueValidator(IValidationFunction):
         self.fields = fields
         self.key = key
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate that values are unique.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -676,11 +693,12 @@ class DependencyValidator(IValidationFunction):
         """
         self.dependencies = dependencies
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Validate field dependencies.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if valid, False otherwise.
@@ -728,11 +746,12 @@ class CompositeValidator(IValidationFunction):
         self.validators = validators
         self.stop_on_first_error = stop_on_first_error
 
-    def validate(self, data: Dict[str, Any]) -> bool:
+    def validate(self, data: Dict[str, Any], context: Any = None) -> bool:
         """Apply all validators to the data.
 
         Args:
             data: Data to validate.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             True if all validators pass.

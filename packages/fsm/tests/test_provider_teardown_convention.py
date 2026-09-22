@@ -54,7 +54,7 @@ import pytest
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import State
+from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.execution.stream import StreamExecutor, StreamPipeline
 from dataknobs_fsm.resources.base import BaseResourceProvider, ResourceStatus
 from dataknobs_fsm.resources.manager import ResourceManager
@@ -392,8 +392,8 @@ def test_the_record_cannot_be_edited_through_the_property() -> None:
 def _one_state_fsm() -> FSM:
     fsm = FSM(name="teardown_fsm")
     network = StateNetwork(name="main")
-    network.add_state(State(name="start", type="start"), initial=True)
-    network.add_state(State(name="end", type="end"), final=True)
+    network.add_state(StateDefinition(name="start", type=StateType.START), initial=True)
+    network.add_state(StateDefinition(name="end", type=StateType.END), final=True)
     network.add_arc("start", "end")
     fsm.add_network(network, is_main=True)
     return fsm

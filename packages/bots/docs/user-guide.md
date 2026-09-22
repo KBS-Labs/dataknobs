@@ -254,7 +254,7 @@ Bot: I'm an AI assistant designed to have helpful, harmless conversations...
     "embedding_provider": "ollama",
     "embedding_model": "nomic-embed-text",
     "backend": "faiss",
-    "dimension": 384
+    "dimension": 768
 }
 ```
 
@@ -267,7 +267,7 @@ Bot: I'm an AI assistant designed to have helpful, harmless conversations...
         {
             "type": "vector",
             "backend": "memory",
-            "dimension": 384,
+            "dimension": 768,
             "embedding_provider": "ollama",
             "embedding_model": "nomic-embed-text"
         }
@@ -677,8 +677,7 @@ async def main():
             "documents_path": "./my_docs",
             "vector_store": {
                 "backend": "faiss",
-                "dimension": 384,
-                "collection": "my_knowledge"
+                "dimensions": 768
             },
             "embedding_provider": "ollama",
             "embedding_model": "nomic-embed-text",

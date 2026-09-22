@@ -55,6 +55,12 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
 
     CONFIG_CLS: ClassVar[type[FaissVectorStoreConfig]] = FaissVectorStoreConfig
 
+    # The index is built at ``initialize`` from ``self.dimensions``, before
+    # any vector exists, so the width cannot be deferred. Left undeclared it
+    # is ``faiss.IndexFlatL2(0)``, which *constructs* --- the failure is a
+    # bare ``AssertionError`` out of the first ``add``, with no message.
+    REQUIRES_DECLARED_DIMENSIONS: ClassVar[bool] = True
+
     # Per-instance only; see ``PathPersistedCapabilityMixin``. Union form
     # deliberate --- ``CapabilityMixin`` does not union across the MRO.
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = VectorStore.SUPPORTED_CAPABILITIES
@@ -328,9 +334,9 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         if not self._initialized:
             await self.initialize()
 
-        # An empty batch is a no-op, not an error: see
-        # ``VectorStoreBase._is_empty_batch``.
-        if self._is_empty_batch(vectors):
+        # An empty batch is a no-op and a mis-sized one is an error, in
+        # that order: see ``VectorStoreBase._guard_batch``.
+        if self._guard_batch(vectors):
             return []
 
         import numpy as np

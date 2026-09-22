@@ -67,6 +67,51 @@ and every record would keep matching the assembly it was written under, so
 take effect. :func:`current_content_hash` is the writer's question and consults
 no metadata; :func:`recompute_content_hash` is the reader's and prefers what
 the record carries.
+
+One rule for the model, and a reader per container
+--------------------------------------------------
+
+Publishing ``MODEL_NAME_KEY`` fixed the **key** being spelled at each of its
+sites. The rule for comparing what it holds was left at each site, and the
+same thing happened again: five readers, and two copies of *absent is unknown,
+otherwise exact equality* that had already come to disagree in two cases ---
+both times into a false alarm, which is the direction that costs a caller a
+corpus re-embed. :func:`is_foreign_model` is that rule now, and every site
+calls it.
+
+The shapes it is read out of are genuinely three, and those do not collapse:
+
+=========================  =============================  ======================
+Container                  Written by                     Read by
+=========================  =============================  ======================
+a stored row's metadata    ``add_records``,               :func:`row_model_name`
+                           ``bulk_embed_and_store``,
+                           ``DedupChecker.register``
+a ``{field}_metadata``     ``VectorMetadata.to_dict``     :func:`sidecar_model_name`
+sidecar                    (nested), a hand-built dict
+                           (flat)
+a ``VectorField``          ``VectorField.__init__``       its ``model_name``
+                                                          attribute
+=========================  =============================  ======================
+
+**A reader accepting every shape everywhere would be a defect rather than a
+tolerance.** ``add_records`` writes the flat key onto the row while the same
+field's own metadata carries the nested one, in a single call --- so the two
+spellings are not alternatives, they are two containers side by side. And a
+stored row's metadata is the *caller's* namespace besides: the store documents
+five keys of its own and passes everything else through untouched,
+``search_similar_records`` promoting each to a field of the record it
+synthesises. A corpus of vehicles carries ``model``, and reading that as the
+embedding model would warn a correctly built index that its own rankings are
+meaningless.
+
+**The comparison in ``dataknobs_data.ontology.registry`` is a fourth site and
+deliberately not one of these.** There a configuration *document* is on one
+side, so a provider prefix and a version tag are things it may omit and
+requiring either would refuse a correctly configured deployment. Here both
+sides are ``model_id`` values produced by the same mechanism, where an
+omission is two embedders disagreeing. See ``registry._same_model``, which
+names this module back.
 """
 
 from __future__ import annotations
@@ -76,7 +121,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
 
     from ..records import Record
 
@@ -96,6 +141,20 @@ CONTENT_HASH_KEY = "content_hash"
 #: key nothing wrote reads as absent, which every reader treats as
 #: "unknown, assume current".
 MODEL_NAME_KEY = "model_name"
+
+#: The version of that model, where a writer records one.
+#:
+#: Published for the reason its sibling above was, and late for the same
+#: reason it was: the sibling's publication was prompted by a reader that
+#: *"came to read a key nothing wrote"*, and the key that reader was
+#: spelling was this one. It stayed a literal at every site afterwards.
+#:
+#: Written and read only where a version exists to record. A
+#: :class:`~dataknobs_data.vector.embedding.TextEmbedder` carries an
+#: identity and no version, so the whole embedder seam leaves this absent
+#: --- which is why the two keys cannot share a rule: see
+#: :func:`sidecar_model_version`.
+MODEL_VERSION_KEY = "model_version"
 
 #: The field names that were assembled, in order.
 SOURCE_FIELDS_KEY = "content_source_fields"
@@ -373,3 +432,193 @@ def recompute_content_hash(
     separator = stored_separator if stored_separator is not None else fallback_separator
 
     return current_content_hash(record, source_fields, separator)
+
+
+# --------------------------------------------------------------------------
+# The model half: one rule, and a reader per container
+# --------------------------------------------------------------------------
+#
+# The digest above answers whether the TEXT changed. What follows answers
+# whether the MODEL did, and a stored vector is current only if both agree.
+# Which container each reader serves, and why they are not interchangeable,
+# is in this module's docstring.
+#
+# **The nested key itself stays a literal**, in one function below and in
+# ``VectorMetadata``/``VectorField``, because it is those dataclasses' own
+# serialisation shape rather than a staleness key --- what they publish is
+# ``to_dict``/``from_dict``, and a constant here would be a second authority
+# on a shape they own.
+
+
+def is_foreign_model(stored: str | None, mine: str | None) -> bool:
+    """Whether a vector recorded as *stored* was written by another model.
+
+    The whole rule, in one place. It was in five, and two of the copies had
+    already drifted --- both of them into false alarms, which is the
+    direction that costs a caller a corpus re-embed.
+
+    Two sides, and two ways to have nothing to say:
+
+    * **An unnamed vector is unknown, not stale.** Vectors written before
+      this key existed, and every vector from the ``embedding_fn`` lane,
+      carry no name. Calling those foreign re-embeds a whole corpus on the
+      first sweep after an upgrade.
+    * **An unnamed reader accuses nobody.** An embedder publishing no
+      ``model_id`` has one side of a comparison, not a disagreement with
+      every row in the store. The registry states the same rule for the
+      same case one module over: *"refusing would make a legitimate
+      embedder unusable with a legitimate document"*.
+
+    **Empty counts as unnamed on both sides.** A name is written from an
+    embedder's ``model_id``, so ``""`` is what an embedder publishing
+    nothing puts there; reporting it as a foreign model hands a caller an
+    identity they cannot look up or re-embed against.
+
+    Args:
+        stored: What the vector recorded, or ``None`` where it recorded
+            nothing.
+        mine: The identity of the embedder asking, or ``None`` where it
+            publishes none.
+
+    Returns:
+        True only where both sides name a model and the names differ.
+    """
+    return bool(stored) and bool(mine) and stored != mine
+
+
+def row_model_name(metadata: dict[str, Any] | None) -> str | None:
+    """The model a **stored row** says wrote it.
+
+    The row container's reader: the flat :data:`MODEL_NAME_KEY`, and only
+    that. The nested ``{"model": {"name": ...}}`` shape belongs to the
+    sidecar container and is read by :func:`sidecar_model_name`; in a row,
+    that spelling is caller data --- see the note above this function.
+
+    **Three names for one thing, and they are one thing.** The key is
+    spelled ``model_name``, what a writer puts in it is an embedder's
+    ``model_id``, and the two results that carry it onward call it
+    ``mismatched_model_ids``.
+
+    Args:
+        metadata: One stored row's metadata, as the store returned it.
+
+    Returns:
+        The name, or ``None`` where the row does not name one --- which
+        includes naming it empty, the distinction :func:`is_foreign_model`
+        explains.
+    """
+    if not metadata:
+        return None
+    name = metadata.get(MODEL_NAME_KEY)
+    return str(name) if name else None
+
+
+def foreign_model_names(
+    metadatas: Iterable[dict[str, Any] | None],
+    mine: str | None,
+) -> list[str]:
+    """Which models other than *mine* wrote these rows, distinct and sorted.
+
+    What both store-row readers want, whole: ``SemanticIndex`` over one
+    search's hits, ``DedupChecker`` over one check's candidates. What each
+    does with the answer stays at each site and differs for stated reasons
+    --- one warns once per *index* and accumulates across searches, the
+    other warns once per *check*.
+
+    **Distinct and sorted**, because the question is *which models*: a
+    caller deciding what to re-embed wants the set, not one entry per row,
+    and a stable order is what makes the answer assertable.
+
+    Args:
+        metadatas: One stored row's metadata each, in any order. ``None``
+            entries are rows that carried none.
+        mine: The identity of the embedder asking. ``None`` or empty
+            answers ``[]`` --- see :func:`is_foreign_model`.
+
+    Returns:
+        Every foreign name found, once each, sorted.
+    """
+    found: set[str] = set()
+    for metadata in metadatas:
+        name = row_model_name(metadata)
+        if name is not None and is_foreign_model(name, mine):
+            found.add(name)
+    return sorted(found)
+
+
+def _sidecar_model_value(metadata: dict[str, Any] | None, nested: str, flat: str) -> Any:
+    """Whichever of a sidecar's two shapes carries this value.
+
+    **Nested wins where both are present**, because the nested one is what
+    the declared shape writes. ``VectorField`` puts its constructor's
+    ``model_name`` there while a caller's own ``metadata`` dict is merged in
+    underneath, and ``VectorField.from_dict`` reads the nested one back.
+
+    That precedence is the other reason a row is not read this way: a row
+    written by ``bulk_embed_and_store`` carries the flat key from the
+    embedder that just wrote it, over whatever a caller's metadata brought
+    with it --- the opposite order, for the same reason. One function
+    cannot hold both.
+
+    The ``isinstance`` guards cross a persistence trust boundary, as
+    :func:`stored_assembly` does: these values come back from whatever store
+    wrote them and are not guaranteed to be the shapes that were written.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    model = metadata.get("model")
+    if isinstance(model, dict):
+        value = model.get(nested)
+        if value is not None:
+            return value
+    return metadata.get(flat)
+
+
+def sidecar_model_name(metadata: dict[str, Any] | None) -> str | None:
+    """The model a ``{field}_metadata`` **sidecar** says wrote its vector.
+
+    Lives here rather than beside one of its readers for the reason
+    :data:`MODEL_NAME_KEY` does: a container's reading rule belongs with the
+    key, or it gets re-derived at the next site.
+
+    **Both shapes, which is this container's tolerance and not a licence for
+    the row reader to copy it.** ``VectorMetadata.to_dict`` nests the name as
+    ``{"model": {"name": ...}}`` and that is what ``IncrementalVectorizer``
+    writes; a hand-built sidecar may carry it flat. Reading only one shape is
+    what made the version check compare against something nothing wrote.
+
+    Args:
+        metadata: The sidecar, or a ``VectorField``'s own metadata.
+
+    Returns:
+        The name, or ``None`` where the sidecar does not name one ---
+        empty included, matching :func:`row_model_name` so that one rule
+        answers both containers.
+    """
+    value = _sidecar_model_value(metadata, "name", MODEL_NAME_KEY)
+    return str(value) if value else None
+
+
+def sidecar_model_version(metadata: dict[str, Any] | None) -> str | None:
+    """The model *version* a ``{field}_metadata`` sidecar records.
+
+    The sibling of :func:`sidecar_model_name`, accepting the same two shapes
+    for the same reason, and differing from it in one stated place:
+    **absence is reported as absence, not folded into it.**
+
+    The two keys are compared differently by their caller and have to be.
+    An unnamed vector is passed over, because a corpus written before names
+    were recorded must not all read as stale; an unversioned one is *not*,
+    because a synchronizer tracking versions has nothing else to go on. So
+    this returns ``""`` where a sidecar recorded an empty version rather
+    than flattening it to ``None``, leaving that caller's distinction
+    intact.
+
+    Args:
+        metadata: The sidecar, or a ``VectorField``'s own metadata.
+
+    Returns:
+        The version as written, or ``None`` where the sidecar records none.
+    """
+    value = _sidecar_model_value(metadata, "version", MODEL_VERSION_KEY)
+    return str(value) if value is not None else None

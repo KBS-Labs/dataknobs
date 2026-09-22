@@ -5,11 +5,20 @@
 
 This module provides streaming-related functions that can be referenced
 in FSM configurations for processing large data sets efficiently.
+
+Every ``transform`` here declares ``context`` and none of them reads it. The
+parameter is part of :class:`~dataknobs_fsm.functions.base.ITransformFunction`
+and the engines always pass it, so omitting it made the declaration and the
+implementation disagree --- which mypy reported as an ``override``
+incompatibility, and which produced a real failure through the
+``custom_functions=`` door, where a one-argument implementation was read as an
+inline lambda and handed a wrapper instead of the record.
 """
 
 import asyncio
 import csv
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -37,11 +46,12 @@ class ChunkReader(ITransformFunction):
         self.chunk_size = chunk_size
         self.format = format
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by reading next chunk from source.
 
         Args:
             data: Input data (may contain chunk state).
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with next chunk of records.
@@ -214,18 +224,32 @@ class ChunkReader(ITransformFunction):
     async def _read_stream_chunk(
         self, source: IStreamSource, state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Read chunk from stream source."""
-        records = []
+        """Read one chunk from a stream source.
 
-        async for record in source.read(self.chunk_size):
-            records.append(record)
+        Through :meth:`IStreamSource.read_chunk`, which is the only read the
+        interface declares. This asked for ``source.read(chunk_size)`` and
+        iterated it with ``async for``: no shipped source has a ``read``, so
+        every stream source raised ``AttributeError`` on the first chunk, and
+        the type checker had said so for as long as the branch existed.
 
-        has_more = len(records) == self.chunk_size
+        ``read_chunk`` is synchronous and opens files, so it runs on a worker
+        thread rather than on the event loop --- the same treatment the file
+        branch's reads already get.
+        """
+        chunk = await asyncio.to_thread(source.read_chunk)
+
+        if chunk is None:
+            # The source is exhausted. An empty chunk rather than an error: a
+            # pipeline polls until ``has_more`` is False, and the poll that
+            # discovers the end is an ordinary one.
+            return {"records": [], "has_more": False, "state": dict(state)}
+
+        records = chunk.data if isinstance(chunk.data, list) else [chunk.data]
 
         return {
             "records": records,
-            "has_more": has_more,
-            "state": {"stream_position": source.position if hasattr(source, "position") else None},
+            "has_more": not chunk.is_last,
+            "state": {"sequence_number": chunk.sequence_number},
         }
 
 
@@ -252,11 +276,12 @@ class RecordParser(ITransformFunction):
         self.output_field = output_field
         self.options = options or {}
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by parsing records.
 
         Args:
             data: Input data containing raw records.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with parsed records.
@@ -311,17 +336,15 @@ class RecordParser(ITransformFunction):
 
     def _parse_xml(self, raw: Union[str, bytes]) -> Dict[str, Any]:
         """Parse XML data."""
-        import xml.etree.ElementTree as ET
-
         if isinstance(raw, str):
             raw = raw.encode("utf-8")
 
         root = ET.fromstring(raw)
         return self._xml_to_dict(root)
 
-    def _xml_to_dict(self, element) -> Dict[str, Any]:
+    def _xml_to_dict(self, element: ET.Element) -> Dict[str, Any]:
         """Convert XML element to dictionary."""
-        result = {}
+        result: Dict[str, Any] = {}
 
         # Add attributes
         if element.attrib:
@@ -376,11 +399,12 @@ class FileAppender(ITransformFunction):
         self.create_if_missing = create_if_missing
         self._buffer: List[Any] = []
 
-    async def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by appending to file.
 
         Args:
             data: Input data containing records to append.
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with append status.
@@ -449,13 +473,13 @@ class FileAppender(ITransformFunction):
 
             with open(self.file_path, "a", newline="") as f:
                 if self._buffer and isinstance(self._buffer[0], dict):
-                    writer = csv.DictWriter(f, fieldnames=self._buffer[0].keys())
+                    dict_writer = csv.DictWriter(f, fieldnames=self._buffer[0].keys())
                     if not file_exists:
-                        writer.writeheader()
-                    writer.writerows(self._buffer)
+                        dict_writer.writeheader()
+                    dict_writer.writerows(self._buffer)
                 else:
-                    writer = csv.writer(f)
-                    writer.writerows(self._buffer)
+                    row_writer = csv.writer(f)
+                    row_writer.writerows(self._buffer)
 
         elif self.format == "lines":
             # Append lines
@@ -502,11 +526,12 @@ class StreamAggregator(ITransformFunction):
         self._window: List[Dict[str, Any]] = []
         self._groups: Dict[tuple, List[Dict[str, Any]]] = {}
 
-    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, data: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
         """Transform data by aggregating stream.
 
         Args:
             data: Input data (single record or batch).
+            context: Execution context, unused here but declared by the interface.
 
         Returns:
             Data with aggregation results.
@@ -568,13 +593,13 @@ class StreamAggregator(ITransformFunction):
             return None
 
         if func == "sum":
-            return sum(values)  # type: ignore
+            return sum(values)
         elif func == "avg":
-            return sum(values) / len(values)  # type: ignore
+            return sum(values) / len(values)
         elif func == "min":
-            return min(values)  # type: ignore
+            return min(values)
         elif func == "max":
-            return max(values)  # type: ignore
+            return max(values)
         else:
             raise TransformError(f"Unknown aggregation function: {func}")
 
@@ -589,17 +614,17 @@ class StreamAggregator(ITransformFunction):
 
 
 # Convenience functions for creating streaming functions
-def read_chunks(source: str, size: int = 1000, **kwargs) -> ChunkReader:
+def read_chunks(source: str, size: int = 1000, **kwargs: Any) -> ChunkReader:
     """Create a ChunkReader."""
     return ChunkReader(source, size, **kwargs)
 
 
-def parse(format: str, **kwargs) -> RecordParser:
+def parse(format: str, **kwargs: Any) -> RecordParser:
     """Create a RecordParser."""
     return RecordParser(format, **kwargs)
 
 
-def append_to_file(path: str, **kwargs) -> FileAppender:
+def append_to_file(path: str, **kwargs: Any) -> FileAppender:
     """Create a FileAppender."""
     return FileAppender(path, **kwargs)
 

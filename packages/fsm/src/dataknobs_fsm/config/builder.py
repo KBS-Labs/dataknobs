@@ -17,6 +17,7 @@ raw configuration with optional custom functions.
 import importlib
 import inspect
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Callable, Dict, List, Type
 
 from dataknobs_common.callbacks import is_async_callable
@@ -40,23 +41,16 @@ from dataknobs_fsm.core.state import StateDefinition, StateSchema, StateType
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import (
-    IEndStateTestFunction,
+    INTERFACE_METHODS,
     IStateTestFunction,
     ITransformFunction,
     IValidationFunction,
+    RegisteredFunction,
+    accepts_context,
 )
 from dataknobs_fsm.resources.base import IResourceProvider
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.functions.manager import FunctionManager, FunctionSource
-
-
-# Interface -> the method the engine ultimately invokes on a function instance.
-_INTERFACE_METHODS: Dict[type, str] = {
-    ITransformFunction: "transform",
-    IValidationFunction: "validate",
-    IStateTestFunction: "test",
-    IEndStateTestFunction: "should_end",
-}
 
 
 class _ResolvedLibraryFunction:
@@ -85,31 +79,12 @@ class _ResolvedLibraryFunction:
         # Read by AsyncExecutionEngine._is_interface_transform to dispatch the
         # deterministic (dict, context) signature for transforms.
         self.interface = interface
-        self._method_name = _INTERFACE_METHODS[interface]
+        self._method_name = INTERFACE_METHODS[interface]
         self._impl = getattr(instance, self._method_name)
-        self._accepts_context = self._impl_accepts_context(self._impl)
+        self._accepts_context = accepts_context(self._impl)
         self.__name__ = type(instance).__name__
         # Tell FSMBuilder._resolve_function not to re-wrap this object.
         self._is_wrapped = True
-
-    @staticmethod
-    def _impl_accepts_context(impl: Callable) -> bool:
-        """Whether the library method takes the execution context beyond ``data``.
-
-        Library functions are a mix of ``transform(self, data)`` (1-arg) and
-        ``transform(self, data, context=None)`` (2-arg). ``impl`` is a bound
-        method, so ``self`` is already excluded from the signature.
-        """
-        try:
-            params = list(inspect.signature(impl).parameters.values())
-        except (TypeError, ValueError):
-            return True
-        if any(
-            p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-            for p in params
-        ):
-            return True
-        return len(params) >= 2
 
     def _invoke(self, data: Any, context: Any) -> Any:
         plain = ensure_dict(data)
@@ -196,10 +171,23 @@ class _AsyncResolvedLibraryFunction(_ResolvedLibraryFunction):
         return await getattr(self, self._method_name)(data, context, **kwargs)
 
 
+def _declared(value: str | None, ref_type: str, field: str) -> str:
+    """The field a ``FunctionReference`` of this type is required to carry.
+
+    ``FunctionReference.validate_reference`` enforces this at construction, so
+    the ``None`` branch is not a case the config can reach --- it is where the
+    schema's guarantee is written down in a form the reader (and the type
+    checker) can follow to the call sites.
+    """
+    if value is None:
+        raise ValueError(f"A '{ref_type}' function reference requires '{field}'")
+    return value
+
+
 class FSMBuilder:
     """Build executable FSM instances from configuration."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the FSMBuilder."""
         self._resource_manager = ResourceManager()
         self._function_manager = FunctionManager()
@@ -275,7 +263,7 @@ class FSMBuilder:
         # Return the core FSM directly
         return fsm
 
-    def register_function(self, name: str, func: Callable) -> None:
+    def register_function(self, name: str, func: RegisteredFunction) -> None:
         """Register a custom function.
 
         Args:
@@ -447,27 +435,26 @@ class FSMBuilder:
                     arc_config, state_def, network, fsm_config, arc_definition_order
                 )
                 arc_definition_order += 1
-                # Add arc to both the state definition and the network
-                state_def.outgoing_arcs.append(arc)
-                # Also register the arc with the network for execution
-                # Extract function names for network registration
-                pre_test_name = None
-                transform_name = None
-                if arc.pre_test:
-                    pre_test_name = getattr(arc.pre_test, "__name__", str(arc.pre_test))
-                if arc.transform:
-                    if isinstance(arc.transform, list):
-                        transform_name = arc.transform
-                    else:
-                        transform_name = getattr(arc.transform, "__name__", str(arc.transform))
-
+                # One arc, stored once. This used to append ``arc`` to the
+                # state and then call ``add_arc`` to build a *second*, lossy
+                # arc for the network out of stringified function names --- so
+                # the network's own accessors described the graph with arcs
+                # that had no priority, no definition order and function
+                # *names* where the state held resolved callables. ``add_arc``
+                # now records the arc the builder resolved, in every index.
                 network.add_arc(
                     source_state=state_config.name,
                     target_state=arc_config.target,
-                    pre_test=pre_test_name,
-                    transform=transform_name,
-                    metadata=arc_config.metadata,
+                    definition=arc,
                 )
+
+        # ``streaming: {enabled: true}`` is a documented network-level config
+        # key that nothing read. ``StateNetwork.supports_streaming`` was fed
+        # instead by a branch that asked each state's ``resource_requirements``
+        # list for a ``streaming_enabled`` attribute a list does not have, so
+        # the flag had no source at all and every network answered ``False``.
+        if network_config.streaming is not None:
+            network.set_streaming_enabled(network_config.streaming.enabled)
 
         return network
 
@@ -487,19 +474,19 @@ class FSMBuilder:
             schema = self._build_schema(state_config.data_schema)
 
         # Resolve pre-validators
-        pre_validators = []
+        pre_validators: List[RegisteredFunction] = []
         for func_ref in state_config.pre_validators:
             pre_validator = self._resolve_function(func_ref, IValidationFunction)
             pre_validators.append(pre_validator)
 
         # Resolve validators
-        validators = []
+        validators: List[RegisteredFunction] = []
         for func_ref in state_config.validators:
             validator = self._resolve_function(func_ref, IValidationFunction)
             validators.append(validator)
 
         # Resolve transforms
-        transforms = []
+        transforms: List[RegisteredFunction] = []
         for func_ref in state_config.transforms:
             transform = self._resolve_function(func_ref, ITransformFunction)
             transforms.append(transform)
@@ -515,12 +502,17 @@ class FSMBuilder:
         state_def.pre_validation_functions = pre_validators
         state_def.validation_functions = validators
         state_def.transform_functions = transforms
-        # Look up actual resource configs from the FSM config
+        # Look up actual resource configs from the FSM config, and hand the
+        # state the runtime type its field declares. A name the config does not
+        # define still gets a config rather than an error, so that arm builds
+        # one and converts it by the same route.
         resource_map = {res.name: res for res in fsm_config.resources}
         state_def.resource_requirements = [
-            resource_map[r]
-            if r in resource_map
-            else ResourceConfig(name=r, type=ResourceType.CUSTOM)
+            (
+                resource_map[r]
+                if r in resource_map
+                else ResourceConfig(name=r, type=ResourceType.CUSTOM)
+            ).to_runtime()
             for r in state_config.resources
         ]
         state_def.data_mode = data_mode
@@ -561,17 +553,20 @@ class FSMBuilder:
         if isinstance(func, _ResolvedLibraryFunction):
             return None
 
-        # Check for various name attributes
-        if hasattr(func, "name"):
-            return func.name
-        elif hasattr(func, "__name__"):
+        # Check for various name attributes. Each is read off a duck-typed
+        # object, so each is narrowed to the ``str`` this function promises
+        # rather than returned as whatever the attribute happened to hold.
+        candidate = getattr(func, "name", None)
+        if isinstance(candidate, str):
+            return candidate
+        dunder = getattr(func, "__name__", None)
+        if isinstance(dunder, str):
             # Skip generic names that would cause collisions
-            name = func.__name__
-            if name not in ["<lambda>", "inline_func"]:
-                return name
-        elif hasattr(func, "wrapper") and hasattr(func.wrapper, "name"):
+            if dunder not in ["<lambda>", "inline_func"]:
+                return dunder
+        elif hasattr(func, "wrapper") and isinstance(getattr(func.wrapper, "name", None), str):
             # InterfaceWrapper case
-            return func.wrapper.name
+            return str(func.wrapper.name)
         else:
             # Search for the function in the manager
             for fname in self._function_manager.list_functions():
@@ -686,7 +681,7 @@ class FSMBuilder:
 
         # Create appropriate arc type
         if isinstance(arc_config, PushArcConfig):
-            arc = PushArc(
+            arc: ArcDefinition = PushArc(
                 target_state=arc_config.target,
                 target_network=arc_config.target_network,
                 return_state=arc_config.return_state,
@@ -757,7 +752,7 @@ class FSMBuilder:
             an instance of ``expected_type`` (caller falls back to its standard
             wrapper path).
         """
-        if expected_type not in _INTERFACE_METHODS:
+        if expected_type not in INTERFACE_METHODS:
             return None
         kwargs = params or {}
         if inspect.isclass(raw):
@@ -768,7 +763,7 @@ class FSMBuilder:
             # A keyword factory function (e.g. transformers.map_fields). Calling
             # it with the configured params yields the FSM-function instance.
             instance = raw(**kwargs)
-        if not isinstance(instance, tuple(_INTERFACE_METHODS)):
+        if not isinstance(instance, tuple(INTERFACE_METHODS)):
             return None
         # A custom class may implement the interface method as ``async def``;
         # pick the async adapter so the engine awaits it rather than storing an
@@ -781,7 +776,7 @@ class FSMBuilder:
         # synchronous. That is the sync adapter over an async implementation,
         # which is exactly the un-awaited coroutine this branch exists to
         # prevent. A missing method answers `False` either way.
-        impl = getattr(instance, _INTERFACE_METHODS[expected_type], None)
+        impl = getattr(instance, INTERFACE_METHODS[expected_type], None)
         adapter_cls = (
             _AsyncResolvedLibraryFunction if is_async_callable(impl) else _ResolvedLibraryFunction
         )
@@ -804,9 +799,22 @@ class FSMBuilder:
         Raises:
             ValueError: If function cannot be resolved.
         """
+        # ``FunctionReference.validate_reference`` requires ``name`` for
+        # builtin/registered/custom, ``module`` as well for custom, and
+        # ``code`` for inline --- a pydantic model cannot be constructed
+        # without them. Each branch reads the ones *its* type is required to
+        # carry; ``inline`` has no name, which is why this is not hoisted.
+        # Every arm binds something the engines will call --- a
+        # ``FunctionWrapper``, an ``InterfaceWrapper``, a raw function or a
+        # ``functools.partial`` over one --- which is what this method
+        # promises to return, so that is what the local says rather than
+        # ``Any``.
+        func: Callable[..., Any]
+
         if func_ref.type == "builtin":
             # Look up built-in function
-            wrapper = self._function_manager.get_function(func_ref.name)
+            name = _declared(func_ref.name, func_ref.type, "name")
+            wrapper = self._function_manager.get_function(name)
             if not wrapper:
                 raise ValueError(f"Built-in function not found: {func_ref.name}")
             # The built-in library is classes (e.g. RequiredFieldsValidator) and
@@ -823,14 +831,16 @@ class FSMBuilder:
 
         elif func_ref.type == "registered":
             # Look up registered function
-            wrapper = self._function_manager.get_function(func_ref.name)
+            name = _declared(func_ref.name, func_ref.type, "name")
+            wrapper = self._function_manager.get_function(name)
             if not wrapper:
                 raise ValueError(f"Registered function not found: {func_ref.name}")
             func = wrapper
 
         elif func_ref.type == "custom":
             # Check manager first
-            wrapper = self._function_manager.get_function(func_ref.name)
+            name = _declared(func_ref.name, func_ref.type, "name")
+            wrapper = self._function_manager.get_function(name)
             if wrapper:
                 func = wrapper
             else:
@@ -848,21 +858,21 @@ class FSMBuilder:
                 # question for the whole function-resolution family, not for
                 # this branch alone.
                 try:
-                    module = importlib.import_module(func_ref.module)
+                    module = importlib.import_module(
+                        _declared(func_ref.module, func_ref.type, "module")
+                    )
                 except ImportError as exc:
                     raise ValueError(
                         f"Custom function module not found: {func_ref.module}"
                     ) from exc
                 try:
-                    raw = getattr(module, func_ref.name)
+                    raw = getattr(module, name)
                 except AttributeError as exc:
                     raise ValueError(
                         f"Custom function not found: {func_ref.module}.{func_ref.name}"
                     ) from exc
                 # Register it for future use
-                self._function_manager.register_function(
-                    func_ref.name, raw, FunctionSource.REGISTERED
-                )
+                self._function_manager.register_function(name, raw, FunctionSource.REGISTERED)
                 # A custom *class* implementing an FSM function interface is
                 # configured by ``params`` (constructor args) the same way a
                 # built-in class is; materialize + adapt it. A plain custom
@@ -880,11 +890,16 @@ class FSMBuilder:
                 func = raw
 
         elif func_ref.type == "inline":
-            # Use function manager's inline handling
-            wrapper = self._function_manager.resolve_function(func_ref.code, expected_type)
-            if not wrapper:
+            # Use function manager's inline handling. Bound to its own name
+            # because ``resolve_function`` returns a wider type than the
+            # ``get_function`` lookups above --- reusing ``wrapper`` made the
+            # two look like the same thing.
+            resolved = self._function_manager.resolve_function(
+                _declared(func_ref.code, func_ref.type, "code"), expected_type
+            )
+            if not resolved:
                 raise ValueError(f"Failed to create inline function from: {func_ref.code}")
-            func = wrapper
+            func = resolved
             # Mark as already wrapped to avoid double wrapping
             func._is_wrapped = True
 
@@ -954,9 +969,16 @@ class FSMBuilder:
             for state in network.states.values():
                 for arc in network.get_arcs_from_state(state.name):
                     if isinstance(arc, PushArc):
-                        # Check target network exists
-                        if arc.target_network not in self._networks:
-                            raise ValueError(f"Target network '{arc.target_network}' not found")
+                        # Check target network exists. The name is parsed off
+                        # the field rather than compared whole: the documented
+                        # ``"network:initial_state"`` form would otherwise
+                        # report as a missing network. This branch had never
+                        # run --- ``get_arcs_from_state`` used to return the
+                        # network's own arc type, which no ``PushArc`` ever
+                        # was --- so the bug it carried was never met.
+                        target_network, _ = arc.parse_target()
+                        if target_network not in self._networks:
+                            raise ValueError(f"Target network '{target_network}' not found")
                         # Check return state exists if specified
                         if arc.return_state and arc.return_state not in state_names:
                             raise ValueError(f"Return state '{arc.return_state}' not found")
@@ -1002,7 +1024,7 @@ class FSMBuilder:
 
 def build_fsm(
     config: str | Path | dict[str, Any],
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
 ) -> CoreFSMClass:
     """Build an FSM from configuration with custom functions registered.
 

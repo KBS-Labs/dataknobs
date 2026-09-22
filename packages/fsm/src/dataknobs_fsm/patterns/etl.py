@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, ClassVar, Dict, List, Union
 
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.structured_config import (
     StructuredConfig,
     StructuredConfigConsumer,
@@ -28,6 +29,7 @@ from ..api.async_simple import AsyncSimpleFSM
 from ..functions.base import (
     ITransformFunction,
     IValidationFunction,
+    RegisteredFunction,
     TransformError,
 )
 from ..functions.library.database import DatabaseUpsert
@@ -49,6 +51,11 @@ class ETLMode(Enum):
     APPEND = "append"  # Always append, no updates
 
 
+def _as_query_dict(spec: Query | Mapping[str, Any]) -> Dict[str, Any]:
+    """Project an extraction-query spec onto its serializable dict shape."""
+    return spec.to_dict() if isinstance(spec, Query) else dict(spec)
+
+
 @dataclass(frozen=True)
 class ETLConfig(StructuredConfig):
     """Configuration for ETL pipeline."""
@@ -62,7 +69,23 @@ class ETLConfig(StructuredConfig):
     checkpoint_interval: int = 10000  # Checkpoint every N records
 
     # Optional configurations
-    source_query: str | None = "SELECT * FROM source_table"
+    # The extraction query, as a :class:`Query` or as its serializable
+    # ``Query.to_dict()`` shape; ``None`` (the default) reads the whole
+    # source. Whichever form is given is stored as the dict, because
+    # ``Query`` is itself a dataclass and ``dataclasses.asdict`` --- which
+    # :meth:`to_dict` delegates to --- would explode it into its raw
+    # attribute names (``sort_specs``, ``limit_value``) holding live
+    # ``Operator`` members: a shape ``Query.from_dict`` raises on, and
+    # one ``json.dumps`` refuses. Storing the serializable form keeps the
+    # round-trip that the rest of this class guarantees.
+    source_query: Query | Dict[str, Any] | None = None
+    # The column an INCREMENTAL run watermarks on: each run filters to rows
+    # whose value here is greater than the highest one the previous run
+    # loaded. ``"updated_at"`` was the literal in the filter, so a source
+    # that timestamps rows under any other name had no incremental mode
+    # available to it. Ignored in every other mode --- but still *read*, so
+    # a checkpoint saved by a full run records a resumable position.
+    watermark_field: str = "updated_at"
     target_table: str = "target_table"
     key_columns: List[str] | None = None
     field_mappings: Dict[str, str] | None = None
@@ -129,6 +152,34 @@ class ETLConfig(StructuredConfig):
         ``key_columns=["id"]``). Mapping order makes that combination fragile,
         so it is rejected rather than reasoned about.
         """
+        # Store the extraction query in its serializable shape whichever
+        # form was given (see the field comment). Frozen dataclass --- the
+        # bypass touches only the snapshot this config owns; the caller's
+        # ``Query`` is read, never mutated.
+        if self.source_query is not None:
+            if not isinstance(self.source_query, (Query, Mapping)):
+                # This field defaulted to a raw SQL string for a while, and
+                # nothing it reaches takes SQL --- `stream_read` filters
+                # through the `Query` abstraction, on every backend. Say so,
+                # rather than failing inside whichever backend is configured.
+                raise InvalidConfigurationError(
+                    f"source_query must be a Query or its to_dict() mapping, got "
+                    f"{type(self.source_query).__name__}. The extraction runs through "
+                    f"AsyncDatabase.stream_read, which takes a Query, not SQL; use "
+                    f"Query().filter(...) or None to read the whole source."
+                )
+            object.__setattr__(self, "source_query", _as_query_dict(self.source_query))
+
+        # An empty watermark field would filter on the column named "",
+        # which no source has --- an incremental run would extract nothing
+        # and report no reason.
+        if not self.watermark_field.strip():
+            raise InvalidConfigurationError(
+                "watermark_field must name a column; it is the field an "
+                "incremental run compares against the highest value the "
+                "previous run loaded."
+            )
+
         key_columns = self.key_columns or []
         mappings = self.field_mappings or {}
         for col in key_columns:
@@ -321,7 +372,12 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
 
     def _setup(self) -> None:
         self._fsm = self._build_fsm()
-        self._checkpoint_data = {}
+        self._checkpoint_data: Dict[str, Any] = {}
+        # The highest ``watermark_field`` value this pipeline has loaded.
+        # Deliberately NOT reset by :meth:`_reset_metrics`: metrics are
+        # per-run, the watermark is the position successive runs advance,
+        # which is the whole of what makes a run incremental.
+        self._watermark: Any = None
         self._reset_metrics()
 
     def _reset_metrics(self) -> None:
@@ -480,7 +536,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             custom_functions=self._build_custom_functions(),
         )
 
-    def _build_custom_functions(self) -> Dict[str, Callable]:
+    def _build_custom_functions(self) -> Dict[str, RegisteredFunction]:
         """Build the registered functions the ETL FSM references by name.
 
         Per-record steps wired as FSM functions:
@@ -508,7 +564,7 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         ``AsyncSimpleFSM(config, custom_functions=...)`` and referenced from each
         state's ``functions`` block / arc condition.
         """
-        functions: Dict[str, Callable] = {
+        functions: Dict[str, RegisteredFunction] = {
             "transform": _ETLTransform(
                 self.config.field_mappings,
                 self.config.transformations,
@@ -581,40 +637,96 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
 
             source_db = await AsyncDatabase.from_backend(
                 self.config.source_db["type"],
-                self.config.source_db,  # type: ignore
+                self.config.source_db,
             )
 
             # Determine extraction strategy
             if self.config.mode == ETLMode.INCREMENTAL:
                 query = self._get_incremental_query()
             else:
-                query = self.config.source_query or Query()
+                query = self._configured_query()
 
-            # Process in batches
-            async for batch in self._extract_batches(source_db, query):  # type: ignore
-                # Process batch through FSM
-                results = await self._fsm.process_batch(
-                    data=batch,  # type: ignore
-                    batch_size=self.config.batch_size,
-                    max_workers=self.config.parallel_workers,
-                )
+            # Process in batches. Closed explicitly, because the threshold
+            # check below raises out of this loop and the `finally` then
+            # closes `source_db` -- which without this would happen while a
+            # read on it is still suspended, holding whatever that read holds.
+            batches = self._extract_batches(source_db, query)
+            saw_a_watermark = False
+            unwatermarked = 0
+            async with aclosing_iter(batches) as extracted:
+                async for batch in extracted:
+                    # Read the batch's high-water mark before the FSM sees
+                    # it: `transform` may rename the column away via
+                    # `field_mappings`, and a record that fails never comes
+                    # back at all.
+                    batch_watermark, unpositioned = self._scan_watermark(batch)
+                    saw_a_watermark = saw_a_watermark or batch_watermark is not None
+                    unwatermarked += unpositioned
+                    errors_before = self._metrics["errors"]
 
-                # Update metrics
-                self._update_metrics(results)
+                    # Process batch through FSM
+                    results = await self._fsm.process_batch(
+                        data=batch,
+                        batch_size=self.config.batch_size,
+                        max_workers=self.config.parallel_workers,
+                    )
 
-                # Check error threshold
-                if self._check_error_threshold():
-                    # Report rejections too when they count toward the threshold,
-                    # so the message is not a confusing "0 errors" when excess
-                    # rejections (not errors) tripped the gate.
-                    detail = f"{self._metrics['errors']} errors"
-                    if self.config.reject_counts_as_error:
-                        detail += f", {self._metrics['rejected']} rejected"
-                    raise ETLError(f"Error threshold exceeded: {detail}")
+                    # Update metrics
+                    self._update_metrics(results)
 
-                # Checkpoint if needed
-                if self._should_checkpoint():
-                    await self._save_checkpoint()
+                    # Advance the watermark only over a batch that errored
+                    # nothing, so a transient failure cannot carry the
+                    # position past rows it lost --- the batch is
+                    # re-extracted next run, and `load` is an upsert keyed
+                    # on `key_columns`, so re-delivery is idempotent.
+                    # Rejections deliberately do NOT block it: a validation
+                    # reject is permanent, so waiting for one would freeze
+                    # the pipeline on the first invalid row forever. That is
+                    # the same errors-vs-rejections distinction
+                    # `_update_metrics` draws.
+                    if self._metrics["errors"] == errors_before:
+                        self._advance_watermark(batch_watermark)
+
+                    # Check error threshold
+                    if self._check_error_threshold():
+                        # Report rejections too when they count toward the threshold,
+                        # so the message is not a confusing "0 errors" when excess
+                        # rejections (not errors) tripped the gate.
+                        detail = f"{self._metrics['errors']} errors"
+                        if self.config.reject_counts_as_error:
+                            detail += f", {self._metrics['rejected']} rejected"
+                        raise ETLError(f"Error threshold exceeded: {detail}")
+
+                    # Checkpoint if needed
+                    if self._should_checkpoint():
+                        await self._save_checkpoint()
+
+            # Rows the watermark cannot position. Two strengths of the same
+            # configuration mistake, both of which the run can see and the
+            # operator cannot.
+            if self.config.mode == ETLMode.INCREMENTAL and unwatermarked:
+                if not saw_a_watermark:
+                    # A full scan wearing the word "incremental".
+                    logger.warning(
+                        "ETL: incremental run extracted %d record(s), none carrying the "
+                        "watermark field '%s' -- the watermark cannot advance, so every "
+                        "run re-reads the whole source. Set watermark_field to the column "
+                        "this source timestamps its rows with.",
+                        unwatermarked,
+                        self.config.watermark_field,
+                    )
+                else:
+                    # Worse than a full scan: these rows loaded this time and
+                    # will not be seen again, because `> watermark` excludes a
+                    # row with no value as surely as an old one.
+                    logger.warning(
+                        "ETL: incremental run extracted %d record(s) carrying no '%s'. "
+                        "An incremental read cannot position them, so once the watermark "
+                        "advances they fall outside the filter and later runs will not "
+                        "see them. A nullable watermark column is not safely incremental.",
+                        unwatermarked,
+                        self.config.watermark_field,
+                    )
 
         finally:
             # Close the source and the FSM independently so a failing source
@@ -635,6 +747,14 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
     ) -> AsyncIterator[List[Dict[str, Any]]]:
         """Extract data in batches.
 
+        The source read is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`, so closing this
+        generator closes it. Every consumer of these batches can stop early
+        --- a run that fails, a checkpoint that gives up, a caller taking a
+        sample --- and a bare ``async for`` leaves the read below suspended,
+        which on a Postgres source is a pooled connection inside an open
+        transaction held until the interpreter finalizes it.
+
         Args:
             db: Source database
             query: Extraction query
@@ -643,24 +763,101 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             Batches of records
         """
         batch = []
-        async for record in db.stream_read(query):
-            batch.append(record.to_dict())
-            if len(batch) >= self.config.batch_size:
-                yield batch
-                batch = []
+        async with aclosing_iter(db.stream_read(query)) as records:
+            async for record in records:
+                batch.append(record.to_dict())
+                if len(batch) >= self.config.batch_size:
+                    yield batch
+                    batch = []
 
         if batch:
             yield batch
 
-    def _get_incremental_query(self) -> Query:
-        """Get query for incremental extraction."""
-        # Get last processed timestamp from checkpoint
-        last_timestamp = self._checkpoint_data.get("last_timestamp")
+    def _configured_query(self) -> Query:
+        """Materialize ``config.source_query``; a fresh ``Query`` each call.
 
-        if last_timestamp:
-            return Query().filter("updated_at", ">", last_timestamp)
-        else:
+        The config stores the serializable dict shape, so this rebuilds the
+        :class:`Query` rather than handing out a shared one --- callers add
+        filters to it.
+        """
+        spec = self.config.source_query
+        if spec is None:
             return Query()
+        return Query.from_dict(_as_query_dict(spec))
+
+    def _get_incremental_query(self) -> Query:
+        """Narrow the configured query to rows changed since the watermark.
+
+        Built *from* ``source_query`` rather than from scratch: an
+        incremental run restricts what a full run would extract, so a
+        pipeline that names a source query and runs incrementally must not
+        silently extract the rows that query excludes.
+
+        ``is not None`` rather than a truth test, because a legitimate
+        watermark can be falsy --- ``0`` is a valid sequence number, and
+        treating it as "no watermark yet" would re-extract the source.
+        """
+        query = self._configured_query()
+
+        if self._watermark is not None:
+            query.filter(self.config.watermark_field, ">", self._watermark)
+
+        return query
+
+    def _order_watermarks(self, left: Any, right: Any) -> bool:
+        """Is ``left`` past ``right``? Refuse a column that cannot be ordered.
+
+        A watermark column holding two types --- a string date beside an
+        int, say --- would otherwise abort the run with a bare ``TypeError``
+        from whichever batch happened to straddle them. Name the field and
+        both values instead.
+        """
+        try:
+            return bool(left > right)
+        except TypeError as exc:
+            raise ETLError(
+                f"watermark field '{self.config.watermark_field}' holds values that "
+                f"cannot be ordered: {left!r} ({type(left).__name__}) against "
+                f"{right!r} ({type(right).__name__}). An incremental run needs one "
+                f"comparable type in that column."
+            ) from exc
+
+    def _scan_watermark(self, batch: List[Dict[str, Any]]) -> tuple[Any, int]:
+        """The highest ``watermark_field`` value in ``batch``, and how many rows lacked one.
+
+        A row missing the field, or carrying ``None`` in it, cannot be
+        positioned against the watermark, so it is skipped rather than
+        treated as the lowest value --- an untimestamped row must not drag
+        the position backward.
+
+        It is counted, because skipping it is not harmless: once the
+        watermark is set, ``value > watermark`` excludes an unpositioned row
+        as well, so it is visible only to a run that has no watermark yet.
+        A nullable watermark column is therefore not safely incremental, and
+        :meth:`run` says so rather than dropping the rows in silence.
+        """
+        field = self.config.watermark_field
+        highest: Any = None
+        unpositioned = 0
+        for record in batch:
+            value = record.get(field)
+            if value is None:
+                unpositioned += 1
+                continue
+            if highest is None or self._order_watermarks(value, highest):
+                highest = value
+        return highest, unpositioned
+
+    def _advance_watermark(self, value: Any) -> None:
+        """Move the watermark forward to ``value``; never backward.
+
+        Batches are not guaranteed to arrive in watermark order, so a later
+        batch holding older rows must not rewind the position.
+        """
+        if value is None:
+            return
+        if self._watermark is None or self._order_watermarks(value, self._watermark):
+            self._watermark = value
 
     def _update_metrics(self, results: List[Dict[str, Any]]) -> None:
         """Update execution metrics by classifying each record's terminal.
@@ -734,10 +931,16 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
             "metrics": self._metrics,
             "config": {"mode": self.config.mode.value, "batch_size": self.config.batch_size},
             "position": self._metrics["extracted"],
+            # Where the source was read to, as opposed to how many rows came
+            # out of it. Without this a resumed run restored the counts and
+            # restarted from the beginning of the source.
+            "watermark": self._watermark,
         }
 
-        # Generate checkpoint ID
-        checkpoint_id = hashlib.md5(json.dumps(checkpoint).encode()).hexdigest()[:8]
+        # Generate checkpoint ID. ``default=str`` because the watermark is a
+        # value out of the source --- a ``datetime`` from a SQL column, say
+        # --- and only its rendering feeds the digest.
+        checkpoint_id = hashlib.md5(json.dumps(checkpoint, default=str).encode()).hexdigest()[:8]
 
         # Save to storage (simplified - would use persistent storage)
         self._checkpoint_data[checkpoint_id] = checkpoint
@@ -749,13 +952,14 @@ class DatabaseETL(StructuredConfigConsumer[ETLConfig]):
         if checkpoint_id in self._checkpoint_data:
             checkpoint = self._checkpoint_data[checkpoint_id]
             self._metrics = checkpoint["metrics"]
+            self._watermark = checkpoint.get("watermark")
 
 
 def create_etl_pipeline(
     source: Union[str, Dict[str, Any]],
     target: Union[str, Dict[str, Any]],
     mode: ETLMode = ETLMode.FULL_REFRESH,
-    **kwargs,
+    **kwargs: Any,
 ) -> DatabaseETL:
     """Factory function to create ETL pipeline.
 
@@ -806,19 +1010,33 @@ def create_database_sync(
     source: Dict[str, Any],
     target: Dict[str, Any],
     sync_interval: int = 300,  # 5 minutes
+    **kwargs: Any,
 ) -> DatabaseETL:
     """Create database synchronization pipeline.
+
+    Each ``run()`` extracts only the rows past the watermark the previous one
+    loaded, so a sync is repeated by calling ``run()`` again on the returned
+    pipeline --- the watermark lives on that object.
 
     Args:
         source: Source database config
         target: Target database config
-        sync_interval: Sync interval in seconds
+        sync_interval: **Not yet honoured.** Nothing in ``DatabaseETL``
+            schedules repeat runs; the caller drives the cadence. Accepted so
+            the signature does not change when scheduling lands.
+        **kwargs: Forwarded to :class:`ETLConfig` --- notably
+            ``watermark_field``, which a source that does not name its
+            timestamp column ``updated_at`` must set.
 
     Returns:
         AsyncDatabase sync ETL pipeline
     """
     return create_etl_pipeline(
-        source=source, target=target, mode=ETLMode.INCREMENTAL, checkpoint_interval=1000
+        source=source,
+        target=target,
+        mode=ETLMode.INCREMENTAL,
+        checkpoint_interval=1000,
+        **kwargs,
     )
 
 

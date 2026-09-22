@@ -19,7 +19,7 @@ from dataknobs_common.capabilities import (
 
 from ...fields import VectorField
 from ...records import Record
-from ..content import MODEL_NAME_KEY
+from ..content import MODEL_NAME_KEY, MODEL_VERSION_KEY
 from ..embedding import default_model_name, embed_texts, require_embedding_source
 from ..types import VectorSearchResult
 from .common import VectorStoreBase, VectorStoreConfigT
@@ -147,8 +147,14 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
         produces rather than intends — a comprehension that filtered
         everything out, a chunker handed a blank document — so requiring
         an ``if items:`` guard at every call site only moves the check.
-        Both ``[]`` and ``np.array([])`` count as empty. Implementations
-        get this from ``VectorStoreBase._is_empty_batch``.
+        Both ``[]`` and ``np.array([])`` count as empty.
+
+        A batch that is **not** empty is measured against the store's
+        declared ``dimensions`` and refused if it disagrees, so a width
+        stated in config is a claim about the rows rather than a label.
+        Implementations get both, in that order, from
+        ``VectorStoreBase._guard_batch``; a store declaring no width has
+        nothing to compare and is not held to the sentinel.
 
         A configured ``domain_id`` is defaulted into every row written
         that does not carry one of its own.
@@ -560,7 +566,7 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
             if vector_obj.model_name:
                 metadata[MODEL_NAME_KEY] = vector_obj.model_name
             if vector_obj.model_version:
-                metadata["model_version"] = vector_obj.model_version
+                metadata[MODEL_VERSION_KEY] = vector_obj.model_version
 
             # Add requested fields
             if include_fields:
@@ -765,7 +771,7 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
                 if model_name is not None:
                     batch_metadata[j].setdefault(MODEL_NAME_KEY, model_name)
                 if model_version is not None:
-                    batch_metadata[j].setdefault("model_version", model_version)
+                    batch_metadata[j].setdefault(MODEL_VERSION_KEY, model_version)
                 # `setdefault` for `model_name`'s reason and not
                 # `source_text`'s: this method derives the text from `texts`
                 # and so knows better than the caller, but it is *told* the

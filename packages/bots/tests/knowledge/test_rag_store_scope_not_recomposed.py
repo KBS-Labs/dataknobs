@@ -43,15 +43,19 @@ from dataknobs_bots.providers import build_embedding_config, create_embedding_pr
 from dataknobs_data.vector.stores import VectorStoreFactory
 
 
-async def _embedder() -> Any:
+async def _embedder(store: Any) -> Any:
     return await create_embedding_provider(
-        build_embedding_config(embedding_provider="echo", embedding_model="test")
+        build_embedding_config(
+            embedding_provider="echo",
+            embedding_model="test",
+            store_dimensions=store.dimensions,
+        )
     )
 
 
 async def _kb_over(store: Any, config: dict[str, Any] | None = None) -> RAGKnowledgeBase:
     return RAGKnowledgeBase.from_components(
-        config, vector_store=store, embedding_provider=await _embedder()
+        config, vector_store=store, embedding_provider=await _embedder(store)
     )
 
 

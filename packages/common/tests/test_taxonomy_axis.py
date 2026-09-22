@@ -1348,3 +1348,135 @@ async def test_the_async_twin_answers_without_awaiting(mammals_v11_path: Path) -
         "latin_name",
         "lifespan_years",
     ]
+
+
+# --------------------------------------------------------------------------
+# What `has_edge_annotations()` measures, in the package that defines it
+# --------------------------------------------------------------------------
+#
+# The member's only coverage lived in `dataknobs-data`'s column-axis suite,
+# reached through a registry. That is the right place for the live-binding
+# case, and it left the synchronous twin --- the flavour a consumer reaches
+# first --- exercised only for the two answers that were already right.
+#
+# The two defects need different documents, and the difference is the point:
+#
+# - A **negation** is reachable on an ordinary authored axis, because an
+#   assertion's polarity is independent of whether it forms an edge.
+# - An **off-axis assertion** is *not*. On an assertion-backed axis the
+#   assertions under the relation **are** the structure, so an assertion
+#   under that relation is an edge of that axis by construction. Reaching
+#   it needs an axis whose structure comes from somewhere else --- a
+#   column binding, or the hand-built equivalent below. That is why the
+#   registry found this and an authored document cannot.
+
+_AXIS_DOCUMENT = {
+    "id": "annotated",
+    "entity_types": [{"id": "Thing"}],
+    "entities": [
+        {"id": "root", "type": "Thing", "name": "Root"},
+        {"id": "mid", "type": "Thing", "name": "Mid"},
+        {"id": "other", "type": "Thing", "name": "Other"},
+    ],
+    "relation_types": [{"id": "parent"}],
+    "taxonomies": [{"id": "categories", "relation": "parent"}],
+}
+
+#: `mid -> root`, as a structure that is **not** derived from any assertion
+#: --- the hand-built stand-in for a `kind: column` binding.
+_BOUND_TREE = {"root": (), "mid": ("root",), "other": ()}
+
+
+def _document_with(*assertions: dict[str, str]) -> dict[str, object]:
+    return {**_AXIS_DOCUMENT, "assertions": list(assertions)}
+
+
+def _bound_axis(document: dict[str, object]) -> Taxonomy:
+    """The document's assertions beside a structure they did not build."""
+    onto = load_ontology(document)
+    return Taxonomy(
+        definition=onto.taxonomies["categories"],
+        structure=MappingHierarchy(_BOUND_TREE),
+        entities=onto.entities,
+        assertions=onto.assertions,
+    )
+
+
+def test_a_stated_negation_is_not_an_edge_annotation() -> None:
+    """``edge_criteria`` narrows on polarity; this read used a bare relation.
+
+    A ``NEGATED`` assertion states that an edge does **not** hold. It is not
+    an annotation on an edge, ``parent_edges()`` excludes it, and
+    ``edge_criteria`` exists so no reader has to remember why --- its
+    docstring names this exact failure, *"a query that does not narrow
+    returns a stated negation as an edge"*. This read was the reader added
+    later that omitted it.
+    """
+    axis = _bound_axis(
+        _document_with(
+            {"subject": "mid", "relation": "parent", "object": "root", "polarity": "negated"}
+        )
+    )
+    assert axis.at("mid").parent_edges() == ()
+    assert axis.has_edge_annotations() is False
+
+
+def test_an_assertion_under_the_relation_that_is_no_edge_of_this_axis() -> None:
+    """Narrowing by relation alone counts an assertion belonging elsewhere.
+
+    ``other`` is an entity of this vocabulary and a **root** of this axis, so
+    ``mid -> other`` is an edge of nothing here and no ``parent_edges()``
+    call can return it. The probe counted it because it asked the whole
+    source for the relation instead of asking this axis for an annotated
+    edge. Two axes sharing a relation --- a live column axis landing beside
+    a legacy assertion axis over the same edge name --- is the shape that
+    produces this in a real document.
+    """
+    axis = _bound_axis(_document_with({"subject": "mid", "relation": "parent", "object": "other"}))
+    assert axis.at("mid").parent_edges() == ()
+    assert axis.has_edge_annotations() is False
+
+
+def test_an_asserted_edge_of_this_axis_says_yes() -> None:
+    """The positive control: narrowing is not refusing.
+
+    The same bound structure, and an assertion that *does* land on one of
+    its edges. A fix keyed on the axis's backing --- *is this hierarchy
+    made of assertions?* --- would answer ``False`` here, for an axis
+    demonstrably carrying an annotation.
+    """
+    axis = _bound_axis(_document_with({"subject": "mid", "relation": "parent", "object": "root"}))
+    assert len(axis.at("mid").parent_edges()) == 1
+    assert axis.has_edge_annotations() is True
+
+
+def test_both_twins_answer_the_same_on_every_case() -> None:
+    """The twins share no runtime code, so the agreement is asserted.
+
+    Three documents rather than one: a twin pair can agree on the easy
+    answer and differ on the narrowing, which is the half that changed.
+    """
+
+    async def _asynchronous(document: dict[str, object]) -> bool:
+        onto = await async_load_ontology(document)
+        axis = AsyncTaxonomy(
+            definition=onto.taxonomies["categories"],
+            structure=AsyncMappingHierarchy(_BOUND_TREE),
+            entities=onto.entities,
+            assertions=onto.assertions,
+        )
+        return await axis.has_edge_annotations()
+
+    cases = {
+        "negated": _document_with(
+            {"subject": "mid", "relation": "parent", "object": "root", "polarity": "negated"}
+        ),
+        "off-axis": _document_with({"subject": "mid", "relation": "parent", "object": "other"}),
+        "annotated": _document_with({"subject": "mid", "relation": "parent", "object": "root"}),
+    }
+    for label, document in cases.items():
+        synchronous = _bound_axis(document).has_edge_annotations()
+        asynchronous = asyncio.run(_asynchronous(document))
+        assert synchronous == asynchronous, (
+            f"the twins disagree on the {label!r} document: sync={synchronous} async={asynchronous}"
+        )

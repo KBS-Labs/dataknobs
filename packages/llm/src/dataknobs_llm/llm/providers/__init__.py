@@ -12,7 +12,7 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, overload
 
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import StructuredConfig, config_registries
@@ -370,6 +370,54 @@ def create_llm_provider(
     return factory.create(config)
 
 
+#: The top-level keys :func:`create_embedding_provider` forwards to the
+#: provider on its **flat** branch, and the only ones.
+#:
+#: Published for :func:`reads_nested_embedding`'s reason, one line along: a
+#: caller building that dict has to know which top-level keys survive, and the
+#: alternative to reading them from here is writing the list out again
+#: somewhere else. ``dataknobs-bots``' ``build_embedding_config`` takes exactly
+#: these three as parameters, and a guard there compares the two sets rather
+#: than trusting that they still agree.
+#:
+#: Dead on the nested branch, where the same values are read from inside the
+#: section instead.
+FLAT_EMBEDDING_PASSTHROUGHS = ("api_base", "api_key", "dimensions")
+
+
+def reads_nested_embedding(section: Any) -> TypeGuard[dict[str, Any]]:
+    """Whether :func:`create_embedding_provider` reads *section* as the nested form.
+
+    That function accepts two dict shapes --- a nested ``embedding:``
+    sub-dict, and the legacy flat ``embedding_provider`` / ``embedding_model``
+    keys --- and this is the whole of how it tells them apart. Both halves
+    matter and only one of them is obvious: an **empty** section is falsy and
+    falls through to the flat keys, and a section that is not a **dict** at
+    all is ignored and falls through the same way.
+
+    **Published because a consumer has to be able to ask.** Anything building
+    that dict must put a value where the reader will look for it, which means
+    predicting this branch. ``dataknobs-bots``' ``build_embedding_config``
+    did, by writing the condition out a second time --- and dropped the
+    ``isinstance`` half, which is the only half that can disagree. Measured on
+    that copy: ``embedding="ollama"`` raised ``TypeError`` where the helper
+    would have ignored it, and ``embedding=["dimensions"]`` raised nothing
+    and silently put the caller's vector width at the top level of a config
+    this function would read the nested branch of. One predicate, asked by
+    both, cannot do either.
+
+    Args:
+        section: Whatever the config's ``embedding`` key holds, including
+            nothing --- ``None`` and a missing key answer ``False``.
+
+    Returns:
+        True when the nested branch is the one that will be taken.
+        A :class:`~typing.TypeGuard`, so a caller narrowing on it may then
+        read the section as the mapping it has just been told it is.
+    """
+    return isinstance(section, dict) and bool(section)
+
+
 async def create_embedding_provider(
     config: LLMConfig | dict[str, Any],
     *,
@@ -433,7 +481,7 @@ async def create_embedding_provider(
         # Dict path. 1. Nested "embedding" sub-dict (preferred)
         extra: dict[str, Any]
         embedding_config = config.get("embedding", {})
-        if embedding_config and isinstance(embedding_config, dict):
+        if reads_nested_embedding(embedding_config):
             provider_name = embedding_config.get("provider", default_provider)
             model_name = embedding_config.get("model", default_model)
             # Forward all extra keys (api_base, api_key, dimensions, etc.)
@@ -443,7 +491,7 @@ async def create_embedding_provider(
             provider_name = config.get("embedding_provider", default_provider)
             model_name = config.get("embedding_model", default_model)
             extra = {}
-            for passthrough in ("api_base", "api_key", "dimensions"):
+            for passthrough in FLAT_EMBEDDING_PASSTHROUGHS:
                 if passthrough in config:
                     extra[passthrough] = config[passthrough]
         provider_config = {
@@ -508,5 +556,7 @@ __all__ = [
     "LLMProviderFactory",
     "create_llm_provider",
     "create_embedding_provider",
+    "reads_nested_embedding",
+    "FLAT_EMBEDDING_PASSTHROUGHS",
     "normalize_llm_config",
 ]

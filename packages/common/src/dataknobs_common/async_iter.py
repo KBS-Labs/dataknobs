@@ -40,9 +40,10 @@ import asyncio
 import queue
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from typing import TypeVar, cast
 
-__all__ = ["aiter_sync_in_thread"]
+__all__ = ["aclosing_iter", "aiter_sync_in_thread"]
 
 T = TypeVar("T")
 
@@ -62,6 +63,62 @@ _POLL_SECONDS = 0.05
 # Name applied to the producer thread so tests (and debuggers) can assert no
 # pump thread is left alive after teardown.
 _THREAD_NAME = "dk-aiter-sync-pump"
+
+
+@asynccontextmanager
+async def aclosing_iter(iterator: AsyncIterator[T]) -> AsyncIterator[AsyncIterator[T]]:
+    """Drive *iterator* inside a block that closes it on the way out.
+
+    :func:`contextlib.aclosing` over an ``AsyncIterator``, for the population
+    where "is it closable" is not answerable at the call site.
+
+    **Why not ``contextlib.aclosing``.** That one requires an ``aclose``
+    member and the type checker enforces it, so it cannot be written against
+    an ``AsyncIterator`` --- and ``AsyncIterator`` is what the protocols in
+    this workspace declare, deliberately: an ``async def`` generator function
+    returns its iterator without awaiting, so the *plain* iterator is the
+    signature a structural implementation actually has. Every implementation
+    in the tree happens to be an async generator and does have ``aclose``;
+    an outside one need only have ``__aiter__`` and ``__anext__``, and
+    ``contextlib.aclosing`` around that raises ``AttributeError`` **at the
+    exit**, replacing whatever the block was already failing with.
+
+    So the close is conditional on the iterator having one. Nothing is lost
+    where it does not: an iterator with no ``aclose`` has no cleanup to run
+    at a close, which is why it has no ``aclose``.
+
+    **What the close buys, and why it is not optional.** An async generator a
+    consumer walks away from --- a ``break``, a raise, an early return --- is
+    left suspended at its ``yield``, and its ``finally`` runs only when the
+    interpreter finalizes it: a later turn of the loop, unordered against
+    whatever the consumer does next. Anything the generator was holding is
+    held across that gap, and anything it reports there arrives after the
+    consumer has moved on. Both are real in this tree ---
+    ``AsyncPostgresDatabase.stream_read`` yields from inside an acquired pool
+    connection and an open transaction, and ``EntitySourceIndexSource``
+    reports an all-empty stream from a ``finally``.
+
+    Args:
+        iterator: What to drive. Yielded back unchanged, so the block reads
+            ``async for item in it``.
+
+    Example:
+        ```python
+        async with aclosing_iter(source.stream_items()) as items:
+            async for item in items:
+                if done:
+                    break  # the source's cleanup runs here, not later
+        ```
+    """
+    try:
+        yield iterator
+    finally:
+        # `getattr` rather than `isinstance(iterator, AsyncGenerator)`: the
+        # member is what gets called, so the member is what to look for --- a
+        # consumer's own closable iterator need not be a generator.
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 async def aiter_sync_in_thread(

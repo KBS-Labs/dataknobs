@@ -87,8 +87,10 @@ class VectorMemoryConfig(StructuredConfig):
 
     Attributes:
         backend: Vector-store backend key (``memory``, ``faiss``, …).
-        dimension: Vector-store dimension (singular). Distinct from
+        dimension: Vector-store width (singular). Distinct from
             ``dimensions`` below, which is forwarded to the embedder.
+            ``None`` means the config named no width, which the store
+            then declares nothing for --- see the note on the field.
         collection: Optional collection/index name for the store.
         persist_path: Optional persistence path for the store.
         store_params: Extra keyword arguments merged into the
@@ -137,7 +139,21 @@ class VectorMemoryConfig(StructuredConfig):
     #: unpersisted vector store -- one that loses every embedding on
     #: restart -- was indistinguishable from one that was asked for.
     backend: str | None = None
-    dimension: int = 1536
+    #: ``None`` means the config named no width, for the same reason
+    #: ``backend`` above is optional. A spelled default is indistinguishable
+    #: from a consumer's choice once it leaves this dataclass, and this one
+    #: leaves it twice: ``_ainit`` writes it into the store's config *and*
+    #: hands it to ``build_embedding_config`` as ``store_dimensions``, whose
+    #: whole contract is that it carries **the width the config gave the
+    #: store**. Spelled 1536, that argument was never absent, so an embedder
+    #: was told to emit a number nobody had typed --- silently for a provider
+    #: that honours the request, and fatally for ``OllamaProvider``, whose
+    #: ``embed`` refuses a stated width its model cannot produce. The other
+    #: caller of that helper, ``RAGKnowledgeBase``, reads
+    #: ``vector_store.get("dimensions")`` and so supplies only a width that
+    #: was really stated; this is what makes the two agree on what "declared"
+    #: means.
+    dimension: int | None = None
     collection: str | None = None
     persist_path: str | None = None
     store_params: dict[str, Any] = field(default_factory=dict)

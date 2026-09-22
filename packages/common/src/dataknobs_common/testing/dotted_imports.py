@@ -36,14 +36,25 @@ Usage::
         assert_no_ad_hoc_dotted_import(
             *(root / "packages").glob("*/src"),
             allow={
-                # Parses a CLI argument and exits; not config-driven
-                # resolution at all.
-                "llm/src/dataknobs_llm/prompts/syntax.py:486",
-                # Takes an already-split module/name pair, so it parses no
-                # path and there is nothing for the resolver to own.
-                "fsm/src/dataknobs_fsm/config/builder.py:903",
+                # One "<package>/src/<path>.py:<line>" per deferred site, each
+                # with the reason it is deferred.
+                "<package>/src/<module>.py:<line>",
             },
         )
+
+``allow=`` fails on an entry that matches nothing, so every entry has to name
+a line that is still flagged. That is the point --- a suppression which
+silently stopped covering its line is the failure this guard exists to
+prevent --- and it is why the example above carries a placeholder rather than
+real coordinates: a docstring is not re-checked against the tree, so a
+concrete ``path:line`` copied into one goes stale without anything saying so.
+Both entries here had, while the guarded copy they were mirroring stayed
+correct --- and a figure for how far would drift the same way, so there is
+none.
+
+This repository's live allow list is ``DEFERRED`` in
+``tests/test_dotted_import_consolidation.py``; read that for the current
+sites and their reasons.
 
 It is a source scan, not a runtime check: the defect is a shape in the code,
 and a copy can sit on a path that needs a live service to reach.

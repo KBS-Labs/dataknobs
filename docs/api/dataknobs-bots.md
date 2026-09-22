@@ -120,8 +120,9 @@ Semantic search-based memory using vector similarity.
 ```python
 memory = await create_memory_from_config({
     "type": "vector",
-    "vector_store": {"backend": "faiss", "dimension": 384},
-    "top_k": 5
+    "backend": "faiss",
+    "dimension": 768,
+    "max_results": 5
 })
 ```
 
@@ -139,7 +140,7 @@ from dataknobs_bots.knowledge import create_knowledge_base_from_config
 kb = await create_knowledge_base_from_config({
     "enabled": True,
     "documents_path": "./docs",
-    "vector_store": {"backend": "faiss", "dimension": 384}
+    "vector_store": {"backend": "faiss", "dimensions": 768}
 })
 
 results = await kb.query("What is the product?", k=5)
@@ -209,7 +210,7 @@ config = {
     "knowledge": {
         "enabled": True,
         "documents_path": "./docs",
-        "vector_store": {"backend": "faiss"}
+        "vector_store": {"backend": "faiss", "dimensions": 768}
     },
     "reasoning": {
         "type": "react"

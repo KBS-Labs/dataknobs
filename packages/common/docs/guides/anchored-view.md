@@ -266,9 +266,46 @@ assert axis.at("no_such_node").parent_edges() == () and not axis.at("no_such_nod
 
 unannotated = replace(axis, assertions=None)
 assert unannotated.at("beagle").parent_edges() == ()
-assert unannotated.assertions is None                       # the question to ask
+assert not unannotated.has_edge_annotations()               # the question to ask
 assert [above.node for above in unannotated.at("beagle").parents()] == ["dog"]
+
+assert axis.has_edge_annotations()                          # and the other answer
 ```
+
+!!! warning "Ask `has_edge_annotations()`, not `assertions is None`"
+
+    `assertions is None` was the documented question and **it does not
+    survive a live binding.** `OntologyRegistry` constructs an assertion
+    source for every vocabulary it loads, whether or not any axis of that
+    vocabulary is made of assertions — so a `kind: column` taxonomy over a
+    live table has a source that is *empty* rather than *absent*.
+
+    Measured, asked of both flavours of one five-row tree: `assertions is
+    None` answers `False` **both times**, while the edge read answers `0` and
+    `1`. So the consumer who follows the old instruction gets the **wrong**
+    answer rather than no answer — `False` reads as *this axis does carry
+    annotations*, which makes `()` read as *nothing is written on this edge*
+    when the truth is *nothing can be*.
+
+    `has_edge_annotations()` asks whether an **asserted** edge under this
+    axis's relation lands on an edge *of this axis* — which is exactly what
+    `parent_edges()` reads, so the two cannot disagree. It is named for what
+    it measures rather than for provenance on purpose, and provenance is the
+    wrong question in *both* directions: a `materialization.structure:
+    materialized` copy of an assertion axis is *bound* and its edges are
+    still assertions, and a `kind: column` axis is not one where nothing can
+    be written — its edges come from the table, but an assertion landing on
+    one of them annotates it.
+
+    Narrowing by relation alone is not enough either, and it is the narrower
+    mistake. Two axes may share a relation — a live column axis beside a
+    legacy assertion axis over the same edge name is what a migration looks
+    like — and an assertion belonging to the other axis would answer for
+    this one. A stated **negation** would count too, which is the failure
+    `edge_criteria` exists to prevent.
+
+    `assertions` itself stays what it is — the source, or `None` for an axis
+    built with none — and is still the thing the edge members read.
 
 The structure decides which parents there are; the edge members only read what
 is written on the edges to them. So an axis whose structure was copied at load

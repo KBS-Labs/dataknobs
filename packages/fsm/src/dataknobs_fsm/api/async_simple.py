@@ -285,7 +285,7 @@ See Also:
 """
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -300,6 +300,7 @@ from ..core.result_formatter import ResultFormatter
 from ..execution.async_batch import AsyncBatchExecutor
 from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.async_stream import AsyncStreamExecutor
+from ..functions.base import RegisteredFunction
 from ..resources.manager import ResourceManager
 from ..streaming.core import StreamConfig as CoreStreamConfig
 from ._resource_surface import ResourceSurface
@@ -519,7 +520,7 @@ class AsyncSimpleFSM(ResourceSurface):
         config: str | Path | dict[str, Any],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
         resources: dict[str, Any] | None = None,
-        custom_functions: dict[str, Callable] | None = None,
+        custom_functions: Mapping[str, RegisteredFunction] | None = None,
     ):
         """Initialize AsyncSimpleFSM from configuration.
 
@@ -623,15 +624,22 @@ class AsyncSimpleFSM(ResourceSurface):
 
     async def process_batch(
         self,
-        data: list[dict[str, Any] | Record],
+        data: Sequence[dict[str, Any] | Record],
         batch_size: int = 10,
         max_workers: int = 4,
         on_progress: Callable | None = None,
     ) -> list[dict[str, Any]]:
         """Process multiple records in parallel batches asynchronously.
 
+        ``data`` is a ``Sequence`` rather than a ``list`` because ``list`` is
+        invariant: a caller holding a ``list[dict[str, Any]]`` --- which is
+        what a batch of rows read from a database is --- cannot pass it to a
+        ``list[dict[str, Any] | Record]`` parameter, though every element is
+        acceptable. This body only iterates, so nothing was gained by asking
+        for the narrower type.
+
         Args:
-            data: List of input records to process
+            data: Input records to process
             batch_size: Number of records per batch
             max_workers: Maximum parallel workers
             on_progress: Optional callback for progress updates
@@ -889,7 +897,7 @@ class AsyncSimpleFSM(ResourceSurface):
 # Factory function for AsyncSimpleFSM
 async def create_async_fsm(
     config: str | Path | dict[str, Any],
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
     **kwargs: Any,
 ) -> AsyncSimpleFSM:
     """Factory function to create an AsyncSimpleFSM instance.

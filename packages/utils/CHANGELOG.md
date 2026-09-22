@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The package door imports its submodules lazily (PEP 562).**
+  `dataknobs_utils/__init__.py` imported all fifteen *"for easy access"*, and
+  the package declares no optional extras, so a consumer reaching **one**
+  function paid for all fifteen. Measured in a fresh interpreter, that single
+  import line loaded **1,342 modules in 303 ms** and pulled `nltk`, `pandas`,
+  `numpy`, `psycopg2`, `lxml`, `beautifulsoup4`, `requests`, `graphviz`,
+  `defusedxml`, `python-dotenv` and `json-stream` behind it. It now loads
+  **64 modules in 5 ms** and reaches none of those.
+
+  The case that found it: a consumer adding `dataknobs-data` to a package
+  declaring `dataknobs-common` alone went from 2 third-party distributions to
+  34, and the twenty-eight beyond the four `dataknobs-data` declares arrived
+  behind this door — for one name, `quote_ident` out of `sql_utils`, reached
+  by the **in-memory** backend. Measured over that chain: `import
+  dataknobs_data` falls **2,088 → 1,592 modules** and **946 → 842 ms**, and
+  seven of the eleven heavy roots go. The four that remain — `numpy`,
+  `pandas`, `psycopg2`, `python-dotenv` — are `sql_utils`' own module-level
+  imports, which a lazy door does not reach.
+
+  **Every spelling a caller uses still works**, and that is asserted rather
+  than assumed: `from dataknobs_utils import json_utils`, `import
+  dataknobs_utils.json_utils` and attribute access all resolve, `dir()` still
+  lists the submodules, and an unknown name still raises `AttributeError`
+  rather than letting an `ImportError` escape. The pattern is this
+  repository's own — `dataknobs_common.events`, `dataknobs_bots.knowledge`
+  and `dataknobs_llm.tools` all defer behind `__getattr__` for the same
+  stated reason.
+
+  **This changes what a process imports, not what a consumer installs.** That
+  follows from what `pyproject.toml` declares, and moving a dependency into an
+  extra is a separate change with its own compatibility surface.
+
 - **the JSON index tree binds `children` once rather than re-reading it.**
   `dataknobs-structures` now answers `Tree.children` with a fresh tuple rather
   than the list the node holds, so each read allocates one. The path builder

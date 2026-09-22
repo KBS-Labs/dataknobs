@@ -45,7 +45,6 @@ def _etl(src: str, tgt: str) -> DatabaseETL:
         ETLConfig(
             source_db={"type": "file", "path": src},
             target_db={"type": "file", "path": tgt},
-            source_query=None,
             target_table="records",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,

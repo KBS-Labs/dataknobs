@@ -122,14 +122,14 @@ class TestStreamExecutor:
     @pytest.fixture
     def simple_fsm(self):
         """Create a simple FSM for testing."""
-        from dataknobs_fsm.core.state import State
+        from dataknobs_fsm.core.state import StateDefinition, StateType
 
         # Create network
         network = StateNetwork(name="main")
 
         # Create and add states
-        start_state = State(name="start", type="start")
-        end_state = State(name="end", type="end")
+        start_state = StateDefinition(name="start", type=StateType.START)
+        end_state = StateDefinition(name="end", type=StateType.END)
 
         network.add_state(start_state, initial=True)
         network.add_state(end_state, final=True)

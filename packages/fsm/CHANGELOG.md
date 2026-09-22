@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`config.schema.ResourceConfig.to_runtime()`** converts a resource as a
+  configuration document declares it into `functions.base.ResourceConfig`, the
+  runtime type a state actually holds. `config` becomes `connection_params`,
+  `connection_pool_size` becomes `pool_size`, `timeout_seconds` becomes
+  `timeout`, and the two retry fields travel together in `retry_policy` under
+  the names the schema gives them. A consumer doing its own
+  configuration-to-core translation calls this rather than rewriting the
+  mapping.
+
+- **A state and an arc can say what they are, as data.**
+  `StateDefinition.to_dict()` / `from_dict()` round-trip the declarative
+  fields (name, type, description, metadata, timeout, retry, run-on-failure,
+  emit-output, data mode); functions, schemas and resource configs are objects
+  resolved against a registry and are deliberately not written.
+  `ArcDefinition.name` is `metadata['name']` or `source->target`,
+  `ArcDefinition.source_state` is stamped by `StateNetwork.add_arc`, and
+  `PushArc.parse_target()` is the one reader of the
+  `"network"` / `"network:initial_state"` syntax. `transform_function_names()`
+  answers what an arc's `transform` field refers to across all four of its
+  shapes, and `as_validation_callable()` is the validator counterpart of
+  `as_state_test_callable()`.
+
+- **An arc round-trips as the class it is.** `ArcDefinition.to_dict()` /
+  `from_dict()` and `PushArc`'s overrides carry the arc's own payload, tagged
+  with `ArcDefinition.kind`, and `arc_from_dict()` rebuilds whichever class
+  was recorded. `TransformSpec` gains `to_dict()` / `from_dict()`, and
+  `transform_to_data()` / `transform_from_data()` convert the `transform`
+  field's four shapes to and from plain data. Consumers with their own arc
+  subclass register it with `register_arc_type()` rather than losing it to the
+  base class on every round trip; an unregistered `kind` raises instead of
+  silently returning a base arc.
+
+- **`StateNetwork.arc_definitions`** lists every arc in the network. The
+  `arcs` mapping is keyed `"source:target"` and so cannot represent two arcs
+  between the same pair of states, which is the ordinary way to branch on a
+  condition.
+
+- **`StateNetwork.set_streaming_enabled()`** declares whether a network
+  streams, and the config builder now calls it from `streaming: {enabled: …}`.
+
+- **`StateNetwork.find_cycles()`** is public, under the name this changelog,
+  the construction API's documentation and its tests already gave it. It was
+  defined as `_find_cycles`.
+
 - **`FSM.execute()` takes `bridge=` and `timeout=`.** It is the remaining
   one-shot synchronous surface, drives the same engine the executors drive, and
   had neither: two calls ran on two throwaway loops, and neither was the FSM's
@@ -49,7 +93,652 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as one more failed result. Both default to the previous behaviour: a bridge
   of the operation's own, and an unbounded wait.
 
+### Changed
+
+- **BREAKING: a name a configuration writes is at least one character.** Every
+  name in the document schema is refused when empty --- the FSM's, a network's,
+  a state's, a resource's, and every reference to one, including the resources
+  an arc requires, which are checked against nothing else. The refusal names
+  the field (`resources.0.name: String should have at least 1 character`). An
+  empty name used to load, and nothing downstream could tell it from an absent
+  one: a state requiring a resource named `""` was skipped by both of the async
+  engine's acquisition loops and ran without it, an end state named `""` was
+  invisible to `is_final_state_common` so the engine could not see the FSM's
+  own end, and a main network named `""` answered `FSM.get_outgoing_arcs` with
+  no arcs. Each was silent, and each was the opposite of what the document
+  said, so a document this now refuses was already not doing what it read as
+  doing. Whitespace is still accepted: `"  "` is a poor name but not an absent
+  one.
+
+- **BREAKING: a state's `resource_requirements` holds the runtime
+  `ResourceConfig`, on every FSM.** The field is declared
+  `List[functions.base.ResourceConfig]` --- `core` imports that type and
+  imports nothing from `config` --- and the builder put
+  `config.schema.ResourceConfig` there, a second class of the same name
+  declaring the same concept under different field names. So on any FSM built
+  from configuration the field carried an object with none of the four fields
+  its annotation promises. A consumer reading `rc.config`,
+  `rc.connection_pool_size`, `rc.timeout_seconds`, `rc.retry_attempts` or
+  `rc.retry_delay_seconds` off a state's requirements now reads
+  `rc.connection_params`, `rc.pool_size`, `rc.timeout` and
+  `rc.retry_policy["retry_attempts"]` / `["retry_delay_seconds"]`. The document
+  format is unchanged: this is the shape of the object the builder produces,
+  not of the YAML it reads.
+
+- **BREAKING: a network holds one kind of state, and it is `StateDefinition`.**
+  `State` --- a three-attribute class carrying `name`, `metadata` and
+  `resource_requirements` --- is removed, along with its export from
+  `dataknobs_fsm.core`. It could not produce a network the engines could run:
+  they ask a state for `outgoing_arcs` and `type` and it had neither, so
+  execution returned `(False, "'State' object has no attribute
+  'outgoing_arcs'")` --- a refusal, not a crash, so a caller saw a record that
+  simply did not process. `StateNetwork.from_dict` built one per state from
+  the name alone, discarding the rest of the payload. Migration is mechanical:
+  `State` becomes `StateDefinition`, and `type="start"` becomes
+  `type=StateType.START`. `dataknobs_fsm.core` now exports `StateDefinition`
+  and `StateType`, which it did not.
+
+- **BREAKING: a network holds one kind of arc, and it is `ArcDefinition`.**
+  `StateNetwork.Arc` is removed. The network kept its arcs as `Arc` in
+  `_arcs` / `_arc_index` while the engines read `ArcDefinition` off
+  `StateDefinition.outgoing_arcs`, populated by a different writer. The `arcs`
+  property existed to translate, rebuilding a lossy `ArcDefinition` per call
+  per arc with `priority`, `definition_order` and `required_resources`
+  dropped --- so the accessor answering "what arcs are here" answered with
+  arcs the engines would have ordered differently. `get_arcs_from_state`,
+  `get_arcs_to_state` and `arcs` now return the stored arcs themselves.
+
+- **BREAKING: `StateNetwork.add_arc` records the arc on the source state.**
+  It is now the single writer of every index the network keeps --- `_arcs`,
+  `_arc_index`, and `states[source].outgoing_arcs` --- storing one object in
+  all three rather than equal copies. It takes `definition=` for a caller that
+  has already built an arc, returns the stored `ArcDefinition` rather than an
+  `Arc`, and accepts the arc type's full `transform` union. `remove_arc` and
+  `remove_state` undo all three.
+
+- **BREAKING: a validator that raises refuses the record.** The two validator
+  lists a state carries sit five lines apart in the same state entry and gave
+  opposite answers to the same event: `pre_validation_functions` failed entry
+  ("the record is refused entry as if it had been rejected"), while
+  `validation_functions` swallowed the exception and reported the record as
+  validated --- the same outcome as a validator that could not run at all, and
+  as one whose rejection was discarded. Both now refuse, and the reason is
+  logged with its traceback, because a gate with a bug in it is otherwise
+  indistinguishable from a gate that rejected the record. The swallow began as
+  a bare `except Exception: pass`; the change that later gave it a log line
+  scoped itself to observability, with no outcome changed. Consumers relying
+  on a broken validator being ignored will now see those records fail --- which
+  is the point, but it is a change in what reaches the output.
+
+- **BREAKING: `StateNetwork.remove_arc` matches by identity.** It took any
+  arc `==` to a stored one; it now takes the stored object. A caller that
+  rebuilt an equivalent `ArcDefinition` to remove gets `ValueError` and should
+  pass the arc `add_arc` returned, or find it via `get_arcs_from_state`.
+
+- **BREAKING: a push arc naming an undefined target network is refused when
+  the FSM is built,** by the completeness check that was written to refuse it
+  and had never run. A typo in `target_network` is answered once, at build,
+  instead of once per record for the life of the run. The engine's own
+  runtime guard is unchanged, for a network removed after build.
+
+- **`FSMData.update` is `MutableMapping`'s.** The hand-written override did
+  what the inherited one does, through the same `__setitem__`, and could not
+  be declared compatibly with the supertype it was overriding. Two shapes it
+  accepted go with it: `update(None)`, a no-op that is now a `TypeError`, and
+  `update(other=<mapping>)` by keyword, which merged the mapping and now sets
+  a field named `other`. The positional `update(<mapping>)` — what every call
+  site uses — is unchanged, and the pair-iterable and keyword-field forms a
+  mapping accepts now work too.
+
+- **`StateDataWrapper` answers `to_dict()`** with the record it holds, as
+  `FSMData` does. The two wrappers disagreeing about that question — one
+  returning the record, the other raising `AttributeError` — is what
+  `ensure_dict` had to carry a special case for. It also no longer builds an
+  `FSMData` beside the record on every wrap: that attribute was written on
+  each construction and never read by anything.
+
+
+- **One reading of "does this callable take the context?".** Three sites
+  answered it separately and disagreed: the config builder's resolved adapter,
+  the record-callable normalizer behind the validation gate and the enrichment
+  step, and `InterfaceWrapper`'s inline heuristic. It is now
+  `functions.base.accepts_context`, which all of them call, alongside
+  `INTERFACE_METHODS` --- one mapping from interface to the method that carries
+  its logic, replacing the copies in the builder and the function manager.
+  `normalize_record_callable` moves from
+  `functions.library._callables` (private, and in the wrong package for
+  something the manager and the builder both need) to `functions.base`, where
+  the interfaces it adapts are declared; the private module is gone.
+
+- **`ValueNormalizer` declares the mapping it accepts.** Its `normalizations`
+  argument was typed `Dict[str, str]` while the code has always handled a list
+  of normalizations per field --- and reaches that branch by default, since the
+  `"*"` fallback is a list. It is now
+  `Mapping[str, str | list[str]]`, which also lets a caller pass a narrower
+  dict.
+
+- **`custom_functions` declares what it carries.** The channel on `SimpleFSM`,
+  `AsyncSimpleFSM`, `AdvancedFSM`, `build_fsm` and
+  `FSMBuilder.register_function` was typed `dict[str, Callable]`, but a bare
+  interface instance is not a `Callable` --- which is why the tree holds three
+  separate pieces of machinery for finding its interface method. It is now
+  `Mapping[str, RegisteredFunction]`, a new public alias in
+  `dataknobs_fsm.functions.base` naming the five shapes the channel accepts;
+  `Mapping` rather than `dict` because the parameter is only read, so an
+  existing `dict[str, Callable]` still satisfies it. Under the old annotation
+  mypy read all four `isinstance` arms of
+  `FunctionWrapper._normalize_interface_callable` as unreachable.
+
+- **`process_batch` takes a `Sequence`, on both twins.** `data` was declared
+  `list[dict[str, Any] | Record]`, and `list` is invariant: a caller holding a
+  `list[dict[str, Any]]` --- which is what a batch of rows read from a
+  database is --- could not pass it, though every element was acceptable. The
+  only two in-tree call sites passing a list whose element type is visible
+  both carried a blanket `# type: ignore` at the call rather than a type, and
+  one of the two suppressed nothing at all. The asynchronous body only
+  iterates `data` and the synchronous one forwards it, so nothing was being
+  bought by the narrower type.
+
+- **`BatchExecutor` no longer keeps a per-type list of released resource
+  ids.** The unreachable body above also appended each released id to a list
+  nothing read back or drained --- `_acquire_resources` took its length for a
+  `pool_size` metadata field and nothing else --- so restoring the release
+  would have grown that list once per allocation for the life of the executor.
+  A pool nothing draws from is an accumulator, and the id it accumulated was
+  already the caller's to reuse, so it is gone, along with the per-type
+  `asyncio.Lock` created beside it and never acquired. The `pool_size` and
+  `final_pool_size` keys of `context.metadata["batch_<id>_resources"]` go with
+  it; `resource_type`, `limit`, `acquired_at` and `released_at` remain.
+
+  `enable_resource_pooling` does not pool and never did: nothing in this class
+  hands out a resource or enforces the `limit` in `context.resource_limits`.
+  The flag gates the bookkeeping above and the released-status transition, and
+  its docstring now says so. Whether to implement pooling or drop the
+  parameter is open.
+
+- **Batch bookkeeping is carried in `context.metadata["batch_info"]` alone.**
+  `BatchExecutor` also set a `batch_id` attribute directly on the
+  `ExecutionContext` it cloned per item. It was never part of that class ---
+  the type checker reported it as undeclared at both sites --- and the same
+  value has always been in `batch_info` beside it, written at the same moment.
+  A transform reading `context.batch_id` should read
+  `context.metadata["batch_info"]["batch_id"]`.
+
+- **execution-history walks bind `children` once per node rather than
+  re-reading it.** `dataknobs-structures` now answers `Tree.children` with a
+  fresh tuple rather than the list the node holds, so each read allocates one.
+  All seven recursive walks over the history tree tested `node.children` and
+  then iterated it, paying for two per node visited; each now reads once. No
+  behaviour changed.
+- **`execution/history.py` carries full type annotations.** The nine findings
+  the type checker had against it are cleared and the package ceiling drops
+  with them: six nested walk helpers with no return annotation, a path list
+  and a node variable it could not infer, and an `append` onto a dictionary
+  value it had therefore widened to `object`. Annotations only; no behaviour
+  changed, and a `# type: ignore` that existed to paper over that same
+  uninferred dictionary is gone rather than left in place.
+
 ### Fixed
+
+- **Four readers stop guessing which resource shape reached them.** Each had
+  grown its own accommodation for the two classes rather than the boundary
+  being translated once: `AsyncExecutionEngine` computed a state's acquisition
+  timeout as
+  `getattr(rc, "timeout_seconds", None) or getattr(rc, "timeout", None) or 30`
+  in two places; `StateNetwork._update_resource_requirements` bucketed on
+  `kind.value if isinstance(kind, Enum) else str(kind)`, its comment naming
+  "the two-`ResourceConfig` mismatch this package tracks separately"; and
+  `ResourceManager.configure_from_requirements` accommodated nothing --- it
+  reads `config.timeout` and raised `AttributeError` on every state the builder
+  produces. That last one is public API on a public class and has no in-tree
+  caller, which is the only reason it had never been seen. All four now read
+  the declared field.
+
+- **A network built through `StateNetwork`'s own API can be executed.** That
+  API --- `add_state`, `add_arc`, `get_state`, `initial_states`, `validate`,
+  `find_cycles`, `to_dict` / `from_dict` --- is the only door into the FSM
+  that is not a YAML document, and it had never produced a runnable network.
+  It failed twice over, either half sufficient alone: `add_state` took a state
+  class the engines cannot read, and `add_arc` recorded the arc everywhere
+  except the one list they consult. Nothing inside the class could see it:
+  `validate()` passed, `find_cycles` answered and `get_arcs_from_state`
+  returned the arcs, because all of them read the index the engines do not.
+  The config path escaped because `FSMBuilder` did both jobs itself, reaching
+  past the API to hand-append an arc to the state one line before calling
+  `add_arc` --- so every test of the supported path exercised the copy that
+  was complete. The package's published data-pipeline example, which builds
+  its network this way, reported "Successfully processed 0 records"; it now
+  processes all of them.
+
+- **`execute(..., arc_name=...)` can match an arc.** The filter reads
+  `arc.name`, which only the network's retired `Arc` had, while the list it
+  filters holds `ArcDefinition` --- so no arc ever matched and the miss
+  reported as an ordinary "no arc by that name".
+
+- **A validator that is a plain callable runs.** `validation_functions` is a
+  list of `RegisteredFunction`, which includes plain callables, and the async
+  engine reached every entry as `validator.validate`. A function raises
+  `AttributeError` there, into a loop that swallows every exception --- so the
+  validator did not run and the record was reported as validated.
+  `as_validation_callable` prefers `.validate` where it exists, so the config
+  path invokes exactly what it invoked before.
+
+- **A validator that returns `False` fails the record.** Reaching the
+  callable was half the fix. The loop consumed only a `dict` result, so a
+  validator that ran and rejected was indistinguishable from one that passed
+  --- the same outcome as one that could not run at all, arrived at a
+  different way. `ValidationOutcome` states the contract in as many words
+  (`False` fails, a dict merges, `True` / `None` pass) and already carried a
+  note about the previous time it was not honoured.
+
+- **A state assembled before it is added keeps its arcs.**
+  `StateDefinition.add_outgoing_arc` writes `outgoing_arcs` --- the list the
+  engines read --- and nothing else, so a state built that way and then added
+  gave a network whose own accessors disagreed with the engine: `validate()`
+  reported "no outgoing arcs" and "unreachable" about a network that ran
+  correctly, `to_dict()` dropped the arc, and `remove_arc` could not remove
+  it. `add_state` now ingests what it finds, through the same single writer
+  `add_arc` uses. Arc targets are checked by `validate()`, which runs once the
+  network is whole, rather than at ingestion, where a forward reference is
+  ordinary.
+
+- **`remove_arc` and `remove_state` remove the arc they were given.**
+  Removal was by equality, and `ArcDefinition` is a dataclass: a freshly built
+  arc with the same fields is `==` to a stored one, so `remove_arc` accepted
+  an arc the network never held and removed a different one instead. Where two
+  equal arcs were both present, which one survived was decided by list order.
+  Both now match by identity, which is the guarantee `add_arc` was made the
+  single writer to provide.
+
+- **Two arcs between the same pair of states are both counted.**
+  `FSM.get_all_arcs()`, `get_resource_summary()["total_arcs"]` and the
+  function-reference scan behind `FSM.validate()` all read through the
+  `"source:target"`-keyed `arcs` mapping, which collapses them. A second
+  branch's `pre_test` was never collected, so `validate()` could not report it
+  unregistered. All three now read `arc_definitions`.
+
+- **A network's resource requirements are aggregated.**
+  `_update_resource_requirements` asked `state.resource_requirements` --- a
+  `List[ResourceConfig]` --- for `.databases`, `.filesystems`,
+  `.http_services` and `.llms`. A list has none of them, so every branch was
+  skipped and `get_resource_requirements()` answered empty for every network
+  ever built. Retyping the parameter from the retired `State` is what made the
+  mismatch visible; `analyze_dependencies`, directly above it, already read
+  the same field correctly.
+
+- **`supports_streaming` reflects the config that asks for streaming.**
+  `streaming: {enabled: true}` is a documented network-level key that nothing
+  read; the flag was fed instead by the dead branch above, so every network
+  answered `False`. The builder now wires it, and recalculating resource
+  totals no longer clears it.
+
+- **A serialized network keeps its transforms and its sub-network calls.**
+  `to_dict` wrote `arc.transform` whole, which stopped being JSON the moment
+  `add_arc` began storing the builder's own `TransformSpec` --- so any config
+  with transform `params` produced a dictionary `json.dumps` refuses. It also
+  recorded nothing about an arc's class or a push arc's
+  `target_network` / `return_state` / `isolation_mode` / `data_mapping` /
+  `result_mapping`, so a round-tripped sub-network call came back as an
+  ordinary transition to the state named in `target`: never entered, nothing
+  raised. Arcs now serialize themselves, and `from_dict` rebuilds them through
+  `add_arc`, so a restored network has the same single-writer guarantee a
+  freshly built one does.
+
+- **`FSM.get_start_state` no longer guards against shapes that cannot occur.**
+  The same search was written twice, each copy testing `hasattr` for
+  `states`, `is_start_state` and `type` --- shapes the annotations rule out,
+  and which the second state class that made them conceivable no longer exists
+  to supply. One `_first_start_state` helper, called from both places.
+
+- **A `target_network` of the documented `"network:initial_state"` form is
+  accepted by the build-time check.** It compared the whole string against the
+  known network names, so `"validation:deep_check"` reported as a missing
+  network. The syntax now has one reader, `PushArc.parse_target()`, which the
+  engine and the builder share.
+
+- **`FSM.validate()` no longer raises on an arc with chained transforms.**
+  The collector behind it, `_get_all_function_references`, added
+  `arc.transform` to a set whole, so a `TransformSpec` went in as an object
+  and a *list* went in as an unhashable value.
+
+- **`StateNetwork.analyze_dependencies()` returns the shape it declares.** It
+  is typed `Dict[str, Set[str]]` and keyed its result by the `ResourceConfig`
+  object, so no caller could look a resource up by the name it configured.
+
+- **A serialized network carries its states.** `StateNetwork.to_dict` asked
+  `hasattr(state, "to_dict")` and fell back to `str(state)`; since every
+  network the builder produces holds `StateDefinition`, which had no
+  `to_dict`, the fallback *was* the behaviour and a serialized network carried
+  a Python repr of each state. Arcs now also carry `priority`,
+  `definition_order` and `required_resources` through the round trip.
+
+- **`FunctionContext.function_name` is a string on every arc.** It is declared
+  `str` and received `None` for an arc with neither a transform nor a
+  pre-test, and a `TransformSpec` object where one was configured with params.
+
+- **`ExecutionContext` declares `last_error` and `_arc_acquired_resources`.**
+  Both were created on the instance by whoever wrote them first, so every
+  reader asked `hasattr` before reading --- a guard indistinguishable from one
+  guarding against a stale value. No behaviour changed.
+
+- **`AsyncStreamExecutor` and the engines find an initial state the same way.**
+  The executor held a near-verbatim copy of `find_initial_state_common`,
+  without its `fsm.name` fallback, so the two could answer differently for the
+  same FSM; it now delegates to the engine it already holds.
+
+- **A failing state transform says what went wrong, not only where.**
+  `BaseExecutionEngine.handle_transform_error` is the single sink every state
+  transform failure reaches --- the async engine's transform loop,
+  `AdvancedFSM`'s stepped runner, and `process_transform_result` when a
+  transform *returns* `ExecutionResult.failure_result(...)`. It took the
+  exception as its first argument and recorded only the state name, so the
+  reason existed nowhere afterwards: a caller was told `State transform failed
+  in: work` through every surface --- `SimpleFSM.process`,
+  `AsyncSimpleFSM.process`, `process_batch`, the batch executor's metadata,
+  `StepResult.error` --- and nothing was logged, at any level. The state is the
+  one part of it the caller already knew. The narrowest case is the second
+  door: a transform that returns
+  `ExecutionResult.failure_result("row 42 has no key column")` has *stated* its
+  reason deliberately, and that string was wrapped in an `Exception` and
+  dropped.
+
+  The exception is now kept on `context.transform_errors`, keyed by state ---
+  the first one per state, since a later failure in a `run_on_failure` state
+  follows from it --- and logged at `ERROR` with its traceback. Every surface
+  above reports `State transform failed in: work (ValueError: no 'name'
+  column)`, through one shared `transform_failure_message` in place of the two
+  copies that built the sentence. `failed_states` is unchanged in type,
+  contents and lifecycle, and remains the authority on *which* states failed;
+  `transform_errors` follows the same three rules for the same reasons --- not
+  copied by `clone()` or `create_child_context()`, unioned by
+  `merge_child_context()`.
+
+- **An exception the engine declines to raise is written down.** Five handlers
+  in the execution path caught everything and continued in silence. The policy
+  is right in all five --- a validator is optional and a monitoring hook must
+  not be able to stop a run --- but the exception reached no log, no result and
+  no attribute, so the run finished reporting what it would have reported had
+  nothing gone wrong. Two of them also *change an outcome*: a `pre_validators`
+  entry that crashes is reported as one that rejected the record, and an arc
+  `condition` that crashes is reported as an arc that declined, so a valid
+  record is turned away and the bug that turned it away leaves no trace. All
+  five now log with the traceback attached: the state validator loop and both
+  hook dispatchers (`AsyncExecutionEngine._fire_hooks`,
+  `AdvancedFSM._call_hook_async`) at `WARNING`, and the two gates at `WARNING`
+  with what the refusal will look like from outside. **No outcome changes** ---
+  reconciling the two gates with `_evaluate_arc`, which raises on the
+  argument that an outage must not be reported as a data-quality drop, changes
+  how records route and is a separate decision.
+
+- **`ExecutionContext.get_execution_stats()` answers instead of raising.** It
+  read `self.transition_count` and `self.execution_id`, and the class has never
+  had either attribute, so every call raised `AttributeError` on the fourth
+  line of the dict it was building --- for every input, since the read is
+  unconditional. Both values were already tracked under other names:
+  `state_history` gains an entry each time `set_state` leaves a state, so its
+  length is the number of transitions taken, and a run's id is carried in
+  `metadata`, which is where `ExecutionHistory` and `ResultFormatter` both read
+  it (`None` for a run that was not given one).
+
+- **A consumer function that fails is reported, not run a second time with
+  other arguments.** Four sites decided a callable's arity by calling it and
+  catching the failure: `try func(state_obj) / except (TypeError,
+  AttributeError): func(record, context)`. An `except` cannot tell where the
+  exception came from. Argument binding raises `TypeError` before the
+  callable's frame exists --- the case the clause was written for --- but a
+  `TypeError` or `AttributeError` raised *inside the body*, after the work
+  has been done, looks identical from outside. So a transform with an
+  ordinary bug in it (`.upper()` on a number) ran twice, and anything it
+  wrote, sent, appended or counted happened twice with it. `AttributeError`
+  never belonged there at all: binding cannot raise it, so catching it could
+  only ever re-run a body that had already failed.
+
+  The sites are the async engine's state-transform and validator dispatch,
+  `AdvancedFSM`'s own copy of the transform dispatch, and
+  `evaluate_arc_condition_common`. The validator one was the quietest --- its
+  loop swallows every exception, so the record still reported success while
+  the function had run twice and raised twice. The arc-condition one turned a
+  condition with a bug in it into a condition that declined the arc.
+
+  Each now reads the signature instead, through the reading this package
+  already has: `accepts_context` answers whether a callable wants the
+  context, and a new sibling `accepts_one_argument` answers whether it will
+  take the state object alone. `state_step_args` applies the second at the
+  three state-step sites, which previously held three copies of the same
+  `try` / `except` pair. **Which argument each callable receives is
+  unchanged** --- measured across every registered shape, and across all
+  1970 tests in this package --- so what goes away is only the second call.
+
+- **The object an inline one-argument function receives answers as the
+  record.** `wrap_for_lambda` hands a `StateDataWrapper` to every
+  one-argument *plain* callable — a registered function, a registered gate,
+  an inline `lambda state: ...` — and its whole type-level surface was
+  `__getitem__` and `__setitem__`. Python answers `in` and iteration from the
+  *type*, so `'field' in state` fell back to the old integer-indexing
+  protocol and raised `KeyError: 0`, naming a key the caller never wrote;
+  `len(state)` raised `TypeError`; iterating raised the same `KeyError`.
+  `bool(state)` was `True` for an empty record, `state == {...}` was `False`
+  for the record it wrapped, and `repr(state)` printed an address. None of it
+  surfaced as itself: a transform reported `State transform failed in:
+  <state>`, and a gate was worse — the crash inside it reads as a refusal, so
+  a valid record was turned away with the arc reported as failed. The wrapper
+  is now a `MutableMapping` over the record, as `FSMData` in the same module
+  has been since the commit that made this wrapper's `.data` a raw dict.
+  `state.data` is unchanged: still the raw record, still the documented way
+  to read a field.
+
+- **Copying a `StateDataWrapper` no longer recurses until the stack ends.**
+  `__getattr__` forwarded every miss to `self.data`, so the copy and pickle
+  protocols probing a half-built instance — one whose `data` is not set yet —
+  asked it for `data`, which asked for `data`, without end; `copy.copy` and
+  `copy.deepcopy` both died of `RecursionError`. An unknown attribute is also
+  reported by naming the wrapper and where a field is read, in place of
+  `'dict' object has no attribute 'x'`, which pointed at neither.
+
+- **`ensure_dict` returns a dict.** Two duck-typed branches returned `._data`
+  on sight of the attribute, whatever it held, so an object holding something
+  else handed that back to callers who store the answer straight into
+  `context.data` — a record that is not a record, from a function whose name
+  is the promise that it is one. Both check the value now, and an object that
+  fails the check reaches the conversion at the bottom, which either converts
+  it or fails where it happened.
+
+- **A function is called with the arity it declares, through every door.**
+  `ITransformFunction.transform` and `IValidationFunction.validate` declare
+  `(data, context=None)`, and 28 of the 42 shipped implementations omitted
+  `context` --- `transformers.py` 9, `validators.py` 9, `streaming.py` 4 and
+  `dataknobs-llm`'s `fsm_integration/functions.py` 6, each reported by mypy as
+  an `override` incompatibility. They ran through the config door, whose
+  resolved adapter reads the arity and passes the record alone, and failed
+  through `custom_functions=`, where `InterfaceWrapper`'s arity heuristic read
+  a one-argument function as an *inline lambda* and handed it a
+  `StateDataWrapper` instead of the record. The same shipped `FieldMapper`
+  therefore worked when named in a config and failed when registered by name,
+  and a one-argument validator refused every record it was given, valid ones
+  included --- the crash inside the gate reads as a refusal, so it was not an
+  error anyone could see. All 28 now declare `context`, and the arity reading
+  is one shared function (`functions.base.accepts_context`) that every door
+  uses, so an implementation of a consumer's own behaves the same through
+  both. It counts positional parameters only: the config door's own copy
+  counted `**kwargs` and then passed the context *positionally*, so
+  `def transform(self, data, **kwargs)` raised `TypeError` at every call.
+
+- **A one-argument arc condition no longer makes the arc vanish.** Both
+  pre-test call sites invoke a condition as `func(data, context)`, and
+  `as_state_test_callable` returned a bare `test(self, data)` method
+  unchanged. The `TypeError` was swallowed by the arc-skipping `except`, so a
+  condition that said *yes* read as *no* and the FSM did not move, with the
+  step still reporting success.
+
+- **`InterfaceWrapper` behaves the same whichever way it is reached.** The
+  engines reach a resolved function two ways --- a state's transforms through
+  `.transform`, its pre-validators by calling the object --- and `__call__`
+  went straight to the inner wrapper, skipping the call shaping that
+  `.transform` got. It now dispatches through the interface method, as the
+  config builder's adapter always has. The arity reading is also made once,
+  against the implementation, rather than at each invocation site: a
+  registered function is wrapped twice, and a wrapper's own `__call__` is
+  `(*args, **kwargs)`, so reading the signature one layer out reported every
+  doubly-wrapped function as taking the context.
+
+- **A wrapped validator answers within `ValidationOutcome`.**
+  `InterfaceWrapper` wrapped every non-`None` answer from `validate` into an
+  `ExecutionResult`, including `False`. No validator path unwraps one, so a
+  wrapped `False` is neither `False` nor a dict and the gate reads it as a
+  pass --- a validator that could not refuse. Only `transform` is wrapped now,
+  which is the interface whose declared outcome includes `ExecutionResult`.
+
+- **`ChainTransformer` honours every member of `TransformOutcome`.** It fed
+  each link's raw answer to the next one, so a link that mutated the record in
+  place and returned `None` blanked the chain --- and the engine then read that
+  `None` as "mutated in place" against the *original* record, silently
+  discarding every link. It now reads a link's answer the way both engines do:
+  `None` keeps the current record, an `ExecutionResult` is unwrapped and a
+  failing one is the chain's error. An `async def` link raises instead of being
+  passed on as an un-awaited coroutine, which had made the record a coroutine
+  object with nothing raised.
+
+- **`ChunkReader` can read a stream source.** Its stream branch called
+  `source.read(chunk_size)` and iterated the result with `async for`.
+  `IStreamSource` declares `read_chunk()`, `__iter__` and `close` --- there is
+  no `read`, and no shipped source has one --- so every stream source raised
+  `AttributeError` on the first chunk, which mypy had reported for as long as
+  the branch existed. It now reads through `read_chunk`, off the event loop,
+  and reports `has_more` from the chunk's `is_last`.
+
+- **The FSM function interfaces declare what the engines actually do.**
+  `ITransformFunction.transform` was declared `def ... -> ExecutionResult`.
+  Measured across the workspace: 32 implementations, **none** returning an
+  `ExecutionResult`, and 14 of them `async def` --- the declaration described
+  nothing that exists, and `git log --all -S'return ExecutionResult'` over the
+  function library returns no commit, so none ever has. It now declares
+  `TransformOutcome | Awaitable[TransformOutcome]`, where `TransformOutcome`
+  is the union both engines agree on: a dict becomes the record, an
+  `ExecutionResult` is unwrapped, and `None` means the record was mutated in
+  place.
+
+  `IValidationFunction.validate` said the same thing, and there it was a trap
+  rather than merely unused: neither validator path unwraps an
+  `ExecutionResult`, so a *failing* one is neither `False` nor a dict and the
+  record passes --- a validator written to the documented interface could
+  never reject. It now declares `ValidationOutcome` (`bool | dict | None`),
+  which is what the engines read, and says why `ExecutionResult` is not among
+  them.
+
+- **A transform that mutates the record in place no longer destroys it.**
+  `InterfaceWrapper` wrapped every non-`ExecutionResult` answer, turning a
+  `None` return into `ExecutionResult(data=None)`. The two mean opposite
+  things --- a raw `None` says "preserve the record", an `ExecutionResult`
+  carrying `None` says the record *is* nothing, and `ensure_dict(None)` is
+  `{}` --- so a transform that edited the record and returned `None` emptied
+  it. `None` is now passed through, and the wrapping is written once for the
+  sync and async arms instead of twice.
+
+- **An arc condition registered as an interface instance is evaluated instead
+  of dropped.** `AdvancedFSM._resolve_test_function` handed the registered
+  object to two call sites that invoke it as `func(data, context)`. A bare
+  `IStateTestFunction` is not callable --- it carries its condition on
+  `.test` --- so the `TypeError` was swallowed by the arc-skipping
+  `except Exception`, a condition that said *yes* read as *no*, and the FSM
+  simply did not move while still reporting success. It now resolves through
+  `as_state_test_callable`, the one place that judgement is made;
+  `AdvancedFSM` builds through `FSMBuilder` rather than `build_fsm`, so it was
+  a second path bypassing it and that function's docstring now names both.
+
+- **A `FunctionWrapper` agrees with itself about its async flavour.** It
+  reported `is_async` True for a wrapper over an async callable *object* or a
+  `functools.partial` around one, while `asyncio.iscoroutinefunction` said
+  False --- the private `asyncio.coroutines._is_coroutine` sentinel it handed
+  back from `__getattr__` only reached callers through attribute forwarding
+  that an object, unlike a function, has nothing to forward. It now marks
+  itself with `inspect.markcoroutinefunction`, the public API both detectors
+  read, which also survives the sentinel's removal in CPython 3.14.
+
+- **An incremental ETL run extracts only what changed, on the column the
+  source actually timestamps.** `ETLMode.INCREMENTAL` promised to filter to
+  changed rows and did neither half of it. The field was the literal
+  `"updated_at"`, so a source naming its timestamp column anything else had
+  no incremental mode available to it; and the *value* was read from
+  `self._checkpoint_data["last_timestamp"]`, a key nothing in the class ever
+  wrote --- so the filter was never added and every incremental run
+  re-extracted the whole source.
+
+  `ETLConfig.watermark_field` (default `"updated_at"`) now names the column,
+  and the watermark is a real position: each run advances it to the highest
+  value it loaded, saves it into a checkpoint, and restores it from one.
+  Successive `run()` calls on a pipeline therefore read only what changed.
+  `create_database_sync` forwards `**kwargs` to `ETLConfig`, so the column is
+  settable through the factory that exists to produce incremental pipelines.
+
+  Three decisions come with an advancing watermark. It advances only over a
+  batch that errored nothing, so a target-write outage cannot carry the
+  position past rows it lost --- the batch is re-extracted next run, and
+  `load` is an upsert keyed on `key_columns`, so re-delivery is idempotent.
+  A validation rejection does **not** hold it back, because a reject is
+  permanent and waiting for one would freeze the pipeline on the first
+  invalid row forever --- the same errors-versus-rejections distinction the
+  metrics draw. And a row carrying no value in the watermark column cannot
+  be positioned at all: it loads once and then falls outside `> watermark`
+  like an old row, so the run warns rather than dropping it in silence. A
+  watermark column holding two types raises an `ETLError` naming the field
+  and both values, in place of an ordering error from whichever batch
+  straddles them.
+
+  Checkpoints remain in memory on the pipeline object, so a program that
+  builds a fresh pipeline per tick still re-reads the whole source; that is
+  now stated in the pattern's documented limitations rather than implied.
+  `create_database_sync`'s `sync_interval` is likewise documented as not yet
+  honoured --- nothing schedules repeat runs.
+
+- **`ETLConfig.source_query` is a `Query`, and its default reads the whole
+  source.** The field was typed `str | None` and shipped defaulting to the raw
+  SQL string `"SELECT * FROM source_table"`, while the only thing it reaches
+  is `AsyncDatabase.stream_read`, whose parameter is a `Query`. No SQL string
+  works on any of the seven backends, so the shipped default could not run an
+  ETL at all --- it died inside whichever backend was configured, on an
+  attribute a `str` does not have. It now takes a `Query` or the mapping
+  `Query.to_dict()` produces, defaults to `None` (read everything), and
+  refuses a `str` at construction naming what the field is for.
+
+  The config stores the mapping whichever form is given. `Query` is itself a
+  dataclass, so `dataclasses.asdict` --- which `to_dict()` delegates to ---
+  explodes it into its raw attribute names holding live `Operator` members: a
+  shape `Query.from_dict` raises on, and one `json.dumps` refuses. Storing the
+  mapping is what keeps `ETLConfig`'s round-trip, which is a tested property
+  of every config in the patterns family.
+
+- **An incremental ETL run no longer discards the configured query.**
+  `INCREMENTAL` built its `updated_at > <checkpoint>` filter from a fresh
+  `Query`, so a pipeline that named a `source_query` and ran incrementally
+  silently extracted the rows that query excluded. The watermark filter is
+  now added to the configured query, which is what "incremental" means: a
+  subset of what a full run would extract.
+
+- **Every consumer of `stream_read` closes the read it opened.** An async
+  generator a consumer walks away from --- a `break`, a raise, an early
+  return --- is left suspended at its `yield`, and its `finally` runs only
+  when the interpreter finalizes it: a later turn of the loop, unordered
+  against whatever the consumer does next. `AsyncPostgresDatabase.stream_read`
+  yields from inside an acquired pool connection and an open transaction, so
+  against a Postgres source that gap is a connection the pool does not have
+  back.
+
+  The rule is one sentence --- **a frame closes the stream it opened, and a
+  generator closes the stream it drives** --- and six places here did not.
+  `DatabaseETL._extract_batches`, `AsyncDatabaseProvider.stream_read` and both
+  `batch_read` methods are generators over a stream, so closing them has to
+  reach it; the provider pair is two delegating frames over one read, and a
+  chain breaks at whichever link does not say it.
+  `AsyncDatabaseResourceAdapter.execute_query` opens a read and breaks at the
+  first row whenever `fetch_one` is set, which is the ordinary path and the
+  *success* path, not an error path.
+
+  `DatabaseETL.run` is the sixth and the one where the order matters. It
+  raises out of the extract loop when the error threshold trips, and its
+  `finally` then closes the source database --- so without a close, the
+  source was closed while a read on it was still suspended inside it. The
+  extract generator closing its own read does not help there: nothing closes
+  *it* unless the run does.
 
 - **`execute_batches` runs every batch on one loop.** It loops over
   `execute_batch`, and each of those opened a bridge of its own --- so a single
@@ -97,47 +786,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unreachable: every allocation stayed marked as held for the life of the
   context. It now compares members and marks a released allocation
   `AVAILABLE`, which is what `ExecutionContext.release_resource` does.
-
-### Changed
-
-- **`BatchExecutor` no longer keeps a per-type list of released resource
-  ids.** The unreachable body above also appended each released id to a list
-  nothing read back or drained --- `_acquire_resources` took its length for a
-  `pool_size` metadata field and nothing else --- so restoring the release
-  would have grown that list once per allocation for the life of the executor.
-  A pool nothing draws from is an accumulator, and the id it accumulated was
-  already the caller's to reuse, so it is gone, along with the per-type
-  `asyncio.Lock` created beside it and never acquired. The `pool_size` and
-  `final_pool_size` keys of `context.metadata["batch_<id>_resources"]` go with
-  it; `resource_type`, `limit`, `acquired_at` and `released_at` remain.
-
-  `enable_resource_pooling` does not pool and never did: nothing in this class
-  hands out a resource or enforces the `limit` in `context.resource_limits`.
-  The flag gates the bookkeeping above and the released-status transition, and
-  its docstring now says so. Whether to implement pooling or drop the
-  parameter is open.
-
-- **Batch bookkeeping is carried in `context.metadata["batch_info"]` alone.**
-  `BatchExecutor` also set a `batch_id` attribute directly on the
-  `ExecutionContext` it cloned per item. It was never part of that class ---
-  the type checker reported it as undeclared at both sites --- and the same
-  value has always been in `batch_info` beside it, written at the same moment.
-  A transform reading `context.batch_id` should read
-  `context.metadata["batch_info"]["batch_id"]`.
-
-- **execution-history walks bind `children` once per node rather than
-  re-reading it.** `dataknobs-structures` now answers `Tree.children` with a
-  fresh tuple rather than the list the node holds, so each read allocates one.
-  All seven recursive walks over the history tree tested `node.children` and
-  then iterated it, paying for two per node visited; each now reads once. No
-  behaviour changed.
-- **`execution/history.py` carries full type annotations.** The nine findings
-  the type checker had against it are cleared and the package ceiling drops
-  with them: six nested walk helpers with no return annotation, a path list
-  and a node variable it could not infer, and an `append` onto a dictionary
-  value it had therefore widened to `object`. Annotations only; no behaviour
-  changed, and a `# type: ignore` that existed to paper over that same
-  uninferred dictionary is gone rather than left in place.
 
 ### Licensing
 

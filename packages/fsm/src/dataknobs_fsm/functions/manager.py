@@ -10,7 +10,8 @@ in a consistent manner.
 
 import asyncio
 import inspect
-from typing import Any, Callable, Dict, Union, Protocol, runtime_checkable
+from collections.abc import Mapping
+from typing import Any, Callable, Dict, Tuple, Union, Protocol, cast, runtime_checkable
 from enum import Enum
 import logging
 
@@ -22,6 +23,10 @@ from dataknobs_fsm.functions.base import (
     IStateTestFunction,
     IEndStateTestFunction,
     ExecutionResult,
+    INTERFACE_METHODS,
+    RegisteredFunction,
+    accepts_context,
+    interface_method_of,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,9 +57,15 @@ class FunctionWrapper:
     preserving their async nature and providing consistent interfaces.
     """
 
+    #: Set by ``FSMBuilder._resolve_function`` on a wrapper it has already
+    #: adapted, so the builder's own "wrap if not wrapped" check does not wrap
+    #: it a second time. Declared here rather than only assigned there, which
+    #: is what made the assignment an ``attr-defined`` finding.
+    _is_wrapped: bool = False
+
     def __init__(
         self,
-        func: Callable,
+        func: RegisteredFunction,
         name: str,
         source: FunctionSource = FunctionSource.REGISTERED,
         interface: type | None = None,
@@ -72,12 +83,27 @@ class FunctionWrapper:
         # itself is typically not callable and carries no async signal, so
         # wrapping it directly mis-detects async and cannot be invoked; the
         # real (possibly-async) implementation lives on the interface method.
+        self.interface_method: str | None = interface_method_of(func)
         func = self._normalize_interface_callable(func)
 
         self.func = func
         self.name = name
         self.source = source
         self.interface = interface
+
+        # What shape to call the target with, decided once here rather than at
+        # each invocation site. A wrapper is routinely wrapped again --- the
+        # config builder resolves a registered name to this object and then
+        # adapts *it* to an interface --- and a wrapper's own ``__call__`` is
+        # ``(*args, **kwargs)``, so re-reading the signature one layer out
+        # answers about the wrapper instead of the implementation. Inheriting
+        # keeps the answer attached to the function it describes.
+        self.accepts_context: bool
+        if isinstance(func, FunctionWrapper):
+            self.interface_method = self.interface_method or func.interface_method
+            self.accepts_context = func.accepts_context
+        else:
+            self.accepts_context = accepts_context(func, default=self.interface_method is not None)
 
         # Determine if function is async
         self._is_async = self._check_async(func)
@@ -86,8 +112,18 @@ class FunctionWrapper:
         self.__name__ = getattr(func, "__name__", name)
         self.__doc__ = getattr(func, "__doc__", "")
 
+        # A wrapper is not itself an ``async def``, so a caller asking
+        # ``asyncio.iscoroutinefunction(wrapper)`` gets the wrong answer unless
+        # the wrapper says otherwise --- and the FSM hands wrappers to callers
+        # that ask exactly that. ``inspect.markcoroutinefunction`` is the public
+        # way to say it (3.12+) and both detectors read it; the private
+        # ``asyncio.coroutines._is_coroutine`` sentinel this replaces is
+        # undeclared by typeshed and gone in CPython 3.14.
+        if self._is_async:
+            inspect.markcoroutinefunction(self)
+
     @staticmethod
-    def _normalize_interface_callable(func: Callable) -> Callable:
+    def _normalize_interface_callable(func: RegisteredFunction) -> Callable:
         """Return the bound interface method for an FSM function instance.
 
         An object implementing one of the FSM function interfaces
@@ -96,16 +132,15 @@ class FunctionWrapper:
         method, not on ``__call__``. Target that bound method so async
         detection and invocation are correct. Plain callables pass through
         unchanged.
+
+        Which method belongs to which interface is
+        :data:`~dataknobs_fsm.functions.base.INTERFACE_METHODS`, read here and
+        by the config builder's resolved adapter rather than spelled out twice.
         """
-        if isinstance(func, ITransformFunction):
-            return func.transform
-        if isinstance(func, IValidationFunction):
-            return func.validate
-        if isinstance(func, IStateTestFunction):
-            return func.test
-        if isinstance(func, IEndStateTestFunction):
-            return func.should_end
-        return func
+        method = interface_method_of(func)
+        if method is None:
+            return cast("Callable[..., Any]", func)
+        return cast("Callable[..., Any]", getattr(func, method))
 
     def _check_async(self, func: Callable) -> bool:
         """Check if calling ``func`` produces an awaitable.
@@ -192,12 +227,8 @@ class FunctionWrapper:
             # Direct call for sync functions
             return self.func(*args, **kwargs)
 
-    # Make wrapper detectable as async when wrapping async functions
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         """Forward attribute access to wrapped function."""
-        if name == "_is_coroutine" and self._is_async:
-            # Mark as coroutine function for asyncio detection
-            return asyncio.coroutines._is_coroutine
         return getattr(self.func, name)
 
     def __repr__(self) -> str:
@@ -210,6 +241,14 @@ class FunctionWrapper:
 class InterfaceWrapper:
     """Wrapper that adapts functions to specific FSM interfaces."""
 
+    _is_wrapped: bool = False
+    """Set by the config builder on an inline function it has already adapted.
+
+    Declared here because the builder sets it on whatever ``resolve_function``
+    returned, which is a ``FunctionWrapper`` *or* one of these --- and only
+    the former declared it, so the reader had to ask with ``getattr``.
+    """
+
     def __init__(self, wrapper: FunctionWrapper, interface: type):
         """Initialize interface wrapper.
 
@@ -221,7 +260,7 @@ class InterfaceWrapper:
         self.interface = interface
         self._setup_interface_methods()
 
-    def _setup_interface_methods(self):
+    def _setup_interface_methods(self) -> None:
         """Set up methods based on interface."""
         if self.interface == ITransformFunction:
             self.transform = self._create_method("transform")
@@ -239,7 +278,42 @@ class InterfaceWrapper:
             self.should_end = self._create_test_method()
             self.get_end_condition = lambda: f"End test: {self.wrapper.name}"
 
-    def _create_method(self, method_name: str):
+    def _call_shape(self, data: Any, context: Any) -> Tuple[Any, ...]:
+        """The positional arguments the wrapped function is invoked with.
+
+        Three shapes, and the choice between them is not arity alone:
+
+        * ``(data, context)`` --- the engine's own call shape, for anything
+          that can receive the context.
+        * ``(data,)`` --- an interface implementation written to the
+          one-argument convention. ``ITransformFunction.transform`` declares
+          ``data``, not ``state``, so a plain record is what it asked for; this
+          is the judgement the config builder's resolved adapter has always
+          made, and making it here is what stops the two doors into an FSM
+          from disagreeing about the same object.
+        * ``(wrap_for_lambda(data),)`` --- a one-argument *plain* callable,
+          which is the documented inline form ``lambda state: state.data[...]``
+          that :func:`~dataknobs_fsm.core.data_wrapper.wrap_for_lambda` exists
+          to serve.
+
+        The question is answered by :class:`FunctionWrapper`, once, against the
+        implementation --- not re-introspected here. A registered function
+        arrives wrapped twice (the builder resolves the name to a wrapper, then
+        adapts *that* to an interface), and a wrapper's ``__call__`` is
+        ``(*args, **kwargs)``: read one layer out, every doubly-wrapped
+        function looked like it took the context, and a one-argument condition
+        was called with two.
+        """
+        if self.wrapper.accepts_context:
+            return (data, context)
+        if self.wrapper.interface_method is not None:
+            return (data,)
+
+        from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+
+        return (wrap_for_lambda(data),)
+
+    def _create_method(self, method_name: str) -> Callable[..., Any]:
         """Create an interface method that wraps the function.
 
         Args:
@@ -248,80 +322,68 @@ class InterfaceWrapper:
         Returns:
             Method that calls the wrapped function
         """
-        # Check if the function expects a single state argument (common for inline lambdas)
-
-        func = self.wrapper.func
-        try:
-            sig = inspect.signature(func)
-            param_count = len(sig.parameters)
-            # If function takes only 1 param, it likely expects a state object
-            expects_state_obj = param_count == 1
-        except Exception:
-            # Can't determine signature, assume standard (data, context)
-            expects_state_obj = False
-
         if self.wrapper.is_async:
 
-            async def async_method(data: Any, context: Dict[str, Any] | None = None) -> Any:
-                if expects_state_obj:
-                    # Wrap data for functions expecting state.data pattern
-                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
-
-                    state_obj = wrap_for_lambda(data)
-                    result = await self.wrapper.execute_async(state_obj)
-                else:
-                    result = await self.wrapper.execute_async(data, context)
-                if method_name in ["validate", "transform"]:
-                    # Wrap in ExecutionResult if needed
-                    if not isinstance(result, ExecutionResult):
-                        return ExecutionResult.success_result(result)
-                return result
+            async def async_method(
+                data: Any, context: Dict[str, Any] | None = None, **kwargs: Any
+            ) -> Any:
+                result = await self.wrapper.execute_async(
+                    *self._call_shape(data, context), **kwargs
+                )
+                return self._as_interface_result(method_name, result)
 
             return async_method
         else:
 
-            def sync_method(data: Any, context: Dict[str, Any] | None = None) -> Any:
-                if expects_state_obj:
-                    # Wrap data for functions expecting state.data pattern
-                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
-
-                    state_obj = wrap_for_lambda(data)
-                    result = self.wrapper.execute_sync(state_obj)
-                else:
-                    result = self.wrapper.execute_sync(data, context)
-                if method_name in ["validate", "transform"]:
-                    # Wrap in ExecutionResult if needed
-                    if not isinstance(result, ExecutionResult):
-                        return ExecutionResult.success_result(result)
-                return result
+            def sync_method(data: Any, context: Dict[str, Any] | None = None, **kwargs: Any) -> Any:
+                result = self.wrapper.execute_sync(*self._call_shape(data, context), **kwargs)
+                return self._as_interface_result(method_name, result)
 
             return sync_method
 
-    def _create_test_method(self):
+    @staticmethod
+    def _as_interface_result(method_name: str, result: Any) -> Any:
+        """Normalize a wrapped function's answer to what its interface declares.
+
+        Only ``transform`` is wrapped. ``ExecutionResult`` is a member of
+        :data:`~dataknobs_fsm.functions.base.TransformOutcome` and both engines
+        unwrap one, but it is deliberately *not* a member of
+        :data:`~dataknobs_fsm.functions.base.ValidationOutcome` --- no
+        validator path unwraps it, so a wrapped ``False`` is neither ``False``
+        nor a dict and the gate reads it as a pass. Wrapping a validator's
+        answer therefore produced a gate that could not refuse; it stayed
+        latent only because the route the engines actually took to a
+        pre-validator was ``__call__``, which skipped this.
+
+        ``None`` is passed through rather than wrapped. Both engines read a
+        raw ``None`` from a transform as "the record was mutated in place and
+        must be preserved" (``BaseExecutionEngine.process_transform_result``
+        skips it; ``AsyncExecutionEngine._coalesce_transform_result`` returns
+        the current data), whereas an ``ExecutionResult`` carrying ``data=None``
+        says the record *is* nothing --- ``ensure_dict(None)`` is ``{}``. So
+        wrapping the one produced the other, and a transform that mutated in
+        place and returned ``None`` emptied the record it had just edited.
+
+        Written once for both flavours, because the two copies this replaces
+        were the same four lines and a fix to one of them would not have
+        reached the other.
+        """
+        if method_name != "transform":
+            return result
+        if result is None or isinstance(result, ExecutionResult):
+            return result
+        return ExecutionResult.success_result(result)
+
+    def _create_test_method(self) -> Callable[..., Any]:
         """Create a test method that returns (bool, reason)."""
-        # Check if the function expects a single state argument (common for inline lambdas)
-
-        func = self.wrapper.func
-        try:
-            sig = inspect.signature(func)
-            param_count = len(sig.parameters)
-            # If function takes only 1 param, it likely expects a state object
-            expects_state_obj = param_count == 1
-        except Exception:
-            # Can't determine signature, assume standard (data, context)
-            expects_state_obj = False
-
         if self.wrapper.is_async:
 
-            async def async_test(data: Any, context: Dict[str, Any] | None = None):
-                if expects_state_obj:
-                    # Wrap data for functions expecting state.data pattern
-                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
-
-                    state_obj = wrap_for_lambda(data)
-                    result = await self.wrapper.execute_async(state_obj)
-                else:
-                    result = await self.wrapper.execute_async(data, context)
+            async def async_test(
+                data: Any, context: Dict[str, Any] | None = None, **kwargs: Any
+            ) -> Any:
+                result = await self.wrapper.execute_async(
+                    *self._call_shape(data, context), **kwargs
+                )
                 if isinstance(result, tuple):
                     return result
                 return (bool(result), None)
@@ -329,15 +391,8 @@ class InterfaceWrapper:
             return async_test
         else:
 
-            def sync_test(data: Any, context: Dict[str, Any] | None = None):
-                if expects_state_obj:
-                    # Wrap data for functions expecting state.data pattern
-                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
-
-                    state_obj = wrap_for_lambda(data)
-                    result = self.wrapper.execute_sync(state_obj)
-                else:
-                    result = self.wrapper.execute_sync(data, context)
+            def sync_test(data: Any, context: Dict[str, Any] | None = None, **kwargs: Any) -> Any:
+                result = self.wrapper.execute_sync(*self._call_shape(data, context), **kwargs)
                 if isinstance(result, tuple):
                     return result
                 return (bool(result), None)
@@ -345,8 +400,24 @@ class InterfaceWrapper:
             return sync_test
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Make the wrapper callable."""
-        return self.wrapper(*args, **kwargs)
+        """Invoke through the interface method this wrapper built.
+
+        Not straight to the inner :class:`FunctionWrapper`, which is what this
+        did. The interface method is where :meth:`_call_shape` decides how many
+        arguments the implementation gets, and the engines reach a resolved
+        function *both* ways --- a state's pre-validators are called as
+        ``validator(record, context)`` while its transforms go through
+        ``.transform`` --- so bypassing it made the two routes to one object
+        disagree, and a one-argument validator raised ``TypeError`` on the
+        route that skipped the shaping. Mirrors
+        ``_ResolvedLibraryFunction.__call__``, which has always dispatched this
+        way. An interface this wrapper built no method for falls through to the
+        inner wrapper unchanged.
+        """
+        method = getattr(self, INTERFACE_METHODS.get(self.interface, ""), None)
+        if method is None:
+            return self.wrapper(*args, **kwargs)
+        return method(*args, **kwargs)
 
     @property
     def is_async(self) -> bool:
@@ -371,7 +442,7 @@ class FunctionManager:
     and managing functions across the entire FSM system.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize function manager."""
         self._functions: Dict[str, FunctionWrapper] = {}
         self._builtin_functions: Dict[str, FunctionWrapper] = {}
@@ -380,7 +451,7 @@ class FunctionManager:
     def register_function(
         self,
         name: str,
-        func: Callable,
+        func: RegisteredFunction,
         source: FunctionSource = FunctionSource.REGISTERED,
         interface: type | None = None,
     ) -> FunctionWrapper:
@@ -410,7 +481,9 @@ class FunctionManager:
         return wrapper
 
     def register_functions(
-        self, functions: Dict[str, Callable], source: FunctionSource = FunctionSource.REGISTERED
+        self,
+        functions: Mapping[str, RegisteredFunction],
+        source: FunctionSource = FunctionSource.REGISTERED,
     ) -> Dict[str, FunctionWrapper]:
         """Register multiple functions.
 
@@ -492,7 +565,7 @@ class FunctionManager:
         # Compile and create function
         try:
             # Create a namespace for execution with registered functions
-            namespace = {"asyncio": asyncio}
+            namespace: Dict[str, Any] = {"asyncio": asyncio}
 
             # Add all registered functions to namespace so inline code can call them
             for name, wrapper in self._functions.items():
@@ -645,12 +718,12 @@ class FunctionManager:
 
         return result
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all registered functions except builtins."""
         self._functions.clear()
         self._inline_cache.clear()
 
-    def clear_all(self):
+    def clear_all(self) -> None:
         """Clear all functions including builtins."""
         self.clear()
         self._builtin_functions.clear()
@@ -670,7 +743,7 @@ def get_function_manager() -> FunctionManager:
 
 
 def register_function(
-    name: str, func: Callable, source: FunctionSource = FunctionSource.REGISTERED
+    name: str, func: RegisteredFunction, source: FunctionSource = FunctionSource.REGISTERED
 ) -> FunctionWrapper:
     """Register a function with the global manager.
 

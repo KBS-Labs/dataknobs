@@ -136,7 +136,7 @@ config = {
     "knowledge_base": {
         "enabled": True,
         "documents_path": "./docs",
-        "vector_store": {"backend": "faiss", "dimension": 384}
+        "vector_store": {"backend": "faiss", "dimensions": 768}
     }
 }
 ```

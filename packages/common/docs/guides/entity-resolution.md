@@ -213,11 +213,52 @@ cascade positions by rung rather than by number. It does *not* survive an
 `INCOMPATIBLE` corpus, so a caller putting candidates in front of a person
 reads `compatibility` first.
 
+`ResolutionResult.ref()` is where that stops being advice. It is the one
+member that *acts* on the order rather than handing it back — its default
+subject is the first candidate — and what it produces is a stored
+`ResolutionRef` that outlives the result and names one entity while demoting
+the rest. So over an `INCOMPATIBLE` corpus there is no default: it raises, and
+asks for `entity_id=` naming which candidate the reference is of. One
+candidate is not an order and is not refused.
+
 ## When the query does not spell the form
 
 Every rung above answers a **lookup**: the form is in the vocabulary or it is
 not. So a query carrying a typo reaches none of them, and a cascade of all
 three returns nothing at all.
+
+**Two different things bring a reader to this heading, and only one of them is
+answered by a rung.** Decide which you have before reading further:
+
+| | A **convention** | A **typo** |
+|---|---|---|
+| What it is | your vocabulary and your queries spell the same name by different rules — `gear_pump` against `gear pump`, `C.D.C.` against `cdc`, `K-9` against `k9` | the query is misspelled, and no rule turns one spelling into the other |
+| Where it is fixed | **at the index**, by folding both sides with one function: `load_ontology(path, normalizer=...)` | **at a rung**, by measuring how near the two are: `LexicalSignal` |
+| What comes back | an ordinary declared hit — `kind` is `DECLARED`, `scoring` is `DECLARED`, score `1.0` | a proposal — `kind` is `INFERRED`, `scoring` is `NATIVE`, score a measurement |
+
+The distinction matters because **no rung can answer a convention.** Every rung
+on this page probes the index as it is, and the index is keyed on *folded
+declared forms*: rewriting the query alone reaches nothing when the form's own
+spelling has to be rewritten too. Both sides have to be folded by one function,
+and the only place that happens is the loader's `normalizer=` keyword —
+[Loading one](ontology.md#loading-one) carries the worked fold.
+
+Reaching for `LexicalSignal` on a convention gets an answer, which is what makes
+this worth spelling out. It is just the wrong one often enough to matter:
+measured over sixteen multi-word names spelled the way a parts list joins words,
+folding at the index ranks the intended entity first **16 of 16** and this rung
+ranks it first **10 of 16**. All six misses share one shape — the compound's
+head noun is itself a declared entity, so an exact match on that short window
+scores `1.000` while the whole-query match against the intended compound scores
+about `0.93`. `pump` beats `gear_pump`; `valve` beats `gate_valve`. It is
+visible in this section's own worked output below, where `retriever` at `0.941`
+sits above `golden_retriever` at `0.903`: a caller taking `ranked()[0]` there
+gets the shorter form.
+
+That behaviour is not a defect and is not something to tune around — the score
+means exactly what it says, and a ratio over a window has no term for *how much
+of the query this form accounts for*. It is the wrong instrument for a
+convention, which is what this table is here to say.
 
 `LexicalSignal` is the rung for that case. It compares each window of the query
 against every form the vocabulary declares, and proposes the ones that came

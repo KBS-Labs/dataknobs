@@ -71,6 +71,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one metadata while the rows in it may be in several vocabularies, and this is
   what lets a reader tell which.
 
+
+- **`Authority.find_matches(text_obj)`**, the counterpart to
+  `add_valid_annotations`: a subclass finds its matches and hands them back
+  rather than adding them, so something other than the authority that found a
+  match can judge it. `RegexAuthority` and `DataframeAuthority` implement it,
+  and `AuthoritiesBundle` implements it by merging its members'. It is **not
+  abstract** — a subclass written before it existed still constructs, and
+  keeps working wherever nothing needs its matches back.
+
+- **`Authority.find_matches_with_finders(text_obj)`**, the same matches paired
+  with the authority that found each one — the authority whose columns the
+  match's rows are written in, which is what anything reading those rows back
+  has to go through. An authority that finds its own matches is its own
+  finder, so the default pairs each match with itself and a subclass
+  implementing only `find_matches` needs nothing more. `AuthoritiesBundle`
+  overrides this one rather than `find_matches`, so a member's vocabulary
+  survives being judged by the composite and by any composite above that.
+  `add_valid_annotations` takes these pairs.
+
+- **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
+  matches and this decides how they are judged. Two supporting members come
+  with it — `RegexAuthority.build_match_annotations(match)`, which builds one
+  match's rows and is now an override point in its own right, and
+  `TokenAligner.matches`, which records the aligner's rows grouped by match.
+  `TokenAligner.annotations` is unchanged as a flat list of every row, now
+  derived from `matches`.
+
+- **`AuthorityData.get_authority_data(name)`**, answering with the data the
+  named authority is built over. Flat data holds one authority's values and so
+  answers for its own name, raising `KeyError` for any other;
+  `MultiAuthorityData` overrides it to build and keep its named "sub"
+  authorities exactly as it already did. It is the one question a factory asks
+  of the data it is handed, which is what lets one factory take either.
+
+- **`MultiAuthorityFactory` takes the field groups and annotations validator it
+  builds with**, as `field_groups` and `anns_validator` constructor arguments
+  read back through `get_field_groups(name)` and `get_anns_validator(name)` —
+  the shape `get_lexical_expander(name)` already had, so a subclass can vary
+  any of the three by authority without reimplementing the build. Both were
+  hardcoded `None`, so an authority built through the factory could not carry
+  a consumer's derived field groups and validated nothing, though
+  `DataframeAuthority` accepts both. Unconfigured, the factory builds what it
+  built before.
+
 ### Fixed
 
 - **A configured annotation column name no longer breaks reading the rows
@@ -107,41 +151,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument and would raise, so widening the declared type there without
   widening the behaviour would publish a promise three classes do not keep.
 
-### Changed
-
-- **`DirectoryProcessor.process()` no longer refuses a caller already on an
-  event loop.** The sync wrapper collected `process_async()` through
-  `asyncio.run`, which raises `RuntimeError: asyncio.run() cannot be called
-  from a running event loop`; it now goes through `run_coro_sync`, so the walk
-  runs on a private loop and never on the caller's. The limitation is gone
-  from the module docstring, the method docstring and the ingestion guides
-  along with it. `process_directory()` carried the same limitation by
-  delegation and loses it the same way. What is unchanged: the call still
-  blocks the calling thread for the whole walk — `process_async()` is still
-  the right call from async code — and it still collects before returning, so
-  `files_skipped` is final when it returns.
-
-- **`DirectoryProcessor.process()` and `process_directory()` take a
-  keyword-only `timeout=`.** Both block the calling thread for a walk whose
-  size they do not know in advance, and a caller inside a `def` has no
-  cancellation of its own — so a source that stops answering was an unbounded
-  block with nothing to interrupt it. `timeout=` bounds the whole walk and
-  raises `TimeoutError` on expiry. It is keyword-only on `process_directory()`
-  so it cannot be mistaken for a third positional argument. The default,
-  `None`, waits for as long as the walk takes, so nothing changes for existing
-  callers. The bound is on the **walk**: the throwaway loop is torn down
-  afterwards and waits up to five seconds for a cancelled walk to unwind
-  rather than destroying its cleanup mid-flight, so the worst case is
-  `timeout` plus that. Documented in the directory-processor guide.
-
-- **The sequence defaults on `get_lexical_variations` and
-  `get_hyphen_slash_expansions_fn` are annotated `Sequence[str]`.** Each was
-  declared `List[str]` while defaulting to a tuple, so the annotation
-  described neither the default it carried nor what the body does with the
-  value, which is iterate it. Callers passing a list are unaffected; a caller
-  passing a tuple now type-checks, as it always ran.
-
-### Fixed
 
 - **`BackendDocumentSource` yields `-1` for a size a backend reports as
   `None`.** `DocumentFileRef` documents `-1` as the size "when the source
@@ -172,19 +181,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parentheticals by default, so the truncated string was among the variations
   a caller matches against.
 
-### Licensing
-
-- **Relicensed from MIT to Apache-2.0.** This version and every later version
-  of `dataknobs-xization` is licensed under the Apache License, Version 2.0. **All
-  previously released versions remain under the MIT License**, on the terms
-  under which they were published — the change is not retroactive, and the MIT
-  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
-  `LICENSE` and `NOTICE`, the package metadata declares
-  `License-Expression: Apache-2.0`, and every shipped source file carries an
-  SPDX `Apache-2.0` header. Building the package now requires
-  `hatchling>=1.27`, which is where that metadata became expressible.
-
-### Fixed
 
 - **`DataframeAuthority` annotates text.** The dictionary half of the
   authority stack — `DataframeAuthority`, `TokenAligner`, `TokenMatch`, and
@@ -424,6 +420,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`DirectoryProcessor.process()` no longer refuses a caller already on an
+  event loop.** The sync wrapper collected `process_async()` through
+  `asyncio.run`, which raises `RuntimeError: asyncio.run() cannot be called
+  from a running event loop`; it now goes through `run_coro_sync`, so the walk
+  runs on a private loop and never on the caller's. The limitation is gone
+  from the module docstring, the method docstring and the ingestion guides
+  along with it. `process_directory()` carried the same limitation by
+  delegation and loses it the same way. What is unchanged: the call still
+  blocks the calling thread for the whole walk — `process_async()` is still
+  the right call from async code — and it still collects before returning, so
+  `files_skipped` is final when it returns.
+
+- **`DirectoryProcessor.process()` and `process_directory()` take a
+  keyword-only `timeout=`.** Both block the calling thread for a walk whose
+  size they do not know in advance, and a caller inside a `def` has no
+  cancellation of its own — so a source that stops answering was an unbounded
+  block with nothing to interrupt it. `timeout=` bounds the whole walk and
+  raises `TimeoutError` on expiry. It is keyword-only on `process_directory()`
+  so it cannot be mistaken for a third positional argument. The default,
+  `None`, waits for as long as the walk takes, so nothing changes for existing
+  callers. The bound is on the **walk**: the throwaway loop is torn down
+  afterwards and waits up to five seconds for a cancelled walk to unwind
+  rather than destroying its cleanup mid-flight, so the worst case is
+  `timeout` plus that. Documented in the directory-processor guide.
+
+- **The sequence defaults on `get_lexical_variations` and
+  `get_hyphen_slash_expansions_fn` are annotated `Sequence[str]`.** Each was
+  declared `List[str]` while defaulting to a tuple, so the annotation
+  described neither the default it carried nor what the body does with the
+  value, which is iterate it. Callers passing a list are unaffected; a caller
+  passing a tuple now type-checks, as it always ran.
+
+
 - **`AuthorityFactory` is generic over the authority data it builds from**, and
   `MultiAuthorityFactory` declares itself `AuthorityFactory[AuthorityData]` —
   the base type, because every `AuthorityData` now supplies the data for the
@@ -446,50 +475,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type-checking against this package is told about the `None` it could always
   have received, instead of finding it.
 
-### Added
+### Licensing
 
-- **`Authority.find_matches(text_obj)`**, the counterpart to
-  `add_valid_annotations`: a subclass finds its matches and hands them back
-  rather than adding them, so something other than the authority that found a
-  match can judge it. `RegexAuthority` and `DataframeAuthority` implement it,
-  and `AuthoritiesBundle` implements it by merging its members'. It is **not
-  abstract** — a subclass written before it existed still constructs, and
-  keeps working wherever nothing needs its matches back.
-
-- **`Authority.find_matches_with_finders(text_obj)`**, the same matches paired
-  with the authority that found each one — the authority whose columns the
-  match's rows are written in, which is what anything reading those rows back
-  has to go through. An authority that finds its own matches is its own
-  finder, so the default pairs each match with itself and a subclass
-  implementing only `find_matches` needs nothing more. `AuthoritiesBundle`
-  overrides this one rather than `find_matches`, so a member's vocabulary
-  survives being judged by the composite and by any composite above that.
-  `add_valid_annotations` takes these pairs.
-
-- **`Authority.add_valid_annotations`**, the seam above: a subclass finds the
-  matches and this decides how they are judged. Two supporting members come
-  with it — `RegexAuthority.build_match_annotations(match)`, which builds one
-  match's rows and is now an override point in its own right, and
-  `TokenAligner.matches`, which records the aligner's rows grouped by match.
-  `TokenAligner.annotations` is unchanged as a flat list of every row, now
-  derived from `matches`.
-
-- **`AuthorityData.get_authority_data(name)`**, answering with the data the
-  named authority is built over. Flat data holds one authority's values and so
-  answers for its own name, raising `KeyError` for any other;
-  `MultiAuthorityData` overrides it to build and keep its named "sub"
-  authorities exactly as it already did. It is the one question a factory asks
-  of the data it is handed, which is what lets one factory take either.
-
-- **`MultiAuthorityFactory` takes the field groups and annotations validator it
-  builds with**, as `field_groups` and `anns_validator` constructor arguments
-  read back through `get_field_groups(name)` and `get_anns_validator(name)` —
-  the shape `get_lexical_expander(name)` already had, so a subclass can vary
-  any of the three by authority without reimplementing the build. Both were
-  hardcoded `None`, so an authority built through the factory could not carry
-  a consumer's derived field groups and validated nothing, though
-  `DataframeAuthority` accepts both. Unconfigured, the factory builds what it
-  built before.
+- **Relicensed from MIT to Apache-2.0.** This version and every later version
+  of `dataknobs-xization` is licensed under the Apache License, Version 2.0. **All
+  previously released versions remain under the MIT License**, on the terms
+  under which they were published — the change is not retroactive, and the MIT
+  text is preserved in `LICENSES/MIT-historical.txt`. Distributions now ship
+  `LICENSE` and `NOTICE`, the package metadata declares
+  `License-Expression: Apache-2.0`, and every shipped source file carries an
+  SPDX `Apache-2.0` header. Building the package now requires
+  `hatchling>=1.27`, which is where that metadata became expressible.
 
 ### Removed
 

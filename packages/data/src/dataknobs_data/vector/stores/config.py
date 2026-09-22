@@ -80,7 +80,27 @@ class VectorStoreConfig(StructuredConfig):
     ``None`` means "use the timestamp defaults".
 
     Attributes:
-        dimensions: Vector dimensions.
+        dimensions: Vector width. ``0`` is the absence of a declaration,
+            not a declaration of zero --- the default since the backend
+            was written, where the parse was ``config.get("dimensions",
+            0)`` under the comment *"required for most stores"*. It is
+            in-band because the field is an ``int``, so every reader has
+            to know: a backend that can defer the question leaves the
+            sentinel alone (``MemoryVectorStore`` never reads the value
+            outside ``get_stats``; ``ChromaVectorStore`` lets chroma pin
+            the collection's width at its first write), and one that needs
+            the number up front declares ``REQUIRES_DECLARED_DIMENSIONS``
+            and refuses the sentinel at construction.
+
+            **No backend resolves it to a default of its own.**
+            :class:`ChromaVectorStoreConfig` did, to 384, and that is how a
+            caller who declared nothing came to be refused for writing
+            768 --- see that class for why substituting a number is not
+            the same as deferring the question.
+            **Nothing compares a vector to the sentinel**;
+            see :meth:`VectorStoreBase._check_batch_width`. Negative, and
+            above 65536, are wrong under every one of those readings and
+            are refused at construction.
         metric: Distance-metric name for vector similarity.
         persist_path: Filesystem path for persistent storage; ``~`` is
             expanded by the store during ``_setup``.
@@ -146,11 +166,24 @@ class ChromaVectorStoreConfig(VectorStoreConfig):
     keeping the key out of any log that interpolates ``repr(config)``.
 
     Attributes:
-        dimensions: Vector dimensions. ``0`` is a sentinel meaning "use the
-            384-dimension sentence-transformers default"; it is resolved to
-            384 in ``__post_init__`` (matching the legacy backend), so an
-            explicit ``dimensions=0`` cannot be used to request a
-            zero-dimension store.
+        dimensions: Vector dimensions, with ``0`` meaning **undeclared** ---
+            the same reading every other backend gives it, and no longer
+            resolved here to 384.
+
+            That resolution was introduced *"matching the legacy backend"*,
+            and in the legacy backend the number was **inert**: it appeared
+            three times in the whole file, all three in the assignment
+            itself, and nothing compared it to a vector. Once
+            :meth:`VectorStoreBase._check_batch_width` began comparing,
+            keeping the value stopped preserving that behaviour and
+            inverted it --- a caller who stated no width and wrote their own
+            768-wide vectors was refused with ``expected 384``, citing a
+            number nobody typed, on the config that states the least.
+
+            Chroma needs no declared width of its own: it pins a
+            collection's width at the first write and enforces it from
+            there. A store that wants 384 compared against its writes says
+            384.
         collection_name: Chroma collection name.
         scalar_metadata_keys: Opt-in set of metadata keys whose values are
             always scalar; lets the store push a Chroma-native ``$eq``
@@ -181,10 +214,6 @@ class ChromaVectorStoreConfig(VectorStoreConfig):
         if keys is not None and not isinstance(keys, frozenset):
             raw["scalar_metadata_keys"] = frozenset(keys)
         return raw
-
-    def __post_init__(self) -> None:
-        if self.dimensions == 0:
-            object.__setattr__(self, "dimensions", 384)
 
 
 @dataclass(frozen=True)

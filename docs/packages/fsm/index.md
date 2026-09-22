@@ -466,7 +466,7 @@ Functions can be registered and used throughout the FSM:
 
 | Type | Description | Example |
 |------|-------------|---------|
-| **inline** | Lambda expressions or code strings | `"lambda state: state.data.upper()"` |
+| **inline** | Lambda expressions or code strings | `"lambda state: {**state.data, 'name': state.data['name'].upper()}"` |
 | **builtin** | Library functions (`validators.<Name>` / `transformers.<Name>`) | `{"type": "builtin", "name": "transformers.map_fields", "params": {"mapping": {"a": "b"}}}` |
 | **custom** | Functions/classes from Python modules | `{"type": "custom", "module": "myapp.transforms", "name": "MyTransform"}` |
 | **registered** | Runtime-registered functions | `{"type": "registered", "name": "process_data"}` |
