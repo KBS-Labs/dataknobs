@@ -1130,7 +1130,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # and the reason is the validator, not the data. The outcome is
                 # left as it is -- propagating instead would change what happens
                 # to every record a broken gate sees -- but the reason is now
-                # written down, as _evaluate_arc_pre_test already does for the
+                # written down, as _evaluate_arc already does for the
                 # same shape one layer out.
                 logger.warning(
                     "Pre-validator %s raised in state '%s'; the record is "

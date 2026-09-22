@@ -343,9 +343,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   network. The syntax now has one reader, `PushArc.parse_target()`, which the
   engine and the builder share.
 
-- **`FSM.get_all_functions()` no longer raises on an arc with chained
-  transforms.** It added `arc.transform` to a set whole, so a `TransformSpec`
-  went in as an object and a *list* went in as an unhashable value.
+- **`FSM.validate()` no longer raises on an arc with chained transforms.**
+  The collector behind it, `_get_all_function_references`, added
+  `arc.transform` to a set whole, so a `TransformSpec` went in as an object
+  and a *list* went in as an unhashable value.
 
 - **`StateNetwork.analyze_dependencies()` returns the shape it declares.** It
   is typed `Dict[str, Set[str]]` and keyed its result by the `ResourceConfig`
@@ -412,7 +413,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hook dispatchers (`AsyncExecutionEngine._fire_hooks`,
   `AdvancedFSM._call_hook_async`) at `WARNING`, and the two gates at `WARNING`
   with what the refusal will look like from outside. **No outcome changes** ---
-  reconciling the two gates with `_evaluate_arc_pre_test`, which raises on the
+  reconciling the two gates with `_evaluate_arc`, which raises on the
   argument that an outage must not be reported as a data-quality drop, changes
   how records route and is a separate decision.
 

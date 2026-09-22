@@ -712,7 +712,7 @@ class BaseExecutionEngine(ABC):
             # everywhere downstream, as a condition that declined the arc: the
             # record is routed as if the answer were a considered "no" and the
             # exception that produced it is gone. The outcome is unchanged
-            # here -- see AsyncExecutionEngine._evaluate_arc_pre_test, which
+            # here -- see AsyncExecutionEngine._evaluate_arc, which
             # raises instead on the argument that an outage must not be
             # reported as a data-quality drop; the two disagree, and
             # reconciling them changes routing rather than reporting.
