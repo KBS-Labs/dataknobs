@@ -1609,16 +1609,19 @@ similarities:
 | **`pre_test`** raises anything else | propagates; the record is a failed record | no | `WARNING` with the traceback |
 | **`pre_validators`** entry raises | state entry refused, exactly as a rejection | no | `WARNING` with the traceback |
 | **arc `condition`** raises | arc treated as declined | no | `WARNING` with the traceback |
-| **`validation_functions`** entry raises | run continues; the record went unchecked | no | `WARNING` with the traceback |
+| **`validation_functions`** entry raises | state entry refused, exactly as a rejection | no | `WARNING` with the traceback |
 
 Four rows there answer `False` where the record cannot tell the difference
 between a decision and a crash, and the two `pre_test` rows disagree with
 each other about whether that is acceptable. The reasoning is written at
-`AsyncExecutionEngine._evaluate_arc_pre_test`: an infrastructure outage
-reported as a data-quality drop routes every record to the reject terminal
-and reports a clean run. That argument applies to the three rows above it
-too; they keep their current outcome, and log, so the difference is at least
-visible.
+`AsyncExecutionEngine._evaluate_arc`: an infrastructure outage reported as a
+data-quality drop routes every record to the reject terminal and reports a
+clean run. That argument applies to the three rows above it too. Two of them
+keep their current outcome and log, so the difference is at least visible.
+The third has since been settled the other way: a `validation_functions`
+entry that raises now refuses the record, as `pre_validators` five lines away
+in the same state entry always has --- a record its gate could not check is
+not a checked record.
 
 **A failing state transform does not halt the FSM.** The record still
 traverses to a final state, which is how it gets counted. What it does stop

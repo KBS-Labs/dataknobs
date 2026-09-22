@@ -145,10 +145,10 @@ def transform_function_names(
     The field carries four shapes --- nothing, one name, one
     :class:`TransformSpec` carrying a name plus params, or a list of names and
     specs --- and a caller that wants "which functions does this arc use"
-    should not have to know that. ``FSM.get_all_functions`` did: it added
-    ``arc.transform`` to a set whole, so a spec went in as an object and a
-    *list* went in as an unhashable value, raising ``TypeError`` on any arc
-    configured with chained transforms.
+    should not have to know that. ``FSM._get_all_function_references`` did:
+    it added ``arc.transform`` to a set whole, so a spec went in as an
+    object and a *list* went in as an unhashable value, raising
+    ``TypeError`` on any arc configured with chained transforms.
     """
     if transform is None:
         return []

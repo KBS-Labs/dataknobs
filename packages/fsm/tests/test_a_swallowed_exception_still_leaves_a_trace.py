@@ -26,11 +26,16 @@ ones that change an outcome: a pre-validator that *crashed* is reported as a
 pre-validator that *rejected the record*, and an arc condition that crashed is
 reported as an arc that declined. The record is turned away and the bug that
 turned it away leaves no trace. The package already has the right shape for
-this one --- ``_evaluate_arc_pre_test`` logs with the traceback and re-raises,
-on the argument that an infrastructure outage must not be reported as a
+this one --- ``_evaluate_arc`` logs with the traceback and re-raises, on the
+argument that an infrastructure outage must not be reported as a
 data-quality drop --- and these two disagree with it. **They keep their
 outcome here**, because changing what happens to a record is not the same
 decision as writing down why; what changes is that the reason exists.
+
+The validator loop has since joined them, and the count above is the one
+this file measured: a ``validation_functions`` entry that raises now refuses
+the record rather than letting it through unchecked, which is why
+``test_a_validator_that_raises_is_written_down`` asserts a failed run.
 
 The validator one had already been noticed and left half-done: its comment
 reads ``# Log but don't fail - validators are optional`` above a bare
