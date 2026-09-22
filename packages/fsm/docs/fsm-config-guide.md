@@ -45,6 +45,29 @@ config = {
 }
 ```
 
+### Names
+
+Every name a configuration writes must be at least one character: the FSM's,
+a network's, a state's, a resource's, and every reference to one --- an arc's
+`target`, a push arc's `target_network` and `return_state`, `main_network`,
+and the resource names a state, a network or an arc requires.
+
+An empty name used to load, and nothing downstream could tell it apart from an
+absent one. A state requiring a resource named `""` was skipped by the engine's
+acquisition loops and ran without it; an end state named `""` was invisible to
+the termination check; a main network named `""` reported no arcs out of any
+state. Each was silent, and each was the opposite of what the document said.
+The schema refuses an empty name now, naming the field:
+
+```text
+1 validation error for FSMConfig
+resources.0.name
+  String should have at least 1 character
+```
+
+Whitespace is still accepted. `"  "` is a poor name but not an absent one, and
+nothing downstream mistakes it for one.
+
 ## States
 
 States are the nodes in your FSM graph. Each state has a name and metadata that defines its behavior.
