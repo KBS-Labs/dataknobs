@@ -15,7 +15,7 @@ This module defines the schema for FSM configuration files, including:
 
 import logging
 from enum import Enum
-from typing import Any, Dict, List, Literal, Union
+from typing import Annotated, Any, Dict, List, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -71,6 +71,27 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+#: A name this document writes: what it calls a resource, a state, a network
+#: or the FSM itself, and how one part of the document refers to another.
+#:
+#: Empty is refused because every falsy guard downstream reads an empty name
+#: as an *absent* one, and the two mean opposite things here. A state that
+#: requires a resource named ``''`` is skipped by both acquisition loops in
+#: the async engine and runs without it; a final state named ``''`` is
+#: invisible to the engine's termination check; a main network named ``''``
+#: answers ``FSM.get_outgoing_arcs`` with no arcs. Each was measured, and each
+#: is silent --- the document says one thing and the run does the other with
+#: nothing reported. ``FunctionReference`` had already reached this conclusion
+#: for the one name it thought about: it refuses a builtin or registered
+#: function on ``not self.name``, which an empty string is. This is the same
+#: rule for the rest.
+#:
+#: Whitespace is *not* refused. ``'  '`` is truthy, so nothing downstream
+#: mistakes it for an absent name, and what a name may contain is a separate
+#: question from whether there is one.
+NonEmptyName = Annotated[str, Field(min_length=1)]
+
+
 class FunctionReference(_StrictModel):
     """Reference to a function."""
 
@@ -124,7 +145,7 @@ class ResourceConfig(_StrictModel):
     are mapped onto each other.
     """
 
-    name: str
+    name: NonEmptyName
     type: ResourceType
     config: Dict[str, Any] = Field(default_factory=dict)
     connection_pool_size: int = Field(default=10, ge=1)
@@ -170,14 +191,14 @@ class ResourceConfig(_StrictModel):
 class ArcConfig(_StrictModel):
     """Configuration for an arc."""
 
-    target: str
+    target: NonEmptyName
     condition: FunctionReference | None = None
     transform: FunctionReference | list[FunctionReference] | None = None
     #: Resources the arc's transform/condition require. Either a list of
     #: resource names (``["db"]`` → role==name) or a ``{role: name}`` map
     #: (``{"database": "primary_db"}``) to bind a logical role to a concrete
     #: resource for role-based access via ``FunctionContext.resource_for_role``.
-    resources: List[str] | Dict[str, str] = Field(default_factory=list)
+    resources: List[NonEmptyName] | Dict[str, NonEmptyName] = Field(default_factory=list)
     priority: int = Field(default=0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -185,8 +206,8 @@ class ArcConfig(_StrictModel):
 class PushArcConfig(ArcConfig):
     """Configuration for a push arc to another network."""
 
-    target_network: str
-    return_state: str | None = None
+    target_network: NonEmptyName
+    return_state: NonEmptyName | None = None
     # Push-arc data isolation across the sub-network boundary. Uses the runtime
     # isolation enum (copy/reference/serialize) so the configured value flows
     # straight to ``PushArc.isolation_mode`` with no translation. This is a
@@ -207,13 +228,13 @@ class PushArcConfig(ArcConfig):
 class StateConfig(_StrictModel):
     """Configuration for a state."""
 
-    name: str
+    name: NonEmptyName
     data_schema: Dict[str, Any] | None = Field(default=None, alias="schema")
     pre_validators: List[FunctionReference] = Field(default_factory=list)
     validators: List[FunctionReference] = Field(default_factory=list)
     transforms: List[FunctionReference] = Field(default_factory=list)
     arcs: List[Union[ArcConfig, PushArcConfig]] = Field(default_factory=list)
-    resources: List[str] = Field(default_factory=list)
+    resources: List[NonEmptyName] = Field(default_factory=list)
     data_mode: DataHandlingMode | None = None
     is_start: bool = False
     is_end: bool = False
@@ -243,9 +264,9 @@ class StateConfig(_StrictModel):
 class NetworkConfig(_StrictModel):
     """Configuration for a state network."""
 
-    name: str
+    name: NonEmptyName
     states: List[StateConfig]
-    resources: List[str] = Field(default_factory=list)
+    resources: List[NonEmptyName] = Field(default_factory=list)
     streaming: StreamConfig | None = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -271,7 +292,7 @@ class NetworkConfig(_StrictModel):
 class FSMConfig(_StrictModel):
     """Complete FSM configuration."""
 
-    name: str
+    name: NonEmptyName
     version: str = "1.0.0"
     description: str | None = None
 
@@ -283,7 +304,7 @@ class FSMConfig(_StrictModel):
 
     # Networks
     networks: List[NetworkConfig]
-    main_network: str
+    main_network: NonEmptyName
 
     # Execution
     execution_strategy: ExecutionStrategy = ExecutionStrategy.DEPTH_FIRST

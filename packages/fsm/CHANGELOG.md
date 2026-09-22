@@ -95,6 +95,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: a name a configuration writes is at least one character.** Every
+  name in the document schema is refused when empty --- the FSM's, a network's,
+  a state's, a resource's, and every reference to one, including the resources
+  an arc requires, which are checked against nothing else. The refusal names
+  the field (`resources.0.name: String should have at least 1 character`). An
+  empty name used to load, and nothing downstream could tell it from an absent
+  one: a state requiring a resource named `""` was skipped by both of the async
+  engine's acquisition loops and ran without it, an end state named `""` was
+  invisible to `is_final_state_common` so the engine could not see the FSM's
+  own end, and a main network named `""` answered `FSM.get_outgoing_arcs` with
+  no arcs. Each was silent, and each was the opposite of what the document
+  said, so a document this now refuses was already not doing what it read as
+  doing. Whitespace is still accepted: `"  "` is a poor name but not an absent
+  one.
+
 - **BREAKING: a state's `resource_requirements` holds the runtime
   `ResourceConfig`, on every FSM.** The field is declared
   `List[functions.base.ResourceConfig]` --- `core` imports that type and
