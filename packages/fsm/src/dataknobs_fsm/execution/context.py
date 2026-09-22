@@ -201,6 +201,19 @@ class ExecutionContext:
         # child's failures back into the parent.
         self.failed_states: set[str] = set()
 
+        # Why each of those states failed: the exception its transform raised,
+        # or the one built from the message a transform returned in an
+        # ``ExecutionResult``. Recorded alongside ``failed_states`` by
+        # BaseExecutionEngine.handle_transform_error, which keeps the *first*
+        # exception per state (a later one in a ``run_on_failure`` state is a
+        # consequence of it, not the cause). ``failed_states`` remains the
+        # authority on which states failed and is what the persistence gates
+        # read; this only ever answers "why", so a state added to
+        # ``failed_states`` by other means simply has no entry here. It
+        # follows the same three rules for the same reason: not copied by
+        # clone() or create_child_context(), unioned by merge_child_context().
+        self.transform_errors: dict[str, Exception] = {}
+
     def push_network(self, network_name: str, return_state: str | None = None) -> None:
         """Push a network onto the execution stack.
 
@@ -476,8 +489,9 @@ class ExecutionContext:
         child.is_child_context = True
         child.parent_context = self
         child.variables = self.variables.copy()
-        # failed_states deliberately NOT copied — a parallel sub-path starts
-        # clean; its failures are unioned back via merge_child_context().
+        # failed_states and transform_errors deliberately NOT copied — a
+        # parallel sub-path starts clean; its failures and their reasons are
+        # unioned back via merge_child_context().
 
         self.parallel_paths[path_id] = child
         return child
@@ -508,6 +522,11 @@ class ExecutionContext:
         # (Sub-network/push-arc failures are handled on the engine's subflow
         # path, which runs in this same context, not on this merge.)
         self.failed_states |= getattr(child, "failed_states", set())
+        # ...and why, so the diagnostic survives the merge with the name. An
+        # existing reason is kept: the parent's own failure in a state came
+        # first, and a reason that changes on merge is worse than none.
+        for state_name, error in getattr(child, "transform_errors", {}).items():
+            self.transform_errors.setdefault(state_name, error)
 
         # Merge metadata
         self.metadata.update(child.metadata)
@@ -606,9 +625,11 @@ class ExecutionContext:
         # Preserve the resource manager so cloned contexts (batch items,
         # COPY-mode per-record children) can still acquire state resources.
         clone.resource_manager = self.resource_manager
-        # failed_states deliberately NOT copied — a clone (batch item /
-        # per-record child) starts clean so one record's transform failure does
-        # not taint the next record's persistence decision.
+        # failed_states and transform_errors deliberately NOT copied — a clone
+        # (batch item / per-record child) starts clean so one record's
+        # transform failure does not taint the next record's persistence
+        # decision, nor explain the next record's outcome with the previous
+        # record's exception.
 
         return clone
 
@@ -622,7 +643,7 @@ class ExecutionContext:
             return True
 
         # Check if current state is marked as ended
-        return self.metadata.get("is_end_state", False)
+        return bool(self.metadata.get("is_end_state", False))
 
     def get_current_state(self) -> str | None:
         """Get the name of the current state.
@@ -639,14 +660,28 @@ class ExecutionContext:
             Copy of the current data dictionary.
         """
         if isinstance(self.data, dict):
-            return self.data.copy()
+            snapshot: Dict[str, Any] = self.data.copy()
+            return snapshot
         elif hasattr(self.data, "__dict__"):
-            return vars(self.data).copy()
+            return dict(vars(self.data))
         else:
             return {"value": self.data}
 
     def get_execution_stats(self) -> Dict[str, Any]:
         """Get execution statistics.
+
+        ``transition_count`` and ``execution_id`` used to be read off ``self``,
+        where neither has ever existed, so every call raised ``AttributeError``
+        on the fourth line of this dict. Both are tracked under other names:
+        ``state_history`` gains an entry each time :meth:`set_state` leaves a
+        state, so its length is the number of transitions taken, and a run's
+        id is carried in ``metadata`` --- which is where
+        :class:`~dataknobs_fsm.execution.history.ExecutionHistory` and
+        :class:`~dataknobs_fsm.core.result_formatter.ResultFormatter` both
+        read it. ``execution_id`` is None for a run that was not given one.
+
+        See :meth:`get_performance_stats` for timings, resources and batch
+        counts; the two overlap on ``states_visited`` and ``current_state``.
 
         Returns:
             Dictionary with execution metrics.
@@ -655,8 +690,8 @@ class ExecutionContext:
             "states_visited": len(self.state_history),
             "current_state": self.current_state,
             "previous_state": self.previous_state,
-            "transition_count": self.transition_count,
-            "execution_id": self.execution_id,
+            "transition_count": len(self.state_history),
+            "execution_id": self.metadata.get("execution_id"),
             "data_mode": self.data_mode.value if self.data_mode else None,
             "transaction_mode": self.transaction_mode.value if self.transaction_mode else None,
         }

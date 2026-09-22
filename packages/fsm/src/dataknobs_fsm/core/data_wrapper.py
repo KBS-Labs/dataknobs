@@ -27,6 +27,12 @@ class FSMData(MutableMapping):
     to user functions unless they explicitly request the wrapper.
     """
 
+    #: The record itself. Declared rather than only assigned: it is set
+    #: through ``object.__setattr__`` to dodge ``__setattr__``, and with
+    #: ``__getattr__`` in the class an undeclared attribute reads as ``Any``,
+    #: which made every accessor below return ``Any`` from a typed signature.
+    _data: Dict[str, Any]
+
     # Explicitly mark as unhashable (mutable mapping)
     __hash__ = None  # type: ignore[assignment]
 
@@ -52,7 +58,7 @@ class FSMData(MutableMapping):
         """Delete item using dict-style access."""
         del self._data[key]
 
-    def __contains__(self, key: str) -> bool:
+    def __contains__(self, key: object) -> bool:
         """Check if key exists in data."""
         return key in self._data
 
@@ -113,15 +119,6 @@ class FSMData(MutableMapping):
     def items(self) -> ItemsView[str, Any]:
         """Get items view."""
         return self._data.items()
-
-    def update(self, other: Union[Dict[str, Any], "FSMData"] = None, **kwargs) -> None:
-        """Update data from dict or another FSMData."""
-        if other is not None:
-            if isinstance(other, FSMData):
-                self._data.update(other._data)
-            else:
-                self._data.update(other)
-        self._data.update(kwargs)
 
     def clear(self) -> None:
         """Clear all data."""
@@ -194,16 +191,32 @@ class FSMData(MutableMapping):
         return bool(self._data)
 
 
-class StateDataWrapper:
-    """Wrapper for state data that provides backward compatibility.
+class StateDataWrapper(MutableMapping):
+    """The record, as an inline one-argument function receives it.
 
-    This wrapper is used for inline lambda functions that expect
-    `state.data` access pattern. It wraps the FSMData to provide
-    the expected interface.
+    ``wrap_for_lambda`` builds one of these for every one-argument *plain*
+    callable an FSM reaches --- a registered function, a registered gate, an
+    inline ``lambda state: ...``. The documented way to read it is
+    ``state.data[...]``, and :attr:`data` is the raw record itself rather than
+    a copy, so a transform that mutates it in place mutates the record.
+
+    **It is also a mapping in its own right**, because it is handed to
+    functions as the thing they were given and they read it as one.
+    ``__getitem__`` and ``__setitem__`` alone were not enough for that:
+    Python answers ``in`` and iteration from the *type*, so with no
+    ``__contains__`` the ``in`` operator fell back to the old integer-indexing
+    protocol and ``'field' in state`` raised ``KeyError: 0`` --- naming a key
+    the caller never wrote. Declaring ``MutableMapping`` and its five methods
+    answers ``in``, ``len``, iteration, ``bool``, ``==`` and ``dict(state)``
+    together, and matches :class:`FSMData`, which has been a ``MutableMapping``
+    since the commit that made this class' ``.data`` a raw dict.
+
+    Attribute access still reaches the *record object's* attributes, not its
+    keys: ``state.get(...)`` and ``state.keys()`` are the dict's, and
+    ``state.field`` is not a way to read a field. ``state.data[...]`` is.
     """
 
-    data: Dict[str, Any]  # Always stores the raw dict
-    _fsm_data: FSMData  # The FSMData wrapper
+    data: Dict[str, Any]  # Always the raw record, never a wrapper
 
     def __init__(self, data: Union[Dict[str, Any], FSMData, Any] = None):
         """Initialize state wrapper.
@@ -213,20 +226,36 @@ class StateDataWrapper:
         """
         # Always expose the underlying dict for lambdas
         if isinstance(data, FSMData):
-            self.data = data._data  # Expose raw dict
-            self._fsm_data = data
+            self.data = data.to_dict()  # Expose raw dict
         elif isinstance(data, dict):
             self.data = data  # Expose raw dict
-            self._fsm_data = FSMData(data)
         else:
             # Convert to dict
-            data_dict = dict(data) if data else {}
-            self.data = data_dict
-            self._fsm_data = FSMData(data_dict)
+            self.data = dict(data) if data else {}
 
     def __getattr__(self, name: str) -> Any:
-        """Forward attribute access to data."""
-        return getattr(self.data, name)
+        """Forward attribute access to the record object.
+
+        ``data`` and private names are refused here rather than forwarded.
+        ``__getattr__`` runs only for a name ordinary lookup did not find, so
+        forwarding ``data`` asked ``self.data`` for ``data`` on an instance
+        whose ``data`` is not set yet --- which is every half-built instance
+        the copy and pickle protocols probe, and the reason ``copy.copy`` and
+        ``copy.deepcopy`` both died of ``RecursionError``.
+        """
+        if name == "data" or name.startswith("_"):
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+        try:
+            return getattr(self.data, name)
+        except AttributeError:
+            # Say which object was asked. The forwarded error named ``dict``,
+            # which points at neither this wrapper nor the record's keys.
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'; "
+                f"read a field as state.data[{name!r}] or state[{name!r}]"
+            ) from None
+
+    # -- the record, as a mapping ------------------------------------------ #
 
     def __getitem__(self, key: str) -> Any:
         """Forward dict-style access to data."""
@@ -235,6 +264,62 @@ class StateDataWrapper:
     def __setitem__(self, key: str, value: Any) -> None:
         """Forward dict-style setting to data."""
         self.data[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        """Forward dict-style deletion to data."""
+        del self.data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over the record's keys."""
+        return iter(self.data)
+
+    def __len__(self) -> int:
+        """Number of fields in the record. Also what makes ``bool`` correct."""
+        return len(self.data)
+
+    # The mixin would derive these from the five above; delegating instead
+    # keeps the dict's own view objects and its one-call lookups, and matches
+    # how FSMData answers the same questions.
+    def __contains__(self, key: object) -> bool:
+        """Whether the record has this field."""
+        return key in self.data
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get value with default."""
+        return self.data.get(key, default)
+
+    def keys(self) -> KeysView[str]:
+        """Get keys view."""
+        return self.data.keys()
+
+    def values(self) -> ValuesView[Any]:
+        """Get values view."""
+        return self.data.values()
+
+    def items(self) -> ItemsView[str, Any]:
+        """Get items view."""
+        return self.data.items()
+
+    def copy(self) -> Dict[str, Any]:
+        """A shallow copy of the record, as a plain dict.
+
+        ``MutableMapping`` supplies no ``copy``; this is the one dict method
+        that attribute forwarding used to answer and the mixin does not.
+        """
+        return self.data.copy()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The underlying record.
+
+        Named to match :meth:`FSMData.to_dict`. The two wrappers being asked
+        this and answering differently --- one with the record, one with
+        ``AttributeError`` --- is what ``ensure_dict`` had to be fixed for.
+        """
+        return self.data
+
+    def __repr__(self) -> str:
+        """String representation showing the record, not an address."""
+        return f"{type(self).__name__}({self.data!r})"
 
 
 def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper, Any]) -> Dict[str, Any]:
@@ -251,25 +336,32 @@ def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper, Any]) -> 
     """
     if isinstance(data, dict):
         return data
-    elif isinstance(data, FSMData):
+    # Both wrappers in this module answer `to_dict()` with the raw record.
+    # They did not always: `StateDataWrapper.data` became a raw dict in the
+    # same commit that made `FSMData` a MutableMapping, leaving this function
+    # calling `.to_dict()` on a plain dict — a latent AttributeError that had
+    # to be special-cased here. The wrapper answers it now, so the two shapes
+    # are one branch again.
+    if isinstance(data, (FSMData, StateDataWrapper)):
         return data.to_dict()
-    elif isinstance(data, StateDataWrapper):
-        # StateDataWrapper.data always stores the raw dict (see its class
-        # invariant), so it is already in the target shape — calling .to_dict()
-        # on it would raise AttributeError.
-        return data.data
-    elif hasattr(data, "_data"):
-        # Handle other wrapper types
-        return data._data
-    elif hasattr(data, "data"):
+    # Other wrapper types, reached by duck typing. Each `_data` is checked
+    # rather than returned on sight: this function's whole contract is that
+    # what comes back is a dict, and a wrapper holding something else used to
+    # make it return that something else --- which the engines then stored as
+    # `context.data`.
+    inner_data = getattr(data, "_data", None)
+    if isinstance(inner_data, dict):
+        return inner_data
+    if hasattr(data, "data"):
         # Handle objects with data attribute
         inner = data.data
         if isinstance(inner, dict):
             return inner
         elif isinstance(inner, FSMData):
             return inner.to_dict()
-        elif hasattr(inner, "_data"):
-            return inner._data
+        nested = getattr(inner, "_data", None)
+        if isinstance(nested, dict):
+            return nested
     # Last resort - try to convert
     return dict(data) if data else {}
 

@@ -23,13 +23,15 @@ from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
     FIELD_SEPARATOR_KEY,
-    MODEL_NAME_KEY,
     SOURCE_FIELDS_KEY,
     assemble_source_text,
     compute_content_hash,
     content_hash_metadata,
     current_content_hash,
     describes_its_assembly,
+    is_foreign_model,
+    sidecar_model_name,
+    sidecar_model_version,
 )
 
 if TYPE_CHECKING:
@@ -38,43 +40,6 @@ if TYPE_CHECKING:
     from ..database import AsyncDatabase
 
 logger = logging.getLogger(__name__)
-
-
-def _stored_model_version(metadata: dict[str, Any]) -> str | None:
-    """Read a model version out of a ``{field}_metadata`` sidecar.
-
-    ``VectorMetadata.to_dict`` nests it as ``{"model": {"version": ...}}``,
-    which is the shape ``IncrementalVectorizer`` writes. The flat
-    ``model_version`` key was the only one read here and nothing writes it, so
-    every record vectorized that way reported a version mismatch and was
-    re-embedded on every sweep. Both shapes are accepted; the nested one is
-    the one that exists.
-    """
-    model = metadata.get("model")
-    if isinstance(model, dict):
-        version = model.get("version")
-        if version is not None:
-            return str(version)
-    version = metadata.get("model_version")
-    return str(version) if version is not None else None
-
-
-def _stored_model_name(metadata: dict[str, Any]) -> str | None:
-    """Read a model name out of a ``{field}_metadata`` sidecar.
-
-    The sibling of :func:`_stored_model_version`, accepting the same two
-    shapes for the same reason: ``VectorMetadata.to_dict`` nests the name as
-    ``{"model": {"name": ...}}`` and a hand-built sidecar may carry it flat.
-    Reading only one shape is what made the version check compare against
-    something nothing wrote.
-    """
-    model = metadata.get("model")
-    if isinstance(model, dict):
-        name = model.get("name")
-        if name is not None:
-            return str(name)
-    name = metadata.get(MODEL_NAME_KEY)
-    return str(name) if name is not None else None
 
 
 @dataclass
@@ -316,14 +281,15 @@ class VectorTextSynchronizer:
                 if stored_version != self.model_version:
                     return False
 
-            # `model_name` is the key the embedder seam actually writes. A
-            # stored `None` is not a mismatch: it means the vector predates
-            # anything recording a name, and calling every such vector stale
-            # would re-embed a whole corpus on upgrade for no new information.
-            if self.config.track_model_name and self.model_name:
-                stored_name = field_obj.model_name
-                if stored_name is not None and stored_name != self.model_name:
-                    return False
+            # `model_name` is the key the embedder seam actually writes, and
+            # the rule for comparing it -- a stored nothing is unknown rather
+            # than stale -- is `is_foreign_model`'s rather than this lane's.
+            # It was spelled here, once more in the plain lane below, and
+            # again in `mixins`, `dedup` and `SemanticIndex`.
+            if self.config.track_model_name and is_foreign_model(
+                field_obj.model_name, self.model_name
+            ):
+                return False
         else:
             # Plain value (list or array)
             vector_value = field_obj.value
@@ -338,20 +304,20 @@ class VectorTextSynchronizer:
                 metadata = record.get_value(metadata_field)
                 if not metadata or not isinstance(metadata, dict):
                     return False
-                if _stored_model_version(metadata) != self.model_version:
+                if sidecar_model_version(metadata) != self.model_version:
                     return False
 
-            # The same clause as the `VectorField` lane above, and it has to be
-            # spelled differently to mean the same thing: there the name is an
-            # attribute, here it is a sidecar record. An *absent* sidecar is
-            # therefore the plain lane's spelling of "recorded no name", so it
+            # The same *rule* as the `VectorField` lane above, now literally
+            # the same call; what still differs is where the name is read
+            # from, which is what the two readers are for. An *absent*
+            # sidecar is this lane's spelling of "recorded no name", so it
             # cannot be a mismatch on its own --- unlike the version check
             # directly above, which does treat it as one.
-            if self.config.track_model_name and self.model_name:
-                metadata = record.get_value(f"{vector_field}_metadata")
-                stored_name = _stored_model_name(metadata) if isinstance(metadata, dict) else None
-                if stored_name is not None and stored_name != self.model_name:
-                    return False
+            if self.config.track_model_name and is_foreign_model(
+                sidecar_model_name(record.get_value(f"{vector_field}_metadata")),
+                self.model_name,
+            ):
+                return False
 
         # Compare the digest this class stored against the text the record
         # would produce now. The digest was previously written and never read:

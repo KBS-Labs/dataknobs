@@ -19,12 +19,15 @@ from dataknobs_fsm.functions.base import (
     IStateTestFunction,
     ITransformFunction,
     IValidationFunction,
+    RegisteredFunction,
     ResourceConfig,
     ResourceError,
     ResourceStatus,
     StateTransitionError,
     TransformError,
+    TransformOutcome,
     ValidationError,
+    ValidationOutcome,
 )
 
 __all__ = [
@@ -43,6 +46,10 @@ __all__ = [
     "IStateTestFunction",
     "IEndStateTestFunction",
     "IResource",
+    # What the interfaces hand back, and what may be registered by name
+    "TransformOutcome",
+    "ValidationOutcome",
+    "RegisteredFunction",
     # Config classes
     "ResourceConfig",
     # Exceptions

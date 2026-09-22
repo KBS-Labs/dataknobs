@@ -1120,10 +1120,20 @@ hierarchy with only the four members stays a valid one.
 the `entity_types` store the *type* lattice lives in — a different lattice from
 the one `structure` walks, and what `inherited_attributes` reads.
 
-`assertions` is optional, and `assertions is None` is a question worth asking: it
-distinguishes *this edge carries no annotation* from *this axis has no
-annotations to give*. A hierarchy built from a `parent_id` column has rows and
-no assertions at all.
+`assertions` is optional, and the two readings of an empty `parent_edges()` —
+*this edge carries no annotation* versus *this axis has no annotations to
+give* — are separated by `has_edge_annotations()`. A hierarchy built from a
+`parent_id` column has rows and no assertions at all.
+
+Ask the member rather than `assertions is None`: a registry constructs an
+assertion source for every vocabulary it loads, so a live axis has one that is
+*empty* rather than *absent* and the field answers `False` for both kinds.
+`has_edge_annotations()` asks whether an **asserted** edge under this axis's
+relation lands on an edge *of this axis* — the same thing `parent_edges()`
+reads, so the two agree by construction. Neither the relation alone nor the
+backing decides it: two axes may share a relation, a stated negation is not an
+annotation, and a column axis whose table edge carries a matching assertion
+does have one.
 
 A definition may state a `materialization` per axis. Both defaults are the live
 read, which is also what a file gets for declaring nothing:

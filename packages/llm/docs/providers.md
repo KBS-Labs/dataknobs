@@ -247,9 +247,33 @@ provider = await create_embedding_provider({
 ```
 
 Only `api_base`, `api_key`, and `dimensions` are forwarded from the top level.
-Other top-level keys (e.g., `backend`, `type`) are ignored.
+Other top-level keys (e.g., `backend`, `type`) are ignored. That set is
+published as `FLAT_EMBEDDING_PASSTHROUGHS`, so code building this dict can
+read it rather than repeat it.
 
-When the nested format is present, it takes precedence over legacy keys.
+**Which format is in play** is decided by one rule, and *present* is not it.
+A nested section is read only when it is **non-empty and a dict**; an empty
+one and a non-dict one both fall through to the legacy keys, ignored. The
+rule is published as `reads_nested_embedding()`:
+
+```python
+from dataknobs_llm import reads_nested_embedding
+
+reads_nested_embedding({"provider": "ollama"})   # True  -- nested branch
+reads_nested_embedding({})                       # False -- falls through
+reads_nested_embedding("ollama")                 # False -- falls through
+reads_nested_embedding(None)                     # False -- no section
+```
+
+Ask it rather than predicting it. Anything assembling this dict has to put a
+value where the reader will look for it, and the two halves are not equally
+obvious — `dataknobs-bots`' `build_embedding_config` wrote the condition out
+a second time, kept the truthy half and dropped the `isinstance` half, and a
+vector width then landed at the top level of a config whose nested branch
+would be taken. It is a [`TypeGuard`][typeguard], so narrowing on it also
+lets a type checker read the section as the mapping it just confirmed.
+
+[typeguard]: https://docs.python.org/3/library/typing.html#typing.TypeGuard
 
 ### Embedding Mode
 

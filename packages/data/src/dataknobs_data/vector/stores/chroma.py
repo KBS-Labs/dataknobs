@@ -69,9 +69,13 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
         super()._setup()
         cfg = self.config
 
-        # ``dimensions`` defaults to 384 in ChromaVectorStoreConfig, so
-        # ``self.dimensions`` is already resolved by the base ``_setup``.
         self.collection_name = cfg.collection_name
+
+        # Whether the collection's actual width has been compared to the
+        # declaration. Once per store: chroma pins a collection's width at
+        # its first write and enforces it from there, so a comparison that
+        # has passed cannot later come untrue.
+        self._width_confirmed = False
 
         # Opt-in declaration of metadata keys whose stored values are
         # always scalar (never list-valued). For declared scalar keys
@@ -435,6 +439,64 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
             )
 
         self._initialized = True
+        await self._check_stored_width()
+
+    async def _check_stored_width(self) -> None:
+        """Compare the declaration against a row the collection already holds.
+
+        **The one comparison this backend can make for free.** Chroma is the
+        only store here that writes vectors the caller never supplied ---
+        :meth:`add_documents` hands text to an embedding function and the
+        function chooses the width --- so :meth:`_check_batch_width`, which
+        measures what the caller passed, has nothing to measure on that path.
+        Measured on a store declaring 8 whose embedding function makes 384:
+        ``add_vectors`` was refused and ``add_documents`` wrote two rows,
+        leaving the store declaring a width its own collection did not hold.
+
+        There is no cheaper moment. Chroma's ``CreateCollectionConfiguration``
+        accepts ``hnsw``, ``spann`` and ``embedding_function`` and nothing
+        else, so the declaration cannot be pushed down into the collection;
+        and asking an embedding function its width means **running** it,
+        which for a hosted one is a billable call the store has no business
+        making on its own behalf. What a row already in the collection costs
+        is one ``get`` of one row.
+
+        **This is the comparison ``pgvector`` already makes**, one backend
+        along: it reads the table's declared column against the store's
+        configuration at initialize. That difference in coverage is what made
+        one document portable-looking and not portable, and closing it here
+        is the parity rather than a new idea.
+
+        Silent in three cases, each for the reason the vector door gives:
+
+        * **Nothing declared.** ``dimensions`` of ``0`` is the absence of a
+          declaration, so there is no claim to falsify.
+        * **Nothing stored.** A width is only knowable from a row, and an
+          empty collection has none --- the limit the document door closes
+          by calling this again once it has written.
+        * **Already confirmed.** Chroma pins a collection's width at its
+          first write, so an agreement established once stays true.
+
+        Raises:
+            ValueError: When the collection's rows are not the width this
+                store declares.
+        """
+        if self._width_confirmed or self.dimensions == 0:
+            return
+        got = await asyncio.to_thread(lambda: self.collection.get(limit=1, include=["embeddings"]))
+        stored = got.get("embeddings") if got else None
+        if stored is None or len(stored) == 0:
+            return
+        width = len(stored[0])
+        if width != self.dimensions:
+            raise ValueError(
+                f"collection {self.collection_name!r} holds {width}-wide vectors but "
+                f"this store declares dimensions={self.dimensions}. Chroma fixes a "
+                f"collection's width at its first write, so the declaration cannot be "
+                f"met by this collection: correct 'dimensions', use a collection "
+                f"written at that width, or let the width go undeclared"
+            )
+        self._width_confirmed = True
 
     async def close(self) -> None:
         """Close Chroma client."""
@@ -451,9 +513,9 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
         if not self._initialized:
             await self.initialize()
 
-        # An empty batch is a no-op, not an error: see
-        # ``VectorStoreBase._is_empty_batch``.
-        if self._is_empty_batch(vectors):
+        # An empty batch is a no-op and a mis-sized one is an error, in
+        # that order: see ``VectorStoreBase._guard_batch``.
+        if self._guard_batch(vectors):
             return []
 
         import numpy as np
@@ -1258,6 +1320,17 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
             ids=ids,
             metadatas=await self._stamped_payloads(ids, metadata),
         )
+
+        # The width against the declaration, which could not be checked
+        # before the write: the embedding function chose it and asking it
+        # first means running it. See ``_check_stored_width`` -- this is
+        # the moment it becomes knowable for free, and it is the moment it
+        # becomes permanent, because chroma pins a collection's width at
+        # its first write. The rows this call wrote are in the collection
+        # when it raises, and that is the honest report: the collection is
+        # now fixed at a width the declaration does not meet, so it cannot
+        # serve this store however the caller proceeds.
+        await self._check_stored_width()
 
         return ids
 

@@ -28,6 +28,7 @@ from dataknobs_common import (
     CapabilityMixin,
     CapabilityNotSupportedError,
 )
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.callbacks import is_async_callable, run_callback
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -545,10 +546,11 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     Example:
         ```python
+        from dataknobs_common.async_iter import aclosing_iter
         from dataknobs_data import async_database_factory, Record, Query, Filter, Operator
 
         # Create async database
-        db = async_database_factory("memory")
+        db = async_database_factory.create(backend="memory")
 
         # Use as async context manager
         async with db:
@@ -564,9 +566,14 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             # Update record
             await db.update(id1, Record({"name": "Alice", "age": 31}))
 
-            # Stream large datasets
-            async for record in db.stream_read():
-                process_record(record)
+            # Stream large datasets. The read is driven under
+            # ``aclosing_iter``, so a consumer that stops early --- a
+            # ``break``, a raise, an early return --- closes what it was
+            # iterating rather than leaving it suspended at its ``yield``
+            # with whatever it holds open. A bare ``async for`` does not.
+            async with aclosing_iter(db.stream_read()) as records:
+                async for record in records:
+                    process_record(record)
         ```
     """
 
@@ -1291,6 +1298,18 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
         Default implementation, can be overridden for efficiency.
 
+        **The read is driven under
+        :func:`~dataknobs_common.async_iter.aclosing_iter`**, because closing
+        this generator has to reach the one below it. A consumer that walks
+        away --- a ``break``, a raise, an early return --- leaves this
+        suspended at its ``yield``; the ``GeneratorExit`` that arrives at the
+        close leaves the loop, and a bare ``async for`` does not close what it
+        was iterating. On the two backends whose ``stream_read`` holds a real
+        resource across its yields --- Postgres, inside an acquired pool
+        connection and an open transaction, and Elasticsearch, inside a scroll
+        --- that is the resource held until the interpreter finalizes the
+        abandoned read rather than until this one was given up.
+
         Args:
             query: Optional query to filter records
             transform: Optional transformation function
@@ -1299,13 +1318,14 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Yields:
             Transformed records
         """
-        async for record in self.stream_read(query, config):
-            if transform:
-                transformed = await run_callback(transform, record)
-                if transformed:  # None means filter out
-                    yield transformed
-            else:
-                yield record
+        async with aclosing_iter(self.stream_read(query, config)) as records:
+            async for record in records:
+                if transform:
+                    transformed = await run_callback(transform, record)
+                    if transformed:  # None means filter out
+                        yield transformed
+                else:
+                    yield record
 
     @classmethod
     async def from_backend(

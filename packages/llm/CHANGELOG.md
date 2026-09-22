@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`create_embedding_provider`'s two dict formats are now a question a
+  caller can ask, not a condition they have to restate.** Anything building
+  that dict must put each value where the reader will look for it, which
+  means predicting which of the two branches will be taken and which
+  top-level keys survive. Both are now published: `reads_nested_embedding()`
+  answers the first — a nested section is read only when it is non-empty
+  **and** a dict, so an empty one and a non-dict one alike fall through to
+  the legacy flat keys — and `FLAT_EMBEDDING_PASSTHROUGHS` is the second,
+  the three top-level keys the flat branch forwards. `create_embedding_provider`
+  itself now reads both, so the published answer and the behaviour are one
+  thing rather than two that agree today. `reads_nested_embedding` is a
+  `TypeGuard`, so narrowing on it also types the section as the mapping it
+  confirms.
+
 ### Fixed
+
+- **The FSM integration's functions declare the `context` their interfaces
+  do.** All six of `fsm_integration.functions` --- `PromptBuilder`,
+  `LLMCaller`, `ResponseValidator`, `FunctionCaller`, `ConversationManager`,
+  `EmbeddingGenerator` --- omitted the `context` parameter that
+  `ITransformFunction.transform` and `IValidationFunction.validate` declare.
+  They ran when named in a config, whose resolved adapter reads the arity and
+  passes the record alone, and failed when handed to an FSM by name through
+  `custom_functions=`: a one-argument implementation was read there as an
+  inline lambda and given a `StateDataWrapper` instead of the record. The
+  registration door is fixed in `dataknobs-fsm` for implementations of a
+  consumer's own; declaring the parameter is what makes these six agree with
+  the interfaces they implement, which mypy had reported as an `override`
+  incompatibility for each.
 
 - **The synchronous provider adapter no longer raises inside a running event
   loop.** All six of `SyncProviderAdapter`'s async-reaching methods —

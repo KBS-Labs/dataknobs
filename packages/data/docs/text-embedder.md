@@ -21,6 +21,12 @@ Three members, and each is narrower than what it replaced:
 | `dimensions -> int` | the length of every vector `embed` returns |
 | `model_id -> str` | stable identity of the model producing them — across processes, not merely within one |
 
+`model_id` is an identity, **not a format**. Nothing here says
+`provider:model`; an implementation publishing a bare `nomic-embed-text:latest`
+conforms. The one caller that takes the value apart — the ontology registry,
+checking a document's `index.embedder:` block against it — reads every
+`(provider, model)` pair the string could be rather than assuming one.
+
 `isinstance(x, TextEmbedder)` works and checks that the three members are
 present. It does not check their signatures, and `issubclass` is unavailable
 (a protocol carrying non-method members cannot support it). Treat it as a

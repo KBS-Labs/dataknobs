@@ -490,7 +490,23 @@ await manager.initialize()
 resolved: ResolvedConfig = await manager.get_or_create("my-bot")
 print(f"Config: {resolved.resolved_config}")
 print(f"Environment: {resolved.environment_name}")
+
+# It is the resolved configuration, as a read-only mapping
+llm_config = resolved["llm"]
+if "memory" in resolved:
+    ...
+merged = {**resolved, "memory": {"backend": "vector"}}
 ```
+
+`ResolvedConfig` is a `Mapping`, so it goes wherever a configuration mapping
+is expected: `resolved["llm"]`, `"llm" in resolved`, `len(resolved)`,
+`dict(resolved)`, `{**resolved, **overrides}`.
+
+It is **read-only**, and deliberately. `get_or_create` returns the *same
+instance* to every caller for as long as it is cached, so a write through one
+caller would land in another caller's configuration. Take `to_dict()` — a deep
+copy — when you need a configuration you can change; `dict(resolved)` is the
+shallow view the mapping protocol implies.
 
 ## Hot Reload
 

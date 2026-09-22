@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import ItemsView, Iterator, KeysView, Mapping, ValuesView
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.events import EventBus
@@ -21,11 +22,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ResolvedConfig:
+class ResolvedConfig(Mapping):
     """A resolved configuration with metadata.
 
     This class wraps a resolved configuration dictionary along with
     metadata about how it was resolved.
+
+    **It is the resolved configuration**, as a read-only mapping, so it goes
+    wherever a configuration mapping is expected: ``config["llm"]``,
+    ``"llm" in config``, ``{**config, **overrides}``, ``dict(config)``.
+    ``__getitem__`` and ``get`` alone were not enough for that. Python
+    answers ``in`` and iteration from the *type*, and with neither
+    ``__contains__`` nor ``__iter__`` the interpreter fell back to the
+    protocol that predates them --- asking for index ``0`` --- so
+    ``"llm" in config`` raised ``KeyError: 0``, naming a key that appears
+    nowhere in any configuration.
+
+    Read-only on purpose. :meth:`CachingRegistryManager.get_or_create` hands
+    **the same instance** to every caller for as long as it is cached, so a
+    ``__setitem__`` here would let one caller's edit become another caller's
+    configuration. ``to_dict()`` is the way to take a copy you may change;
+    it deep-copies, which ``dict(config)`` deliberately does not.
 
     Attributes:
         config_id: The identifier for this configuration
@@ -70,9 +87,47 @@ class ResolvedConfig:
         """Get a value from the resolved configuration."""
         return self.resolved_config[key]
 
+    def __iter__(self) -> Iterator[str]:
+        """Iterate the resolved configuration's top-level keys."""
+        return iter(self.resolved_config)
+
+    def __len__(self) -> int:
+        """How many top-level sections the resolved configuration has."""
+        return len(self.resolved_config)
+
+    # The mixin would derive these from the three above; delegating instead
+    # keeps the dict's own view objects and its single-lookup membership test.
+    def __contains__(self, key: object) -> bool:
+        """Whether the resolved configuration has this section."""
+        return key in self.resolved_config
+
+    def keys(self) -> KeysView[str]:
+        """The resolved configuration's keys."""
+        return self.resolved_config.keys()
+
+    def values(self) -> ValuesView[Any]:
+        """The resolved configuration's values."""
+        return self.resolved_config.values()
+
+    def items(self) -> ItemsView[str, Any]:
+        """The resolved configuration's items."""
+        return self.resolved_config.items()
+
     def to_dict(self) -> dict[str, Any]:
-        """Return the resolved configuration as a dict."""
+        """Return the resolved configuration as a dict.
+
+        A deep copy, and the way to obtain a configuration you may modify.
+        ``dict(config)`` is the shallow view the mapping protocol implies.
+        """
         return copy.deepcopy(self.resolved_config)
+
+    def __repr__(self) -> str:
+        """Name the configuration and where it was resolved, then its sections."""
+        return (
+            f"{type(self).__name__}(config_id={self.config_id!r}, "
+            f"environment_name={self.environment_name!r}, "
+            f"resolved_config={self.resolved_config!r})"
+        )
 
 
 class ConfigCachingManager(CachingRegistryManager[ResolvedConfig]):

@@ -71,6 +71,7 @@ from dataknobs_common.callbacks import (
     run_callback_off_loop,
 )
 from dataknobs_common.async_iter import (
+    aclosing_iter,
     aiter_sync_in_thread,
 )
 from dataknobs_common.aws import (
@@ -527,6 +528,7 @@ __all__ = [
     "run_callback",
     "run_callback_off_loop",
     # Async iteration
+    "aclosing_iter",
     "aiter_sync_in_thread",
     # Async->sync bridge
     "BridgedOperation",

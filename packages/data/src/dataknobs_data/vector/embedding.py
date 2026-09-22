@@ -133,12 +133,20 @@ class TextEmbedder(Protocol):
 
         "Stable" means across processes and across runs, not merely within
         one: it is written into stored metadata --- as the ``VectorField``'s
-        ``model_name`` --- and read back later by something that never saw the
-        embedder. That reader is
-        :meth:`~dataknobs_data.vector.sync.VectorTextSynchronizer._has_current_vector`,
-        which compares it under ``SyncConfig.track_model_name``. Both halves
-        are required: a key written and never compared is a description, not a
-        guard.
+        ``model_name``, or as a stored row's ``MODEL_NAME_KEY`` --- and read
+        back later by something that never saw the embedder. Five readers do,
+        across three containers, and they compare it by one rule:
+        :func:`~dataknobs_data.vector.content.is_foreign_model`, whose module
+        says which reader serves which container. Both halves are required: a
+        key written and never compared is a description, not a guard.
+
+        **What this does *not* promise is a format.** Nothing here says
+        ``provider:model``, and a consumer implementation publishing a bare
+        ``nomic-embed-text:latest`` is conforming. A caller that needs to
+        take the value apart --- the ontology registry does, to check a
+        document's ``embedder:`` block against it --- is reading a convention
+        of the implementations it expects rather than a guarantee of this
+        member.
         """
         ...
 

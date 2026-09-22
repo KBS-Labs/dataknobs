@@ -65,7 +65,11 @@ def _share_physical_rows(primary: Any, *views: Any) -> None:
 async def _make_kb(store: Any, **config: Any) -> RAGKnowledgeBase:
     """A KB over a pre-built store, with a deterministic embedder."""
     embedder = await create_embedding_provider(
-        build_embedding_config(embedding_provider="echo", embedding_model="test")
+        build_embedding_config(
+            embedding_provider="echo",
+            embedding_model="test",
+            store_dimensions=store.dimensions,
+        )
     )
     return RAGKnowledgeBase.from_components(
         config or None, vector_store=store, embedding_provider=embedder

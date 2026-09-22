@@ -21,6 +21,8 @@ from __future__ import annotations
 from collections.abc import Hashable
 from typing import TYPE_CHECKING
 
+import pytest
+
 from dataknobs_common.index import (
     AliasSource,
     AsyncIndexSource,
@@ -30,7 +32,7 @@ from dataknobs_common.index import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 ALIASES = "dk_alias_forms"
 
@@ -206,3 +208,75 @@ def test_an_index_item_compares_by_value_and_refuses_to_be_hashed() -> None:
     """
     assert IndexItem(id="a", text="alpha") == IndexItem(id="a", text="alpha")
     assert not isinstance(IndexItem(id="a", text="alpha"), Hashable)
+
+
+# --------------------------------------------------------------------------
+# A source that drives another source closes it
+# --------------------------------------------------------------------------
+
+
+class _Holds:
+    """An iterator that holds something for as long as it is open.
+
+    The shape the shipped leaf sources have: ``EntitySourceIndexSource``
+    reports an all-empty stream from a ``finally``, and
+    ``RecordFieldSource`` over PostgreSQL yields from inside
+    ``pool.acquire()`` and an open transaction. Both are reached only by a
+    **close**, so what a decorator in front of them does with the stream it
+    opened decides whether either ever happens.
+
+    Not a mock: a real async generator with a real acquire/release pair,
+    which is the whole subject.
+    """
+
+    def __init__(self) -> None:
+        self.held = 0
+
+    async def rows(self) -> AsyncIterator[IndexItem]:
+        self.held += 1
+        try:
+            yield IndexItem(id="catalog:acme", text="Acme Corp", metadata={ALIASES: ["ACME"]})
+            yield IndexItem(id="catalog:bolt", text="Bolt")
+        finally:
+            self.held -= 1
+
+    def declares(self) -> frozenset[str]:
+        return frozenset()
+
+    def stream_items(self) -> AsyncIterator[IndexItem]:
+        return self.rows()
+
+
+@pytest.mark.parametrize(
+    "decorate",
+    [
+        pytest.param(lambda holder: CallableSource(holder.rows), id="CallableSource"),
+        pytest.param(lambda holder: AliasSource(holder, ALIASES), id="AliasSource"),
+    ],
+)
+async def test_a_source_driving_another_closes_it_when_it_is_closed(
+    decorate: Callable[[_Holds], AsyncIndexSource],
+) -> None:
+    """Closing the outer has to reach the inner, or the family loses one frame per hop.
+
+    Both of these drive an inner async iterator and forward what it yields.
+    A bare ``async for`` leaves that inner iterator suspended when the outer
+    is closed: its cleanup then runs when the interpreter finalizes it, a
+    later turn of the loop, unordered against whatever the consumer does
+    next. Measured through ``AliasSource`` in front of the ontology adapter
+    --- the composition an ``index:`` block with ``aliases: true`` builds ---
+    the leaf's report arrived after the consumer had already handled the
+    failure rather than with it.
+
+    So the assertion is made **at the close** and not after it: "released
+    eventually" is what the unfixed code already does.
+    """
+    from contextlib import aclosing
+
+    holder = _Holds()
+    async with aclosing(decorate(holder).stream_items()) as items:
+        async for _item in items:
+            break
+        assert holder.held == 1, "the inner iterator is open while the outer is being read"
+
+    assert holder.held == 0, "closing the outer did not close the inner"

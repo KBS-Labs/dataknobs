@@ -138,6 +138,67 @@ Both accept a `normalizer=` keyword — a `Callable[[str], str]` folded over
 surface forms before they are compared. `default_normalizer` is what they use
 when you pass nothing.
 
+**This is where a spelling convention is answered, and it is the only place.**
+If your vocabulary and your queries spell the same name by different rules —
+`gear_pump` against `gear pump` against `GearPump`, `C.D.C.` against `cdc` —
+the fold has to apply to *both sides*, and the loader is what applies it to
+both. No rung can do this: a rung probes the index as it is, and the index is
+keyed on folded declared forms, so rewriting the query alone reaches nothing
+when the form's own spelling needs rewriting too.
+
+```python
+import re
+
+from dataknobs_common.entity_resolution import ExactNormalizedSignal
+from dataknobs_common.ontology import load_ontology
+from dataknobs_common.text import default_normalizer
+
+parts = {
+    "id": "parts",
+    "entity_types": [{"id": "Part"}],
+    "entities": [
+        {"id": "gear_pump", "type": "Part", "name": "Gear Pump"},
+        {"id": "gate_valve", "type": "Part", "name": "Gate Valve"},
+    ],
+}
+
+
+def squash(form: str) -> str:
+    """Delete every character that is not a letter or a digit, then casefold."""
+    return re.sub(r"[^0-9a-z]", "", form.casefold())
+
+
+for label, normalizer in (("default", default_normalizer), ("squash", squash)):
+    rung = ExactNormalizedSignal(load_ontology(parts, normalizer=normalizer).entities)
+    for query in ("Gear Pump", "gear-pump", "GearPump"):
+        hit = rung.candidates(query, k=1)
+        found = f"{hit[0].entity_id} ({hit[0].evidence[0].kind.value})" if hit else "-"
+        print(f"{label:8} {query!r:13} {found}")
+```
+
+```
+default  'Gear Pump'   gear_pump (declared)
+default  'gear-pump'   -
+default  'GearPump'    -
+squash   'Gear Pump'   gear_pump (declared)
+squash   'gear-pump'   gear_pump (declared)
+squash   'GearPump'    gear_pump (declared)
+```
+
+The default already folds case and whitespace, which is why the first row
+answers without anything being passed. The other two are the convention:
+one function, applied to the declared forms at load and to the query at
+probe time, and the hit that comes back is an ordinary **declared** one —
+score `1.0`, `kind` `DECLARED`. That is the difference from
+[`LexicalSignal`](entity-resolution.md#when-the-query-does-not-spell-the-form),
+which measures how *near* two spellings are and answers `INFERRED`: the right
+instrument for a typo, and the wrong one for a rule.
+
+**The fold must be deterministic and total.** It is applied to every declared
+form once at load and to every query at probe time, so a function that is not
+a pure mapping from string to string makes the two sides disagree in a way
+nothing reports.
+
 Underneath, the document is validated into an `OntologyConfig` and assembled by
 `build_ontology`, which returns an `OntologyParts` — the declared material,
 before any source is constructed over it. Reach for those two when you want the

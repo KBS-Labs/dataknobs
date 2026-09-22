@@ -322,7 +322,7 @@ a **state** or **arc** declares and injects it into the function's
 function reads it from there:
 
 ```python
-from dataknobs_fsm.functions.base import ITransformFunction, ExecutionResult
+from dataknobs_fsm.functions.base import ITransformFunction
 
 class WriteRow(ITransformFunction):
     def __init__(self, resource_name: str) -> None:

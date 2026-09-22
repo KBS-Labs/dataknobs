@@ -12,6 +12,8 @@ from .content import (
     CONTENT_HASH_KEY,
     DEFAULT_FIELD_SEPARATOR,
     FIELD_SEPARATOR_KEY,
+    MODEL_NAME_KEY,
+    MODEL_VERSION_KEY,
     SOURCE_FIELDS_KEY,
     assemble_source_text,
     compute_content_hash,
@@ -19,7 +21,12 @@ from .content import (
     current_content_hash,
     derive_source_text,
     describes_its_assembly,
+    foreign_model_names,
+    is_foreign_model,
     recompute_content_hash,
+    row_model_name,
+    sidecar_model_name,
+    sidecar_model_version,
     stored_assembly,
 )
 from .embedding import (
@@ -138,6 +145,14 @@ __all__ = [
     "describes_its_assembly",
     "recompute_content_hash",
     "stored_assembly",
+    # Staleness — and which model produced the vector
+    "MODEL_NAME_KEY",
+    "MODEL_VERSION_KEY",
+    "foreign_model_names",
+    "is_foreign_model",
+    "row_model_name",
+    "sidecar_model_name",
+    "sidecar_model_version",
     # Migration
     "VectorMigration",
     "IncrementalVectorizer",

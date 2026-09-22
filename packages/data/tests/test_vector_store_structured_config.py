@@ -242,9 +242,19 @@ class TestChromaConfig:
         assert_structured_config_consumer(ChromaVectorStore)
         assert ChromaVectorStore.CONFIG_CLS is ChromaVectorStoreConfig
 
-    def test_dimensions_default_384(self) -> None:
+    def test_an_unstated_width_stays_undeclared(self) -> None:
+        """``0`` is the absence of a declaration here as on every backend.
+
+        This resolved to 384 --- chroma's default embedding function's
+        width --- introduced *"matching the legacy backend"*, where the
+        number was inert: nothing compared it to a vector. Once
+        ``_check_batch_width`` began comparing, the substitution stopped
+        preserving that behaviour and inverted it, refusing a caller who
+        declared nothing and wrote their own 768-wide vectors with
+        ``expected 384``.
+        """
         cfg = ChromaVectorStoreConfig.from_dict({"collection_name": "docs"})
-        assert cfg.dimensions == 384
+        assert cfg.dimensions == 0
 
     def test_explicit_dimensions_preserved(self) -> None:
         cfg = ChromaVectorStoreConfig.from_dict({"dimensions": 512})
@@ -283,7 +293,7 @@ class TestChromaConfig:
 
         store = ChromaVectorStore({"collection_name": "docs", "metric": "euclidean"})
         assert store.collection_name == "docs"
-        assert store.dimensions == 384
+        assert store.dimensions == 0
         assert store.chroma_metric == "l2"
 
 

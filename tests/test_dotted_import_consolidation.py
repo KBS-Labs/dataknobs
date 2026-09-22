@@ -34,7 +34,7 @@ from tests._workspace import ROOT
 DEFERRED = {
     # Takes a pre-split `FunctionRef`, so it parses no path — but it does
     # import dynamically, which is what the scan sees.
-    "fsm/src/dataknobs_fsm/config/builder.py:851",
+    "fsm/src/dataknobs_fsm/config/builder.py:826",
     # Inside `_cli_main`, `# pragma: no cover`: parses a CLI argument and
     # exits. Not config-driven resolution at all.
     "llm/src/dataknobs_llm/prompts/syntax.py:494",
@@ -47,6 +47,16 @@ DEFERRED = {
     # than an oversight: a module that will not import is recorded as a
     # hole in the sweep, because one silently skipped reads as a clean tree.
     "common/src/dataknobs_common/testing/dataclass_sweep.py:184",
+    # The `dataknobs_utils` package door's PEP 562 `__getattr__`: imports one
+    # of its **own** submodules by a name that has already been checked
+    # against a frozen literal set three lines above, so an unknown name
+    # raises `AttributeError` before this line is reached. None of the four
+    # decisions the canonical resolver settles arises -- there is no
+    # separator (the name is a bare identifier), no attribute to look up, no
+    # shape to check, and a typo cannot get here. Reaching for
+    # `dataknobs_common.imports` would also import `dataknobs_common` at this
+    # door, which is the cost the lazy door exists to remove.
+    "utils/src/dataknobs_utils/__init__.py:100",
 }
 
 

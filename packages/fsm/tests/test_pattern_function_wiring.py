@@ -64,7 +64,6 @@ def _etl() -> DatabaseETL:
         ETLConfig(
             source_db={"type": "file", "path": "/tmp/dk_w1_src.json"},
             target_db={"type": "file", "path": "/tmp/dk_w1_tgt.json"},
-            source_query=None,
             target_table="t",
             key_columns=["id"],
             mode=ETLMode.FULL_REFRESH,

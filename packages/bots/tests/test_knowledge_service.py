@@ -27,11 +27,19 @@ from dataknobs_llm.llm import LLMProviderFactory
 # ============================================================================
 
 
+#: The one width the store declares and the embedder produces.
+#:
+#: Stated once because the two fixtures below are independent: the store
+#: records this width and the embedder has to emit it, and an embedder left
+#: on its own default writes vectors the store has declared it will not hold.
+EMBEDDING_WIDTH = 384
+
+
 @pytest.fixture
 async def memory_vector_store():
     """Create a real in-memory vector store for testing."""
     factory = VectorStoreFactory()
-    store = factory.create(backend="memory", dimensions=384)
+    store = factory.create(backend="memory", dimensions=EMBEDDING_WIDTH)
     await store.initialize()
     yield store
     await store.close()
@@ -41,7 +49,9 @@ async def memory_vector_store():
 async def echo_provider():
     """Create a real echo provider for deterministic embeddings."""
     llm_factory = LLMProviderFactory(is_async=True)
-    provider = llm_factory.create({"provider": "echo", "model": "test"})
+    provider = llm_factory.create(
+        {"provider": "echo", "model": "test", "dimensions": EMBEDDING_WIDTH}
+    )
     await provider.initialize()
     yield provider
     await provider.close()

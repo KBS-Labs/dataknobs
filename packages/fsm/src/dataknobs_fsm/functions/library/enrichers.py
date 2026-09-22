@@ -39,7 +39,7 @@ from typing import Any
 from dataknobs_data import Filter, Operator, Query
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
-from dataknobs_fsm.functions.library._callables import normalize_record_callable
+from dataknobs_fsm.functions.base import normalize_record_callable
 from dataknobs_fsm.functions.library.database import _require_resource
 from dataknobs_fsm.functions.library.transformers import (
     DataEnricher,

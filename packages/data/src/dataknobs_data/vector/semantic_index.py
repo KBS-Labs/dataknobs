@@ -27,8 +27,10 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.exceptions import OperationError
 
+from dataknobs_data.vector.content import foreign_model_names
 from dataknobs_data.vector.types import DistanceMetric
 
 if TYPE_CHECKING:
@@ -108,6 +110,24 @@ class SemanticIndex:
         self.store = store
         self.metric = metric
 
+        #: Whether the staleness *log* has already fired on this instance.
+        #:
+        #: The read path carries no other once-per-instance state, and this
+        #: is why it has any: a mismatch is a property of the store and the
+        #: embedder, not of the query, so a caller running a thousand
+        #: searches against a stale store has one fact to be told and would
+        #: otherwise be told it a thousand times.
+        #:
+        #: It gates the log alone, not the comparison. Stopping the
+        #: comparison too would cap :attr:`mismatched_model_ids` at whichever
+        #: model happened to be seen first, which is the answer a caller
+        #: deciding what to re-embed can least use.
+        self._reported_stale = False
+
+        #: Every foreign ``model_name`` this index's searches have ranked
+        #: against, published through :attr:`mismatched_model_ids`.
+        self._mismatched_model_ids: set[str] = set()
+
         if metric is not None:
             claimed = DistanceMetric.resolve(metric).canonical()
             actual = DistanceMetric.resolve(store.metric).canonical()
@@ -117,6 +137,37 @@ class SemanticIndex:
                     f"{actual.value!r}. The store owns the metric; change the store's "
                     f"configuration, or drop the claim"
                 )
+
+    @property
+    def mismatched_model_ids(self) -> list[str]:
+        """Foreign model identities this index's searches have ranked against.
+
+        Sorted, distinct, and empty until a search returns a row whose
+        ``model_name`` differs from this index's embedder. Non-empty means
+        the rankings rested on vectors from more than one embedding space,
+        so scores --- and therefore any ``threshold`` applied to them --- are
+        arithmetic on incomparable quantities.
+
+        **Handed back as well as logged, because a log line is not an answer
+        a program can act on.** The warning fires once per instance, so a
+        service that starts before its log sink, or reads its logs nowhere,
+        has the fact pass it by; this member is still there afterwards. The
+        sibling is :attr:`~dataknobs_data.dedup.DedupResult.mismatched_model_ids`,
+        which carries the same fact under the same name for the same stated
+        reason --- *"every candidate is still the best answer available; what
+        changes is that the caller can now tell the answer is untrustworthy"*.
+
+        **Not a scan.** It reads nothing the searches did not already read,
+        so it answers *which foreign models has this index been ranking
+        against* and not *what wrote the rows in this store*. The second is
+        the more general question and a different shape: undefined over a
+        store several vocabularies share, and on some backends a full scan.
+
+        Returns:
+            A fresh sorted list, so a caller cannot edit this index's state
+            by holding onto it.
+        """
+        return sorted(self._mismatched_model_ids)
 
     async def build(self) -> int:
         """Embed everything the source streams and write it to the store.
@@ -202,13 +253,25 @@ class SemanticIndex:
             return count
 
         try:
-            async for item in self.source.stream_items():
-                ids.append(item.id)
-                texts.append(item.text)
-                metadata.append(dict(item.metadata))
-                if len(texts) >= BUILD_BATCH_SIZE:
-                    written += await flush()
-            written += await flush()
+            # `aclosing_iter` rather than a bare `async for`, because every exit
+            # from this loop but the last one leaves the source's generator
+            # suspended. An abandoned async generator runs its cleanup when
+            # the interpreter finalizes it -- a later turn of the loop --
+            # so what the source was holding was still held while the caller
+            # decided what to do about the failure. Two shipped sources hold
+            # something real there: `RecordFieldSource` over PostgreSQL
+            # yields from inside `pool.acquire()` and an open transaction,
+            # and over Elasticsearch from inside a scroll. A source's
+            # end-of-stream report is the same question -- it arrives at the
+            # close, so a build that never closes never sees it.
+            async with aclosing_iter(self.source.stream_items()) as items:
+                async for item in items:
+                    ids.append(item.id)
+                    texts.append(item.text)
+                    metadata.append(dict(item.metadata))
+                    if len(texts) >= BUILD_BATCH_SIZE:
+                        written += await flush()
+                written += await flush()
         except Exception as exc:
             # `written` is the last completed flush, so it is exactly what the
             # store holds from this build -- the partial batch in hand was
@@ -246,6 +309,14 @@ class SemanticIndex:
         one synthesised from stored metadata. Getting back to the unprojected
         row is the source's job through its own origin lookup, and having two
         routes to it is how the two start disagreeing.
+
+        **An empty answer is worth pairing with
+        :attr:`mismatched_model_ids`.** Searching a store built under another
+        model produces scores a *threshold* tuned under this one will tend to
+        reject, so "no results" and "the wrong embedder" look identical from
+        the return value. The comparison behind that member runs on what the
+        store answered with, before *threshold*, so it is populated in
+        exactly the case the result list is not.
 
         Args:
             text: What to search for.
@@ -311,7 +382,83 @@ class SemanticIndex:
                 k=k,
                 filter=filter,
             )
+            # Before the threshold, not after. What the store answered with
+            # is the evidence; what survives *threshold* is the answer. A
+            # mismatch depresses exactly the scores a threshold is compared
+            # against, so filtering first is how the check goes silent on the
+            # case it exists for -- see `_note_foreign_models`.
+            self._note_foreign_models(hits)
             if threshold is not None:
                 hits = [hit for hit in hits if hit.score >= threshold]
             out.append(hits)
         return out
+
+    def _note_foreign_models(self, hits: list[VectorSearchResult]) -> None:
+        """Record, and once per index report, rows written by another model.
+
+        ``build`` writes the embedder's ``model_id`` onto every row, and the
+        docstring on that parameter says what for: *"which is what makes a
+        stored vector's staleness judgeable by something that never saw this
+        object"*. Nothing compared it. Measured: a store built under one
+        model and searched through another returned three ranked hits and
+        said nothing, at any level --- so the datum was recorded and there
+        was nowhere to stand to read it.
+
+        **The evidence is what the store answered with, which is why this
+        runs before the caller's threshold.** A threshold is applied to
+        scores, and a score computed across two embedding spaces is the
+        thing a mismatch corrupts --- so the likeliest presentation of this
+        defect is an empty result list, and filtering first made that the
+        one presentation the check could not see. Measured on the unfixed
+        code: the store answered a cross-model query with three rows, every
+        one of them carrying the foreign name, and a threshold removed them
+        from the answer and from the comparison together.
+
+        **The real limit is narrower, and it stands.** The name is legible in
+        the metadata *of a hit*, so nothing can be said about a query the
+        **store** answered with nothing, and nothing can be said before a
+        query at all. Answering *what model wrote these rows* without one is
+        the more general fix and a different shape: a scan on some backends,
+        and undefined over a store several vocabularies share.
+
+        **Absent is not disagreement, and that rule is not this method's.**
+        ``add_records`` omits the key when the field carries no name, so a
+        row written before the key existed, or by an embedder with no
+        ``model_id``, has nothing to compare and is passed over --- as does
+        an index whose own embedder is unnamed. Which rows those are is
+        ``foreign_model_names``' answer rather than a loop here: this rule
+        was restated at five sites, and two of the copies had already come to
+        disagree about an empty name on either side. ``DedupChecker`` is one
+        of the two and now asks the same function, so *one* name for the
+        fact is matched by one rule behind it.
+
+        **The log stops at one; the record does not.** A caller has one fact
+        to be told and would otherwise be told it on every query. But a store
+        can hold rows from several earlier models, and *which ones* is what
+        a caller deciding what to re-embed needs --- so every foreign name
+        is kept for :attr:`mismatched_model_ids` even after the warning has
+        fired. The line names every model *this* search ranked against;
+        anything later reaches only the member, which is what the line says.
+
+        Args:
+            hits: One query's results **as the store returned them**, before
+                any threshold filtering.
+        """
+        mine = getattr(self.embedder, "model_id", None)
+        foreign = foreign_model_names((hit.metadata for hit in hits), mine)
+        if not foreign:
+            return
+        self._mismatched_model_ids.update(foreign)
+        if self._reported_stale:
+            return
+        self._reported_stale = True
+        logger.warning(
+            "semantic index searched with embedder %r returned rows written by %s; "
+            "the stored vectors and the query vector come from different models, so "
+            "the ranking is arithmetic on incomparable quantities. Rebuild the index, "
+            "or search with the model that wrote it. Logged once per index; every "
+            "such model, including any seen after this line, is named by "
+            "`mismatched_model_ids`",
+            mine,
+            ", ".join(repr(name) for name in foreign),
+        )

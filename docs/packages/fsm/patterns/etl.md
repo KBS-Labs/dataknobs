@@ -95,7 +95,8 @@ not JSON serialization.
 | `parallel_workers` | `int` | `4` | Max parallel records per batch |
 | `error_threshold` | `float` | `0.05` | Max error rate before aborting |
 | `checkpoint_interval` | `int` | `10000` | Checkpoint cadence (records) |
-| `source_query` | `str \| None` | `"SELECT * FROM source_table"` | Extraction query; pass `None` to stream the whole source |
+| `source_query` | `Query \| dict \| None` | `None` | Extraction query, as a `Query` or its `to_dict()` mapping; `None` streams the whole source. See [The extraction query](#the-extraction-query) |
+| `watermark_field` | `str` | `"updated_at"` | Column an `INCREMENTAL` run watermarks on; see [Incremental runs](#incremental-runs) |
 | `target_table` | `str` | `"target_table"` | Logical table name for the upsert |
 | `key_columns` | `list[str] \| None` | `None` (→ `["id"]`) | Columns forming the upsert key |
 | `field_mappings` | `dict[str, str] \| None` | `None` | `old_name → new_name` renames applied in the transform step |
@@ -105,6 +106,50 @@ not JSON serialization.
 | `validation_resources` | `dict[str, dict] \| None` | `None` | Resources a resource-backed `validation_schema` predicate needs (e.g. a reference table); see [Resource-backed validation](#resource-backed-validation-validate-against-a-reference-table) |
 | `enrichment_sources` | `list[dict \| ITransformFunction \| Callable] \| None` | `None` | Per-record enrichment steps applied in order in the `enrich` stage; see [Enrichment](#enrichment) |
 | `enrichment_on_missing` | `str` | `"ignore"` | Lookup-miss policy (`"ignore"` / `"null"` / `"error"`); see [Enrichment](#enrichment) |
+
+### The extraction query
+
+`source_query` is what `run()` hands to `AsyncDatabase.stream_read`, so it is a
+[`Query`](../../data/api-reference.md) —
+the backend-independent filter/sort/limit spec — not SQL. `None` (the default)
+reads the whole source.
+
+```python
+from dataknobs_data import Operator, Query
+
+config = ETLConfig(
+    source_db={"type": "file", "path": src},
+    target_db={"type": "file", "path": tgt},
+    source_query=Query().filter("status", Operator.EQ, "active"),
+)
+```
+
+The same query in a config file, as the mapping `Query.to_dict()` produces:
+
+```python
+etl = DatabaseETL.from_config({
+    "source_db": {"type": "file", "path": src},
+    "target_db": {"type": "file", "path": tgt},
+    "source_query": {
+        "filters": [{"field": "status", "operator": "=", "value": "active"}],
+    },
+})
+```
+
+Either form is accepted; the config stores the mapping. `Query` is itself a
+dataclass, and `to_dict()` delegates to `dataclasses.asdict`, which would
+explode it into its raw attribute names holding live `Operator` members — a
+shape `Query.from_dict` raises on, and one `json.dumps` refuses. Storing the mapping
+is what keeps `ETLConfig` round-trippable through JSON:
+
+```python
+restored = ETLConfig.from_dict(json.loads(json.dumps(config.to_json_dict())))
+assert restored == config
+```
+
+A `str` is rejected at construction rather than inside whichever backend is
+configured. The field defaulted to the SQL string `"SELECT * FROM source_table"`
+for a while; nothing it reaches takes SQL, on any backend.
 
 ### Transformations
 
@@ -324,14 +369,69 @@ key (distinct from the validation gate, which adds `rejected`).
 from dataknobs_fsm.patterns.etl import ETLMode
 
 ETLMode.FULL_REFRESH   # "full" — stream the whole source
-ETLMode.INCREMENTAL    # "incremental" — filter to changed rows (updated_at > checkpoint)
+ETLMode.INCREMENTAL    # "incremental" — filter to rows past the watermark
 ETLMode.UPSERT         # "upsert"
 ETLMode.APPEND         # "append"
 ```
 
 The load step is always an upsert keyed by `key_columns`. `INCREMENTAL` changes
-only the **extraction query** (it filters on `updated_at` against the last
-checkpoint).
+only the **extraction query**: it adds a `watermark_field > <watermark>` filter
+*to* whatever `source_query` names, so an incremental run extracts a subset of
+what a full run would, never rows the configured query excludes.
+
+### Incremental runs
+
+The **watermark** is the highest `watermark_field` value the pipeline has
+loaded. Each `run()` reads it, filters the source past it, and moves it
+forward; successive runs on the same pipeline object therefore read only what
+changed.
+
+```python
+etl = DatabaseETL(ETLConfig(
+    source_db={"type": "file", "path": "source.json"},
+    target_db={"type": "file", "path": "target.json"},
+    key_columns=["id"],
+    mode=ETLMode.INCREMENTAL,
+    watermark_field="modified_at",   # whatever this source timestamps rows with
+))
+
+await etl.run()   # no watermark yet -> reads the whole source
+await etl.run()   # reads only rows whose modified_at is past the first run's high mark
+```
+
+Five properties are worth stating, because each is a decision rather than an
+accident:
+
+- **The watermark advances only over a batch that errored nothing.** A
+  transient failure — a target-write outage — must not carry the position past
+  rows it lost, so the whole batch is re-extracted on the next run. `load` is
+  an upsert keyed on `key_columns`, so that re-delivery is idempotent. This is
+  at-least-once, not exactly-once.
+- **A validation rejection does *not* hold it back.** A reject is permanent, so
+  waiting for one would freeze the pipeline on the first invalid row forever.
+  That is the same errors-versus-rejections distinction the
+  [metrics](#metrics) draw.
+- **A nullable watermark column is not safely incremental.** A row missing
+  `watermark_field`, or carrying `None` in it, cannot be positioned: it does
+  not move the high mark, and once the watermark is set, `value > watermark`
+  excludes it as surely as an old value — so it is visible only to a run that
+  has no watermark yet. Such a run logs a warning naming how many rows it
+  loaded that later runs will not see. If *no* extracted row carries the field
+  at all, the warning instead reports what it is: a full scan wearing the word
+  "incremental".
+- **The watermark lives on the pipeline object** and is saved into (and
+  restored from) a checkpoint. Checkpoints are held in memory on that object,
+  so resuming in a *new process* is not yet possible — see
+  [Current limitations](#current-limitations).
+- **The column must hold one comparable type.** Two types in it — a string
+  date beside an int — would otherwise abort the run with an ordering error
+  from whichever batch straddles them; instead the run raises an `ETLError`
+  naming the field and both values.
+
+A source whose watermark column is not monotonic — rows that are written with a
+timestamp older than one already loaded — can be missed. That is inherent to
+watermarking, not specific to this implementation; such a source needs a
+sequence column, named through `watermark_field`, instead of a wall-clock one.
 
 ## Metrics
 
@@ -383,8 +483,11 @@ etl = create_etl_pipeline(
     transformations=[lambda r: {**r, "ingested": True}],
 )
 
-# Incremental sync (INCREMENTAL mode, checkpoint_interval=1000).
-sync = create_database_sync(source={...}, target={...}, sync_interval=300)
+# Incremental sync (INCREMENTAL mode, checkpoint_interval=1000). **kwargs are
+# forwarded to ETLConfig. `sync_interval` is accepted but not yet honoured —
+# nothing schedules repeat runs, so the caller drives the cadence by calling
+# `sync.run()` again; the watermark lives on the pipeline object.
+sync = create_database_sync(source={...}, target={...}, watermark_field="modified_at")
 
 # Migration with field mappings (FULL_REFRESH, batch_size=5000, parallel_workers=8).
 migration = create_data_migration(
@@ -432,6 +535,16 @@ pipelines = create_data_warehouse_load(
   It re-enables the state's transforms only; the record is still reported as a
   failure.
 
+- **Checkpoints are in-memory.** `checkpoint_interval` saves a checkpoint —
+  metrics, position, and the [watermark](#incremental-runs) — onto the pipeline
+  object, and `run(checkpoint_id=...)` restores one from there. Nothing is
+  written to durable storage, so a checkpoint does not survive the process that
+  made it, and `checkpoint_id` values cannot be carried between runs of a
+  program. Successive `run()` calls on one long-lived pipeline object do
+  resume incrementally; a scheduled job that constructs a fresh pipeline each
+  time re-reads the whole source. A persistent checkpoint store is tracked
+  separately.
+
 ## Testing
 
 Use real constructs — a file-backed `AsyncDatabase` is reopenable, so a test can
@@ -457,7 +570,6 @@ async def test_etl_persists_transformed_rows(tmp_path):
     etl = DatabaseETL(ETLConfig(
         source_db={"type": "file", "path": src},
         target_db={"type": "file", "path": tgt},
-        source_query=None,
         target_table="records",
         key_columns=["id"],
         mode=ETLMode.FULL_REFRESH,

@@ -4,7 +4,9 @@
 """Testing utilities for dataknobs-data.
 
 Deterministic vector draws, for this package's own tests and for consumers
-testing their own ``VectorStore`` implementations against the same protocol.
+testing their own ``VectorStore`` implementations against the same protocol,
+plus :class:`HoldingStreamDatabase` for testing that a consumer of
+``stream_read`` closes the read it opened.
 
 Every helper here builds its own ``numpy.random.Generator`` rather than reading
 the process-global stream. That is what makes a draw safe to call from
@@ -25,16 +27,22 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.records import Record
+
 if TYPE_CHECKING:
+    from dataknobs_data.query import Query
+    from dataknobs_data.streaming import StreamConfig
     from dataknobs_data.vector.embedding import TextEmbedder
 
 __all__ = [
     "DeterministicEmbedder",
+    "HoldingStreamDatabase",
     "chroma_embedding_function",
     "text_embedding",
     "vector",
@@ -275,3 +283,76 @@ if TYPE_CHECKING:
         stands in for are held to something else.
         """
         return embedder
+
+
+class HoldingStreamDatabase(AsyncMemoryDatabase):
+    """An ``AsyncDatabase`` whose ``stream_read`` holds something across its yields.
+
+    Two shipped backends do. ``AsyncPostgresDatabase.stream_read`` yields from
+    inside an acquired pool connection and an open ``conn.transaction()``, and
+    ``AsyncElasticsearchDatabase.stream_read`` from inside a scroll cleared in
+    a ``finally``. Neither releases until the generator is **closed**, so a
+    consumer that walks away --- a ``break``, a raise, an early return ---
+    holds the connection until the interpreter finalizes the generator, on a
+    later turn of the loop, unordered against whatever the consumer does next.
+
+    Neither of those backends can stand in for itself in a unit test, and no
+    other can stand in for them: a memory backend holds nothing, so against one
+    the defect and the fix measure the same. This is the construct that makes
+    the difference visible --- :attr:`held` is ``1`` while a read is open and
+    ``0`` once it is closed, so a test asserts ``held == 0`` at the point the
+    consumer finished rather than eventually.
+
+    Not a mock. One real async generator with one real acquire/release pair,
+    on a real ``AsyncDatabase``, which is the property under test.
+
+    **Filters are not applied**, so every row reaches the consumer. That is
+    deliberate: what is being measured is whether the consumer closed the read
+    it opened, and a narrowing that emptied the read would let the assertion
+    pass without the consumer having done anything. ``limit`` *is* applied,
+    because a bounded read is the case where a caller most expects the
+    generator to have finished on its own --- and it has not, which is the
+    point.
+
+    Attributes:
+        rows: What each read yields, in order, one ``Record`` per mapping.
+        held: How many reads are open right now. ``0`` at rest.
+        opens: How many reads have been started, ever. A consumer issuing two
+            reads where one was expected shows up here.
+
+    Example:
+        ```python
+        walked_away = HoldingStreamDatabase([{"id": "a"}, {"id": "b"}])
+        async for _record in walked_away.stream_read():
+            break
+        assert walked_away.held == 1  # the read is suspended, holding
+
+        closed = HoldingStreamDatabase([{"id": "a"}, {"id": "b"}])
+        async with aclosing_iter(closed.stream_read()) as records:
+            async for _record in records:
+                break
+        assert closed.held == 0  # the close reached it
+        ```
+    """
+
+    def __init__(self, rows: Sequence[Mapping[str, Any]] = ()) -> None:
+        """Build a database whose reads yield *rows*."""
+        super().__init__()
+        self.rows: list[dict[str, Any]] = [dict(row) for row in rows]
+        self.held = 0
+        self.opens = 0
+
+    async def stream_read(
+        self, query: Query | None = None, config: StreamConfig | None = None
+    ) -> AsyncIterator[Record]:
+        """Yield :attr:`rows`, holding a notional resource until the close."""
+        self.held += 1
+        self.opens += 1
+        try:
+            bound = None if query is None else query.limit_value
+            for index, row in enumerate(self.rows):
+                if bound is not None and index >= bound:
+                    return
+                yield Record(data=dict(row))
+        finally:
+            self.held -= 1

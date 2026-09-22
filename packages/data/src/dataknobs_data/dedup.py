@@ -31,7 +31,7 @@ import numpy as np
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.records import Record
-from dataknobs_data.vector.content import MODEL_NAME_KEY
+from dataknobs_data.vector.content import MODEL_NAME_KEY, foreign_model_names
 from dataknobs_data.vector.embedding import (
     TextEmbedder,
     embed_text,
@@ -350,23 +350,20 @@ class DedupChecker:
             k=self._config.max_similar_results,
         )
 
+        # A candidate embedded by another model is not a weak match, it is a
+        # meaningless comparison: the two vectors are in different spaces.
+        # Which candidates those are is `foreign_model_names`' question and
+        # not this loop's -- the rule it applies (absent is unknown, not a
+        # mismatch) was written here and in `SemanticIndex` separately, and
+        # the two copies had drifted into disagreeing about an empty name on
+        # either side. `getattr` rather than an attribute for the same
+        # reason: an unregistered embedder and one publishing no identity are
+        # both "nothing to compare against", and only one of them was.
+        current_model = getattr(self._embedder, "model_id", None)
+        mismatched = foreign_model_names((meta for _, _, meta in results), current_model)
+
         similar: list[SimilarItem] = []
-        mismatched: list[str] = []
-        current_model = self._embedder.model_id if self._embedder is not None else None
         for record_id, score, meta in results:
-            # A candidate embedded by another model is not a weak match, it is
-            # a meaningless comparison: the two vectors are in different
-            # spaces. An ABSENT key is unknown, not a mismatch -- vectors
-            # written before this key existed, and every vector from the
-            # `embedding_fn` lane, must not all read as stale.
-            stored_model = meta.get(MODEL_NAME_KEY) if meta else None
-            if (
-                current_model is not None
-                and stored_model is not None
-                and stored_model != current_model
-                and stored_model not in mismatched
-            ):
-                mismatched.append(str(stored_model))
             if score >= self._config.similarity_threshold:
                 similar.append(
                     SimilarItem(
@@ -382,10 +379,10 @@ class DedupChecker:
                 "are meaningless, and this check fails OPEN -- duplicates are admitted "
                 "as unique. Re-embed the store, or treat `mismatched_model_ids` on the "
                 "result as an error.",
-                ", ".join(sorted(mismatched)),
+                ", ".join(mismatched),
                 current_model,
             )
-        return similar, sorted(mismatched)
+        return similar, mismatched
 
     def _build_semantic_text(self, content: dict[str, Any]) -> str:
         """Build text for semantic embedding from configured fields.

@@ -41,7 +41,7 @@ from typing import Any
 
 from dataknobs_common.callbacks import is_async_callable
 
-from dataknobs_fsm.functions.library._callables import normalize_record_callable
+from dataknobs_fsm.functions.base import normalize_record_callable
 from dataknobs_fsm.functions.manager import FunctionWrapper
 
 

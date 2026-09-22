@@ -277,7 +277,7 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -296,6 +296,7 @@ from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.common import TraversalStrategy
 from ..execution.context import ExecutionContext
 from ..execution.history import ExecutionHistory
+from ..functions.base import RegisteredFunction, as_state_test_callable, state_step_args
 
 if TYPE_CHECKING:
     from ..core.arc import ArcExecution, TransformSpec
@@ -365,7 +366,7 @@ class AdvancedFSM(ResourceSurface):
         self,
         config: FSM | str | Path | dict[str, Any],
         execution_mode: ExecutionMode = ExecutionMode.STEP_BY_STEP,
-        custom_functions: dict[str, Callable] | None = None,
+        custom_functions: Mapping[str, RegisteredFunction] | None = None,
     ):
         """Initialize AdvancedFSM.
 
@@ -985,13 +986,28 @@ class AdvancedFSM(ResourceSurface):
         return None
 
     def _resolve_test_function(self, pre_test_name: str) -> Callable | None:
-        """Look up a pre-test function by name in the FSM registry."""
+        """Look up a pre-test function by name, in the form the call sites invoke.
+
+        Both callers do ``test_func(context.data, context)``, and a bare
+        ``IStateTestFunction`` is not callable --- it carries its condition on
+        ``.test``. The resulting ``TypeError`` was swallowed by their
+        arc-skipping ``except Exception``, so a registered interface condition
+        that said *yes* read as *no* and the arc silently disappeared, with the
+        step still reporting success.
+
+        :func:`as_state_test_callable` is the one place that judgement is made;
+        its docstring named the async engine's ``custom_functions`` merge as
+        "the one path that bypasses it", and this was a second --- ``AdvancedFSM``
+        does not go through ``build_fsm``, so nothing had normalized what it
+        stores.
+        """
         registry = getattr(self.fsm, "function_registry", {})
         if hasattr(registry, "functions"):
             functions = registry.functions
         else:
             functions = registry
-        return functions.get(pre_test_name) or self._custom_functions.get(pre_test_name)
+        resolved = functions.get(pre_test_name) or self._custom_functions.get(pre_test_name)
+        return None if resolved is None else as_state_test_callable(resolved)
 
     @staticmethod
     def _test_result_is_truthy(result: Any) -> bool:
@@ -1165,7 +1181,7 @@ class AdvancedFSM(ResourceSurface):
         if state_name in failed:
             return (
                 False,
-                f"State transform failed in: {state_name}",
+                self._engine.transform_failure_message(context, [state_name]),
                 failed_list,
             )
         # A prior step failed but this step's state did not — surface the
@@ -1275,8 +1291,18 @@ class AdvancedFSM(ResourceSurface):
                 result = hook(*args)
                 if inspect.isawaitable(result):
                     await result
-            except Exception:
-                pass  # Silently ignore hook errors
+            except Exception as exc:
+                # A hook must not be able to fail the step, and it still
+                # cannot. But a monitoring hook that has silently stopped
+                # working reports nothing and says nothing about reporting
+                # nothing, which is the failure mode a hook is installed
+                # against.
+                logger.warning(
+                    "Execution hook '%s' raised and was ignored: %s",
+                    hook_name,
+                    exc,
+                    exc_info=exc,
+                )
 
     async def _get_available_transitions_async(
         self, context: ExecutionContext, arc_name: str | None = None
@@ -1382,11 +1408,20 @@ class AdvancedFSM(ResourceSurface):
                     variables=context.variables,
                 )
 
-                # Try calling with state object first (for inline lambdas)
-                try:
-                    result = transform_func(state_obj)
-                except (TypeError, AttributeError):
-                    result = transform_func(ensure_dict(context.data), func_context)
+                # The state object for an inline lambda, (record, context) for
+                # anything that cannot take one argument -- decided by reading
+                # the signature, through the same helper the engine's own
+                # transform loop uses. This was a `try state_obj / except
+                # (TypeError, AttributeError)` pair, and an `except` cannot
+                # tell a failed argument binding from a failed body: a
+                # transform with an ordinary bug in it ran twice.
+                args = state_step_args(
+                    transform_func,
+                    state_obj=state_obj,
+                    record=ensure_dict(context.data),
+                    context=func_context,
+                )
+                result = transform_func(*args)
 
                 # Await if the result is a coroutine
                 if inspect.isawaitable(result):
@@ -2015,7 +2050,7 @@ class FSMDebugger:
 
 def create_advanced_fsm(
     config: str | Path | dict[str, Any] | FSM,
-    custom_functions: dict[str, Callable] | None = None,
+    custom_functions: Mapping[str, RegisteredFunction] | None = None,
     **kwargs: Any,
 ) -> AdvancedFSM:
     """Factory function to create an AdvancedFSM instance.

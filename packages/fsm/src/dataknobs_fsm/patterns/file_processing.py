@@ -26,6 +26,7 @@ from ..api.async_simple import AsyncSimpleFSM
 from ..functions.base import (
     ITransformFunction,
     IValidationFunction,
+    RegisteredFunction,
     TransformError,
 )
 from ..functions.library.validators import build_gate_arcs, build_record_validator
@@ -368,7 +369,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
                 arcs.append({"from": stage, "to": nxt, "name": f"{stage}_done"})
         return arcs
 
-    def _build_custom_functions(self) -> Dict[str, Any]:
+    def _build_custom_functions(self) -> Dict[str, RegisteredFunction]:
         """Build the registered functions the FSM references by name.
 
         Only functions for configured stages are returned, so a state never
@@ -384,7 +385,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         Routed through ``AsyncSimpleFSM(config, custom_functions=...)`` and
         referenced from each state's ``functions`` block / arc condition.
         """
-        functions: Dict[str, Any] = {}
+        functions: Dict[str, RegisteredFunction] = {}
         if self.config.transformations:
             functions["transform"] = _FileTransform(self.config.transformations)
         if self.config.aggregations:
@@ -498,7 +499,7 @@ class FileProcessor(StructuredConfigConsumer[FileProcessingConfig]):
         emitted: List[Dict[str, Any]] = []
         for batch in batches:
             results = await self._fsm.process_batch(
-                data=batch,  # type: ignore
+                data=batch,
                 batch_size=self.config.chunk_size,
                 max_workers=self.config.parallel_chunks,
             )
@@ -757,7 +758,7 @@ def create_log_analyzer(
     transformations = []
     if patterns:
 
-        def extract_patterns(data):
+        def extract_patterns(data: Dict[str, Any]) -> Dict[str, Any]:
             result = data.copy()
             for pattern in patterns:
                 match = re.search(pattern, data.get("line", ""))

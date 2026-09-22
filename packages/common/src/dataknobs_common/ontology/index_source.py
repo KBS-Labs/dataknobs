@@ -113,6 +113,17 @@ class EntitySourceIndexSource(Generic[K]):
     #: parameter.
     _declared: frozenset[str] = field(init=False, repr=False, compare=False)
 
+    #: The id of the source that was described, kept for the same reason.
+    #:
+    #: **``describe()`` is asked once per instance, and this is the half of
+    #: that rule the neighbour above does not state.** The second call came
+    #: back to read one field off a fresh description for a log line, which
+    #: is the cheap end of the same defect: ``describe()`` builds a new value
+    #: every time and the protocol promises nothing about two of them
+    #: agreeing, so a report naming the id read the second time names a
+    #: source no refusal here ever looked at. Not a parameter.
+    _source_id: str = field(init=False, repr=False, compare=False)
+
     def __post_init__(self) -> None:
         """Refuse a field name, an unenumerable source, and an undeclared type.
 
@@ -200,6 +211,7 @@ class EntitySourceIndexSource(Generic[K]):
                 )
 
         object.__setattr__(self, "_declared", frozenset(declared))
+        object.__setattr__(self, "_source_id", description.source_id)
 
     @property
     def source_field(self) -> str:
@@ -253,24 +265,114 @@ class EntitySourceIndexSource(Generic[K]):
         the entity source, which is a protocol change rather than something
         this adapter can arrange; until there is one, the claim above is about
         entity objects and this paragraph is the part it does not cover.
+
+        **A build whose every row composes empty text is reported, once.**
+        :data:`TEXT_FIELDS`' construction check catches a *misspelled* field
+        name for the reason it states --- *"the alternative is a stream that
+        yields empty text for every row and looks like an empty
+        vocabulary"* --- and cannot catch a correctly spelled one the
+        entities carry nothing under, which is the ordinary case for a live
+        binding whose projection fills whatever columns the table has. The
+        result is not an empty index: it is an index full of rows
+        equidistant from every query, which is worse, because an empty index
+        has a report and this has an answer. So this reports it, at the same
+        level and for the same reason as the partial-coverage warning at
+        construction --- and needs no live-binding restriction as that one
+        has, because an authored document whose every entity yields empty
+        text under ``fields:`` is a document with no names either.
+
+        **Every row, not some.** A binding holding the field on a third of
+        its rows is legitimate and common, and reporting there would fire on
+        the ordinary case. A stream that yields nothing reports nothing
+        either: that is the empty-index condition, which the construction
+        refusals already speak for.
+
+        **The report follows the close, not the end.** Written as a statement
+        after the loop it was reachable only by a consumer that ran the
+        stream out, so the two consumers that most need it --- one stopping
+        on a failure, one stopping on purpose --- got silence. A build that
+        fails partway is exactly where *every row composed empty text* is
+        worth knowing, because it is a candidate cause and the caller is
+        about to decide whether to retry. So it is emitted from a ``finally``
+        and says which of the two happened, since a count off an unfinished
+        stream describes what was consumed rather than what the vocabulary
+        holds.
+
+        The stated cost: a caller sampling a short prefix for a preview can
+        now be warned about a binding that fills the field on most of its
+        rows but not its first few. That is the same weak-sample reading the
+        paragraph above declines for *some* rows and accepts for *few* ---
+        accepted here because the consumer of this protocol is an index
+        build, the count is in the message for the reader to weigh, and the
+        condition it reports is a property of the request (a ``fields:``
+        naming something the projection does not fill) rather than of the
+        data.
+
+        **Closed, rather than abandoned.** An async generator a consumer
+        walks away from runs its ``finally`` when the interpreter finalizes
+        it --- a later turn of the loop, unordered against the consumer's own
+        reporting. A consumer that wants the report at its failure closes the
+        stream there, which is what ``SemanticIndex.build`` does with
+        :func:`~dataknobs_common.async_iter.aclosing_iter`.
         """
         entities = self.ontology.entities
-        for type_id in sorted(self._declared):
-            ids = sorted(await entities.by_type(type_id), key=str)
-            cursor = iter(ids)
-            while batch := list(islice(cursor, STREAM_BATCH_SIZE)):
-                found = await entities.get_many(batch)
-                for entity_id in batch:
-                    entity = found.get(entity_id)
-                    if entity is None:
-                        continue
-                    yield IndexItem(
-                        id=self.ontology.qualify(entity.id),
-                        text=self._text_for(entity),
-                        metadata={
-                            ONTOLOGY_ID_KEY: self.ontology.id,
-                            self.aliases_key: list(entity.aliases),
-                        },
+        yielded = 0
+        with_text = 0
+        finished = False
+        try:
+            for type_id in sorted(self._declared):
+                ids = sorted(await entities.by_type(type_id), key=str)
+                cursor = iter(ids)
+                while batch := list(islice(cursor, STREAM_BATCH_SIZE)):
+                    found = await entities.get_many(batch)
+                    for entity_id in batch:
+                        entity = found.get(entity_id)
+                        if entity is None:
+                            continue
+                        text = self._text_for(entity)
+                        yielded += 1
+                        with_text += bool(text)
+                        yield IndexItem(
+                            id=self.ontology.qualify(entity.id),
+                            text=text,
+                            metadata={
+                                ONTOLOGY_ID_KEY: self.ontology.id,
+                                self.aliases_key: list(entity.aliases),
+                            },
+                        )
+            finished = True
+        finally:
+            # In `finally` rather than after the loop, so the report follows
+            # the *close* rather than the exhaustion -- see the docstring.
+            # Nothing here awaits: a `finally` that awaits during a close
+            # raises `async generator ignored GeneratorExit` and loses both
+            # the report and the close.
+            if yielded and not with_text:
+                plural = "y" if yielded == 1 else "ies"
+                fields = ", ".join(self._fields)
+                if finished:
+                    logger.warning(
+                        "index source over ontology %s streamed %d entit%s and every one "
+                        "composed empty text from field(s) %s of source %s; the index this "
+                        "builds is not empty, it is full of rows equidistant from every query",
+                        self.ontology.id,
+                        yielded,
+                        plural,
+                        fields,
+                        self._source_id,
+                    )
+                else:
+                    logger.warning(
+                        "index source over ontology %s was closed after %d entit%s and every "
+                        "one composed empty text from field(s) %s of source %s; the stream "
+                        "did not finish, so that is what it produced rather than what the "
+                        "vocabulary holds -- but a row composing no text is not absent from "
+                        "an index, it is in it and equidistant from every query",
+                        self.ontology.id,
+                        yielded,
+                        plural,
+                        fields,
+                        self._source_id,
                     )
 
     def _text_for(self, entity: object) -> str:

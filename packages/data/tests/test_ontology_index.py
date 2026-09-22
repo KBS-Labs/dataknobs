@@ -576,33 +576,393 @@ async def test_the_forms_collide_in_a_store_keyed_on_id() -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_a_declared_embedder_beside_an_injected_one_is_refused() -> None:
-    """The refusal's other configuration, which was not refused at all.
+async def _loaded_with(document: dict[str, Any], embedder: Any) -> OntologyRegistry:
+    """A loaded registry whose embedder the caller chose.
 
-    ``block["embedder"]`` was read only inside ``and self._injected_embedder
-    is None``, so with an embedder injected the document's ``embedder:``
-    section was never read, never compared and never logged. The comment two
-    lines above names that exact failure --- *"a section parsed into a field
-    and quietly dropped is the failure that produces a registry reporting
-    success while holding no store, no embedder and no index"* --- and the
-    block did it in the other branch.
+    ``_registry`` above injects one of its own, so a test about *which*
+    embedder was injected cannot go through it.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), embedder=embedder
+    )
+    await registry.load()
+    return registry
 
-    What makes it invisible rather than merely wrong: every row written
-    records the **injected** model under ``MODEL_NAME_KEY``, so the staleness
-    contract stays self-consistent while the document, the runbook and every
-    reader of the configuration name a different model.
+
+def _declaring(model: str, provider: str | None = None) -> dict[str, Any]:
+    """:data:`CATALOG` with an ``index:`` section naming a model."""
+    embedding: dict[str, Any] = {"model": model}
+    if provider is not None:
+        embedding["provider"] = provider
+    return _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "embedder": {"embedding": embedding},
+        }
+    )
+
+
+async def test_a_declared_embedder_that_disagrees_with_the_injected_one_is_refused() -> None:
+    """The document and the process name different models, and it is said.
+
+    ``block["embedder"]`` was once read only inside ``and
+    self._injected_embedder is None``, so with an embedder injected the
+    document's ``embedder:`` section was never read, never compared and never
+    logged --- *"a section parsed into a field and quietly dropped is the
+    failure that produces a registry reporting success while holding no
+    store, no embedder and no index"*, in the other branch. What made it
+    invisible rather than merely wrong: every row written records the
+    **injected** model, so the staleness contract stays self-consistent while
+    the document, the runbook and every reader of the configuration name a
+    different model.
+    """
+    with pytest.raises(ValidationError, match="embedder") as refused:
+        await _loaded_with(
+            _declaring("mxbai-embed-large"),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text:latest"),
+        )
+
+    message = str(refused.value)
+    assert "mxbai-embed-large" in message and "nomic-embed-text" in message
+
+
+async def test_a_declared_embedder_that_agrees_is_a_claim_the_document_may_make() -> None:
+    """The repair, and the whole of what changed: agreement builds the index.
+
+    The refusal this replaces was added to *make the disagreement visible*,
+    and a comparison serves that intent more completely than a refusal does:
+    refusal left the document unable to state the model at all, while the
+    number a ``kind: semantic`` rung's ``threshold:`` means something against
+    is a property of that model. The refusal's own stated reason --- *"cannot
+    build the declared one to compare"* --- is about **building**, and the
+    injected embedder already publishes ``model_id``.
+
+    **The tag rule, measured.** A document declares ``nomic-embed-text`` and
+    an Ollama-backed embedder publishes ``ollama:nomic-embed-text:latest``:
+    the provider is a prefix the document may omit and the tag is a suffix it
+    may omit, and requiring either would refuse every correctly configured
+    deployment. Both spellings below name one model.
+    """
+    for document in (
+        _declaring("nomic-embed-text"),
+        _declaring("nomic-embed-text", provider="ollama"),
+        _declaring("nomic-embed-text:latest", provider="ollama"),
+    ):
+        registry = await _loaded_with(
+            document,
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text:latest"),
+        )
+        try:
+            assert registry.index("catalog") is not None
+        finally:
+            await registry.close()
+
+
+async def test_two_stated_tags_that_differ_are_two_models() -> None:
+    """The omission rule is *may omit*, which is not *is always ignored*.
+
+    ``_untagged`` stripped the tag from **both** sides before comparing, so
+    a document declaring ``nomic-embed-text:v1.5`` agreed with an embedder
+    publishing ``nomic-embed-text:latest``. Those are different weights, and
+    a version bump is the one change that most reliably invalidates a
+    calibrated ``threshold:`` --- which is this comparison's stated reason
+    for existing. The rule the docstring gives is that the tag is *"a suffix
+    either side may omit"*; stripping a tag the other side also states
+    discards the only thing distinguishing them.
+
+    Where one side omits it there is nothing to compare and the base names
+    decide, which is the case the test above pins and this must not break.
+    """
+    with pytest.raises(ValidationError, match="embedder") as refused:
+        await _loaded_with(
+            _declaring("nomic-embed-text:v1.5", provider="ollama"),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text:latest"),
+        )
+
+    message = str(refused.value)
+    assert "v1.5" in message and "latest" in message, (
+        "the message must show both tags, since the base names are identical "
+        f"and the tags are the whole disagreement: {message}"
+    )
+
+
+async def test_two_stated_tags_that_match_are_one_model() -> None:
+    """The positive control: comparing tags is not refusing them."""
+    registry = await _loaded_with(
+        _declaring("nomic-embed-text:v1.5", provider="ollama"),
+        DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text:v1.5"),
+    )
+    try:
+        assert registry.index("catalog") is not None
+    finally:
+        await registry.close()
+
+
+async def test_an_identity_named_verbatim_is_the_model_it_names() -> None:
+    """The remedy the refusal prints has to clear the refusal.
+
+    The message names both sides --- *"naming model X, and the injected
+    embedder publishes Y"* --- so the obvious repair is to write Y into the
+    document. That was refused, for every ``model_id`` carrying a colon: the
+    published side was split on its first colon as ``provider:model`` and the
+    document's side was not, so the two halves of an identical pair were
+    compared against each other and found to differ. The refusal then said
+    *"one of them is wrong about what this index holds"* of two identical
+    strings.
+
+    Nothing promises the split. ``TextEmbedder.model_id`` says in those words
+    that it does not promise a format, and only one of the three shipped
+    implementations spells ``provider:model`` --- the bots knowledge-base
+    adapter publishes ``kb:<name>`` and ``DeterministicEmbedder`` publishes a
+    bare word.
+    """
+    for published in (
+        "nomic-embed-text:latest",
+        "ollama:nomic-embed-text",
+        "ollama:nomic-embed-text:latest",
+        "kb:my-model",
+        "deterministic",
+    ):
+        registry = await _loaded_with(
+            _declaring(published),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id=published),
+        )
+        try:
+            assert registry.index("catalog") is not None
+        finally:
+            await registry.close()
+
+
+async def test_an_embedder_publishing_no_provider_can_still_be_named() -> None:
+    """A colon is not a provider, and a tagged bare name is the common case.
+
+    An embedder publishing ``nomic-embed-text:latest`` --- no provider prefix,
+    which the protocol permits and a consumer implementation wrapping an
+    Ollama client naturally produces --- was read as provider
+    ``nomic-embed-text`` and model ``latest``. A document declaring
+    ``nomic-embed-text`` was then refused, with a message asserting the
+    embedder publishes a different model.
+
+    The provider is a prefix **either side may omit**, exactly as the tag is a
+    suffix either side may omit. Where the published side omits it there is no
+    provider to compare, so a provider the document states is not contradicted
+    by one the embedder never published.
+    """
+    for document in (
+        _declaring("nomic-embed-text"),
+        _declaring("nomic-embed-text:latest"),
+        _declaring("nomic-embed-text", provider="ollama"),
+    ):
+        registry = await _loaded_with(
+            document,
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="nomic-embed-text:latest"),
+        )
+        try:
+            assert registry.index("catalog") is not None
+        finally:
+            await registry.close()
+
+
+async def test_a_declared_provider_the_injected_embedder_is_not_is_refused() -> None:
+    """Right model name, wrong provider, is still two different geometries.
+
+    ``model_id`` is ``provider:model`` for the reason its own docstring gives
+    --- *"so that two embedders reaching the same model agree, and two
+    reaching different models do not"*. Two providers serving a same-named
+    model are not guaranteed to be the same weights, and a ``threshold:``
+    calibrated against one means nothing against the other.
+    """
+    with pytest.raises(ValidationError, match="embedder") as refused:
+        await _loaded_with(
+            _declaring("nomic-embed-text", provider="openai"),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text"),
+        )
+
+    assert "openai" in str(refused.value)
+
+
+async def test_a_key_the_embedder_block_does_not_read_is_refused() -> None:
+    """The same silent drop the block's own no-``model:`` refusal exists for.
+
+    ``embedder:`` is a **claim**, not a spec: the registry cannot build an
+    embedder and does not try, so ``dimensions:`` and ``api_base:`` written
+    here configure nothing. Reading two keys and passing over the rest is
+    *"configuration the registry accepted and acted on in no way"* --- the
+    words the no-``model:`` refusal two tests down uses about itself, and the
+    reason ``metirc:`` is refused one section up.
+
+    Partially reading the block is what makes the remainder surprising: a
+    reader who sees ``model:`` checked has every reason to think the keys
+    beside it are too.
+    """
+    for block, named in (
+        (
+            {"model": "nomic-embed-text", "dimensions": 256, "api_base": "http://x"},
+            ["api_base", "dimensions"],
+        ),
+        ({"embedding": {"model": "nomic-embed-text", "base_url": "http://x"}}, ["base_url"]),
+    ):
+        document = _document(
+            index={
+                "store": {"backend": "memory", "dimensions": DIMENSIONS},
+                "embedder": block,
+            }
+        )
+        with pytest.raises(ValidationError, match="does not read") as refused:
+            await _loaded_with(
+                document,
+                DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text"),
+            )
+        assert str(named) in str(refused.value), refused.value
+
+
+async def test_the_claim_is_not_read_out_of_whatever_mapping_happens_to_carry_a_model() -> None:
+    """One nesting is supported, and it is named rather than searched for.
+
+    ``dataknobs-llm`` spells its own configuration ``embedder: {embedding:
+    {...}}``, so that one level is read. Scanning *every* nested mapping for
+    a ``model`` key instead made any sub-block the claim --- measured, a
+    ``retry:`` block naming a model refused a correctly configured
+    deployment, reporting a model the document never declared as the model
+    the document declares.
     """
     document = _document(
         index={
             "store": {"backend": "memory", "dimensions": DIMENSIONS},
-            "embedder": {"embedding": {"provider": "ollama", "model": "nomic-embed-text"}},
+            "embedder": {"retry": {"model": "a-model-nobody-declared"}},
+        }
+    )
+
+    with pytest.raises(ValidationError, match="does not read") as refused:
+        await _loaded_with(
+            document,
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text"),
+        )
+
+    message = str(refused.value)
+    assert "retry" in message
+    assert "a-model-nobody-declared" not in message, (
+        "the diagnosis is the unread key, not a model disagreement the document "
+        f"never stated: {message}"
+    )
+
+    # Pinned at the reader too, not only through the key check in front of it.
+    # Widening `EMBEDDER_CLAIM_KEYS` one day must not quietly restore the scan:
+    # the refusal above would stop firing and a scanning reader would answer
+    # again, with nothing in between to say so.
+    from dataknobs_data.ontology.registry import _stated_model
+
+    assert _stated_model({"retry": {"model": "a-model-nobody-declared"}}) is None
+    assert _stated_model({"embedding": {"model": "nomic-embed-text"}}) == (
+        None,
+        "nomic-embed-text",
+    )
+
+
+async def test_a_claim_split_across_the_two_levels_is_refused() -> None:
+    """Half a claim at each level is half a claim read.
+
+    The block states the model and the provider at **one** level. Written at
+    two, one of them is dropped, and both drops are the failure this section
+    refuses elsewhere:
+
+    * ``{provider: openai, embedding: {model: X}}`` loaded clean with the
+      provider unread --- and ``openai`` against an ``ollama`` embedder is
+      exactly the disagreement the sibling test below has refused all along;
+    * ``{model: X, embedding: {model: Y}}`` loaded clean on ``X``, with a
+      second, contradictory model claim in the same block read by nothing.
+    """
+    for block in (
+        {"provider": "openai", "embedding": {"model": "nomic-embed-text"}},
+        {"model": "nomic-embed-text", "embedding": {"model": "mxbai-embed-large"}},
+    ):
+        document = _document(
+            index={
+                "store": {"backend": "memory", "dimensions": DIMENSIONS},
+                "embedder": block,
+            }
+        )
+        with pytest.raises(ValidationError, match="does not read"):
+            await _loaded_with(
+                document,
+                DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text"),
+            )
+
+
+async def test_the_three_shapes_a_claim_is_written_in_still_load() -> None:
+    """The positive control: refusing a key is not refusing the block.
+
+    Flat, flat with a provider, and the ``embedding:`` nesting
+    ``dataknobs-llm``'s own configuration uses. All three are what the guide
+    publishes and all three must keep loading.
+    """
+    for block in (
+        {"model": "nomic-embed-text"},
+        {"model": "nomic-embed-text", "provider": "ollama"},
+        {"embedding": {"model": "nomic-embed-text", "provider": "ollama"}},
+    ):
+        document = _document(
+            index={
+                "store": {"backend": "memory", "dimensions": DIMENSIONS},
+                "embedder": block,
+            }
+        )
+        registry = await _loaded_with(
+            document,
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="ollama:nomic-embed-text"),
+        )
+        try:
+            assert registry.index("catalog") is not None
+        finally:
+            await registry.close()
+
+
+async def test_an_embedder_block_naming_no_model_is_refused_as_an_unreadable_claim() -> None:
+    """A claim the registry cannot read is not a claim it may pass over.
+
+    This is the ``metric:`` precedent: a spelling the library cannot resolve
+    is refused rather than ignored, because accepting a block and acting on
+    it in no way is the silent drop the whole section exists to prevent.
+    """
+    document = _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "embedder": {"embedding": {"provider": "ollama"}},
         }
     )
 
     with pytest.raises(ValidationError, match="embedder") as refused:
-        await _registry(document)
+        await _loaded_with(document, DeterministicEmbedder(dimensions=DIMENSIONS))
 
-    assert "injected" in str(refused.value)
+    # Asserted on the *reason*, not on the word "model": the refusal this
+    # replaced also said "model", so a looser match would pass against the
+    # unfixed code and pin nothing.
+    assert "names no `model:`" in str(refused.value)
+
+
+async def test_an_embedder_with_no_identity_is_reported_rather_than_refused(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No ``model_id`` is no claim to check, and the document is not refused for it.
+
+    ``model_id`` is optional on the ``TextEmbedder`` protocol, and an
+    embedder publishing none leaves the comparison with one side. Refusing
+    would make a legitimate embedder unusable with a legitimate document;
+    saying nothing would make an unchecked claim look checked. So it is
+    reported and the load continues --- which is the one place this check
+    warns rather than raising, because the document is not what is wrong.
+    """
+    embedder = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="")
+
+    with caplog.at_level("WARNING"):
+        registry = await _loaded_with(_declaring("nomic-embed-text"), embedder)
+    try:
+        assert registry.index("catalog") is not None
+        reports = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(reports) == 1
+        assert "nomic-embed-text" in reports[0].getMessage()
+    finally:
+        await registry.close()
 
 
 async def test_a_key_the_index_block_does_not_declare_is_refused() -> None:
@@ -778,3 +1138,458 @@ async def test_a_malformed_source_key_is_refused_as_a_validation_error(
 
     with pytest.raises(ValidationError, match=match):
         await _registry(document)
+
+
+# --------------------------------------------------------------------------
+# The staleness key, compared
+# --------------------------------------------------------------------------
+
+
+def _breeds() -> AsyncIndexSource:
+    """A corpus small enough to search exhaustively and real enough to rank."""
+
+    async def rows() -> AsyncIterator[IndexItem]:
+        for key, text in (
+            ("a", "a spaniel is a gundog"),
+            ("b", "a beagle is a hound"),
+            ("c", "a hound tracks by scent"),
+        ):
+            yield IndexItem(id=key, text=text)
+
+    return CallableSource(rows)
+
+
+async def test_a_hit_written_by_another_model_is_reported_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A build job and a service with a configuration change between them.
+
+    ``SemanticIndex`` writes the embedder's ``model_id`` on every row and
+    says what for --- *"which is what makes a stored vector's staleness
+    judgeable by something that never saw this object"*. Measured before
+    this report: a store built under one model and searched through
+    another returned three ranked hits, raised nothing, and logged nothing
+    at warning or above. The datum was recorded and there was nowhere to
+    stand to read it --- the key is legible in the metadata *of a hit*, so
+    the check a consumer would write can only run after the query it would
+    have invalidated, and only on a query that returned something.
+
+    Reported once per index instance, on the first hit that disagrees. The
+    read path had no report of any kind before this one: the empty-source
+    ``logger.info`` is on the **build** path and fires once per build, so
+    this is the first thing ``_search_many`` has ever said.
+    """
+    store = await _store()
+    try:
+        builder = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="build-v1")
+        await SemanticIndex(_breeds(), builder, store).build()
+
+        searcher = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2")
+        index = SemanticIndex(_breeds(), searcher, store)
+        with caplog.at_level("WARNING"):
+            first = await index.search("hound", k=3)
+            second = await index.search("gundog", k=3)
+
+        assert first and second, "the search still answers; the report is beside it"
+        reports = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(reports) == 1, "once per index, not once per hit and not once per query"
+        message = reports[0].getMessage()
+        assert "build-v1" in message and "serve-v2" in message
+
+    finally:
+        await store.close()
+
+
+async def test_a_hit_written_by_the_same_model_is_not_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The positive control: agreement is silent.
+
+    Without this, a report that fired unconditionally would pass the test
+    above and cry wolf on every correctly configured deployment.
+    """
+    store = await _store()
+    try:
+        embedder = DeterministicEmbedder(dimensions=DIMENSIONS, model_id="v1")
+        await SemanticIndex(_breeds(), embedder, store).build()
+
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="v1"),
+            store,
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3)
+
+        assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    finally:
+        await store.close()
+
+
+async def test_a_row_carrying_no_model_name_is_not_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Absent is not disagreement.
+
+    ``add_records`` omits ``model_name`` entirely when the field carries no
+    name, so a store written before the key existed --- or through the raw
+    ``embedding_fn`` path, which has no identity to default from --- holds
+    rows with nothing to compare. Reporting there would fire on every
+    pre-existing store and say only that it is old.
+
+    The rows are written straight through ``add_vectors`` rather than through
+    a build, because every shipped embedder names itself:
+    ``DeterministicEmbedder`` defaults ``model_id`` to ``"deterministic"``
+    even when the caller passes none, so a build cannot produce this state.
+    """
+    import numpy as np
+
+    store = await _store()
+    try:
+        await store.add_vectors(np.ones((3, DIMENSIONS), dtype=np.float32), ids=["a", "b", "c"])
+
+        index = SemanticIndex(
+            _breeds(), DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2"), store
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3)
+
+        assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    finally:
+        await store.close()
+
+
+# --------------------------------------------------------------------------
+# The comparison runs on what the store answered, not on what survived
+# the caller's threshold
+# --------------------------------------------------------------------------
+#
+# ``D338`` ruled that ``SemanticIndex`` *"reports once, the first time a search
+# returns a hit whose ``model_name`` is not its own embedder's ``model_id``"*,
+# and the limit it accepted is the one the key's placement forces: the name is
+# legible in the metadata **of a hit**, so nothing can be said about a query
+# the store answered with nothing.
+#
+# A threshold is not that. Measured on the unfixed code: the store answered a
+# cross-model query with **three** rows, every one carrying ``build-v1``, and
+# ``_search_many`` dropped them before comparing. The evidence was in hand and
+# was discarded with the answer.
+#
+# Why that is the *likeliest* presentation is reasoning rather than a
+# measurement here, and the distinction matters: vectors from two embedding
+# spaces score against each other arbitrarily, so a threshold tuned under one
+# model has no meaning under two and will tend to keep nothing --- leaving a
+# caller an empty list and no account of it. ``D338`` recorded the same limit
+# on its own evidence (*"under a hash embedder the wrong answers look wrong;
+# under two real models of the same width they would look ordinary"*), and
+# ``DeterministicEmbedder`` is a hash embedder, so these tests can pin where
+# the comparison runs but not how a real pair of models would score.
+#
+# The sibling implementation gets this right. ``DedupChecker._find_similar``
+# compares the stored name against its own on every candidate the store
+# returned and applies ``similarity_threshold`` afterwards, in the same loop.
+
+
+async def test_a_mismatch_is_reported_even_when_the_threshold_keeps_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The reproducer: a filtered-away answer is not absent evidence.
+
+    ``threshold=2.0`` keeps nothing, which is the shape a real mismatch
+    tends to produce for a threshold tuned under one model. What this pins
+    is narrower and is the part that is measurable here: the store answered
+    with three rows carrying ``build-v1``, so the comparison had everything
+    it needed, and the filter is the caller's view of the answer rather than
+    a limit on what can be compared.
+    """
+    store = await _store()
+    try:
+        await SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="build-v1"),
+            store,
+        ).build()
+
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2"),
+            store,
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3, threshold=2.0) == []
+
+        reports = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(reports) == 1, (
+            "the store returned three rows carrying 'build-v1'; the threshold "
+            "removed them from the answer, not from the evidence"
+        )
+        assert "build-v1" in reports[0].getMessage()
+    finally:
+        await store.close()
+
+
+async def test_a_search_the_store_answers_with_nothing_reports_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The limit that is real, expressed the way it is actually reached.
+
+    This is what ``D338`` accepted: the model name lives in a hit's metadata,
+    so a query the **store** answered with nothing leaves nothing to compare.
+    An empty store is how that happens; a threshold is not.
+    """
+    store = await _store()
+    try:
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2"),
+            store,
+        )
+        with caplog.at_level("WARNING"):
+            assert await index.search("hound", k=3) == []
+
+        assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+    finally:
+        await store.close()
+
+
+# --------------------------------------------------------------------------
+# The fact is handed back, not only logged
+# --------------------------------------------------------------------------
+#
+# A log line is not an answer a program can act on, and this one is emitted
+# once per instance --- so a service that starts before its log sink, or reads
+# its logs nowhere, has the datum pass by a second time. ``D338`` declined
+# option (b), *"publish the stored key as a member, so an index or a store
+# answers WHAT MODEL WROTE THESE ROWS without a search"*, because it *"is a
+# scan on some backends and undefined over a store several vocabularies
+# share"*.
+#
+# Publishing what the searches already compared is neither of those things.
+# It reads no row the search did not already read, and over a store several
+# vocabularies share it answers the only question that is well-posed there:
+# which foreign models this index has actually been ranking against.
+#
+# The name is the sibling's. ``DedupResult.mismatched_model_ids`` carries the
+# same fact for the same reason --- *"because every candidate is still the
+# best answer available; what changes is that the caller can now tell the
+# answer is untrustworthy"* --- and two names for one fact is how a consumer
+# who found one fails to find the other.
+
+
+async def test_the_mismatched_model_is_handed_back_not_only_logged() -> None:
+    """The consumer's standing place: a member, not a log line."""
+    store = await _store()
+    try:
+        await SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="build-v1"),
+            store,
+        ).build()
+
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v2"),
+            store,
+        )
+        assert index.mismatched_model_ids == [], "nothing searched, nothing seen"
+
+        await index.search("hound", k=3)
+
+        assert index.mismatched_model_ids == ["build-v1"]
+    finally:
+        await store.close()
+
+
+async def test_every_foreign_model_is_named_though_only_one_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The division of labour between the log and the member.
+
+    The log is a one-shot alert and stays one, as ruled. The member is the
+    complete fact, so a store holding rows from two earlier models names both
+    --- which is what a caller needs to decide what to re-embed, and exactly
+    what a report that stops at the first cannot say.
+    """
+    store = await _store()
+    try:
+        for model, source in (
+            ("build-v1", _breeds()),
+            ("build-v2", CallableSource(_one_more)),
+        ):
+            await SemanticIndex(
+                source, DeterministicEmbedder(dimensions=DIMENSIONS, model_id=model), store
+            ).build()
+
+        index = SemanticIndex(
+            _breeds(),
+            DeterministicEmbedder(dimensions=DIMENSIONS, model_id="serve-v3"),
+            store,
+        )
+        with caplog.at_level("WARNING"):
+            await index.search("hound", k=10)
+
+        assert index.mismatched_model_ids == ["build-v1", "build-v2"]
+        reports = [record for record in caplog.records if record.levelname == "WARNING"]
+        assert len(reports) == 1, "the alert is once per index; the member holds the rest"
+    finally:
+        await store.close()
+
+
+async def _one_more() -> AsyncIterator[IndexItem]:
+    """A fourth row, written under a second model, sharing no id with the first three."""
+    yield IndexItem(id="d", text="a terrier goes to ground")
+
+
+async def test_a_matching_model_leaves_the_member_empty() -> None:
+    """The positive control: agreement publishes nothing, as it logs nothing."""
+    store = await _store()
+    try:
+        await SemanticIndex(
+            _breeds(), DeterministicEmbedder(dimensions=DIMENSIONS, model_id="v1"), store
+        ).build()
+
+        index = SemanticIndex(
+            _breeds(), DeterministicEmbedder(dimensions=DIMENSIONS, model_id="v1"), store
+        )
+        await index.search("hound", k=3)
+
+        assert index.mismatched_model_ids == []
+    finally:
+        await store.close()
+
+
+# --------------------------------------------------------------------------
+# A build that stops partway closes what it opened
+# --------------------------------------------------------------------------
+
+
+class _HoldingSource:
+    """A source that holds something for as long as its stream is open.
+
+    The shape two shipped backends have under
+    :class:`~dataknobs_data.vector.RecordFieldSource`: ``stream_read`` on
+    PostgreSQL yields from inside ``pool.acquire()`` and an open
+    ``conn.transaction()``, and on Elasticsearch from inside a scroll
+    context cleared in a ``finally``. Neither releases until the generator
+    is **closed**, which is the property asserted here; a memory backend
+    holds nothing, so nothing in-tree can stand in for them.
+
+    Not a mock. It is a real async generator with a real acquire/release
+    pair, and the pair is the whole subject.
+    """
+
+    def __init__(self) -> None:
+        self.held = 0
+        self.releases = 0
+
+    def declares(self) -> frozenset[str]:
+        return frozenset()
+
+    async def stream_items(self) -> AsyncIterator[IndexItem]:
+        self.held += 1
+        try:
+            for key in ("a", "b", "c"):
+                yield IndexItem(id=key, text=f"row {key}")
+        finally:
+            self.held -= 1
+            self.releases += 1
+
+
+async def test_a_build_that_fails_partway_closes_the_stream_it_opened() -> None:
+    """The failure path abandoned the generator and left its cleanup to the collector.
+
+    ``build`` opens the source's stream and, on any failure, raises out of
+    the ``async for`` without closing it. An abandoned async generator runs
+    its ``finally`` when the interpreter finalizes it --- a later turn of the
+    loop --- so whatever the source was holding was still held when the
+    caller got the error and started deciding what to do about it.
+
+    Asserted at the moment the error arrives rather than afterwards, because
+    "eventually released" is what the unfixed code already does.
+
+    The width mismatch is a real in-tree failure rather than a raising
+    stand-in: a store declaring one width handed vectors of another is what
+    ``_check_batch_width`` exists to refuse.
+    """
+    from dataknobs_data.vector import semantic_index as module
+
+    store = await _store()
+    source = _HoldingSource()
+    original = module.BUILD_BATCH_SIZE
+    module.BUILD_BATCH_SIZE = 1
+    try:
+        index = SemanticIndex(source, DeterministicEmbedder(dimensions=DIMENSIONS * 2), store)
+        with pytest.raises(OperationError) as failed:
+            await index.build()
+
+        assert source.held == 0, "the stream was still open when the caller got the error"
+        assert source.releases == 1, "closed once, not left to the collector and closed twice"
+        assert failed.value.context == {"written": 0}
+    finally:
+        module.BUILD_BATCH_SIZE = original
+        await store.close()
+
+
+#: :data:`CATALOG` with the one description removed, so ``fields:
+#: ["description"]`` composes empty text for every entity rather than some.
+NO_DESCRIPTIONS: dict[str, Any] = {
+    **CATALOG,
+    "entities": [
+        {key: value for key, value in entity.items() if key != "description"}
+        for entity in CATALOG["entities"]
+    ],
+}
+
+
+async def test_the_report_a_closed_stream_makes_reaches_the_failing_build(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The two halves of the close meet here, and nothing else asserts that.
+
+    ``EntitySourceIndexSource`` reports an all-empty stream from a
+    ``finally``, and ``build`` closes the stream it opened. Each is testable
+    alone in its own package; that a real vocabulary's report reaches a real
+    failing build crosses the boundary between them, which is where a fix
+    written in two halves comes apart.
+
+    A build failing on the store's width is also the case where the report
+    is worth reading: the caller is holding an error about the store and the
+    stream is telling it the text was empty anyway, which changes what a
+    retry should change.
+    """
+    from dataknobs_data.vector import semantic_index as module
+
+    registry = await _registry(
+        {
+            **NO_DESCRIPTIONS,
+            "index": {
+                "store": {"backend": "memory", "dimensions": DIMENSIONS},
+                "fields": ["description"],
+            },
+        }
+    )
+    store = await _store()
+    original = module.BUILD_BATCH_SIZE
+    module.BUILD_BATCH_SIZE = 1
+    try:
+        configured = registry.index("catalog")
+        assert configured is not None
+        index = SemanticIndex(
+            configured.source, DeterministicEmbedder(dimensions=DIMENSIONS * 2), store
+        )
+
+        caplog.clear()
+        with caplog.at_level("WARNING"), pytest.raises(OperationError):
+            await index.build()
+
+        empty_text = [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "composed empty text" in record.getMessage()
+        ]
+        assert len(empty_text) == 1, "the stream's report arrived with the build's failure"
+        assert "did not finish" in empty_text[0].getMessage()
+    finally:
+        module.BUILD_BATCH_SIZE = original
+        await store.close()
+        await registry.close()
