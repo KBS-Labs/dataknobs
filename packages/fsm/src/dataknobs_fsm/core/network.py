@@ -4,7 +4,6 @@
 """State network implementation for FSM."""
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, List, Set, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition, arc_from_dict, TransformSpec
@@ -584,12 +583,6 @@ class StateNetwork:
         totals = self._resource_requirements
 
         for resource in state.resource_requirements:
-            # ``type`` is declared ``str``. The config builder puts the schema
-            # ``ResourceConfig`` here, whose ``type`` is a ``ResourceType`` ---
-            # the two-``ResourceConfig`` mismatch this package tracks
-            # separately. Comparison works across both because ``ResourceType``
-            # subclasses ``str``; only the custom bucket's *key* needs the
-            # enum's value, since ``str()`` on a member gives its repr.
             kind = resource.type
             if kind in ("database", "async_database"):
                 totals.databases.add(resource.name)
@@ -600,8 +593,7 @@ class StateNetwork:
             elif kind == "llm":
                 totals.llms.add(resource.name)
             else:
-                key = kind.value if isinstance(kind, Enum) else str(kind)
-                totals.custom.setdefault(key, set()).add(resource.name)
+                totals.custom.setdefault(kind, set()).add(resource.name)
 
     def _recalculate_resource_requirements(self) -> None:
         """Recalculate all resource requirements from scratch.
