@@ -171,6 +171,19 @@ class _AsyncResolvedLibraryFunction(_ResolvedLibraryFunction):
         return await getattr(self, self._method_name)(data, context, **kwargs)
 
 
+def _declared(value: str | None, ref_type: str, field: str) -> str:
+    """The field a ``FunctionReference`` of this type is required to carry.
+
+    ``FunctionReference.validate_reference`` enforces this at construction, so
+    the ``None`` branch is not a case the config can reach --- it is where the
+    schema's guarantee is written down in a form the reader (and the type
+    checker) can follow to the call sites.
+    """
+    if value is None:
+        raise ValueError(f"A '{ref_type}' function reference requires '{field}'")
+    return value
+
+
 class FSMBuilder:
     """Build executable FSM instances from configuration."""
 
@@ -422,26 +435,17 @@ class FSMBuilder:
                     arc_config, state_def, network, fsm_config, arc_definition_order
                 )
                 arc_definition_order += 1
-                # Add arc to both the state definition and the network
-                state_def.outgoing_arcs.append(arc)
-                # Also register the arc with the network for execution
-                # Extract function names for network registration
-                pre_test_name = None
-                transform_name = None
-                if arc.pre_test:
-                    pre_test_name = getattr(arc.pre_test, "__name__", str(arc.pre_test))
-                if arc.transform:
-                    if isinstance(arc.transform, list):
-                        transform_name = arc.transform
-                    else:
-                        transform_name = getattr(arc.transform, "__name__", str(arc.transform))
-
+                # One arc, stored once. This used to append ``arc`` to the
+                # state and then call ``add_arc`` to build a *second*, lossy
+                # arc for the network out of stringified function names --- so
+                # the network's own accessors described the graph with arcs
+                # that had no priority, no definition order and function
+                # *names* where the state held resolved callables. ``add_arc``
+                # now records the arc the builder resolved, in every index.
                 network.add_arc(
                     source_state=state_config.name,
                     target_state=arc_config.target,
-                    pre_test=pre_test_name,
-                    transform=transform_name,
-                    metadata=arc_config.metadata,
+                    definition=arc,
                 )
 
         return network
@@ -536,17 +540,20 @@ class FSMBuilder:
         if isinstance(func, _ResolvedLibraryFunction):
             return None
 
-        # Check for various name attributes
-        if hasattr(func, "name"):
-            return func.name
-        elif hasattr(func, "__name__"):
+        # Check for various name attributes. Each is read off a duck-typed
+        # object, so each is narrowed to the ``str`` this function promises
+        # rather than returned as whatever the attribute happened to hold.
+        candidate = getattr(func, "name", None)
+        if isinstance(candidate, str):
+            return candidate
+        dunder = getattr(func, "__name__", None)
+        if isinstance(dunder, str):
             # Skip generic names that would cause collisions
-            name = func.__name__
-            if name not in ["<lambda>", "inline_func"]:
-                return name
-        elif hasattr(func, "wrapper") and hasattr(func.wrapper, "name"):
+            if dunder not in ["<lambda>", "inline_func"]:
+                return dunder
+        elif hasattr(func, "wrapper") and isinstance(getattr(func.wrapper, "name", None), str):
             # InterfaceWrapper case
-            return func.wrapper.name
+            return str(func.wrapper.name)
         else:
             # Search for the function in the manager
             for fname in self._function_manager.list_functions():
@@ -661,7 +668,7 @@ class FSMBuilder:
 
         # Create appropriate arc type
         if isinstance(arc_config, PushArcConfig):
-            arc = PushArc(
+            arc: ArcDefinition = PushArc(
                 target_state=arc_config.target,
                 target_network=arc_config.target_network,
                 return_state=arc_config.return_state,
@@ -779,9 +786,22 @@ class FSMBuilder:
         Raises:
             ValueError: If function cannot be resolved.
         """
+        # ``FunctionReference.validate_reference`` requires ``name`` for
+        # builtin/registered/custom, ``module`` as well for custom, and
+        # ``code`` for inline --- a pydantic model cannot be constructed
+        # without them. Each branch reads the ones *its* type is required to
+        # carry; ``inline`` has no name, which is why this is not hoisted.
+        # Every arm binds something the engines will call --- a
+        # ``FunctionWrapper``, an ``InterfaceWrapper``, a raw function or a
+        # ``functools.partial`` over one --- which is what this method
+        # promises to return, so that is what the local says rather than
+        # ``Any``.
+        func: Callable[..., Any]
+
         if func_ref.type == "builtin":
             # Look up built-in function
-            wrapper = self._function_manager.get_function(func_ref.name)
+            name = _declared(func_ref.name, func_ref.type, "name")
+            wrapper = self._function_manager.get_function(name)
             if not wrapper:
                 raise ValueError(f"Built-in function not found: {func_ref.name}")
             # The built-in library is classes (e.g. RequiredFieldsValidator) and
@@ -798,14 +818,16 @@ class FSMBuilder:
 
         elif func_ref.type == "registered":
             # Look up registered function
-            wrapper = self._function_manager.get_function(func_ref.name)
+            name = _declared(func_ref.name, func_ref.type, "name")
+            wrapper = self._function_manager.get_function(name)
             if not wrapper:
                 raise ValueError(f"Registered function not found: {func_ref.name}")
             func = wrapper
 
         elif func_ref.type == "custom":
             # Check manager first
-            wrapper = self._function_manager.get_function(func_ref.name)
+            name = _declared(func_ref.name, func_ref.type, "name")
+            wrapper = self._function_manager.get_function(name)
             if wrapper:
                 func = wrapper
             else:
@@ -823,21 +845,21 @@ class FSMBuilder:
                 # question for the whole function-resolution family, not for
                 # this branch alone.
                 try:
-                    module = importlib.import_module(func_ref.module)
+                    module = importlib.import_module(
+                        _declared(func_ref.module, func_ref.type, "module")
+                    )
                 except ImportError as exc:
                     raise ValueError(
                         f"Custom function module not found: {func_ref.module}"
                     ) from exc
                 try:
-                    raw = getattr(module, func_ref.name)
+                    raw = getattr(module, name)
                 except AttributeError as exc:
                     raise ValueError(
                         f"Custom function not found: {func_ref.module}.{func_ref.name}"
                     ) from exc
                 # Register it for future use
-                self._function_manager.register_function(
-                    func_ref.name, raw, FunctionSource.REGISTERED
-                )
+                self._function_manager.register_function(name, raw, FunctionSource.REGISTERED)
                 # A custom *class* implementing an FSM function interface is
                 # configured by ``params`` (constructor args) the same way a
                 # built-in class is; materialize + adapt it. A plain custom
@@ -855,11 +877,16 @@ class FSMBuilder:
                 func = raw
 
         elif func_ref.type == "inline":
-            # Use function manager's inline handling
-            wrapper = self._function_manager.resolve_function(func_ref.code, expected_type)
-            if not wrapper:
+            # Use function manager's inline handling. Bound to its own name
+            # because ``resolve_function`` returns a wider type than the
+            # ``get_function`` lookups above --- reusing ``wrapper`` made the
+            # two look like the same thing.
+            resolved = self._function_manager.resolve_function(
+                _declared(func_ref.code, func_ref.type, "code"), expected_type
+            )
+            if not resolved:
                 raise ValueError(f"Failed to create inline function from: {func_ref.code}")
-            func = wrapper
+            func = resolved
             # Mark as already wrapped to avoid double wrapping
             func._is_wrapped = True
 
@@ -929,9 +956,16 @@ class FSMBuilder:
             for state in network.states.values():
                 for arc in network.get_arcs_from_state(state.name):
                     if isinstance(arc, PushArc):
-                        # Check target network exists
-                        if arc.target_network not in self._networks:
-                            raise ValueError(f"Target network '{arc.target_network}' not found")
+                        # Check target network exists. The name is parsed off
+                        # the field rather than compared whole: the documented
+                        # ``"network:initial_state"`` form would otherwise
+                        # report as a missing network. This branch had never
+                        # run --- ``get_arcs_from_state`` used to return the
+                        # network's own arc type, which no ``PushArc`` ever
+                        # was --- so the bug it carried was never met.
+                        target_network, _ = arc.parse_target()
+                        if target_network not in self._networks:
+                            raise ValueError(f"Target network '{target_network}' not found")
                         # Check return state exists if specified
                         if arc.return_state and arc.return_state not in state_names:
                             raise ValueError(f"Return state '{arc.return_state}' not found")

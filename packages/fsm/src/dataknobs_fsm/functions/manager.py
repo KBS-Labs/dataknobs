@@ -241,6 +241,14 @@ class FunctionWrapper:
 class InterfaceWrapper:
     """Wrapper that adapts functions to specific FSM interfaces."""
 
+    _is_wrapped: bool = False
+    """Set by the config builder on an inline function it has already adapted.
+
+    Declared here because the builder sets it on whatever ``resolve_function``
+    returned, which is a ``FunctionWrapper`` *or* one of these --- and only
+    the former declared it, so the reader had to ask with ``getattr``.
+    """
+
     def __init__(self, wrapper: FunctionWrapper, interface: type):
         """Initialize interface wrapper.
 

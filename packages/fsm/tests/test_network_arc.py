@@ -3,13 +3,12 @@
 import pytest
 
 from dataknobs_fsm.core import (
-    Arc,
     ArcDefinition,
     ArcExecution,
     DataIsolationMode,
     NetworkResourceRequirements,
     PushArc,
-    State,
+    StateDefinition,
     StateNetwork,
 )
 from dataknobs_fsm.core.exceptions import FunctionError
@@ -35,40 +34,40 @@ class TestStateNetwork:
         network = StateNetwork("test")
 
         # Add normal state
-        state1 = State(name="state1")
+        state1 = StateDefinition(name="state1")
         network.add_state(state1)
 
         assert "state1" in network._states
         assert network.get_state("state1") == state1
 
         # Add initial state
-        state2 = State(name="initial")
+        state2 = StateDefinition(name="initial")
         network.add_state(state2, initial=True)
 
         assert network._initial_state == "initial"
 
         # Add final state
-        state3 = State(name="final")
+        state3 = StateDefinition(name="final")
         network.add_state(state3, final=True)
 
         assert "final" in network._final_states
 
         # Try adding duplicate
         with pytest.raises(ValueError, match="already exists"):
-            network.add_state(State(name="state1"))
+            network.add_state(StateDefinition(name="state1"))
 
         # Try adding second initial state
         with pytest.raises(ValueError, match="Initial state already set"):
-            network.add_state(State(name="another"), initial=True)
+            network.add_state(StateDefinition(name="another"), initial=True)
 
     def test_remove_state(self):
         """Test removing states from network."""
         network = StateNetwork("test")
 
         # Add states
-        network.add_state(State(name="state1"))
-        network.add_state(State(name="state2"), initial=True)
-        network.add_state(State(name="state3"), final=True)
+        network.add_state(StateDefinition(name="state1"))
+        network.add_state(StateDefinition(name="state2"), initial=True)
+        network.add_state(StateDefinition(name="state3"), final=True)
 
         # Add arc
         network.add_arc("state1", "state2")
@@ -96,9 +95,9 @@ class TestStateNetwork:
         network = StateNetwork("test")
 
         # Add states
-        network.add_state(State(name="s1"))
-        network.add_state(State(name="s2"))
-        network.add_state(State(name="s3"))
+        network.add_state(StateDefinition(name="s1"))
+        network.add_state(StateDefinition(name="s2"))
+        network.add_state(StateDefinition(name="s3"))
 
         # Add arc
         arc1 = network.add_arc("s1", "s2", pre_test="check_condition")
@@ -127,8 +126,8 @@ class TestStateNetwork:
         network = StateNetwork("test")
 
         # Setup states and arcs
-        network.add_state(State(name="s1"))
-        network.add_state(State(name="s2"))
+        network.add_state(StateDefinition(name="s1"))
+        network.add_state(StateDefinition(name="s2"))
         arc = network.add_arc("s1", "s2")
 
         # Remove arc
@@ -138,7 +137,7 @@ class TestStateNetwork:
         assert len(network.get_arcs_from_state("s1")) == 0
 
         # Try removing non-existent arc
-        fake_arc = Arc("s1", "s2")
+        fake_arc = ArcDefinition(target_state="s2", source_state="s1")
         with pytest.raises(ValueError, match="Arc not found"):
             network.remove_arc(fake_arc)
 
@@ -147,9 +146,9 @@ class TestStateNetwork:
         network = StateNetwork("test")
 
         # Setup network
-        network.add_state(State(name="s1"))
-        network.add_state(State(name="s2"))
-        network.add_state(State(name="s3"))
+        network.add_state(StateDefinition(name="s1"))
+        network.add_state(StateDefinition(name="s2"))
+        network.add_state(StateDefinition(name="s3"))
 
         arc1 = network.add_arc("s1", "s2")
         arc2 = network.add_arc("s1", "s3")
@@ -182,8 +181,8 @@ class TestStateNetwork:
         assert "No final states" in str(errors)
 
         # Add initial and final states
-        network.add_state(State(name="initial"), initial=True)
-        network.add_state(State(name="final"), final=True)
+        network.add_state(StateDefinition(name="initial"), initial=True)
+        network.add_state(StateDefinition(name="final"), final=True)
 
         # Add connection
         network.add_arc("initial", "final")
@@ -193,14 +192,14 @@ class TestStateNetwork:
         assert len(errors) == 0
 
         # Add unreachable state
-        network.add_state(State(name="unreachable"))
+        network.add_state(StateDefinition(name="unreachable"))
 
         is_valid, errors = network.validate()
         assert not is_valid
         assert any("unreachable" in error for error in errors)
 
         # Add state with no outgoing arcs
-        network.add_state(State(name="dead_end"))
+        network.add_state(StateDefinition(name="dead_end"))
         network.add_arc("initial", "dead_end")
 
         is_valid, errors = network.validate()
@@ -212,12 +211,12 @@ class TestStateNetwork:
         network = StateNetwork("test")
 
         # Create branching network
-        network.add_state(State(name="start"), initial=True)
-        network.add_state(State(name="a"))
-        network.add_state(State(name="b"))
-        network.add_state(State(name="c"))
-        network.add_state(State(name="end"), final=True)
-        network.add_state(State(name="isolated"))
+        network.add_state(StateDefinition(name="start"), initial=True)
+        network.add_state(StateDefinition(name="a"))
+        network.add_state(StateDefinition(name="b"))
+        network.add_state(StateDefinition(name="c"))
+        network.add_state(StateDefinition(name="end"), final=True)
+        network.add_state(StateDefinition(name="isolated"))
 
         network.add_arc("start", "a")
         network.add_arc("start", "b")
@@ -239,10 +238,10 @@ class TestStateNetwork:
         network = StateNetwork("test")
 
         # Create network with cycle
-        network.add_state(State(name="s1"))
-        network.add_state(State(name="s2"))
-        network.add_state(State(name="s3"))
-        network.add_state(State(name="s4"), final=True)
+        network.add_state(StateDefinition(name="s1"))
+        network.add_state(StateDefinition(name="s2"))
+        network.add_state(StateDefinition(name="s3"))
+        network.add_state(StateDefinition(name="s4"), final=True)
 
         network.add_arc("s1", "s2")
         network.add_arc("s2", "s3")
@@ -264,8 +263,8 @@ class TestStateNetwork:
 
         # Add states with resource requirements
         # (In real usage, states would have actual resource requirements)
-        network.add_state(State(name="s1"))
-        network.add_state(State(name="s2"))
+        network.add_state(StateDefinition(name="s1"))
+        network.add_state(StateDefinition(name="s2"))
 
         # Get requirements (should be empty for basic states)
         reqs = network.get_resource_requirements()
@@ -294,9 +293,9 @@ class TestStateNetwork:
         network = StateNetwork("test", "Test network")
 
         # Build network
-        network.add_state(State(name="start"), initial=True)
-        network.add_state(State(name="middle"))
-        network.add_state(State(name="end"), final=True)
+        network.add_state(StateDefinition(name="start"), initial=True)
+        network.add_state(StateDefinition(name="middle"))
+        network.add_state(StateDefinition(name="end"), final=True)
 
         network.add_arc("start", "middle", pre_test="check")
         network.add_arc("middle", "end", transform="process")

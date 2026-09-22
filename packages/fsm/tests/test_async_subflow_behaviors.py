@@ -101,16 +101,58 @@ async def test_async_push_arc_enforces_max_depth() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
-async def test_async_push_to_nonexistent_network_fails() -> None:
-    """A push whose target network does not exist fails the record cleanly.
+MISSING_TARGET_CONFIG: dict = {
+    "name": "missing_target",
+    "main_network": "main",
+    "networks": [
+        {
+            "name": "main",
+            "states": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "arcs": [
+                        {
+                            "target": "after",
+                            "target_network": "does_not_exist",
+                            "return_state": "after",
+                        }
+                    ],
+                },
+                {"name": "after", "arcs": [{"target": "end"}]},
+                {"name": "end", "is_end": True},
+            ],
+        },
+    ],
+}
 
-    ``_execute_push_arc`` returns False when the target network is missing, so
-    the only transition out of ``start`` fails and the run reports failure
-    rather than silently entering nothing.
+
+def test_a_push_to_an_undefined_network_is_refused_at_build_time() -> None:
+    """A ``target_network`` naming nothing is a config error, caught at build.
+
+    ``_validate_completeness`` was written to catch this and had never run: it
+    reads arcs through ``network.get_arcs_from_state``, which used to return
+    the network's own arc type, so ``isinstance(arc, PushArc)`` was always
+    false and the whole push branch was dead. One arc type makes it live, and
+    a typo in ``target_network`` is now answered once, at build, instead of
+    once per record for the life of the run.
+    """
+    with pytest.raises(ValueError, match="Target network 'does_not_exist' not found"):
+        AsyncSimpleFSM(MISSING_TARGET_CONFIG)
+
+
+@pytest.mark.asyncio
+async def test_a_push_whose_network_disappears_after_build_fails_the_record() -> None:
+    """The engine's own guard, which the build-time check does not replace.
+
+    Networks can be removed from a built FSM, so the runtime path still has to
+    answer for a target that is gone. The config is valid here --- the network
+    exists at build --- and is removed afterwards, which is the only way to
+    reach the guard now that a *statically* undefined target is refused
+    earlier.
     """
     config = {
-        "name": "missing_target",
+        "name": "target_removed",
         "main_network": "main",
         "networks": [
             {
@@ -122,7 +164,7 @@ async def test_async_push_to_nonexistent_network_fails() -> None:
                         "arcs": [
                             {
                                 "target": "after",
-                                "target_network": "does_not_exist",
+                                "target_network": "sub",
                                 "return_state": "after",
                             }
                         ],
@@ -131,16 +173,21 @@ async def test_async_push_to_nonexistent_network_fails() -> None:
                     {"name": "end", "is_end": True},
                 ],
             },
+            {
+                "name": "sub",
+                "states": [{"name": "only", "is_start": True, "is_end": True}],
+            },
         ],
     }
     fsm = AsyncSimpleFSM(config)
     try:
+        del fsm._fsm.networks["sub"]
         result = await fsm.process({"id": 1})
     finally:
         await fsm.close()
 
     assert result["success"] is False, (
-        f"a push to an undefined network should fail the record, not succeed (got {result})"
+        f"a push to a network that is gone should fail the record, not succeed (got {result})"
     )
 
 

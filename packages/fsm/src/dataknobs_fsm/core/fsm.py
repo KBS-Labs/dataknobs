@@ -175,6 +175,7 @@ if TYPE_CHECKING:
     from dataknobs_common import SyncLoopBridge
     from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
     from dataknobs_fsm.execution.context import ExecutionContext
+from dataknobs_fsm.core.arc import transform_function_names
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
 from dataknobs_fsm.functions.base import FunctionRegistry
@@ -449,10 +450,9 @@ class FSM:
 
         for network in self.networks.values():
             for arc in network.arcs.values():
-                if hasattr(arc, "pre_test") and arc.pre_test:
+                if arc.pre_test:
                     functions.add(arc.pre_test)
-                if hasattr(arc, "transform") and arc.transform:
-                    functions.add(arc.transform)
+                functions.update(transform_function_names(arc.transform))
 
         return functions
 

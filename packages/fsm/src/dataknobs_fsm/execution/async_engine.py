@@ -8,7 +8,7 @@ import inspect
 import logging
 import time
 from collections.abc import Callable, Mapping
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, assert_never
 
 from dataknobs_common.callbacks import run_callback_off_loop
 
@@ -17,7 +17,6 @@ from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
@@ -28,6 +27,7 @@ from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.functions.base import ValidationError as FSMValidationError
 from dataknobs_fsm.functions.base import as_state_test_callable
+from dataknobs_fsm.functions.base import as_validation_callable
 from dataknobs_fsm.functions.base import state_step_args
 from dataknobs_fsm.functions.base import RegisteredFunction
 from dataknobs_fsm.core.data_wrapper import ensure_dict
@@ -191,7 +191,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             elif context.data_mode == ProcessingMode.STREAM:
                 result = await self._execute_stream(context, max_transitions)
             else:
-                result = False, f"Unknown data mode: {context.data_mode}"
+                # ``ProcessingMode`` has exactly these three members, so the
+                # old ``result = False, "Unknown data mode"`` was unreachable
+                # --- and being unreachable, it would not have caught a fourth
+                # member anyway; it would simply have been the arm nobody
+                # noticed was never taken. ``assert_never`` makes adding one a
+                # *type* error here, which is the only form of this guard that
+                # can actually fire before the mode ships.
+                assert_never(context.data_mode)
 
             self._total_execution_time += time.time() - start_time
             return result
@@ -222,9 +229,19 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 if await self._is_final_state(context.current_state):
                     return self.finalize_single_result(context)
 
+                # ``_enter_initial_state`` sets the current state and fails the
+                # run when it cannot, so by here there is one. Named rather
+                # than assumed, because the transition lookup is keyed by it
+                # and a ``None`` reaching that lookup would be answered as
+                # "no transitions from state None" --- a dead end reported as
+                # an ordinary one.
+                current_state = context.current_state
+                if current_state is None:
+                    return False, "No current state to transition from"
+
                 # Get available transitions
                 transitions_available = await self._get_available_transitions(
-                    context.current_state, context, arc_name
+                    current_state, context, arc_name
                 )
 
                 if not transitions_available:
@@ -963,7 +980,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 context.current_state_owned_resources = {}
                 # Match the sync engine: only set last_error if a more specific
                 # upstream error has not already been recorded (don't clobber it).
-                if not hasattr(context, "last_error") or not context.last_error:
+                if not context.last_error:
                     context.last_error = f"Pre-validation failed for state '{state_name}'"
                 return False
 
@@ -1135,13 +1152,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     # exception, so a body that raised `TypeError` used to be
                     # re-run with other arguments and fail again in silence,
                     # with the record still reported as a success.
+                    validate = as_validation_callable(validator)
                     args = state_step_args(
-                        validator.validate,
+                        validate,
                         state_obj=state_obj,
                         record=ensure_dict(context.data),
                         context=context,
                     )
-                    result = await run_callback_off_loop(validator.validate, *args)
+                    result = await run_callback_off_loop(validate, *args)
 
                     if isinstance(result, dict):
                         # Merge validation results into context data
@@ -1172,9 +1190,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # can reach them via context.resources. When the caller pre-acquired
         # them (enter_state), reuse and don't release here — the caller owns
         # their lifecycle (mirrors the arc-resource ownership pattern).
-        owns_resources = state_resources is None
-        if owns_resources:
-            state_resources = self._acquire_state_resources(context, state)
+        # The resources acquired *here* are the ones released here; a caller
+        # that pre-acquired them owns their lifecycle. Tracked as the dict
+        # itself rather than as a boolean beside it, so the release site holds
+        # what it releases instead of a flag asserting it is non-None.
+        owned_resources: Dict[str, Any] | None = None
+        if state_resources is None:
+            owned_resources = self._acquire_state_resources(context, state)
+            state_resources = owned_resources
         try:
             for transform_func in transform_functions:
                 # Skip running transforms on a record that already failed an
@@ -1214,8 +1237,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             # Release only resources we acquired; caller-owned (pre-acquired)
             # resources are released by the caller (parity with the sync engine,
             # which keeps state resources allocated for child inheritance).
-            if owns_resources:
-                self._release_state_resources(context, state, state_resources)
+            if owned_resources is not None:
+                self._release_state_resources(context, state, owned_resources)
 
     @staticmethod
     def _coalesce_transform_result(result: Any, current_data: Any) -> Any:
@@ -1519,8 +1542,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         unified async engine neither leaks across transitions nor strands a
         subflow's resources on pop.
         """
-        owned = getattr(context, "current_state_owned_resources", None)
-        if owned:
+        owned = context.current_state_owned_resources
+        if owned and context.current_state:
             self._release_named_resources(
                 context,
                 owned,
@@ -1588,8 +1611,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         initial-state pre-validator surfaces *why* it rejected, not just that
         entry failed.
         """
-        specific = getattr(context, "last_error", None)
-        return specific or f"Failed to enter initial state '{state_name}'"
+        return context.last_error or f"Failed to enter initial state '{state_name}'"
 
     async def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
@@ -1611,47 +1633,6 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         """
         # Use base class implementation
         return self.is_final_state_common(state_name)
-
-    async def _is_final_state_legacy(self, state_name: str | None) -> bool:
-        """Legacy implementation kept for reference."""
-        if not state_name:
-            return False
-
-        # Get the main network - could be a string or object
-        main_network_ref = getattr(self.fsm, "main_network", None)
-
-        if main_network_ref is None:
-            # If no main network specified, check all networks
-            for network in self.fsm.networks.values():
-                if state_name in network.states:
-                    state = network.states[state_name]
-                    if (
-                        state.is_end_state()
-                        if hasattr(state, "is_end_state")
-                        else state.type == StateType.END
-                    ):
-                        return True
-            return False
-
-        # Handle case where main_network is already a network object (FSM wrapper)
-        if hasattr(main_network_ref, "states"):
-            main_network = main_network_ref
-        # Handle case where main_network is a string (core FSM)
-        elif isinstance(main_network_ref, str) and main_network_ref in self.fsm.networks:
-            main_network = self.fsm.networks[main_network_ref]
-        else:
-            return False
-
-        # Check if the state exists and is an end state
-        if state_name in main_network.states:
-            state = main_network.states[state_name]
-            return (
-                state.is_end_state()
-                if hasattr(state, "is_end_state")
-                else state.type == StateType.END
-            )
-
-        return False
 
     async def _get_current_network(self, context: ExecutionContext) -> StateNetwork | None:
         """Get the current network from context using common network selector.

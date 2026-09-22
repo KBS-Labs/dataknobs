@@ -81,6 +81,11 @@ class DataAggregator(ITransformFunction):
 The pipeline FSM uses a simple three-state network:
 
 ```python
+from dataknobs_fsm.core.fsm import FSM
+from dataknobs_fsm.core.network import StateNetwork
+from dataknobs_fsm.core.state import StateDefinition, StateType
+
+
 def create_simple_pipeline_fsm() -> FSM:
     # Create FSM
     fsm = FSM(name="data_pipeline")
@@ -93,9 +98,11 @@ def create_simple_pipeline_fsm() -> FSM:
 
     # Create network with states
     network = StateNetwork(name="main")
-    network.add_state(State(name="start", type="start"), initial=True)
-    network.add_state(State(name="process", type="normal"))
-    network.add_state(State(name="end", type="end"), final=True)
+    network.add_state(
+        StateDefinition(name="start", type=StateType.START), initial=True
+    )
+    network.add_state(StateDefinition(name="process", type=StateType.NORMAL))
+    network.add_state(StateDefinition(name="end", type=StateType.END), final=True)
 
     # Connect states with arcs
     network.add_arc("start", "process")

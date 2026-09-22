@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple
 
 from dataknobs_fsm.core.data_wrapper import StateDataWrapper, ensure_dict, wrap_for_lambda
-from dataknobs_fsm.core.arc import ArcDefinition
+from dataknobs_fsm.core.arc import ArcDefinition, PushArc
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
@@ -84,29 +84,27 @@ class BaseExecutionEngine(ABC):
         Returns:
             Name of initial state or None.
         """
-        # Try to get main_network attribute
-        main_network = getattr(self.fsm, "main_network", None)
-
-        # Handle string reference to network
-        if isinstance(main_network, str):
-            if main_network in self.fsm.networks:
-                network = self.fsm.networks[main_network]
-                if hasattr(network, "initial_states") and network.initial_states:
-                    return next(iter(network.initial_states))
-        # Handle direct network object
-        elif main_network and hasattr(main_network, "initial_states"):
-            if main_network.initial_states:
-                return next(iter(main_network.initial_states))
+        # ``FSM.main_network`` is a ``StateNetwork | None`` and every value in
+        # ``FSM.networks`` is a ``StateNetwork``, so this reads them as such.
+        # It used to open with ``getattr(self.fsm, "main_network", None)``,
+        # which discards that and returns ``Any`` --- and then branched on
+        # ``isinstance(main_network, str)`` and ``hasattr(network,
+        # "initial_states")``, neither of which can hold. Those branches were
+        # the reason the type was thrown away and the only thing the loss of
+        # it bought, so they go together: the ``Any`` they created is where
+        # this method's and its callers' type findings came from.
+        main_network = self.fsm.main_network
+        if main_network is not None and main_network.initial_states:
+            return next(iter(main_network.initial_states))
 
         # Fallback to fsm.name for compatibility
-        if hasattr(self.fsm, "name") and self.fsm.name in self.fsm.networks:
-            network = self.fsm.networks[self.fsm.name]
-            if hasattr(network, "initial_states") and network.initial_states:
-                return next(iter(network.initial_states))
+        named = self.fsm.networks.get(self.fsm.name)
+        if named is not None and named.initial_states:
+            return next(iter(named.initial_states))
 
         # Last resort: check all networks for any initial state
         for network in self.fsm.networks.values():
-            if hasattr(network, "initial_states") and network.initial_states:
+            if network.initial_states:
                 return next(iter(network.initial_states))
 
         return None
@@ -488,23 +486,21 @@ class BaseExecutionEngine(ABC):
             return True
         return False
 
-    def parse_push_target(self, push_arc: Any) -> Tuple[str, str | None]:
+    def parse_push_target(self, push_arc: PushArc) -> Tuple[str, str | None]:
         """Split a push arc's ``target_network`` into ``(network, initial?)``.
 
-        Supports the ``"network"`` and ``"network:initial_state"`` forms.
+        Supports the ``"network"`` and ``"network:initial_state"`` forms. The
+        rule lives on :meth:`PushArc.parse_target`, because the syntax belongs
+        to the field; this stays as the engines' door onto it.
 
         Returns:
             ``(network_name, explicit_initial_state_or_None)``.
         """
-        target = push_arc.target_network
-        if ":" in target:
-            network_name, initial_state = target.split(":", 1)
-            return network_name, initial_state.strip()
-        return target, None
+        return push_arc.parse_target()
 
     def resolve_subflow_initial_state(
         self,
-        target_network: Any,
+        target_network: StateNetwork,
         network_name: str,
         explicit_initial_state: str | None,
     ) -> str | None:
@@ -576,15 +572,21 @@ class BaseExecutionEngine(ABC):
         overwriting them, so :meth:`rollback_push` (failed entry) and the pop
         (result mapping + resource restore) can undo/consume them precisely.
         """
-        prev_parent_state_resources = getattr(context, "parent_state_resources", {})
+        prev_parent_state_resources = context.parent_state_resources
         # The pushing state's own resources are inherited by the sub-network
         # while it runs (so the push must not release them); they are released
         # for the parent level on pop, when the parent resumes at return_state.
         # Record the pushing state's owner key (only when it owns resources) so
         # the pop can release exactly that state's acquisitions.
+        #
+        # ``current_state`` is named in the condition rather than assumed by
+        # it. Resources are only ever acquired for a state that is current, so
+        # a context owning some has one --- but that is an argument about the
+        # caller, and the owner key is built *from* the name, so the name is
+        # what the guard should be about.
         pushing_state_owner = (
             self._state_resource_owner_for_name(context, context.current_state)
-            if getattr(context, "current_state_owned_resources", None)
+            if context.current_state and context.current_state_owned_resources
             else None
         )
         parent_data = context.data
@@ -742,7 +744,7 @@ class BaseExecutionEngine(ABC):
         }
 
     @abstractmethod
-    def execute(
+    async def execute(
         self,
         context: ExecutionContext,
         data: Any = None,
@@ -751,7 +753,12 @@ class BaseExecutionEngine(ABC):
     ) -> Tuple[bool, Any]:
         """Execute the FSM with given context.
 
-        This method must be implemented by sync and async engines.
+        Declared ``async`` because the one engine there is, is. It was
+        declared synchronous here while ``AsyncExecutionEngine.execute`` ---
+        the only implementation in the package --- is a coroutine function,
+        so the base described a signature nothing implemented and the
+        subclass was reported as violating it. A synchronous caller reaches
+        this through ``FSM.get_sync_bridge()``, not through a second engine.
 
         Args:
             context: Execution context.

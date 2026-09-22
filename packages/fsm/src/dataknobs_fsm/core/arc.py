@@ -61,12 +61,42 @@ class TransformSpec:
     params: Dict[str, Any] = field(default_factory=dict)
 
 
+def transform_function_names(
+    transform: "str | TransformSpec | list[str | TransformSpec] | None",
+) -> list[str]:
+    """Every function name an arc's ``transform`` field refers to.
+
+    The field carries four shapes --- nothing, one name, one
+    :class:`TransformSpec` carrying a name plus params, or a list of names and
+    specs --- and a caller that wants "which functions does this arc use"
+    should not have to know that. ``FSM.get_all_functions`` did: it added
+    ``arc.transform`` to a set whole, so a spec went in as an object and a
+    *list* went in as an unhashable value, raising ``TypeError`` on any arc
+    configured with chained transforms.
+    """
+    if transform is None:
+        return []
+    items = transform if isinstance(transform, list) else [transform]
+    return [item.name if isinstance(item, TransformSpec) else item for item in items]
+
+
 @dataclass
 class ArcDefinition:
     """Definition of an arc between states.
 
     This class defines the static properties of an arc,
     including the transition logic and resource requirements.
+
+    There used to be a second arc type. ``StateNetwork`` kept its own ``Arc``
+    --- source, target, pre-test, transform, metadata --- in ``_arcs`` and
+    ``_arc_index``, while the engines read ``ArcDefinition`` off
+    ``StateDefinition.outgoing_arcs``, and the two were populated by different
+    writers. The network's ``arcs`` property existed to translate between them
+    and rebuilt a *lossy* ``ArcDefinition`` on every call, dropping
+    ``priority``, ``definition_order`` and ``required_resources`` --- so the
+    accessor that looked like it answered "what arcs are here" answered with
+    arcs the engines would have ordered differently. This is now the only arc
+    type, and :meth:`StateNetwork.add_arc` stores one object in every index.
     """
 
     target_state: str
@@ -80,8 +110,24 @@ class ArcDefinition:
     required_resources: Dict[str, str] = field(default_factory=dict)
     # e.g., {'database': 'main_db', 'llm': 'gpt4'}
 
+    source_state: str = ""
+    """The state this arc leaves, stamped by :meth:`StateNetwork.add_arc`.
+
+    Empty on an arc that has not been added to a network yet. It is last in the
+    field order, and defaulted, because an arc reached through
+    ``state.outgoing_arcs`` already knows its source from the state holding it
+    --- the field exists so an arc reached through the *network's* index knows
+    it too, without the index having to carry the answer alongside.
+    """
+
     def __hash__(self) -> int:
-        """Make ArcDefinition hashable."""
+        """Make ArcDefinition hashable.
+
+        ``source_state`` participates: two arcs that differ only in where they
+        start are different arcs, and a network keyed on the old tuple collided
+        them.
+        """
+        transform_key: tuple[str | None, ...] | str | None
         if isinstance(self.transform, list):
             transform_key = tuple(
                 t.name if isinstance(t, TransformSpec) else t for t in self.transform
@@ -90,7 +136,26 @@ class ArcDefinition:
             transform_key = self.transform.name
         else:
             transform_key = self.transform
-        return hash((self.target_state, self.pre_test, transform_key, self.priority))
+        return hash(
+            (self.source_state, self.target_state, self.pre_test, transform_key, self.priority)
+        )
+
+    @property
+    def name(self) -> str:
+        """The arc's name: ``metadata['name']``, else ``source->target``.
+
+        Carried over from the retired ``StateNetwork.Arc``, which had it while
+        ``ArcDefinition`` did not. The engines filter by it --- ``execute(...,
+        arc_name=...)`` reaches ``[arc for arc in state.outgoing_arcs if
+        hasattr(arc, "name") and arc.name == arc_name]`` --- and
+        ``state.outgoing_arcs`` held the type *without* the property, so that
+        filter matched nothing and the guard that should have said so read as
+        an ordinary "no arc by that name".
+        """
+        name = self.metadata.get("name")
+        if isinstance(name, str):
+            return name
+        return f"{self.source_state}->{self.target_state}"
 
 
 @dataclass
@@ -115,6 +180,27 @@ class PushArc(ArcDefinition):
     result_mapping: Dict[str, str] = field(default_factory=dict)
     # e.g., {'child_result': 'parent_field'}
 
+    def parse_target(self) -> "tuple[str, str | None]":
+        """Split ``target_network`` into ``(network, explicit_initial_state?)``.
+
+        ``target_network`` carries two forms --- ``"validation"`` enters the
+        sub-network at its own initial state, ``"validation:deep_check"``
+        enters it at a named one --- and the syntax is a property of this
+        field, so the one reader of it lives here.
+
+        It did not. The engine split the string and the config builder's
+        completeness check compared the whole of it against the known network
+        names, which made ``"validation:deep_check"`` --- a documented form ---
+        report as a missing network. That never surfaced because the check
+        itself could not run: it reached arcs through the network's index,
+        which held a different arc type, so ``isinstance(arc, PushArc)`` was
+        always false and the branch was dead.
+        """
+        if ":" in self.target_network:
+            network_name, initial_state = self.target_network.split(":", 1)
+            return network_name, initial_state.strip()
+        return self.target_network, None
+
 
 class ArcExecution:
     """Handles the execution of arc transitions.
@@ -124,7 +210,7 @@ class ArcExecution:
     and transaction participation.
     """
 
-    def __init__(self, arc_def: ArcDefinition, source_state: str, function_registry):
+    def __init__(self, arc_def: ArcDefinition, source_state: str, function_registry: Any) -> None:
         """Initialize arc execution.
 
         Args:
@@ -258,11 +344,12 @@ class ArcExecution:
         owns_resources = arc_resources is None
 
         try:
-            if owns_resources:
-                # Get state resources from context if available
-                state_resources = getattr(context, "current_state_resources", None)
+            # Branching on the value rather than on ``owns_resources`` beside
+            # it: the flag and the value say the same thing, and only one of
+            # them carries it to the reader.
+            if arc_resources is None:
                 # Allocate required resources (merging with state resources)
-                resources = self._allocate_resources(context, state_resources)
+                resources = self._allocate_resources(context, context.current_state_resources)
             else:
                 resources = arc_resources
 
@@ -442,12 +529,24 @@ class ArcExecution:
         Returns:
             ``FunctionContext`` (default) or factory output.
         """
-        # Derive a representative function name for the context
+        # Derive a representative function name for the context. A transform
+        # is a name, a ``TransformSpec`` carrying that name plus params, or a
+        # list of either, so unwrapping the spec is done once here rather than
+        # left to whoever reads ``function_name`` and finds an object.
         transform = self.arc_def.transform
+        first: str | TransformSpec | None
         if isinstance(transform, list):
-            func_name = transform[0] if transform else self.arc_def.pre_test
+            first = transform[0] if transform else None
         else:
-            func_name = transform or self.arc_def.pre_test
+            first = transform
+        named = first if first is not None else self.arc_def.pre_test
+        func_name = named.name if isinstance(named, TransformSpec) else named
+        if func_name is None:
+            # An arc with neither a transform nor a pre-test still has a name.
+            # ``FunctionContext.function_name`` is declared ``str``, so the
+            # ``None`` this passed was never a value the contract allowed ---
+            # and it reached logs and error messages as one.
+            func_name = self.arc_def.name
 
         func_context = FunctionContext(
             state_name=self.source_state,
@@ -527,15 +626,11 @@ class ArcExecution:
                 resources[resource_name] = resource
 
                 # Track for cleanup (only arc-specific resources)
-                if not hasattr(context, "_arc_acquired_resources"):
-                    context._arc_acquired_resources = {}
                 context._arc_acquired_resources[resource_name] = owner_id
 
             except Exception as e:
                 # Resource acquisition failed - clean up only arc-specific resources
-                self._release_arc_resources(
-                    context, getattr(context, "_arc_acquired_resources", {})
-                )
+                self._release_arc_resources(context, context._arc_acquired_resources)
                 # Bounded message AND bounded details: `details` is echoed by
                 # generic renderers just as the message is, so relaying the
                 # provider's text there would reopen what the message closes.
@@ -573,8 +668,7 @@ class ArcExecution:
                 self._log_error(f"Failed to release arc resource {resource_name}: {e}")
 
         # Clear arc resources tracking
-        if hasattr(context, "_arc_acquired_resources"):
-            context._arc_acquired_resources = {}
+        context._arc_acquired_resources = {}
 
     def _release_resources(
         self,
@@ -593,7 +687,7 @@ class ArcExecution:
         Args:
             context: Execution context.
         """
-        arc_acquired = getattr(context, "_arc_acquired_resources", None)
+        arc_acquired = context._arc_acquired_resources
         if not arc_acquired:
             return
         # _release_arc_resources releases by (name, owner_id) and clears the map.

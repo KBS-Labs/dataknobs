@@ -6,52 +6,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set, Tuple
 
-from dataknobs_fsm.core.state import State
-
-
-@dataclass
-class Arc:
-    """Represents an arc (transition) between states.
-
-    Attributes:
-        source_state: Name of the source state.
-        target_state: Name of the target state.
-        pre_test: Optional pre-test function name.
-        transform: Optional transform function name.
-        metadata: Additional arc metadata.
-    """
-
-    source_state: str
-    target_state: str
-    pre_test: str | None = None
-    transform: str | list[str] | None = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def __hash__(self) -> int:
-        """Make Arc hashable for use in sets."""
-        transform_key = (
-            tuple(self.transform) if isinstance(self.transform, list) else self.transform
-        )
-        return hash((self.source_state, self.target_state, self.pre_test, transform_key))
-
-    def __eq__(self, other: object) -> bool:
-        """Check equality."""
-        if not isinstance(other, Arc):
-            return False
-        return (
-            self.source_state == other.source_state
-            and self.target_state == other.target_state
-            and self.pre_test == other.pre_test
-            and self.transform == other.transform
-        )
-
-    @property
-    def name(self) -> str:
-        """Generate a name for the arc."""
-        # Use metadata name if available, otherwise generate from states
-        if "name" in self.metadata:
-            return self.metadata["name"]
-        return f"{self.source_state}->{self.target_state}"
+from dataknobs_fsm.core.arc import ArcDefinition, TransformSpec
+from dataknobs_fsm.core.state import StateDefinition
 
 
 @dataclass
@@ -128,13 +84,13 @@ class StateNetwork:
         self.description = description
 
         # State management
-        self._states: Dict[str, State] = {}
+        self._states: Dict[str, StateDefinition] = {}
         self._initial_state: str | None = None
         self._final_states: Set[str] = set()
 
         # Arc management
-        self._arcs: List[Arc] = []
-        self._arc_index: Dict[str, List[Arc]] = {}  # source_state -> [arcs]
+        self._arcs: List[ArcDefinition] = []
+        self._arc_index: Dict[str, List[ArcDefinition]] = {}  # source_state -> [arcs]
 
         # Resource tracking
         self._resource_requirements = NetworkResourceRequirements()
@@ -144,30 +100,23 @@ class StateNetwork:
         self._validation_cache: Dict[str, Any] | None = None
 
     @property
-    def states(self) -> Dict[str, State]:
+    def states(self) -> Dict[str, StateDefinition]:
         """Get all states in the network."""
         return self._states
 
     @property
-    def arcs(self) -> Dict[str, Any]:
-        """Get all arcs in the network."""
-        # Import here to avoid circular dependency
-        from dataknobs_fsm.core.arc import ArcDefinition
+    def arcs(self) -> Dict[str, ArcDefinition]:
+        """The network's arcs, keyed ``"source:target"``.
 
-        # Return arcs as a dict indexed by "source:target"
-        # Convert Arc to ArcDefinition for compatibility
-        arc_dict = {}
-        for arc in self._arcs:
-            key = f"{arc.source_state}:{arc.target_state}"
-            # Create ArcDefinition from Arc
-            arc_def = ArcDefinition(
-                target_state=arc.target_state, pre_test=arc.pre_test, transform=arc.transform
-            )
-            # Copy metadata if it exists
-            if hasattr(arc, "metadata") and arc.metadata:
-                arc_def.metadata = arc.metadata.copy()
-            arc_dict[key] = arc_def
-        return arc_dict
+        This used to convert each stored ``Arc`` into a freshly built
+        ``ArcDefinition`` "for compatibility", once per call and per arc, and
+        the conversion was lossy: ``priority``, ``definition_order`` and
+        ``required_resources`` had nowhere to go, so the arcs this returned
+        would have been evaluated in a different order than the ones the
+        engines hold. There is one arc type now, so this hands back the stored
+        arcs themselves.
+        """
+        return {f"{arc.source_state}:{arc.target_state}": arc for arc in self._arcs}
 
     @property
     def initial_states(self) -> Set[str]:
@@ -219,7 +168,7 @@ class StateNetwork:
         """Check if network supports streaming."""
         return self._streaming_enabled
 
-    def add_state(self, state: State, initial: bool = False, final: bool = False) -> None:
+    def add_state(self, state: StateDefinition, initial: bool = False, final: bool = False) -> None:
         """Add a state to the network.
 
         Args:
@@ -269,12 +218,21 @@ class StateNetwork:
             self._initial_state = None
         self._final_states.discard(state_name)
 
-        # Remove arcs involving this state
-        self._arcs = [
+        # Remove arcs involving this state. The state's own outgoing arcs go
+        # with it; the arcs *into* it are held by other states, so those lists
+        # are pruned too --- an arc surviving on a source state's
+        # ``outgoing_arcs`` after its target is gone is one the engine would
+        # still offer and then fail to follow.
+        removed = [
             arc
             for arc in self._arcs
-            if arc.source_state != state_name and arc.target_state != state_name
+            if arc.source_state == state_name or arc.target_state == state_name
         ]
+        self._arcs = [arc for arc in self._arcs if arc not in removed]
+        for arc in removed:
+            source = self._states.get(arc.source_state)
+            if source is not None and arc in source.outgoing_arcs:
+                source.outgoing_arcs.remove(arc)
 
         # Rebuild arc index
         self._rebuild_arc_index()
@@ -290,10 +248,21 @@ class StateNetwork:
         source_state: str,
         target_state: str,
         pre_test: str | None = None,
-        transform: str | list[str] | None = None,
+        transform: "str | TransformSpec | list[str | TransformSpec] | None" = None,
         metadata: Dict[str, Any] | None = None,
-    ) -> Arc:
-        """Add an arc between two states.
+        definition: ArcDefinition | None = None,
+    ) -> ArcDefinition:
+        """Add an arc between two states, in every index the network keeps.
+
+        **This is the only writer.** The network holds its arcs twice over --- in
+        ``_arcs`` / ``_arc_index``, which its own accessors read, and on the
+        source state's ``outgoing_arcs``, which is the list the execution
+        engines read and the *only* one they read. Maintaining one and not the
+        other is how a network could pass ``validate()``, answer
+        ``get_arcs_from_state()`` and report no transitions at execution time.
+        So one call writes one object into all of them; they are the same
+        object, not equal copies, because copies drift the first time one is
+        edited.
 
         Args:
             source_state: Source state name.
@@ -301,40 +270,55 @@ class StateNetwork:
             pre_test: Optional pre-test function name.
             transform: Optional transform function name.
             metadata: Optional arc metadata.
+            definition: An already-built arc to store instead of constructing
+                one from the arguments above. A caller that has resolved
+                functions, a priority or a definition order --- as
+                :class:`~dataknobs_fsm.config.builder.FSMBuilder` has ---
+                passes it here, so its arc is *the* arc rather than a second
+                one built alongside a lossy copy. ``source_state`` is stamped
+                onto it; ``target_state`` must agree with the argument.
 
         Returns:
-            Created arc.
+            The stored arc: ``definition`` when one was given, else the arc
+            built from the arguments.
 
         Raises:
-            ValueError: If states don't exist.
+            ValueError: If either state is unknown, or if ``definition``
+                names a different target than ``target_state``.
         """
         if source_state not in self._states:
             raise ValueError(f"Source state '{source_state}' not found")
         if target_state not in self._states:
             raise ValueError(f"Target state '{target_state}' not found")
+        if definition is not None and definition.target_state != target_state:
+            raise ValueError(
+                f"Arc definition targets '{definition.target_state}' but was added "
+                f"as an arc to '{target_state}'"
+            )
 
-        arc = Arc(
-            source_state=source_state,
-            target_state=target_state,
-            pre_test=pre_test,
-            transform=transform,
-            metadata=metadata or {},
+        arc = (
+            definition
+            if definition is not None
+            else ArcDefinition(
+                target_state=target_state,
+                pre_test=pre_test,
+                transform=transform,
+                metadata=metadata or {},
+            )
         )
+        arc.source_state = source_state
 
         self._arcs.append(arc)
-
-        # Update arc index
-        if source_state not in self._arc_index:
-            self._arc_index[source_state] = []
-        self._arc_index[source_state].append(arc)
+        self._arc_index.setdefault(source_state, []).append(arc)
+        self._states[source_state].outgoing_arcs.append(arc)
 
         # Invalidate validation cache
         self._validation_cache = None
 
         return arc
 
-    def remove_arc(self, arc: Arc) -> None:
-        """Remove an arc from the network.
+    def remove_arc(self, arc: ArcDefinition) -> None:
+        """Remove an arc from every index :meth:`add_arc` wrote it to.
 
         Args:
             arc: Arc to remove.
@@ -353,10 +337,15 @@ class StateNetwork:
             if not self._arc_index[arc.source_state]:
                 del self._arc_index[arc.source_state]
 
+        # And the source state's own list, which is what the engines read.
+        source = self._states.get(arc.source_state)
+        if source is not None and arc in source.outgoing_arcs:
+            source.outgoing_arcs.remove(arc)
+
         # Invalidate validation cache
         self._validation_cache = None
 
-    def get_state(self, name: str) -> State | None:
+    def get_state(self, name: str) -> StateDefinition | None:
         """Get a state by name.
 
         Args:
@@ -367,7 +356,7 @@ class StateNetwork:
         """
         return self._states.get(name)
 
-    def get_arcs_from_state(self, state_name: str) -> List[Arc]:
+    def get_arcs_from_state(self, state_name: str) -> List[ArcDefinition]:
         """Get all arcs originating from a state.
 
         Args:
@@ -378,7 +367,7 @@ class StateNetwork:
         """
         return self._arc_index.get(state_name, [])
 
-    def get_arcs_to_state(self, state_name: str) -> List[Arc]:
+    def get_arcs_to_state(self, state_name: str) -> List[ArcDefinition]:
         """Get all arcs targeting a state.
 
         Args:
@@ -462,18 +451,19 @@ class StateNetwork:
         Returns:
             Dictionary mapping resources to dependent states.
         """
-        dependencies = {}
+        # Keyed by the resource's *name*, which is what the signature and the
+        # docstring both say. It used to key by the ``ResourceConfig`` object,
+        # so the returned mapping did not have the shape it declared and no
+        # caller could look a resource up by the name it configured it under.
+        dependencies: Dict[str, Set[str]] = {}
 
         for state_name, state in self._states.items():
-            if hasattr(state, "resource_requirements"):
-                for resource in state.resource_requirements:
-                    if resource not in dependencies:
-                        dependencies[resource] = set()
-                    dependencies[resource].add(state_name)
+            for resource in state.resource_requirements:
+                dependencies.setdefault(resource.name, set()).add(state_name)
 
         return dependencies
 
-    def _update_resource_requirements(self, state: State) -> None:
+    def _update_resource_requirements(self, state: StateDefinition) -> None:
         """Update resource requirements based on a state.
 
         Args:
@@ -581,10 +571,7 @@ class StateNetwork:
             "description": self.description,
             "initial_state": self._initial_state,
             "final_states": list(self._final_states),
-            "states": {
-                name: state.to_dict() if hasattr(state, "to_dict") else str(state)
-                for name, state in self._states.items()
-            },
+            "states": {name: state.to_dict() for name, state in self._states.items()},
             "arcs": [
                 {
                     "source": arc.source_state,
@@ -592,6 +579,9 @@ class StateNetwork:
                     "pre_test": arc.pre_test,
                     "transform": arc.transform,
                     "metadata": arc.metadata,
+                    "priority": arc.priority,
+                    "definition_order": arc.definition_order,
+                    "required_resources": arc.required_resources,
                 }
                 for arc in self._arcs
             ],
@@ -619,10 +609,15 @@ class StateNetwork:
         """
         network = cls(name=data["name"], description=data.get("description"))
 
-        # Add states
-        for state_name in data.get("states", {}):
-            # Create basic state (can be enhanced with proper State deserialization)
-            state = State(name=state_name)
+        # Add states. What comes back carries the declarative fields and not
+        # the functions, schema or resources --- see StateDefinition.to_dict
+        # for why. The old reading built a three-attribute ``State`` from the
+        # name alone and discarded the rest of the payload, which produced a
+        # network the engines could not execute at all.
+        for state_name, state_data in data.get("states", {}).items():
+            state = StateDefinition.from_dict(
+                state_data if isinstance(state_data, dict) else {"name": state_name}
+            )
             is_initial = state_name == data.get("initial_state")
             is_final = state_name in data.get("final_states", [])
             network.add_state(state, initial=is_initial, final=is_final)
@@ -632,9 +627,15 @@ class StateNetwork:
             network.add_arc(
                 source_state=arc_data["source"],
                 target_state=arc_data["target"],
-                pre_test=arc_data.get("pre_test"),
-                transform=arc_data.get("transform"),
-                metadata=arc_data.get("metadata", {}),
+                definition=ArcDefinition(
+                    target_state=arc_data["target"],
+                    pre_test=arc_data.get("pre_test"),
+                    transform=arc_data.get("transform"),
+                    metadata=dict(arc_data.get("metadata") or {}),
+                    priority=arc_data.get("priority", 0),
+                    definition_order=arc_data.get("definition_order", 0),
+                    required_resources=dict(arc_data.get("required_resources") or {}),
+                ),
             )
 
         return network
