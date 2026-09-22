@@ -1,12 +1,20 @@
 {
-  "timestamp": "2026-09-22T12:20:57Z",
+  "timestamp": "2026-09-22T13:58:17Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots fsm",
+  "packages": "all",
   "tested_packages": [
     "bots",
-    "fsm"
+    "common",
+    "config",
+    "data",
+    "fsm",
+    "legacy",
+    "llm",
+    "structures",
+    "utils",
+    "xization"
   ],
   "coverage_percent": null,
   "package_hashes": {
@@ -23,13 +31,13 @@
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "befdddefaa7ba397e9b313136990e3f57005e11e03739929540ab71a3b9cb3e0",
+    "toolchain": "9066cb219c337904a40c58a7b17b833271bd0c55d8f13fefcae22a4250e1f8eb",
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "a7d0acea81d203380c2674550654fb3d3f103ca540eb32e1144131ad79e05d65",
     "docs": "016de0e89bbaad37d6952779ccd26c715116b9a6ebdfe4720807584e73aec12d"
   },
-  "total_seconds": 207,
+  "total_seconds": 341,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -41,20 +49,20 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 4
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 6
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 45
+      "duration_seconds": 99
     },
     "documentation": {
       "status": "pass",
@@ -81,14 +89,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 114,
-      "workspace_guards_seconds": 92
+      "duration_seconds": 158,
+      "workspace_guards_seconds": 94
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 10
+      "duration_seconds": 38
     }
   }
 }
