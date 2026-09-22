@@ -449,7 +449,14 @@ class FSM:
         functions = set()
 
         for network in self.networks.values():
-            for arc in network.arcs.values():
+            # ``arc_definitions``, not ``arcs``: the latter keys on
+            # ``"source:target"``, so of two arcs between the same pair of
+            # states --- branching on a condition, the shape ``priority``
+            # exists to order --- only one is reached, and the other's
+            # ``pre_test`` was never collected. ``validate()`` reads this to
+            # check every referenced function is registered, so a missing
+            # function behind the second branch could not be reported.
+            for arc in network.arc_definitions:
                 if arc.pre_test:
                     functions.add(arc.pre_test)
                 functions.update(transform_function_names(arc.transform))
@@ -472,13 +479,17 @@ class FSM:
     def get_all_arcs(self) -> Dict[str, List[str]]:
         """Get all arcs from all networks.
 
+        Built from :attr:`~dataknobs_fsm.core.network.StateNetwork.arc_definitions`
+        so two arcs between the same pair of states are both listed; reading
+        the keys of ``arcs`` reported one of them and undercounted the graph.
+
         Returns:
             Dictionary of network_name -> list of arc IDs.
         """
         all_arcs = {}
 
         for network_name, network in self.networks.items():
-            all_arcs[network_name] = list(network.arcs.keys())
+            all_arcs[network_name] = [arc.name for arc in network.arc_definitions]
 
         return all_arcs
 
@@ -499,7 +510,7 @@ class FSM:
         summary = {
             "total_networks": len(self.networks),
             "total_states": sum(len(n.states) for n in self.networks.values()),
-            "total_arcs": sum(len(n.arcs) for n in self.networks.values()),
+            "total_arcs": sum(len(n.arc_definitions) for n in self.networks.values()),
             "resource_types": list(self.resource_requirements.keys()),
             "supports_streaming": self.supports_streaming(),
             "data_mode": self.data_mode.value,
@@ -699,15 +710,16 @@ class FSM:
         Returns:
             Start state definition if found, None otherwise
         """
-        # If network specified, search that network
+        # The same search, written once. It stood here twice, each copy
+        # guarded by ``hasattr`` against a ``network`` without ``states`` and a
+        # ``state`` without ``is_start_state`` or ``type`` --- shapes the
+        # annotations rule out, and which the second state class that made
+        # them conceivable no longer exists to supply.
         if network_name:
             network = self.networks.get(network_name)
-            if network and hasattr(network, "states"):
-                for state in network.states.values():
-                    if (hasattr(state, "is_start_state") and state.is_start_state()) or (
-                        hasattr(state, "type") and state.type == StateType.START
-                    ):
-                        return state
+            found = self._first_start_state(network) if network else None
+            if found is not None:
+                return found
         else:
             # Search main network first
             if self.main_network_name:
@@ -717,15 +729,27 @@ class FSM:
 
             # Search all networks
             for network in self.networks.values():
-                if hasattr(network, "states"):
-                    for state in network.states.values():
-                        if (hasattr(state, "is_start_state") and state.is_start_state()) or (
-                            hasattr(state, "type") and state.type == StateType.START
-                        ):
-                            return state
+                found = self._first_start_state(network)
+                if found is not None:
+                    return found
 
         # Fallback: look for state named 'start'
         return self.find_state_definition("start", network_name)
+
+    @staticmethod
+    def _first_start_state(network: "StateNetwork") -> Optional["StateDefinition"]:
+        """The first state in ``network`` that is a start state, if any.
+
+        Args:
+            network: The network to search.
+
+        Returns:
+            The start state, or ``None`` if the network has none.
+        """
+        for state in network.states.values():
+            if state.is_start_state():
+                return state
+        return None
 
     @property
     def main_network(self) -> Optional["StateNetwork"]:

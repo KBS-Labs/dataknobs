@@ -4,9 +4,10 @@
 """State network implementation for FSM."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Set, Tuple
 
-from dataknobs_fsm.core.arc import ArcDefinition, TransformSpec
+from dataknobs_fsm.core.arc import ArcDefinition, arc_from_dict, TransformSpec
 from dataknobs_fsm.core.state import StateDefinition
 
 
@@ -105,6 +106,17 @@ class StateNetwork:
         return self._states
 
     @property
+    def arc_definitions(self) -> List[ArcDefinition]:
+        """Every arc in the network, in the order it was added.
+
+        The accessor to reach for. :attr:`arcs` keys on ``"source:target"``
+        and so cannot represent two arcs between the same pair of states ---
+        which is the ordinary way to branch, and the shape ``priority`` and
+        ``definition_order`` exist to order.
+        """
+        return list(self._arcs)
+
+    @property
     def arcs(self) -> Dict[str, ArcDefinition]:
         """The network's arcs, keyed ``"source:target"``.
 
@@ -115,6 +127,12 @@ class StateNetwork:
         would have been evaluated in a different order than the ones the
         engines hold. There is one arc type now, so this hands back the stored
         arcs themselves.
+
+        **The key still collapses parallel arcs.** Two arcs from ``start`` to
+        ``end``, taken on different conditions, share a key and only one
+        survives the mapping --- so this is a view of the network's *edges*,
+        not of its arcs, and a caller counting arcs or collecting the
+        functions they name wants :attr:`arc_definitions` instead.
         """
         return {f"{arc.source_state}:{arc.target_state}": arc for arc in self._arcs}
 
@@ -184,6 +202,21 @@ class StateNetwork:
 
         self._states[state.name] = state
 
+        # A state may arrive with arcs already on it. ``add_outgoing_arc`` is
+        # public and documented as the way to assemble a state before adding
+        # it, and it writes ``outgoing_arcs`` --- the list the engines read ---
+        # and nothing else. Ingesting them here is what keeps the network's own
+        # two indexes from disagreeing with the engine about what this state
+        # can do, which is the same split ``add_arc`` was made the single
+        # writer to close, arrived at from the other side.
+        #
+        # The targets are not checked the way ``add_arc`` checks them: states
+        # are added in whatever order the caller has them, so an arc's target
+        # routinely does not exist yet. ``validate()`` carries that check
+        # instead, once the network is whole.
+        for arc in list(state.outgoing_arcs):
+            self._index_arc(state.name, arc)
+
         if initial:
             if self._initial_state:
                 raise ValueError(f"Initial state already set to '{self._initial_state}'")
@@ -228,11 +261,13 @@ class StateNetwork:
             for arc in self._arcs
             if arc.source_state == state_name or arc.target_state == state_name
         ]
-        self._arcs = [arc for arc in self._arcs if arc not in removed]
+        # Identity again: an arc equal to a removed one is not a removed one.
+        removed_ids = {id(arc) for arc in removed}
+        self._arcs = [arc for arc in self._arcs if id(arc) not in removed_ids]
         for arc in removed:
             source = self._states.get(arc.source_state)
-            if source is not None and arc in source.outgoing_arcs:
-                source.outgoing_arcs.remove(arc)
+            if source is not None:
+                source.outgoing_arcs[:] = [held for held in source.outgoing_arcs if held is not arc]
 
         # Rebuild arc index
         self._rebuild_arc_index()
@@ -306,16 +341,53 @@ class StateNetwork:
                 metadata=metadata or {},
             )
         )
+        # An arc belongs to one source in one network, because ``_index_arc``
+        # stamps ``source_state`` onto it: adding the same object twice
+        # re-stamps it and leaves it in both places with one source, and its
+        # ``__hash__`` (which ``source_state`` participates in) changes under
+        # anything already holding it. An arc that has never been added has an
+        # empty ``source_state``, so the common path settles in one comparison
+        # and the scan runs only for an arc that might genuinely be a repeat
+        # --- worth keeping cheap, since ``from_dict`` calls this once per arc
+        # and a generated graph is exactly what this API is for.
+        if arc.source_state and any(held is arc for held in self._arcs):
+            raise ValueError(
+                f"Arc to '{arc.target_state}' is already in this network; an "
+                f"ArcDefinition belongs to one source in one network, because "
+                f"add_arc stamps source_state onto it"
+            )
+
+        self._index_arc(source_state, arc)
+
+        return arc
+
+    def _index_arc(self, source_state: str, arc: ArcDefinition) -> None:
+        """Record one arc in all three indexes, as one object.
+
+        The write half of :meth:`add_arc`, separated so :meth:`add_state` can
+        ingest a state's pre-existing ``outgoing_arcs`` through it instead of
+        repeating it. Two writers of three indexes is what this class had
+        before; two *callers* of one writer is not the same thing.
+
+        The state's own list is appended to only if the arc is not already on
+        it --- ingestion reaches arcs that are --- and the check is by
+        identity, because an equal arc is a different arc.
+
+        Args:
+            source_state: The state the arc leaves; stamped onto the arc.
+            arc: The arc to record.
+        """
         arc.source_state = source_state
 
         self._arcs.append(arc)
         self._arc_index.setdefault(source_state, []).append(arc)
-        self._states[source_state].outgoing_arcs.append(arc)
+
+        state_arcs = self._states[source_state].outgoing_arcs
+        if not any(held is arc for held in state_arcs):
+            state_arcs.append(arc)
 
         # Invalidate validation cache
         self._validation_cache = None
-
-        return arc
 
     def remove_arc(self, arc: ArcDefinition) -> None:
         """Remove an arc from every index :meth:`add_arc` wrote it to.
@@ -326,21 +398,31 @@ class StateNetwork:
         Raises:
             ValueError: If arc doesn't exist.
         """
-        if arc not in self._arcs:
+        # By identity, for the same reason ``add_arc`` stores one object in
+        # three indexes rather than three equal ones. ``ArcDefinition`` is a
+        # dataclass, so two arcs between the same pair of states with the same
+        # pre-test are ``==``; removing by equality means a freshly built arc
+        # is accepted here and something the caller never held is removed
+        # instead --- and where two equal arcs are both present, the survivor
+        # is chosen by list order rather than by which one was asked for.
+        if not any(held is arc for held in self._arcs):
             raise ValueError("Arc not found in network")
 
-        self._arcs.remove(arc)
+        self._arcs = [held for held in self._arcs if held is not arc]
 
         # Update arc index
-        if arc.source_state in self._arc_index:
-            self._arc_index[arc.source_state].remove(arc)
-            if not self._arc_index[arc.source_state]:
+        indexed = self._arc_index.get(arc.source_state)
+        if indexed is not None:
+            remaining = [held for held in indexed if held is not arc]
+            if remaining:
+                self._arc_index[arc.source_state] = remaining
+            else:
                 del self._arc_index[arc.source_state]
 
         # And the source state's own list, which is what the engines read.
         source = self._states.get(arc.source_state)
-        if source is not None and arc in source.outgoing_arcs:
-            source.outgoing_arcs.remove(arc)
+        if source is not None:
+            source.outgoing_arcs[:] = [held for held in source.outgoing_arcs if held is not arc]
 
         # Invalidate validation cache
         self._validation_cache = None
@@ -404,6 +486,18 @@ class StateNetwork:
                 if final_state not in self._states:
                     errors.append(f"Final state '{final_state}' not found")
 
+        # Check that every arc lands somewhere. ``add_arc`` refuses an unknown
+        # target, but a state assembled with ``add_outgoing_arc`` and then
+        # added is ingested without that check --- its targets may legitimately
+        # not exist yet at ingestion time. This is where that is answered, and
+        # without it ingestion would be a way to put an unfollowable arc into a
+        # network with nothing ever saying so.
+        for arc in self._arcs:
+            if arc.target_state not in self._states:
+                errors.append(
+                    f"Arc from '{arc.source_state}' targets unknown state '{arc.target_state}'"
+                )
+
         # Check for unreachable states
         if self._initial_state:
             reachable = self._find_reachable_states(self._initial_state)
@@ -418,7 +512,7 @@ class StateNetwork:
                     errors.append(f"Non-final state '{state_name}' has no outgoing arcs")
 
         # Check for cycles that don't include final states
-        cycles = self._find_cycles()
+        cycles = self.find_cycles()
         for cycle in cycles:
             if not any(state in self._final_states for state in cycle):
                 errors.append(f"Cycle detected without final states: {' -> '.join(cycle)}")
@@ -436,6 +530,14 @@ class StateNetwork:
             Resource requirements.
         """
         return self._resource_requirements
+
+    def set_streaming_enabled(self, enabled: bool) -> None:
+        """Declare whether this network streams.
+
+        Args:
+            enabled: What :meth:`supports_streaming` should answer.
+        """
+        self._streaming_enabled = enabled
 
     def is_streaming_enabled(self) -> bool:
         """Check if any state in the network requires streaming.
@@ -464,32 +566,55 @@ class StateNetwork:
         return dependencies
 
     def _update_resource_requirements(self, state: StateDefinition) -> None:
-        """Update resource requirements based on a state.
+        """Fold one state's declared resources into the network's totals.
+
+        ``resource_requirements`` is a ``List[ResourceConfig]``, and this asked
+        the *list* for ``.databases`` / ``.filesystems`` / ``.http_services`` /
+        ``.llms``. A list has none of them, so every branch was skipped and
+        :meth:`get_resource_requirements` answered with an empty set for every
+        network ever built --- including every network the config builder
+        produces. Retyping this method's parameter from the retired ``State``
+        to ``StateDefinition`` is what made the mismatch visible; the method
+        directly above it, :meth:`analyze_dependencies`, already read the same
+        field correctly as a list.
 
         Args:
             state: State to analyze.
         """
-        if hasattr(state, "resource_requirements"):
-            reqs = state.resource_requirements
+        totals = self._resource_requirements
 
-            # Update resource sets based on type
-            if hasattr(reqs, "databases"):
-                self._resource_requirements.databases.update(reqs.databases)
-            if hasattr(reqs, "filesystems"):
-                self._resource_requirements.filesystems.update(reqs.filesystems)
-            if hasattr(reqs, "http_services"):
-                self._resource_requirements.http_services.update(reqs.http_services)
-            if hasattr(reqs, "llms"):
-                self._resource_requirements.llms.update(reqs.llms)
-
-            # Update streaming flag
-            if hasattr(reqs, "streaming_enabled"):
-                self._streaming_enabled = self._streaming_enabled or reqs.streaming_enabled
+        for resource in state.resource_requirements:
+            # ``type`` is declared ``str``. The config builder puts the schema
+            # ``ResourceConfig`` here, whose ``type`` is a ``ResourceType`` ---
+            # the two-``ResourceConfig`` mismatch this package tracks
+            # separately. Comparison works across both because ``ResourceType``
+            # subclasses ``str``; only the custom bucket's *key* needs the
+            # enum's value, since ``str()`` on a member gives its repr.
+            kind = resource.type
+            if kind in ("database", "async_database"):
+                totals.databases.add(resource.name)
+            elif kind == "filesystem":
+                totals.filesystems.add(resource.name)
+            elif kind == "http":
+                totals.http_services.add(resource.name)
+            elif kind == "llm":
+                totals.llms.add(resource.name)
+            else:
+                key = kind.value if isinstance(kind, Enum) else str(kind)
+                totals.custom.setdefault(key, set()).add(resource.name)
 
     def _recalculate_resource_requirements(self) -> None:
-        """Recalculate all resource requirements from scratch."""
+        """Recalculate all resource requirements from scratch.
+
+        ``_streaming_enabled`` is deliberately not reset: it is *declared*
+        (by config, through :meth:`set_streaming_enabled`) rather than derived
+        from the states, so recalculating the resource totals must not clear
+        it. It used to be read off each state's ``resource_requirements``,
+        which never had it --- so the flag had no source at all and
+        :meth:`supports_streaming` answered ``False`` for every network,
+        including one whose config said ``streaming: {enabled: true}``.
+        """
         self._resource_requirements = NetworkResourceRequirements()
-        self._streaming_enabled = False
 
         for state in self._states.values():
             self._update_resource_requirements(state)
@@ -528,8 +653,13 @@ class StateNetwork:
 
         return reachable
 
-    def _find_cycles(self) -> List[List[str]]:
+    def find_cycles(self) -> List[List[str]]:
         """Find all cycles in the network.
+
+        Part of the construction API --- the PR that repaired that API, this
+        package's changelog and the test that covers it all name
+        ``find_cycles``, while the method was defined as ``_find_cycles`` and
+        so was not reachable under the name it was published as.
 
         Returns:
             List of cycles (each cycle is a list of state names).
@@ -572,19 +702,15 @@ class StateNetwork:
             "initial_state": self._initial_state,
             "final_states": list(self._final_states),
             "states": {name: state.to_dict() for name, state in self._states.items()},
-            "arcs": [
-                {
-                    "source": arc.source_state,
-                    "target": arc.target_state,
-                    "pre_test": arc.pre_test,
-                    "transform": arc.transform,
-                    "metadata": arc.metadata,
-                    "priority": arc.priority,
-                    "definition_order": arc.definition_order,
-                    "required_resources": arc.required_resources,
-                }
-                for arc in self._arcs
-            ],
+            # Each arc writes its own payload, tagged with its class, so a
+            # ``PushArc`` comes back a ``PushArc``. Written inline here, the
+            # payload carried neither the push fields nor any record of the
+            # class, so a round-tripped sub-network call came back as an
+            # ordinary transition to the state named in ``target`` --- the
+            # sub-network silently never entered. It also wrote ``transform``
+            # whole, which stopped being JSON the moment ``add_arc`` began
+            # storing the builder's own ``TransformSpec``.
+            "arcs": [arc.to_dict() for arc in self._arcs],
             "resource_requirements": {
                 "databases": list(self._resource_requirements.databases),
                 "filesystems": list(self._resource_requirements.filesystems),
@@ -622,20 +748,18 @@ class StateNetwork:
             is_final = state_name in data.get("final_states", [])
             network.add_state(state, initial=is_initial, final=is_final)
 
-        # Add arcs
+        # Add arcs --- through ``add_arc``, so the rebuilt network has the
+        # same single-writer guarantee a freshly built one does. A reader that
+        # appended to ``_arcs`` and to the state separately would recreate the
+        # very split this class was repaired to close, and every accessor
+        # would still agree with itself.
         for arc_data in data.get("arcs", []):
             network.add_arc(
                 source_state=arc_data["source"],
                 target_state=arc_data["target"],
-                definition=ArcDefinition(
-                    target_state=arc_data["target"],
-                    pre_test=arc_data.get("pre_test"),
-                    transform=arc_data.get("transform"),
-                    metadata=dict(arc_data.get("metadata") or {}),
-                    priority=arc_data.get("priority", 0),
-                    definition_order=arc_data.get("definition_order", 0),
-                    required_resources=dict(arc_data.get("required_resources") or {}),
-                ),
+                definition=arc_from_dict(arc_data),
             )
+
+        network.set_streaming_enabled(bool(data.get("streaming_enabled", False)))
 
         return network

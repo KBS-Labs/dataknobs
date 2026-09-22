@@ -96,7 +96,16 @@ def _fsm_with_validator() -> Any:
 async def test_a_validator_that_raises_is_written_down(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Its comment said "Log but don't fail"; it did neither half of that."""
+    """Its comment said "Log but don't fail"; it did neither half of that.
+
+    The log half is what this test is for, and it still is. The other half
+    has since been settled the other way: a validator that raises now refuses
+    the record, as ``pre_validation_functions`` always has --- the two lists
+    sit five lines apart in the same state entry and gave opposite answers to
+    the same event. A record its gate could not check is not a checked
+    record, so the traceback below is the reason for a refusal rather than a
+    note beside a success.
+    """
     fsm = _fsm_with_validator()
     engine = AsyncExecutionEngine(fsm)
     context = ContextFactory.create_context(fsm, {"a": 1}, data_mode=ProcessingMode.SINGLE)
@@ -104,7 +113,7 @@ async def test_a_validator_that_raises_is_written_down(
     with caplog.at_level(logging.WARNING, logger="dataknobs_fsm"):
         success, _ = await engine.execute(context, {"a": 1})
 
-    assert success is True, "a validator is optional: the run still succeeds"
+    assert success is False, "a record the gate could not check is refused"
     carrying = [r for r in caplog.records if r.exc_info]
     assert carrying, [r.getMessage() for r in caplog.records]
     assert any(REASON in str(r.exc_info[1]) for r in carrying if r.exc_info)

@@ -449,9 +449,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         # Filter arcs by name if specified
         arcs_to_evaluate = state.outgoing_arcs
         if arc_name:
-            arcs_to_evaluate = [
-                arc for arc in state.outgoing_arcs if hasattr(arc, "name") and arc.name == arc_name
-            ]
+            # ``hasattr(arc, "name")`` stood here because the arc reached
+            # through ``outgoing_arcs`` was the type *without* the property,
+            # so the guard was the whole reason the filter matched nothing.
+            # One arc type, one ``name``, no guard.
+            arcs_to_evaluate = [arc for arc in state.outgoing_arcs if arc.name == arc_name]
             # If no arcs match the specified name, return empty list
             if not arcs_to_evaluate:
                 return []
@@ -968,25 +970,59 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
         if run_validators and state_def is not None:
             if not await self._run_pre_validators(context, state_def, state_name, state_resources):
-                # Release only what this entry acquired (not the inherited
-                # resources, which the parent owns), then fail the entry.
-                self._release_named_resources(
+                self._fail_entry(
                     context,
                     owned,
-                    self._state_resource_owner(context, state_def),
-                    owner_label=f"state '{getattr(state_def, 'name', '?')}'",
+                    state_def,
+                    f"Pre-validation failed for state '{state_name}'",
                 )
-                context.current_state_resources = {}
-                context.current_state_owned_resources = {}
-                # Match the sync engine: only set last_error if a more specific
-                # upstream error has not already been recorded (don't clobber it).
-                if not context.last_error:
-                    context.last_error = f"Pre-validation failed for state '{state_name}'"
                 return False
 
         # Reuse the resources allocated here (don't re-acquire / release).
-        await self._execute_state_transforms(context, state_resources=state_resources)
+        if not await self._execute_state_transforms(context, state_resources=state_resources):
+            self._fail_entry(
+                context,
+                owned,
+                state_def,
+                f"Validation failed for state '{state_name}'",
+            )
+            return False
         return True
+
+    def _fail_entry(
+        self,
+        context: ExecutionContext,
+        owned: Dict[str, Any],
+        state_def: Any,
+        reason: str,
+    ) -> None:
+        """Undo a state entry that a validator refused, and record why.
+
+        Both gates a state passes through on the way in --- its pre-validators
+        and its validators --- have to leave the same thing behind when they
+        reject: the resources *this* entry acquired released (not the
+        inherited ones, which the parent owns), the context's resource
+        tracking cleared, and a reason recorded. Written twice, the second one
+        would have been written differently.
+
+        Args:
+            context: Execution context.
+            owned: The resources this entry acquired, to release.
+            state_def: The state being entered, for the resource owner key.
+            reason: What to record on ``last_error``.
+        """
+        self._release_named_resources(
+            context,
+            owned,
+            self._state_resource_owner(context, state_def),
+            owner_label=f"state '{getattr(state_def, 'name', '?')}'",
+        )
+        context.current_state_resources = {}
+        context.current_state_owned_resources = {}
+        # Match the sync engine: only set last_error if a more specific
+        # upstream error has not already been recorded (don't clobber it).
+        if not context.last_error:
+            context.last_error = reason
 
     def _allocate_state_resources_with_inheritance(
         self,
@@ -1111,7 +1147,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         self,
         context: ExecutionContext,
         state_resources: Dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         """Execute state functions (validators and transforms) when in a state.
 
         This should be called before evaluating arc conditions to ensure
@@ -1127,10 +1163,16 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 When ``None`` (the regular-transition / initial-state callers),
                 this method acquires and releases the state's own resources
                 itself, the historical behavior.
+
+        Returns:
+            ``False`` if a validator refused the record --- by returning
+            ``False``, or by raising, which is refused the same way
+            :meth:`_run_pre_validators` refuses it --- and ``True`` otherwise.
+            The caller undoes the entry on ``False``.
         """
         network = await self._get_current_network(context)
         if not network or context.current_state not in network.states:
-            return
+            return True
 
         state = network.states[context.current_state]
         state_name = context.current_state
@@ -1139,7 +1181,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         transform_functions, state_obj = self.prepare_state_transform(state, context)
 
         # Execute validation functions first (async-specific)
-        if hasattr(state, "validation_functions") and state.validation_functions:
+        if state.validation_functions:
             for validator in state.validation_functions:
                 try:
                     # The arity fallback was written twice, once per async
@@ -1161,25 +1203,55 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     )
                     result = await run_callback_off_loop(validate, *args)
 
+                    if result is False:
+                        # ``ValidationOutcome`` states the contract in as many
+                        # words --- ``False`` fails the record, a dict merges
+                        # into it, ``True`` / ``None`` pass it unchanged. Only
+                        # the dict arm was consumed, so a validator that ran
+                        # and rejected was indistinguishable from one that
+                        # passed: the same outcome as a validator that could
+                        # not run at all, reached a different way. The alias
+                        # already carries a note about the previous time this
+                        # went wrong, when an ``ExecutionResult`` was neither
+                        # ``False`` nor a dict and "produced a validator that
+                        # could never reject".
+                        logger.info(
+                            "Validator %s rejected the record in state '%s'",
+                            getattr(validator, "__name__", validator),
+                            state_name,
+                        )
+                        return False
+
                     if isinstance(result, dict):
                         # Merge validation results into context data
                         context.data.update(result)
                 except Exception as exc:
-                    # Validators are optional, so this does not fail the run.
-                    # It is logged because a validator that raised is not a
-                    # validator that passed: the record it was written to
-                    # check went unchecked, and without this the two outcomes
-                    # are indistinguishable from anywhere.
+                    # The same answer ``_run_pre_validators`` gives: a record
+                    # its gate could not check is refused, as if the gate had
+                    # rejected it. The two lists are five lines apart in the
+                    # same state entry and used to disagree about this ---
+                    # ``pre_validation_functions`` failed entry, these let the
+                    # record through as validated, which is the outcome the
+                    # unreachable-validator and discarded-verdict defects both
+                    # produced by other routes.
+                    #
+                    # It makes a gate with a bug in it indistinguishable from
+                    # a gate that rejected the record, which is why the reason
+                    # is logged with its traceback rather than only counted:
+                    # a valid record turned away here was turned away by the
+                    # validator, not by the data.
                     logger.warning(
-                        "Validation function failed in state '%s'; the record "
-                        "was not checked by it: %s",
+                        "Validator %s raised in state '%s'; the record is "
+                        "refused as if it had been rejected: %s",
+                        getattr(validator, "__name__", validator),
                         state_name,
                         exc,
                         exc_info=exc,
                     )
+                    return False
 
         if not transform_functions:
-            return
+            return True
 
         logger.debug(
             f"Executing {len(transform_functions)} transform functions for state {state_name}"
@@ -1239,6 +1311,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             # which keeps state resources allocated for child inheritance).
             if owned_resources is not None:
                 self._release_state_resources(context, state, owned_resources)
+
+        return True
 
     @staticmethod
     def _coalesce_transform_result(result: Any, current_data: Any) -> Any:

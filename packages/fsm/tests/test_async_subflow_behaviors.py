@@ -191,6 +191,91 @@ async def test_a_push_whose_network_disappears_after_build_fails_the_record() ->
     )
 
 
+def test_a_push_naming_an_initial_state_builds() -> None:
+    """``"network:initial_state"`` is a documented form, and must build.
+
+    The completeness check compares ``target_network`` against the known
+    network names. Comparing it *whole* makes every use of the two-part form
+    report as a missing network --- and since the check had never run (it
+    reached arcs through an index holding a different arc type, so
+    ``isinstance(arc, PushArc)`` was always false), turning it on is what would
+    have turned that into a refusal of valid configs.
+
+    This is the other half of
+    ``test_a_push_to_an_undefined_network_is_refused_at_build_time``: that one
+    asserts the check rejects a typo, this one asserts it does not reject the
+    syntax. A parser is only correct if both hold.
+    """
+    config = {
+        "name": "named_initial_state",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "sub:second",
+                                "return_state": "after",
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+            {
+                "name": "sub",
+                "states": [
+                    {"name": "first", "is_start": True, "arcs": [{"target": "second"}]},
+                    {"name": "second", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+    fsm = AsyncSimpleFSM(config)
+    fsm._fsm.close()
+
+
+def test_a_push_naming_an_initial_state_in_an_undefined_network_is_refused() -> None:
+    """Splitting the field must not become a way to smuggle a typo past it.
+
+    The refusal names the *network* half, which is the part that was not found.
+    """
+    config = {
+        "name": "named_initial_state_missing_network",
+        "main_network": "main",
+        "networks": [
+            {
+                "name": "main",
+                "states": [
+                    {
+                        "name": "start",
+                        "is_start": True,
+                        "arcs": [
+                            {
+                                "target": "after",
+                                "target_network": "nosuch:second",
+                                "return_state": "after",
+                            }
+                        ],
+                    },
+                    {"name": "after", "arcs": [{"target": "end"}]},
+                    {"name": "end", "is_end": True},
+                ],
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Target network 'nosuch' not found"):
+        AsyncSimpleFSM(config)
+
+
 # --------------------------------------------------------------------------- #
 # custom initial state via the network:state target syntax
 # --------------------------------------------------------------------------- #

@@ -248,7 +248,7 @@ class TestStateNetwork:
         network.add_arc("s3", "s1")  # Creates cycle
         network.add_arc("s3", "s4")
 
-        cycles = network._find_cycles()
+        cycles = network.find_cycles()
 
         assert len(cycles) > 0
         # Should find the s1 -> s2 -> s3 -> s1 cycle

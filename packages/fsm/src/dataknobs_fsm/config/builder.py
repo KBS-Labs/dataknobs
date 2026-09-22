@@ -448,6 +448,14 @@ class FSMBuilder:
                     definition=arc,
                 )
 
+        # ``streaming: {enabled: true}`` is a documented network-level config
+        # key that nothing read. ``StateNetwork.supports_streaming`` was fed
+        # instead by a branch that asked each state's ``resource_requirements``
+        # list for a ``streaming_enabled`` attribute a list does not have, so
+        # the flag had no source at all and every network answered ``False``.
+        if network_config.streaming is not None:
+            network.set_streaming_enabled(network_config.streaming.enabled)
+
         return network
 
     def _build_state(self, state_config: StateConfig, fsm_config: FSMConfig) -> StateDefinition:

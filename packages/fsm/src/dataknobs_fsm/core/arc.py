@@ -7,7 +7,7 @@ import inspect
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, TYPE_CHECKING
+from typing import Any, Callable, ClassVar, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.core.exceptions import FunctionError, ResourceError
 from dataknobs_fsm.functions.base import FunctionContext, as_state_test_callable
@@ -59,6 +59,82 @@ class TransformSpec:
 
     name: str
     params: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The spec as plain data, for :meth:`ArcDefinition.to_dict`."""
+        return {"name": self.name, "params": dict(self.params)}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TransformSpec":
+        """Rebuild a spec from :meth:`to_dict`."""
+        return cls(name=data["name"], params=dict(data.get("params") or {}))
+
+
+def transform_to_data(
+    transform: "str | TransformSpec | list[str | TransformSpec] | None",
+) -> Any:
+    """An arc's ``transform`` field as plain data.
+
+    The field's four shapes are a property of this module, so the reader and
+    the writer of them live beside each other --- as
+    :func:`transform_function_names` and :meth:`PushArc.parse_target` already
+    do. A name stays a string and a :class:`TransformSpec` becomes a mapping,
+    which is what tells them apart on the way back in.
+
+    ``StateNetwork.to_dict`` used to write the field whole. That was harmless
+    only for as long as a ``TransformSpec`` could not reach the network's arc
+    list: the config builder reduced a transform to its name before handing an
+    arc over. Now that ``add_arc`` stores the builder's own arc, any config
+    with transform ``params`` puts a dataclass instance in a dictionary that
+    is supposed to be data, and ``json.dumps`` refuses it.
+    """
+    if transform is None:
+        return None
+    if isinstance(transform, list):
+        return [transform_to_data(item) for item in transform]
+    if isinstance(transform, TransformSpec):
+        return transform.to_dict()
+    return transform
+
+
+def _transform_item_from_data(item: Any) -> "str | TransformSpec":
+    """One element of a serialized ``transform`` field.
+
+    Split out from :func:`transform_from_data` rather than recursing into it,
+    because the field nests exactly one level --- a list of names and specs,
+    never a list of lists --- and a function that recursed into itself would
+    have to declare a return type saying otherwise.
+
+    Args:
+        item: A name, or the mapping :meth:`TransformSpec.to_dict` produces.
+
+    Returns:
+        The name or the rebuilt spec.
+
+    Raises:
+        ValueError: If the element is neither, which means the payload was not
+            written by :func:`transform_to_data`.
+    """
+    if isinstance(item, dict):
+        return TransformSpec.from_dict(item)
+    if isinstance(item, str):
+        return item
+    raise ValueError(f"A transform is a name or a TransformSpec mapping, not {type(item).__name__}")
+
+
+def transform_from_data(
+    data: Any,
+) -> "str | TransformSpec | list[str | TransformSpec] | None":
+    """The inverse of :func:`transform_to_data`.
+
+    A mapping is a :class:`TransformSpec`; a string is a name; a list is
+    handled element by element.
+    """
+    if data is None:
+        return None
+    if isinstance(data, list):
+        return [_transform_item_from_data(item) for item in data]
+    return _transform_item_from_data(data)
 
 
 def transform_function_names(
@@ -120,6 +196,62 @@ class ArcDefinition:
     it too, without the index having to carry the answer alongside.
     """
 
+    kind: ClassVar[str] = "arc"
+    """The tag :meth:`to_dict` writes so :func:`arc_from_dict` can pick a class.
+
+    A serialized arc that does not record which class it was comes back as the
+    base one. For a push arc that is silent: it becomes an ordinary transition
+    to the state named in ``target``, so the sub-network is never entered and
+    nothing raises.
+    """
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The arc as plain data, tagged with its :attr:`kind`.
+
+        A subclass extends this with its own fields and inherits the tag from
+        its own ``kind``; see :meth:`PushArc.to_dict`.
+        """
+        return {
+            "kind": type(self).kind,
+            "source": self.source_state,
+            "target": self.target_state,
+            "pre_test": self.pre_test,
+            "transform": transform_to_data(self.transform),
+            "metadata": dict(self.metadata),
+            "priority": self.priority,
+            "definition_order": self.definition_order,
+            "required_resources": dict(self.required_resources),
+        }
+
+    @classmethod
+    def _base_kwargs(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        """The fields every arc carries, read off ``data``.
+
+        Shared with every subclass so the base half of the payload is read in
+        one place: a subclass that re-read it would be free to disagree about
+        a default, which is the shape of drift this module has already had
+        once.
+        """
+        return {
+            "target_state": data["target"],
+            "pre_test": data.get("pre_test"),
+            "transform": transform_from_data(data.get("transform")),
+            "metadata": dict(data.get("metadata") or {}),
+            "priority": data.get("priority", 0),
+            "definition_order": data.get("definition_order", 0),
+            "required_resources": dict(data.get("required_resources") or {}),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ArcDefinition":
+        """Rebuild an arc of *this* class from :meth:`to_dict`.
+
+        ``source_state`` is deliberately not read back here: it is stamped by
+        :meth:`StateNetwork.add_arc`, which is the only writer of it, and a
+        caller rebuilding a loose arc has no network to be a source in yet.
+        """
+        return cls(**cls._base_kwargs(data))
+
     def __hash__(self) -> int:
         """Make ArcDefinition hashable.
 
@@ -167,6 +299,8 @@ class PushArc(ArcDefinition):
     when the sub-network completes.
     """
 
+    kind: ClassVar[str] = "push"
+
     target_network: str = ""  # Name of the target network
     return_state: str | None = None  # State to return to after sub-network
     isolation_mode: DataIsolationMode = DataIsolationMode.COPY
@@ -200,6 +334,95 @@ class PushArc(ArcDefinition):
             network_name, initial_state = self.target_network.split(":", 1)
             return network_name, initial_state.strip()
         return self.target_network, None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The base payload plus the fields that make this a sub-network call."""
+        data = super().to_dict()
+        data.update(
+            {
+                "target_network": self.target_network,
+                "return_state": self.return_state,
+                "isolation_mode": self.isolation_mode.value,
+                "pass_context": self.pass_context,
+                "data_mapping": dict(self.data_mapping),
+                "result_mapping": dict(self.result_mapping),
+            }
+        )
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PushArc":
+        """Rebuild a push arc, including where it pushes to."""
+        raw_mode = data.get("isolation_mode")
+        return cls(
+            **cls._base_kwargs(data),
+            target_network=data.get("target_network", ""),
+            return_state=data.get("return_state"),
+            isolation_mode=(
+                DataIsolationMode(raw_mode) if raw_mode is not None else DataIsolationMode.COPY
+            ),
+            pass_context=data.get("pass_context", True),
+            data_mapping=dict(data.get("data_mapping") or {}),
+            result_mapping=dict(data.get("result_mapping") or {}),
+        )
+
+
+ARC_TYPES: Dict[str, type[ArcDefinition]] = {
+    ArcDefinition.kind: ArcDefinition,
+    PushArc.kind: PushArc,
+}
+"""The arc classes :func:`arc_from_dict` can rebuild, by :attr:`ArcDefinition.kind`.
+
+A consumer with its own arc subclass registers it here rather than losing it to
+the base class on every round trip --- see :func:`register_arc_type`.
+"""
+
+
+def register_arc_type(arc_type: type[ArcDefinition]) -> None:
+    """Make ``arc_type`` rebuildable by :func:`arc_from_dict`.
+
+    Args:
+        arc_type: An :class:`ArcDefinition` subclass declaring its own
+            :attr:`~ArcDefinition.kind`.
+
+    Raises:
+        ValueError: If its ``kind`` is already registered to another class, or
+            if it did not declare one of its own (which would silently shadow
+            the base entry and send every plain arc through the subclass).
+    """
+    kind = arc_type.kind
+    registered = ARC_TYPES.get(kind)
+    if registered is not None and registered is not arc_type:
+        raise ValueError(
+            f"Arc kind '{kind}' is already registered to {registered.__name__}; "
+            f"{arc_type.__name__} needs a kind of its own"
+        )
+    ARC_TYPES[kind] = arc_type
+
+
+def arc_from_dict(data: Dict[str, Any]) -> ArcDefinition:
+    """Rebuild an arc of whichever class :meth:`ArcDefinition.to_dict` recorded.
+
+    An unrecognised ``kind`` --- a payload written by a consumer whose arc type
+    is not registered in *this* process --- raises rather than quietly
+    returning a base arc, because quietly returning a base arc is how a
+    sub-network call disappears.
+
+    Args:
+        data: A mapping in the shape :meth:`ArcDefinition.to_dict` produces.
+
+    Returns:
+        The rebuilt arc.
+
+    Raises:
+        ValueError: If ``kind`` names a class that is not registered.
+    """
+    kind = data.get("kind", ArcDefinition.kind)
+    arc_type = ARC_TYPES.get(kind)
+    if arc_type is None:
+        known = ", ".join(sorted(ARC_TYPES))
+        raise ValueError(f"Unknown arc kind '{kind}' (known kinds: {known})")
+    return arc_type.from_dict(data)
 
 
 class ArcExecution:

@@ -50,6 +50,7 @@ from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.execution.context import ExecutionContext
+from dataknobs_fsm.functions.base import IValidationFunction
 
 
 def linear_fsm() -> FSM:
@@ -192,3 +193,160 @@ def test_a_plain_callable_validator_on_a_hand_built_state_is_run() -> None:
 
     assert success, result
     assert calls == [{"id": 7}], "the validator was never called"
+
+
+def validator_fsm(validator: Any, *, gate: str = "validation_functions") -> FSM:
+    """``start -> end`` with one validator on the start state.
+
+    Args:
+        validator: The validator to install.
+        gate: Which of the state's two validator lists to install it on ---
+            ``"validation_functions"`` or ``"pre_validation_functions"``.
+    """
+    fsm = FSM(name="validating")
+    network = StateNetwork(name="main")
+    start = StateDefinition(name="start", type=StateType.START)
+    setattr(start, gate, [validator])
+    network.add_state(start, initial=True)
+    network.add_state(StateDefinition(name="end", type=StateType.END), final=True)
+    network.add_arc("start", "end")
+    fsm.add_network(network)
+    return fsm
+
+
+def test_a_validator_that_returns_false_fails_the_record() -> None:
+    """``False`` fails the record --- which is the whole contract of a validator.
+
+    :data:`~dataknobs_fsm.functions.base.ValidationOutcome` states it in as many
+    words: ``False`` to fail the record, a dict to merge into it, ``True`` or
+    ``None`` to pass it unchanged. The loop consumed only the dict, so a
+    validator that ran and said no was indistinguishable from one that said
+    yes --- the same outcome as the plain callable that could not run at all,
+    reached a different way.
+
+    The type alias already carries a note about the previous time this went
+    wrong: an ``ExecutionResult`` was neither ``False`` nor a dict, so "an
+    implementation written to the old declaration produced a validator that
+    could never reject". This is that failure again, one layer down.
+    """
+
+    def reject_minors(data: dict[str, Any], context: Any = None) -> bool:
+        return data.get("age", 0) >= 18
+
+    success, result, _ = run(validator_fsm(reject_minors), {"id": 1, "age": 12})
+
+    assert not success, f"a rejected record was reported as processed: {result!r}"
+
+
+def test_the_reason_a_validator_rejected_reaches_the_caller() -> None:
+    """Failing is not enough; the caller has to be told which state refused."""
+
+    def reject_everything(data: dict[str, Any], context: Any = None) -> bool:
+        return False
+
+    success, result, _ = run(validator_fsm(reject_everything), {"id": 1})
+
+    assert not success
+    assert "start" in str(result), result
+
+
+def test_a_validator_that_passes_lets_the_record_through() -> None:
+    """The other side of the gate: ``True`` is not a rejection."""
+    success, result, final_state = run(validator_fsm(lambda data, context=None: True), {"id": 1})
+
+    assert success, result
+    assert final_state == "end"
+
+
+def test_a_validator_returning_none_lets_the_record_through() -> None:
+    """``None`` passes the record unchanged --- a validator with no ``return``."""
+
+    def check_quietly(data: dict[str, Any], context: Any = None) -> None:
+        return None
+
+    success, result, final_state = run(validator_fsm(check_quietly), {"id": 1})
+
+    assert success, result
+    assert final_state == "end"
+
+
+def test_a_validator_returning_a_dict_still_merges_it() -> None:
+    """The dict arm is the one that already worked, and it keeps working."""
+
+    def stamp(data: dict[str, Any], context: Any = None) -> dict[str, Any]:
+        return {"checked": True}
+
+    fsm = validator_fsm(stamp)
+    context = ExecutionContext(data_mode=ProcessingMode.SINGLE)
+    try:
+        success, _ = fsm.get_sync_bridge().run(fsm.get_async_engine().execute(context, {"id": 1}))
+    finally:
+        fsm.close()
+
+    assert success
+    assert context.data.get("checked") is True
+
+
+def test_an_interface_validator_that_rejects_fails_the_record() -> None:
+    """The same verdict from the shape the config path produces.
+
+    A bare ``IValidationFunction`` is reached through ``.validate`` rather than
+    called directly, so it takes the other branch of
+    ``as_validation_callable`` --- and has to arrive at the same outcome.
+    """
+
+    class RejectMinors(IValidationFunction):
+        def validate(self, data: Any, context: Any = None) -> bool:
+            return bool(data.get("age", 0) >= 18)
+
+        def get_validation_rules(self) -> dict[str, Any]:
+            return {"age": ">= 18"}
+
+    success, result, _ = run(validator_fsm(RejectMinors()), {"id": 1, "age": 12})
+
+    assert not success, f"a rejected record was reported as processed: {result!r}"
+
+
+def explode(data: dict[str, Any], context: Any = None) -> bool:
+    """A validator with a bug in it."""
+    raise RuntimeError("this validator is broken")
+
+
+def test_a_validator_that_raises_fails_the_record() -> None:
+    """A broken validator refuses the record; it does not wave it through.
+
+    A validator that raised left the record reported as validated --- the same
+    user-visible outcome as a validator that could not run and as one whose
+    rejection was discarded, which are the two defects already fixed here. The
+    record it was written to check went unchecked, and "unchecked" is not
+    "passed".
+    """
+    success, result, _ = run(validator_fsm(explode), {"id": 1})
+
+    assert not success, f"a record a broken validator never checked was processed: {result!r}"
+
+
+def test_both_validator_lists_answer_a_raising_validator_the_same_way() -> None:
+    """The two gates a state passes through agree, which is the point.
+
+    ``pre_validation_functions`` has always failed entry when a validator
+    raised --- "the record is refused entry as if it had been rejected".
+    ``validation_functions``, five lines further into the same entry, let it
+    through. One state, two lists, opposite answers to the same event, and
+    nothing recorded the difference as intentional: the swallow began as a
+    bare ``except Exception: pass`` and the commit that later gave it a log
+    line scoped itself to observability, "with no outcome changed".
+    """
+    pre_success, _, _ = run(validator_fsm(explode, gate="pre_validation_functions"), {"id": 1})
+    post_success, _, _ = run(validator_fsm(explode, gate="validation_functions"), {"id": 1})
+
+    assert pre_success is False, "the pre-validation gate's long-standing behaviour"
+    assert post_success == pre_success, "the other gate has to agree with it"
+
+
+def test_a_raising_validator_says_which_state_refused() -> None:
+    """Failing closed is only useful if the caller learns where."""
+    success, result, _ = run(validator_fsm(explode), {"id": 1})
+
+    assert not success
+    assert "start" in str(result), result
