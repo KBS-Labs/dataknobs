@@ -1031,9 +1031,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Allocate a state's resources, inheriting the parent state's.
 
-        Mirrors the sync engine's ``_allocate_state_resources``: start from the
-        parent-inherited resources, then acquire only the state's own
-        requirements that are not already inherited.
+        Start from the parent-inherited resources, then acquire only the
+        state's own requirements that are not already inherited.
 
         Returns:
             ``(merged_resources, owned_resources)`` — the full view stored on
@@ -1057,14 +1056,12 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # Skip resources already inherited from the parent state.
                 continue
             names.append(name)
-            # Default to 30s when no timeout is configured, matching the sync
-            # engine (ExecutionEngine._allocate_state_resources) rather than
-            # leaving it None (an unbounded acquire wait).
-            timeouts[name] = (
-                getattr(resource_config, "timeout_seconds", None)
-                or getattr(resource_config, "timeout", None)
-                or 30
-            )
+            # 30s when the resource configures no timeout, rather than None,
+            # which is an unbounded acquire wait. This engine is the only one
+            # left --- the standalone sync engine it used to match was deleted
+            # in 6a1cbf9a --- so the default is this engine's to state, and
+            # the reason to keep it is the unbounded wait, not the parity.
+            timeouts[name] = resource_config.timeout or 30
 
         owned = self._acquire_named_resources(
             context,
@@ -1566,13 +1563,9 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             if not name:
                 continue
             names.append(name)
-            # Default to 30s when no timeout is configured, matching the sync
-            # engine rather than leaving it None (an unbounded acquire wait).
-            timeouts[name] = (
-                getattr(resource_config, "timeout_seconds", None)
-                or getattr(resource_config, "timeout", None)
-                or 30
-            )
+            # 30s when the resource configures no timeout; see
+            # _allocate_state_resources_with_inheritance for why not None.
+            timeouts[name] = resource_config.timeout or 30
         return self._acquire_named_resources(
             context,
             names,

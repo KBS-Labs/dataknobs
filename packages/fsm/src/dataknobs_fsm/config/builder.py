@@ -502,12 +502,17 @@ class FSMBuilder:
         state_def.pre_validation_functions = pre_validators
         state_def.validation_functions = validators
         state_def.transform_functions = transforms
-        # Look up actual resource configs from the FSM config
+        # Look up actual resource configs from the FSM config, and hand the
+        # state the runtime type its field declares. A name the config does not
+        # define still gets a config rather than an error, so that arm builds
+        # one and converts it by the same route.
         resource_map = {res.name: res for res in fsm_config.resources}
         state_def.resource_requirements = [
-            resource_map[r]
-            if r in resource_map
-            else ResourceConfig(name=r, type=ResourceType.CUSTOM)
+            (
+                resource_map[r]
+                if r in resource_map
+                else ResourceConfig(name=r, type=ResourceType.CUSTOM)
+            ).to_runtime()
             for r in state_config.resources
         ]
         state_def.data_mode = data_mode

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`config.schema.ResourceConfig.to_runtime()`** converts a resource as a
+  configuration document declares it into `functions.base.ResourceConfig`, the
+  runtime type a state actually holds. `config` becomes `connection_params`,
+  `connection_pool_size` becomes `pool_size`, `timeout_seconds` becomes
+  `timeout`, and the two retry fields travel together in `retry_policy` under
+  the names the schema gives them. A consumer doing its own
+  configuration-to-core translation calls this rather than rewriting the
+  mapping.
+
 - **A state and an arc can say what they are, as data.**
   `StateDefinition.to_dict()` / `from_dict()` round-trip the declarative
   fields (name, type, description, metadata, timeout, retry, run-on-failure,
@@ -85,6 +94,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the operation's own, and an unbounded wait.
 
 ### Changed
+
+- **BREAKING: a state's `resource_requirements` holds the runtime
+  `ResourceConfig`, on every FSM.** The field is declared
+  `List[functions.base.ResourceConfig]` --- `core` imports that type and
+  imports nothing from `config` --- and the builder put
+  `config.schema.ResourceConfig` there, a second class of the same name
+  declaring the same concept under different field names. So on any FSM built
+  from configuration the field carried an object with none of the four fields
+  its annotation promises. A consumer reading `rc.config`,
+  `rc.connection_pool_size`, `rc.timeout_seconds`, `rc.retry_attempts` or
+  `rc.retry_delay_seconds` off a state's requirements now reads
+  `rc.connection_params`, `rc.pool_size`, `rc.timeout` and
+  `rc.retry_policy["retry_attempts"]` / `["retry_delay_seconds"]`. The document
+  format is unchanged: this is the shape of the object the builder produces,
+  not of the YAML it reads.
 
 - **BREAKING: a network holds one kind of state, and it is `StateDefinition`.**
   `State` --- a three-attribute class carrying `name`, `metadata` and
@@ -240,6 +264,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uninferred dictionary is gone rather than left in place.
 
 ### Fixed
+
+- **Four readers stop guessing which resource shape reached them.** Each had
+  grown its own accommodation for the two classes rather than the boundary
+  being translated once: `AsyncExecutionEngine` computed a state's acquisition
+  timeout as
+  `getattr(rc, "timeout_seconds", None) or getattr(rc, "timeout", None) or 30`
+  in two places; `StateNetwork._update_resource_requirements` bucketed on
+  `kind.value if isinstance(kind, Enum) else str(kind)`, its comment naming
+  "the two-`ResourceConfig` mismatch this package tracks separately"; and
+  `ResourceManager.configure_from_requirements` accommodated nothing --- it
+  reads `config.timeout` and raised `AttributeError` on every state the builder
+  produces. That last one is public API on a public class and has no in-tree
+  caller, which is the only reason it had never been seen. All four now read
+  the declared field.
 
 - **A network built through `StateNetwork`'s own API can be executed.** That
   API --- `add_state`, `add_arc`, `get_state`, `initial_states`, `validate`,

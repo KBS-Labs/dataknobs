@@ -23,6 +23,7 @@ from dataknobs_config import deep_merge
 
 from dataknobs_fsm.core.arc import DataIsolationMode
 from dataknobs_fsm.core.data_modes import DataHandlingMode
+from dataknobs_fsm.functions.base import ResourceConfig as RuntimeResourceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,13 @@ class StreamConfig(_StrictModel):
 
 
 class ResourceConfig(_StrictModel):
-    """Configuration for a resource."""
+    """Configuration for a resource, as a configuration document declares it.
+
+    This is the YAML-facing shape. The runtime shape is
+    :class:`dataknobs_fsm.functions.base.ResourceConfig` --- same concept,
+    different field names --- and :meth:`to_runtime` is the one place the two
+    are mapped onto each other.
+    """
 
     name: str
     type: ResourceType
@@ -125,6 +132,39 @@ class ResourceConfig(_StrictModel):
     retry_attempts: int = Field(default=3, ge=0)
     retry_delay_seconds: float = Field(default=1.0, ge=0)
     health_check_interval: int | None = Field(default=None, ge=1)
+
+    def to_runtime(self) -> RuntimeResourceConfig:
+        """This resource as the runtime type a state actually holds.
+
+        ``StateDefinition.resource_requirements`` is declared
+        ``List[functions.base.ResourceConfig]`` --- ``core`` imports the
+        runtime type and imports nothing from this package --- so translating
+        at this boundary is what the layering already says should happen. It
+        had never been done: the builder put *this* class into that field, and
+        four readers downstream each grew a hedge for whichever shape reached
+        them.
+
+        The two retry fields travel together in ``retry_policy`` under the
+        names declared here. That field is an open ``Dict`` nothing in this
+        package reads, so carrying the source's own names keeps the mapping
+        lossless and invents no vocabulary for a reader to have to learn.
+        """
+        return RuntimeResourceConfig(
+            name=self.name,
+            type=self.type.value,
+            connection_params=dict(self.config),
+            pool_size=self.connection_pool_size,
+            timeout=float(self.timeout_seconds),
+            retry_policy={
+                "retry_attempts": self.retry_attempts,
+                "retry_delay_seconds": self.retry_delay_seconds,
+            },
+            health_check_interval=(
+                float(self.health_check_interval)
+                if self.health_check_interval is not None
+                else None
+            ),
+        )
 
 
 class ArcConfig(_StrictModel):
