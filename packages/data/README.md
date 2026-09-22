@@ -429,6 +429,7 @@ results = await db.search(query)
 ## Streaming Support
 
 ```python
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_data import StreamConfig
 
 # Stream large datasets efficiently
@@ -439,10 +440,14 @@ config = StreamConfig(
     prefetch=2
 )
 
-# Stream read
-async for record in db.stream_read(query, config):
-    # Process each record without loading all into memory
-    process_record(record)
+# Stream read. A consumer that stops early -- a `break`, a raise, an early
+# return -- has to close what it was iterating; a bare `async for` does not,
+# and on a Postgres- or Elasticsearch-backed read that is a pooled connection
+# or a scroll held until the interpreter finalizes the abandoned read.
+async with aclosing_iter(db.stream_read(query, config)) as records:
+    async for record in records:
+        # Process each record without loading all into memory
+        process_record(record)
 
 # Stream write
 result = await db.stream_write(record_generator(), config)

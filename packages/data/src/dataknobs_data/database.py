@@ -546,10 +546,11 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     Example:
         ```python
+        from dataknobs_common.async_iter import aclosing_iter
         from dataknobs_data import async_database_factory, Record, Query, Filter, Operator
 
         # Create async database
-        db = async_database_factory("memory")
+        db = async_database_factory.create(backend="memory")
 
         # Use as async context manager
         async with db:
@@ -565,9 +566,14 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             # Update record
             await db.update(id1, Record({"name": "Alice", "age": 31}))
 
-            # Stream large datasets
-            async for record in db.stream_read():
-                process_record(record)
+            # Stream large datasets. The read is driven under
+            # ``aclosing_iter``, so a consumer that stops early --- a
+            # ``break``, a raise, an early return --- closes what it was
+            # iterating rather than leaving it suspended at its ``yield``
+            # with whatever it holds open. A bare ``async for`` does not.
+            async with aclosing_iter(db.stream_read()) as records:
+                async for record in records:
+                    process_record(record)
         ```
     """
 

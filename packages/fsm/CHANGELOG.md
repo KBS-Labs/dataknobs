@@ -67,6 +67,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FSMData` beside the record on every wrap: that attribute was written on
   each construction and never read by anything.
 
+
+- **One reading of "does this callable take the context?".** Three sites
+  answered it separately and disagreed: the config builder's resolved adapter,
+  the record-callable normalizer behind the validation gate and the enrichment
+  step, and `InterfaceWrapper`'s inline heuristic. It is now
+  `functions.base.accepts_context`, which all of them call, alongside
+  `INTERFACE_METHODS` --- one mapping from interface to the method that carries
+  its logic, replacing the copies in the builder and the function manager.
+  `normalize_record_callable` moves from
+  `functions.library._callables` (private, and in the wrong package for
+  something the manager and the builder both need) to `functions.base`, where
+  the interfaces it adapts are declared; the private module is gone.
+
+- **`ValueNormalizer` declares the mapping it accepts.** Its `normalizations`
+  argument was typed `Dict[str, str]` while the code has always handled a list
+  of normalizations per field --- and reaches that branch by default, since the
+  `"*"` fallback is a list. It is now
+  `Mapping[str, str | list[str]]`, which also lets a caller pass a narrower
+  dict.
+
+- **`custom_functions` declares what it carries.** The channel on `SimpleFSM`,
+  `AsyncSimpleFSM`, `AdvancedFSM`, `build_fsm` and
+  `FSMBuilder.register_function` was typed `dict[str, Callable]`, but a bare
+  interface instance is not a `Callable` --- which is why the tree holds three
+  separate pieces of machinery for finding its interface method. It is now
+  `Mapping[str, RegisteredFunction]`, a new public alias in
+  `dataknobs_fsm.functions.base` naming the five shapes the channel accepts;
+  `Mapping` rather than `dict` because the parameter is only read, so an
+  existing `dict[str, Callable]` still satisfies it. Under the old annotation
+  mypy read all four `isinstance` arms of
+  `FunctionWrapper._normalize_interface_callable` as unreachable.
+
+- **`process_batch` takes a `Sequence`, on both twins.** `data` was declared
+  `list[dict[str, Any] | Record]`, and `list` is invariant: a caller holding a
+  `list[dict[str, Any]]` --- which is what a batch of rows read from a
+  database is --- could not pass it, though every element was acceptable. The
+  only two in-tree call sites passing a list whose element type is visible
+  both carried a blanket `# type: ignore` at the call rather than a type, and
+  one of the two suppressed nothing at all. The asynchronous body only
+  iterates `data` and the synchronous one forwards it, so nothing was being
+  bought by the narrower type.
+
+- **`BatchExecutor` no longer keeps a per-type list of released resource
+  ids.** The unreachable body above also appended each released id to a list
+  nothing read back or drained --- `_acquire_resources` took its length for a
+  `pool_size` metadata field and nothing else --- so restoring the release
+  would have grown that list once per allocation for the life of the executor.
+  A pool nothing draws from is an accumulator, and the id it accumulated was
+  already the caller's to reuse, so it is gone, along with the per-type
+  `asyncio.Lock` created beside it and never acquired. The `pool_size` and
+  `final_pool_size` keys of `context.metadata["batch_<id>_resources"]` go with
+  it; `resource_type`, `limit`, `acquired_at` and `released_at` remain.
+
+  `enable_resource_pooling` does not pool and never did: nothing in this class
+  hands out a resource or enforces the `limit` in `context.resource_limits`.
+  The flag gates the bookkeeping above and the released-status transition, and
+  its docstring now says so. Whether to implement pooling or drop the
+  parameter is open.
+
+- **Batch bookkeeping is carried in `context.metadata["batch_info"]` alone.**
+  `BatchExecutor` also set a `batch_id` attribute directly on the
+  `ExecutionContext` it cloned per item. It was never part of that class ---
+  the type checker reported it as undeclared at both sites --- and the same
+  value has always been in `batch_info` beside it, written at the same moment.
+  A transform reading `context.batch_id` should read
+  `context.metadata["batch_info"]["batch_id"]`.
+
+- **execution-history walks bind `children` once per node rather than
+  re-reading it.** `dataknobs-structures` now answers `Tree.children` with a
+  fresh tuple rather than the list the node holds, so each read allocates one.
+  All seven recursive walks over the history tree tested `node.children` and
+  then iterated it, paying for two per node visited; each now reads once. No
+  behaviour changed.
+- **`execution/history.py` carries full type annotations.** The nine findings
+  the type checker had against it are cleared and the package ceiling drops
+  with them: six nested walk helpers with no return annotation, a path list
+  and a node variable it could not infer, and an `append` onto a dictionary
+  value it had therefore widened to `object`. Annotations only; no behaviour
+  changed, and a `# type: ignore` that existed to paper over that same
+  uninferred dictionary is gone rather than left in place.
+
 ### Fixed
 
 - **A failing state transform says what went wrong, not only where.**
@@ -429,88 +510,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unreachable: every allocation stayed marked as held for the life of the
   context. It now compares members and marks a released allocation
   `AVAILABLE`, which is what `ExecutionContext.release_resource` does.
-
-### Changed
-
-- **One reading of "does this callable take the context?".** Three sites
-  answered it separately and disagreed: the config builder's resolved adapter,
-  the record-callable normalizer behind the validation gate and the enrichment
-  step, and `InterfaceWrapper`'s inline heuristic. It is now
-  `functions.base.accepts_context`, which all of them call, alongside
-  `INTERFACE_METHODS` --- one mapping from interface to the method that carries
-  its logic, replacing the copies in the builder and the function manager.
-  `normalize_record_callable` moves from
-  `functions.library._callables` (private, and in the wrong package for
-  something the manager and the builder both need) to `functions.base`, where
-  the interfaces it adapts are declared; the private module is gone.
-
-- **`ValueNormalizer` declares the mapping it accepts.** Its `normalizations`
-  argument was typed `Dict[str, str]` while the code has always handled a list
-  of normalizations per field --- and reaches that branch by default, since the
-  `"*"` fallback is a list. It is now
-  `Mapping[str, str | list[str]]`, which also lets a caller pass a narrower
-  dict.
-
-- **`custom_functions` declares what it carries.** The channel on `SimpleFSM`,
-  `AsyncSimpleFSM`, `AdvancedFSM`, `build_fsm` and
-  `FSMBuilder.register_function` was typed `dict[str, Callable]`, but a bare
-  interface instance is not a `Callable` --- which is why the tree holds three
-  separate pieces of machinery for finding its interface method. It is now
-  `Mapping[str, RegisteredFunction]`, a new public alias in
-  `dataknobs_fsm.functions.base` naming the five shapes the channel accepts;
-  `Mapping` rather than `dict` because the parameter is only read, so an
-  existing `dict[str, Callable]` still satisfies it. Under the old annotation
-  mypy read all four `isinstance` arms of
-  `FunctionWrapper._normalize_interface_callable` as unreachable.
-
-- **`process_batch` takes a `Sequence`, on both twins.** `data` was declared
-  `list[dict[str, Any] | Record]`, and `list` is invariant: a caller holding a
-  `list[dict[str, Any]]` --- which is what a batch of rows read from a
-  database is --- could not pass it, though every element was acceptable. The
-  only two in-tree call sites passing a list whose element type is visible
-  both carried a blanket `# type: ignore` at the call rather than a type, and
-  one of the two suppressed nothing at all. The asynchronous body only
-  iterates `data` and the synchronous one forwards it, so nothing was being
-  bought by the narrower type.
-
-- **`BatchExecutor` no longer keeps a per-type list of released resource
-  ids.** The unreachable body above also appended each released id to a list
-  nothing read back or drained --- `_acquire_resources` took its length for a
-  `pool_size` metadata field and nothing else --- so restoring the release
-  would have grown that list once per allocation for the life of the executor.
-  A pool nothing draws from is an accumulator, and the id it accumulated was
-  already the caller's to reuse, so it is gone, along with the per-type
-  `asyncio.Lock` created beside it and never acquired. The `pool_size` and
-  `final_pool_size` keys of `context.metadata["batch_<id>_resources"]` go with
-  it; `resource_type`, `limit`, `acquired_at` and `released_at` remain.
-
-  `enable_resource_pooling` does not pool and never did: nothing in this class
-  hands out a resource or enforces the `limit` in `context.resource_limits`.
-  The flag gates the bookkeeping above and the released-status transition, and
-  its docstring now says so. Whether to implement pooling or drop the
-  parameter is open.
-
-- **Batch bookkeeping is carried in `context.metadata["batch_info"]` alone.**
-  `BatchExecutor` also set a `batch_id` attribute directly on the
-  `ExecutionContext` it cloned per item. It was never part of that class ---
-  the type checker reported it as undeclared at both sites --- and the same
-  value has always been in `batch_info` beside it, written at the same moment.
-  A transform reading `context.batch_id` should read
-  `context.metadata["batch_info"]["batch_id"]`.
-
-- **execution-history walks bind `children` once per node rather than
-  re-reading it.** `dataknobs-structures` now answers `Tree.children` with a
-  fresh tuple rather than the list the node holds, so each read allocates one.
-  All seven recursive walks over the history tree tested `node.children` and
-  then iterated it, paying for two per node visited; each now reads once. No
-  behaviour changed.
-- **`execution/history.py` carries full type annotations.** The nine findings
-  the type checker had against it are cleared and the package ceiling drops
-  with them: six nested walk helpers with no return annotation, a path list
-  and a node variable it could not infer, and an `append` onto a dictionary
-  value it had therefore widened to `object`. Annotations only; no behaviour
-  changed, and a `# type: ignore` that existed to paper over that same
-  uninferred dictionary is gone rather than left in place.
 
 ### Licensing
 

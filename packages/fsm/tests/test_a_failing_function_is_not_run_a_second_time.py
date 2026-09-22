@@ -59,6 +59,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import pytest
+
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import build_fsm
 from dataknobs_fsm.core.context_factory import ContextFactory
@@ -336,3 +338,38 @@ def test_the_arity_reading_agrees_with_what_a_call_would_do() -> None:
     # default here is the historical first attempt: the state object alone.
     assert accepts_one_argument(object(), default=True)
     assert not accepts_one_argument(object(), default=False)
+
+
+def test_a_required_keyword_only_is_read_past_var_positional() -> None:
+    """``*args`` does not excuse a required keyword-only parameter.
+
+    ``accepts_one_argument`` states the rule outright: a required
+    keyword-only parameter cannot be filled by a positional call, so such a
+    callable answers ``False`` and is given ``(record, context)`` instead,
+    where a keyword ``context`` at least has a chance of binding by name.
+    The reading applied that rule only when it reached the parameter ---
+    and ``*args`` returned before it could, because ``*args`` alone does
+    satisfy the positional half of the question.
+
+    So the one shape where both halves disagree, ``(*args, mandatory)``, was
+    read as one-argument-callable and called with the state object alone.
+    The call raises before the body exists, which is the failure the whole
+    reading was written to stop guessing at --- and it is asserted here
+    rather than described, so the reading is checked against what a call
+    does rather than against this docstring.
+    """
+    from dataknobs_fsm.functions.base import accepts_one_argument
+
+    def var_positional_then_required_keyword(*args: Any, mandatory: Any) -> Any:
+        return args, mandatory
+
+    with pytest.raises(TypeError):
+        var_positional_then_required_keyword({"a": 1})
+
+    assert not accepts_one_argument(var_positional_then_required_keyword)
+
+    # The keyword-only parameters that a positional call CAN leave unbound
+    # are unaffected: one with a default, and ``**kwargs``, both still
+    # answer ``True`` beyond a ``*args``.
+    assert accepts_one_argument(lambda *args, context=None: args)
+    assert accepts_one_argument(lambda *args, **kwargs: args)

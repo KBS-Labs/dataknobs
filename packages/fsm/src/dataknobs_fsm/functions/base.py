@@ -471,11 +471,13 @@ def accepts_one_argument(func: Any, *, default: bool = True) -> bool:
 
     **Positional parameters only**, and required ones are what decide it: a
     callable is asked for one argument, so it must have somewhere to put it
-    and nothing else it insists on. ``*args`` satisfies both. A *required*
-    keyword-only parameter cannot be filled by a positional call at all, so
-    such a callable answers ``False`` here and is given ``(record, context)``,
-    where a keyword ``context`` at least has a chance of being bound by name
-    --- which is more than the one-argument call could offer it.
+    and nothing else it insists on. ``*args`` satisfies both, but only as far
+    as it reaches: every parameter it can absorb precedes it. A *required*
+    keyword-only parameter --- which can only follow it --- cannot be filled
+    by a positional call at all, so such a callable answers ``False`` here and
+    is given ``(record, context)``, where a keyword ``context`` at least has a
+    chance of being bound by name --- which is more than the one-argument call
+    could offer it.
 
     Args:
         func: The callable to read. An unintrospectable builtin answers
@@ -492,9 +494,16 @@ def accepts_one_argument(func: Any, *, default: bool = True) -> bool:
         return default
     slots = 0
     required = 0
+    var_positional = False
     for param in params:
         if param.kind is inspect.Parameter.VAR_POSITIONAL:
-            return required <= 1
+            # ``*args`` answers the positional half of the question outright,
+            # but it cannot answer the keyword-only half --- nothing binds a
+            # required keyword-only parameter positionally. Only parameters
+            # ``*args`` can absorb come before it, so the scan continues to
+            # reach the ones that come after.
+            var_positional = True
+            continue
         if param.kind in (
             inspect.Parameter.POSITIONAL_ONLY,
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -507,7 +516,7 @@ def accepts_one_argument(func: Any, *, default: bool = True) -> bool:
             and param.default is inspect.Parameter.empty
         ):
             return False
-    return slots >= 1 and required <= 1
+    return (slots >= 1 or var_positional) and required <= 1
 
 
 def state_step_args(
