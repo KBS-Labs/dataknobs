@@ -1051,7 +1051,6 @@ async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_must_su
             PROJECTION,
             surface_forms={"table": "products", "form": "folded_form", "entity": "sku"},
         ),
-        schema=[*SCHEMA, {"name": "folded_form", "type": "string"}],
     )
     document["sources"][0]["database"] = {
         "backend": "sqlite",

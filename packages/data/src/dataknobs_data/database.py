@@ -19,6 +19,7 @@ import os
 import threading
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
@@ -30,7 +31,7 @@ from dataknobs_common import (
 )
 from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.callbacks import is_async_callable, run_callback
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results
@@ -373,17 +374,32 @@ def prepare_atomic_batch(
 def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
     """Build a ``DatabaseSchema`` from a schema-config value.
 
-    Accepts a ``DatabaseSchema`` (returned as-is), a dict (built via
-    ``DatabaseSchema.from_dict``), or anything else (``None``). Shared by
-    the ``Database`` bases' legacy dict construction and by
-    ``DatabaseConfig._normalize_dict`` so the dict→schema rule lives in
-    exactly one place.
+    Accepts a ``DatabaseSchema`` (returned as-is), a mapping (built via
+    ``DatabaseSchema.from_dict``), a list of field rows (read as that
+    mapping's ``fields:``, which is how an ontology binding writes one), or
+    ``None`` (no schema). Shared by the ``Database`` bases' legacy dict
+    construction and by ``DatabaseConfig._normalize_dict`` so the
+    config→schema rule lives in exactly one place.
+
+    Anything else is refused rather than read as no schema: a scalar here
+    declares nothing, and a schema that silently declares nothing is one every
+    check keyed on it passes over.
+
+    Raises:
+        ValidationError: When ``schema_config`` is none of the above, or is a
+            declaration ``DatabaseSchema.from_dict`` refuses.
     """
-    if isinstance(schema_config, DatabaseSchema):
+    if schema_config is None or isinstance(schema_config, DatabaseSchema):
         return schema_config
-    if isinstance(schema_config, dict):
+    if isinstance(schema_config, Mapping):
         return DatabaseSchema.from_dict(schema_config)
-    return None
+    if isinstance(schema_config, (list, tuple)):
+        return DatabaseSchema.from_dict({"fields": schema_config})
+    raise ValidationError(
+        f"a `schema:` is a mapping (`{{fields: ...}}`) or a list of "
+        f"`{{name: <column>, type: <type>}}` rows, got {type(schema_config).__name__}",
+        context={"got": type(schema_config).__name__},
+    )
 
 
 class RecordStorageMixin:
