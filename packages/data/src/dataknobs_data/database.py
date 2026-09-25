@@ -707,10 +707,15 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         module-level :func:`extract_schema_from_config`.
 
         Args:
-            schema_config: Can be a DatabaseSchema, dict, or None
+            schema_config: A ``DatabaseSchema``, a mapping, a list of field
+                rows, or ``None``
 
         Returns:
-            DatabaseSchema instance or None
+            DatabaseSchema instance, or None for ``None``
+
+        Raises:
+            ValidationError: When ``schema_config`` is any other value, or a
+                declaration the schema reader refuses.
         """
         return extract_schema_from_config(schema_config)
 

@@ -209,10 +209,13 @@ binding. A projection naming a column that declaration lacks is rejected naming
 the column. Nothing here interpolates a name into a query: `Filter` is the only
 path.
 
-A row is read by the same reader as a database config's `schema:`, so it takes
-the keys a database field takes: `name`, `type` (default `string`), `required`,
-`default` and `metadata`. A key outside those, a repeated name, or an unknown
-type is refused at load, naming the binding.
+A row is read by the same reader as a database config's `schema:`, but it
+takes only what the registry reads of it: `name` and `type` (default
+`string`, which is also what `type:` with no value means). A database field's
+other keys — `required`, `default`, `metadata` — are refused here rather than
+loaded and ignored, because the registry uses the declaration to check column
+names and nothing else. A repeated name or an unknown type is refused too. Every
+refusal names the binding.
 
 One `schema:` covers **both** of the binding's tables. `FieldSchema` carries no
 table, so a name declared once is checked once and both uses are checked against
