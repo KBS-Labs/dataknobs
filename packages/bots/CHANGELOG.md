@@ -158,6 +158,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `database` grounded source reads `schema:` through the shared schema
+  reader.** Its `schema: {fields: ...}` is read by
+  `DatabaseSchema.from_dict`, the reader a database config's `schema:` goes
+  through, in place of a copy of its own. So `metadata` is honoured --
+  `metadata.description` becomes the filter's description, where every field
+  used to read `Filter on <field>` -- and `required` and `default` reach the
+  schema. `enum` and type names in any case read as before.
+
+  **Migration.** What the copy degraded quietly is now refused, with a
+  `dataknobs_common.exceptions.ValidationError` whose message begins
+  `source '<name>': `:
+
+  | Declaration | Used to | Write instead |
+  |---|---|---|
+  | an unknown type, `title: money` | become `string` (warned only in the bare form) | a field type, listed in the message |
+  | a key a field does not take, `{type: string, description: ...}` | be ignored | `metadata: {description: ...}` |
+  | a field given as `null`, or a row with no `name` | be warned about and skipped | a type, or the row's `name` |
+  | a repeated row name | let the last row win | one row per field |
+  | `fields:` that is neither a mapping nor a list, `fields: title` | be warned about, leaving no fields | a mapping or a list of rows |
+  | columns beside `fields:`, `schema: {title: string}` | build a source with no fields, silently | `schema: {fields: {title: string}}` |
+  | a non-string field name, `{5: integer}` | raise a bare `TypeError` | a string name |
+  | `type:` with no value | raise a bare `AttributeError` | nothing: it is now `string` |
+
+  **Two exception types, by who refused.** The source's own checks still raise
+  `ValueError` -- an unknown source type, a `schema:` that is not a mapping, a
+  backend option no backend accepts. A refusal from the schema reader is a
+  `ValidationError`, which is not a `ValueError` subclass, so an
+  `except ValueError` around `DynaBot.from_config()` that handled a bad source
+  config needs to catch it as well.
+
+- **Both database doors build their database off the event loop.** A
+  `database` grounded source and `DataKnobsRegistryAdapter.initialize()` each
+  build a database from configuration inside an `async def`, and resolving a
+  backend name imports its implementation from disk. Both now run the build
+  in `asyncio.to_thread`, as the `dataknobs-data` doors that do the same
+  already did, so building a bot on a shared loop no longer stalls the other
+  tasks on it.
+
 - **`HeadingTreeIndex` expands a region through the shared hierarchy walks.**
   The selection lives in `dataknobs-data` and the change is recorded in full
   there; this entry is what a consumer of this package sees. On a well-formed

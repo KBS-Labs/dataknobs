@@ -14,13 +14,19 @@ from dataknobs_common.exceptions import ValidationError
 from .fields import FieldType
 
 #: The keys a field declaration takes, in either spelling. ``dimensions`` and
-#: ``source_field`` are the vector shorthands, folded into ``metadata``. A door
+#: ``source_field`` are the vector shorthands, and ``enum`` the allowed-values
+#: one that :class:`~dataknobs_data.sources.database.DatabaseSource` reads; all
+#: three fold into ``metadata``. A door
 #: that uses less of a declaration narrows this set (``keys=`` on
 #: :func:`read_field_declarations`), so that a key it would discard is refused
 #: rather than loaded.
 FIELD_KEYS: frozenset[str] = frozenset(
-    {"name", "type", "required", "default", "metadata", "dimensions", "source_field"}
+    {"name", "type", "required", "default", "metadata", "dimensions", "source_field", "enum"}
 )
+
+#: The keys that fold into a field's ``metadata`` under their own name, where an
+#: explicit ``metadata`` entry wins.
+_METADATA_SHORTHANDS: tuple[str, ...] = ("dimensions", "source_field", "enum")
 
 #: The keys a schema declaration takes at its top level.
 SCHEMA_KEYS: frozenset[str] = frozenset({"fields", "metadata"})
@@ -288,7 +294,13 @@ class DatabaseSchema:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> DatabaseSchema:
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        origin: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> DatabaseSchema:
         """Create from dictionary representation.
 
         A schema declaration takes ``fields:`` and ``metadata:`` and nothing
@@ -312,34 +324,44 @@ class DatabaseSchema:
         otherwise declare nothing, and every check keyed on the schema would
         then pass over nothing.
 
+        Args:
+            data: The declaration.
+            origin: Where it came from (``"source 'courses'"``), prefixed to
+                every refusal, the top-level ones included.
+            context: Carried into every refusal's ``context``.
+
         Raises:
             ValidationError: When ``data`` is not a mapping, carries a key other
                 than ``fields`` and ``metadata``, or declares a field
                 :func:`read_field_declarations` refuses.
         """
+        prefix = f"{origin}: " if origin else ""
+        base: dict[str, Any] = dict(context or {})
         if not isinstance(data, Mapping):
             raise ValidationError(
-                f"a schema declaration is a mapping, got {type(data).__name__}",
-                context={"got": type(data).__name__},
+                f"{prefix}a schema declaration is a mapping, got {type(data).__name__}",
+                context={**base, "got": type(data).__name__},
             )
         unknown = sorted(str(key) for key in data if key not in SCHEMA_KEYS)
         if unknown:
             raise ValidationError(
-                f"a schema declaration takes `fields:` and `metadata:` and nothing else, "
-                f"and this one declares {unknown}. Columns go under `fields:` -- "
+                f"{prefix}a schema declaration takes `fields:` and `metadata:` and nothing "
+                f"else, and this one declares {unknown}. Columns go under `fields:` -- "
                 f"`{{fields: {{<column>: <type>}}}}` or "
                 f"`{{fields: [{{name: <column>, type: <type>}}]}}`",
-                context={"keys": unknown},
+                context={**base, "keys": unknown},
             )
         # An explicit `null` is the key left out, as it is for a field's keys.
         metadata = data.get("metadata") or {}
         if not isinstance(metadata, Mapping):
             raise ValidationError(
-                f"a schema's `metadata:` is a mapping, got {type(metadata).__name__}",
-                context={"got": type(metadata).__name__},
+                f"{prefix}a schema's `metadata:` is a mapping, got {type(metadata).__name__}",
+                context={**base, "got": type(metadata).__name__},
             )
         return cls(
-            fields=read_field_declarations(data.get("fields") or {}),
+            fields=read_field_declarations(
+                data.get("fields") or {}, origin=origin, context=context
+            ),
             metadata=dict(metadata),
         )
 
@@ -362,9 +384,10 @@ def read_field_declarations(
     - **A sequence of rows**, each a field mapping that carries its ``name``.
 
     A field mapping takes the keys in ``keys`` (by default :data:`FIELD_KEYS`).
-    ``type`` defaults to ``string``; ``required`` is a boolean; ``dimensions``
-    and ``source_field`` fold into ``metadata``, where an explicit ``metadata``
-    entry wins. A mapping entry may repeat its ``name`` (which is what
+    ``type`` defaults to ``string`` and is a type name in any case (``String``
+    is ``string``); ``required`` is a boolean; ``enum`` is a list of the values
+    a field allows; ``dimensions``, ``source_field`` and ``enum`` fold into
+    ``metadata``, where an explicit ``metadata`` entry wins. A mapping entry may repeat its ``name`` (which is what
     :meth:`DatabaseSchema.to_dict` writes) and must then agree with its key. A
     key a field takes, given an explicit ``null``, reads as that key left out
     -- YAML's ``type:`` with no value is ``string``, as ``type`` left out is. A
@@ -503,8 +526,12 @@ def _field_schema(
 
     declared_type = value.get("type", FieldType.STRING)
     try:
+        # Every type's value is its member name lowercased, so folding the case
+        # can only ever find the member the name spells.
         field_type = (
-            declared_type if isinstance(declared_type, FieldType) else FieldType(str(declared_type))
+            declared_type
+            if isinstance(declared_type, FieldType)
+            else FieldType(str(declared_type).lower())
         )
     except ValueError as exc:
         raise ValidationError(
@@ -529,8 +556,18 @@ def _field_schema(
             f"{type(declared_metadata).__name__}; it is a mapping",
             context=field_context,
         )
+    enum = value.get("enum")
+    if enum is not None and not isinstance(enum, (list, tuple)):
+        # A string is iterable, so it would reach a filter schema as one
+        # allowed value per letter.
+        raise ValidationError(
+            f"{prefix}field {name!r} declares `enum: {enum!r}`; it is a list of the "
+            f"values the field allows",
+            context={**field_context, "enum": enum},
+        )
+
     metadata: dict[str, Any] = {}
-    for shorthand in ("dimensions", "source_field"):
+    for shorthand in _METADATA_SHORTHANDS:
         if shorthand in value:
             metadata[shorthand] = value[shorthand]
     metadata.update(declared_metadata)

@@ -268,8 +268,8 @@ def test_a_key_set_the_reader_cannot_read_is_a_programming_error() -> None:
     """A door may narrow the keys a field takes, never widen them: a key the
     reader does not read would load and be discarded.
     """
-    with pytest.raises(ValueError, match="'enum'"):
-        read_field_declarations({"sku": "string"}, keys=frozenset({"name", "type", "enum"}))
+    with pytest.raises(ValueError, match="'description'"):
+        read_field_declarations({"sku": "string"}, keys=frozenset({"name", "type", "description"}))
 
 
 def test_an_empty_declaration_is_still_an_empty_schema() -> None:
@@ -278,6 +278,76 @@ def test_an_empty_declaration_is_still_an_empty_schema() -> None:
     assert DatabaseSchema.from_dict({"metadata": {"owner": "catalog"}}).metadata == {
         "owner": "catalog"
     }
+
+
+# --------------------------------------------------------------------------
+# `enum`, a type name in any case, and a caller that says where it read from
+# --------------------------------------------------------------------------
+
+
+def test_enum_folds_into_metadata_in_both_spellings() -> None:
+    """`DatabaseSource.get_schema()` reads `metadata["enum"]`; `enum:` is its shorthand."""
+    as_mapping = DatabaseSchema.from_dict(
+        {"fields": {"dept": {"type": "string", "enum": ["CS", "Math"]}}}
+    )
+    as_rows = DatabaseSchema.from_dict(
+        {"fields": [{"name": "dept", "type": "string", "enum": ["CS", "Math"]}]}
+    )
+    assert as_mapping.fields["dept"].metadata == {"enum": ["CS", "Math"]}
+    assert as_rows == as_mapping
+
+
+def test_an_explicit_metadata_enum_wins_over_the_shorthand() -> None:
+    """The same precedence `dimensions` and `source_field` already have."""
+    schema = DatabaseSchema.from_dict(
+        {"fields": {"dept": {"enum": ["CS"], "metadata": {"enum": ["Math"]}}}}
+    )
+    assert schema.fields["dept"].metadata["enum"] == ["Math"]
+
+
+@pytest.mark.parametrize("enum", ["CS", 5, {"CS": 1}])
+def test_an_enum_that_is_not_a_list_is_refused_naming_the_field(enum: Any) -> None:
+    """A string would reach the filter schema as `list("CS")`, one letter a value."""
+    with pytest.raises(ValidationError) as excinfo:
+        DatabaseSchema.from_dict({"fields": {"dept": {"enum": enum}}})
+    assert "'dept'" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        ("String", FieldType.STRING),
+        ("TEXT", FieldType.TEXT),
+        ("Sparse_Vector", FieldType.SPARSE_VECTOR),
+    ],
+)
+def test_a_type_name_is_read_in_any_case(declared: str, expected: FieldType) -> None:
+    """Every type's name is its member name lowercased, so `String` can only mean `string`."""
+    as_mapping = DatabaseSchema.from_dict({"fields": {"sku": declared}})
+    as_rows = DatabaseSchema.from_dict({"fields": [{"name": "sku", "type": declared}]})
+    assert as_mapping.fields["sku"].type is expected
+    assert as_rows == as_mapping
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        {"columns": {"sku": "string"}},
+        {"metadata": 5},
+        {"fields": {"sku": "money"}},
+        {"fields": [{"type": "string"}]},
+    ],
+)
+def test_from_dict_names_its_origin_in_every_refusal(declaration: dict[str, Any]) -> None:
+    """A caller that knows where the declaration came from says so once, and
+    every refusal -- the top-level ones included -- carries it.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        DatabaseSchema.from_dict(
+            declaration, origin="source 'courses'", context={"source": "courses"}
+        )
+    assert str(excinfo.value).startswith("source 'courses': ")
+    assert excinfo.value.context["source"] == "courses"
 
 
 # --------------------------------------------------------------------------
@@ -332,6 +402,7 @@ async def test_an_ontology_row_with_a_misspelt_key_is_refused_naming_the_binding
         {"metadata": {"sql_type": "uuid"}},
         {"dimensions": 3},
         {"source_field": "title"},
+        {"enum": ["a", "b"]},
         {"description": "the product code"},
     ],
 )

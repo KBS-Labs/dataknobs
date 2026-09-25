@@ -10,7 +10,7 @@ for database backends and ``dataknobs-bots`` for vector KB sources.
 
 from __future__ import annotations
 
-import functools
+import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -26,8 +26,6 @@ from dataknobs_common.registry import PluginFactory, PluginRegistry
 from dataknobs_data.sources.base import GroundedSource
 
 if TYPE_CHECKING:
-    from dataknobs_data.fields import FieldType
-    from dataknobs_data.schema import DatabaseSchema
     from dataknobs_data.vector.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__)
@@ -59,8 +57,13 @@ async def create_source_from_config(
         A fully initialized source ready for use in the grounded pipeline.
 
     Raises:
-        ValueError: If the source type is unknown or required dependencies
-            are missing.
+        ValueError: If the source type is unknown, required dependencies
+            are missing, or an option is one the source and its backend
+            both refuse -- a refusal by this package's own checks.
+        ValidationError: If a ``database`` source's ``schema`` declares
+            something the shared schema reader refuses (an unknown type, a
+            key a field does not take, a repeated or unnamed field). The
+            message names the source.
 
     Supported source types:
 
@@ -71,9 +74,13 @@ async def create_source_from_config(
 
     ``database``
         Creates a :class:`DatabaseSource` from the config options.
-        Required options: ``backend`` (database backend key),
-        ``content_field``.  Optional: ``connection``,
-        ``text_search_fields``, ``schema`` (field definitions).
+        Source options: ``content_field``, ``text_search_fields``,
+        ``description``, and ``schema`` (``{fields: ...}``, read by
+        :meth:`~dataknobs_data.schema.DatabaseSchema.from_dict`). Every
+        other option is the backend's -- ``backend`` itself, ``path`` for
+        a file-backed one -- and is forwarded to the database factory. An
+        absent ``backend`` builds the in-process store, and the factory
+        reports having chosen it.
 
     Example config (YAML)::
 
@@ -84,7 +91,7 @@ async def create_source_from_config(
           - type: database
             name: courses
             backend: sqlite
-            connection: "courses.db"
+            path: "courses.db"
             content_field: description
             text_search_fields: [title, description]
             schema:
@@ -481,15 +488,18 @@ async def _create_database_source(
     Source options:
         content_field: Field whose value becomes SourceResult.content.
         text_search_fields: Fields for LIKE text search.
-        schema: Dict with "fields" -- either a mapping of field name to
-            type def, or a list of mappings each carrying ``name``.
+        schema: ``{fields: ...}``, in either spelling
+            :meth:`~dataknobs_data.schema.DatabaseSchema.from_dict` reads.
         description: Human-readable source description.
 
     Raises:
         ValueError: If an option is neither a source option nor a key the
-            chosen backend accepts.
+            chosen backend accepts, or ``schema`` is not a mapping.
+        ValidationError: If ``schema`` declares something the shared reader
+            refuses, naming this source.
     """
     from dataknobs_data import async_database_factory
+    from dataknobs_data.schema import DatabaseSchema
     from dataknobs_data.sources.database import DatabaseSource
 
     opts = config.options
@@ -501,7 +511,9 @@ async def _create_database_source(
     db_config: dict[str, Any] = {k: v for k, v in opts.items() if k not in _SOURCE_OPTIONS}
 
     try:
-        db = async_database_factory.create(**db_config)
+        # Off the loop: resolving a backend name imports its implementation
+        # from disk, and a file backend's config normalizes its path.
+        db = await asyncio.to_thread(async_database_factory.create, **db_config)
     except ValueError as exc:
         # The factory names the config class and the offending key; a bot
         # config can declare several sources, so name which one it was.
@@ -517,8 +529,9 @@ async def _create_database_source(
             f"Source {config.name!r}: 'schema' must be a mapping carrying a "
             f"'fields' key, got {type(schema_config).__name__}"
         )
-    field_defs = schema_config.get("fields", {})
-    schema = _build_database_schema(field_defs)
+    schema = DatabaseSchema.from_dict(
+        schema_config, origin=f"source {config.name!r}", context={"source": config.name}
+    )
 
     # A backend that needs connecting raises on every query until it is.
     # ``DatabaseSource`` no longer absorbs that -- it lets the failure
@@ -545,122 +558,6 @@ async def _create_database_source(
         text_search_fields=text_search_fields,
         description=description,
     )
-
-
-@functools.cache
-def _get_field_type_names() -> dict[str, FieldType]:
-    """Build the field type name mapping (cached after first call)."""
-    from dataknobs_data.fields import FieldType
-
-    result: dict[str, FieldType] = {}
-    for ft in FieldType:
-        result[ft.name.lower()] = ft
-        result[ft.value.lower()] = ft
-    return result
-
-
-def _normalize_field_defs(field_defs: Any) -> dict[str, Any]:
-    """Accept either shape ``schema.fields`` is written in.
-
-    The mapping form keys each definition by field name::
-
-        fields:
-          title: string
-          summary: {type: text}
-
-    The list form carries the name inside each entry, which is how the
-    grounded-reasoning guide writes it and how the rest of a bot config
-    spells a list of named things::
-
-        fields:
-          - name: title
-            type: string
-
-    An entry that is not a mapping, or a mapping with no ``name``, cannot
-    be placed in the schema; it is reported and skipped rather than
-    failing the whole source, matching how an unknown field type is
-    handled below.
-    """
-    if isinstance(field_defs, Mapping):
-        return dict(field_defs)
-    if not isinstance(field_defs, Sequence) or isinstance(field_defs, str | bytes):
-        logger.warning(
-            "schema.fields is %r, which is neither a mapping of field names "
-            "nor a list of field definitions; the schema has no fields",
-            field_defs,
-        )
-        return {}
-
-    normalized: dict[str, Any] = {}
-    for entry in field_defs:
-        if not isinstance(entry, Mapping) or not entry.get("name"):
-            logger.warning(
-                "Field definition %r carries no 'name' and cannot be placed "
-                "in the schema, skipping",
-                entry,
-            )
-            continue
-        definition = {k: v for k, v in entry.items() if k != "name"}
-        normalized[str(entry["name"])] = definition
-    return normalized
-
-
-def _build_database_schema(
-    field_defs: Any,
-) -> DatabaseSchema:
-    """Build a DatabaseSchema from config field definitions.
-
-    ``field_defs`` is either shape :func:`_normalize_field_defs` accepts.
-    Each field definition can be:
-        - A string type name: ``"string"``, ``"integer"``, ``"text"``, etc.
-        - A dict with ``type`` and optional ``enum``:
-          ``{type: string, enum: [CS, Math]}``
-
-    Returns:
-        A populated DatabaseSchema.
-    """
-    from dataknobs_data.fields import FieldType
-    from dataknobs_data.schema import DatabaseSchema
-
-    normalized = _normalize_field_defs(field_defs)
-    type_map = _get_field_type_names()
-    kwargs: dict[str, FieldType] = {}
-    enum_fields: dict[str, list[Any]] = {}
-
-    for name, definition in normalized.items():
-        if isinstance(definition, str):
-            ft = type_map.get(definition.lower())
-            if ft is None:
-                logger.warning(
-                    "Unknown field type %r for field %r, defaulting to STRING",
-                    definition,
-                    name,
-                )
-                ft = FieldType.STRING
-            kwargs[name] = ft
-        elif isinstance(definition, dict):
-            type_str = definition.get("type", "string")
-            ft = type_map.get(type_str.lower(), FieldType.STRING)
-            kwargs[name] = ft
-
-            enum_values = definition.get("enum")
-            if enum_values:
-                enum_fields[name] = enum_values
-        else:
-            logger.warning(
-                "Unexpected field definition for %r: %r, skipping",
-                name,
-                definition,
-            )
-
-    schema = DatabaseSchema.create(**kwargs)
-
-    # Apply enum metadata after creation
-    for name, values in enum_fields.items():
-        if name in schema.fields:
-            schema.fields[name].metadata["enum"] = values
-
-    return schema
 
 
 # ------------------------------------------------------------------

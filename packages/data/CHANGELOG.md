@@ -30,14 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - {name: sku, type: string}
   ```
 
-  A field takes `name`, `type` (default `string`), `required` (a boolean),
-  `default`, `metadata`, and the vector shorthands `dimensions` and
-  `source_field`, which fold into `metadata` (an explicit `metadata` entry
-  wins). A key given as `null` reads as that key left out, so `type:` with no
+  A field takes `name`, `type` (default `string`, and a type name in any
+  case: `String` is `string`), `required` (a boolean), `default`, `metadata`,
+  `enum` (a list of the values the field allows, which `DatabaseSource`
+  publishes in its filter schema), and the vector shorthands `dimensions` and
+  `source_field`. `enum`, `dimensions` and `source_field` fold into `metadata`
+  (an explicit `metadata` entry wins). A key given as `null` reads as that key left out, so `type:` with no
   value is `string`, and `fields: null` is no fields. An ontology row takes
   `name` and `type` only: those are what the registry reads, so a row's other
   keys are refused rather than loaded and ignored. `DatabaseSchema.create()`
   reads a `(FieldType, options)` tuple's options through the same reader.
+  `DatabaseSchema.from_dict` takes `origin=` and `context=`, as
+  `read_field_declarations` does, so a caller that knows where a declaration
+  came from (`origin="source 'courses'"`) has every refusal say so.
 
   **Migration.** Seven declarations used to load as *no schema*, or to fail
   with an exception that named nothing. Each is now either read, or refused

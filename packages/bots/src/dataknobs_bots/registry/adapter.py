@@ -12,6 +12,7 @@ construction site, so the metadata channel cannot be silently dropped.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
@@ -192,7 +193,8 @@ class DataKnobsRegistryAdapter:
         if self._initialized:
             return
 
-        if self._db is None:
+        db = self._db
+        if db is None:
             logger.debug(
                 "Creating %s database for registry",
                 self._backend_type or "default",
@@ -203,11 +205,17 @@ class DataKnobsRegistryAdapter:
             options = dict(self._backend_config)
             if self._backend_type is not None:
                 options["backend"] = self._backend_type
-            self._db = async_database_factory.create(**options)
+            # Off the loop: resolving a backend name imports its
+            # implementation from disk, and a file backend's config
+            # normalizes its path.
+            created: AsyncDatabase = await asyncio.to_thread(
+                async_database_factory.create, **options
+            )
+            self._db = db = created
 
-        await self._db.connect()
+        await db.connect()
         self._store = AsyncKeyedRecordStore[Registration](
-            self._db,
+            db,
             serializer=_registration_to_columns,
             deserializer=_registration_from_record,
         )
