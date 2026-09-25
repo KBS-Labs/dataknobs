@@ -847,6 +847,29 @@ async def test_a_rung_reading_surface_forms_over_a_binding_with_no_lookup_is_ref
         await registry.close()
 
 
+async def test_a_rung_reading_surface_forms_is_refused_when_the_rungs_are_a_tuple() -> None:
+    """This registry reads the rung kinds a document writes with a reader of its own.
+
+    That reader took a list only, and answered *no rungs written* for
+    anything else. Once the loader reads a tuple composition, a tuple naming
+    ``exact`` over a binding with no lookup skipped the refusal above -- the
+    one naming the binding and the key to declare -- and reached the build
+    door's generic *cannot build this rung* instead. The two readers of one
+    section have to take the same shapes.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document(resolver={"rungs": ({"kind": "exact"},)})),
+        database=await _store(),
+    )
+    try:
+        with pytest.raises(ValidationError) as excinfo:
+            await registry.load()
+        assert "binding 'products'" in str(excinfo.value)
+        assert "declares no `surface_forms:`" in str(excinfo.value)
+    finally:
+        await registry.close()
+
+
 @pytest.mark.parametrize(
     "resolver",
     [

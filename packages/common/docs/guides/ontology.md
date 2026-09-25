@@ -69,6 +69,47 @@ by default — `pip install dataknobs-common[yaml]`. Nothing else on this page
 does: `load_ontology` also takes a `.json` path or a plain mapping, and either
 runs on the base install.
 
+### What an attribute row reads
+
+An attribute row is read for seven keys. Any other key is refused by name,
+because an unread key would load and be discarded: `enum:` written for
+`enum_values:` would enumerate nothing and report nothing. A key written as
+`null` reads as absent.
+
+| Key | Takes | Absent |
+|---|---|---|
+| `name` | a non-empty string, unique within its entity type | refused |
+| `type` | a string: the vocabulary's type name, kept as written. The vocabulary is open, so `entity`, `enum` and `number` are all legal | `string` |
+| `field_type` | a record field type — `string`, `text`, `integer`, `float`, `boolean`, `datetime`, `json`, `binary`, `vector`, `sparse_vector`, in any case, or the `FieldType` member itself. It **supplies** the record type for a `type:` that names none, and must agree with one that does | derived from `type:`, so an attribute with no `type:` is `string` |
+| `entity_type` | a non-empty string: the id of a declared entity type, for an `entity`-typed attribute | none |
+| `required` | `true` or `false`. `"no"` is refused rather than read as truthy | `false` |
+| `enum_values` | a non-empty list of strings, each named once. An empty list would allow no value at all | not enumerated |
+| `description` | a string, which is what an extraction prompt is built from | `""` |
+
+`field_type:` is for a vocabulary type that has no record counterpart of its
+own. `number` is one. Beside a `type:` that is already a record type it can
+only restate it: `{type: integer, field_type: string}` is refused, because no
+reading honours both.
+
+```python
+from dataknobs_common.fields import FieldType
+from dataknobs_common.ontology import load_ontology
+
+vocabulary = load_ontology(
+    {
+        "id": "zoo",
+        "entity_types": [
+            {
+                "id": "Species",
+                "attributes": [{"name": "lifespan_years", "type": "number", "field_type": "float"}],
+            }
+        ],
+    }
+)
+(lifespan,) = vocabulary.inherited_attributes("Species")
+assert (lifespan.value_type, lifespan.field_type) == ("number", FieldType.FLOAT)
+```
+
 ## The worked call site
 
 Five things a vocabulary is for, in the order someone meets them. Every line

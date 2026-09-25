@@ -23,6 +23,7 @@ from dataknobs_common.events import Event, EventType, InMemoryEventBus, event_bu
 from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import (
     AUTHORED_SOURCE_ID,
+    RESOLVER_SECTION_KEYS,
     AsyncOntology,
     OntologyConfig,
     async_load_ontology,
@@ -40,6 +41,7 @@ from dataknobs_data.backends import async_backends
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 from dataknobs_data.factory import async_database_factory
 from dataknobs_data.ontology import OntologyRegistry
+from dataknobs_data.ontology import registry as registry_module
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.testing import DeterministicEmbedder
 from dataknobs_data.vector.stores.factory import VectorStoreFactory
@@ -802,6 +804,55 @@ async def test_a_resolver_section_with_a_key_this_block_does_not_read_is_refused
         assert "this block does not read" in str(refused.value)
     finally:
         await registry.close()
+
+
+@pytest.mark.parametrize("section", [[{"kind": "exact"}], "exact"], ids=["a-list", "a-string"])
+async def test_a_resolver_section_that_is_not_a_mapping_is_refused_at_this_door(
+    section: Any,
+) -> None:
+    """This door refuses first, so it has to refuse the shape as well as the keys.
+
+    Its key check ran ``set(section)`` on whatever it was handed: a list of
+    rung entries raised a bare ``TypeError`` (a mapping is unhashable), and a
+    string was refused for *declaring* its own letters as keys. The loader's
+    mapping check, one call later, was never reached.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver=section))
+    )
+    try:
+        with pytest.raises(ValidationError) as refused:
+            await registry.load()
+        message = str(refused.value)
+        assert "`resolver:` must be a mapping" in message
+        assert type(section).__name__ in message
+    finally:
+        await registry.close()
+
+
+async def test_resolver_keys_of_mixed_types_are_refused_by_name_at_this_door() -> None:
+    """Sorting ``{1, 'rung'}`` raised a bare ``TypeError`` before the refusal was built."""
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={1: "x", "rung": []}))
+    )
+    try:
+        with pytest.raises(ValidationError) as refused:
+            await registry.load()
+        assert "['1', 'rung']" in str(refused.value)
+    finally:
+        await registry.close()
+
+
+def test_the_resolver_key_set_is_the_loader_s() -> None:
+    """One key set, owned where the section is read into rungs.
+
+    This registry refuses a stray ``resolver:`` key before it opens a store,
+    and the loader's build doors refuse the same key when they read the
+    section. Two answers from two doors, over one set -- a second literal
+    here is a second thing to keep in step with the reader that decides what
+    the section means.
+    """
+    assert registry_module.RESOLVER_BLOCK_KEYS is RESOLVER_SECTION_KEYS
 
 
 async def test_a_rung_needing_a_handle_this_document_did_not_declare_is_named() -> None:

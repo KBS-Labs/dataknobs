@@ -40,6 +40,7 @@ from dataknobs_common.ontology import (
     AsyncOntology,
     Entity,
     NodeTag,
+    RESOLVER_SECTION_KEYS,
     OntologyConfig,
     OntologySupport,
     assemble_async_ontology,
@@ -100,7 +101,12 @@ INDEX_BLOCK_KEYS = frozenset({"store", "embedder", "metric", "fields", "join", "
 #: ``rungs`` absent is read one layer down as *a composition of nothing*
 #: rather than as silence. So ``resolver: {rung: [...]}``, singular, would
 #: build a cascade that matches nothing and report success.
-RESOLVER_BLOCK_KEYS = frozenset({"rungs"})
+#:
+#: The set is ``dataknobs-common``'s, whose build doors read the section into
+#: rungs and refuse the same key there. This door refuses first, naming the
+#: ontology and opening no store; the two messages are two doors' answers over
+#: one set.
+RESOLVER_BLOCK_KEYS = RESOLVER_SECTION_KEYS
 
 #: The one nesting an ``index.embedder:`` block accepts.
 #:
@@ -2759,7 +2765,7 @@ def _refuse_a_form_reading_rung_with_no_lookup(
 
 
 def _refuse_undeclared_keys(
-    block: Mapping[str, Any], *, ontology_id: str, section: str, allowed: frozenset[str], why: str
+    block: Any, *, ontology_id: str, section: str, allowed: frozenset[str], why: str
 ) -> None:
     """Refuse a configured section carrying a key nothing reads.
 
@@ -2770,6 +2776,14 @@ def _refuse_undeclared_keys(
     builds an index with no metric check and ``rung:`` builds a cascade that
     matches nothing --- each reporting success. Only the example differs,
     which is why it is the parameter.
+
+    **The section is a mapping before its keys are read.** Every caller
+    runs this *first*, before any other reader of its section, so a shape
+    check anywhere downstream is never reached from here: ``set(block)`` on a
+    list of rung entries raised a bare ``TypeError`` (a mapping is
+    unhashable), and a string was refused for "declaring" its own letters.
+    The keys are sorted as strings, so a YAML ``1:`` beside ``foo:`` is named
+    rather than escaping as a ``TypeError`` from the sort.
 
     Args:
         block: The section as the document wrote it.
@@ -2782,9 +2796,17 @@ def _refuse_undeclared_keys(
             the message continues into.
 
     Raises:
-        ValidationError: When the block carries a key outside *allowed*.
+        ValidationError: When the block is not a mapping, or carries a key
+            outside *allowed*.
     """
-    undeclared = sorted(set(block) - allowed)
+    if not isinstance(block, Mapping):
+        raise ValidationError(
+            f"ontology {ontology_id!r} declares `{section}:` as "
+            f"{type(block).__name__}; `{section}:` must be a mapping, read for "
+            f"{', '.join(sorted(allowed))}",
+            context={"ontology_id": ontology_id, "section": section, "value": block},
+        )
+    undeclared = sorted(str(key) for key in block if key not in allowed)
     if not undeclared:
         return
     raise ValidationError(
@@ -2805,12 +2827,18 @@ def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
     distinction is kept in the read rather than collapsed in a ``or {}``,
     because a later caller asking a different question of this section needs
     it back and would not find it.
+
+    **A list or a tuple, as the loader reads it.** This reader took a list
+    only, so a tuple composition -- which the loader builds -- read here as
+    *no rungs written*, and both binding refusals that ask this function were
+    skipped for it. Any other shape answers ``()`` because the loader refuses
+    it by name; this is not the door that says so.
     """
     section = config.resolver
-    if section is None:
+    if not isinstance(section, Mapping):
         return ()
     rungs = section.get("rungs")
-    if not isinstance(rungs, list):
+    if not isinstance(rungs, list | tuple):
         return ()
     return tuple(str(rung.get("kind", "")) for rung in rungs if isinstance(rung, Mapping))
 

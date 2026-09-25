@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-25T21:29:23Z",
+  "timestamp": "2026-09-25T23:27:01Z",
   "python_version": "Python 3.12.12",
-  "uv_version": "uv 0.12.18 (Homebrew 2026-09-22 aarch64-apple-darwin)",
+  "uv_version": "uv 0.12.19 (Homebrew 2026-09-24 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "a-plugin-registry-creates-from-a-typed-config",
-  "git_commit": "edee65278c9f32f0bdb9c1c91e604e71e98c0992",
+  "git_branch": "an-ontology-attribute-and-resolver-section-are-read-or-refused",
+  "git_commit": "8fdafad3ca0f2bf31e55816df75c507b33675845",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
