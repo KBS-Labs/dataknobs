@@ -2,11 +2,16 @@
 
 import asyncio
 import typing
-from typing import Any, Dict, Protocol, runtime_checkable
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, ClassVar, Dict, Protocol, runtime_checkable
 
 import pytest
 
 from dataknobs_common import NotFoundError, OperationError, PluginRegistry
+from dataknobs_common import registry as registry_module
+from dataknobs_common.structured_config import StructuredConfig, StructuredConfigConsumer
+from dataknobs_common.testing import assert_twins_agree
 
 
 # Test classes for the registry
@@ -1958,3 +1963,133 @@ class TestAValidateTypeProtocolAndItsAsyncTwin:
         """
         assert isinstance(_SyncFetcher(), _FetchesAsync)
         assert isinstance(_AsyncFetcher(), _Fetches)
+
+
+# --------------------------------------------------------------------------
+# A typed config on the create lane
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _TypedCfg(StructuredConfig):
+    """A typed config carrying a field named like a routing key.
+
+    ``kind`` is spelled the way a mapping config would spell its routing key,
+    so a registry that guessed the key by attribute would find one. It must
+    not guess.
+    """
+
+    kind: str = "typed"
+    label: str = "x"
+
+
+class _TypedConsumer(StructuredConfigConsumer[_TypedCfg]):
+    """Built by ``from_config_async`` from a typed config and a collaborator."""
+
+    CONFIG_CLS: ClassVar[type[_TypedCfg]] = _TypedCfg
+
+
+def _keyed_registry(**options: Any) -> PluginRegistry[Any]:
+    return PluginRegistry("typed_things", config_key="kind", **options)
+
+
+class TestPluginRegistryTypedConfig:
+    """``create`` / ``create_async`` take what the factories they call take.
+
+    A ``from_config`` factory accepts a mapping or a ``StructuredConfig``, and
+    ``create`` passes its config straight through, so a typed config with an
+    explicit key always worked. Reading the key out of ``config[config_key]``
+    is the one step that needs a mapping, and a typed config there crashed
+    with ``argument of type '...' is not iterable`` -- a message naming
+    neither the registry nor the key it was reading.
+    """
+
+    @staticmethod
+    def _assert_names_the_refusal(message: str) -> None:
+        assert "typed_things" in message, message
+        assert "config['kind']" in message, message
+        assert "_TypedCfg" in message, message
+        assert "key=" in message, message
+
+    def test_create_refuses_to_read_a_key_from_a_typed_config(self) -> None:
+        registry = _keyed_registry()
+        registry.register("typed", lambda config, **_: config)
+
+        with pytest.raises(TypeError) as caught:
+            registry.create(config=_TypedCfg())
+
+        self._assert_names_the_refusal(str(caught.value))
+
+    async def test_create_async_refuses_to_read_a_key_from_a_typed_config(self) -> None:
+        registry = _keyed_registry()
+        registry.register("typed", lambda config, **_: config)
+
+        with pytest.raises(TypeError) as caught:
+            await registry.create_async(config=_TypedCfg())
+
+        self._assert_names_the_refusal(str(caught.value))
+
+    def test_a_configured_default_does_not_stand_in_for_the_unread_key(self) -> None:
+        """Falling back would build the default for a config naming another.
+
+        The typed config's own ``kind`` is not ``"default"``. Taking the
+        default because the key could not be read is the silent guess the
+        default-key report exists to make visible.
+        """
+        built: list[Any] = []
+        registry = _keyed_registry(config_key_default="default")
+        registry.register("default", lambda config, **_: built.append(config))
+
+        with pytest.raises(TypeError) as caught:
+            registry.create(config=_TypedCfg())
+
+        self._assert_names_the_refusal(str(caught.value))
+        assert built == [], "the default's factory ran for a key nobody read"
+
+    async def test_an_explicit_key_passes_the_typed_config_through_unchanged(self) -> None:
+        """The pass-through the widened signature depends on, on both halves."""
+        received: list[Any] = []
+        registry = _keyed_registry()
+        registry.register("typed", lambda config, **_: received.append(config) or config)
+        typed = _TypedCfg()
+
+        registry.create("typed", config=typed)
+        await registry.create_async("typed", config=typed)
+
+        assert len(received) == 2
+        assert all(config is typed for config in received), received
+
+    async def test_a_consumer_is_built_from_a_typed_config_and_a_collaborator(self) -> None:
+        """The whole route: ``create_async`` -> ``from_config_async`` -> instance."""
+        registry: PluginRegistry[_TypedConsumer] = PluginRegistry("consumers")
+        registry.register("typed", _TypedConsumer)
+        collaborator = object()
+
+        instance = await registry.create_async(
+            "typed", config=_TypedCfg(label="y"), collab=collaborator
+        )
+
+        assert isinstance(instance, _TypedConsumer)
+        assert instance.config == _TypedCfg(label="y")
+        assert instance.components["collab"] is collaborator
+
+    def test_create_and_create_async_take_one_config_type(self) -> None:
+        """Widened together, and kept together."""
+        assert_twins_agree(PluginRegistry.create, PluginRegistry.create_async, compare_return=True)
+
+    def test_any_mapping_carries_the_key_and_is_stripped(self) -> None:
+        """Reading and stripping the key need a mapping, not a ``dict``."""
+        received: list[Any] = []
+        registry = _keyed_registry(strip_config_key=True)
+        registry.register("typed", lambda config, **_: received.append(config) or config)
+
+        registry.create(config=MappingProxyType({"kind": "typed", "label": "x"}))
+
+        assert received == [{"label": "x"}]
+
+    def test_the_config_alias_is_exported(self) -> None:
+        """It names a public signature, as ``PluginFactory`` does."""
+        import dataknobs_common
+
+        assert "PluginConfig" in dataknobs_common.__all__
+        assert dataknobs_common.PluginConfig is registry_module.PluginConfig

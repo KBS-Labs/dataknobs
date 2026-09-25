@@ -53,7 +53,7 @@ handler = handlers.create(config={"handler_type": "fast", "timeout": 5})
 | `default_factory` | `type[T] \| Callable \| None` | `None` | Default factory when key not found |
 | `validate_type` | `type \| None` | `None` | Base type to validate registrations against. A class, an ABC, or a `@runtime_checkable` Protocol — including one carrying properties. See [What `validate_type` checks](#what-validate_type-checks). |
 | `canonicalize_keys` | `bool` | `False` | Lowercase all keys for case-insensitive lookup |
-| `config_key` | `str \| None` | `None` | Field name to extract lookup key from config dicts |
+| `config_key` | `str \| None` | `None` | Field name to extract lookup key from config mappings |
 | `config_key_default` | `str \| None` | `None` | Fallback when `config_key` field is absent |
 | `strip_config_key` | `bool` | `False` | Remove key field from config before passing to factory |
 | `on_first_access` | `Callable \| None` | `None` | Lazy init callback (supports re-entrant `register()` calls) |
@@ -177,6 +177,54 @@ The registry supports two modes of instantiation with different calling conventi
 The two factory signatures are the reason the async twins are not
 interchangeable: sending a `get()` caller to `create_async()` would change
 the arity out from under their factory. Each sync method names its own twin.
+
+### Typed configs
+
+`create()` and `create_async()` take a `StructuredConfig` as well as a
+mapping. Their parameter is annotated `PluginConfig`, which is exported from
+`dataknobs_common`. That is what the `from_config` / `from_config_async`
+constructors they dispatch to accept, and the config reaches the factory
+unchanged. Reading the key through `config_key` needs a mapping, so pass
+`key=` with a typed config:
+
+```python
+from dataclasses import dataclass
+from typing import ClassVar
+
+from dataknobs_common import PluginRegistry
+from dataknobs_common.structured_config import (
+    StructuredConfig,
+    StructuredConfigConsumer,
+)
+
+
+@dataclass(frozen=True)
+class WidgetConfig(StructuredConfig):
+    size: int = 1
+
+
+class Widget(StructuredConfigConsumer[WidgetConfig]):
+    CONFIG_CLS: ClassVar[type[WidgetConfig]] = WidgetConfig
+
+
+registry: PluginRegistry[Widget] = PluginRegistry("widgets", config_key="type")
+registry.register("widget", Widget)
+
+widget = registry.create("widget", config=WidgetConfig(size=4))  # key named
+registry.create(config={"type": "widget", "size": 4})  # key read from a mapping
+# registry.create(config=WidgetConfig(size=4))  -> TypeError: pass key=
+```
+
+Leaving `key` out with a typed config on a `config_key` registry raises
+`TypeError`, naming the registry and the key it could not read. That happens
+even when `config_key_default` is set. The registry does not fall back to the
+default and does not guess the key from an attribute: a typed config's field
+is not named after the config key, and falling back would build a plugin the
+config did not ask for.
+
+`get()` and `get_async()` stay mapping-only. Their factories are called as
+`factory(key, config)`, and no factory contract says what a typed config
+would mean there.
 
 ## Asynchronous factories
 

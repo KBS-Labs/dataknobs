@@ -1022,6 +1022,14 @@ It prefers a `from_config_async` classmethod when present, else awaits an
 awaitable `from_config`/factory result; a purely synchronous factory
 works unchanged.
 
+A typed config is passed through unchanged, like a mapping. Name the key
+explicitly, because only a mapping can carry it under the registry's
+`config_key`:
+
+```python
+widget = await registry.create_async("widget", config=WidgetConfig(size=4))
+```
+
 ### Environment-variable substitution
 
 `StructuredConfig` lives in `dataknobs-common`, the lowest workspace

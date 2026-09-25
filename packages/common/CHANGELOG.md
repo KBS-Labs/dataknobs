@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **`PluginRegistry.create` and `create_async` take a `StructuredConfig` as
+  well as a mapping.** The `from_config` / `from_config_async` constructors
+  they dispatch to already accepted either, and a typed config given with an
+  explicit `key` always reached the factory unchanged. Only the annotation,
+  `Dict[str, Any] | None`, said otherwise. It is now `PluginConfig | None`,
+  with `PluginConfig` (`Mapping[str, Any] | StructuredConfig`) exported from
+  `dataknobs_common` next to `PluginFactory`. `Dict` became `Mapping` in the
+  same change, so any read-only mapping also carries a routing key.
+
+  A typed config with no `key` on a `config_key` registry used to fail with
+  `argument of type '...' is not iterable`, a message that named neither the
+  registry nor the key. It now raises a `TypeError` that names both and says
+  to pass `key=`. It is raised before `config_key_default` is consulted, so a
+  default never stands in for a key that could not be read. It is still a
+  `TypeError`, so an existing `except TypeError` keeps working. No call that
+  worked before behaves differently.
+
+  `get` and `get_async` are unchanged and still take a mapping, because their
+  factories are called as `factory(key, config)`.
+
 ### Fixed
 
 - **`Taxonomy.has_edge_annotations()` asks about this axis's edges, not the
