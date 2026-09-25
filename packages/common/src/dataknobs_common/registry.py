@@ -61,10 +61,12 @@ from typing import (
     Generic,
     List,
     NamedTuple,
+    TYPE_CHECKING,
     Protocol,
     Sequence,
     TypeAlias,
     TypeVar,
+    Union,
     runtime_checkable,
 )
 
@@ -73,6 +75,11 @@ from dataknobs_common.exceptions import (
     NotFoundError,
     OperationError,
 )
+
+if TYPE_CHECKING:
+    # Type-only: structured_config imports Registry from this module, so a
+    # runtime import in this direction would be circular.
+    from dataknobs_common.structured_config import StructuredConfig
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +125,47 @@ instead. That refusal is the reason this alias is safe to widen: without
 it, admitting the third shape would have deleted the type error that was
 the only thing stopping a caller from silently receiving a coroutine.
 """
+
+# `Union`, not `|`: the typed half is a forward reference, and a string does
+# not support `|` at runtime, where this module's annotations are evaluated.
+PluginConfig: TypeAlias = Union[Mapping[str, Any], "StructuredConfig"]
+"""What :meth:`PluginRegistry.create` and ``create_async`` pass to a factory.
+
+A mapping or a :class:`~dataknobs_common.structured_config.StructuredConfig`,
+because that is what the ``from_config`` / ``from_config_async``
+constructors they dispatch to accept. The config is handed to the factory
+unchanged. The one step that needs a mapping is reading the plugin key out
+of ``config[config_key]``, and a typed config there is refused by name:
+pass ``key=`` instead.
+
+Exported because it appears in a public signature, as :data:`PluginFactory`
+does, so a consumer wrapping ``create`` can name it.
+
+``get`` and ``get_async`` are deliberately not on it: they take any
+mapping, but not a typed config. Their factories are called as
+``factory(key, config)``, with no ``from_config`` dispatch, so no factory
+contract says what a typed config would mean there.
+
+**The forward reference resolves once the package has loaded.** This
+module cannot import ``StructuredConfig`` at load time (see the
+``TYPE_CHECKING`` import above), so ``structured_config`` hands the class
+over through :func:`_bind_structured_config` as soon as it has defined it.
+Importing any part of ``dataknobs_common`` runs both modules, so
+:func:`typing.get_type_hints` on ``create`` and ``create_async`` resolves.
+"""
+
+
+def _bind_structured_config(cls: "type[StructuredConfig]") -> None:
+    """Resolve :data:`PluginConfig`'s forward reference in this module.
+
+    Called once, by ``structured_config``, right after it defines the class.
+    The name is bound here rather than imported because the import runs the
+    other way: ``structured_config`` imports :class:`Registry` from this
+    module, and loads first. Without the binding, anything that resolves the
+    create lane's annotations (:func:`typing.get_type_hints`, a validating
+    decorator on a wrapper) fails with ``NameError``.
+    """
+    globals()["StructuredConfig"] = cls
 
 
 class Unavailable(NamedTuple):
@@ -1605,7 +1653,7 @@ class PluginRegistry(Generic[T]):
     def get(
         self,
         key: str,
-        config: Dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
         use_cache: bool = True,
         use_default: bool = True,
     ) -> T:
@@ -1615,7 +1663,9 @@ class PluginRegistry(Generic[T]):
 
         Args:
             key: Plugin identifier
-            config: Configuration dictionary passed to factory
+            config: Configuration mapping passed to factory, as
+                ``factory(key, config)``. A typed config is not taken here:
+                use ``create`` for a ``StructuredConfig``.
             use_cache: Return cached instance if available
             use_default: Use default factory if key not registered
 
@@ -1702,7 +1752,7 @@ class PluginRegistry(Generic[T]):
     async def get_async(
         self,
         key: str,
-        config: Dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
         use_cache: bool = True,
         use_default: bool = True,
     ) -> T:
@@ -1712,7 +1762,7 @@ class PluginRegistry(Generic[T]):
 
         Args:
             key: Plugin identifier
-            config: Configuration dictionary
+            config: Configuration mapping, as for ``get``
             use_cache: Return cached instance if available
             use_default: Use default factory if key not registered
 
@@ -1790,7 +1840,7 @@ class PluginRegistry(Generic[T]):
     def create(
         self,
         key: str | None = None,
-        config: Dict[str, Any] | None = None,
+        config: PluginConfig | None = None,
         **kwargs: Any,
     ) -> T:
         """Create a fresh instance without caching.
@@ -1823,9 +1873,11 @@ class PluginRegistry(Generic[T]):
         Args:
             key: Plugin identifier. Optional when ``config_key`` is
                 configured on the registry.
-            config: Configuration dictionary passed to factory.  ``None``
-                is treated as ``{}`` for both key resolution and factory
-                invocation.
+            config: A mapping or a ``StructuredConfig``, passed to the
+                factory unchanged. ``None`` is treated as ``{}`` for both key
+                resolution and factory invocation. Reading the key from
+                ``config_key`` needs a mapping, so pass ``key`` with a typed
+                config.
             **kwargs: Additional keyword arguments forwarded to factory.
 
         Returns:
@@ -1833,6 +1885,8 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
+            TypeError: If ``key`` is ``None``, ``config_key`` is set, and
+                ``config`` is not a mapping, so the key cannot be read from it.
             NotFoundError: If resolved key is not registered, or raised by
                 the factory itself (see "Errors from a factory").
             OperationError: If the factory returns an awaitable -- this
@@ -1884,7 +1938,7 @@ class PluginRegistry(Generic[T]):
     async def create_async(
         self,
         key: str | None = None,
-        config: Dict[str, Any] | None = None,
+        config: PluginConfig | None = None,
         **kwargs: Any,
     ) -> T:
         """Create a fresh instance, awaiting an asynchronous factory.
@@ -1915,8 +1969,10 @@ class PluginRegistry(Generic[T]):
         Args:
             key: Plugin identifier. Optional when ``config_key`` is
                 configured on the registry.
-            config: Configuration dictionary passed to the factory.
-                ``None`` is treated as ``{}``.
+            config: A mapping or a ``StructuredConfig``, passed to the
+                factory unchanged. ``None`` is treated as ``{}``. Reading the
+                key from ``config_key`` needs a mapping, so pass ``key`` with
+                a typed config.
             **kwargs: Additional keyword arguments forwarded to the
                 factory (e.g. injected collaborators threaded into a
                 ``StructuredConfigConsumer`` consumer's ``_ainit``).
@@ -1926,6 +1982,8 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             ValueError: If ``key`` is ``None`` and cannot be resolved.
+            TypeError: If ``key`` is ``None``, ``config_key`` is set, and
+                ``config`` is not a mapping, so the key cannot be read from it.
             NotFoundError: If the resolved key is not registered, or raised
                 by the factory itself (see "Errors from a factory").
             OperationError: Wrapping an exception the factory raised
@@ -1964,8 +2022,8 @@ class PluginRegistry(Generic[T]):
     def _resolve_factory(
         self,
         key: str | None,
-        config: Dict[str, Any] | None,
-    ) -> tuple[PluginFactory[T], str, Dict[str, Any] | None]:
+        config: PluginConfig | None,
+    ) -> tuple[PluginFactory[T], str, PluginConfig | None]:
         """Resolve ``(factory, canonical_key, config)`` for create paths.
 
         Shared prologue for :meth:`create` and :meth:`create_async` — the
@@ -1984,7 +2042,8 @@ class PluginRegistry(Generic[T]):
 
         Returns the resolved factory, the canonical key (for error
         context), and the possibly key-stripped config. Raises
-        ``ValueError`` (unresolvable key) or ``self._not_found_exception``
+        ``ValueError`` (unresolvable key), ``TypeError`` (a key to read from
+        a config that is not a mapping) or ``self._not_found_exception``
         (unknown key, or a key declared unavailable —
         :class:`NotFoundError` by default; opt-in via the
         ``not_found_exception`` ctor kwarg) directly — both callers
@@ -1997,6 +2056,18 @@ class PluginRegistry(Generic[T]):
         if key is None:
             if self._config_key is None:
                 raise ValueError("key is required when config_key is not configured")
+            # Before the default below, not only before the lookup: a typed
+            # config may name a key the mapping protocol cannot reach, and
+            # falling back would quietly build a different plugin. Not read
+            # by attribute either -- a typed config's field is not named
+            # after the config key, and only the caller knows the mapping.
+            if config is not None and not isinstance(config, Mapping):
+                raise TypeError(
+                    f"Registry '{self._name}' reads its plugin key from "
+                    f"config['{self._config_key}'], which needs a mapping; got "
+                    f"{type(config).__name__}. Pass key= to create from a "
+                    f"{type(config).__name__}."
+                )
             if self._config_key in (config or {}):
                 key = (config or {})[self._config_key]
             else:
@@ -2065,7 +2136,7 @@ class PluginRegistry(Generic[T]):
         self,
         factory: Callable[..., Any],
         key: str,
-        config: Dict[str, Any] | None,
+        config: PluginConfig | None,
         kwargs: Dict[str, Any],
         *,
         positional_key: bool,
