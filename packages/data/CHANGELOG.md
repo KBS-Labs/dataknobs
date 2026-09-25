@@ -32,7 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A field takes `name`, `type` (default `string`), `required` (a boolean),
   `default`, `metadata`, and the vector shorthands `dimensions` and
-  `source_field`. An ontology row now takes the same keys.
+  `source_field`, which fold into `metadata` (an explicit `metadata` entry
+  wins). A key given as `null` reads as that key left out, so `type:` with no
+  value is `string`, and `fields: null` is no fields. An ontology row takes
+  `name` and `type` only: those are what the registry reads, so a row's other
+  keys are refused rather than loaded and ignored. `DatabaseSchema.create()`
+  reads a `(FieldType, options)` tuple's options through the same reader.
 
   **Migration.** Seven declarations used to load as *no schema*, or to fail
   with an exception that named nothing. Each is now either read, or refused
@@ -48,17 +53,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `fields:` as a list | raise `AttributeError` | nothing: it is now read |
   | a bare list of rows, `schema: [{name: sku}]` | load with no fields | nothing: it is now read |
   | an unknown type, `{fields: {sku: money}}` | raise `ValueError` | a `FieldType` value, listed in the message |
+  | an ontology row with a key other than `name` and `type`, `{name: sku, description: ...}` | load, the key ignored | drop the key: the registry reads a row's name and type only |
 
   Four stricter checks are new as well: a repeated field name (the last one used
   to win), a key a field does not take (a misspelt `requird:` used to be
-  ignored), an empty or non-string name, and a `required:` that is not a
-  boolean (`required: "no"` is truthy).
+  ignored), an empty or non-string name -- a mapping key included, which used
+  to be converted, so `{5: integer}` declared a field called `"5"` -- and a
+  `required:` that is not a boolean (`required: "no"` is truthy).
+
+  `DatabaseSchema.create()` now applies those checks to a tuple's options. An
+  unknown option, a `type` among the options, or a `required` that is not a
+  boolean is refused with `ValidationError` where it used to be ignored or
+  read as truthy. An explicit `metadata={"dimensions": ...}` now wins over the
+  `dimensions` shorthand, as it does in a configuration, where the shorthand
+  used to win. The caller's `metadata` dict is no longer written into. A
+  definition that is neither a `FieldType` nor a `(FieldType, options)` tuple
+  still raises `ValueError`.
 
   An unknown type raising `ValidationError` rather than `ValueError` is the one
   change of exception type; `ValidationError` is not a `ValueError` subclass,
   so an `except ValueError` around building a database from configuration
-  needs to catch it instead. `DatabaseSchema.create()` still raises
-  `ValueError`.
+  needs to catch it instead.
 
   **Postgres is unchanged.** Its `schema:` key is the SQL schema name, a
   string, and a mapping or list there is still refused by

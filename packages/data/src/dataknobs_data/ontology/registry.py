@@ -2553,15 +2553,25 @@ def _handle_addresses_one_table(database: AsyncDatabase) -> bool:
     return _config_class_addresses_one_table(getattr(type(database), "CONFIG_CLS", None))
 
 
+#: The keys a binding's ``schema:`` row takes: what the registry reads of it.
+#: A narrower set than a database field's, because a key the registry does not
+#: read would be loaded and discarded (see :func:`_declared_schema`). A change
+#: that starts reading another key widens this set in the same change.
+BINDING_ROW_KEYS: frozenset[str] = frozenset({"name", "type"})
+
+
 def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema | None:
     """The binding's declared ``schema:``, as a :class:`DatabaseSchema`.
 
     The published form is a list of ``{name, type}`` rows, which is what a
     person writes in a config file. Each row is read by
     :func:`~dataknobs_data.schema.read_field_declarations` -- the reader a
-    database config's ``schema:`` goes through -- so a row takes the keys a
-    database field takes, and the one declaration is read one way wherever it
-    is written. ``None`` where the binding declared none -- the refusal for
+    database config's ``schema:`` goes through -- so the one declaration is
+    read one way wherever it is written. A row takes :data:`BINDING_ROW_KEYS`
+    and nothing else: a binding uses a declaration's column names to validate
+    what its projection names, so a key such as ``required:`` would load and
+    be discarded, and one that loads and is discarded reads as one that is
+    honoured. ``None`` where the binding declared none -- the refusal for
     that belongs with the rest of the projection's validation rather than here.
     """
     declared = spec.get("schema")
@@ -2575,7 +2585,10 @@ def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema
         )
     return DatabaseSchema(
         fields=read_field_declarations(
-            declared, origin=f"binding {binding!r}", context={"source_id": binding}
+            declared,
+            origin=f"binding {binding!r}",
+            context={"source_id": binding},
+            keys=BINDING_ROW_KEYS,
         )
     )
 

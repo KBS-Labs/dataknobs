@@ -77,7 +77,11 @@ class DatabaseConfig(StructuredConfig):
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        """Convert a dict-shaped ``schema`` to a ``DatabaseSchema``.
+        """Read a ``schema`` value into a ``DatabaseSchema``, or refuse it.
+
+        A mapping or a list of field rows goes through
+        :func:`extract_schema_from_config`, which refuses any other value by
+        name; a ``DatabaseSchema`` passes through unchanged.
 
         Subclasses that override this for backend-specific normalization
         (e.g. Postgres connection assembly) must call
