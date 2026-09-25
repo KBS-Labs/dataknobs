@@ -66,7 +66,6 @@ import dataknobs_data.entity_resolution  # noqa: F401
 from dataknobs_data.backend_selection import normalize_backend
 from dataknobs_data.backends import async_backends
 from dataknobs_data.factory import async_database_factory
-from dataknobs_data.fields import FieldType
 from dataknobs_data.ontology.hierarchy import (
     COLUMN_AXIS_KIND,
     ColumnAxisBinding,
@@ -79,7 +78,7 @@ from dataknobs_data.ontology.sources import (
     refuse_undeclared_columns,
     validate_against_schema,
 )
-from dataknobs_data.schema import DatabaseSchema, FieldSchema
+from dataknobs_data.schema import DatabaseSchema, read_field_declarations
 from dataknobs_data.vector.semantic_index import SemanticIndex
 from dataknobs_data.vector.stores.factory import VectorStoreFactory
 from dataknobs_data.vector.types import DistanceMetric
@@ -2558,9 +2557,12 @@ def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema
     """The binding's declared ``schema:``, as a :class:`DatabaseSchema`.
 
     The published form is a list of ``{name, type}`` rows, which is what a
-    person writes in a config file. ``None`` where the binding declared none --
-    the refusal for that belongs with the rest of the projection's validation
-    rather than here.
+    person writes in a config file. Each row is read by
+    :func:`~dataknobs_data.schema.read_field_declarations` -- the reader a
+    database config's ``schema:`` goes through -- so a row takes the keys a
+    database field takes, and the one declaration is read one way wherever it
+    is written. ``None`` where the binding declared none -- the refusal for
+    that belongs with the rest of the projection's validation rather than here.
     """
     declared = spec.get("schema")
     if declared is None:
@@ -2571,33 +2573,11 @@ def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema
             f"rows, got {type(declared).__name__}",
             context={"source_id": binding},
         )
-    schema = DatabaseSchema()
-    for row in declared:
-        if not isinstance(row, Mapping) or "name" not in row:
-            raise ValidationError(
-                f"binding {binding!r}: every `schema:` row names a column -- "
-                f"`{{name: <column>, type: <type>}}` -- and this one is {row!r}",
-                context={"source_id": binding, "row": row},
-            )
-        schema.add_field(
-            FieldSchema(name=str(row["name"]), type=_field_type(row.get("type"), binding=binding))
+    return DatabaseSchema(
+        fields=read_field_declarations(
+            declared, origin=f"binding {binding!r}", context={"source_id": binding}
         )
-    return schema
-
-
-def _field_type(declared: Any, *, binding: str) -> FieldType:
-    """A declared column type, or a refusal listing the ones there are."""
-    if declared is None:
-        return FieldType.STRING
-    try:
-        return FieldType(str(declared))
-    except ValueError as exc:
-        raise ValidationError(
-            f"binding {binding!r}: `schema:` declares type {declared!r}, which is "
-            f"not a field type. Declared types: "
-            f"{sorted(member.value for member in FieldType)}",
-            context={"source_id": binding, "type": declared},
-        ) from exc
+    )
 
 
 def _refuse_a_scan_over_a_binding_that_cannot_bound_it(

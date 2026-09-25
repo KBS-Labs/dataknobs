@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A schema declaration is read, or it is refused by name.** A `schema:` in a
+  database config, `DatabaseSchema.from_dict`, and an ontology binding's
+  `schema:` rows are now read by one function,
+  `dataknobs_data.schema.read_field_declarations`, so the one declaration is
+  read one way wherever it is written. `fields:` takes either spelling:
+
+  ```yaml
+  schema:
+    fields:                       # a mapping ...
+      sku: string
+      price: {type: float, required: true}
+  ---
+  schema:
+    fields:                       # ... or a list of rows
+      - {name: sku, type: string}
+      - {name: price, type: float, required: true}
+  ---
+  schema:                         # or the bare list, as an ontology writes it
+    - {name: sku, type: string}
+  ```
+
+  A field takes `name`, `type` (default `string`), `required` (a boolean),
+  `default`, `metadata`, and the vector shorthands `dimensions` and
+  `source_field`. An ontology row now takes the same keys.
+
+  **Migration.** Seven declarations used to load as *no schema*, or to fail
+  with an exception that named nothing. Each is now either read, or refused
+  with a `dataknobs_common.exceptions.ValidationError` naming what to write
+  instead:
+
+  | Declaration | Used to | Write instead |
+  |---|---|---|
+  | columns at the top level, `schema: {sku: string}` | load with no fields | `schema: {fields: {sku: string}}` |
+  | a scalar, `schema: text` | load with no fields | a mapping or a list of rows |
+  | a field that is not a type or a mapping, `{fields: {sku: 5}}` | drop the field | `sku: string` |
+  | a field mapping with no `type` | raise `KeyError` | nothing: it is now a `string` field |
+  | `fields:` as a list | raise `AttributeError` | nothing: it is now read |
+  | a bare list of rows, `schema: [{name: sku}]` | load with no fields | nothing: it is now read |
+  | an unknown type, `{fields: {sku: money}}` | raise `ValueError` | a `FieldType` value, listed in the message |
+
+  Four stricter checks are new as well: a repeated field name (the last one used
+  to win), a key a field does not take (a misspelt `requird:` used to be
+  ignored), an empty or non-string name, and a `required:` that is not a
+  boolean (`required: "no"` is truthy).
+
+  An unknown type raising `ValidationError` rather than `ValueError` is the one
+  change of exception type; `ValidationError` is not a `ValueError` subclass,
+  so an `except ValueError` around building a database from configuration
+  needs to catch it instead. `DatabaseSchema.create()` still raises
+  `ValueError`.
+
+  **Postgres is unchanged.** Its `schema:` key is the SQL schema name, a
+  string, and a mapping or list there is still refused by
+  `PostgresDatabaseConfig`. Pass a structural schema to Postgres as
+  `schema=DatabaseSchema(...)`, and write the SQL schema name as
+  `schema_name:` in that case: the keyword is merged into the config under
+  `schema`, so a `schema: <name>` beside it is replaced and the store opens in
+  `public`.
+
 - **Every consumer of `stream_read` closes the read it opened.** An async
   generator a consumer walks away from --- a `break`, a raise, an early
   return --- is left suspended at its `yield`, and its `finally` runs only

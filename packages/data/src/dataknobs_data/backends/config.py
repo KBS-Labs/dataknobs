@@ -43,17 +43,19 @@ class DatabaseConfig(StructuredConfig):
     """Base configuration for every ``SyncDatabase`` / ``AsyncDatabase`` backend.
 
     The ``schema`` field carries the ``DatabaseSchema`` the base
-    ``Database`` accepts today. ``_normalize_dict`` routes a dict-shaped
-    ``schema`` through :func:`extract_schema_from_config` so it becomes a
-    ``DatabaseSchema`` before field projection; a ``DatabaseSchema``
+    ``Database`` accepts today. ``_normalize_dict`` routes any other
+    ``schema`` value through :func:`extract_schema_from_config` so it
+    becomes a ``DatabaseSchema`` before field projection -- a mapping, or a
+    list of field rows -- or is refused by name; a ``DatabaseSchema``
     instance passes through unchanged. This preserves the public
     ``Database(config=..., schema=...)`` kwarg: the consumer mixin merges
     ``schema=`` into the dict and this field captures it.
 
     Attributes:
-        schema: Optional database schema. A dict is converted to a
-            ``DatabaseSchema`` at construction; ``None`` yields an empty
-            schema in the backend.
+        schema: Optional database schema. A mapping or a list of field
+            rows is converted to a ``DatabaseSchema`` at construction, and
+            any other value is refused; ``None`` yields an empty schema in
+            the backend.
     """
 
     schema: DatabaseSchema | None = None

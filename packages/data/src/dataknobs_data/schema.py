@@ -5,10 +5,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from dataknobs_common.exceptions import ValidationError
+
 from .fields import FieldType
+
+#: The keys a field declaration takes, in either spelling. ``dimensions`` and
+#: ``source_field`` are the vector shorthands, folded into ``metadata``.
+FIELD_KEYS: frozenset[str] = frozenset(
+    {"name", "type", "required", "default", "metadata", "dimensions", "source_field"}
+)
+
+#: The keys a schema declaration takes at its top level.
+SCHEMA_KEYS: frozenset[str] = frozenset({"fields", "metadata"})
 
 
 @dataclass
@@ -153,7 +165,9 @@ class DatabaseSchema:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, **field_definitions) -> DatabaseSchema:
+    def create(
+        cls, **field_definitions: FieldType | tuple[FieldType, dict[str, Any]]
+    ) -> DatabaseSchema:
         """Create a schema from keyword arguments.
 
         Args:
@@ -244,7 +258,7 @@ class DatabaseSchema:
 
     def get_source_fields(self) -> dict[str, list[str]]:
         """Get mapping of source fields to their dependent vector fields."""
-        source_map = {}
+        source_map: dict[str, list[str]] = {}
         for name, field_obj in self.fields.items():
             if field_obj.is_vector_field():
                 source = field_obj.get_source_field()
@@ -262,55 +276,215 @@ class DatabaseSchema:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> DatabaseSchema:
+    def from_dict(cls, data: Mapping[str, Any]) -> DatabaseSchema:
         """Create from dictionary representation.
 
-        Supports multiple formats:
-        1. Full format with FieldSchema dicts
-        2. Simple format with just field types
-        3. Mixed format
+        A schema declaration takes ``fields:`` and ``metadata:`` and nothing
+        else. ``fields:`` is read by :func:`read_field_declarations`, in either
+        of its two spellings:
 
         Examples:
-            # Simple format
-            {"fields": {"content": "text", "score": "float"}}
+            # A mapping: a type name, or a field mapping
+            {"fields": {"content": "text", "score": {"type": "float", "required": True}}}
 
-            # Full format
-            {"fields": {"content": {"type": "text", "required": true}}}
+            # A list of rows, which is how an ontology binding writes it
+            {"fields": [{"name": "content", "type": "text"}, {"name": "score", "type": "float"}]}
 
             # Vector fields
             {"fields": {"embedding": {"type": "vector", "dimensions": 384}}}
+
+        An empty mapping is an empty schema. A declaration that says something
+        this reader cannot read is refused rather than read as no schema: a
+        column written at the top level instead of under ``fields:`` would
+        otherwise declare nothing, and every check keyed on the schema would
+        then pass over nothing.
+
+        Raises:
+            ValidationError: When ``data`` is not a mapping, carries a key other
+                than ``fields`` and ``metadata``, or declares a field
+                :func:`read_field_declarations` refuses.
         """
-        schema = cls(metadata=data.get("metadata", {}))
+        if not isinstance(data, Mapping):
+            raise ValidationError(
+                f"a schema declaration is a mapping, got {type(data).__name__}",
+                context={"got": type(data).__name__},
+            )
+        unknown = sorted(str(key) for key in data if key not in SCHEMA_KEYS)
+        if unknown:
+            raise ValidationError(
+                f"a schema declaration takes `fields:` and `metadata:` and nothing else, "
+                f"and this one declares {unknown}. Columns go under `fields:` -- "
+                f"`{{fields: {{<column>: <type>}}}}` or "
+                f"`{{fields: [{{name: <column>, type: <type>}}]}}`",
+                context={"keys": unknown},
+            )
+        metadata = data.get("metadata", {})
+        if not isinstance(metadata, Mapping):
+            raise ValidationError(
+                f"a schema's `metadata:` is a mapping, got {type(metadata).__name__}",
+                context={"got": type(metadata).__name__},
+            )
+        return cls(
+            fields=read_field_declarations(data.get("fields", {})),
+            metadata=dict(metadata),
+        )
 
-        for name, field_data in data.get("fields", {}).items():
-            if isinstance(field_data, str):
-                # Simple string type
-                schema.fields[name] = FieldSchema(name=name, type=FieldType(field_data))
-            elif isinstance(field_data, dict):
-                if "type" in field_data:
-                    # Full field schema dict
-                    field_type = FieldType(field_data["type"])
-                    metadata = {}
 
-                    # Handle vector-specific fields
-                    if "dimensions" in field_data:
-                        metadata["dimensions"] = field_data["dimensions"]
-                    if "source_field" in field_data:
-                        metadata["source_field"] = field_data["source_field"]
+def read_field_declarations(
+    declared: Any,
+    *,
+    origin: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> dict[str, FieldSchema]:
+    """Read field declarations, in either spelling, or refuse them by name.
 
-                    # Merge with explicit metadata
-                    if "metadata" in field_data:
-                        metadata.update(field_data["metadata"])
+    The one reader behind every door a declaration comes through --
+    :meth:`DatabaseSchema.from_dict`, a database config's ``schema:``, and an
+    ontology binding's ``schema:`` rows -- so the two spellings cannot be read
+    two ways.
 
-                    schema.fields[name] = FieldSchema(
-                        name=name,
-                        type=field_type,
-                        metadata=metadata,
-                        required=field_data.get("required", False),
-                        default=field_data.get("default"),
-                    )
-                else:
-                    # Try to parse as FieldSchema dict
-                    schema.fields[name] = FieldSchema.from_dict(field_data)
+    - **A mapping** of ``{<column>: <type name> | <field mapping>}``.
+    - **A sequence of rows**, each a field mapping that carries its ``name``.
 
-        return schema
+    A field mapping takes the keys in :data:`FIELD_KEYS`. ``type`` defaults to
+    ``string``; ``required`` is a boolean; ``dimensions`` and ``source_field``
+    fold into ``metadata``. A mapping entry may repeat its ``name`` (which is
+    what :meth:`DatabaseSchema.to_dict` writes) and must then agree with its
+    key.
+
+    Args:
+        declared: The declarations: a mapping or a sequence of rows.
+        origin: Where the declaration came from (``"binding 'catalog'"``),
+            prefixed to every message, so a caller that knows says so without
+            catching and re-raising.
+        context: Carried into every refusal's ``context`` beside what the
+            refusal adds, in the caller's own keys (an ontology binding's
+            ``source_id``).
+
+    Returns:
+        The declared fields, by name, in declaration order.
+
+    Raises:
+        ValidationError: When ``declared`` is neither a mapping nor a sequence
+            of rows, or a field is unnamed, repeated, of an unknown type, or
+            carries a key a field does not take.
+    """
+    prefix = f"{origin}: " if origin else ""
+    base: dict[str, Any] = dict(context or {})
+
+    entries: list[tuple[str | None, Any]]
+    if isinstance(declared, Mapping):
+        entries = [(str(name), value) for name, value in declared.items()]
+    elif isinstance(declared, Sequence) and not isinstance(declared, (str, bytes)):
+        entries = [(None, row) for row in declared]
+    else:
+        raise ValidationError(
+            f"{prefix}fields are declared as a mapping of `{{<column>: <type>}}` or a list "
+            f"of `{{name: <column>, type: <type>}}` rows, got {type(declared).__name__}",
+            context={**base, "got": type(declared).__name__},
+        )
+
+    fields: dict[str, FieldSchema] = {}
+    for key, value in entries:
+        # A bare type name is the mapping spelling's shorthand for `{type: <name>}`.
+        declaration = (
+            {"type": value} if key is not None and isinstance(value, (str, FieldType)) else value
+        )
+        if not isinstance(declaration, Mapping):
+            label = f"field {key!r}" if key is not None else f"row {value!r}"
+            raise ValidationError(
+                f"{prefix}{label} is not a field declaration: a field is a type name "
+                f"(`string`) or a mapping (`{{name: <column>, type: <type>}}`)",
+                context={**base, "field": key},
+            )
+        name = _declared_name(key, declaration, prefix=prefix, context=base)
+        if name in fields:
+            raise ValidationError(
+                f"{prefix}field {name!r} is declared twice", context={**base, "field": name}
+            )
+        fields[name] = _field_schema(name, declaration, prefix=prefix, context=base)
+    return fields
+
+
+def _declared_name(
+    key: str | None, value: Mapping[str, Any], *, prefix: str, context: dict[str, Any]
+) -> str:
+    """A field's name: the mapping key, or the row's ``name``, and never both disagreeing."""
+    if key is None:
+        if "name" not in value:
+            raise ValidationError(
+                f"{prefix}every field row names its column -- "
+                f"`{{name: <column>, type: <type>}}` -- and this one is {dict(value)!r}",
+                context={**context, "row": dict(value)},
+            )
+        name = value["name"]
+    else:
+        name = value.get("name", key)
+        if name != key:
+            raise ValidationError(
+                f"{prefix}field {key!r} names itself {name!r}; a mapping entry's `name` "
+                f"is its key or absent",
+                context={**context, "field": key, "name": name},
+            )
+    if not isinstance(name, str) or not name:
+        raise ValidationError(
+            f"{prefix}a field's name is a non-empty string, got {name!r}",
+            context={**context, "name": name},
+        )
+    return name
+
+
+def _field_schema(
+    name: str, value: Mapping[str, Any], *, prefix: str, context: dict[str, Any]
+) -> FieldSchema:
+    """One field mapping, whose name is already read, as a :class:`FieldSchema`."""
+    field_context = {**context, "field": name}
+    unknown = sorted(str(key) for key in value if key not in FIELD_KEYS)
+    if unknown:
+        raise ValidationError(
+            f"{prefix}field {name!r} declares {unknown}, which a field does not take. "
+            f"A field takes {sorted(FIELD_KEYS)}",
+            context={**field_context, "keys": unknown},
+        )
+
+    declared_type = value.get("type", FieldType.STRING)
+    try:
+        field_type = (
+            declared_type if isinstance(declared_type, FieldType) else FieldType(str(declared_type))
+        )
+    except ValueError as exc:
+        raise ValidationError(
+            f"{prefix}field {name!r} declares type {declared_type!r}, which is not a "
+            f"field type. Field types: {sorted(member.value for member in FieldType)}",
+            context={**field_context, "type": declared_type},
+        ) from exc
+
+    required = value.get("required", False)
+    if not isinstance(required, bool):
+        # Checked for being a boolean rather than for truthiness: `required: "no"`
+        # is truthy, so the value that most obviously means *off* turned it on.
+        raise ValidationError(
+            f"{prefix}field {name!r} declares `required: {required!r}`; it is `true` or `false`",
+            context={**field_context, "required": required},
+        )
+
+    declared_metadata = value.get("metadata", {})
+    if not isinstance(declared_metadata, Mapping):
+        raise ValidationError(
+            f"{prefix}field {name!r} declares `metadata:` as "
+            f"{type(declared_metadata).__name__}; it is a mapping",
+            context=field_context,
+        )
+    metadata: dict[str, Any] = {}
+    for shorthand in ("dimensions", "source_field"):
+        if shorthand in value:
+            metadata[shorthand] = value[shorthand]
+    metadata.update(declared_metadata)
+
+    return FieldSchema(
+        name=name,
+        type=field_type,
+        metadata=metadata,
+        required=required,
+        default=value.get("default"),
+    )
