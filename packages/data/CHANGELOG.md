@@ -1222,7 +1222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of mixed types (a YAML `1:` beside `foo:`) are named as strings rather than
   escaping as a `TypeError` from sorting them. The schema reader now reads a
   field's `type:` through `dataknobs-common`'s `FieldType.lookup`, which the
-  ontology loader also calls; what it accepts is unchanged.
+  ontology loader also calls; what it accepts is unchanged. The registry's
+  own reader of the rung kinds a document writes takes a tuple `rungs:` as the
+  loader now does, so the two record-binding refusals that ask it (a rung
+  reading surface forms over a binding with no `surface_forms:`, and a
+  scanning rung with no `longest_form_tokens:`) fire for a tuple composition
+  instead of being skipped.
 
 - **A record binding's `entity_projection.type: {const: ...}` must name an
   entity type the document declares.** It is the ninth member of the

@@ -679,6 +679,35 @@ def test_resolver_keys_of_mixed_types_are_refused_by_name(reader: Any, mammals_p
 
 
 @BUILDERS
+def test_a_rungs_tuple_is_read_as_a_list(build: Any, mammals_path: Path) -> None:
+    """A document built in Python may write the composition as a tuple.
+
+    It was refused as *must be a list, got tuple*, while the same loader reads
+    ``attributes:`` and ``enum_values:`` as either -- a refusal of a value
+    whose meaning is not in doubt. YAML cannot write a tuple, so no file is
+    affected.
+    """
+    assert len(build(mammals_path, {"rungs": ({"kind": "exact"},)}).rungs) == 1
+
+
+@pytest.mark.parametrize(
+    "registry", [signal_backends, async_signal_backends], ids=["sync", "async"]
+)
+def test_the_pre_check_reads_a_rungs_tuple_as_the_doors_do(registry: Any) -> None:
+    """The published *would this build* answers as the build doors do."""
+    refuse_unbuildable_rungs({"rungs": ({"kind": "exact"},)}, registry=registry)
+
+
+@SECTION_READERS
+def test_a_rungs_value_that_is_not_a_sequence_is_still_refused(
+    reader: Any, mammals_path: Path
+) -> None:
+    """Widening to a tuple is not widening to anything iterable: a mapping stays refused."""
+    with pytest.raises(ValidationError, match="must be a list"):
+        reader(mammals_path, {"rungs": {"kind": "exact"}})
+
+
+@BUILDERS
 @pytest.mark.parametrize(
     ("section", "rungs"),
     [(None, 3), ({}, 0), ({"rungs": []}, 0)],

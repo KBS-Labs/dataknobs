@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written as a mapping, and a `resolver:` section that is not a mapping used
   to raise a bare `AttributeError`, which no door documents. They now raise
   `ValidationError`, and `attributes: null` reads as no attributes rather
-  than raising `TypeError`.
+  than raising `TypeError`. `resolver: {rungs: (...)}`, a tuple, is read as
+  a list is, where it was refused as "must be a list, got tuple"; only a
+  document built in Python can write one.
 
 - **`Taxonomy.has_edge_annotations()` asks about this axis's edges, not the
   vocabulary's relation.** It narrowed the assertion source by relation alone,

@@ -2827,12 +2827,18 @@ def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
     distinction is kept in the read rather than collapsed in a ``or {}``,
     because a later caller asking a different question of this section needs
     it back and would not find it.
+
+    **A list or a tuple, as the loader reads it.** This reader took a list
+    only, so a tuple composition -- which the loader builds -- read here as
+    *no rungs written*, and both binding refusals that ask this function were
+    skipped for it. Any other shape answers ``()`` because the loader refuses
+    it by name; this is not the door that says so.
     """
     section = config.resolver
-    if section is None:
+    if not isinstance(section, Mapping):
         return ()
     rungs = section.get("rungs")
-    if not isinstance(rungs, list):
+    if not isinstance(rungs, list | tuple):
         return ()
     return tuple(str(rung.get("kind", "")) for rung in rungs if isinstance(rung, Mapping))
 

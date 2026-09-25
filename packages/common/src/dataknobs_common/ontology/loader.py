@@ -1927,7 +1927,9 @@ def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], .
     rungs = section.get("rungs")
     if rungs is None:
         return ()
-    if not isinstance(rungs, list):
+    # A tuple too, as `attributes:` and `enum_values:` are read: a document
+    # built in Python may write one, and its meaning is not in doubt.
+    if not isinstance(rungs, list | tuple):
         raise ValidationError(
             f"`resolver.rungs:` must be a list, got {type(rungs).__name__}",
             context={"rungs": rungs},
