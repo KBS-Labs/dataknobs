@@ -270,6 +270,29 @@ mappings above or as a mapping of field name to type:
           summary: {type: text}
 ```
 
+Either way it is read by the same function as a database config's `schema:`
+(`extract_schema_from_config`), so `schema:` may also be the bare list of
+rows, and `schema:` with no value is no schema. A field takes `type` (any
+case: `String` is `string`; absent, or `type:` with no value, is `string`),
+`metadata`, and `enum` (the list of values the field allows). Those are what
+the source reads. Two of them reach the filter schema the intent extractor
+sees: `metadata.description` becomes the filter's description in place of
+`Filter on <field>`, and `enum` adds the allowed values with a normalization
+hint:
+
+```yaml
+      schema:
+        fields:
+          department: {type: string, enum: [CS, Math, Physics]}
+          level: {type: integer, metadata: {description: "Course level, 100-400"}}
+```
+
+Anything else is refused with a `ValidationError` naming the source: an
+unknown type, a key a field does not take (`required`, `default` and the
+vector shorthands included, since this source reads none of them), an `enum`
+or `metadata.enum` that is not a list, a field with no name or declared
+twice, and columns written beside `fields:` rather than under it.
+
 Omitting `backend` builds the in-process store, which is unpersisted and
 answers every query with zero results until something writes to it. That
 case is reported at WARNING so it cannot be mistaken for a configured one.

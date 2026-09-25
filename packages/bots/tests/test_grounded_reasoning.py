@@ -1356,34 +1356,6 @@ class TestSourceFactory:
             await create_source_from_config(config)
 
 
-class TestSourceFactorySchema:
-    """Tests for _build_database_schema helper."""
-
-    def test_string_type_shorthand(self) -> None:
-        from dataknobs_bots.knowledge.sources.factory import _build_database_schema
-
-        schema = _build_database_schema({"name": "string", "age": "integer"})
-        assert "name" in schema.fields
-        assert "age" in schema.fields
-
-    def test_dict_type_with_enum(self) -> None:
-        from dataknobs_bots.knowledge.sources.factory import _build_database_schema
-
-        schema = _build_database_schema(
-            {
-                "dept": {"type": "string", "enum": ["CS", "Math"]},
-            }
-        )
-        assert "dept" in schema.fields
-        assert schema.fields["dept"].metadata.get("enum") == ["CS", "Math"]
-
-    def test_empty_fields(self) -> None:
-        from dataknobs_bots.knowledge.sources.factory import _build_database_schema
-
-        schema = _build_database_schema({})
-        assert len(schema.fields) == 0
-
-
 class TestDynaBotSourceWiring:
     """Tests for DynaBot.from_config() grounded source construction."""
 

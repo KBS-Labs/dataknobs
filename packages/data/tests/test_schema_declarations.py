@@ -16,6 +16,7 @@ those, because every check keyed on it then passes over nothing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -27,7 +28,7 @@ from dataknobs_data.backends.config import MemoryDatabaseConfig, PostgresDatabas
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.ontology import OntologyRegistry
-from dataknobs_data.database import AsyncDatabase, SyncDatabase
+from dataknobs_data.database import AsyncDatabase, SyncDatabase, extract_schema_from_config
 from dataknobs_data.schema import DatabaseSchema, FieldSchema, read_field_declarations
 
 ROWS: list[dict[str, Any]] = [
@@ -268,8 +269,8 @@ def test_a_key_set_the_reader_cannot_read_is_a_programming_error() -> None:
     """A door may narrow the keys a field takes, never widen them: a key the
     reader does not read would load and be discarded.
     """
-    with pytest.raises(ValueError, match="'enum'"):
-        read_field_declarations({"sku": "string"}, keys=frozenset({"name", "type", "enum"}))
+    with pytest.raises(ValueError, match="'description'"):
+        read_field_declarations({"sku": "string"}, keys=frozenset({"name", "type", "description"}))
 
 
 def test_an_empty_declaration_is_still_an_empty_schema() -> None:
@@ -278,6 +279,147 @@ def test_an_empty_declaration_is_still_an_empty_schema() -> None:
     assert DatabaseSchema.from_dict({"metadata": {"owner": "catalog"}}).metadata == {
         "owner": "catalog"
     }
+
+
+# --------------------------------------------------------------------------
+# `enum`, a type name in any case, and a caller that says where it read from
+# --------------------------------------------------------------------------
+
+
+def test_enum_folds_into_metadata_in_both_spellings() -> None:
+    """`DatabaseSource.get_schema()` reads `metadata["enum"]`; `enum:` is its shorthand."""
+    as_mapping = DatabaseSchema.from_dict(
+        {"fields": {"dept": {"type": "string", "enum": ["CS", "Math"]}}}
+    )
+    as_rows = DatabaseSchema.from_dict(
+        {"fields": [{"name": "dept", "type": "string", "enum": ["CS", "Math"]}]}
+    )
+    assert as_mapping.fields["dept"].metadata == {"enum": ["CS", "Math"]}
+    assert as_rows == as_mapping
+
+
+def test_an_explicit_metadata_enum_wins_over_the_shorthand() -> None:
+    """The same precedence `dimensions` and `source_field` already have."""
+    schema = DatabaseSchema.from_dict(
+        {"fields": {"dept": {"enum": ["CS"], "metadata": {"enum": ["Math"]}}}}
+    )
+    assert schema.fields["dept"].metadata["enum"] == ["Math"]
+
+
+@pytest.mark.parametrize("enum", ["CS", 5, {"CS": 1}])
+@pytest.mark.parametrize(
+    "spell",
+    [
+        lambda enum: {"enum": enum},
+        lambda enum: {"metadata": {"enum": enum}},
+        lambda enum: {"enum": ["A"], "metadata": {"enum": enum}},
+    ],
+    ids=["shorthand", "metadata", "metadata-over-a-valid-shorthand"],
+)
+def test_an_enum_that_is_not_a_list_is_refused_naming_the_field(
+    enum: Any, spell: Callable[[Any], dict[str, Any]]
+) -> None:
+    """A string would reach the filter schema as `list("CS")`, one letter a value.
+
+    The value checked is the one that wins: an explicit `metadata.enum` takes
+    precedence over the shorthand, so checking the shorthand alone let the
+    winning value through unread.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        DatabaseSchema.from_dict({"fields": {"dept": spell(enum)}})
+    assert "'dept'" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        ("String", FieldType.STRING),
+        ("TEXT", FieldType.TEXT),
+        ("Sparse_Vector", FieldType.SPARSE_VECTOR),
+    ],
+)
+def test_a_type_name_is_read_in_any_case(declared: str, expected: FieldType) -> None:
+    """Every type's name is its member name lowercased, so `String` can only mean `string`."""
+    as_mapping = DatabaseSchema.from_dict({"fields": {"sku": declared}})
+    as_rows = DatabaseSchema.from_dict({"fields": [{"name": "sku", "type": declared}]})
+    assert as_mapping.fields["sku"].type is expected
+    assert as_rows == as_mapping
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        {"columns": {"sku": "string"}},
+        {"metadata": 5},
+        {"fields": {"sku": "money"}},
+        {"fields": [{"type": "string"}]},
+    ],
+)
+def test_from_dict_names_its_origin_in_every_refusal(declaration: dict[str, Any]) -> None:
+    """A caller that knows where the declaration came from says so once, and
+    every refusal -- the top-level ones included -- carries it.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        DatabaseSchema.from_dict(
+            declaration, origin="source 'courses'", context={"source": "courses"}
+        )
+    assert str(excinfo.value).startswith("source 'courses': ")
+    assert excinfo.value.context["source"] == "courses"
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "title",
+        5,
+        {"columns": {"sku": "string"}},
+        {"fields": {"sku": "money"}},
+        [{"type": "string"}],
+    ],
+    ids=["scalar-str", "scalar-int", "top-level-columns", "unknown-type", "bare-row-list"],
+)
+def test_extract_schema_from_config_names_its_origin_in_every_refusal(declaration: Any) -> None:
+    """The one door for a `schema:` value says where it read from, as `from_dict` does.
+
+    A caller reading a `schema:` must be able to go through this function rather
+    than around it to `from_dict`, and the only reason one had to go around was
+    that this door could not name its origin.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        extract_schema_from_config(
+            declaration, origin="source 'courses'", context={"source": "courses"}
+        )
+    assert str(excinfo.value).startswith("source 'courses': ")
+    assert excinfo.value.context["source"] == "courses"
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        {"fields": {"sku": {"type": "string", "required": True}}},
+        [{"name": "sku", "type": "string", "required": True}],
+    ],
+    ids=["mapping", "bare-row-list"],
+)
+def test_a_door_that_reads_less_narrows_the_keys_through_either_entry(
+    declaration: Any,
+) -> None:
+    """`keys=` reaches the field reader through `from_dict` and through the config door.
+
+    A door that uses a declaration's name and type only must be able to refuse
+    `required:` rather than load it and discard it, whichever entry it reads by.
+    """
+    keys = frozenset({"name", "type"})
+    with pytest.raises(ValidationError, match=r"\['required'\]"):
+        extract_schema_from_config(declaration, keys=keys)
+    if isinstance(declaration, dict):
+        with pytest.raises(ValidationError, match=r"\['required'\]"):
+            DatabaseSchema.from_dict(declaration, keys=keys)
+
+
+def test_extract_schema_from_config_still_reads_a_null_as_no_schema() -> None:
+    """YAML's `schema:` with no value is the key left out, at every door."""
+    assert extract_schema_from_config(None, origin="source 'courses'") is None
 
 
 # --------------------------------------------------------------------------
@@ -332,6 +474,7 @@ async def test_an_ontology_row_with_a_misspelt_key_is_refused_naming_the_binding
         {"metadata": {"sql_type": "uuid"}},
         {"dimensions": 3},
         {"source_field": "title"},
+        {"enum": ["a", "b"]},
         {"description": "the product code"},
     ],
 )

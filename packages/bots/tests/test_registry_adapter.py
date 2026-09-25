@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime
+from typing import Any
 
 import pytest
 
@@ -910,3 +911,50 @@ class TestDataKnobsRegistryAdapterSurfaceCompletion:
 
         assert await adapter.count_all(filter_metadata={}) == 2
         assert await adapter.count_all(filter_metadata=None) == 2
+
+
+#: Every database the probe backend built, and every ``connect`` each received.
+_BUILT: list["_CountingMemoryDatabase"] = []
+
+
+class _CountingMemoryDatabase(AsyncMemoryDatabase):
+    """The in-process store, recording that it was built and how often it was opened.
+
+    Registered as a backend under its own name, so the adapter builds it through
+    the real factory, exactly as it builds any backend it is named.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.connects = 0
+        _BUILT.append(self)
+
+    async def connect(self) -> None:
+        self.connects += 1
+        await super().connect()
+
+
+async def test_two_concurrent_initializes_build_and_open_one_database() -> None:
+    """``initialize()`` promises to be idempotent, and that holds for concurrent callers.
+
+    The build moved into a worker thread, which put an ``await`` between the
+    check that no database exists and the assignment of the one built. Two
+    concurrent callers then both passed the check and each built one; the
+    adapter kept the second, and ``close()`` never reached the first, so its
+    connection leaked. Before the move they shared one database but each
+    connected it.
+    """
+    from dataknobs_data.backends import async_backends
+
+    _BUILT.clear()
+    async_backends.register("counting_memory_test", _CountingMemoryDatabase)
+    adapter = DataKnobsRegistryAdapter(backend_type="counting_memory_test")
+    try:
+        await asyncio.gather(adapter.initialize(), adapter.initialize())
+
+        assert len(_BUILT) == 1, "two concurrent initializes built two databases"
+        assert _BUILT[0].connects == 1, "one database was connected more than once"
+        assert adapter._db is _BUILT[0]
+    finally:
+        await adapter.close()
+        async_backends.unregister("counting_memory_test")
