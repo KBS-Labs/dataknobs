@@ -163,6 +163,12 @@ is of *record*, and last leaves that `exact` for a caller whose string already
 misses everything. Those are different answers on purpose: silence is silence,
 and an empty list is a composition somebody wrote.
 
+The section takes `rungs:` and nothing else. Any other key is refused by name
+by `build_resolver`, `async_build_resolver` and `refuse_unbuildable_rungs`. A
+section with no `rungs:` reads as a composition of nothing, so `rung:`, one
+letter short, would otherwise build a cascade that matches nothing and say so
+nowhere.
+
 ## Every candidate carries its evidence
 
 *Why did this win?* is answerable without re-running the query.

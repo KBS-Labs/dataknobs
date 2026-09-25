@@ -40,6 +40,7 @@ from dataknobs_common.ontology import (
     AsyncOntology,
     Entity,
     NodeTag,
+    RESOLVER_SECTION_KEYS,
     OntologyConfig,
     OntologySupport,
     assemble_async_ontology,
@@ -100,7 +101,12 @@ INDEX_BLOCK_KEYS = frozenset({"store", "embedder", "metric", "fields", "join", "
 #: ``rungs`` absent is read one layer down as *a composition of nothing*
 #: rather than as silence. So ``resolver: {rung: [...]}``, singular, would
 #: build a cascade that matches nothing and report success.
-RESOLVER_BLOCK_KEYS = frozenset({"rungs"})
+#:
+#: The set is ``dataknobs-common``'s, whose build doors read the section into
+#: rungs and refuse the same key there. This door refuses first, naming the
+#: ontology and opening no store; the two messages are two doors' answers over
+#: one set.
+RESOLVER_BLOCK_KEYS = RESOLVER_SECTION_KEYS
 
 #: The one nesting an ``index.embedder:`` block accepts.
 #:

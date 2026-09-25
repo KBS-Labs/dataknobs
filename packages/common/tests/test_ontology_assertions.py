@@ -203,6 +203,30 @@ def test_a_literal_object_is_read_from_a_mapping() -> None:
     assert parent.object == EntityRef("dog")
 
 
+def test_a_literal_s_type_is_read_whatever_its_case() -> None:
+    """``Integer`` is a spelling of ``integer``, as it is for an attribute's ``type:``.
+
+    One function reads both, so the two readings of one word cannot diverge.
+    Before case was folded, an unrecognised spelling fell back to ``STRING``,
+    so this literal loaded as a string with an integer value.
+    """
+    onto = load_ontology(
+        {
+            "id": "x",
+            "assertions": [
+                {
+                    "subject": "beagle",
+                    "relation": "weighs",
+                    "object": {"value": 10, "type": "Integer"},
+                },
+            ],
+        }
+    )
+
+    weight = onto.assertions.find(subject="beagle", relation="weighs")[0]
+    assert weight.object == Literal(value=10, type=FieldType.INTEGER)
+
+
 # --------------------------------------------------------------------------
 # A stated negation loads, and a query can select on it
 # --------------------------------------------------------------------------

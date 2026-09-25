@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.fields import FieldType
 from dataknobs_common.ontology import async_load_ontology, build_ontology, load_ontology
 from dataknobs_common.ontology import loader as loader_module
 from dataknobs_common.ontology.config import OntologyConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from dataknobs_common.ontology import AsyncOntology, Ontology
+    from dataknobs_common.ontology.model import AttributeDef
 
 
 def _sync_door(document: Mapping[str, Any]) -> None:
@@ -644,6 +651,293 @@ def test_the_refusal_falls_back_to_the_keys_a_row_does_have(door: Door) -> None:
     message = str(excinfo.value)
     assert "type" in message
     assert "name" in message
+
+
+# --------------------------------------------------------------------------
+# An attribute row is read for its keys, and each key for its shape
+# --------------------------------------------------------------------------
+#
+# `required: "no"` loaded as a required attribute, because the key was read
+# with `bool(...)` and a non-empty string is truthy. It was not alone in the
+# row: `name` and `description` went through `str(...)`, so `null` became the
+# string "None"; `enum_values` was tested for truthiness, so an empty list and
+# an absent key read the same; and a key nothing reads -- `enum:` for
+# `enum_values:` -- loaded and was discarded. The published `field_type:` key
+# was discarded too, which is the one case below that the loader now reads
+# rather than refuses.
+
+
+def _one_attribute(**attribute: Any) -> dict[str, Any]:
+    """A document whose one entity type declares the one attribute given."""
+    return {"id": "x", "entity_types": [{"id": "Species", "attributes": [attribute]}]}
+
+
+def _sync_loaded(document: Mapping[str, Any]) -> Ontology:
+    return load_ontology(document)
+
+
+def _async_loaded(document: Mapping[str, Any]) -> AsyncOntology:
+    return asyncio.run(async_load_ontology(document))
+
+
+LOADERS = pytest.mark.parametrize(
+    "loaded", [_sync_loaded, _async_loaded], ids=["load_ontology", "async_load_ontology"]
+)
+
+Loaded = Callable[[Mapping[str, Any]], "Ontology | AsyncOntology"]
+
+
+def _the_attribute(loaded: Loaded, **attribute: Any) -> AttributeDef:
+    (built,) = loaded(_one_attribute(name="a", **attribute)).entity_types["Species"].attributes
+    return built
+
+
+#: Every attribute a row can be refused for, and the key the refusal is about.
+#: Listed as a table so :func:`test_every_attribute_refusal_is_one_exception_type`
+#: can hold the claim that each is one type, and so a new refusal has one
+#: place to be added.
+_REFUSED_ATTRIBUTES: list[tuple[str, str, dict[str, Any]]] = [
+    ("required-no", "required", {"name": "a", "required": "no"}),
+    ("required-false-string", "required", {"name": "a", "required": "false"}),
+    ("required-one", "required", {"name": "a", "required": 1}),
+    ("required-zero", "required", {"name": "a", "required": 0}),
+    ("name-int", "name", {"name": 5}),
+    ("name-null", "name", {"name": None}),
+    ("name-empty", "name", {"name": ""}),
+    ("description-int", "description", {"name": "a", "description": 5}),
+    ("enum-values-empty", "enum_values", {"name": "a", "enum_values": []}),
+    ("enum-values-string", "enum_values", {"name": "a", "enum_values": "CS"}),
+    ("enum-values-ints", "enum_values", {"name": "a", "enum_values": [1, 2]}),
+    ("type-int", "type", {"name": "a", "type": 5}),
+    ("field-type-unknown", "field_type", {"name": "a", "field_type": "money"}),
+    ("field-type-int", "field_type", {"name": "a", "field_type": 5}),
+]
+
+
+@DOORS
+@pytest.mark.parametrize(
+    ("key", "attribute"),
+    [(key, attribute) for _, key, attribute in _REFUSED_ATTRIBUTES],
+    ids=[case for case, _, _ in _REFUSED_ATTRIBUTES],
+)
+def test_an_attribute_value_of_the_wrong_shape_is_refused(
+    door: Door, key: str, attribute: dict[str, Any]
+) -> None:
+    """Named key, named entity type, and the documented exception type.
+
+    ``required: "no"`` is the case the register row is about: it loaded as a
+    *required* attribute. The rest are the same function's other readers,
+    each of which coerced rather than checked -- ``name: null`` became the
+    attribute ``'None'``, and ``enum_values: "CS"`` became ``['C', 'S']``.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(_one_attribute(**attribute))
+
+    message = str(excinfo.value)
+    assert repr(key) in message
+    assert "'Species'" in message
+    assert excinfo.value.context["section"] == "entity_types.attributes"
+    assert excinfo.value.context["entity_type"] == "Species"
+    assert excinfo.value.context["field"] == key
+
+
+@DOORS
+def test_a_non_boolean_required_says_it_is_on_or_off(door: Door) -> None:
+    """The message a ``"no"`` author needs is the one ``index.aliases`` gives."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(_one_attribute(name="latin_name", required="no"))
+
+    message = str(excinfo.value)
+    assert "'latin_name'" in message
+    assert "`true` or `false`" in message
+
+
+@LOADERS
+@pytest.mark.parametrize("attribute", [{}, {"required": None}], ids=["absent", "null"])
+def test_an_absent_or_null_required_reads_false(loaded: Loaded, attribute: dict[str, Any]) -> None:
+    """``null`` is silence, as it is for ``index.aliases`` and in ``data``'s reader."""
+    assert _the_attribute(loaded, **attribute).required is False
+
+
+@LOADERS
+def test_a_boolean_required_is_read_as_written(loaded: Loaded) -> None:
+    assert _the_attribute(loaded, required=True).required is True
+    assert _the_attribute(loaded, required=False).required is False
+
+
+@LOADERS
+@pytest.mark.parametrize(
+    ("attribute", "expected"),
+    [({}, ""), ({"description": None}, ""), ({"description": "Latin name"}, "Latin name")],
+    ids=["absent", "null", "string"],
+)
+def test_a_description_is_a_string_and_null_is_silence(
+    loaded: Loaded, attribute: dict[str, Any], expected: str
+) -> None:
+    """``null`` used to reach an extraction prompt as the word ``None``."""
+    assert _the_attribute(loaded, **attribute).description == expected
+
+
+@LOADERS
+@pytest.mark.parametrize("values", [["a", "b"], ("a", "b")], ids=["list", "tuple"])
+def test_enum_values_read_as_a_list_of_strings(loaded: Loaded, values: Any) -> None:
+    assert _the_attribute(loaded, enum_values=values).enum_values == ["a", "b"]
+
+
+@LOADERS
+def test_an_absent_enum_values_is_not_enumerated(loaded: Loaded) -> None:
+    assert _the_attribute(loaded).enum_values is None
+
+
+@DOORS
+def test_an_attribute_key_this_loader_does_not_read_is_refused(door: Door) -> None:
+    """``enum:`` for ``enum_values:`` loaded, and its values were discarded.
+
+    A dropped key and an unsupported key have to look different -- the rule
+    :data:`~dataknobs_common.ontology.TAXONOMY_ROW_KEYS` enforces for an axis
+    row, applied to the row next door. The message lists what *is* read, so
+    the misspelling is findable from it.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(_one_attribute(name="severity", enum=["a", "b"]))
+
+    message = str(excinfo.value)
+    assert "['enum']" in message
+    assert "'severity'" in message
+    assert str(sorted(loader_module.ATTRIBUTE_ROW_KEYS)) in message
+    assert excinfo.value.context["keys"] == ["enum"]
+
+
+@LOADERS
+def test_a_type_is_kept_verbatim_and_its_vocabulary_is_open(loaded: Loaded) -> None:
+    """``type:`` names a vocabulary type, and the loader does not decide which exist.
+
+    ``entity``, ``enum`` and ``number`` are vocabulary types with no record
+    counterpart, and the published documents write all three. So an unknown
+    type loads with no ``field_type``; only a non-string one is refused.
+    """
+    built = _the_attribute(loaded, type="nonsense")
+    assert built.value_type == "nonsense"
+    assert built.field_type is None
+
+    assert _the_attribute(loaded).value_type == "string"
+
+
+@LOADERS
+def test_a_type_derives_its_field_type_whatever_its_case(loaded: Loaded) -> None:
+    """``type: String`` is a spelling of ``string``; ``value_type`` keeps the author's."""
+    built = _the_attribute(loaded, type="String")
+    assert built.field_type is FieldType.STRING
+    assert built.value_type == "String"
+
+
+@LOADERS
+@pytest.mark.parametrize("spelling", ["float", "Float"])
+def test_a_field_type_is_read_and_overrides_the_derivation(loaded: Loaded, spelling: str) -> None:
+    """The published key the loader discarded.
+
+    ``{type: number, field_type: float}`` is written in four guides, the
+    shared test vocabulary and the proving ground, and loaded as
+    ``field_type=None`` -- ``number`` has no record type, and the key that
+    said which one was never read.
+    """
+    built = _the_attribute(loaded, type="number", field_type=spelling)
+    assert built.field_type is FieldType.FLOAT
+    assert built.value_type == "number"
+
+
+def test_a_refused_field_type_lists_the_values_it_could_have_been() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        load_ontology(_one_attribute(name="price", field_type="money"))
+
+    message = str(excinfo.value)
+    for member in FieldType:
+        assert repr(member.value) in message
+
+
+def test_the_guides_vocabulary_reads_its_field_type(mammals_v11_path: Path) -> None:
+    """The documents on disk, read through the reader a consumer holds.
+
+    ``lifespan_years`` is written ``{type: number, field_type: float}``, the
+    one spelling every published example of the key uses.
+    """
+    ontology = load_ontology(mammals_v11_path)
+    lifespan = {a.name: a for a in ontology.inherited_attributes("Breed")}["lifespan_years"]
+
+    assert lifespan.field_type is FieldType.FLOAT
+
+
+@DOORS
+@pytest.mark.parametrize(
+    "entity_type",
+    [
+        {"id": "Species", "attributes": ["latin_name"]},
+        {"id": "Species", "attributes": {"latin_name": {"type": "string"}}},
+    ],
+    ids=["attribute-not-a-mapping", "attributes-a-mapping"],
+)
+def test_an_attributes_list_of_the_wrong_shape_is_refused(
+    door: Door, entity_type: dict[str, Any]
+) -> None:
+    """Both raised a bare ``AttributeError``, which no documented ``Raises:`` names."""
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", "entity_types": [entity_type]})
+
+    assert "'Species'" in str(excinfo.value)
+    assert excinfo.value.context["section"] == "entity_types.attributes"
+
+
+@DOORS
+def test_two_attributes_with_one_name_on_one_type_are_refused(door: Door) -> None:
+    """One name, one declaration: the file's duplicate-id rule, on the list it skipped."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [
+                    {
+                        "id": "Species",
+                        "attributes": [
+                            {"name": "a", "type": "string"},
+                            {"name": "a", "type": "number"},
+                        ],
+                    }
+                ],
+            }
+        )
+
+    assert "'a'" in str(excinfo.value)
+    assert "'Species'" in str(excinfo.value)
+
+
+@DOORS
+def test_a_subtype_may_redeclare_its_parent_s_attribute(door: Door) -> None:
+    """The duplicate rule is per row. Across ``isa`` it is inheritance, a different question."""
+    door(
+        {
+            "id": "x",
+            "entity_types": [
+                {"id": "Species", "attributes": [{"name": "a"}]},
+                {"id": "Breed", "isa": "Species", "attributes": [{"name": "a"}]},
+            ],
+        }
+    )
+
+
+def test_every_attribute_refusal_is_one_exception_type() -> None:
+    """The table covers every key the row is read for, and each refusal is one type.
+
+    A key added to :data:`ATTRIBUTE_ROW_KEYS` with no case here is a key
+    whose shape nothing checks -- which is how the seven readers above came
+    to coerce: each was written on its own. ``entity_type`` is the one key
+    with no shape refusal of its own, because the reference check owns it.
+    """
+    refused = {key for _, key, _ in _REFUSED_ATTRIBUTES}
+    assert refused | {"entity_type"} == loader_module.ATTRIBUTE_ROW_KEYS
+
+    for _, _, attribute in _REFUSED_ATTRIBUTES:
+        with pytest.raises(ValidationError):
+            load_ontology(_one_attribute(**attribute))
 
 
 # --------------------------------------------------------------------------

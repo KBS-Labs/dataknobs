@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import Collection, Container, Mapping, Sequence
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
 
 from dataknobs_common._nested_core import _mint_tree, _walk_tree
 from dataknobs_common.config_loading import load_yaml_or_json
@@ -133,7 +133,13 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
             inference mode or polarity; on a key only a later version reads --
             ``condition:``, ``cardinality:``, ``constraints:`` -- which is
             refused rather than dropped; on a scalar ``domain:`` or ``range:``,
-            which is one type name rather than a list of one; or on a
+            which is one type name rather than a list of one; on an attribute
+            row that is not a mapping, declares a key an attribute is not read
+            for, repeats a name its entity type already declares, or carries a
+            value of the wrong shape -- a ``required:`` that is not a boolean,
+            a ``name:`` that is not a non-empty string, an ``enum_values:``
+            that is not a non-empty list of strings, a ``field_type:`` naming
+            no record type; or on a
             reference into a section this document declares -- ``isa``, an
             attribute's ``entity_type``, a relation type's ``domain``,
             ``range`` or ``inverse_of``, an entity's ``type``, an assertion's
@@ -749,7 +755,7 @@ def _refuse_undeclared_attribute_types(
     """
     for row in rows:
         type_id = str(row.get("id"))
-        for attribute in row.get("attributes", []):
+        for attribute in row.get("attributes") or ():
             target = attribute.get("entity_type")
             if target is None:
                 continue
@@ -1177,35 +1183,220 @@ def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
             description=row.get("description"),
             aliases=list(row.get("aliases", [])),
             metadata=dict(row.get("metadata", {})),
-            attributes=[_build_attribute(a) for a in row.get("attributes", [])],
+            attributes=_build_attributes(row.get("attributes"), type_id),
             isa=str(parent) if parent is not None else None,
         )
     return built
 
 
-def _build_attribute(row: Mapping[str, Any]) -> AttributeDef:
-    declared = row.get("type")
+#: The keys an attribute row is read for, and the only ones.
+#:
+#: :data:`TAXONOMY_ROW_KEYS`'s rule on the row next door: a key nothing reads
+#: loaded and was discarded, so ``enum:`` written for ``enum_values:`` said
+#: nothing and enumerated nothing. ``field_type`` is here because the
+#: published documents write it -- ``{type: number, field_type: float}`` -- and
+#: the loader is what should honour it, not what should refuse it.
+ATTRIBUTE_ROW_KEYS: frozenset[str] = frozenset(
+    {"name", "type", "field_type", "entity_type", "required", "enum_values", "description"}
+)
+
+_ATTRIBUTES_SECTION = "entity_types.attributes"
+
+
+def _build_attributes(declared: Any, entity_type: str) -> list[AttributeDef]:
+    """An entity type's ``attributes:`` list, each row read, no name twice.
+
+    ``null`` is silence, as everywhere in this loader. A mapping here -- the
+    natural mistake of keying attributes by name -- and a row that is not a
+    mapping both raised a bare ``AttributeError`` before, which no door's
+    ``Raises:`` names.
+
+    **A duplicate name is refused within one row only.** It is the file's
+    duplicate-id rule, on a list that was never given it: the second
+    declaration shadowed the first for every reader. A subtype redeclaring an
+    attribute its parent declares is inheritance, which is a different
+    question and not this one.
+    """
+    if declared is None:
+        return []
+    if not isinstance(declared, list | tuple):
+        raise ValidationError(
+            f"`{_ATTRIBUTES_SECTION}:` of entity type {entity_type!r} must be a list "
+            f"of attribute rows, got {type(declared).__name__}",
+            context={"section": _ATTRIBUTES_SECTION, "entity_type": entity_type},
+        )
+    built: list[AttributeDef] = []
+    seen: set[str] = set()
+    for row in declared:
+        if not isinstance(row, Mapping):
+            raise ValidationError(
+                f"`{_ATTRIBUTES_SECTION}:` of entity type {entity_type!r} holds "
+                f"{row!r}, which is not an attribute row: each is a mapping "
+                f"with at least a `name:`",
+                context={"section": _ATTRIBUTES_SECTION, "entity_type": entity_type},
+            )
+        attribute = _build_attribute(row, entity_type)
+        if attribute.name in seen:
+            raise ValidationError(
+                f"entity type {entity_type!r} declares attribute {attribute.name!r} "
+                f"twice; the second declaration would shadow the first for every reader",
+                context={
+                    "section": _ATTRIBUTES_SECTION,
+                    "entity_type": entity_type,
+                    "attribute": attribute.name,
+                },
+            )
+        seen.add(attribute.name)
+        built.append(attribute)
+    return built
+
+
+def _build_attribute(row: Mapping[str, Any], entity_type: str) -> AttributeDef:
+    """One attribute row, every key read for its shape and no other key read.
+
+    Each value used to be coerced rather than checked: ``required: "no"``
+    went through ``bool(...)`` and loaded as a *required* attribute,
+    ``name: null`` and ``description: null`` through ``str(...)`` and loaded
+    as the word ``'None'`` -- in the field an extraction prompt is built from
+    -- and ``enum_values: []`` was tested for truthiness, so it read as *not
+    enumerated*, the opposite of what was written. Every refusal goes through
+    :func:`_refuse_attribute_value`, so the eighth key inherits the message
+    rather than writing a ninth.
+
+    ``type:`` stays open: ``entity``, ``enum`` and ``number`` are vocabulary
+    types with no record counterpart, and deciding which vocabulary types
+    exist is not the loader's business. Only a non-string one is refused.
+    """
+    name = _required(row, "name", _ATTRIBUTES_SECTION)
+    if not isinstance(name, str) or not name:
+        _refuse_attribute_value(entity_type, None, "name", name, "a non-empty string")
+    unread = sorted(set(row) - ATTRIBUTE_ROW_KEYS)
+    if unread:
+        raise ValidationError(
+            f"attribute {name!r} of entity type {entity_type!r} declares {unread}, "
+            f"which this loader does not read. An attribute row is read for "
+            f"{sorted(ATTRIBUTE_ROW_KEYS)}",
+            context={
+                "section": _ATTRIBUTES_SECTION,
+                "entity_type": entity_type,
+                "attribute": name,
+                "keys": unread,
+            },
+        )
+    declared = _attribute_str(row, "type", entity_type, name)
+    description = _attribute_str(row, "description", entity_type, name)
+    required = row.get("required")
+    if required is not None and not isinstance(required, bool):
+        _refuse_attribute_value(
+            entity_type,
+            name,
+            "required",
+            required,
+            "a boolean: it is on or off, so it is `true` or `false`",
+        )
     return AttributeDef(
-        name=str(_required(row, "name", "entity_types.attributes")),
-        value_type=str(declared) if declared is not None else "string",
-        field_type=_field_type(declared),
+        name=name,
+        value_type=declared if declared is not None else "string",
+        field_type=_attribute_field_type(row, declared, entity_type, name),
         entity_type=row.get("entity_type"),
-        required=bool(row.get("required", False)),
-        enum_values=list(row["enum_values"]) if row.get("enum_values") else None,
-        description=str(row.get("description", "")),
+        required=bool(required),
+        enum_values=_attribute_enum_values(row, entity_type, name),
+        description=description if description is not None else "",
+    )
+
+
+def _attribute_str(
+    row: Mapping[str, Any], key: str, entity_type: str, attribute: str
+) -> str | None:
+    """A string-valued attribute key, or ``None`` where it is absent or ``null``."""
+    value = row.get(key)
+    if value is not None and not isinstance(value, str):
+        _refuse_attribute_value(entity_type, attribute, key, value, "a string")
+    return value
+
+
+def _attribute_enum_values(
+    row: Mapping[str, Any], entity_type: str, attribute: str
+) -> list[str] | None:
+    """The values an enumerated attribute allows, or ``None`` for *not enumerated*.
+
+    **An empty list is refused rather than read as absent.** A set of allowed
+    values with no members allows no value at all, so no instance could ever
+    satisfy the attribute. That is a contradiction rather than a policy,
+    which is what separates it from ``rungs: []``: an empty rung composition
+    can be carried out, and matches nothing.
+    """
+    values = row.get("enum_values")
+    if values is None:
+        return None
+    if (
+        not isinstance(values, list | tuple)
+        or not values
+        or not all(isinstance(value, str) for value in values)
+    ):
+        _refuse_attribute_value(
+            entity_type, attribute, "enum_values", values, "a non-empty list of strings"
+        )
+    return list(values)
+
+
+def _attribute_field_type(
+    row: Mapping[str, Any], declared: str | None, entity_type: str, attribute: str
+) -> FieldType | None:
+    """The record type an attribute is stored as.
+
+    An explicit ``field_type:`` **overrides** the derivation from ``type:``.
+    It is the key for the case the derivation cannot cover -- a vocabulary
+    type such as ``number`` stored as a :class:`FieldType` -- and the
+    published documents write it for exactly that; it was discarded, so every
+    one of them loaded with ``field_type=None``.
+    """
+    explicit = row.get("field_type")
+    if explicit is None:
+        return _field_type(declared)
+    member = _field_type(explicit) if isinstance(explicit, str) else None
+    if member is None:
+        _refuse_attribute_value(
+            entity_type,
+            attribute,
+            "field_type",
+            explicit,
+            f"a record field type, one of {[m.value for m in FieldType]}",
+        )
+    return member
+
+
+def _refuse_attribute_value(
+    entity_type: str, attribute: str | None, key: str, value: Any, wants: str
+) -> NoReturn:
+    """The one refusal for an attribute key of the wrong shape."""
+    subject = f"attribute {attribute!r}" if attribute is not None else "an attribute"
+    raise ValidationError(
+        f"{subject} of entity type {entity_type!r} declares {key!r} as {value!r}, "
+        f"which is not {wants}",
+        context={
+            "section": _ATTRIBUTES_SECTION,
+            "entity_type": entity_type,
+            "attribute": attribute,
+            "field": key,
+            "value": value,
+        },
     )
 
 
 def _field_type(declared: Any) -> FieldType | None:
-    """The record field type an attribute's declared type maps onto, if any.
+    """The record field type a declared type maps onto, if any.
 
     ``entity`` and ``enum`` are vocabulary concepts with no record-field
     counterpart, so they map to None rather than being forced onto one.
+    Case is folded, so ``String`` is a spelling of ``string`` -- the reading
+    ``dataknobs-data``'s schema reader gives the same word. Shared with a
+    literal's ``type:``, so the two readings of one word cannot diverge.
     """
     if declared is None:
         return None
     try:
-        return FieldType(str(declared))
+        return FieldType(str(declared).lower())
     except ValueError:
         return None
 
@@ -1563,7 +1754,8 @@ def build_resolver(
         A synchronous resolver over the configured rungs.
 
     Raises:
-        ValidationError: For a ``resolver:`` section naming a rung this
+        ValidationError: For a ``resolver:`` section that is not a mapping
+            or declares a key other than ``rungs``, one naming a rung this
             flavour cannot build, a malformed rung entry, an unknown
             ``kind:``, or a rung whose own factory refused the configuration
         ConfigLoadError: For any refusal in reading ``config`` as a document
@@ -1636,6 +1828,7 @@ async def async_build_resolver(
 
     Raises:
         ValidationError: For a ``resolver:`` section this door cannot build --
+            one that is not a mapping or declares a key other than ``rungs``,
             a malformed rung entry, an entry naming no ``kind:``, a ``kind:``
             nothing registers, or a rung whose own factory refused the
             configuration, handles included. **One type for all of them**,
@@ -1654,6 +1847,15 @@ async def async_build_resolver(
     )
 
 
+#: The keys a ``resolver:`` section is read for, and the only ones.
+#:
+#: Published because two doors read the section: the build doors here, and
+#: ``dataknobs-data``'s ``OntologyRegistry``, which refuses a stray key before
+#: it opens a store. Both answer from this set, so the key set is written once
+#: and in the package that decides what the section means.
+RESOLVER_SECTION_KEYS: frozenset[str] = frozenset({"rungs"})
+
+
 def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], ...] | None:
     """The rungs a ``resolver:`` section declares, or ``None`` for silence.
 
@@ -1662,10 +1864,32 @@ def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], .
     nothing, and gets the default composition. A document declaring
     ``rungs: []`` has written a composition -- an empty one -- and gets a
     cascade that misses everything, because the composition *is* the policy
-    and a consumer who wants no rungs must be able to say so.
+    and a consumer who wants no rungs must be able to say so. ``{}`` reads the
+    same way, as a section that composes nothing.
+
+    **A key other than ``rungs`` is refused**, and that is the third case.
+    Read with ``.get`` alone, ``resolver: {rung: [...]}`` -- one letter short
+    -- was a section with no ``rungs:``, so it built a cascade that matches
+    nothing and said nothing. A section that is not a mapping is refused too;
+    it raised a bare ``AttributeError`` before, which no door's ``Raises:``
+    names.
     """
     if section is None:
         return None
+    if not isinstance(section, Mapping):
+        raise ValidationError(
+            f"`resolver:` must be a mapping, got {type(section).__name__}",
+            context={"resolver": section},
+        )
+    unread = sorted(set(section) - RESOLVER_SECTION_KEYS)
+    if unread:
+        raise ValidationError(
+            f"`resolver:` declares {unread}, which this loader does not read. The "
+            f"section is read for {sorted(RESOLVER_SECTION_KEYS)}, and one with no "
+            f"`rungs:` is read as a composition of nothing -- so a key spelt any "
+            f"other way builds a cascade that matches nothing",
+            context={"keys": unread},
+        )
     rungs = section.get("rungs")
     if rungs is None:
         return ()
@@ -1930,8 +2154,9 @@ def refuse_unbuildable_rungs(
             other is buildable by exactly one of these doors.
 
     Raises:
-        ValidationError: For an entry that is not a mapping, one naming no
-            ``kind:``, or one naming a kind this registry cannot build ---
+        ValidationError: For a section that is not a mapping or declares a
+            key other than ``rungs``; for an entry that is not a mapping, one
+            naming no ``kind:``, or one naming a kind this registry cannot build ---
             carrying the mark's own reason where there is one, because *the
             kind is unknown* and *the kind ships elsewhere* are different
             faults with different remedies.

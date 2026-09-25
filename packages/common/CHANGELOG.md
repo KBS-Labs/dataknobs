@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An attribute's `field_type:` is read.** The published documents write
+  `{type: number, field_type: float}` for a vocabulary type that has no record
+  type of its own, and the loader never read the key, so every one of those
+  attributes loaded with `field_type=None`. An explicit `field_type:` now
+  overrides the type derived from `type:`, in any case, and `type: String`
+  derives `STRING` where it used to derive nothing; `value_type` keeps what
+  the author wrote. An assertion literal's `type:` is read by the same
+  function, so `{value: 3, type: Integer}` is now an `INTEGER` literal where
+  it used to fall back to `STRING`. An attribute that is not a mapping, an `attributes:`
+  written as a mapping, and a `resolver:` section that is not a mapping used
+  to raise a bare `AttributeError`, which no door documents. They now raise
+  `ValidationError`, and `attributes: null` reads as no attributes rather
+  than raising `TypeError`.
+
 - **`Taxonomy.has_edge_annotations()` asks about this axis's edges, not the
   vocabulary's relation.** It narrowed the assertion source by relation alone,
   which answered `True` in two cases where every edge of the axis is bare and
@@ -1742,6 +1756,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **An ontology attribute row, and a `resolver:` section, are read or
+  refused.** Each value in an attribute row was coerced rather than checked,
+  and a key nothing read loaded and was discarded. The worst case was
+  `required: "no"`, which `bool(...)` read as a *required* attribute. A
+  `resolver:` section was read with `.get("rungs")` alone, so any other key
+  left a section with no `rungs:`, which built a cascade that matches nothing
+  and reported success. Every case below now raises `ValidationError`, the
+  type both load doors and both build doors document:
+
+  | Written | Used to load as | Now |
+  |---|---|---|
+  | `required: "no"`, `"false"`, `1`, `0` | truthiness: `"no"` was required | refused: `true` or `false` |
+  | `name: 5`, `name: null`, `name: ""` | `'5'`, `'None'`, `''` | refused |
+  | `description: 5` | `'5'` | refused |
+  | `type: 5` | `value_type='5'` | refused |
+  | `enum_values: []` | not enumerated, the same as absent | refused: it would allow no value |
+  | `enum_values: "CS"`, `[1, 2]` | `['C', 'S']`, `[1, 2]` | refused: a list of strings |
+  | `field_type:` that names no record type | discarded | refused, listing the ten |
+  | a key an attribute row does not read, such as `enum:` | discarded | refused, naming it and the seven that are read |
+  | one attribute name twice on one entity type | both kept | refused |
+  | `resolver: {rung: [...]}`, or any key but `rungs` | a cascade with no rungs, or the key discarded | refused by `build_resolver`, `async_build_resolver` and `refuse_unbuildable_rungs`, naming the key |
+
+  `null` still reads as absent for `required` (`false`), `description` (`""`)
+  and the rest, and a subtype may still redeclare an attribute its parent
+  declares. `type:` stays open: an unknown vocabulary type such as `number`
+  still loads, with no `field_type`. A `resolver:` section that is absent
+  still gets the default three rungs, and `{}` and `rungs: []` still compose
+  nothing. Neither load door reads `resolver:`, so neither refuses a stray key
+  there; the build doors do.
+
+  No ontology document that this workspace's tests and guides load changes:
+  every `required:` in them is a boolean, and every `resolver:` section is
+  absent, `{}` or `rungs:` alone. What was checked is documents. A section
+  built in Python rather than read from a file could be an object that answers
+  `.get` without being a `Mapping`; `resolver:` now refuses one, and an
+  attribute row or an `attributes:` list must likewise be a mapping and a list
+  (or tuple). The allowed keys are `RESOLVER_SECTION_KEYS`, exported from
+  `dataknobs_common.ontology`. `dataknobs-data`'s `OntologyRegistry` reads the
+  same set and still refuses first, before it opens a store.
 
 - **`PluginRegistry.create` and `create_async` take a `StructuredConfig` as
   well as a mapping.** The `from_config` / `from_config_async` constructors

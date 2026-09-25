@@ -15,12 +15,18 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 
-from dataknobs_common.entity_resolution import EntityCandidate, signal_backends
+from dataknobs_common.entity_resolution import (
+    EntityCandidate,
+    async_signal_backends,
+    signal_backends,
+)
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import (
+    RESOLVER_SECTION_KEYS,
     async_build_resolver,
     async_load_ontology,
     load_ontology,
+    refuse_unbuildable_rungs,
 )
 from dataknobs_common.ontology.loader import build_resolver
 
@@ -570,3 +576,121 @@ def test_a_rung_that_ships_elsewhere_says_so_rather_than_reading_as_a_typo() -> 
     # is the one piece of this metadata the two marks do not share.
     assert signal_backends.get_metadata("authority")["flavour"] == "sync"
     assert async_signal_backends.get_metadata("authority")["flavour"] == "async"
+
+
+# --------------------------------------------------------------------------
+# A `resolver:` section is a mapping, read for `rungs:` and nothing else
+# --------------------------------------------------------------------------
+#
+# `_rung_specs` read `section.get("rungs")`, so a section carrying any other
+# key -- `resolver: {k: 5}`, or `rung:` for `rungs:` -- built a cascade with no
+# rungs, which matches nothing, and said nothing. `data`'s registry already
+# refused that document at its own door; the loader's doors did not.
+
+
+def _with_resolver(mammals_path: Path, section: Any) -> dict[str, Any]:
+    document: dict[str, Any] = yaml.safe_load(mammals_path.read_text())
+    document["ontology"]["resolver"] = section
+    return document
+
+
+def _sync_build(mammals_path: Path, section: Any) -> Any:
+    document = _with_resolver(mammals_path, section)
+    return build_resolver(document, load_ontology(document))
+
+
+def _async_build(mammals_path: Path, section: Any) -> Any:
+    document = _with_resolver(mammals_path, section)
+    return asyncio.run(async_build_resolver(document, asyncio.run(async_load_ontology(document))))
+
+
+def _sync_precheck(mammals_path: Path, section: Any) -> None:
+    refuse_unbuildable_rungs(section, registry=signal_backends)
+
+
+def _async_precheck(mammals_path: Path, section: Any) -> None:
+    refuse_unbuildable_rungs(section, registry=async_signal_backends)
+
+
+SECTION_READERS = pytest.mark.parametrize(
+    "reader",
+    [_sync_build, _async_build, _sync_precheck, _async_precheck],
+    ids=[
+        "build_resolver",
+        "async_build_resolver",
+        "refuse_unbuildable_rungs-sync",
+        "refuse_unbuildable_rungs-async",
+    ],
+)
+
+BUILDERS = pytest.mark.parametrize(
+    "build", [_sync_build, _async_build], ids=["build_resolver", "async_build_resolver"]
+)
+
+
+@SECTION_READERS
+@pytest.mark.parametrize(
+    ("section", "unread"),
+    [
+        ({"k": 5}, ["k"]),
+        ({"rung": [{"kind": "exact"}]}, ["rung"]),
+        ({"rungs": [{"kind": "exact"}], "k": 5}, ["k"]),
+    ],
+    ids=["a-stray-key", "a-misspelt-rungs", "a-stray-key-beside-rungs"],
+)
+def test_a_resolver_key_other_than_rungs_is_refused_by_name(
+    reader: Any, section: dict[str, Any], unread: list[str], mammals_path: Path
+) -> None:
+    """Each of these built zero rungs -- or dropped a key -- and reported nothing.
+
+    The pre-check is included because it is the published way to ask *would
+    this build* before opening anything, and it reads the section through
+    the same function the doors do.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        reader(mammals_path, section)
+
+    message = str(excinfo.value)
+    assert str(unread) in message
+    assert str(sorted(RESOLVER_SECTION_KEYS)) in message
+    assert excinfo.value.context["keys"] == unread
+
+
+@SECTION_READERS
+@pytest.mark.parametrize("section", [[{"kind": "exact"}], "exact"], ids=["a-list", "a-string"])
+def test_a_resolver_section_that_is_not_a_mapping_is_refused(
+    reader: Any, section: Any, mammals_path: Path
+) -> None:
+    """Both raised a bare ``AttributeError``, which no door's ``Raises:`` names."""
+    with pytest.raises(ValidationError) as excinfo:
+        reader(mammals_path, section)
+
+    assert "`resolver:` must be a mapping" in str(excinfo.value)
+    assert type(section).__name__ in str(excinfo.value)
+
+
+@BUILDERS
+@pytest.mark.parametrize(
+    ("section", "rungs"),
+    [(None, 3), ({}, 0), ({"rungs": []}, 0)],
+    ids=["absent", "empty-section", "empty-rungs"],
+)
+def test_the_three_readings_of_a_quiet_section_are_kept(
+    build: Any, section: Any, rungs: int, mammals_path: Path
+) -> None:
+    """Silence is the default composition; ``{}`` and ``rungs: []`` compose nothing.
+
+    ``{}`` is kept as an empty composition rather than refused, because
+    ``data``'s registry documents that reading and the tree writes it.
+    """
+    assert len(build(mammals_path, section).rungs) == rungs
+
+
+def test_a_loader_does_not_refuse_a_resolver_section_it_never_reads(
+    mammals_path: Path,
+) -> None:
+    """The scope guard beside the one for rungs: loading is not building."""
+    document = _with_resolver(mammals_path, {"k": 5})
+
+    assert load_ontology(document).entity("beagle").name == "Beagle"
+    assert asyncio.run(async_load_ontology(document)).id == "mammals"
