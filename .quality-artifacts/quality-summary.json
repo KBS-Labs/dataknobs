@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-25T18:46:46Z",
+  "timestamp": "2026-09-25T19:43:40Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -12,10 +12,10 @@
   ],
   "coverage_percent": null,
   "package_hashes": {
-    "bots": "a1c0ccbb7b85485ff8600c4f5c54abaff920b15489b605c7ae1a0ebf65af855c",
+    "bots": "91f566c5cf8bb4704d4d74793bad4e65c5f472dfc0cde8c85998242a660c2144",
     "common": "d20eedb028ce7043b47c209fec2ed154a6f10e168fde840637f4da0221501f10",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "3e903a6449d90204c352182bb915e3e628e2f06e73385602dbb2ecd83cb68ce1",
+    "data": "1188d83ff932d88f0a50bdd5562507fa114afb7557979cc72a1700d8130f2faa",
     "fsm": "e3a2dcf74844ffc72314ef4bb734de086a587074c6c8bcca102dcc0d6482fe33",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "a1e76ac931cc4279a45581cfd641738e12af7c139d2f54d8ab49900b36d7d233",
@@ -29,9 +29,9 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "d2c5db9bff675da6bf5aa42d7d5b2cc741bb93110d4b7406f704b6563d4d7e9c",
-    "docs": "0e3d31e1e1b910c5e33b2078c04f084970c0a9f1d5884f35c51bc5bd66550e14"
+    "docs": "7836c4e79ab2003d6984a97bacd061caec0da0b08bdc04201e511cffbb74a4f7"
   },
-  "total_seconds": 278,
+  "total_seconds": 277,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -63,7 +63,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 29
+      "duration_seconds": 28
     },
     "documentation_versions": {
       "status": "pass",
@@ -77,14 +77,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 128,
-      "workspace_guards_seconds": 95
+      "duration_seconds": 126,
+      "workspace_guards_seconds": 93
     },
     "integration_tests": {
       "status": "pass",
