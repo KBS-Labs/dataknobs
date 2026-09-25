@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-25T20:44:03Z",
+  "timestamp": "2026-09-25T21:29:23Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "f84a66c2c127b74bc6ae3b6ce6d9f0d63cd61b0aeb513b0e92901c06b8287885",
-    "common": "13c5b355b1f114d8c73a9a6d2b02b6c0d9f58fb2358e6cc66260214fae962916",
+    "common": "8504e55f57faf9be5e68d4df55e4d48055a06235770c5a53600737d594ba98c5",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
     "data": "d6a5df6ea61c87220e4fb36db0c25739437aff4e281edee999c2efdf4a52b2d4",
     "fsm": "e3a2dcf74844ffc72314ef4bb734de086a587074c6c8bcca102dcc0d6482fe33",
@@ -35,9 +35,9 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "7aa693eac9ba36923db17315b06855007145424fc3f52bfb5473e8f4d1177b5d",
-    "docs": "ab3f95e14e258be278eb6517edb0b7ba57c6a82dc5aec21c296403daee8b26e2"
+    "docs": "120fb27d81b15b7f500e48e4b8b614b876db8f523d8f9538465cf4f725099f09"
   },
-  "total_seconds": 325,
+  "total_seconds": 328,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -55,7 +55,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 2
     },
     "validation": {
       "status": "pass",
@@ -89,14 +89,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 156,
-      "workspace_guards_seconds": 93
+      "duration_seconds": 158,
+      "workspace_guards_seconds": 95
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 35
+      "duration_seconds": 36
     }
   }
 }
