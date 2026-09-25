@@ -7,28 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Changed
-
-- **`PluginRegistry.create` and `create_async` take a `StructuredConfig` as
-  well as a mapping.** The `from_config` / `from_config_async` constructors
-  they dispatch to already accepted either, and a typed config given with an
-  explicit `key` always reached the factory unchanged. Only the annotation,
-  `Dict[str, Any] | None`, said otherwise. It is now `PluginConfig | None`,
-  with `PluginConfig` (`Mapping[str, Any] | StructuredConfig`) exported from
-  `dataknobs_common` next to `PluginFactory`. `Dict` became `Mapping` in the
-  same change, so any read-only mapping also carries a routing key.
-
-  A typed config with no `key` on a `config_key` registry used to fail with
-  `argument of type '...' is not iterable`, a message that named neither the
-  registry nor the key. It now raises a `TypeError` that names both and says
-  to pass `key=`. It is raised before `config_key_default` is consulted, so a
-  default never stands in for a key that could not be read. It is still a
-  `TypeError`, so an existing `except TypeError` keeps working. No call that
-  worked before behaves differently.
-
-  `get` and `get_async` are unchanged and still take a mapping, because their
-  factories are called as `factory(key, config)`.
-
 ### Fixed
 
 - **`Taxonomy.has_edge_annotations()` asks about this axis's edges, not the
@@ -1133,10 +1111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 353,
-  the thirteen beyond them being the operation family, the near-spelling rung,
-  the surface-form catalogue, the index-source family and `aclosing_iter`,
-  each added by its own entry above. `declared_candidates` is inside the 134 rather than beyond
+  the resolution cascade — 134 names, taking the package's `__all__` to 354,
+  the fourteen beyond them being the operation family, the near-spelling rung,
+  the surface-form catalogue, the index-source family, `aclosing_iter` and
+  `PluginConfig`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
@@ -1764,6 +1742,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **`PluginRegistry.create` and `create_async` take a `StructuredConfig` as
+  well as a mapping.** The `from_config` / `from_config_async` constructors
+  they dispatch to already accepted either, and a typed config given with an
+  explicit `key` always reached the factory unchanged. Only the annotation,
+  `Dict[str, Any] | None`, said otherwise. It is now `PluginConfig | None`,
+  with `PluginConfig` (`Mapping[str, Any] | StructuredConfig`) exported from
+  `dataknobs_common` next to `PluginFactory`. `Dict` became `Mapping` in the
+  same change, so any read-only mapping also carries a routing key.
+
+  A typed config with no `key` on a `config_key` registry used to fail with
+  `argument of type '...' is not iterable`, a message that named neither the
+  registry nor the key. It now raises a `TypeError` that names both and says
+  to pass `key=`. It is raised before `config_key_default` is consulted, so a
+  default never stands in for a key that could not be read. It is still a
+  `TypeError`, so an existing `except TypeError` keeps working. No call that
+  worked before behaves differently.
+
+  `get` and `get_async` are unchanged and still take a mapping, because their
+  factories are called as `factory(key, config)`.
 
 - **An index source that drives another closes it.** `AliasSource` and
   `CallableSource` each drive an inner async iterator and forward what it
