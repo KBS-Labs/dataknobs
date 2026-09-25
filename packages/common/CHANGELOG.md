@@ -1750,18 +1750,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Dict[str, Any] | None`, said otherwise. It is now `PluginConfig | None`,
   with `PluginConfig` (`Mapping[str, Any] | StructuredConfig`) exported from
   `dataknobs_common` next to `PluginFactory`. `Dict` became `Mapping` in the
-  same change, so any read-only mapping also carries a routing key.
+  same change, on `get` and `get_async` as well, so any read-only mapping is
+  accepted and carries a routing key. `typing.get_type_hints` resolves the new
+  annotation once `dataknobs_common` has loaded.
 
   A typed config with no `key` on a `config_key` registry used to fail with
   `argument of type '...' is not iterable`, a message that named neither the
   registry nor the key. It now raises a `TypeError` that names both and says
   to pass `key=`. It is raised before `config_key_default` is consulted, so a
   default never stands in for a key that could not be read. It is still a
-  `TypeError`, so an existing `except TypeError` keeps working. No call that
-  worked before behaves differently.
+  `TypeError`, so an existing `except TypeError` keeps working. No call the
+  old annotation admitted behaves differently. One call it did not admit
+  does: an object that is not a `collections.abc.Mapping` but answers `in`
+  and `[]` used to have its key read by duck typing, and is now refused the
+  same way. Wrap it in a `dict`, or pass `key=`.
 
-  `get` and `get_async` are unchanged and still take a mapping, because their
-  factories are called as `factory(key, config)`.
+  `get` and `get_async` take any mapping, but not a typed config, because
+  their factories are called as `factory(key, config)`.
 
 - **An index source that drives another closes it.** `AliasSource` and
   `CallableSource` each drive an inner async iterator and forward what it

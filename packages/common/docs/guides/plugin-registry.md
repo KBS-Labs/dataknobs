@@ -55,7 +55,7 @@ handler = handlers.create(config={"handler_type": "fast", "timeout": 5})
 | `canonicalize_keys` | `bool` | `False` | Lowercase all keys for case-insensitive lookup |
 | `config_key` | `str \| None` | `None` | Field name to extract lookup key from config mappings |
 | `config_key_default` | `str \| None` | `None` | Fallback when `config_key` field is absent |
-| `strip_config_key` | `bool` | `False` | Remove key field from config before passing to factory |
+| `strip_config_key` | `bool` | `False` | Remove the key field from config before passing it to the factory, when `key` is not given. An explicit `key=` leaves the config as given |
 | `on_first_access` | `Callable \| None` | `None` | Lazy init callback (supports re-entrant `register()` calls) |
 | `not_found_kind` | `str \| None` | `None` | Opt-in kind label rendered into the not-found error from `create()` / `create_async()`. When set (e.g. `"event bus backend"`), the message becomes `"Unknown event bus backend: <key>. Available backends: <sorted-keys>"`. When `None`, the historical `"Plugin '<key>' not registered"` text is used. |
 | `not_found_exception` | `type[Exception]` | `NotFoundError` | Exception class raised on not-found. Defaults to `NotFoundError` (the `DataknobsError`-rooted shape consumers catch programmatically). Domain shims preserving a historical `ValueError` contract pass `not_found_exception=ValueError`. Non-`DataknobsError` classes receive the message only (no `context=` kwarg). |
@@ -222,9 +222,12 @@ default and does not guess the key from an attribute: a typed config's field
 is not named after the config key, and falling back would build a plugin the
 config did not ask for.
 
-`get()` and `get_async()` stay mapping-only. Their factories are called as
-`factory(key, config)`, and no factory contract says what a typed config
-would mean there.
+`get()` and `get_async()` take any mapping, but not a typed config. Their
+factories are called as `factory(key, config)`, and no factory contract says
+what a typed config would mean there.
+
+The key is read from a `collections.abc.Mapping` only. An object that answers
+`in` and `[]` without being one is refused the same way as a typed config.
 
 ## Asynchronous factories
 

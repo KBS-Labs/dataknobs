@@ -70,7 +70,7 @@ from typing import (
 )
 
 from dataknobs_common.exceptions import ConfigurationError
-from dataknobs_common.registry import Registry
+from dataknobs_common.registry import Registry, _bind_structured_config
 from dataknobs_common.serialization import jsonify
 
 logger = logging.getLogger(__name__)
@@ -1125,6 +1125,11 @@ class StructuredConfig:
         config_cls.from_dict(raw).validate()
 
 
+# ``registry`` is imported above and cannot import this module back, so its
+# ``PluginConfig`` names this class as a forward reference. Handing the class
+# over here, once it exists, is what resolves it.
+_bind_structured_config(StructuredConfig)
+
 ConfigT = TypeVar("ConfigT", bound=StructuredConfig)
 
 
@@ -1535,9 +1540,12 @@ class StructuredConfigConsumer(Generic[ConfigT]):
                     {"my_internal_collaborator"}
                 )
 
-                def _build_child(self, child_config):
+                def _build_child(self, child_section: Mapping[str, Any]):
+                    # The registry reads the child's key from the
+                    # section, so it must be a mapping. A typed child
+                    # config goes with ``key=`` instead.
                     return get_registry().create(
-                        config=child_config,
+                        config=child_section,
                         **self.forwardable_components(),
                     )
 

@@ -141,16 +141,31 @@ pass ``key=`` instead.
 Exported because it appears in a public signature, as :data:`PluginFactory`
 does, so a consumer wrapping ``create`` can name it.
 
-``get`` and ``get_async`` are deliberately not on it. Their factories are
-called as ``factory(key, config)``, with no ``from_config`` dispatch, so no
-factory contract says what a typed config would mean there.
+``get`` and ``get_async`` are deliberately not on it: they take any
+mapping, but not a typed config. Their factories are called as
+``factory(key, config)``, with no ``from_config`` dispatch, so no factory
+contract says what a typed config would mean there.
 
-**Cost of the forward reference.** ``StructuredConfig`` is imported only
-for type checking, so :func:`typing.get_type_hints` on ``create`` or
-``create_async`` raises ``NameError``. Nothing calls it on them; the parity
-guards read signatures with :func:`inspect.signature`, which does not
-resolve forward references.
+**The forward reference resolves once the package has loaded.** This
+module cannot import ``StructuredConfig`` at load time (see the
+``TYPE_CHECKING`` import above), so ``structured_config`` hands the class
+over through :func:`_bind_structured_config` as soon as it has defined it.
+Importing any part of ``dataknobs_common`` runs both modules, so
+:func:`typing.get_type_hints` on ``create`` and ``create_async`` resolves.
 """
+
+
+def _bind_structured_config(cls: "type[StructuredConfig]") -> None:
+    """Resolve :data:`PluginConfig`'s forward reference in this module.
+
+    Called once, by ``structured_config``, right after it defines the class.
+    The name is bound here rather than imported because the import runs the
+    other way: ``structured_config`` imports :class:`Registry` from this
+    module, and loads first. Without the binding, anything that resolves the
+    create lane's annotations (:func:`typing.get_type_hints`, a validating
+    decorator on a wrapper) fails with ``NameError``.
+    """
+    globals()["StructuredConfig"] = cls
 
 
 class Unavailable(NamedTuple):
@@ -1638,7 +1653,7 @@ class PluginRegistry(Generic[T]):
     def get(
         self,
         key: str,
-        config: Dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
         use_cache: bool = True,
         use_default: bool = True,
     ) -> T:
@@ -1648,7 +1663,9 @@ class PluginRegistry(Generic[T]):
 
         Args:
             key: Plugin identifier
-            config: Configuration dictionary passed to factory
+            config: Configuration mapping passed to factory, as
+                ``factory(key, config)``. A typed config is not taken here:
+                use ``create`` for a ``StructuredConfig``.
             use_cache: Return cached instance if available
             use_default: Use default factory if key not registered
 
@@ -1735,7 +1752,7 @@ class PluginRegistry(Generic[T]):
     async def get_async(
         self,
         key: str,
-        config: Dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
         use_cache: bool = True,
         use_default: bool = True,
     ) -> T:
@@ -1745,7 +1762,7 @@ class PluginRegistry(Generic[T]):
 
         Args:
             key: Plugin identifier
-            config: Configuration dictionary
+            config: Configuration mapping, as for ``get``
             use_cache: Return cached instance if available
             use_default: Use default factory if key not registered
 

@@ -634,6 +634,19 @@ Only `get_async()` and `create_async()` can await the third shape; the
 synchronous `get()` and `create()` raise `OperationError` naming the async
 method to call instead. See [Asynchronous factories](plugin-registry.md#asynchronous-factories).
 
+#### `PluginConfig`
+
+```python
+PluginConfig: TypeAlias = Union[Mapping[str, Any], "StructuredConfig"]
+```
+
+What `create()` and `create_async()` take as `config`: a mapping or a
+`StructuredConfig`, because that is what the `from_config` /
+`from_config_async` constructors they dispatch to accept. The config reaches
+the factory unchanged. Exported from `dataknobs_common`, because it appears in
+those two public signatures. `get()` and `get_async()` are not on it: they take
+`Mapping[str, Any]`. See [Typed configs](plugin-registry.md#typed-configs).
+
 #### `PluginRegistry[T]`
 
 Registry with factory support for creating fresh instances on demand, lazy initialization, and configuration-driven key resolution.
@@ -669,9 +682,9 @@ PluginRegistry(
 - `default_factory` (PluginFactory[T] | None): Default factory when key not found
 - `validate_type` (type[T] | None): Base type to validate registrations against. A class, an ABC, or a `@runtime_checkable` Protocol — including one carrying properties. See [What `validate_type` checks](plugin-registry.md#what-validate_type-checks)
 - `canonicalize_keys` (bool): Lowercase all keys for case-insensitive lookup
-- `config_key` (str | None): Field name to extract lookup key from config dicts in `create()`
+- `config_key` (str | None): Field name to extract lookup key from config mappings in `create()` / `create_async()` when `key` is not given
 - `config_key_default` (str | None): Fallback value when `config_key` field is absent
-- `strip_config_key` (bool): Remove the config key field from config before passing to factory
+- `strip_config_key` (bool): Remove the config key field from config before passing it to the factory, when `key` is not given. An explicit `key=` leaves the config as given
 - `on_first_access` (Callable | None): Callback invoked once before first public method access. Supports re-entrant calls (e.g., callback can call `register()`)
 - `not_found_kind` (str | None): Kind label for the not-found message from `create()` / `create_async()`. Setting it to e.g. `"event bus backend"` produces `"Unknown event bus backend: <key>. Available backends: <sorted-keys>"`; leaving it `None` keeps `"Plugin '<key>' not registered"`
 - `not_found_exception` (type[Exception]): Class raised on not-found by `create()` / `create_async()`. `NotFoundError` by default; a shim preserving a historical `ValueError` contract passes that instead. A class not rooted in `DataknobsError` is constructed with the message only, since a stdlib exception would reject the `context=` keyword
@@ -700,7 +713,7 @@ Get or create a cached plugin instance. Factories are called with `(key, config)
 
 **Parameters:**
 - `key` (str): Plugin identifier
-- `config` (dict | None): Configuration passed to factory
+- `config` (Mapping[str, Any] | None): Configuration passed to factory. Not a typed config; use `create()` for that
 - `use_cache` (bool): Return cached instance if available
 - `use_default` (bool): Use default factory if key not registered
 
@@ -716,13 +729,14 @@ Create a fresh instance without caching. Uses `(config, **kwargs)` factory signa
 
 **Parameters:**
 - `key` (str | None): Plugin identifier. Optional when `config_key` is configured.
-- `config` (dict | None): Configuration passed to factory
+- `config` (PluginConfig | None): A mapping or a `StructuredConfig`, passed to the factory unchanged. Reading the key through `config_key` needs a mapping, so pass `key` with a typed config
 - `**kwargs`: Additional keyword arguments forwarded to factory
 
 **Returns:** Fresh plugin instance
 
 **Raises:**
 - `ValueError`: If `key` is None and cannot be resolved
+- `TypeError`: If `key` is None and `config` is not a mapping, such as a `StructuredConfig`. The message names the registry and its `config_key`, and says to pass `key=`. Raised before `config_key_default` is consulted, and not wrapped in `OperationError`
 - `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names — or raised by the factory itself, in which case it reaches the caller unchanged
 - `OperationError`: If the factory returns an awaitable (the message names `create_async()`), if the factory raises, or if it returns something that is not a `validate_type`. The factory's own message is not copied into the wrapper; it travels on `__cause__`
 
