@@ -669,6 +669,15 @@ def test_a_resolver_section_that_is_not_a_mapping_is_refused(
     assert type(section).__name__ in str(excinfo.value)
 
 
+@SECTION_READERS
+def test_resolver_keys_of_mixed_types_are_refused_by_name(reader: Any, mammals_path: Path) -> None:
+    """Sorting ``{1, 'foo'}`` raised a bare ``TypeError`` before the refusal was built."""
+    with pytest.raises(ValidationError) as excinfo:
+        reader(mammals_path, {1: "x", "foo": "y"})
+
+    assert excinfo.value.context["keys"] == ["1", "foo"]
+
+
 @BUILDERS
 @pytest.mark.parametrize(
     ("section", "rungs"),

@@ -529,20 +529,15 @@ def _field_schema(
         )
 
     declared_type = value.get("type", FieldType.STRING)
-    try:
-        # Every type's value is its member name lowercased, so folding the case
-        # can only ever find the member the name spells.
-        field_type = (
-            declared_type
-            if isinstance(declared_type, FieldType)
-            else FieldType(str(declared_type).lower())
-        )
-    except ValueError as exc:
+    # `common`'s one reading, shared with the ontology loader's `type:` and
+    # `field_type:`, so the two readers of one word cannot drift apart.
+    field_type = FieldType.lookup(declared_type)
+    if field_type is None:
         raise ValidationError(
             f"{prefix}field {name!r} declares type {declared_type!r}, which is not a "
             f"field type. Field types: {sorted(member.value for member in FieldType)}",
             context={**field_context, "type": declared_type},
-        ) from exc
+        )
 
     required = value.get("required", False)
     if not isinstance(required, bool):

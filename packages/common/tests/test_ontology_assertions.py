@@ -227,6 +227,29 @@ def test_a_literal_s_type_is_read_whatever_its_case() -> None:
     assert weight.object == Literal(value=10, type=FieldType.INTEGER)
 
 
+def test_a_literal_s_type_given_as_a_member_is_read() -> None:
+    """A document built in Python may hand the member itself.
+
+    ``str(FieldType.INTEGER).lower()`` is ``'fieldtype.integer'``, which names
+    no type, so this literal loaded as a ``STRING`` holding an integer.
+    """
+    onto = load_ontology(
+        {
+            "id": "x",
+            "assertions": [
+                {
+                    "subject": "beagle",
+                    "relation": "weighs",
+                    "object": {"value": 10, "type": FieldType.INTEGER},
+                },
+            ],
+        }
+    )
+
+    weight = onto.assertions.find(subject="beagle", relation="weighs")[0]
+    assert weight.object == Literal(value=10, type=FieldType.INTEGER)
+
+
 # --------------------------------------------------------------------------
 # A stated negation loads, and a query can select on it
 # --------------------------------------------------------------------------

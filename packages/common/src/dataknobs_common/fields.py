@@ -72,6 +72,48 @@ class FieldType(Enum):
     VECTOR = "vector"
     SPARSE_VECTOR = "sparse_vector"
 
+    @classmethod
+    def lookup(cls, value: object) -> FieldType | None:
+        """The member *value* names, or ``None`` when it names none.
+
+        A member is itself, and a string is the member whose value it spells
+        in any case: every value is its member's name lowercased, so folding
+        the case can only find the member the word spells. Anything else --
+        a vocabulary word such as ``number``, a non-string, ``None`` -- names
+        no member.
+
+        **One reading for every reader of a declared type.** The ontology
+        loader and ``dataknobs-data``'s schema reader each folded the case
+        with their own ``.lower()`` and had already drifted: one took a
+        member and the other refused it. Whether *no member* is an error is
+        the caller's question, which is why this answers ``None`` rather than
+        raising -- the loader keeps an attribute's ``type:`` open, and the
+        schema reader refuses an unknown one.
+
+        Args:
+            value: A member, or a type name as a document writes it.
+
+        Returns:
+            The member, or ``None``.
+
+        Example:
+            ```python
+            from dataknobs_common import FieldType
+
+            assert FieldType.lookup("Float") is FieldType.FLOAT
+            assert FieldType.lookup(FieldType.TEXT) is FieldType.TEXT
+            assert FieldType.lookup("number") is None
+            ```
+        """
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, str):
+            return None
+        try:
+            return cls(value.lower())
+        except ValueError:
+            return None
+
 
 @dataclass
 class Field:

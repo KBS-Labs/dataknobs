@@ -2765,7 +2765,7 @@ def _refuse_a_form_reading_rung_with_no_lookup(
 
 
 def _refuse_undeclared_keys(
-    block: Mapping[str, Any], *, ontology_id: str, section: str, allowed: frozenset[str], why: str
+    block: Any, *, ontology_id: str, section: str, allowed: frozenset[str], why: str
 ) -> None:
     """Refuse a configured section carrying a key nothing reads.
 
@@ -2776,6 +2776,14 @@ def _refuse_undeclared_keys(
     builds an index with no metric check and ``rung:`` builds a cascade that
     matches nothing --- each reporting success. Only the example differs,
     which is why it is the parameter.
+
+    **The section is a mapping before its keys are read.** Every caller
+    runs this *first*, before any other reader of its section, so a shape
+    check anywhere downstream is never reached from here: ``set(block)`` on a
+    list of rung entries raised a bare ``TypeError`` (a mapping is
+    unhashable), and a string was refused for "declaring" its own letters.
+    The keys are sorted as strings, so a YAML ``1:`` beside ``foo:`` is named
+    rather than escaping as a ``TypeError`` from the sort.
 
     Args:
         block: The section as the document wrote it.
@@ -2788,9 +2796,17 @@ def _refuse_undeclared_keys(
             the message continues into.
 
     Raises:
-        ValidationError: When the block carries a key outside *allowed*.
+        ValidationError: When the block is not a mapping, or carries a key
+            outside *allowed*.
     """
-    undeclared = sorted(set(block) - allowed)
+    if not isinstance(block, Mapping):
+        raise ValidationError(
+            f"ontology {ontology_id!r} declares `{section}:` as "
+            f"{type(block).__name__}; `{section}:` must be a mapping, read for "
+            f"{', '.join(sorted(allowed))}",
+            context={"ontology_id": ontology_id, "section": section, "value": block},
+        )
+    undeclared = sorted(str(key) for key in block if key not in allowed)
     if not undeclared:
         return
     raise ValidationError(

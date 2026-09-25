@@ -708,10 +708,31 @@ _REFUSED_ATTRIBUTES: list[tuple[str, str, dict[str, Any]]] = [
     ("enum-values-empty", "enum_values", {"name": "a", "enum_values": []}),
     ("enum-values-string", "enum_values", {"name": "a", "enum_values": "CS"}),
     ("enum-values-ints", "enum_values", {"name": "a", "enum_values": [1, 2]}),
+    ("enum-values-repeated", "enum_values", {"name": "a", "enum_values": ["a", "a"]}),
     ("type-int", "type", {"name": "a", "type": 5}),
     ("field-type-unknown", "field_type", {"name": "a", "field_type": "money"}),
     ("field-type-int", "field_type", {"name": "a", "field_type": 5}),
+    (
+        "field-type-contradicts-type",
+        "field_type",
+        {"name": "a", "type": "integer", "field_type": "string"},
+    ),
+    ("entity-type-int", "entity_type", {"name": "a", "type": "entity", "entity_type": 5}),
+    ("entity-type-list", "entity_type", {"name": "a", "type": "entity", "entity_type": ["S"]}),
+    ("entity-type-empty", "entity_type", {"name": "a", "type": "entity", "entity_type": ""}),
 ]
+
+#: One accepted value for every key the row is read for, so the parity guard
+#: below can hold that each key has a reading as well as a refusal.
+_ACCEPTED_ATTRIBUTES: dict[str, dict[str, Any]] = {
+    "name": {"name": "a"},
+    "type": {"name": "a", "type": "number"},
+    "field_type": {"name": "a", "type": "number", "field_type": "float"},
+    "entity_type": {"name": "a", "type": "entity", "entity_type": "Species"},
+    "required": {"name": "a", "required": True},
+    "enum_values": {"name": "a", "enum_values": ["x", "y"]},
+    "description": {"name": "a", "description": "Latin name"},
+}
 
 
 @DOORS
@@ -924,20 +945,170 @@ def test_a_subtype_may_redeclare_its_parent_s_attribute(door: Door) -> None:
     )
 
 
-def test_every_attribute_refusal_is_one_exception_type() -> None:
-    """The table covers every key the row is read for, and each refusal is one type.
+def test_every_attribute_key_has_a_reading_and_a_refusal() -> None:
+    """Both tables cover every key the row is read for, and each refusal is one type.
 
-    A key added to :data:`ATTRIBUTE_ROW_KEYS` with no case here is a key
+    A key added to :data:`ATTRIBUTE_ROW_KEYS` with no refused case is a key
     whose shape nothing checks -- which is how the seven readers above came
-    to coerce: each was written on its own. ``entity_type`` is the one key
-    with no shape refusal of its own, because the reference check owns it.
+    to coerce: each was written on its own. One with no accepted case is a
+    key no document could write. ``entity_type`` has no exemption: the
+    reference check compares ``str(value)`` and stands down under
+    ``imports:``, so it cannot stand in for a shape check.
     """
     refused = {key for _, key, _ in _REFUSED_ATTRIBUTES}
-    assert refused | {"entity_type"} == loader_module.ATTRIBUTE_ROW_KEYS
+    assert refused == loader_module.ATTRIBUTE_ROW_KEYS
+    assert set(_ACCEPTED_ATTRIBUTES) == loader_module.ATTRIBUTE_ROW_KEYS
 
     for _, _, attribute in _REFUSED_ATTRIBUTES:
         with pytest.raises(ValidationError):
             load_ontology(_one_attribute(**attribute))
+    for attribute in _ACCEPTED_ATTRIBUTES.values():
+        load_ontology(_one_attribute(**attribute))
+
+
+@LOADERS
+def test_an_absent_type_reads_as_a_string_attribute_all_the_way_down(loaded: Loaded) -> None:
+    """``value_type`` said ``string`` and ``field_type`` said nothing.
+
+    ``type: string`` derives ``STRING``, so an attribute that leaves ``type:``
+    out -- which reads as ``string`` -- has to derive it too, or the default
+    is a different attribute from the one it stands for.
+    """
+    built = _the_attribute(loaded)
+    assert built.value_type == "string"
+    assert built.field_type is FieldType.STRING
+
+
+@LOADERS
+@pytest.mark.parametrize(
+    ("declared", "explicit"),
+    [("float", "float"), ("Float", "FLOAT"), ("number", "float"), ("entity", "string")],
+    ids=["agree", "agree-any-case", "number", "entity"],
+)
+def test_a_field_type_the_type_does_not_contradict_is_read(
+    loaded: Loaded, declared: str, explicit: str
+) -> None:
+    """The override is for a type with no record counterpart, or one that agrees."""
+    built = _the_attribute(loaded, type=declared, field_type=explicit)
+    assert built.field_type is FieldType(explicit.lower())
+
+
+@DOORS
+def test_a_field_type_contradicting_its_type_names_both(door: Door) -> None:
+    """``{type: integer, field_type: string}`` loaded as an integer stored as a string.
+
+    Two keys that each name a record type and disagree is the contradiction
+    ``enum_values: []`` is refused for: no reading of the row honours both.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(_one_attribute(name="count", type="integer", field_type="string"))
+
+    message = str(excinfo.value)
+    assert "'integer'" in message
+    assert "'string'" in message
+
+
+@LOADERS
+@pytest.mark.parametrize("member", list(FieldType), ids=[m.value for m in FieldType])
+def test_a_field_type_given_as_a_member_is_read(loaded: Loaded, member: FieldType) -> None:
+    """A document built in Python may hand the member itself.
+
+    ``load_ontology`` takes a plain mapping, and ``dataknobs-data``'s schema
+    reader already takes a member. This one refused it as *not a record
+    field type* while listing the very value it was.
+    """
+    assert _the_attribute(loaded, type="number", field_type=member).field_type is member
+
+
+@LOADERS
+def test_a_type_given_as_a_member_is_refused_as_not_a_string(loaded: Loaded) -> None:
+    """``type:`` is the vocabulary word and stays a string; ``field_type:`` takes the member."""
+    with pytest.raises(ValidationError, match="'type'"):
+        _the_attribute(loaded, type=FieldType.FLOAT)
+
+
+@LOADERS
+def test_null_attributes_read_as_none(loaded: Loaded) -> None:
+    """``attributes: null`` raised a bare ``TypeError`` from the reference check.
+
+    ``null`` is silence everywhere else in this loader, and here it is the
+    shape a YAML key with no value takes.
+    """
+    document = {"id": "x", "entity_types": [{"id": "Species", "attributes": None}]}
+    assert loaded(document).entity_types["Species"].attributes == []
+
+
+@DOORS
+def test_an_entity_type_numbered_like_a_type_id_is_still_a_string(door: Door) -> None:
+    """The reference check compares ``str(value)``, and type ids are ``str()``'d.
+
+    So ``id: 2024`` beside ``entity_type: 2024`` passed the check and loaded
+    an ``int`` into a field typed ``str | None``, where every
+    ``attribute.entity_type == type.id`` comparison is false.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [
+                    {"id": 2024},
+                    {
+                        "id": "Species",
+                        "attributes": [{"name": "a", "type": "entity", "entity_type": 2024}],
+                    },
+                ],
+            }
+        )
+
+    assert excinfo.value.context["field"] == "entity_type"
+
+
+@DOORS
+def test_an_entity_type_of_the_wrong_shape_is_refused_under_imports(door: Door) -> None:
+    """``imports:`` stands the reference check down, so it cannot be the shape check.
+
+    ``entity_type: [L]`` loaded as a list in a document that imports.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "imports": ["mammals"],
+                "entity_types": [
+                    {
+                        "id": "Species",
+                        "attributes": [{"name": "a", "type": "entity", "entity_type": ["L"]}],
+                    }
+                ],
+            }
+        )
+
+    assert excinfo.value.context["field"] == "entity_type"
+
+
+@DOORS
+def test_unread_attribute_keys_of_mixed_types_are_refused_by_name(door: Door) -> None:
+    """Sorting ``{1, 'foo'}`` raised a bare ``TypeError`` before the refusal was built."""
+    with pytest.raises(ValidationError) as excinfo:
+        door(
+            {
+                "id": "x",
+                "entity_types": [
+                    {"id": "Species", "attributes": [{"name": "a", 1: "x", "foo": "y"}]}
+                ],
+            }
+        )
+
+    assert excinfo.value.context["keys"] == ["1", "foo"]
+
+
+@DOORS
+def test_unread_taxonomy_keys_of_mixed_types_are_refused_by_name(door: Door) -> None:
+    """The same sort, on the axis row's key set next door."""
+    with pytest.raises(ValidationError) as excinfo:
+        door({"id": "x", "taxonomies": [{"id": "t", "relation": "r", 1: "x", "foo": "y"}]})
+
+    assert excinfo.value.context["keys"] == ["1", "foo"]
 
 
 # --------------------------------------------------------------------------

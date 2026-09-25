@@ -1213,6 +1213,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An ontology registry refuses a `resolver:` or `index:` section that is not
+  a mapping, by name.** `OntologyRegistry` checks a section's keys before
+  anything else reads it, and that check read the keys of whatever it was
+  handed: `resolver: [{kind: exact}]` escaped as a bare `TypeError`, and
+  `index: "memory"` was refused for "declaring" its own letters as keys. Both
+  now raise `ValidationError` saying the section must be a mapping. Unread keys
+  of mixed types (a YAML `1:` beside `foo:`) are named as strings rather than
+  escaping as a `TypeError` from sorting them. The schema reader now reads a
+  field's `type:` through `dataknobs-common`'s `FieldType.lookup`, which the
+  ontology loader also calls; what it accepts is unchanged.
+
 - **A record binding's `entity_projection.type: {const: ...}` must name an
   entity type the document declares.** It is the ninth member of the
   reference family `build_ontology` refuses eight of, and the one that cannot

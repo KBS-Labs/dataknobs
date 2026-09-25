@@ -80,14 +80,16 @@ because an unread key would load and be discarded: `enum:` written for
 |---|---|---|
 | `name` | a non-empty string, unique within its entity type | refused |
 | `type` | a string: the vocabulary's type name, kept as written. The vocabulary is open, so `entity`, `enum` and `number` are all legal | `string` |
-| `field_type` | a record field type — `string`, `text`, `integer`, `float`, `boolean`, `datetime`, `json`, `binary`, `vector`, `sparse_vector`, in any case. It **overrides** the one derived from `type:` | derived from `type:`, if it names one |
-| `entity_type` | the id of a declared entity type, for an `entity`-typed attribute | none |
+| `field_type` | a record field type — `string`, `text`, `integer`, `float`, `boolean`, `datetime`, `json`, `binary`, `vector`, `sparse_vector`, in any case, or the `FieldType` member itself. It **supplies** the record type for a `type:` that names none, and must agree with one that does | derived from `type:`, so an attribute with no `type:` is `string` |
+| `entity_type` | a non-empty string: the id of a declared entity type, for an `entity`-typed attribute | none |
 | `required` | `true` or `false`. `"no"` is refused rather than read as truthy | `false` |
-| `enum_values` | a non-empty list of strings. An empty list would allow no value at all | not enumerated |
+| `enum_values` | a non-empty list of strings, each named once. An empty list would allow no value at all | not enumerated |
 | `description` | a string, which is what an extraction prompt is built from | `""` |
 
 `field_type:` is for a vocabulary type that has no record counterpart of its
-own. `number` is one:
+own. `number` is one. Beside a `type:` that is already a record type it can
+only restate it: `{type: integer, field_type: string}` is refused, because no
+reading honours both.
 
 ```python
 from dataknobs_common.fields import FieldType

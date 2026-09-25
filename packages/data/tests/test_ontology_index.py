@@ -981,6 +981,22 @@ async def test_a_key_the_index_block_does_not_declare_is_refused() -> None:
         await _registry(document)
 
 
+@pytest.mark.parametrize("block", [["store"], "memory"], ids=["a-list", "a-string"])
+async def test_an_index_block_that_is_not_a_mapping_is_refused(block: Any) -> None:
+    """The key check ran ``set(block)`` on whatever it was handed.
+
+    A string was refused for *declaring* its own letters as keys, and a list
+    of mappings raised a bare ``TypeError``. The refusal says what the block
+    has to be instead.
+    """
+    with pytest.raises(ValidationError) as refused:
+        await _registry(_document(index=block))
+
+    message = str(refused.value)
+    assert "`index:` must be a mapping" in message
+    assert type(block).__name__ in message
+
+
 async def test_the_index_block_configures_the_source_it_builds() -> None:
     """``AliasSource`` shipped reachable only from Python, which is half a feature.
 

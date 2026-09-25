@@ -1266,11 +1266,18 @@ def _build_attribute(row: Mapping[str, Any], entity_type: str) -> AttributeDef:
     ``type:`` stays open: ``entity``, ``enum`` and ``number`` are vocabulary
     types with no record counterpart, and deciding which vocabulary types
     exist is not the loader's business. Only a non-string one is refused.
+
+    **``entity_type:`` is checked for its shape here, not left to the
+    reference check.** That check compares ``str(value)`` against ids that
+    were ``str()``'d at build time, so ``entity_type: 2024`` beside
+    ``id: 2024`` passed it and loaded an ``int``; and it stands down under
+    ``imports:``, where ``entity_type: [L]`` loaded as a list. Resolving the
+    name stays its job; being a name is this one's.
     """
     name = _required(row, "name", _ATTRIBUTES_SECTION)
     if not isinstance(name, str) or not name:
         _refuse_attribute_value(entity_type, None, "name", name, "a non-empty string")
-    unread = sorted(set(row) - ATTRIBUTE_ROW_KEYS)
+    unread = sorted(str(key) for key in row if key not in ATTRIBUTE_ROW_KEYS)
     if unread:
         raise ValidationError(
             f"attribute {name!r} of entity type {entity_type!r} declares {unread}, "
@@ -1285,6 +1292,9 @@ def _build_attribute(row: Mapping[str, Any], entity_type: str) -> AttributeDef:
         )
     declared = _attribute_str(row, "type", entity_type, name)
     description = _attribute_str(row, "description", entity_type, name)
+    target = _attribute_str(row, "entity_type", entity_type, name)
+    if target == "":
+        _refuse_attribute_value(entity_type, name, "entity_type", target, "a non-empty string")
     required = row.get("required")
     if required is not None and not isinstance(required, bool):
         _refuse_attribute_value(
@@ -1294,11 +1304,12 @@ def _build_attribute(row: Mapping[str, Any], entity_type: str) -> AttributeDef:
             required,
             "a boolean: it is on or off, so it is `true` or `false`",
         )
+    value_type = declared if declared is not None else "string"
     return AttributeDef(
         name=name,
-        value_type=declared if declared is not None else "string",
-        field_type=_attribute_field_type(row, declared, entity_type, name),
-        entity_type=row.get("entity_type"),
+        value_type=value_type,
+        field_type=_attribute_field_type(row, value_type, entity_type, name),
+        entity_type=target,
         required=bool(required),
         enum_values=_attribute_enum_values(row, entity_type, name),
         description=description if description is not None else "",
@@ -1325,6 +1336,10 @@ def _attribute_enum_values(
     satisfy the attribute. That is a contradiction rather than a policy,
     which is what separates it from ``rungs: []``: an empty rung composition
     can be carried out, and matches nothing.
+
+    **A repeated value is refused** for the reason a repeated attribute name
+    is: the list is a set written in order, and a second ``a`` is either a
+    typo for another value or says nothing.
     """
     values = row.get("enum_values")
     if values is None:
@@ -1337,31 +1352,54 @@ def _attribute_enum_values(
         _refuse_attribute_value(
             entity_type, attribute, "enum_values", values, "a non-empty list of strings"
         )
+    if len(set(values)) != len(values):
+        _refuse_attribute_value(
+            entity_type, attribute, "enum_values", values, "a list naming each value once"
+        )
     return list(values)
 
 
 def _attribute_field_type(
-    row: Mapping[str, Any], declared: str | None, entity_type: str, attribute: str
+    row: Mapping[str, Any], value_type: str, entity_type: str, attribute: str
 ) -> FieldType | None:
     """The record type an attribute is stored as.
 
-    An explicit ``field_type:`` **overrides** the derivation from ``type:``.
-    It is the key for the case the derivation cannot cover -- a vocabulary
-    type such as ``number`` stored as a :class:`FieldType` -- and the
-    published documents write it for exactly that; it was discarded, so every
-    one of them loaded with ``field_type=None``.
+    Derived from the **effective** type, so an attribute that leaves
+    ``type:`` out -- which reads as ``string`` -- is a ``STRING`` attribute
+    all the way down, as ``type: string`` is.
+
+    An explicit ``field_type:`` **supplies** the record type where the
+    derivation finds none. It is the key for a vocabulary type such as
+    ``number`` stored as a :class:`FieldType`, and the published documents
+    write it for exactly that; it was discarded, so every one of them loaded
+    with ``field_type=None``. Where ``type:`` already names a record type,
+    ``field_type:`` has to agree with it: ``{type: integer, field_type:
+    string}`` is a contradiction no reading honours, which is the ground
+    ``enum_values: []`` is refused on. A member is taken as well as its name,
+    since a document built in Python may hand one.
     """
+    derived = _field_type(value_type)
     explicit = row.get("field_type")
     if explicit is None:
-        return _field_type(declared)
-    member = _field_type(explicit) if isinstance(explicit, str) else None
+        return derived
+    member = _field_type(explicit)
     if member is None:
         _refuse_attribute_value(
             entity_type,
             attribute,
             "field_type",
             explicit,
-            f"a record field type, one of {[m.value for m in FieldType]}",
+            f"a record field type, one of {sorted(m.value for m in FieldType)}",
+        )
+    if derived is not None and derived is not member:
+        _refuse_attribute_value(
+            entity_type,
+            attribute,
+            "field_type",
+            explicit,
+            f"the record type its `type: {value_type!r}` already names "
+            f"({derived.value!r}); `field_type:` supplies a record type for a "
+            f"vocabulary type that has none, and cannot contradict one that does",
         )
     return member
 
@@ -1389,16 +1427,12 @@ def _field_type(declared: Any) -> FieldType | None:
 
     ``entity`` and ``enum`` are vocabulary concepts with no record-field
     counterpart, so they map to None rather than being forced onto one.
-    Case is folded, so ``String`` is a spelling of ``string`` -- the reading
-    ``dataknobs-data``'s schema reader gives the same word. Shared with a
-    literal's ``type:``, so the two readings of one word cannot diverge.
+    Read through :meth:`FieldType.lookup`, which ``dataknobs-data``'s schema
+    reader also calls: ``String`` is a spelling of ``string`` and a member is
+    itself, in both. Shared with a literal's ``type:``, so the two readings
+    of one word here cannot diverge either.
     """
-    if declared is None:
-        return None
-    try:
-        return FieldType(str(declared).lower())
-    except ValueError:
-        return None
+    return FieldType.lookup(declared)
 
 
 def _endpoints(row: Mapping[str, Any], field: str, relation_id: str) -> frozenset[str]:
@@ -1598,7 +1632,7 @@ def _refuse_an_unread_taxonomy_key(row: Mapping[str, Any], taxonomy_id: str) -> 
     """
     if "kind" in row:
         return
-    unread = sorted(set(row) - TAXONOMY_ROW_KEYS)
+    unread = sorted(str(key) for key in row if key not in TAXONOMY_ROW_KEYS)
     if not unread:
         return
     raise ValidationError(
@@ -1881,7 +1915,7 @@ def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], .
             f"`resolver:` must be a mapping, got {type(section).__name__}",
             context={"resolver": section},
         )
-    unread = sorted(set(section) - RESOLVER_SECTION_KEYS)
+    unread = sorted(str(key) for key in section if key not in RESOLVER_SECTION_KEYS)
     if unread:
         raise ValidationError(
             f"`resolver:` declares {unread}, which this loader does not read. The "

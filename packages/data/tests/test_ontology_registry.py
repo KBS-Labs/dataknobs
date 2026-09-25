@@ -806,6 +806,43 @@ async def test_a_resolver_section_with_a_key_this_block_does_not_read_is_refused
         await registry.close()
 
 
+@pytest.mark.parametrize("section", [[{"kind": "exact"}], "exact"], ids=["a-list", "a-string"])
+async def test_a_resolver_section_that_is_not_a_mapping_is_refused_at_this_door(
+    section: Any,
+) -> None:
+    """This door refuses first, so it has to refuse the shape as well as the keys.
+
+    Its key check ran ``set(section)`` on whatever it was handed: a list of
+    rung entries raised a bare ``TypeError`` (a mapping is unhashable), and a
+    string was refused for *declaring* its own letters as keys. The loader's
+    mapping check, one call later, was never reached.
+    """
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver=section))
+    )
+    try:
+        with pytest.raises(ValidationError) as refused:
+            await registry.load()
+        message = str(refused.value)
+        assert "`resolver:` must be a mapping" in message
+        assert type(section).__name__ in message
+    finally:
+        await registry.close()
+
+
+async def test_resolver_keys_of_mixed_types_are_refused_by_name_at_this_door() -> None:
+    """Sorting ``{1, 'rung'}`` raised a bare ``TypeError`` before the refusal was built."""
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_authored(resolver={1: "x", "rung": []}))
+    )
+    try:
+        with pytest.raises(ValidationError) as refused:
+            await registry.load()
+        assert "['1', 'rung']" in str(refused.value)
+    finally:
+        await registry.close()
+
+
 def test_the_resolver_key_set_is_the_loader_s() -> None:
     """One key set, owned where the section is read into rungs.
 
