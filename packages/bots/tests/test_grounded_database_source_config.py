@@ -208,10 +208,17 @@ async def test_an_unusable_schema_fields_shape_is_refused() -> None:
         await _create_database_source(_config(backend="memory", schema={"fields": "title"}))
 
 
-async def test_a_schema_that_is_not_a_mapping_is_reported() -> None:
-    """``schema`` carries a ``fields`` key; anything else names the source."""
-    with pytest.raises(ValueError, match="case_studies"):
-        await _create_database_source(_config(backend="memory", schema=["title"]))
+@pytest.mark.parametrize("schema", ["title", 5])
+async def test_a_schema_that_declares_nothing_readable_is_refused(schema: Any) -> None:
+    """A scalar ``schema:`` is refused by the one ``schema:`` reader, naming the source.
+
+    It used to be refused by a check of this source's own, as a ``ValueError``.
+    The source now reads ``schema:`` through ``extract_schema_from_config``, the
+    same door as a database config's ``schema:``, so the refusal is that door's.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        await _create_database_source(_config(backend="memory", schema=schema))
+    assert str(excinfo.value).startswith("source 'case_studies': ")
 
 
 async def test_a_rejected_config_opens_no_store(tmp_path: Path) -> None:
@@ -230,13 +237,26 @@ async def test_a_rejected_config_opens_no_store(tmp_path: Path) -> None:
     """
     store = tmp_path / "unwritten" / "cases.db"
 
-    with pytest.raises(ValueError, match="'schema' must be a mapping"):
+    with pytest.raises(ValidationError, match="source 'case_studies'"):
         await _create_database_source(
-            _config(backend="sqlite", path=str(store), table="cases", schema=["title"])
+            _config(backend="sqlite", path=str(store), table="cases", schema="title")
         )
 
     assert not store.exists()
     assert not store.parent.exists()
+
+
+async def test_the_schema_is_read_before_the_database_is_built() -> None:
+    """A config wrong in both its schema and a backend option is refused for its schema.
+
+    The schema is read from the config alone, so it is read first: a refused
+    declaration builds no database at all, rather than one built -- in a worker
+    thread, importing its backend -- and then thrown away.
+    """
+    with pytest.raises(ValidationError, match="'money'"):
+        await _create_database_source(
+            _config(backend="memory", bogus_option=1, schema={"fields": {"title": "money"}})
+        )
 
 
 # --------------------------------------------------------------------------
@@ -291,6 +311,50 @@ async def test_columns_beside_fields_are_refused() -> None:
     assert "['title']" in message and "fields:" in message
 
 
+@pytest.mark.parametrize("key", ["required", "default", "dimensions", "source_field"])
+async def test_a_field_key_the_source_never_reads_is_refused(key: str) -> None:
+    """Each loads through the general reader, and nothing on this path reads it.
+
+    ``DatabaseSource`` reads a field's type and its ``metadata`` description and
+    enum, so a ``required: true`` here would load and read as honoured.
+    """
+    message = await _refusal({"fields": {"title": {"type": "string", key: True}}})
+    assert f"'{key}'" in message
+
+
+@pytest.mark.parametrize(
+    "field",
+    [{"metadata": {"enum": "CS"}}, {"enum": ["CS"], "metadata": {"enum": "CS"}}],
+    ids=["metadata", "metadata-over-a-valid-shorthand"],
+)
+async def test_an_explicit_metadata_enum_that_is_not_a_list_is_refused(
+    field: dict[str, Any],
+) -> None:
+    """It used to reach the filter schema as ``['C', 'S']``: the winning value went unchecked."""
+    message = await _refusal({"fields": {"dept": {"type": "string", **field}}})
+    assert "'dept'" in message
+
+
+async def test_a_bare_row_list_is_a_schema_as_it_is_for_a_database_config() -> None:
+    """``schema: [{name, type}, ...]`` is what a database config's ``schema:`` reads.
+
+    It used to be refused here by a mapping check of this source's own, so the
+    two doors a ``schema:`` comes through accepted different shapes.
+    """
+    source = await _create_database_source(_config(backend="memory", schema=DOCUMENTED_FIELD_LIST))
+    await source.close()
+
+    assert set(source.get_schema().fields) == {"title", "summary"}
+
+
+async def test_a_schema_with_no_value_is_no_schema() -> None:
+    """YAML's ``schema:`` with no value is the key left out, as it is for a database config."""
+    source = await _create_database_source(_config(backend="memory", schema=None))
+    await source.close()
+
+    assert source.get_schema().fields == {}
+
+
 async def test_a_non_string_mapping_key_is_refused() -> None:
     """``{5: integer}`` reached ``DatabaseSchema.create(**kwargs)`` as a bare ``TypeError``."""
     message = await _refusal({"fields": {5: "integer"}})
@@ -300,8 +364,8 @@ async def test_a_non_string_mapping_key_is_refused() -> None:
 async def test_a_refused_schema_opens_no_store(tmp_path: Path) -> None:
     """The reader runs on the config alone, so before ``connect()`` creates anything.
 
-    The sibling above pins that ordering for bots' own mapping check; this
-    pins it for the shared reader's refusals, which arrive from the same spot.
+    The sibling above pins that ordering for a ``schema:`` that declares
+    nothing readable; this pins it for a field the reader refuses.
     """
     store = tmp_path / "unwritten" / "cases.db"
 

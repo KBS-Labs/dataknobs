@@ -159,12 +159,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A `database` grounded source reads `schema:` through the shared schema
-  reader.** Its `schema: {fields: ...}` is read by
-  `DatabaseSchema.from_dict`, the reader a database config's `schema:` goes
-  through, in place of a copy of its own. So `metadata` is honoured --
+  reader.** Its `schema:` is read by `extract_schema_from_config`, the function
+  a database config's `schema:` goes through, in place of a copy of its own,
+  and with the field keys the source reads
+  (`dataknobs_data.sources.database.SOURCE_FIELD_KEYS`). So it takes the
+  shapes a database config does -- `{fields: ...}` in either spelling, a bare
+  list of field rows, or no value at all -- and `metadata` is honoured:
   `metadata.description` becomes the filter's description, where every field
-  used to read `Filter on <field>` -- and `required` and `default` reach the
-  schema. `enum` and type names in any case read as before.
+  used to read `Filter on <field>`. Type names in any case read as before, and
+  so does an `enum:` that is a list.
 
   **Migration.** What the copy degraded quietly is now refused, with a
   `dataknobs_common.exceptions.ValidationError` whose message begins
@@ -173,20 +176,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | Declaration | Used to | Write instead |
   |---|---|---|
   | an unknown type, `title: money` | become `string` (warned only in the bare form) | a field type, listed in the message |
+  | a type that is not a name, `type: 5` | raise a bare `AttributeError` | a type name |
   | a key a field does not take, `{type: string, description: ...}` | be ignored | `metadata: {description: ...}` |
+  | `required`, `default`, `dimensions` or `source_field` on a field | be ignored | nothing: the source reads none of them, so remove it |
+  | an `enum` that is not a list, `enum: CS` or `metadata: {enum: CS}` | reach the filter schema one letter a value (`['C', 'S']`) | a list, `enum: [CS]` |
+  | a `metadata:` that is not a mapping, or a `metadata.description` that is not a string | be ignored | a mapping, with a string description |
+  | a mapping entry whose `name:` disagrees with its key, `{title: {name: other}}` | be ignored | the key alone |
   | a field given as `null`, or a row with no `name` | be warned about and skipped | a type, or the row's `name` |
   | a repeated row name | let the last row win | one row per field |
   | `fields:` that is neither a mapping nor a list, `fields: title` | be warned about, leaving no fields | a mapping or a list of rows |
   | columns beside `fields:`, `schema: {title: string}` | build a source with no fields, silently | `schema: {fields: {title: string}}` |
+  | a scalar `schema:`, `schema: title` | raise `ValueError` | a mapping or a list of rows |
   | a non-string field name, `{5: integer}` | raise a bare `TypeError` | a string name |
-  | `type:` with no value | raise a bare `AttributeError` | nothing: it is now `string` |
+
+  Three used to be refused and now load: `type:` with no value is `string`
+  (it raised a bare `AttributeError`), a bare list of field rows is read as
+  `fields:`, and `schema:` with no value is no schema (both raised
+  `ValueError`).
 
   **Two exception types, by who refused.** The source's own checks still raise
-  `ValueError` -- an unknown source type, a `schema:` that is not a mapping, a
-  backend option no backend accepts. A refusal from the schema reader is a
-  `ValidationError`, which is not a `ValueError` subclass, so an
-  `except ValueError` around `DynaBot.from_config()` that handled a bad source
-  config needs to catch it as well.
+  `ValueError` -- an unknown source type, a backend option no backend accepts.
+  A refusal from the schema reader is a `ValidationError`, which is not a
+  `ValueError` subclass, so an `except ValueError` around
+  `DynaBot.from_config()` that handled a bad source config needs to catch it
+  as well. A scalar `schema:` moves from the first kind to the second.
+
+  The schema is read before the database is built, so a refused declaration
+  builds and opens nothing.
 
 - **Both database doors build their database off the event loop.** A
   `database` grounded source and `DataKnobsRegistryAdapter.initialize()` each
@@ -194,7 +210,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend name imports its implementation from disk. Both now run the build
   in `asyncio.to_thread`, as the `dataknobs-data` doors that do the same
   already did, so building a bot on a shared loop no longer stalls the other
-  tasks on it.
+  tasks on it. `initialize()` is idempotent for concurrent callers too: two
+  of them used to build and connect a database each, and the one not kept
+  was never closed.
 
 - **`HeadingTreeIndex` expands a region through the shared hierarchy walks.**
   The selection lives in `dataknobs-data` and the change is recorded in full

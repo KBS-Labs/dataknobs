@@ -37,7 +37,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 from .database_utils import ensure_record_id, process_search_results
 from .exceptions import ConcurrencyError, DuplicateRecordError
 from .query import Query, RESERVED_KEY_FIELD, is_storage_key_field
-from .schema import DatabaseSchema, FieldSchema
+from .schema import FIELD_KEYS, DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
 if TYPE_CHECKING:
@@ -371,19 +371,37 @@ def prepare_atomic_batch(
     return prepared
 
 
-def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
+def extract_schema_from_config(
+    schema_config: Any,
+    *,
+    origin: str | None = None,
+    context: Mapping[str, Any] | None = None,
+    keys: frozenset[str] = FIELD_KEYS,
+) -> DatabaseSchema | None:
     """Build a ``DatabaseSchema`` from a schema-config value.
 
     Accepts a ``DatabaseSchema`` (returned as-is), a mapping (built via
     ``DatabaseSchema.from_dict``), a list of field rows (read as that
     mapping's ``fields:``, which is how an ontology binding writes one), or
     ``None`` (no schema). Shared by the ``Database`` bases' legacy dict
-    construction and by ``DatabaseConfig._normalize_dict`` so the
+    construction, by ``DatabaseConfig._normalize_dict``, and by any other
+    config that carries a ``schema:`` (a grounded ``database`` source), so the
     config→schema rule lives in exactly one place.
 
     Anything else is refused rather than read as no schema: a scalar here
     declares nothing, and a schema that silently declares nothing is one every
     check keyed on it passes over.
+
+    Args:
+        schema_config: The ``schema:`` value.
+        origin: Where it came from (``"source 'courses'"``), prefixed to
+            every refusal.
+        context: Carried into every refusal's ``context``.
+        keys: The keys a field takes through this door, as for
+            :func:`~dataknobs_data.schema.read_field_declarations`. A door
+            whose consumer reads less of a declaration narrows it, so a key it
+            would discard is refused. A ``DatabaseSchema`` passed as-is has
+            already been read and is not re-checked.
 
     Raises:
         ValidationError: When ``schema_config`` is none of the above, or is a
@@ -392,13 +410,16 @@ def extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
     if schema_config is None or isinstance(schema_config, DatabaseSchema):
         return schema_config
     if isinstance(schema_config, Mapping):
-        return DatabaseSchema.from_dict(schema_config)
+        return DatabaseSchema.from_dict(schema_config, origin=origin, context=context, keys=keys)
     if isinstance(schema_config, (list, tuple)):
-        return DatabaseSchema.from_dict({"fields": schema_config})
+        return DatabaseSchema.from_dict(
+            {"fields": schema_config}, origin=origin, context=context, keys=keys
+        )
+    prefix = f"{origin}: " if origin else ""
     raise ValidationError(
-        f"a `schema:` is a mapping (`{{fields: ...}}`) or a list of "
+        f"{prefix}a `schema:` is a mapping (`{{fields: ...}}`) or a list of "
         f"`{{name: <column>, type: <type>}}` rows, got {type(schema_config).__name__}",
-        context={"got": type(schema_config).__name__},
+        context={**(context or {}), "got": type(schema_config).__name__},
     )
 
 

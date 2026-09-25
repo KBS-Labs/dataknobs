@@ -151,6 +151,7 @@ class DataKnobsRegistryAdapter:
         self._initialized = False
         self._owns_database = database is None
         self._store: AsyncKeyedRecordStore[Registration] | None = None
+        self._initialize_lock = asyncio.Lock()
 
     def _require_store(self) -> AsyncKeyedRecordStore[Registration]:
         # Runtime guard that survives `python -O` (unlike `assert`).
@@ -188,42 +189,48 @@ class DataKnobsRegistryAdapter:
         """Initialize the underlying database and wrap it in a keyed store.
 
         Creates the database connection if not already connected.
-        Safe to call multiple times (idempotent).
+        Safe to call multiple times (idempotent), concurrently included: the
+        build runs in a worker thread, so without the lock two callers would
+        both find no database, each build and connect one, and the one not
+        kept would never be closed.
         """
-        if self._initialized:
-            return
+        # Checked under the lock only: a caller that waited on it finds the
+        # work done by the one that held it.
+        async with self._initialize_lock:
+            if self._initialized:
+                return
 
-        db = self._db
-        if db is None:
-            logger.debug(
-                "Creating %s database for registry",
+            db = self._db
+            if db is None:
+                logger.debug(
+                    "Creating %s database for registry",
+                    self._backend_type or "default",
+                )
+                # ``backend`` passed only when one was named, so an unnamed
+                # backend reaches the factory as an absent key rather than as
+                # this adapter's guess at what it should have been.
+                options = dict(self._backend_config)
+                if self._backend_type is not None:
+                    options["backend"] = self._backend_type
+                # Off the loop: resolving a backend name imports its
+                # implementation from disk, and a file backend's config
+                # normalizes its path.
+                created: AsyncDatabase = await asyncio.to_thread(
+                    async_database_factory.create, **options
+                )
+                self._db = db = created
+
+            await db.connect()
+            self._store = AsyncKeyedRecordStore[Registration](
+                db,
+                serializer=_registration_to_columns,
+                deserializer=_registration_from_record,
+            )
+            self._initialized = True
+            logger.info(
+                "Registry adapter initialized with %s backend",
                 self._backend_type or "default",
             )
-            # ``backend`` passed only when one was named, so an unnamed
-            # backend reaches the factory as an absent key rather than as
-            # this adapter's guess at what it should have been.
-            options = dict(self._backend_config)
-            if self._backend_type is not None:
-                options["backend"] = self._backend_type
-            # Off the loop: resolving a backend name imports its
-            # implementation from disk, and a file backend's config
-            # normalizes its path.
-            created: AsyncDatabase = await asyncio.to_thread(
-                async_database_factory.create, **options
-            )
-            self._db = db = created
-
-        await db.connect()
-        self._store = AsyncKeyedRecordStore[Registration](
-            db,
-            serializer=_registration_to_columns,
-            deserializer=_registration_from_record,
-        )
-        self._initialized = True
-        logger.info(
-            "Registry adapter initialized with %s backend",
-            self._backend_type or "default",
-        )
 
     async def close(self) -> None:
         """Close the underlying database.

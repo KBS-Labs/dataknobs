@@ -33,16 +33,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A field takes `name`, `type` (default `string`, and a type name in any
   case: `String` is `string`), `required` (a boolean), `default`, `metadata`,
   `enum` (a list of the values the field allows, which `DatabaseSource`
-  publishes in its filter schema), and the vector shorthands `dimensions` and
+  publishes in its filter schema; checked whether it is written `enum:` or
+  `metadata.enum`), and the vector shorthands `dimensions` and
   `source_field`. `enum`, `dimensions` and `source_field` fold into `metadata`
   (an explicit `metadata` entry wins). A key given as `null` reads as that key left out, so `type:` with no
   value is `string`, and `fields: null` is no fields. An ontology row takes
   `name` and `type` only: those are what the registry reads, so a row's other
   keys are refused rather than loaded and ignored. `DatabaseSchema.create()`
   reads a `(FieldType, options)` tuple's options through the same reader.
-  `DatabaseSchema.from_dict` takes `origin=` and `context=`, as
-  `read_field_declarations` does, so a caller that knows where a declaration
-  came from (`origin="source 'courses'"`) has every refusal say so.
+  `DatabaseSchema.from_dict` and `extract_schema_from_config` -- the reader
+  of a config's whole `schema:` value, and so the one to call for one -- take
+  `origin=`, `context=` and `keys=`, as `read_field_declarations` does: a
+  caller that knows where a declaration came from
+  (`origin="source 'courses'"`) has every refusal say so, and a door whose
+  consumer reads less of a field narrows the keys it takes.
+
+  `DatabaseSource` publishes the keys a field declaration takes for it as
+  `dataknobs_data.sources.database.SOURCE_FIELD_KEYS` (`name`, `type`,
+  `metadata`, `enum`: what `get_schema()` reads). Its constructor refuses, with
+  `ValidationError` naming the source and the field, a `metadata["description"]`
+  that is not a string or a `metadata["enum"]` that is not a list or tuple.
+  Both are copied into the filter schema, where a string `enum` became one
+  allowed value per letter. That applies to a schema built by hand as well as
+  to one read from configuration.
 
   **Migration.** Seven declarations used to load as *no schema*, or to fail
   with an exception that named nothing. Each is now either read, or refused

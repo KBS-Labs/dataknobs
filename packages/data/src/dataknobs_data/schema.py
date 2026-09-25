@@ -300,6 +300,7 @@ class DatabaseSchema:
         *,
         origin: str | None = None,
         context: Mapping[str, Any] | None = None,
+        keys: frozenset[str] = FIELD_KEYS,
     ) -> DatabaseSchema:
         """Create from dictionary representation.
 
@@ -329,6 +330,8 @@ class DatabaseSchema:
             origin: Where it came from (``"source 'courses'"``), prefixed to
                 every refusal, the top-level ones included.
             context: Carried into every refusal's ``context``.
+            keys: The keys a field takes through this door, as for
+                :func:`read_field_declarations`.
 
         Raises:
             ValidationError: When ``data`` is not a mapping, carries a key other
@@ -360,7 +363,7 @@ class DatabaseSchema:
             )
         return cls(
             fields=read_field_declarations(
-                data.get("fields") or {}, origin=origin, context=context
+                data.get("fields") or {}, origin=origin, context=context, keys=keys
             ),
             metadata=dict(metadata),
         )
@@ -386,7 +389,8 @@ def read_field_declarations(
     A field mapping takes the keys in ``keys`` (by default :data:`FIELD_KEYS`).
     ``type`` defaults to ``string`` and is a type name in any case (``String``
     is ``string``); ``required`` is a boolean; ``enum`` is a list of the values
-    a field allows; ``dimensions``, ``source_field`` and ``enum`` fold into
+    a field allows, whichever of ``enum:`` and ``metadata.enum`` it is written
+    as; ``dimensions``, ``source_field`` and ``enum`` fold into
     ``metadata``, where an explicit ``metadata`` entry wins. A mapping entry may repeat its ``name`` (which is what
     :meth:`DatabaseSchema.to_dict` writes) and must then agree with its key. A
     key a field takes, given an explicit ``null``, reads as that key left out
@@ -556,21 +560,24 @@ def _field_schema(
             f"{type(declared_metadata).__name__}; it is a mapping",
             context=field_context,
         )
-    enum = value.get("enum")
-    if enum is not None and not isinstance(enum, (list, tuple)):
-        # A string is iterable, so it would reach a filter schema as one
-        # allowed value per letter.
-        raise ValidationError(
-            f"{prefix}field {name!r} declares `enum: {enum!r}`; it is a list of the "
-            f"values the field allows",
-            context={**field_context, "enum": enum},
-        )
-
     metadata: dict[str, Any] = {}
     for shorthand in _METADATA_SHORTHANDS:
         if shorthand in value:
             metadata[shorthand] = value[shorthand]
     metadata.update(declared_metadata)
+
+    # Checked after the merge, because the value checked has to be the one that
+    # wins: an explicit `metadata.enum` takes precedence over the shorthand.
+    enum = metadata.get("enum")
+    if enum is not None and not isinstance(enum, (list, tuple)):
+        # A string is iterable, so it would reach a filter schema as one
+        # allowed value per letter.
+        spelled = "metadata.enum" if "enum" in declared_metadata else "enum"
+        raise ValidationError(
+            f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; it is a list of the "
+            f"values the field allows",
+            context={**field_context, "enum": enum},
+        )
 
     return FieldSchema(
         name=name,

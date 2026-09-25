@@ -17,12 +17,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from dataknobs_common.exceptions import ValidationError
+
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.query import Filter, Operator, Query
 from dataknobs_data.schema import DatabaseSchema
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
+
+#: The keys a field declaration takes for a database source: what
+#: :meth:`DatabaseSource.get_schema` reads -- the name, the type, and
+#: ``metadata`` (its ``description`` and ``enum``), with ``enum:`` the shorthand
+#: that folds into it. A door that builds a source's schema from configuration
+#: passes this as ``keys=`` to the schema reader, so a key the source would load
+#: and never read (``required``, ``default``, the vector shorthands) is refused
+#: rather than read as honoured.
+SOURCE_FIELD_KEYS: frozenset[str] = frozenset({"name", "type", "metadata", "enum"})
 
 # FieldType → JSON schema type mapping
 _FIELD_TYPE_MAP: dict[FieldType, str] = {
@@ -41,6 +52,31 @@ _SKIP_TYPES: set[FieldType] = {
     FieldType.SPARSE_VECTOR,
     FieldType.BINARY,
 }
+
+
+def _check_filter_metadata(schema: DatabaseSchema, source: str) -> None:
+    """Refuse a field's ``description`` or ``enum`` the filter schema cannot carry.
+
+    Checked here rather than only where a declaration is read, because a schema
+    also reaches a source built by hand, with its metadata set directly, and the
+    source is the one reader of both keys.
+    """
+    for field_name, field_schema in schema.fields.items():
+        context = {"source": source, "field": field_name}
+        description = field_schema.metadata.get("description")
+        if description is not None and not isinstance(description, str):
+            raise ValidationError(
+                f"source {source!r}: field {field_name!r} has a `metadata.description` "
+                f"of type {type(description).__name__}; it is a string",
+                context={**context, "got": type(description).__name__},
+            )
+        enum = field_schema.metadata.get("enum")
+        if enum is not None and not isinstance(enum, (list, tuple)):
+            raise ValidationError(
+                f"source {source!r}: field {field_name!r} has a `metadata.enum` of type "
+                f"{type(enum).__name__}; it is a list of the values the field allows",
+                context={**context, "got": type(enum).__name__},
+            )
 
 
 class DatabaseSource(GroundedSource):
@@ -64,6 +100,12 @@ class DatabaseSource(GroundedSource):
             when ``text_queries`` are present in the intent.
         description: Human-readable description for the extraction
             prompt.
+
+    Raises:
+        ValidationError: When a field's ``metadata["description"]`` is not a
+            string, or its ``metadata["enum"]`` is not a list or tuple. Both
+            become part of the filter schema, and a string ``enum`` would reach
+            it as one allowed value per letter.
 
     Example::
 
@@ -101,6 +143,7 @@ class DatabaseSource(GroundedSource):
         text_search_fields: list[str] | None = None,
         description: str = "",
     ) -> None:
+        _check_filter_metadata(schema, name)
         self._db = db
         self._schema = schema
         self._name = name

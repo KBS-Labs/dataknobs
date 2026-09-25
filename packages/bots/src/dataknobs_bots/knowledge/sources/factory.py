@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
@@ -75,8 +75,9 @@ async def create_source_from_config(
     ``database``
         Creates a :class:`DatabaseSource` from the config options.
         Source options: ``content_field``, ``text_search_fields``,
-        ``description``, and ``schema`` (``{fields: ...}``, read by
-        :meth:`~dataknobs_data.schema.DatabaseSchema.from_dict`). Every
+        ``description``, and ``schema`` (``{fields: ...}`` or a bare list of
+        field rows, read by
+        :func:`~dataknobs_data.database.extract_schema_from_config`). Every
         other option is the backend's -- ``backend`` itself, ``path`` for
         a file-backed one -- and is forwarded to the database factory. An
         absent ``backend`` builds the in-process store, and the factory
@@ -488,21 +489,43 @@ async def _create_database_source(
     Source options:
         content_field: Field whose value becomes SourceResult.content.
         text_search_fields: Fields for LIKE text search.
-        schema: ``{fields: ...}``, in either spelling
-            :meth:`~dataknobs_data.schema.DatabaseSchema.from_dict` reads.
+        schema: What a database config's ``schema:`` takes, read by
+            :func:`~dataknobs_data.database.extract_schema_from_config`:
+            ``{fields: ...}`` in either spelling, a bare list of field rows,
+            or nothing. A field takes
+            :data:`~dataknobs_data.sources.database.SOURCE_FIELD_KEYS`, the
+            keys :class:`DatabaseSource` reads.
         description: Human-readable source description.
 
     Raises:
         ValueError: If an option is neither a source option nor a key the
-            chosen backend accepts, or ``schema`` is not a mapping.
+            chosen backend accepts.
         ValidationError: If ``schema`` declares something the shared reader
             refuses, naming this source.
     """
     from dataknobs_data import async_database_factory
+    from dataknobs_data.database import extract_schema_from_config
     from dataknobs_data.schema import DatabaseSchema
-    from dataknobs_data.sources.database import DatabaseSource
+    from dataknobs_data.sources.database import SOURCE_FIELD_KEYS, DatabaseSource
 
     opts = config.options
+
+    # Read from the config alone, and so before anything is built or opened: a
+    # backend's ``connect`` creates what it is pointed at -- directories, file,
+    # table -- and raising after that abandons a store the config was rejected
+    # for; and a refused declaration should not first build a database, in a
+    # worker thread importing its backend, only to throw it away. Read through
+    # the door every ``schema:`` goes through, so this source takes the shapes
+    # a database config does, and with the field keys the source reads.
+    schema = (
+        extract_schema_from_config(
+            opts.get("schema"),
+            origin=f"source {config.name!r}",
+            context={"source": config.name},
+            keys=SOURCE_FIELD_KEYS,
+        )
+        or DatabaseSchema()
+    )
 
     # ``backend`` is forwarded only when these options name one -- it is
     # simply not a source option, so the comprehension leaves it absent when
@@ -518,20 +541,6 @@ async def _create_database_source(
         # The factory names the config class and the offending key; a bot
         # config can declare several sources, so name which one it was.
         raise ValueError(f"Source {config.name!r}: {exc}") from exc
-
-    # Built from the config alone, and so before anything is opened: a
-    # backend's ``connect`` creates what it is pointed at -- directories,
-    # file, table -- and raising after that abandons a store the config
-    # was rejected for.
-    schema_config = opts.get("schema", {})
-    if not isinstance(schema_config, Mapping):
-        raise ValueError(
-            f"Source {config.name!r}: 'schema' must be a mapping carrying a "
-            f"'fields' key, got {type(schema_config).__name__}"
-        )
-    schema = DatabaseSchema.from_dict(
-        schema_config, origin=f"source {config.name!r}", context={"source": config.name}
-    )
 
     # A backend that needs connecting raises on every query until it is.
     # ``DatabaseSource`` no longer absorbs that -- it lets the failure
