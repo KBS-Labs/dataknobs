@@ -481,6 +481,7 @@ class SyncVectorOperationsMixin(ABC):
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        field_separator: str = DEFAULT_FIELD_SEPARATOR,
         *,
         on_stored: Callable[[list[str]], None] | None = None,
     ) -> list[str]:
@@ -494,9 +495,13 @@ class SyncVectorOperationsMixin(ABC):
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
-            on_stored: Called once per commit with the ids that commit made
-                durable, so a caller whose call raises partway can tell what
-                reached the store. ``None`` reports nothing.
+            field_separator: What to join multiple text fields on
+            on_stored: Called once per commit with the ids that commit
+                stored, so a caller whose call raises partway can tell what
+                reached the database. Stored is not durable: that is the
+                backend's, and an in-memory database is never durable.
+                Synchronous; an async callback is refused, because this
+                method cannot await it. ``None`` reports nothing.
 
         Returns:
             List of record IDs that were processed
@@ -822,10 +827,11 @@ class AsyncVectorOperationsMixin(ABC):
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], BatchVectors] | None = None,
+        embedding_fn: Callable[[list[str]], BatchVectors | Awaitable[BatchVectors]] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        field_separator: str = DEFAULT_FIELD_SEPARATOR,
         *,
         embedder: TextEmbedder | None = None,
         on_stored: Callable[[list[str]], Awaitable[None] | None] | None = None,
@@ -836,18 +842,21 @@ class AsyncVectorOperationsMixin(ABC):
             records: Records to process
             text_field: Field name(s) containing text to embed
             vector_field: Field name to store vectors in
-            embedding_fn: Function to generate embeddings. Still accepted;
-                prefer *embedder*.
+            embedding_fn: Function to generate embeddings, sync or async.
+                Still accepted; prefer *embedder*.
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            field_separator: What to join multiple text fields on
             embedder: A :class:`~dataknobs_data.vector.TextEmbedder`. Carries
                 its own ``model_id``, so an implementation can fill
                 *model_name* from the thing that produced the vectors rather
                 than from a parameter the caller has to keep in step.
-            on_stored: Called once per commit with the ids that commit made
-                durable, so a caller whose call raises partway can tell what
-                reached the store. Sync or async. ``None`` reports nothing.
+            on_stored: Called once per commit with the ids that commit
+                stored, so a caller whose call raises partway can tell what
+                reached the database. Stored is not durable: that is the
+                backend's, and an in-memory database is never durable. Sync
+                or async. ``None`` reports nothing.
 
         Returns:
             List of record IDs that were processed

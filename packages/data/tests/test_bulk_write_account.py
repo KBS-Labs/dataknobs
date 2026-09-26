@@ -36,6 +36,7 @@ from dataknobs_data import Record
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.testing import DeterministicEmbedder
 from dataknobs_data.vector import SemanticIndex
+from dataknobs_data.vector.semantic_index import BUILD_BATCH_SIZE
 from dataknobs_data.vector.bulk_embed_mixin import AsyncBulkEmbedMixin, BulkEmbedMixin
 from dataknobs_data.vector.mixins import AsyncVectorOperationsMixin, SyncVectorOperationsMixin
 from dataknobs_data.vector.stores.base import VectorStore
@@ -102,6 +103,9 @@ async def _store() -> MemoryVectorStore:
 async def test_a_failed_build_reports_what_the_store_holds(
     items: int, fails_on: int, stored: int
 ) -> None:
+    # Each case is only the case its id names while the flush size sits
+    # between the two failure points; past either, it silently tests the other.
+    assert 220 < BUILD_BATCH_SIZE <= 1120 < 2 * BUILD_BATCH_SIZE
     store = await _store()
     try:
         index = SemanticIndex(_items(items), _FailsOn(_text(fails_on)), store)
@@ -114,12 +118,12 @@ async def test_a_failed_build_reports_what_the_store_holds(
         await store.close()
 
 
-async def test_a_failed_write_names_what_did_not_arrive_and_where_to_resume() -> None:
+async def test_a_failed_write_names_what_did_not_arrive() -> None:
     """The ids ``build()`` held that the store does not have.
 
     They are a contiguous run starting at the first unstored id, because the
     store commits a prefix of what it was handed. The ids are the source's and
-    the store upserts, so resuming or rebuilding from there duplicates nothing.
+    the store upserts, so a rebuild duplicates nothing.
     """
     store = await _store()
     try:
@@ -130,8 +134,12 @@ async def test_a_failed_write_names_what_did_not_arrive_and_where_to_resume() ->
         assert context["unstored"] == 50
         assert context["first_unstored"] == _id(200)
         assert context["last_unstored"] == _id(249)
-        assert _id(200) in str(failed.value)
-        assert "never sent" not in str(failed.value)
+        message = str(failed.value)
+        assert _id(200) in message
+        assert "never sent" not in message
+        # `unstored` is what the build held, not the whole shortfall: nothing
+        # past the last id it held was read at all.
+        assert f"not read past {_id(249)!r}" in message
 
         written = await SemanticIndex(
             _items(250), DeterministicEmbedder(dimensions=DIMENSIONS), store
@@ -164,6 +172,82 @@ async def test_a_failed_source_counts_what_it_read_and_never_sent() -> None:
         assert context["first_unstored"] == _id(0)
         assert context["last_unstored"] == _id(4)
         assert await store.count() == 0
+    finally:
+        await store.close()
+
+
+async def test_a_failed_build_offers_a_rebuild_not_a_resume() -> None:
+    """``build()`` cannot start partway, so its error must not say it can.
+
+    It takes no starting point, and a resume point is only a point in an order
+    the source repeats --- ``RecordFieldSource`` streams ``stream_read`` with
+    no sort, so a second run need not yield the ids in the first run's order,
+    and skipping to ``first_unstored`` there skips items that were never
+    stored. The remedy ``build()`` supports is a rebuild.
+    """
+    store = await _store()
+    try:
+        with pytest.raises(OperationError) as failed:
+            await SemanticIndex(_items(250), _FailsOn(_text(220)), store).build()
+
+        message = str(failed.value)
+        assert "resume" not in message
+        assert "rebuild" in message
+    finally:
+        await store.close()
+
+
+class _ClosesBadly:
+    """A structural source iterator whose close fails after a clean stream.
+
+    ``IndexSource.stream_items`` is declared to return an ``AsyncIterator``,
+    and ``aclosing_iter`` closes anything that has an ``aclose``. So a source
+    can yield everything, have every item stored, and still fail the build on
+    the way out.
+    """
+
+    def __init__(self, count: int) -> None:
+        self._items = iter([IndexItem(id=_id(n), text=_text(n)) for n in range(count)])
+
+    def __aiter__(self) -> _ClosesBadly:
+        return self
+
+    async def __anext__(self) -> IndexItem:
+        try:
+            return next(self._items)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        raise OperationError("the source's connection failed to close")
+
+
+class _ClosingSource:
+    def __init__(self, count: int) -> None:
+        self.count = count
+
+    def stream_items(self) -> _ClosesBadly:
+        return _ClosesBadly(self.count)
+
+    def declares(self) -> frozenset[str]:
+        return frozenset()
+
+
+async def test_a_failure_closing_a_drained_source_does_not_claim_a_partial_build() -> None:
+    store = await _store()
+    try:
+        index = SemanticIndex(
+            _ClosingSource(250), DeterministicEmbedder(dimensions=DIMENSIONS), store
+        )
+        with pytest.raises(OperationError) as failed:
+            await index.build()
+
+        assert await store.count() == 250
+        assert failed.value.context["written"] == 250
+        assert failed.value.context["unstored"] == 0
+        message = str(failed.value)
+        assert "partial" not in message
+        assert "closing the source" in message
     finally:
         await store.close()
 
@@ -395,3 +479,206 @@ def test_the_two_database_lanes_are_twins() -> None:
         async_only=["embedder"],
         flavour_typed=["embedding_fn", "on_stored"],
     )
+
+
+def test_the_abstract_declarations_take_what_their_lanes_take() -> None:
+    """A subclass author reads the abstract signature, so it must be the real one.
+
+    Both concrete lanes take ``field_separator``, and the async lane's
+    ``embedding_fn`` may be async; the declarations said neither.
+    """
+    for declared, lane in (
+        (SyncVectorOperationsMixin.bulk_embed_and_store, BulkEmbedMixin.bulk_embed_and_store),
+        (AsyncVectorOperationsMixin.bulk_embed_and_store, AsyncBulkEmbedMixin.bulk_embed_and_store),
+    ):
+        shape = [
+            (p.name, p.kind, p.default, p.annotation)
+            for p in inspect.signature(declared).parameters.values()
+        ]
+        assert shape == [
+            (p.name, p.kind, p.default, p.annotation)
+            for p in inspect.signature(lane).parameters.values()
+        ], declared.__qualname__
+
+
+# --------------------------------------------------------------------- #
+# The database lanes: what they report, and what they refuse
+# --------------------------------------------------------------------- #
+
+
+class _AsyncCallable:
+    """A stateful callback, written the way anything holding a handle is."""
+
+    async def __call__(self, stored: list[str]) -> None:
+        return None
+
+
+async def _async_function(stored: list[str]) -> None:
+    return None
+
+
+@pytest.mark.parametrize(
+    "callback", [_async_function, _AsyncCallable()], ids=["function", "object"]
+)
+def test_the_sync_database_lane_refuses_an_async_callback(callback: Any) -> None:
+    """This lane cannot await, so an async callback would never run.
+
+    Called without an ``await`` it returns a coroutine and raises nothing,
+    so every report would be dropped with only a ``RuntimeWarning`` to show
+    for it. Refused before anything is written.
+    """
+    db = SyncMemoryDatabase()
+
+    with pytest.raises(TypeError, match="on_stored"):
+        db.bulk_embed_and_store(
+            _records(3),
+            "body",
+            embedding_fn=_embedding_fn_failing_on("absent"),
+            on_stored=callback,
+        )
+
+    assert db.all() == []
+
+
+async def test_the_async_database_lane_runs_a_sync_callback_off_the_loop() -> None:
+    """The per-record thread hop the docstring prices is real, and on a worker."""
+    db = AsyncMemoryDatabase()
+    loop_thread = threading.get_ident()
+    threads: set[int] = set()
+
+    def record(stored: list[str]) -> None:
+        threads.add(threading.get_ident())
+
+    await db.bulk_embed_and_store(
+        _records(3), "body", embedding_fn=_embedding_fn_failing_on("absent"), on_stored=record
+    )
+
+    assert threads and loop_thread not in threads
+
+
+def test_a_raising_callback_on_the_sync_database_lane_propagates_and_its_record_stands() -> None:
+    db = SyncMemoryDatabase()
+    told: list[list[str]] = []
+
+    def refuse(stored: list[str]) -> None:
+        told.append(stored)
+        raise RuntimeError("checkpoint sink unavailable")
+
+    with pytest.raises(RuntimeError, match="checkpoint sink"):
+        db.bulk_embed_and_store(
+            _records(3), "body", embedding_fn=_embedding_fn_failing_on("absent"), on_stored=refuse
+        )
+
+    assert len(told) == 1
+    assert [record.id for record in db.all()] == told[0]
+
+
+async def test_a_raising_callback_on_the_async_database_lane_propagates_and_its_record_stands() -> (
+    None
+):
+    db = AsyncMemoryDatabase()
+    told: list[list[str]] = []
+
+    async def refuse(stored: list[str]) -> None:
+        told.append(stored)
+        raise RuntimeError("checkpoint sink unavailable")
+
+    with pytest.raises(RuntimeError, match="checkpoint sink"):
+        await db.bulk_embed_and_store(
+            _records(3), "body", embedding_fn=_embedding_fn_failing_on("absent"), on_stored=refuse
+        )
+
+    assert len(told) == 1
+    assert [record.id for record in await db.all()] == told[0]
+
+
+# A record deleted between the lane's existence check and its update.
+#
+# The lanes used to check `exists` and then `update`, ignoring update()'s
+# `False` for a record that had gone, and reported the record written. They
+# now call `upsert`, which the database already had for exactly this.
+#
+# The memory backends take their lock once per call and never yield inside
+# one, so no second task or thread can be scheduled into the gap between two
+# calls deterministically. These subclasses put the delete there instead:
+# `exists` answers truthfully, then the record is gone, which is exactly what a
+# concurrent writer does to a check-then-act. Everything else is the real
+# backend.
+
+
+class _SyncDeletedAfterCheck(SyncMemoryDatabase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.raced: set[str] = set()
+
+    def exists(self, id: str) -> bool:
+        answer = super().exists(id)
+        if answer and id not in self.raced:
+            self.raced.add(id)
+            self.delete(id)
+        return answer
+
+
+class _AsyncDeletedAfterCheck(AsyncMemoryDatabase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.raced: set[str] = set()
+
+    async def exists(self, id: str) -> bool:
+        answer = await super().exists(id)
+        if answer and id not in self.raced:
+            self.raced.add(id)
+            await self.delete(id)
+        return answer
+
+
+def _existing(count: int) -> list[Record]:
+    return [Record(data={"body": _text(n)}, storage_id=_id(n)) for n in range(count)]
+
+
+def test_the_sync_database_lane_never_reports_a_record_it_did_not_write() -> None:
+    """``update()`` answers ``False`` for a record that has gone; that is not a write."""
+    db = _SyncDeletedAfterCheck()
+    for record in _existing(3):
+        db.create(record)
+    reported: list[str] = []
+
+    db.bulk_embed_and_store(
+        _existing(3),
+        "body",
+        embedding_fn=_embedding_fn_failing_on("absent"),
+        on_stored=reported.extend,
+    )
+
+    # Every record is written and reported, whether or not the write went
+    # through the check the delete races: a backend whose upsert is atomic
+    # never asks `exists` at all, which closes the gap rather than surviving it.
+    assert sorted(reported) == [_id(n) for n in range(3)]
+    for record_id in reported:
+        read = db.read(record_id)
+        assert read is not None and read.fields.get("embedding"), record_id
+
+
+async def test_the_async_database_lane_never_reports_a_record_it_did_not_write() -> None:
+    db = _AsyncDeletedAfterCheck()
+    for record in _existing(3):
+        await db.create(record)
+    reported: list[str] = []
+
+    async def record(stored: list[str]) -> None:
+        reported.extend(stored)
+
+    await db.bulk_embed_and_store(
+        _existing(3),
+        "body",
+        embedding_fn=_embedding_fn_failing_on("absent"),
+        on_stored=record,
+    )
+
+    # Every record is written and reported, whether or not the write went
+    # through the check the delete races: a backend whose upsert is atomic
+    # never asks `exists` at all, which closes the gap rather than surviving it.
+    assert sorted(reported) == [_id(n) for n in range(3)]
+    for record_id in reported:
+        read = await db.read(record_id)
+        assert read is not None and read.fields.get("embedding"), record_id

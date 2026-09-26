@@ -793,7 +793,9 @@ registry.get("catalog").localize(hits[0].record.id)   # 'sku-4471'
 ```
 
 A build that fails partway raises `OperationError`, and its `context` says what
-the store holds: `written`, and `first_unstored`, the id to resume from. See
+the store holds: `written`, and `unstored` with its `first_unstored` and
+`last_unstored` ids, qualified the way `dk_ontology_id` rows are. The remedy is
+to rebuild, which overwrites rather than duplicates. See
 `SemanticIndex.build()`'s docstring for the full set of keys.
 
 **The enumeration is the vocabulary, not the schema.** Every entity the bound

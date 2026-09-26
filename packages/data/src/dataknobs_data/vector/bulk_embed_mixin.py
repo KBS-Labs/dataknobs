@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.callbacks import run_callback_off_loop
+from dataknobs_common.callbacks import is_async_callable, run_callback_off_loop
 
 from ..fields import VectorField
 from .content import (
@@ -181,9 +181,17 @@ class BulkEmbedMixin:
 
         Raises:
             ValueError: If embedding_fn is not provided
+            TypeError: If *on_stored* is async. This lane cannot await it,
+                and an un-awaited callback raises nothing and runs nothing,
+                so every report would be lost.
         """
         if not embedding_fn:
             raise ValueError("embedding_fn is required for bulk_embed_and_store")
+        if is_async_callable(on_stored):
+            raise TypeError(
+                "on_stored is async, and the sync bulk_embed_and_store cannot await it; "
+                "pass a plain function, or use an async database"
+            )
 
         text_fields = resolve_text_fields(text_field)
         processed_ids = []
@@ -208,10 +216,12 @@ class BulkEmbedMixin:
                 )
                 track_vector_dimensions(self, record)
 
-                # Assumes self has create, update and exists (Database interface).
-                if record.id and self.exists(record.id):  # type: ignore[attr-defined]
-                    self.update(record.id, record)  # type: ignore[attr-defined]
-                    record_id = record.id
+                # Assumes self has create and upsert (Database interface).
+                # `upsert`, not `exists` then `update`: it acts on update()'s
+                # answer, so a record deleted between the two is written
+                # rather than reported written.
+                if record.id:
+                    record_id = self.upsert(record.id, record)  # type: ignore[attr-defined]
                 else:
                     record_id = self.create(record)  # type: ignore[attr-defined]
                 processed_ids.append(record_id)
@@ -311,11 +321,10 @@ class AsyncBulkEmbedMixin:
                 )
                 track_vector_dimensions(self, record)
 
-                # Assumes self has async create, update and exists
-                # (AsyncDatabase interface).
-                if record.id and await self.exists(record.id):  # type: ignore[attr-defined]
-                    await self.update(record.id, record)  # type: ignore[attr-defined]
-                    record_id = record.id
+                # Assumes self has async create and upsert (AsyncDatabase
+                # interface); `upsert` for the sync lane's reason.
+                if record.id:
+                    record_id = await self.upsert(record.id, record)  # type: ignore[attr-defined]
                 else:
                     record_id = await self.create(record)  # type: ignore[attr-defined]
                 processed_ids.append(record_id)

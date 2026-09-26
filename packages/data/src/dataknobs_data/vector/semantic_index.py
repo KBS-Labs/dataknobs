@@ -237,7 +237,10 @@ class SemanticIndex:
         with the field the canonical text came from.
 
         Returns:
-            How many items were **handed to the store**. ``0`` over an empty
+            How many items the store reported storing, which on success is
+            every item handed to it (:meth:`VectorStore.add_vectors
+            <dataknobs_data.vector.stores.base.VectorStore.add_vectors>`
+            returns one id per vector it was given). ``0`` over an empty
             source is a legitimate answer and not an error: a vocabulary that
             holds nothing is a vocabulary.
 
@@ -254,11 +257,21 @@ class SemanticIndex:
                 - ``written``: how many items the store reported storing.
                 - ``unstored``: how many items this build had read that the
                   store does not have --- the rest of a write that failed, or
-                  items read and not yet sent when the source failed.
+                  items read and not yet sent when the source failed. **Not
+                  the whole shortfall:** the source was not read past them,
+                  so anything it would have yielded later is missing too.
                 - ``first_unstored`` / ``last_unstored``: the first and last
-                  of those ids, or ``None``. ``first_unstored`` is where to
-                  resume. The ids are the source's and the store upserts, so
-                  resuming there or rebuilding duplicates nothing.
+                  of those ids, or ``None``. They are ids as this index
+                  writes them --- on the ontology registry's route, the
+                  qualified ones.
+
+                **The remedy is a rebuild.** This method takes no starting
+                point, and the ids are the source's while the store upserts,
+                so a rebuild overwrites rather than duplicates.
+                ``first_unstored`` says where this build's account stops in
+                *this run's* order; it is not a resume point in general,
+                because a source need not stream in the same order twice
+                (``RecordFieldSource`` streams ``stream_read`` unsorted).
 
                 Exact per store commit; see
                 :meth:`VectorStore.bulk_embed_and_store
@@ -275,6 +288,10 @@ class SemanticIndex:
         # what a failed write left behind.
         stored_of_write = 0
         writing = False
+        # Set once the source is exhausted and its last items are stored, so
+        # a failure after it --- closing the source --- is not reported as a
+        # partial build.
+        drained = False
 
         async def stored(stored_ids: list[str]) -> None:
             nonlocal written, stored_of_write
@@ -324,6 +341,7 @@ class SemanticIndex:
                     if len(texts) >= BUILD_BATCH_SIZE:
                         await flush()
                 await flush()
+                drained = True
         except Exception as exc:
             # `written` is what the store reported, commit by commit, so it
             # counts the part of a failed write that did land. What is left
@@ -335,30 +353,39 @@ class SemanticIndex:
             unstored = ids[stored_of_write:]
             first = unstored[0] if unstored else None
             last = unstored[-1] if unstored else None
-            if not unstored:
-                missing = "nothing it had read is missing"
+            if drained:
+                state = (
+                    "every item the source yielded reached the store; the failure "
+                    "came after the last write, closing the source"
+                )
+            elif not unstored:
+                state = (
+                    "nothing it had read is missing, but the source failed before "
+                    "it was exhausted, so the store holds a partial build"
+                )
             elif writing:
-                missing = (
-                    f"{len(unstored)} item(s) handed to the store did not reach it, "
-                    f"{first!r} to {last!r}; the failure was in the store's batch "
-                    f"starting at {first!r}"
+                state = (
+                    f"the store holds a partial build: {len(unstored)} item(s) handed "
+                    f"to it did not arrive, {first!r} to {last!r}, the failure being "
+                    f"in its batch starting at {first!r}, and the source was not "
+                    f"read past {last!r}"
                 )
             else:
-                missing = (
-                    f"{len(unstored)} item(s) read from the source were never sent, "
-                    f"{first!r} to {last!r}"
+                state = (
+                    f"the store holds a partial build: {len(unstored)} item(s) read "
+                    f"from the source were never sent, {first!r} to {last!r}, and "
+                    f"the source failed before yielding more"
                 )
             logger.warning(
                 "semantic index build failed after %d item(s) were written; %s",
                 written,
-                missing,
+                state,
                 exc_info=exc,
             )
-            resume = f"resume from {first!r}, or rebuild" if first is not None else "rebuild"
             raise OperationError(
-                f"semantic index build failed after it wrote {written} item(s); the "
-                f"store holds a partial build and {missing}. To finish, {resume} -- "
-                f"the ids are the source's, so either overwrites rather than duplicates",
+                f"semantic index build failed after it wrote {written} item(s); "
+                f"{state}. To finish, rebuild -- the ids are the source's and the "
+                f"store upserts, so a rebuild overwrites rather than duplicates",
                 context={
                     "written": written,
                     "unstored": len(unstored),

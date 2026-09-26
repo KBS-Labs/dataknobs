@@ -165,7 +165,13 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
             metadata: Optional metadata for each vector
 
         Returns:
-            List of IDs for the added vectors, empty for an empty batch
+            One id per vector, in the order the vectors were given: the
+            *ids* passed, where they were passed, and the minted ones
+            otherwise. Empty for an empty batch. Callers rely on this
+            correspondence --- :meth:`bulk_embed_and_store` reports these
+            ids as what it stored, and ``SemanticIndex.build()`` reads that
+            report as a prefix of the ids it handed over --- so an
+            implementation returns neither fewer ids nor reordered ones.
         """
         pass
 
@@ -741,6 +747,13 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
           non-transactional write has nothing to roll it back.
         - If the callback itself raises, the raise propagates and the
           commit it was told about stands.
+        - **Stored is not durable.** It means :meth:`add_vectors` returned.
+          ``PgVectorStore`` has committed to its database by then, and
+          ``ChromaVectorStore`` to disk when it has a ``persist_path``
+          (without one its client is in-memory). The memory and FAISS
+          stores write to disk only on :meth:`save` or :meth:`close`, and
+          only when a ``persist_path`` is set. A checkpoint that must survive the process follows a
+          :meth:`save`, not a report.
 
         The exception this method raises is whatever the embedder or the
         store raised, unwrapped, so a caller's ``except`` clauses keep
