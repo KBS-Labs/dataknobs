@@ -64,7 +64,9 @@ class TestAnOperatorTheEnumHasIsReachableFromTheFluentPath:
     def test_the_fluent_path_and_from_dict_agree(self, member: Operator) -> None:
         """One vocabulary, not two, for the two ways to name an operator."""
         fluent = Query().filter("field", member.value, _operand(member, "x")).filters[0]
-        deserialized = Filter.from_dict({"field": "field", "operator": member.value, "value": _operand(member, "x")})
+        deserialized = Filter.from_dict(
+            {"field": "field", "operator": member.value, "value": _operand(member, "x")}
+        )
 
         assert fluent.operator is deserialized.operator is member
 
