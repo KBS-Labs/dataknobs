@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dataknobs-bots[postgres]` installs from wheels.** It forwards to
+  `dataknobs-data[postgres]`, which required the source-built `psycopg2` and so
+  failed to install without `pg_config`. That extra now requires
+  `psycopg2-binary`. The extra no longer brings in `sqlalchemy`, which nothing
+  here imports.
+
 - **Two classes that answer `obj['key']` now answer `in`, `len` and
   iteration.** A type that defines `__getitem__` and no `__iter__` is still
   iterable: Python falls back to the protocol that predates `__iter__` and

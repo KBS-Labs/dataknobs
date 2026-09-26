@@ -45,7 +45,7 @@ http = [
 # `DatabaseResource` / `StorageBackend.POSTGRES` / `DatabaseETL` and the
 # `backend: postgres` config path in the simple + async APIs, all of which
 # run through dataknobs-data's backends.  Forwarding to that package's
-# extra keeps the psycopg2 / sqlalchemy / asyncpg floors in a single place
+# extra keeps the psycopg2-binary / asyncpg floors in a single place
 # rather than re-pinning the drivers here.  Unlike `dataknobs-bots`, this
 # package does not reach dataknobs-common's Postgres lock or event bus —
 # the `PostgresEventBus` mention in `resources.pool` is a docstring

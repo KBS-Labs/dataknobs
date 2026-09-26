@@ -355,7 +355,7 @@ Some packages require additional dependencies:
 
 ```bash
 # For PostgreSQL support
-pip install psycopg2-binary
+pip install "dataknobs-data[postgres]"
 
 # For Elasticsearch
 pip install elasticsearch

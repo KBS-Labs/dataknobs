@@ -280,6 +280,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dataknobs-fsm[postgres]` installs from wheels.** It forwards to
+  `dataknobs-data[postgres]`, which required the source-built `psycopg2` and so
+  failed to install without `pg_config`. That extra now requires
+  `psycopg2-binary`. The extra no longer brings in `sqlalchemy`, which nothing
+  here imports.
+
 - **Four readers stop guessing which resource shape reached them.** Each had
   grown its own accommodation for the two classes rather than the boundary
   being translated once: `AsyncExecutionEngine` computed a state's acquisition
