@@ -946,14 +946,16 @@ CLAUDE_STOP_REASON_NORMALIZATION: Dict[str, str] = {
 #: token budget (the response is incomplete — see :attr:`LLMResponse.truncated`).
 CLAUDE_TRUNCATION_STOP_REASONS: frozenset[str] = frozenset({"max_tokens"})
 
-#: Case-insensitive substrings identifying a context-window-overflow 400 across
+#: Case-insensitive substrings identifying a context-window overflow across
 #: vendor phrasings. Conservative — only unambiguous overflow wording, so an
 #: unrelated 400 (rejected param, malformed request) stays a plain
 #: ``ValidationError``. Every provider folds the vendor error *body* into the
 #: dispatched message — the SDK providers via ``str(exc)`` and the aiohttp
 #: providers (Ollama, HuggingFace) via ``raise_for_status_with_body`` (which
 #: preserves the body aiohttp's own ``raise_for_status`` would drop) — so a
-#: marker here fires uniformly without per-provider translator changes.
+#: marker here fires for every provider without per-provider translator
+#: changes. *Which statuses* are read for a marker is per provider, not
+#: uniform: see :attr:`LLMProvider._context_length_statuses`.
 _CONTEXT_LENGTH_MARKERS: frozenset[str] = frozenset(
     {
         "context_length_exceeded",  # OpenAI machine code + message fragment
@@ -962,6 +964,7 @@ _CONTEXT_LENGTH_MARKERS: frozenset[str] = frozenset(
         "input is too long",  # Bedrock message
         "too many input tokens",  # Bedrock variant
         "context window",  # generic
+        "exceeds the context length",  # Ollama, /api/embeddings and /api/embed
     }
 )
 
@@ -1068,6 +1071,14 @@ class LLMProvider(ABC):
     #: A class-level default so :attr:`provider_name`'s getter works before any
     #: assignment; an instance assignment shadows it.
     _provider_name_override: str | None = None
+
+    #: Statuses on which this provider's vendor reports a context-window
+    #: overflow. A marker (:data:`_CONTEXT_LENGTH_MARKERS`) must still match;
+    #: this says only where to look for one. ``{400}`` by default, because a 5xx
+    #: is the server's own failure and is retried as one: reading a 5xx as the
+    #: caller's input is right only for a vendor measured to report an overflow
+    #: that way, so that vendor's provider declares it.
+    _context_length_statuses: ClassVar[frozenset[int]] = frozenset({400})
 
     def __init__(
         self,
@@ -1188,11 +1199,17 @@ class LLMProvider(ABC):
 
     @staticmethod
     def _is_context_length_error(
-        status: int | None, detail: str, *, code: str | None = None
+        status: int | None,
+        detail: str,
+        *,
+        code: str | None = None,
+        statuses: frozenset[int] = frozenset({400}),
     ) -> bool:
-        """True when a 400 is specifically a context-window overflow.
+        """True when an error response is specifically a context-window overflow.
 
-        Status-gated first (only 400s qualify), then a machine ``code``
+        Status-gated first (only *statuses* qualify — ``{400}`` unless the
+        caller passes a provider's
+        :attr:`_context_length_statuses`), then a machine ``code``
         (OpenAI supplies one) or a conservative marker in the vendor's own
         rendering (see :data:`_CONTEXT_LENGTH_MARKERS`). Deliberately narrow so
         an unrelated 400 — a rejected sampling parameter, a malformed request —
@@ -1202,7 +1219,7 @@ class LLMProvider(ABC):
         phrasing this matches on is deliberately kept out of that message (see
         :meth:`_api_error_message`).
         """
-        if status != 400:
+        if status not in statuses:
             return False
         # ``str(code)`` guards the generic ``code`` extension point: a future
         # provider passing a non-str machine code must not ``AttributeError``.
@@ -1254,10 +1271,11 @@ class LLMProvider(ABC):
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`
           (carrying ``retry_after`` when a provider could extract it),
-        - 400 that is a context-window overflow →
+        - a context-window overflow →
           :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`
           (a ``ValidationError`` subclass — see
-          :meth:`_is_context_length_error`),
+          :meth:`_is_context_length_error`), on a 400 or on any other status
+          this provider declares in :attr:`_context_length_statuses`,
         - any other 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
         - 401/403 and anything else (other status, connection, timeout, or an
           unknown ``None`` status) →
@@ -1284,7 +1302,9 @@ class LLMProvider(ABC):
         message = self._api_error_message(status)
         if status == 429:
             return RateLimitError(message, retry_after=retry_after)
-        if self._is_context_length_error(status, detail, code=code):
+        if self._is_context_length_error(
+            status, detail, code=code, statuses=self._context_length_statuses
+        ):
             # Named, unlike the other 400s: this is the one the caller can act
             # on (compact history, switch model), and naming it needs none of
             # the vendor's words — the type is already decided by here.

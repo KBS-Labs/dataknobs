@@ -45,7 +45,7 @@ import openai
 import pytest
 from botocore.exceptions import ClientError
 
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_llm.exceptions import ContextLengthExceededError
 from dataknobs_llm.llm.base import LLMConfig, LLMProvider, ModelCapability
 from dataknobs_llm.llm.providers.bedrock import BedrockProvider
@@ -170,6 +170,22 @@ def _hf_provider(session: Any) -> HuggingFaceProvider:
     return provider
 
 
+def _error_response(status: int, reason: str, body: str) -> FakeResponse:
+    """A *status* response whose vendor wording lives only in the *body*."""
+    return FakeResponse(status, text=body, raise_exc=make_client_response_error(status, reason))
+
+
+#: Ollama's measured overflow body, on ``/api/embeddings`` (as a 500) and on
+#: ``/api/embed`` with ``truncate: false`` (as a 400). Ollama 0.33.2.
+_OLLAMA_OVERFLOW_BODY = '{"error":"the input length exceeds the context length"}'
+
+#: Ollama's measured answer when a completion model is asked to embed: also a
+#: 500 on ``/api/embeddings``, and not an overflow.
+_OLLAMA_NO_EMBEDDINGS_BODY = (
+    '{"error":"This server does not support embeddings. Start it with `--embeddings`"}'
+)
+
+
 def _bad_request_response(body: str) -> FakeResponse:
     """A 400 whose vendor wording lives in the *body*, not the reason phrase.
 
@@ -178,7 +194,7 @@ def _bad_request_response(body: str) -> FakeResponse:
     carries no marker, so overflow is detected only once the body is folded in
     (and a non-overflow body stays a plain ``ValidationError``).
     """
-    return FakeResponse(400, text=body, raise_exc=make_client_response_error(400, "Bad Request"))
+    return _error_response(400, "Bad Request", body)
 
 
 # ---------------------------------------------------------------------------
@@ -297,15 +313,52 @@ class TestAiohttpProviderContextLength:
     """
 
     async def test_ollama_context_length_via_body_marker(self) -> None:
-        response = _bad_request_response(
-            '{"error":"input is too long for this model\'s context window"}'
-        )
+        """Ollama's embedding endpoint reports an overflow as a **500**.
+
+        The body and the status are the ones Ollama sends (measured, 0.33.2). An
+        earlier version of this test pinned a 400 with wording Ollama never
+        uses, and passed while the real path raised ``OperationError``;
+        ``test_ollama_context_overflow.py`` runs the same case against a live
+        server.
+        """
+        response = _error_response(500, "Internal Server Error", _OLLAMA_OVERFLOW_BODY)
         provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
         with pytest.raises(ContextLengthExceededError) as excinfo:
-            await provider.complete("hi")
+            await provider.embed("an over-long text")
         # Backward compatibility + original error preserved on __cause__.
         assert isinstance(excinfo.value, ValidationError)
         assert excinfo.value.__cause__ is response._raise_exc
+
+    async def test_ollama_context_length_as_a_400(self) -> None:
+        """``/api/embed`` with ``truncate: false`` sends the same words as a 400."""
+        response = _bad_request_response(_OLLAMA_OVERFLOW_BODY)
+        provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
+        with pytest.raises(ContextLengthExceededError):
+            await provider.embed("an over-long text")
+
+    async def test_ollama_500_without_a_marker_stays_operation_error(self) -> None:
+        """A 500 alone is not an overflow: the marker decides.
+
+        Ollama answers a completion model asked to embed with a 500 too, and
+        that is the server's condition, not the caller's input.
+        """
+        response = _error_response(500, "Internal Server Error", _OLLAMA_NO_EMBEDDINGS_BODY)
+        provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
+        with pytest.raises(OperationError) as excinfo:
+            await provider.embed("text")
+        assert not isinstance(excinfo.value, ValidationError)
+
+    async def test_the_500_is_ollamas_alone(self) -> None:
+        """HuggingFace declares no 500, so the same response stays an OperationError.
+
+        Pins that the widened status set is a declaration of one provider, not a
+        change to the shared default.
+        """
+        response = _error_response(500, "Internal Server Error", _OLLAMA_OVERFLOW_BODY)
+        provider = _hf_provider(FakeSession([FakeSession.responding(response)]))
+        with pytest.raises(OperationError) as excinfo:
+            await provider.complete("hi")
+        assert not isinstance(excinfo.value, ValidationError)
 
     async def test_ollama_non_overflow_400_stays_validation_error(self) -> None:
         """A 400 whose body has no overflow marker stays a plain ValidationError.
@@ -357,6 +410,7 @@ class TestIsContextLengthError:
             "Input is too long for requested model",
             "too many input tokens",
             "the context window is exceeded",
+            "the input length exceeds the context length",
         ],
     )
     def test_fires_on_400_with_marker(self, message: str) -> None:
@@ -378,6 +432,23 @@ class TestIsContextLengthError:
         """Only a 400 qualifies — a marker in a 429/401/500 message never fires."""
         assert LLMProvider._is_context_length_error(status, "prompt is too long") is False
 
+    def test_a_declared_status_admits_the_marker(self) -> None:
+        """A provider that declares 500 has its 500s read for a marker."""
+        overflow = "the input length exceeds the context length"
+        assert (
+            LLMProvider._is_context_length_error(500, overflow, statuses=frozenset({400, 500}))
+            is True
+        )
+        assert LLMProvider._is_context_length_error(500, overflow) is False
+
+    def test_a_declared_status_still_needs_the_marker(self) -> None:
+        assert (
+            LLMProvider._is_context_length_error(
+                500, "internal error", statuses=frozenset({400, 500})
+            )
+            is False
+        )
+
 
 class TestStatusDispatchContextLength:
     """``_dataknobs_error_for_status`` routes overflow before the generic 400."""
@@ -396,6 +467,14 @@ class TestStatusDispatchContextLength:
         provider = _base_provider()
         err = provider._dataknobs_error_for_status(400, "bad request")
         assert type(err) is ValidationError
+
+    def test_a_base_provider_500_with_a_marker_stays_operation_error(self) -> None:
+        """The shared default admits only a 400: a 5xx is the server's failure."""
+        provider = _base_provider()
+        err = provider._dataknobs_error_for_status(
+            500, "the input length exceeds the context length"
+        )
+        assert type(err) is OperationError
 
     def test_429_with_marker_stays_rate_limit_error(self) -> None:
         """The 429 branch wins even if the message happens to carry a marker."""
