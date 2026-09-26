@@ -15,7 +15,14 @@ from typing import Any, TYPE_CHECKING
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..exceptions import DuplicateRecordError, RecordValidationError
-from ..query import Filter, Operator, Query, SortOrder, is_storage_key_field
+from ..query import (
+    Filter,
+    Operator,
+    Query,
+    SortOrder,
+    is_storage_key_field,
+    membership_values,
+)
 from ..records import Record
 
 # Field name segments must be valid identifiers to prevent SQL injection.
@@ -1076,9 +1083,14 @@ class SQLQueryBuilder:
             Operator.NOT_IN,
         ]
 
-        # Determine target type from the value
+        # Determine target type from the value. A membership value is typed by
+        # its first member that can match: a leading ``None`` renders no
+        # placeholder, so it must not leave a numeric field compared as text.
         first_value = value
-        if isinstance(value, (list, tuple)) and len(value) > 0:
+        if op in (Operator.IN, Operator.NOT_IN):
+            members = membership_values(value)
+            first_value = members[0] if members else None
+        elif isinstance(value, (list, tuple)) and len(value) > 0:
             first_value = value[0]
 
         target_type: str | None = None
@@ -1156,7 +1168,9 @@ class SQLQueryBuilder:
             param_start: Starting parameter number for placeholders.
 
         Returns:
-            Tuple of (SQL clause, parameters).
+            Tuple of (SQL clause, parameters). A clause may bind no parameters
+            (``EXISTS``, an empty membership list), so the caller numbers the
+            next placeholder from the length of the list returned.
         """
         param_placeholder = self._get_param_placeholder(param_start)
 
@@ -1176,22 +1190,8 @@ class SQLQueryBuilder:
             return f"{field_expr} LIKE {param_placeholder}", [value]
         elif op == Operator.NOT_LIKE:
             return f"{field_expr} NOT LIKE {param_placeholder}", [value]
-        elif op == Operator.IN:
-            placeholders = ", ".join(
-                [
-                    self._get_param_placeholder(i)
-                    for i in range(param_start, param_start + len(value))
-                ]
-            )
-            return f"{field_expr} IN ({placeholders})", list(value)
-        elif op == Operator.NOT_IN:
-            placeholders = ", ".join(
-                [
-                    self._get_param_placeholder(i)
-                    for i in range(param_start, param_start + len(value))
-                ]
-            )
-            return f"{field_expr} NOT IN ({placeholders})", list(value)
+        elif op in (Operator.IN, Operator.NOT_IN):
+            return self._build_membership_clause(field_expr, op, value, param_start)
         elif op == Operator.BETWEEN:
             placeholder1 = self._get_param_placeholder(param_start)
             placeholder2 = self._get_param_placeholder(param_start + 1)
@@ -1215,6 +1215,41 @@ class SQLQueryBuilder:
             return self._build_starts_with_clause(field_expr, value, param_start)
         else:
             raise ValueError(f"Unsupported operator: {op}")
+
+    def _build_membership_clause(
+        self,
+        field_expr: str,
+        op: Operator,
+        value: Any,
+        param_start: int,
+    ) -> tuple[str, list[Any]]:
+        """Build an ``IN`` / ``NOT IN`` clause that answers as ``Filter.matches`` does.
+
+        Only the members that can match are rendered (see
+        :func:`~dataknobs_data.query.membership_values`): a ``None`` member
+        would make every ``NOT IN`` row ``NULL`` under SQL's three-valued
+        logic. When none are left, the clause is written out rather than
+        rendered as ``()``, which Postgres and DuckDB reject:
+
+        - ``IN`` an empty list is ``FALSE`` --- nothing is in it.
+        - ``NOT IN`` an empty list is ``<field> IS NOT NULL``, not ``TRUE``:
+          ``Filter.matches`` never matches a record whose field has no value,
+          so this is every record that has one. The empty ``STARTS_WITH``
+          prefix takes the same answer for the same reason.
+
+        Neither binds a parameter, so the placeholders that follow are
+        numbered as though the clause were absent.
+        """
+        members = membership_values(value)
+        if not members:
+            if op == Operator.IN:
+                return "FALSE", []
+            return f"{field_expr} IS NOT NULL", []
+        placeholders = ", ".join(
+            self._get_param_placeholder(i) for i in range(param_start, param_start + len(members))
+        )
+        keyword = "IN" if op == Operator.IN else "NOT IN"
+        return f"{field_expr} {keyword} ({placeholders})", members
 
     def _build_starts_with_clause(
         self,

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An `IN` or `NOT_IN` filter's value must be a collection, and anything else
+  is refused when the `Filter` is built.** A list, tuple, set or any other
+  collection that is not a string is accepted, as before. A string used to mean
+  substring match in memory (`"bl" in "blue"`) and a match on any single
+  character in SQL (`IN ('b', 'l', 'u', 'e')`), so the same filter selected
+  different records on different backends. A missing value raised a bare
+  `TypeError` on first use. Both now raise `ValueError` at construction, naming
+  the field, the operator and the type given, whether the filter is built
+  directly, through `Query.filter`, or from `Filter.from_dict` /
+  `Query.from_dict`. A `Filter` holding any accepted collection hashes, including
+  `dict.keys()`, which used to raise `TypeError: unhashable type`.
+
+  **Migration.** Wrap a single value in a list (`["blue"]`), or use `EQ`.
+
 - **A schema declaration is read, or it is refused by name.** A `schema:` in a
   database config, `DatabaseSchema.from_dict`, and an ontology binding's
   `schema:` rows are now read by one function,
@@ -1212,6 +1226,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **An `IN` or `NOT_IN` filter answers the same on every backend.** The SQL
+  backends rendered the list verbatim, and the memory matcher is the contract
+  they now follow:
+
+  | Filter | Used to | Now, everywhere |
+  |---|---|---|
+  | `IN []` | a syntax error on Postgres and DuckDB | matches nothing |
+  | `NOT_IN []` | a syntax error on Postgres and DuckDB; on SQLite, every record, including those with no value | every record whose field has a value |
+  | `NOT_IN [None, "green"]` | nothing, on every SQL backend | every record with a value other than `"green"` |
+  | `IN [None, 5]` over a numeric field | Postgres: `operator does not exist: text = integer` | the records whose value is `5` |
+
+  A `None` member never matches a record, so it is left out of the list a
+  backend is sent. `NOT_IN` selects only records whose field has a value, as
+  `NEQ` does. `Filter`'s value, equality and `to_dict()` are unchanged: a
+  `None` member is ignored where the filter is evaluated, not removed from it.
 
 - **An ontology registry refuses a `resolver:` or `index:` section that is not
   a mapping, by name.** `OntologyRegistry` checks a section's keys before

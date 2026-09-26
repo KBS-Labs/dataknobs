@@ -41,7 +41,7 @@ class TestQueryOperatorMapping:
         query = Query()
 
         # Mixed case now resolves rather than falling through to EQ.
-        query.filter("field", "In", "value")
+        query.filter("field", "In", ["value"])
         assert query.filters[0].operator == Operator.IN
 
         # A spelling that names no operator is refused.
@@ -76,7 +76,9 @@ class TestQueryOperatorMapping:
         ]
 
         for str_op, expected_op in mappings:
-            query = Query().filter("field", str_op, "value")
+            # A membership operator takes a list; a bare string is refused.
+            value = ["value"] if expected_op in (Operator.IN, Operator.NOT_IN) else "value"
+            query = Query().filter("field", str_op, value)
             assert query.filters[0].operator == expected_op, f"Failed for operator '{str_op}'"
 
 
@@ -396,6 +398,58 @@ class TestQueryIntegration:
         assert len(query1.sort_specs) == 1
         assert query1.limit_value == 15
         assert query1.offset_value == 15  # page 2
+
+
+class TestAMembershipValueIsACollection:
+    """``IN`` / ``NOT IN`` take a collection, and anything else is refused when built.
+
+    A string used to mean two different things: substring match in memory
+    (``"bl" in "blue"``) and a match on any one character in SQL
+    (``IN ('b', 'l', 'u', 'e')``). A missing value raised a bare ``TypeError``
+    on first use, naming neither the filter nor the operator.
+    """
+
+    @pytest.mark.parametrize("operator", [Operator.IN, Operator.NOT_IN])
+    @pytest.mark.parametrize("value", ["blue", b"blue", 5, None])
+    def test_a_non_collection_is_refused(self, operator, value):
+        with pytest.raises(ValueError) as excinfo:
+            Filter("colour", operator, value)
+        message = str(excinfo.value)
+        assert "'colour'" in message
+        assert operator.name in message
+        assert type(value).__name__ in message
+
+    def test_a_missing_value_is_refused_at_construction(self):
+        with pytest.raises(ValueError, match="NoneType"):
+            Filter("colour", Operator.IN)
+
+    def test_a_long_value_is_cut_short_in_the_message(self):
+        with pytest.raises(ValueError) as excinfo:
+            Filter("colour", Operator.IN, "x" * 500)
+        assert "x" * 100 not in str(excinfo.value)
+
+    def test_the_fluent_and_serialized_routes_reach_the_refusal(self):
+        with pytest.raises(ValueError, match="'colour'"):
+            Query().filter("colour", "in", "blue")
+        with pytest.raises(ValueError, match="'colour'"):
+            Filter.from_dict({"field": "colour", "operator": "not_in", "value": "blue"})
+        with pytest.raises(ValueError, match="'colour'"):
+            Query.from_dict({"filters": [{"field": "colour", "operator": "in", "value": "blue"}]})
+
+    @pytest.mark.parametrize(
+        "value",
+        [["a"], ("a",), {"a"}, frozenset({"a"}), {"a": 1}.keys(), []],
+        ids=["list", "tuple", "set", "frozenset", "dict_keys", "empty"],
+    )
+    def test_a_collection_is_accepted_and_hashes(self, value):
+        spec = Filter("colour", Operator.IN, value)
+        assert spec.value is value
+        hash(spec)
+
+    def test_other_operators_are_not_checked(self):
+        """``EQ`` against a list compares the list; that is not a membership test."""
+        assert Filter("tags", Operator.EQ, "blue").value == "blue"
+        assert Filter("tags", Operator.EQ, ["a"]).value == ["a"]
 
 
 if __name__ == "__main__":

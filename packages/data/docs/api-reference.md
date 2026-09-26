@@ -455,6 +455,14 @@ query = (Query()
 #   (escape-safe: a '_' or '%' in the prefix matches literally, unlike LIKE)
 ```
 
+`IN` and `NOT_IN` take a collection (a list, tuple, set, or any other
+collection that is not a string). Anything else, including a single string,
+raises `ValueError` when the `Filter` is built; wrap a single value in a list,
+or use `EQ`. Every backend answers a membership filter the same way: nothing
+is in an empty list, and a `None` member matches nothing. `NOT_IN` matches only
+records whose field has a value, as `NEQ` does, so `NOT_IN []` selects every
+record that has one.
+
 ### Querying by identifier and key prefix
 
 A record's identifier is a first-class query target. `Filter("id", ...)`

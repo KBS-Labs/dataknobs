@@ -9,6 +9,8 @@ sorting, pagination, and vector similarity search for database operations.
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -191,13 +193,40 @@ def _hashable(value: Any) -> Any:
     need not be: ``["a"]`` and ``("a",)`` are unequal filters that land on one
     hash, which is an ordinary collision.
     """
-    if isinstance(value, (list, tuple)):
-        return tuple(_hashable(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_hashable(item) for item in value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return frozenset((key, _hashable(item)) for key, item in value.items())
+    if isinstance(value, AbstractSet):
+        return frozenset(_hashable(item) for item in value)
+    if isinstance(value, (str, bytes, bytearray)):
+        return value
+    if isinstance(value, Collection):
+        # Every other collection a membership value may be --- a list, a tuple,
+        # ``dict.values()`` --- is compared in iteration order, so it projects
+        # onto a tuple in that order.
+        return tuple(_hashable(item) for item in value)
     return value
+
+
+#: The two operators whose value is a collection of candidates rather than one.
+_MEMBERSHIP_OPERATORS = frozenset({Operator.IN, Operator.NOT_IN})
+
+#: How much of a refused value's ``repr`` a refusal quotes.
+_REFUSED_VALUE_REPR_LIMIT = 40
+
+
+def membership_values(value: Collection[Any]) -> list[Any]:
+    """The members of an ``IN`` / ``NOT IN`` value that can match a record.
+
+    :meth:`Filter.matches` never matches a ``None`` record value, so a ``None``
+    member can never select anything. SQL disagrees in the way that matters:
+    ``x NOT IN (NULL, ...)`` is ``NULL`` for every ``x``, so one ``None``
+    member empties a whole ``NOT IN``. A backend that renders the list renders
+    these members instead, and handles the list they leave empty.
+
+    The filter keeps the value it was given; this is how it is *evaluated*,
+    not a rewrite of it.
+    """
+    return [member for member in value if member is not None]
 
 
 @dataclass(frozen=True)
@@ -221,6 +250,14 @@ class Filter:
     a caller is supposed to ask with and then raises anyway. The list-valued
     operators are not a corner here --- ``IN`` is the common case --- so
     :meth:`__hash__` is written out over a projected value instead.
+
+    **Membership.** ``IN`` and ``NOT_IN`` take a collection --- a list, tuple,
+    set or any other :class:`~collections.abc.Collection` that is not a string
+    --- and anything else is refused here, when the filter is built. A string
+    used to mean substring match in memory and single-character match in SQL.
+    Every backend then answers as :meth:`matches` does: nothing is in an empty
+    list, a ``None`` member matches nothing, and ``NOT_IN`` selects only
+    records whose field has a value, as ``NEQ`` does.
 
     Attributes:
         field: The field name to filter on
@@ -248,6 +285,28 @@ class Filter:
     field: str
     operator: Operator
     value: Any = None
+
+    def __post_init__(self) -> None:
+        """Refuse a membership value that is not a collection.
+
+        Raises:
+            ValueError: If the operator is ``IN`` or ``NOT_IN`` and the value
+                is not a collection, or is a string. ``ValueError`` because it
+                is what this module raises for a bad operator or sort order,
+                so an ``except ValueError`` around query building catches it.
+        """
+        if self.operator in _MEMBERSHIP_OPERATORS and (
+            isinstance(self.value, (str, bytes, bytearray))
+            or not isinstance(self.value, Collection)
+        ):
+            shown = repr(self.value)
+            if len(shown) > _REFUSED_VALUE_REPR_LIMIT:
+                shown = shown[: _REFUSED_VALUE_REPR_LIMIT - 3] + "..."
+            raise ValueError(
+                f"Filter({self.field!r}, {self.operator.name}) needs a list of values; "
+                f"got {type(self.value).__name__} {shown}. "
+                "Wrap a single value in a list, or use EQ."
+            )
 
     def __hash__(self) -> int:
         """Hash the condition, projecting a container value onto a hashable shape.
