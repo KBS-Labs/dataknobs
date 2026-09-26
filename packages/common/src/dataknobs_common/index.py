@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -85,6 +86,38 @@ def join_non_empty(values: Sequence[Any], join: str) -> str:
     """
     rendered = [str(value).strip() for value in values if value is not None]
     return join.join(value for value in rendered if value)
+
+
+def refuse_non_sequence_of_names(names: object, *, role: str) -> None:
+    """Refuse a string, or anything but a sequence, where field names are declared.
+
+    **A string first, because the annotation admits it.** A ``str`` is a
+    ``Sequence[str]``, and iterating it yields its characters, so
+    ``fields="title"`` reads as five one-letter fields no record carries:
+    silently empty text in one source, and in another a refusal naming the
+    letters rather than the mistake. A number or a mapping raised
+    ``TypeError`` at the first iteration instead. Asked first by every source
+    taking a sequence of names, so the caller is told what they wrote.
+
+    Args:
+        names: What the caller passed as the sequence of names.
+        role: What the sequence is to the caller, for the message ---
+            ``"`fields` of MultiFieldSource"``.
+
+    Raises:
+        ValidationError: *names* is a string, or not a sequence.
+    """
+    if isinstance(names, str):
+        raise ValidationError(
+            f"{role} is the bare string {names!r}; it takes a sequence of field names, "
+            f"and a string is read as its characters rather than as a list of one",
+            context={"value": names, "role": role},
+        )
+    if not isinstance(names, SequenceABC):
+        raise ValidationError(
+            f"{role} is {names!r}; it takes a sequence of field names",
+            context={"value": names, "role": role},
+        )
 
 
 def refuse_unjoinable_field_name(name: str, *, role: str) -> None:

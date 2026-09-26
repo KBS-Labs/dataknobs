@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Generic
 
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.hierarchy import K
-from dataknobs_common.index import IndexItem, join_non_empty
+from dataknobs_common.index import IndexItem, join_non_empty, refuse_non_sequence_of_names
 from dataknobs_common.ontology.sources import AUTHORED_SOURCE_ID
 from dataknobs_common.ontology.tags import ALIAS_FORMS_KEY, ONTOLOGY_ID_KEY
 
@@ -131,6 +131,9 @@ class EntitySourceIndexSource(Generic[K]):
         matters only in that the cheapest comes first; each is a different
         question and none subsumes another.
         """
+        refuse_non_sequence_of_names(
+            self.fields, role=f"`fields` of an index source over ontology {self.ontology.id!r}"
+        )
         chosen = tuple(self.fields)
         unknown = [name for name in chosen if name not in TEXT_FIELDS]
         if unknown or not chosen:

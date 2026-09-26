@@ -385,3 +385,20 @@ async def test_a_source_over_a_database_closes_the_read_it_opened(
         assert database.held == 1, "the read is open while the source is being read"
 
     assert database.held == 0, "closing the source did not close the read"
+
+
+@pytest.mark.parametrize("fields", ["title", "a,b"], ids=["a-name", "a-comma-list"])
+async def test_a_bare_string_of_fields_is_refused_by_its_own_name(
+    catalogue: AsyncMemoryDatabase, fields: str
+) -> None:
+    """``MultiFieldSource(db, "title")`` built, over the fields ``t, i, t, l, e``.
+
+    A string is a ``Sequence[str]``, so nothing stopped it, and every row then
+    composed empty text from five fields no record carries. ``"a,b"`` reached
+    the comma refusal instead, which names a different mistake than the one
+    made: the caller meant two names and wrote one string.
+    """
+    with pytest.raises(ValidationError, match=f"bare string {fields!r}") as refused:
+        MultiFieldSource(catalogue, fields)
+
+    assert "comma" not in str(refused.value)

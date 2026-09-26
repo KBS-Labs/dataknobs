@@ -613,3 +613,17 @@ async def test_closing_a_stream_whose_rows_carry_text_reports_nothing(
                 break
 
     assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+
+
+async def test_a_bare_string_of_fields_is_refused_by_its_own_name(tmp_path: Path) -> None:
+    """``fields="name"`` is a list of four one-letter names, so say what it was.
+
+    The refusal used to arrive from the field check, naming ``'a', 'e', 'm',
+    'n'``, which is not the mistake the caller made.
+    """
+    catalog = await _catalog(tmp_path)
+
+    with pytest.raises(ValidationError, match="bare string 'name'") as refused:
+        EntitySourceIndexSource(catalog, fields="name")
+
+    assert "'a', 'e'" not in str(refused.value)

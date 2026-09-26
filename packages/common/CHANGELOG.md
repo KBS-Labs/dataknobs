@@ -1805,6 +1805,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A bare string where a list of field names is declared is refused.**
+  `EntitySourceIndexSource(onto, fields="name")` used to be refused as four
+  unknown fields named `'a', 'e', 'm', 'n'`, and `fields=5` raised `TypeError`.
+  Both now raise `ValidationError` naming the value given. The check is
+  `refuse_non_sequence_of_names`, in `dataknobs_common.index`, and
+  `dataknobs-data`'s `MultiFieldSource` and the registry's `index.fields:` use
+  the same one. **Migration:** pass a list of one, `fields=["name"]`.
+
 - **An ontology attribute row, and a `resolver:` section, are read or
   refused.** Each value in an attribute row was coerced rather than checked,
   and a key nothing read loaded and was discarded. The worst case was

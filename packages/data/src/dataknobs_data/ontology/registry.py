@@ -50,7 +50,7 @@ from dataknobs_common.ontology import (
     refuse_unbuildable_rungs,
     split_qualified,
 )
-from dataknobs_common.index import AliasSource, AsyncIndexSource
+from dataknobs_common.index import AliasSource, AsyncIndexSource, refuse_non_sequence_of_names
 from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -1963,18 +1963,9 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         fields = block.get("fields")
         if fields is not None:
             # A bare scalar in YAML is a string, so `fields: name` is what a
-            # consumer writes by hand -- and `tuple("name")` is four
-            # one-character field names, so the adapter's refusal would name
-            # 'a', 'e', 'm', 'n' rather than the mistake. A non-sequence raised
-            # `TypeError` past a door whose every other refusal is a
-            # `ValidationError` about a document.
-            if isinstance(fields, str) or not isinstance(fields, Sequence):
-                raise ValidationError(
-                    f"ontology {ontology.id!r} declares `index.fields: {fields!r}`; it takes "
-                    f"a list of entity field names, and a bare string is one name spelled "
-                    f"as its characters rather than a list of one",
-                    context={"ontology_id": ontology.id, "fields": fields},
-                )
+            # consumer writes by hand. The adapter asks the same question, but
+            # asked here the refusal names the document key.
+            refuse_non_sequence_of_names(fields, role=f"ontology {ontology.id!r}'s `index.fields:`")
             configured["fields"] = tuple(fields)
 
         join = block.get("join")

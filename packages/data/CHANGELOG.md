@@ -1238,6 +1238,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`MultiFieldSource` refuses a bare string of field names.**
+  `MultiFieldSource(db, "title")` built a source over the fields
+  `t, i, t, l, e`, and every row composed empty text. It now raises
+  `ValidationError` naming the string, and `"a,b"` is refused as a bare string
+  rather than as a field name holding a comma. Pass a list: `["title"]`.
+
 - **`dataknobs-data[postgres]` installs from wheels.** The extra required the
   `psycopg2` distribution, which is an sdist on macOS and Linux and builds only
   where `pg_config` is on the path, so the install failed on a machine without

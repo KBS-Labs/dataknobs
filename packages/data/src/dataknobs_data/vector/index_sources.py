@@ -27,7 +27,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dataknobs_common.async_iter import aclosing_iter
-from dataknobs_common.index import IndexItem, join_non_empty, refuse_unjoinable_field_name
+from dataknobs_common.index import (
+    IndexItem,
+    join_non_empty,
+    refuse_non_sequence_of_names,
+    refuse_unjoinable_field_name,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -159,11 +164,16 @@ class MultiFieldSource:
     declared: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        """Refuse a field name that :attr:`source_field` could not carry.
+        """Refuse a bare string of names, and a name :attr:`source_field` could not carry.
 
-        The names are comma-joined into that key, so one holding a comma
-        would be read back as several (see :attr:`source_field`).
+        A string is a ``Sequence[str]``, so ``fields="title"`` built a source
+        over the fields ``t, i, t, l, e`` and composed empty text for every
+        row; it is refused first, so ``"a,b"`` is named as the string it is
+        rather than as a field holding a comma. The names are comma-joined
+        into that key, so one holding a comma would be read back as several
+        (see :attr:`source_field`).
         """
+        refuse_non_sequence_of_names(self.fields, role="`fields` of MultiFieldSource")
         for name in self.fields:
             refuse_unjoinable_field_name(name, role="text field")
 
