@@ -30,18 +30,23 @@ from dataknobs_data.query import (
 from dataknobs_data.query_logic import QueryBuilder
 
 
+def _operand(operator: Operator, scalar: object) -> object:
+    """A value ``operator`` accepts: membership takes a list, and a bare scalar is refused."""
+    return [scalar] if operator in (Operator.IN, Operator.NOT_IN) else scalar
+
+
 class TestAnOperatorTheEnumHasIsReachableFromTheFluentPath:
     """The drift that produced the bug, guarded at its source."""
 
     @pytest.mark.parametrize("member", list(Operator), ids=lambda m: m.name)
     def test_every_member_is_reachable_by_its_own_value(self, member: Operator) -> None:
-        query = Query().filter("field", member.value, "x")
+        query = Query().filter("field", member.value, _operand(member, "x"))
 
         assert query.filters[0].operator is member
 
     @pytest.mark.parametrize("member", list(Operator), ids=lambda m: m.name)
     def test_every_member_is_accepted_as_itself(self, member: Operator) -> None:
-        query = Query().filter("field", member, "x")
+        query = Query().filter("field", member, _operand(member, "x"))
 
         assert query.filters[0].operator is member
 
@@ -58,8 +63,10 @@ class TestAnOperatorTheEnumHasIsReachableFromTheFluentPath:
     @pytest.mark.parametrize("member", list(Operator), ids=lambda m: m.name)
     def test_the_fluent_path_and_from_dict_agree(self, member: Operator) -> None:
         """One vocabulary, not two, for the two ways to name an operator."""
-        fluent = Query().filter("field", member.value, "x").filters[0]
-        deserialized = Filter.from_dict({"field": "field", "operator": member.value, "value": "x"})
+        fluent = Query().filter("field", member.value, _operand(member, "x")).filters[0]
+        deserialized = Filter.from_dict(
+            {"field": "field", "operator": member.value, "value": _operand(member, "x")}
+        )
 
         assert fluent.operator is deserialized.operator is member
 
@@ -76,7 +83,7 @@ class TestTheQueryBuilderReadsTheSameVocabulary:
 
     @pytest.mark.parametrize("member", list(Operator), ids=lambda m: m.name)
     def test_every_member_is_reachable(self, member: Operator) -> None:
-        builder = QueryBuilder().where("field", member.value, "x")
+        builder = QueryBuilder().where("field", member.value, _operand(member, "x"))
 
         assert builder.root_condition.filter.operator is member  # type: ignore[union-attr]
 
@@ -91,7 +98,7 @@ class TestTheQueryBuilderReadsTheSameVocabulary:
         ],
     )
     def test_the_aliases_the_fluent_path_takes(self, spelling: str, expected: Operator) -> None:
-        builder = QueryBuilder().where("field", spelling, "x")
+        builder = QueryBuilder().where("field", spelling, _operand(expected, "x"))
 
         assert builder.root_condition.filter.operator is expected  # type: ignore[union-attr]
 
@@ -166,7 +173,7 @@ class TestTheSpellingsThatAlwaysWorkedStillDo:
         ],
     )
     def test_alias(self, spelling: str, expected: Operator) -> None:
-        assert Query().filter("f", spelling, 1).filters[0].operator is expected
+        assert Query().filter("f", spelling, _operand(expected, 1)).filters[0].operator is expected
 
     @pytest.mark.parametrize(
         ("spelling", "expected"),

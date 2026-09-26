@@ -455,6 +455,20 @@ query = (Query()
 #   (escape-safe: a '_' or '%' in the prefix matches literally, unlike LIKE)
 ```
 
+`IN` and `NOT_IN` take a collection (a list, tuple, set, `dict.keys()`, or
+any other collection that is neither a string nor a mapping). Anything else
+raises `ValueError` when the `Filter` is built: wrap a single value in a list
+or use `EQ`, and pass a mapping's keys rather than the mapping.
+
+The SQL backends (SQLite, DuckDB, PostgreSQL) and the backends that filter in
+memory (memory, file, S3) answer a membership filter the same way: nothing is
+in an empty list, and a `None` member matches nothing. `NOT_IN` matches only
+records whose field has a value, as `NEQ` does, so `NOT_IN []` selects every
+record that has one. Elasticsearch differs in two ways: its `NOT_IN` also
+matches a document that lacks the field, as each of its negations does, and it
+chooses a string field's exact-match (`.keyword`) path from the list's first
+member only.
+
 ### Querying by identifier and key prefix
 
 A record's identifier is a first-class query target. `Filter("id", ...)`

@@ -153,6 +153,20 @@ class TestFilter:
         assert listed.to_dict()["value"] == ["active", "pending"]
         assert listed.matches("active") is True
 
+    def test_a_bytearray_value_hashes_as_the_equal_bytes_value(self):
+        """``bytearray`` does not hash, and it equals the ``bytes`` it holds.
+
+        The projection passed it through untouched, so a filter holding one
+        raised ``TypeError: unhashable type: 'bytearray'`` from a hash the
+        type promises. Projected onto ``bytes``, equal filters hash equal.
+        """
+        mutable = Filter("blob", Operator.EQ, bytearray(b"x"))
+        frozen = Filter("blob", Operator.EQ, b"x")
+
+        assert mutable == frozen
+        assert hash(mutable) == hash(frozen)
+        assert isinstance(mutable.value, bytearray)
+
 
 class TestSortSpec:
     """Test SortSpec class."""
@@ -260,7 +274,9 @@ class TestQuery:
 
         for str_op, enum_op in operators:
             query.clear_filters()
-            query.filter("field", str_op, "value")
+            # A membership operator takes a list; a bare string is refused.
+            value = ["value"] if enum_op in (Operator.IN, Operator.NOT_IN) else "value"
+            query.filter("field", str_op, value)
             assert query.filters[0].operator == enum_op
 
     def test_query_clear_methods(self):
