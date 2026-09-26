@@ -260,7 +260,9 @@ class TestQuery:
 
         for str_op, enum_op in operators:
             query.clear_filters()
-            query.filter("field", str_op, "value")
+            # A membership operator takes a list; a bare string is refused.
+            value = ["value"] if enum_op in (Operator.IN, Operator.NOT_IN) else "value"
+            query.filter("field", str_op, value)
             assert query.filters[0].operator == enum_op
 
     def test_query_clear_methods(self):
