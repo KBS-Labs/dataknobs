@@ -194,7 +194,7 @@ def _bad_request_response(body: str) -> FakeResponse:
     carries no marker, so overflow is detected only once the body is folded in
     (and a non-overflow body stays a plain ``ValidationError``).
     """
-    return FakeResponse(400, text=body, raise_exc=make_client_response_error(400, "Bad Request"))
+    return _error_response(400, "Bad Request", body)
 
 
 # ---------------------------------------------------------------------------
