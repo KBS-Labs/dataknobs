@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An ontology `index:` block with `aliases: true` is refused.** It indexed
+  each surface form as a row of its own under the entity's id, and every vector
+  store the block can open keeps one row per id, so the index held one row per
+  entity carrying whichever form came last, and the text `fields:` composed was
+  lost. The refusal is a `ValidationError` raised at load, before the store is
+  opened, whatever `fields:` says. `aliases: false` still loads and does
+  nothing.
+
+  **Migration:** to index aliases, remove `aliases: true` and list `aliases` in
+  `fields:`, for example `fields: [name, description, aliases]`. Each entity is
+  then one row whose text is followed by the forms its other fields do not
+  already contain (`Bolt -- a fastener -- Also called: Hex bolt`). Its source
+  field reads `name,description,aliases`. A caller who needs one item per form
+  can still build `AliasSource` in Python; its forms still collide in a store
+  keyed on id.
+
 - **The `postgres` extra no longer installs `sqlalchemy`.** Nothing in this
   package imports it. **Migration:** code that imports `sqlalchemy` and relied
   on this extra to install it must declare that dependency itself.
@@ -837,6 +853,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does.
 
 ### Added
+
+- **`index.aliases_label:`** sets what goes in front of an entity's folded
+  surface forms when `aliases` is in `fields:`. It defaults to
+  `Also called: `, and `""` gives the forms bare. It is refused when `aliases`
+  is not in `fields:`, since nothing would read it.
 
 - **`HoldingStreamDatabase`**, in `dataknobs_data.testing` -- an
   `AsyncDatabase` whose `stream_read` acquires something at the top and

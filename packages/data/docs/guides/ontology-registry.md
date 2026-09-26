@@ -968,7 +968,7 @@ refuse every euclidean store somebody configured on purpose.
 
 ### What the `index:` block reads
 
-Six keys, and **a key that is not one of them is refused**. A block is
+Seven keys, and **a key that is not one of them is refused**. A block is
 configuration a consumer wrote, and one the registry accepts while acting on it
 in no way is the same silent drop the `embedder:` refusal above exists for —
 `metirc: l2` would otherwise build an index with no metric check and report
@@ -979,45 +979,24 @@ success.
 | `store:` | Where the vectors go. No default; resolved through `$resource` and released by `close()`. |
 | `embedder:` | A claim, checked against the injected embedder's `model_id` rather than built. Reads `model:` and `provider:`, and refuses anything else — see [what the block reads](#what-the-embedder-block-reads). Refused with nothing injected — see above. |
 | `metric:` | A claim about the store, checked rather than applied. |
-| `fields:` | Which entity fields compose the embedded text, in order. `name` and `description` are the two an entity carries free text in; anything else is refused at load. Defaults to `[name]`. |
+| `fields:` | Which entity fields compose the embedded text, in order: `name`, `description` and `aliases`. Anything else is refused at load, and so is a bare string (`fields: name`), which would be read as its letters. `aliases` [folds the entity's surface forms into its own row](#indexing-aliases). Defaults to `[name]`. |
 | `join:` | What goes between two non-empty field values. Applied *between* them, so an entity carrying one of two produces no dangling separator. Defaults to ` -- `. |
-| `aliases:` | `true` wraps the source so each surface form is indexed as its own item under the entity's id. See the warning below before using it. Checked for being a boolean, not for truthiness — `aliases: "no"` is truthy. |
+| `aliases:` | `false`, or absent, does nothing. **`true` is refused** — see [indexing aliases](#indexing-aliases) for why, and for the route that replaces it. Checked for being a boolean, not for truthiness — `aliases: "no"` is truthy. |
+| `aliases_label:` | What goes in front of the folded forms. Defaults to `Also called: `; `""` gives the forms bare. Refused unless `aliases` is in `fields:`, where it would configure nothing. |
 
 ```yaml
   index:
     store:
       $resource: catalog_index
       type: vector_stores
-    fields: [name, description]
+    fields: [name, description, aliases]
     join: " -- "
-    aliases: true
 ```
-
-!!! warning "`aliases: true` collapses in a store keyed on id"
-
-    The decorator yields one item per surface form, all carrying the entity's
-    id, and a vector store upserts on id conflict — so three forms leave **one**
-    row, holding the last form rather than the entity's name. Which id the extra
-    rows should take is not settled by any ruling this layer can read. Use it
-    where the reader de-duplicates by id, or where the store is keyed on
-    something else, until it is.
-
-    The surviving row still says what it holds. A form row records the alias
-    key (`dk_alias_forms`) as its source field, so its hit answers
-    `vector_field == "dk_alias_forms"` with the alias among that metadata
-    key's values. An entity with no aliases keeps the leaf's answer:
-    `"name,description"` for `fields: [name, description]`.
-
-    The two answers name different kinds of thing. `dk_alias_forms` is a
-    metadata key, and it is on the hit. `name` and `description` are entity
-    attributes, and they are not. So a reader asking whether a hit matched
-    through an alias tests `vector_field == "dk_alias_forms"`, not whether the
-    name mentions aliases.
 
 !!! note "A `fields:` the rows do not fill is reported at the build, not at load"
 
     `fields:` is checked at load for *naming* something an entity carries —
-    `name` and `description`, and nothing else. It cannot be checked for being
+    `name`, `description` and `aliases`, and nothing else. It cannot be checked for being
     *filled*: a live binding's projection fills whatever columns the consumer's
     table has, so `fields: [description]` over a table without that column is a
     legitimate document right up until the rows arrive.
@@ -1043,6 +1022,30 @@ store's own metric and so needs the store it is about.
 Every refusal here raises `ValidationError` — including the two that used to
 escape as bare `ValueError`s, a misspelled `metric:` and a metric the store is
 not serving. What is being refused in each case is a document.
+
+#### Indexing aliases
+
+List `aliases` in `fields:`. Each entity is still **one** row, and its surface
+forms are folded into that row's text, at the position `fields:` gives them,
+behind `aliases_label:`:
+
+```text
+Bolt -- a fastener -- Also called: Hex bolt; Carriage bolt
+```
+
+A form the rest of the row already holds is left out: the comparison is a
+case-insensitive substring test against the other chosen fields, so `BOLT` and
+`Fastener` add nothing above. The known cost of that rule is a form that is a
+substring of a *different* word — `Eagle` is left out beside `Beagle`. An
+entity with nothing to add gets no label. The row's source field names all
+three fields, `"name,description,aliases"`. Python callers composing their own
+source can fold forms the same way with `dataknobs_common.index.fold_forms`.
+
+**Why `aliases: true` is refused.** It wrote every surface form as a row of its
+own under the entity's id, and a vector store keeps one row per id — every
+store this block can open upserts on id conflict. So the index held one row per
+entity, carrying whichever form came last, and the text `fields:` composed was
+lost. The refusal names the route above, and happens before the store opens.
 
 ## Resolving against the vocabulary
 

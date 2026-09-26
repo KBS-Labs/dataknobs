@@ -47,17 +47,34 @@ from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.exceptions import ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ALIAS_FORM_SEPARATOR",
+    "DEFAULT_ALIASES_LABEL",
     "AliasSource",
     "AsyncIndexSource",
     "CallableSource",
     "IndexItem",
     "MappingSource",
+    "fold_forms",
 ]
+
+#: What goes between two surface forms folded into one text.
+#:
+#: The value the retrieval measurement scored, and published rather than
+#: configurable because nothing has varied it. A key beside the label is the
+#: small addition if a caller needs another.
+ALIAS_FORM_SEPARATOR = "; "
+
+#: What goes in front of the folded forms, unless a caller says otherwise.
+#:
+#: Also the measured value. Whether a label helps retrieval at all is not
+#: settled, which is why the empty string is an accepted label rather than a
+#: mistake: it is the configuration that would measure it.
+DEFAULT_ALIASES_LABEL = "Also called: "
 
 
 def join_non_empty(values: Sequence[Any], join: str) -> str:
@@ -86,6 +103,54 @@ def join_non_empty(values: Sequence[Any], join: str) -> str:
     """
     rendered = [str(value).strip() for value in values if value is not None]
     return join.join(value for value in rendered if value)
+
+
+def fold_forms(
+    forms: Iterable[object] | str, *, beside: str, label: str = DEFAULT_ALIASES_LABEL
+) -> str:
+    """The forms *beside* does not already hold, joined, behind a label --- or ``""``.
+
+    How an entity's surface forms go into its own row rather than into rows of
+    their own. A store keyed on id keeps one row per id, so forms written as
+    items of their own collapse into whichever came last; folded into the
+    entity's text, they are embedded with it and the row survives whole.
+
+    **"Already holds" is casefolded containment, not equality.** That is the
+    rule the retrieval measurement scored: a form repeating what the text says
+    adds nothing a query could match on. Its known hazard is a form that is a
+    substring of a different word --- ``"Eagle"`` is dropped beside
+    ``"Beagle"``. Whole-word matching is the obvious alternative and it is
+    unmeasured, so it is not taken here.
+
+    ``""`` rather than a bare label when nothing survives, so
+    :func:`join_non_empty` drops the slot and no separator or label dangles.
+    Forms are not de-duplicated among themselves, which is also as measured.
+
+    **Here beside :func:`join_non_empty`, and public**, for the reason that
+    helper gives: it is a pure algorithm over values. A caller composing its
+    own source can fold forms the way the configured route does rather than
+    copying it.
+
+    Args:
+        forms: The surface forms, in order. Each is rendered with ``str`` and
+            stripped; ``None`` and blank forms are dropped. A bare string is
+            one form, not its characters, which is the alias key's own rule.
+        beside: The text the forms are folded into --- what the row embeds
+            besides them. Compared with, never included in, the result.
+        label: What goes in front of the forms. ``""`` gives the forms bare.
+
+    Returns:
+        The label and the surviving forms joined by
+        :data:`ALIAS_FORM_SEPARATOR`, or ``""`` where none survived.
+    """
+    if isinstance(forms, str):
+        forms = (forms,)
+    held = beside.casefold()
+    rendered = [str(form).strip() for form in forms if form is not None]
+    kept = [form for form in rendered if form and form.casefold() not in held]
+    if not kept:
+        return ""
+    return f"{label}{ALIAS_FORM_SEPARATOR.join(kept)}"
 
 
 def refuse_non_sequence_of_names(names: object, *, role: str) -> None:
@@ -448,7 +513,7 @@ class AliasSource:
         from a ``finally``, and ``RecordFieldSource`` over PostgreSQL yields
         from inside an acquired connection and an open transaction.
         Measured with this class in front of the ontology adapter --- the
-        composition an ``index:`` block with ``aliases: true`` builds --- the
+        composition an ``index:`` block with ``aliases: true`` used to build --- the
         leaf's report arrived after the consumer had already handled the
         failure instead of with it.
         """

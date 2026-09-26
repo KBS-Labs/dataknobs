@@ -349,6 +349,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An entity's aliases can be indexed in its own row.** `aliases` joins
+  `TEXT_FIELDS`, so `EntitySourceIndexSource(onto, fields=("name",
+  "description", "aliases"))` composes one item per entity, and its text is
+  followed by the surface forms the other chosen fields do not already contain,
+  behind a label: `Bolt -- a fastener -- Also called: Hex bolt; Carriage bolt`.
+  The slot sits where `fields` puts it, and an entity with nothing to add gets
+  no label. "Already contain" is a case-insensitive substring test, so a form
+  that is part of a different word (`Eagle` beside `Beagle`) is left out. The
+  item's `source_field` reads `"name,description,aliases"`.
+
+  The new `aliases_label` field sets the label: `None` means the default,
+  `DEFAULT_ALIASES_LABEL` (`"Also called: "`), and `""` gives the forms bare.
+  A label that is not a string, or one given while `aliases` is not in
+  `fields`, is refused with `ValidationError`, since nothing would read it.
+
+  The folding is published as `fold_forms(forms, *, beside, label=...)` in
+  `dataknobs_common.index`, with `ALIAS_FORM_SEPARATOR` (`"; "`) and
+  `DEFAULT_ALIASES_LABEL`, so a caller composing its own source can fold forms
+  the same way. `AliasSource` is unchanged: its forms still share the entity's
+  id and still collide in a store keyed on id.
+
 - **`IndexItem.source_field`: an item can say where its own text came from.**
   Optional and `None` by default, which leaves the source's `source_field`
   to describe the item, so every existing construction and comparison is

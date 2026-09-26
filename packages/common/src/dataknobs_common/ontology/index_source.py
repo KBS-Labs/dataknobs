@@ -29,7 +29,13 @@ from typing import TYPE_CHECKING, Generic
 
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.hierarchy import K
-from dataknobs_common.index import IndexItem, join_non_empty, refuse_non_sequence_of_names
+from dataknobs_common.index import (
+    DEFAULT_ALIASES_LABEL,
+    IndexItem,
+    fold_forms,
+    join_non_empty,
+    refuse_non_sequence_of_names,
+)
 from dataknobs_common.ontology.sources import AUTHORED_SOURCE_ID
 from dataknobs_common.ontology.tags import ALIAS_FORMS_KEY, ONTOLOGY_ID_KEY
 
@@ -54,11 +60,18 @@ STREAM_BATCH_SIZE = 1000
 
 #: The ``Entity`` attributes ``fields`` may name.
 #:
-#: Two, and they are the two an entity carries free text in. Validated at
-#: construction rather than at the first read, so the caller is told while
-#: still holding the mistake --- the alternative is a stream that yields empty
-#: text for every row and looks like an empty vocabulary.
-TEXT_FIELDS = ("name", "description")
+#: The three an entity carries text in: two strings, and ``aliases``, a list
+#: of surface forms. The list is not rendered as a value --- its ``str()`` is
+#: a Python repr --- but folded by :func:`~dataknobs_common.index.fold_forms`,
+#: so an entity's forms are embedded in its own row rather than in rows of
+#: their own that a store keyed on id collapses. Validated at construction
+#: rather than at the first read, so the caller is told while still holding
+#: the mistake --- the alternative is a stream that yields empty text for
+#: every row and looks like an empty vocabulary.
+TEXT_FIELDS = ("name", "description", "aliases")
+
+#: The one list-valued member of :data:`TEXT_FIELDS`, folded rather than joined.
+ALIASES_FIELD = "aliases"
 
 
 # `eq=False` for the reason the pure sources carry: `fields` is declared a
@@ -80,7 +93,9 @@ class EntitySourceIndexSource(Generic[K]):
         ontology: The vocabulary to enumerate. Its ``entities`` supplies the
             rows and its ``qualify`` supplies the id space.
         fields: Which of :data:`TEXT_FIELDS` to read off each entity, in
-            order. Validated at construction.
+            order. Validated at construction. ``aliases`` folds the forms the
+            other chosen fields do not already hold into this row, behind
+            :attr:`aliases_label`, at its position in the order.
         join: What to put between two non-empty field values. Applied
             **between** values rather than after each, so an entity carrying
             only one of two fields produces no dangling separator --- which is
@@ -89,12 +104,17 @@ class EntitySourceIndexSource(Generic[K]):
             the one a decorating source is pointed at. Defaulted to the
             published constant rather than spelled, because it is one key with
             two ends.
+        aliases_label: What goes in front of the folded forms. ``None``
+            means :data:`~dataknobs_common.index.DEFAULT_ALIASES_LABEL`, and
+            ``""`` gives the forms bare. Refused unless ``aliases`` is in
+            :attr:`fields`, where it would configure nothing.
     """
 
     ontology: AsyncOntology[K]
     fields: Sequence[str] = ("name",)
     join: str = " -- "
     aliases_key: str = ALIAS_FORMS_KEY
+    aliases_label: str | None = None
 
     #: Resolved once at construction, so the per-item read is a lookup rather
     #: than a repeated membership test. Not a parameter.
@@ -125,9 +145,9 @@ class EntitySourceIndexSource(Generic[K]):
     _source_id: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Refuse a field name, an unenumerable source, and an undeclared type.
+        """Refuse bad fields or label, an unenumerable source, and an undeclared type.
 
-        Three refusals, all at construction, all naming the source. The order
+        Every refusal at construction, all naming the source. The order
         matters only in that the cheapest comes first; each is a different
         question and none subsumes another.
         """
@@ -139,11 +159,32 @@ class EntitySourceIndexSource(Generic[K]):
         if unknown or not chosen:
             raise ValidationError(
                 f"index source over ontology {self.ontology.id!r} was asked for "
-                f"{sorted(unknown) or 'no'} entity field(s); an entity carries free text "
+                f"{sorted(unknown) or 'no'} entity field(s); an entity carries text "
                 f"in {', '.join(TEXT_FIELDS)} and nothing else",
                 context={"ontology_id": self.ontology.id, "fields": list(chosen)},
             )
         object.__setattr__(self, "_fields", chosen)
+
+        if self.aliases_label is not None:
+            # A label is read only by the fold, so one given without the field
+            # it labels is configuration nothing acts on -- the silent drop the
+            # registry's key check refuses, refused here so that a Python
+            # caller and a document get one answer.
+            if not isinstance(self.aliases_label, str):
+                raise ValidationError(
+                    f"index source over ontology {self.ontology.id!r} was given "
+                    f"aliases_label={self.aliases_label!r}; it is what goes in front of "
+                    f"the folded forms, so it is a string",
+                    context={"ontology_id": self.ontology.id, "aliases_label": self.aliases_label},
+                )
+            if ALIASES_FIELD not in chosen:
+                raise ValidationError(
+                    f"index source over ontology {self.ontology.id!r} was given "
+                    f"aliases_label={self.aliases_label!r} but does not compose from "
+                    f"{ALIASES_FIELD!r}, so nothing would read it; list {ALIASES_FIELD!r} "
+                    f"in its fields",
+                    context={"ontology_id": self.ontology.id, "fields": list(chosen)},
+                )
 
         description = self.ontology.entities.describe()
         declared = description.declares
@@ -385,5 +426,28 @@ class EntitySourceIndexSource(Generic[K]):
         stripped afterwards, which is what keeps one value from arriving with
         a separator hanging off it. Over a real vocabulary most entities carry
         a name and no description, so this is the ordinary path.
+
+        ``aliases`` is folded rather than read: its slot holds the forms that
+        the **other** chosen fields, composed, do not already contain --- the
+        text the row embeds besides them, whichever side of the slot it sits
+        on. An entity with nothing to add gets an empty slot, which the join
+        drops, so no label is left hanging.
         """
-        return join_non_empty([getattr(entity, name, "") for name in self._fields], self.join)
+        values: list[object] = [
+            getattr(entity, name, "") for name in self._fields if name != ALIASES_FIELD
+        ]
+        if ALIASES_FIELD not in self._fields:
+            return join_non_empty(values, self.join)
+        label = DEFAULT_ALIASES_LABEL if self.aliases_label is None else self.aliases_label
+        folded = fold_forms(
+            getattr(entity, ALIASES_FIELD, None) or (),
+            beside=join_non_empty(values, self.join),
+            label=label,
+        )
+        return join_non_empty(
+            [
+                folded if name == ALIASES_FIELD else getattr(entity, name, "")
+                for name in self._fields
+            ],
+            self.join,
+        )
