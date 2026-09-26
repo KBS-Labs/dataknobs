@@ -1241,6 +1241,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer, such as `"name,description"`, and a surface-form row reads the
   alias key, with its text among that key's values.
 
+- **`RecordFieldSource` and `MultiFieldSource` refuse a field name holding a
+  comma** with `ValidationError` at construction. Each writes its field
+  names, comma-joined, into the rows' `source_field`, and that key's reader
+  splits on commas, so a name like `"name,alias"` was read back as two fields
+  no record carries. Both sources are built only from Python, so no
+  configuration is affected. To migrate, rename the record field.
+
 - **An `IN` or `NOT_IN` filter answers the same on every SQL backend as it does
   in memory.** The SQL backends rendered the list verbatim, and the memory
   matcher is the contract they now follow:

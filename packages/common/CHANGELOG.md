@@ -18,7 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composed from the inner source's fields. The canonical item carries
   nothing and keeps the source's answer. Forms still share the entity's id
   and still collide in a store keyed on id; the row that survives now names
-  the field its text is in.
+  the field its text is in. A form row's answer is a metadata key, which is
+  on the row, while the canonical row's answer names the inner source's
+  fields.
+
+  **An `aliases_field` containing a comma is refused** with `ValidationError`
+  at construction. The store reads `source_field` as comma-joined field names,
+  so such a key would name fields no record carries. It is reachable only by
+  constructing `AliasSource` directly; an `index:` block always uses
+  `dk_alias_forms`. To migrate, rename the metadata key the inner source
+  writes its forms under. The check is `refuse_unjoinable_field_name`, in
+  `dataknobs_common.index`, and `dataknobs-data`'s table sources use the same
+  one.
 
 - **`FieldType.lookup(value)`: one reading of a declared record type.** It
   returns the member a value names (the member itself, or its name in any
@@ -342,9 +353,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Optional and `None` by default, which leaves the source's `source_field`
   to describe the item, so every existing construction and comparison is
   unchanged. It is for a source that emits items of more than one kind,
-  such as a decorator, and for a `CallableSource`, which had no way to state
-  a field name. An index writes it beside the item's text in preference to
-  the source's answer.
+  such as a decorator. An index writes it beside the item's text in
+  preference to the source's answer.
+
+- **`MappingSource` and `CallableSource` take `source_field`.** Optional and
+  `None` by default. It is the name an index records beside every row the
+  source writes, as the composing sources already state. Neither source can
+  know it, so only the caller can say it. An item's own
+  `IndexItem.source_field` overrides it for that item.
 
 - **`aclosing_iter`**, in `dataknobs_common.async_iter` -- `contextlib.aclosing`
   for the population where *is it closable* is not answerable at the call

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dataknobs_common.async_iter import aclosing_iter
-from dataknobs_common.index import IndexItem, join_non_empty
+from dataknobs_common.index import IndexItem, join_non_empty, refuse_unjoinable_field_name
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -80,6 +80,10 @@ class RecordFieldSource:
     field: str
     query: Query | None = None
     declared: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        """Refuse a field name that :attr:`source_field` could not carry."""
+        refuse_unjoinable_field_name(self.field, role="text field")
 
     @property
     def source_field(self) -> str:
@@ -153,6 +157,15 @@ class MultiFieldSource:
     join: str = DEFAULT_JOIN
     query: Query | None = None
     declared: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        """Refuse a field name that :attr:`source_field` could not carry.
+
+        The names are comma-joined into that key, so one holding a comma
+        would be read back as several (see :attr:`source_field`).
+        """
+        for name in self.fields:
+            refuse_unjoinable_field_name(name, role="text field")
 
     @property
     def source_field(self) -> str:

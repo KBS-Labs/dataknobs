@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.index import (
     AliasSource,
     AsyncIndexSource,
@@ -120,19 +121,6 @@ async def test_a_form_equal_to_the_canonical_text_is_not_yielded_twice() -> None
 # --------------------------------------------------------------------------
 
 
-class _Composed(CallableSource):
-    """A source that can say what its text was composed from.
-
-    ``source_field`` is not a protocol member --- an index reads it with a
-    fall-back --- so a source either has one or does not, and the decorator
-    has to be right over both.
-    """
-
-    @property
-    def source_field(self) -> str:
-        return "name,description"
-
-
 def test_the_decorator_states_the_inner_source_field_as_the_inner_spells_it() -> None:
     """Forwarded verbatim, and ``None`` over an inner source with nothing to say.
 
@@ -142,7 +130,7 @@ def test_the_decorator_states_the_inner_source_field_as_the_inner_spells_it() ->
     inner's value is forwarded as it is spelled: its key's reader splits on
     commas, and a re-join here would be a second encoder of one grammar.
     """
-    inner = _Composed(lambda: [])
+    inner = CallableSource(lambda: [], source_field="name,description")
 
     assert AliasSource(inner, ALIASES).source_field == "name,description"
     assert AliasSource(CallableSource(lambda: []), ALIASES).source_field is None
@@ -166,6 +154,36 @@ async def test_a_form_says_it_came_from_the_alias_field_and_the_canonical_item_d
         ("Acme Corporation", ALIASES),
     ]
     assert all(item.metadata == {ALIASES: ["ACME", "Acme Corporation"]} for item in items)
+
+
+def test_the_two_plain_sources_state_the_field_they_were_given() -> None:
+    """A mapping or a callable can name what its text is, as the others do.
+
+    ``source_field`` is not a protocol member --- an index reads it with a
+    fall-back --- and the two sources that compose nothing had no way to state
+    one. A caller that knows its mapping's values are titles had to subclass
+    to say so, and a subclass overriding one member is the hook the class
+    should have had. ``None`` stays the default, which is the answer they gave
+    before: the rows are not distinguishable, and nothing claims otherwise.
+    """
+    assert MappingSource({}).source_field is None
+    assert CallableSource(lambda: []).source_field is None
+    assert MappingSource({}, source_field="title").source_field == "title"
+    assert CallableSource(lambda: [], source_field="title").source_field == "title"
+
+
+@pytest.mark.parametrize("field", ["forms,aliases", ","])
+def test_an_alias_field_with_a_comma_is_refused(field: str) -> None:
+    """A form row names this key as its source field, and that key splits on commas.
+
+    The store's ``source_field`` has one grammar: comma-joined names, split
+    back by its reader. A form row records :attr:`AliasSource.aliases_field`
+    there, so a key holding a comma would name fields no record carries ---
+    the grammar broken from the other side. Refused at construction, naming
+    the key, rather than discovered as a mislabelled row.
+    """
+    with pytest.raises(ValidationError, match=repr(field)):
+        AliasSource(CallableSource(lambda: []), field)
 
 
 # --------------------------------------------------------------------------

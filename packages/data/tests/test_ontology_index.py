@@ -606,6 +606,9 @@ async def test_every_row_an_aliased_index_writes_says_what_its_text_came_from() 
 
         hits = await _hits_by_id(index)
 
+        assert hits, "the index built no rows"
+        assert all(hit.vector_field is not None for hit in hits.values())
+
         bolt = hits["catalog:sku-8802"]
         assert bolt.source_text == "Bolt"
         assert bolt.vector_field == "name,description"
@@ -655,7 +658,10 @@ async def test_an_item_s_own_source_field_outranks_the_one_its_metadata_carries(
     inner source that wrote ``source_field`` into its own metadata would
     otherwise label each alias with the canonical text's field --- the false
     pair above, arriving by another route. The middle rung still holds for a
-    row whose item says nothing: the store's per-row route is unchanged.
+    row whose item says nothing, and it holds *against a source that has an
+    answer of its own*: the inner source here states ``"name,description"``,
+    so a store that wrote the batch value over the row's key, rather than
+    only where the row had none, would relabel ``bolt`` with it.
 
     The same field gives the escape hatch a way to state what it indexed,
     per item, with no constructor parameter to add.
@@ -676,7 +682,9 @@ async def test_an_item_s_own_source_field_outranks_the_one_its_metadata_carries(
     try:
         embedder = DeterministicEmbedder(dimensions=DIMENSIONS)
         aliased = SemanticIndex(
-            AliasSource(CallableSource(inner), ALIAS_FORMS_KEY), embedder, store
+            AliasSource(CallableSource(inner, source_field="name,description"), ALIAS_FORMS_KEY),
+            embedder,
+            store,
         )
         await aliased.build()
         await SemanticIndex(CallableSource(titled), embedder, store).build()

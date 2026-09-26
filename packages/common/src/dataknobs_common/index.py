@@ -4,7 +4,8 @@
 """What "some other data source" means, for anything that indexes text.
 
 One protocol, so every layer above it is source-agnostic: a thing that can
-stream ``(id, text, metadata)`` triples and say which named sets its ids fall
+stream :class:`IndexItem` values --- an id, a text, its metadata, and
+optionally where that text came from --- and say which named sets its ids fall
 in. A vector index binds one of these to a store; nothing above this module
 knows whether the text came from a database column, a dict, or a vocabulary.
 
@@ -42,6 +43,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from dataknobs_common.async_iter import aclosing_iter
+from dataknobs_common.exceptions import ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -85,6 +87,33 @@ def join_non_empty(values: Sequence[Any], join: str) -> str:
     return join.join(value for value in rendered if value)
 
 
+def refuse_unjoinable_field_name(name: str, *, role: str) -> None:
+    """Refuse a field name that the ``source_field`` grammar cannot carry.
+
+    A row's ``source_field`` is comma-joined field names, and its reader
+    splits it back on commas. So a name holding a comma is read back as
+    several names, none of which a record carries, and the row names fields
+    its text did not come from. Every source that writes a name into that key
+    asks this at construction, so the grammar has one guard, not one per
+    source.
+
+    Args:
+        name: The field name a source would write into ``source_field``.
+        role: What the name is to the caller, for the message --- ``"alias
+            field"``, ``"text field"``.
+
+    Raises:
+        ValidationError: The name holds a comma.
+    """
+    if "," in name:
+        raise ValidationError(
+            f"{role} {name!r} holds a comma; a row records it as its source field, "
+            f"which is read as comma-joined field names, so it would name fields no "
+            f"record carries",
+            context={"field": name, "role": role},
+        )
+
+
 @dataclass
 class IndexItem:
     """One indexable thing: an id, the text that stands for it, and its tags.
@@ -105,9 +134,9 @@ class IndexItem:
             and the common case --- leaves the source's own ``source_field``
             to describe it. A decorator emitting items of more than one kind
             needs it, because one aggregate answer can describe only one of
-            them; so does a callable-backed source, which has no other way to
-            state a field name. An index writes it beside the item's text, in
-            preference to the source's answer.
+            them. A source whose items all share one answer states it once,
+            on the source, instead. An index writes this beside the item's
+            text, in preference to the source's answer.
     """
 
     id: str
@@ -183,6 +212,15 @@ class MappingSource:
     #: inside a namespace passes the name it qualified them with.
     declared: frozenset[str] = frozenset()
 
+    #: What this source's text is, as the name an index records beside it ---
+    #: ``"title"``, say. ``None`` by default: a mapping of id to text cannot know which field
+    #: its text was read from, so only the caller can say, and a caller that
+    #: says nothing gets rows no reader can tell from any other caller's. An
+    #: item that states its own :attr:`IndexItem.source_field` overrides this
+    #: for that item. Comma-joined where the text was composed from several
+    #: fields, which is the grammar the store's reader splits on.
+    source_field: str | None = None
+
     def declares(self) -> frozenset[str]:
         """Whatever this source was constructed to declare."""
         return self.declared
@@ -213,7 +251,7 @@ class CallableSource:
             async for row in api.pages():
                 yield IndexItem(id=row["id"], text=row["title"])
 
-        source = CallableSource(rows)
+        source = CallableSource(rows, source_field="title")
         ```
     """
 
@@ -224,6 +262,10 @@ class CallableSource:
 
     #: As :attr:`MappingSource.declared`.
     declared: frozenset[str] = frozenset()
+
+    #: As :attr:`MappingSource.source_field`. Where items differ --- a callable
+    #: yielding titles and bodies --- each item states its own instead.
+    source_field: str | None = None
 
     def declares(self) -> frozenset[str]:
         """Whatever this source was constructed to declare."""
@@ -278,6 +320,15 @@ class AliasSource:
     describe only one of the two, and a row built from a form would then
     name a field its text is not in.
 
+    **The two answers name different kinds of thing.** The canonical item's
+    answer is the inner source's, which names the fields *it* read --- an
+    entity's ``name`` and ``description``, say, which are not on the row.
+    A form's answer is :attr:`aliases_field`, a **metadata key**, and that
+    key *is* on the row: the item's metadata travels with it. So only a form
+    row's pair can be checked from the hit alone (its text is among the
+    values under the key it names); a canonical row's pair is checked against
+    the entity, not the hit.
+
     The forms are read from the inner item's own metadata, under
     :attr:`aliases_field`, so the leaf source is what decides which key
     carries them and this class needs no vocabulary of its own. An item whose
@@ -315,6 +366,17 @@ class AliasSource:
     #: it and this one reads it --- one key, two ends, and a literal at either
     #: end is how the two stop agreeing.
     aliases_field: str
+
+    def __post_init__(self) -> None:
+        """Refuse an alias key the store's ``source_field`` grammar cannot carry.
+
+        A form row records :attr:`aliases_field` as its source field, and that
+        key is comma-joined names, split back on commas by its reader. A key
+        holding a comma would be read as fields no record carries, so it is
+        refused here, where the key is named, not found later as a row that
+        mislabels itself.
+        """
+        refuse_unjoinable_field_name(self.aliases_field, role="alias field")
 
     @property
     def source_field(self) -> str | None:
