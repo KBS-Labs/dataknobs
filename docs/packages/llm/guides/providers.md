@@ -986,7 +986,7 @@ without importing a vendor SDK (the original error is preserved on `__cause__`):
 
 | Vendor error | dataknobs exception |
 |--------------|---------------------|
-| 400 — context-window overflow | `ContextLengthExceededError` (a `ValidationError` subclass) |
+| 400 (or a status the provider declares) — context-window overflow | `ContextLengthExceededError` (a `ValidationError` subclass) |
 | 400 (other bad request) | `ValidationError` |
 | 429 (rate limit) | `RateLimitError` (with `retry_after` when the vendor exposes it) |
 | 401 / 403 (auth) | `OperationError` |
@@ -1003,6 +1003,15 @@ message). Detection is a machine `code` (OpenAI) or a conservative marker in the
 vendor's own text (all vendors), and stays deliberately narrow — an unrelated 400 (a
 rejected sampling parameter, a malformed request) remains a plain
 `ValidationError`.
+
+Ollama is the one vendor that reports an overflow on another status: its
+embedding endpoint answers an over-long text with a **500** (`the input length
+exceeds the context length`), so `OllamaProvider.embed()` raises
+`ContextLengthExceededError` for it. A 500 alone is not enough — Ollama also
+answers a completion model asked to embed with a 500, and that stays an
+`OperationError` — the marker decides. If you catch `OperationError` around
+`embed()` to handle an over-long text, catch `ContextLengthExceededError` (or
+`ValidationError`) instead.
 
 This is uniform across Anthropic, OpenAI, Ollama, HuggingFace, and Bedrock: the
 status→type policy lives once on `LLMProvider._dataknobs_error_for_status`, and
@@ -1050,7 +1059,12 @@ its own key reports that key here too. If you write your own provider, note that
 `_dataknobs_error_for_status(status, detail, ...)` takes the vendor rendering as
 *classification* material only — it decides context-window overflow from it and
 then discards it. You cannot set the message, which is the point: a provider
-this package has never seen inherits the same guarantee.
+this package has never seen inherits the same guarantee. If your vendor reports
+an overflow on a status other than 400, declare it on the class —
+`_context_length_statuses = frozenset({400, 500})`, as `OllamaProvider` does —
+and the shared gate reads those statuses for a marker too; the default is
+`{400}`, because a 5xx is otherwise the server's own failure and is retried as
+one.
 
 #### Anthropic 400-retry safety net
 

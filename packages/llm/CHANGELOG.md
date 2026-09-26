@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An over-long text sent to an Ollama embedding model raises
+  `ContextLengthExceededError`**, where it raised `OperationError (HTTP 500)`.
+  Ollama's embedding endpoint reports an overflow as a 500 with the words
+  `the input length exceeds the context length`, and the shared overflow
+  detection read only 400s and knew none of those words. Both are fixed: the
+  wording joins the shared markers, and the statuses read for a marker are now
+  declared per provider in `_context_length_statuses` — `{400}` by default,
+  `{400, 500}` for `OllamaProvider`. A 500 still needs the marker, so Ollama's
+  other 500s stay `OperationError`. The message stays free of the vendor's
+  text, which remains on `__cause__`. **One change for existing code:** an
+  `except OperationError` around `embed()` no longer catches an over-long
+  text; `except ContextLengthExceededError` or `except ValidationError` does.
+
 - **The FSM integration's functions declare the `context` their interfaces
   do.** All six of `fsm_integration.functions` --- `PromptBuilder`,
   `LLMCaller`, `ResponseValidator`, `FunctionCaller`, `ConversationManager`,

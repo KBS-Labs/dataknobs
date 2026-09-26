@@ -1036,6 +1036,15 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         options = self._build_options(shaped_config)
         return self._apply_param_remaps(options, constraints.param_remaps)
 
+    # ``/api/embeddings`` reports an over-long input as a 500, with the body
+    # "the input length exceeds the context length" (measured, Ollama 0.33.2).
+    # A 500 there also means other things (a completion model asked to embed),
+    # so the marker, not the status, decides. The 500 is here only for
+    # ``embed()``'s endpoint: ``/api/embed`` reports the same overflow as a 400,
+    # so a change that moves ``embed()`` there drops the 500 or names what else
+    # still needs it.
+    _context_length_statuses = frozenset({400, 500})
+
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw aiohttp transport error into a dataknobs exception.
 
@@ -1048,7 +1057,10 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`,
-        - 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
+        - a context-window overflow, on a 400 or a 500 (see
+          :attr:`_context_length_statuses`) →
+          :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`,
+        - any other 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
         - 401/403 / other status / connection / timeout →
           :class:`~dataknobs_common.exceptions.OperationError`.
 
