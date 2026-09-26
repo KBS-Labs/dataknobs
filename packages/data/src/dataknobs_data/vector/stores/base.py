@@ -661,6 +661,7 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
         model_name: str | None = None,
         model_version: str | None = None,
         source_field: str | None = None,
+        on_stored: Callable[[list[str]], Awaitable[None] | None] | None = None,
     ) -> list[str]:
         """Embed texts and store vectors.
 
@@ -714,6 +715,36 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
                 it in *metadata*, which wins (see the ``setdefault`` below).
                 ``None`` writes nothing, which is what every existing caller
                 gets.
+            on_stored: Told about each commit as it happens: called once
+                after every :meth:`add_vectors` call, with the ids that call
+                stored. See "A failure partway" below. An ``async def`` is
+                awaited on the loop; a plain function runs on a worker
+                thread, so a checkpoint write does not stall the loop.
+                ``None``, the default, reports nothing.
+
+        **A failure partway leaves earlier slices stored.** The texts are
+        embedded and written one *batch_size* slice at a time, and each
+        :meth:`add_vectors` call commits before the next slice is embedded.
+        So a raise from the embedder or the store on slice *n* leaves slices
+        ``1..n-1`` in the store --- and the return value, the only other
+        account this method gives, never arrives. *on_stored* is how a
+        caller learns what did arrive:
+
+        - The ids it is told about are always a **prefix** of *ids*, in
+          order, because the slices are taken and stored in order. Where
+          the caller named no ids, they are the ones the store minted.
+        - It is not called for an empty input, nor for a slice that raised.
+        - The account is exact per :meth:`add_vectors` call. Inside one
+          call it is the backend's: ``PgVectorStore`` writes in a
+          transaction, and the memory, FAISS and Chroma stores validate a
+          batch before writing any of it, but a backend fault partway through one
+          non-transactional write has nothing to roll it back.
+        - If the callback itself raises, the raise propagates and the
+          commit it was told about stands.
+
+        The exception this method raises is whatever the embedder or the
+        store raised, unwrapped, so a caller's ``except`` clauses keep
+        matching.
 
         Returns:
             List of IDs for added vectors
@@ -783,5 +814,7 @@ class VectorStore(DynamicCapabilityMixin, ABC, VectorStoreBase[VectorStoreConfig
             # Store vectors
             stored_ids = await self.add_vectors(embeddings, ids=batch_ids, metadata=batch_metadata)
             all_ids.extend(stored_ids)
+            if on_stored is not None:
+                await run_callback_off_loop(on_stored, list(stored_ids))
 
         return all_ids

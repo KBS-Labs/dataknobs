@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A failed `SemanticIndex.build()` words its error differently, and its
+  `context` has more keys.** The message names the ids that did not reach the
+  store and says where to resume. The `context` dict gains `unstored`,
+  `first_unstored` and `last_unstored` beside `written`, so a caller comparing
+  the whole dict against `{"written": n}` needs to compare `context["written"]`
+  instead.
+
 - **An ontology `index:` block with `aliases: true` is refused.** It indexed
   each surface form as a row of its own under the entity's id, and every vector
   store the block can open keeps one row per id, so the index held one row per
@@ -857,6 +864,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`on_stored` on every `bulk_embed_and_store`**: `VectorStore`,
+  `BulkEmbedMixin` and `AsyncBulkEmbedMixin`, and the two abstract declarations
+  in `SyncVectorOperationsMixin` / `AsyncVectorOperationsMixin`. It is
+  keyword-only, defaults to `None`, and is called once per commit with the ids
+  that commit made durable: one `add_vectors` slice on the store, one record on
+  the database lanes. None of these writes is atomic, and a raise partway
+  through used to leave a caller no way to tell what had been stored; on the
+  store lane the reported ids are a prefix of the ids passed, so a caller can
+  resume exactly. The exception raised is unchanged. On the async lanes an
+  `async def` callback is awaited on the loop and a plain function runs on a
+  worker thread.
+
+- **A failed `SemanticIndex.build()` names what the store does not have.** Its
+  `OperationError` context carries `unstored` (how many items the build had
+  read that did not reach the store), `first_unstored`, which is where to
+  resume, and `last_unstored`.
+
 - **`index.aliases_label:`** sets what goes in front of an entity's folded
   surface forms when `aliases` is in `fields:`. It defaults to
   `"Also called: "`, and `""` gives the forms bare. It is used verbatim, so
@@ -1264,6 +1288,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A failed `SemanticIndex.build()` reported fewer items written than the
+  store held.** It counted its own writes of `BUILD_BATCH_SIZE` items, but the
+  store commits each write in slices of its own `batch_size`, so a write that
+  raised had usually committed part of itself already. A build of 250 items
+  failing on the 221st reported `written == 0` over a store holding 200; one of
+  1250 failing on the 1121st reported 1000 over a store holding 1100. The count
+  now comes from the store's report of each commit. The message also said the
+  partial batch in hand "was never sent", which was false whenever the store
+  had failed rather than the source.
 
 - **`MultiFieldSource` takes a non-empty sequence of field names and refuses
   anything else** with `ValidationError`. Each of these built a source that

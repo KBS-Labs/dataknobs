@@ -792,6 +792,10 @@ hits[0].metadata["dk_ontology_id"]     # 'catalog'
 registry.get("catalog").localize(hits[0].record.id)   # 'sku-4471'
 ```
 
+A build that fails partway raises `OperationError`, and its `context` says what
+the store holds: `written`, and `first_unstored`, the id to resume from. See
+`SemanticIndex.build()`'s docstring for the full set of keys.
+
 **The enumeration is the vocabulary, not the schema.** Every entity the bound
 source holds gets a row, under every type it actually holds — so a type
 `entity_types:` declares and nothing is filed under contributes nothing and

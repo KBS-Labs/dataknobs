@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.callbacks import run_callback_off_loop
+
 from ..fields import VectorField
 from .content import (
     DEFAULT_FIELD_SEPARATOR,
@@ -151,6 +153,8 @@ class BulkEmbedMixin:
         model_name: str | None = None,
         model_version: str | None = None,
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
+        *,
+        on_stored: Callable[[list[str]], None] | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -166,6 +170,11 @@ class BulkEmbedMixin:
             model_version: Version of the embedding model
             field_separator: What to join multiple text fields on. Was
                 hardcoded to a space, which is the value it still defaults to.
+            on_stored: Called with ``[record_id]`` after each record is
+                written. This lane commits one record at a time, so a raise
+                partway through leaves every earlier record stored, and the
+                return value never arrives to say which; this is what does.
+                Synchronous, like everything else on this lane.
 
         Returns:
             List of record IDs that were processed
@@ -202,9 +211,12 @@ class BulkEmbedMixin:
                 # Assumes self has create, update and exists (Database interface).
                 if record.id and self.exists(record.id):  # type: ignore[attr-defined]
                     self.update(record.id, record)  # type: ignore[attr-defined]
-                    processed_ids.append(record.id)
+                    record_id = record.id
                 else:
-                    processed_ids.append(self.create(record))  # type: ignore[attr-defined]
+                    record_id = self.create(record)  # type: ignore[attr-defined]
+                processed_ids.append(record_id)
+                if on_stored is not None:
+                    on_stored([record_id])
 
         return processed_ids
 
@@ -233,6 +245,7 @@ class AsyncBulkEmbedMixin:
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
         *,
         embedder: TextEmbedder | None = None,
+        on_stored: Callable[[list[str]], Awaitable[None] | None] | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -256,6 +269,11 @@ class AsyncBulkEmbedMixin:
             embedder: A :class:`~dataknobs_data.vector.TextEmbedder` --- async
                 by declaration, so this lane classifies nothing when it is
                 used.
+            on_stored: Called with ``[record_id]`` after each record is
+                written, for the sync lane's reason. An ``async def`` is
+                awaited on the loop; a plain function runs on a worker
+                thread, which costs one thread hop **per record** here ---
+                pass an ``async def`` where that matters.
 
         Returns:
             List of record IDs that were processed
@@ -297,8 +315,11 @@ class AsyncBulkEmbedMixin:
                 # (AsyncDatabase interface).
                 if record.id and await self.exists(record.id):  # type: ignore[attr-defined]
                     await self.update(record.id, record)  # type: ignore[attr-defined]
-                    processed_ids.append(record.id)
+                    record_id = record.id
                 else:
-                    processed_ids.append(await self.create(record))  # type: ignore[attr-defined]
+                    record_id = await self.create(record)  # type: ignore[attr-defined]
+                processed_ids.append(record_id)
+                if on_stored is not None:
+                    await run_callback_off_loop(on_stored, [record_id])
 
         return processed_ids

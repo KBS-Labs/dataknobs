@@ -31,7 +31,7 @@ from .types import BatchVectors, DistanceMetric, VectorSearchResult
 
 if TYPE_CHECKING:
     import numpy as np
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
     from ..query import Query
     from ..records import Record
     from .embedding import TextEmbedder
@@ -481,6 +481,8 @@ class SyncVectorOperationsMixin(ABC):
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        *,
+        on_stored: Callable[[list[str]], None] | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -492,6 +494,9 @@ class SyncVectorOperationsMixin(ABC):
             batch_size: Number of records to process at once
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            on_stored: Called once per commit with the ids that commit made
+                durable, so a caller whose call raises partway can tell what
+                reached the store. ``None`` reports nothing.
 
         Returns:
             List of record IDs that were processed
@@ -823,6 +828,7 @@ class AsyncVectorOperationsMixin(ABC):
         model_version: str | None = None,
         *,
         embedder: TextEmbedder | None = None,
+        on_stored: Callable[[list[str]], Awaitable[None] | None] | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -839,6 +845,9 @@ class AsyncVectorOperationsMixin(ABC):
                 its own ``model_id``, so an implementation can fill
                 *model_name* from the thing that produced the vectors rather
                 than from a parameter the caller has to keep in step.
+            on_stored: Called once per commit with the ids that commit made
+                durable, so a caller whose call raises partway can tell what
+                reached the store. Sync or async. ``None`` reports nothing.
 
         Returns:
             List of record IDs that were processed
