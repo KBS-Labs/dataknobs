@@ -1840,8 +1840,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **anything that is not a sequence**: a `set`, a `frozenset`, a mapping,
     `dict.keys()` or a generator. **A set used to load**, composing its fields
     in whatever order it iterated; `fields=5` raised `TypeError`;
-  - **a member that is not a string**: `fields=["name", 5]` raised a bare
-    `TypeError`.
+  - **a member that is not a string**: `fields=["name", 5]` was refused as an
+    unknown entity field rather than as a non-string, and unknown names of
+    mixed types (`fields=[5, "x"]`) raised a bare `TypeError`.
 
   The check is `refuse_non_sequence_of_names(names, *, role, context=None)`, in
   `dataknobs_common.index`. `dataknobs-data`'s `MultiFieldSource` and the
