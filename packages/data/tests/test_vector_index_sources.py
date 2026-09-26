@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.records import Record
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
@@ -247,6 +248,31 @@ async def test_the_composed_source_field_is_spelled_the_way_its_reader_parses_it
 
     # One field stays a bare name, which is what the store lane looks up.
     assert RecordFieldSource(catalogue, "title").source_field == "title"
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda db: RecordFieldSource(db, "name,alias"),
+        lambda db: MultiFieldSource(db, ["title", "name,alias"]),
+    ],
+    ids=["one-field", "several-fields"],
+)
+async def test_a_field_name_holding_a_comma_is_refused(
+    catalogue: AsyncMemoryDatabase,
+    build: Callable[[AsyncMemoryDatabase], object],
+) -> None:
+    """The key's grammar is comma-joined names, so a name cannot hold a comma.
+
+    ``source_field`` is split on commas by its reader (the test above), so a
+    field named ``"name,alias"`` is read back as two fields, ``name`` and
+    ``alias``, and no record carries either. The row would name fields its
+    text did not come from, which is the defect the key exists to prevent.
+    Refused at construction, naming the field, as ``AliasSource`` refuses
+    the same thing in its alias key.
+    """
+    with pytest.raises(ValidationError, match="'name,alias'"):
+        build(catalogue)
 
 
 async def test_a_source_that_claims_hashable_can_actually_be_hashed(

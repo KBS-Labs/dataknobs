@@ -1002,6 +1002,18 @@ success.
     where the reader de-duplicates by id, or where the store is keyed on
     something else, until it is.
 
+    The surviving row still says what it holds. A form row records the alias
+    key (`dk_alias_forms`) as its source field, so its hit answers
+    `vector_field == "dk_alias_forms"` with the alias among that metadata
+    key's values. An entity with no aliases keeps the leaf's answer:
+    `"name,description"` for `fields: [name, description]`.
+
+    The two answers name different kinds of thing. `dk_alias_forms` is a
+    metadata key, and it is on the hit. `name` and `description` are entity
+    attributes, and they are not. So a reader asking whether a hit matched
+    through an alias tests `vector_field == "dk_alias_forms"`, not whether the
+    name mentions aliases.
+
 !!! note "A `fields:` the rows do not fill is reported at the build, not at load"
 
     `fields:` is checked at load for *naming* something an entity carries —

@@ -215,6 +215,19 @@ class SemanticIndex:
         read door --- both answer ``vector_field=None`` --- so a consumer
         cannot tell an index hit from anything else in the same store.
 
+        **An item may answer for itself**, through
+        :attr:`~dataknobs_common.index.IndexItem.source_field`, and that
+        answer travels by the store's own per-row route: a ``source_field``
+        key in the row's metadata, which the store keeps over the call
+        argument. It is needed where one source emits items of more than one
+        kind --- ``AliasSource`` yields the inner's composed text and then
+        each surface form, and one aggregate value describes only the first.
+        The precedence is the item's own field, then a ``source_field`` the
+        item's metadata already carried, then the source's answer; the item
+        wins over its metadata because a decorator copies the inner item's
+        metadata onto every form, and an inherited key would label an alias
+        with the field the canonical text came from.
+
         Returns:
             How many items were **handed to the store**. ``0`` over an empty
             source is a legitimate answer and not an error: a vocabulary that
@@ -268,7 +281,10 @@ class SemanticIndex:
                 async for item in items:
                     ids.append(item.id)
                     texts.append(item.text)
-                    metadata.append(dict(item.metadata))
+                    row = dict(item.metadata)
+                    if item.source_field is not None:
+                        row["source_field"] = item.source_field
+                    metadata.append(row)
                     if len(texts) >= BUILD_BATCH_SIZE:
                         written += await flush()
                 written += await flush()
