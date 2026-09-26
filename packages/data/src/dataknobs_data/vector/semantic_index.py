@@ -358,6 +358,8 @@ class SemanticIndex:
                     "every item the source yielded reached the store; the failure "
                     "came after the last write, closing the source"
                 )
+            elif not unstored and written == 0:
+                state = "the source failed before yielding anything, so this build wrote nothing"
             elif not unstored:
                 state = (
                     "nothing it had read is missing, but the source failed before "

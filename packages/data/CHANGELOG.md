@@ -1303,6 +1303,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `upsert()`, which acts on that answer, and which a backend may implement
   atomically.
 
+  **A subclass that watches writes by overriding `update()` alone may stop
+  seeing these.** The memory, file and Elasticsearch backends, and the async
+  S3 and PostgreSQL ones, write an unconditional `upsert()` directly rather
+  than through `update()`. Override `upsert()` as well.
+
 - **The abstract `bulk_embed_and_store` declarations did not match the
   methods behind them.** `SyncVectorOperationsMixin` and
   `AsyncVectorOperationsMixin` omitted `field_separator`, which both concrete

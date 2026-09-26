@@ -23,6 +23,7 @@ from __future__ import annotations
 import inspect
 import threading
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,8 @@ from dataknobs_common.testing import assert_twins_agree
 
 from dataknobs_data import Record
 from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.testing import DeterministicEmbedder
 from dataknobs_data.vector import SemanticIndex
 from dataknobs_data.vector.semantic_index import BUILD_BATCH_SIZE
@@ -172,6 +175,59 @@ async def test_a_failed_source_counts_what_it_read_and_never_sent() -> None:
         assert context["first_unstored"] == _id(0)
         assert context["last_unstored"] == _id(4)
         assert await store.count() == 0
+    finally:
+        await store.close()
+
+
+async def test_a_source_that_fails_before_yielding_does_not_claim_a_partial_build() -> None:
+    """Nothing was read, so nothing was written: the store holds no part of it."""
+
+    async def trouble_at_once() -> AsyncIterator[IndexItem]:
+        raise OperationError("the source's backend was not there")
+        yield  # pragma: no cover -- makes this an async generator
+
+    store = await _store()
+    try:
+        index = SemanticIndex(
+            CallableSource(trouble_at_once), DeterministicEmbedder(dimensions=DIMENSIONS), store
+        )
+        with pytest.raises(OperationError) as failed:
+            await index.build()
+
+        context = failed.value.context
+        assert context["written"] == 0
+        assert context["unstored"] == 0
+        assert await store.count() == 0
+        message = str(failed.value)
+        assert "partial" not in message
+        assert "before yielding anything" in message
+    finally:
+        await store.close()
+
+
+async def test_a_source_that_fails_between_flushes_names_the_partial_build() -> None:
+    """Everything read was stored, but the source stopped short of its end."""
+
+    async def one_flush_then_trouble() -> AsyncIterator[IndexItem]:
+        for n in range(BUILD_BATCH_SIZE):
+            yield IndexItem(id=_id(n), text=_text(n))
+        raise OperationError("the source's backend went away mid-stream")
+
+    store = await _store()
+    try:
+        index = SemanticIndex(
+            CallableSource(one_flush_then_trouble),
+            DeterministicEmbedder(dimensions=DIMENSIONS),
+            store,
+        )
+        with pytest.raises(OperationError) as failed:
+            await index.build()
+
+        context = failed.value.context
+        assert context["written"] == BUILD_BATCH_SIZE
+        assert context["unstored"] == 0
+        assert await store.count() == BUILD_BATCH_SIZE
+        assert "partial build" in str(failed.value)
     finally:
         await store.close()
 
@@ -682,3 +738,88 @@ async def test_the_async_database_lane_never_reports_a_record_it_did_not_write()
     for record_id in reported:
         read = await db.read(record_id)
         assert read is not None and read.fields.get("embedding"), record_id
+
+
+# The memory backends' upsert never asks `exists`, so the two tests above show
+# the gap closed, not survived. SQLite takes the base-class upsert, which does
+# check and then update, so there the delete lands between the two calls inside
+# upsert itself -- the race the lane has to come through, happening for real.
+
+
+class _SyncSQLiteDeletedAfterCheck(SyncSQLiteDatabase):
+    raced: set[str]
+
+    def exists(self, id: str) -> bool:
+        answer = super().exists(id)
+        if answer and id not in self.raced:
+            self.raced.add(id)
+            self.delete(id)
+        return answer
+
+
+class _AsyncSQLiteDeletedAfterCheck(AsyncSQLiteDatabase):
+    raced: set[str]
+
+    async def exists(self, id: str) -> bool:
+        answer = await super().exists(id)
+        if answer and id not in self.raced:
+            self.raced.add(id)
+            await self.delete(id)
+        return answer
+
+
+def test_the_sync_database_lane_survives_a_delete_between_check_and_update(
+    tmp_path: Path,
+) -> None:
+    db = _SyncSQLiteDeletedAfterCheck(config={"path": str(tmp_path / "records.db")})
+    db.raced = set()
+    db.connect()
+    try:
+        for record in _existing(3):
+            db.create(record)
+        reported: list[str] = []
+
+        db.bulk_embed_and_store(
+            _existing(3),
+            "body",
+            embedding_fn=_embedding_fn_failing_on("absent"),
+            on_stored=reported.extend,
+        )
+
+        assert db.raced == {_id(n) for n in range(3)}, "the race did not happen"
+        assert sorted(reported) == [_id(n) for n in range(3)]
+        for record_id in reported:
+            read = db.read(record_id)
+            assert read is not None and read.fields.get("embedding"), record_id
+    finally:
+        db.close()
+
+
+async def test_the_async_database_lane_survives_a_delete_between_check_and_update(
+    tmp_path: Path,
+) -> None:
+    db = _AsyncSQLiteDeletedAfterCheck(config={"path": str(tmp_path / "records.db")})
+    db.raced = set()
+    await db.connect()
+    try:
+        for record in _existing(3):
+            await db.create(record)
+        reported: list[str] = []
+
+        async def record(stored: list[str]) -> None:
+            reported.extend(stored)
+
+        await db.bulk_embed_and_store(
+            _existing(3),
+            "body",
+            embedding_fn=_embedding_fn_failing_on("absent"),
+            on_stored=record,
+        )
+
+        assert db.raced == {_id(n) for n in range(3)}, "the race did not happen"
+        assert sorted(reported) == [_id(n) for n in range(3)]
+        for record_id in reported:
+            read = await db.read(record_id)
+            assert read is not None and read.fields.get("embedding"), record_id
+    finally:
+        await db.close()
