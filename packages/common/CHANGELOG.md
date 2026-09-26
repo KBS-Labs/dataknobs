@@ -367,8 +367,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The folding is published as `fold_forms(forms, *, beside, label=...)` in
   `dataknobs_common.index`, with `ALIAS_FORM_SEPARATOR` (`"; "`) and
   `DEFAULT_ALIASES_LABEL`, so a caller composing its own source can fold forms
-  the same way. `AliasSource` is unchanged: its forms still share the entity's
-  id and still collide in a store keyed on id.
+  the same way. The label is used verbatim, with nothing added between it and
+  the first form. These, and the helpers `join_non_empty`,
+  `refuse_non_sequence_of_names` and `refuse_unjoinable_field_name`, are listed
+  in `dataknobs_common.index.__all__` and imported from there; the top-level
+  `dataknobs_common` package re-exports that module's classes and protocol
+  only. `dataknobs_common.ontology.index_source.DEFAULT_FIELDS` is the default
+  `fields`, `("name",)`. `AliasSource` is unchanged: its forms still share the
+  entity's id and still collide in a store keyed on id.
 
 - **`IndexItem.source_field`: an item can say where its own text came from.**
   Optional and `None` by default, which leaves the source's `source_field`
@@ -1826,13 +1832,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A bare string where a list of field names is declared is refused.**
-  `EntitySourceIndexSource(onto, fields="name")` used to be refused as four
-  unknown fields named `'a', 'e', 'm', 'n'`, and `fields=5` raised `TypeError`.
-  Both now raise `ValidationError` naming the value given. The check is
-  `refuse_non_sequence_of_names`, in `dataknobs_common.index`, and
-  `dataknobs-data`'s `MultiFieldSource` and the registry's `index.fields:` use
-  the same one. **Migration:** pass a list of one, `fields=["name"]`.
+- **`fields` must be a sequence of strings.** `EntitySourceIndexSource`
+  refuses, with `ValidationError` naming the value given and carrying the
+  ontology id in its context:
+  - **a bare string**: `fields="name"` used to be refused as four unknown
+    fields named `'a', 'e', 'm', 'n'`;
+  - **anything that is not a sequence**: a `set`, a `frozenset`, a mapping,
+    `dict.keys()` or a generator. **A set used to load**, composing its fields
+    in whatever order it iterated; `fields=5` raised `TypeError`;
+  - **a member that is not a string**: `fields=["name", 5]` raised a bare
+    `TypeError`.
+
+  The check is `refuse_non_sequence_of_names(names, *, role, context=None)`, in
+  `dataknobs_common.index`. `dataknobs-data`'s `MultiFieldSource` and the
+  registry's `index.fields:` use the same one. **Migration:** pass a list or a
+  tuple, in the order the text should be composed: `fields=["name"]`,
+  `fields=("name", "description")`.
 
 - **An ontology attribute row, and a `resolver:` section, are read or
   refused.** Each value in an attribute row was coerced rather than checked,

@@ -51,6 +51,7 @@ from dataknobs_common.ontology import (
     split_qualified,
 )
 from dataknobs_common.index import AsyncIndexSource, refuse_non_sequence_of_names
+from dataknobs_common.ontology.index_source import DEFAULT_FIELDS as _DEFAULT_INDEX_FIELDS
 from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -1972,7 +1973,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             # A bare scalar in YAML is a string, so `fields: name` is what a
             # consumer writes by hand. The adapter asks the same question, but
             # asked here the refusal names the document key.
-            refuse_non_sequence_of_names(fields, role=f"ontology {ontology.id!r}'s `index.fields:`")
+            refuse_non_sequence_of_names(
+                fields,
+                role=f"`index.fields:` of ontology {ontology.id!r}",
+                context={"ontology_id": ontology.id},
+            )
             configured["fields"] = tuple(fields)
 
         join = block.get("join")
@@ -1987,8 +1992,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 )
             configured["join"] = join
 
-        if "aliases_label" in block:
-            configured["aliases_label"] = block["aliases_label"]
+        # An explicit null is the key left out, as it is for `join:` above, so
+        # it is not forwarded and the adapter's label refusals never see it.
+        aliases_label = block.get("aliases_label")
+        if aliases_label is not None:
+            configured["aliases_label"] = aliases_label
 
         aliases = block.get("aliases")
         # Checked for being a boolean rather than for truthiness: `aliases: "no"`
@@ -2016,7 +2024,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 context={
                     "ontology_id": ontology.id,
                     "aliases": True,
-                    "fields": list(configured.get("fields", ())),
+                    "fields": list(configured.get("fields", _DEFAULT_INDEX_FIELDS)),
                 },
             )
 

@@ -749,3 +749,30 @@ async def test_a_bare_string_of_fields_is_refused_by_its_own_name(tmp_path: Path
         EntitySourceIndexSource(parts, fields="name")
 
     assert "'a', 'e'" not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("fields", "match"),
+    [
+        ({"name"}, "sequence of field names"),
+        ({"name": 1}, "sequence of field names"),
+        ((name for name in ["name"]), "sequence of field names"),
+        (["name", 5], "not a string"),
+        ([None], "not a string"),
+    ],
+    ids=["a-set", "a-mapping", "a-generator", "a-number-member", "a-none-member"],
+)
+async def test_fields_that_are_not_a_sequence_of_names_are_refused_naming_the_ontology(
+    tmp_path: Path, fields: object, match: str
+) -> None:
+    """Each is refused as the mistake it is, with the ontology in its context.
+
+    A set used to load in an arbitrary order, and ``["name", 5]`` raised a
+    bare ``TypeError`` from sorting the unknown names.
+    """
+    parts = await _fasteners(tmp_path)
+
+    with pytest.raises(ValidationError, match=match) as refused:
+        EntitySourceIndexSource(parts, fields=fields)  # type: ignore[arg-type]
+
+    assert refused.value.context["ontology_id"] == "parts"

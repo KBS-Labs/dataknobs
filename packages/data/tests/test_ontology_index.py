@@ -1213,6 +1213,8 @@ async def test_aliases_true_is_refused_whatever_fields_says(fields: list[str] | 
 
     assert "list `aliases` in `fields:`" in str(refused.value)
     assert refused.value.context["aliases"] is True
+    # The fields in effect, which is the adapter's default where the block names none.
+    assert refused.value.context["fields"] == (fields or ["name"])
     assert registry._vector_store_cache == {}
 
 
@@ -1275,6 +1277,23 @@ async def test_the_index_block_sets_the_label_in_front_of_the_forms() -> None:
 async def test_a_label_the_block_cannot_use_is_refused(block: dict[str, Any]) -> None:
     with pytest.raises(ValidationError, match="aliases_label"):
         await _registry(_with_fastener(block))
+
+
+async def test_an_explicit_null_label_reads_as_absent() -> None:
+    """``aliases_label: null`` is the key left out, as ``join: null`` is.
+
+    So it loads without ``aliases`` in ``fields:``, and configures nothing
+    because it states nothing: YAML writes ``aliases_label:`` with no value
+    as a null, which is what a document half-edited back to the default holds.
+    """
+    registry = await _registry(_with_fastener({"fields": ["name"], "aliases_label": None}))
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        texts = {item.id: item.text async for item in index.source.stream_items()}
+        assert texts["catalog:bolt-2"] == "Bolt"
+    finally:
+        await registry.close()
 
 
 async def test_a_document_that_cannot_build_an_index_leaves_no_store_open() -> None:
@@ -1371,6 +1390,7 @@ async def test_a_build_that_fails_partway_says_how_far_it_got() -> None:
     [
         ({"fields": "name"}, "fields"),
         ({"fields": 5}, "fields"),
+        ({"fields": ["name", 5]}, "fields"),
         ({"join": 5}, "join"),
         ({"aliases": "yes"}, "aliases"),
     ],
@@ -1393,8 +1413,12 @@ async def test_a_malformed_source_key_is_refused_as_a_validation_error(
     """
     document = _document(index={"store": {"backend": "memory", "dimensions": DIMENSIONS}, **block})
 
-    with pytest.raises(ValidationError, match=match):
+    with pytest.raises(ValidationError, match=match) as refused:
         await _registry(document)
+
+    # Every refusal at this door says which document it came from.
+    assert refused.value.context["ontology_id"] == "catalog"
+    assert "''" not in str(refused.value)
 
 
 # --------------------------------------------------------------------------

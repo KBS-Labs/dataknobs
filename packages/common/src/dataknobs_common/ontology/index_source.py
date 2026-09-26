@@ -73,6 +73,13 @@ TEXT_FIELDS = ("name", "description", "aliases")
 #: The one list-valued member of :data:`TEXT_FIELDS`, folded rather than joined.
 ALIASES_FIELD = "aliases"
 
+#: What :attr:`EntitySourceIndexSource.fields` is when a caller names none.
+#:
+#: Published so a caller that must report the fields in effect before it
+#: constructs a source --- the registry's ``index:`` refusals --- reads the
+#: default rather than restating it where it would drift.
+DEFAULT_FIELDS: tuple[str, ...] = ("name",)
+
 
 # `eq=False` for the reason the pure sources carry: `fields` is declared a
 # `Sequence[str]`, so a caller passing a list gives a frozen instance that
@@ -111,7 +118,7 @@ class EntitySourceIndexSource(Generic[K]):
     """
 
     ontology: AsyncOntology[K]
-    fields: Sequence[str] = ("name",)
+    fields: Sequence[str] = DEFAULT_FIELDS
     join: str = " -- "
     aliases_key: str = ALIAS_FORMS_KEY
     aliases_label: str | None = None
@@ -152,7 +159,9 @@ class EntitySourceIndexSource(Generic[K]):
         question and none subsumes another.
         """
         refuse_non_sequence_of_names(
-            self.fields, role=f"`fields` of an index source over ontology {self.ontology.id!r}"
+            self.fields,
+            role=f"`fields` of an index source over ontology {self.ontology.id!r}",
+            context={"ontology_id": self.ontology.id},
         )
         chosen = tuple(self.fields)
         unknown = [name for name in chosen if name not in TEXT_FIELDS]

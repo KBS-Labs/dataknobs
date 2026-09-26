@@ -979,10 +979,10 @@ success.
 | `store:` | Where the vectors go. No default; resolved through `$resource` and released by `close()`. |
 | `embedder:` | A claim, checked against the injected embedder's `model_id` rather than built. Reads `model:` and `provider:`, and refuses anything else — see [what the block reads](#what-the-embedder-block-reads). Refused with nothing injected — see above. |
 | `metric:` | A claim about the store, checked rather than applied. |
-| `fields:` | Which entity fields compose the embedded text, in order: `name`, `description` and `aliases`. Anything else is refused at load, and so is a bare string (`fields: name`), which would be read as its letters. `aliases` [folds the entity's surface forms into its own row](#indexing-aliases). Defaults to `[name]`. |
+| `fields:` | Which entity fields compose the embedded text, in order: `name`, `description` and `aliases`. Anything else is refused at load, and so is a bare string (`fields: name`), which would be read as its letters, and a member that is not a string. `aliases` [folds the entity's surface forms into its own row](#indexing-aliases). Defaults to `[name]`. |
 | `join:` | What goes between two non-empty field values. Applied *between* them, so an entity carrying one of two produces no dangling separator. Defaults to ` -- `. |
 | `aliases:` | `false`, or absent, does nothing. **`true` is refused** — see [indexing aliases](#indexing-aliases) for why, and for the route that replaces it. Checked for being a boolean, not for truthiness — `aliases: "no"` is truthy. |
-| `aliases_label:` | What goes in front of the folded forms. Defaults to `Also called: `; `""` gives the forms bare. Refused unless `aliases` is in `fields:`, where it would configure nothing. |
+| `aliases_label:` | What goes in front of the folded forms, used verbatim: nothing is added between it and the first form, so quote it and end it with the space you want (`aliases_label: "aka "`). A plain YAML scalar drops a trailing space, so `aliases_label: aka` renders `akaHex bolt`. Defaults to `"Also called: "`; `""` gives the forms bare. Refused unless `aliases` is in `fields:`, where it would configure nothing. An explicit `null` is the key left out, as it is for `join:`. |
 
 ```yaml
   index:
@@ -1027,7 +1027,14 @@ not serving. What is being refused in each case is a document.
 
 List `aliases` in `fields:`. Each entity is still **one** row, and its surface
 forms are folded into that row's text, at the position `fields:` gives them,
-behind `aliases_label:`:
+behind `aliases_label:`. An entity such as
+
+```yaml
+    - {id: bolt-2, type: Product, name: Bolt, description: a fastener,
+       aliases: [Fastener, "Hex bolt", BOLT, "Carriage bolt"]}
+```
+
+indexed under `fields: [name, description, aliases]` is embedded as
 
 ```text
 Bolt -- a fastener -- Also called: Hex bolt; Carriage bolt
@@ -1036,7 +1043,9 @@ Bolt -- a fastener -- Also called: Hex bolt; Carriage bolt
 A form the rest of the row already holds is left out: the comparison is a
 case-insensitive substring test against the other chosen fields, so `BOLT` and
 `Fastener` add nothing above. The known cost of that rule is a form that is a
-substring of a *different* word — `Eagle` is left out beside `Beagle`. An
+substring of a *different* word — `Eagle` is left out beside `Beagle` — and,
+since the comparison runs over the joined text, a form inside the `join:`
+separator or spanning two fields. An
 entity with nothing to add gets no label. The row's source field names all
 three fields, `"name,description,aliases"`. Python callers composing their own
 source can fold forms the same way with `dataknobs_common.index.fold_forms`.
@@ -1046,6 +1055,13 @@ own under the entity's id, and a vector store keeps one row per id — every
 store this block can open upserts on id conflict. So the index held one row per
 entity, carrying whichever form came last, and the text `fields:` composed was
 lost. The refusal names the route above, and happens before the store opens.
+
+**Migrating a store that already holds an index built under `aliases: true`.**
+Edit the document, then run `build()` again. Nothing reports that the store's
+rows were composed differently: the one staleness check, made on a search's
+hits, compares the embedder's model name and nothing else. So a persistent
+store keeps the collapsed rows, each holding one form where the entity's text
+should be, until a build writes each entity's folded row over them.
 
 ## Resolving against the vocabulary
 

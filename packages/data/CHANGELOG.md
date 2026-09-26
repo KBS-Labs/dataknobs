@@ -21,9 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fields:`, for example `fields: [name, description, aliases]`. Each entity is
   then one row whose text is followed by the forms its other fields do not
   already contain (`Bolt -- a fastener -- Also called: Hex bolt`). Its source
-  field reads `name,description,aliases`. A caller who needs one item per form
-  can still build `AliasSource` in Python; its forms still collide in a store
-  keyed on id.
+  field reads `name,description,aliases`. **Then rebuild the index**: a
+  persistent store (Chroma, pgvector, FAISS on disk) keeps its collapsed rows
+  until `build()` writes each entity's folded row over them, and nothing
+  reports the difference, because the staleness check compares the embedder's
+  model name alone. A caller who needs one item per form can still build
+  `AliasSource` in Python; its forms still collide in a store keyed on id.
 
 - **The `postgres` extra no longer installs `sqlalchemy`.** Nothing in this
   package imports it. **Migration:** code that imports `sqlalchemy` and relied
@@ -856,8 +859,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`index.aliases_label:`** sets what goes in front of an entity's folded
   surface forms when `aliases` is in `fields:`. It defaults to
-  `Also called: `, and `""` gives the forms bare. It is refused when `aliases`
-  is not in `fields:`, since nothing would read it.
+  `"Also called: "`, and `""` gives the forms bare. It is used verbatim, so
+  quote it and end it with the space you want (`aliases_label: "aka "`); a
+  plain YAML scalar drops a trailing space. It is refused when `aliases` is
+  not in `fields:`, since nothing would read it. An explicit `null` reads as
+  the key left out, as it does for `join:`.
 
 - **`HoldingStreamDatabase`**, in `dataknobs_data.testing` -- an
   `AsyncDatabase` whose `stream_read` acquires something at the top and
@@ -1259,11 +1265,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`MultiFieldSource` refuses a bare string of field names.**
-  `MultiFieldSource(db, "title")` built a source over the fields
-  `t, i, t, l, e`, and every row composed empty text. It now raises
-  `ValidationError` naming the string, and `"a,b"` is refused as a bare string
-  rather than as a field name holding a comma. Pass a list: `["title"]`.
+- **`MultiFieldSource` takes a non-empty sequence of field names and refuses
+  anything else** with `ValidationError`. Each of these built a source that
+  composed nothing, or failed with a bare `TypeError`:
+  - **a bare string**: `MultiFieldSource(db, "title")` built a source over the
+    fields `t, i, t, l, e`, and every row composed empty text. `"a,b"` is now
+    refused as a bare string rather than as a field name holding a comma;
+  - **a generator**: the constructor's comma check used it up, so
+    `source_field` was `""`, every row composed nothing, and an index built
+    over the source wrote no rows and raised nothing;
+  - **a set or a mapping**: the fields set the order a text is composed in,
+    and neither has an order to give;
+  - **a member that is not a string**: `fields=[5]` raised a bare `TypeError`;
+  - **no fields at all**: `fields=[]` built, and every row composed empty text.
+
+  **Migration:** pass a list or a tuple of names, in order: `["title"]`.
 
 - **`dataknobs-data[postgres]` installs from wheels.** The extra required the
   `psycopg2` distribution, which is an sdist on macOS and Linux and builds only
