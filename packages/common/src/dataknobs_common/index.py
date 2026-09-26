@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -46,17 +47,37 @@ from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.exceptions import ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ALIAS_FORM_SEPARATOR",
+    "DEFAULT_ALIASES_LABEL",
     "AliasSource",
     "AsyncIndexSource",
     "CallableSource",
     "IndexItem",
     "MappingSource",
+    "fold_forms",
+    "join_non_empty",
+    "refuse_non_sequence_of_names",
+    "refuse_unjoinable_field_name",
 ]
+
+#: What goes between two surface forms folded into one text.
+#:
+#: The value the retrieval measurement scored, and published rather than
+#: configurable because nothing has varied it. A key beside the label is the
+#: small addition if a caller needs another.
+ALIAS_FORM_SEPARATOR = "; "
+
+#: What goes in front of the folded forms, unless a caller says otherwise.
+#:
+#: Also the measured value. Whether a label helps retrieval at all is not
+#: settled, which is why the empty string is an accepted label rather than a
+#: mistake: it is the configuration that would measure it.
+DEFAULT_ALIASES_LABEL = "Also called: "
 
 
 def join_non_empty(values: Sequence[Any], join: str) -> str:
@@ -85,6 +106,117 @@ def join_non_empty(values: Sequence[Any], join: str) -> str:
     """
     rendered = [str(value).strip() for value in values if value is not None]
     return join.join(value for value in rendered if value)
+
+
+def fold_forms(
+    forms: Iterable[object] | str, *, beside: str, label: str = DEFAULT_ALIASES_LABEL
+) -> str:
+    """The forms *beside* does not already hold, joined, behind a label --- or ``""``.
+
+    How an entity's surface forms go into its own row rather than into rows of
+    their own. A store keyed on id keeps one row per id, so forms written as
+    items of their own collapse into whichever came last; folded into the
+    entity's text, they are embedded with it and the row survives whole.
+
+    **"Already holds" is casefolded containment, not equality.** That is the
+    rule the retrieval measurement scored: a form repeating what the text says
+    adds nothing a query could match on. Its known hazard is a form that is a
+    substring of a different word --- ``"Eagle"`` is dropped beside
+    ``"Beagle"``. *beside* is compared whole, separators included, so the
+    same holds for a form inside a separator the caller joined into it
+    (``"-"`` beside ``" -- "``) and for one spanning two joined values.
+    Whole-word matching is the obvious alternative and it is unmeasured, so
+    it is not taken here.
+
+    ``""`` rather than a bare label when nothing survives, so
+    :func:`join_non_empty` drops the slot and no separator or label dangles.
+    Forms are not de-duplicated among themselves, which is also as measured.
+
+    **Here beside :func:`join_non_empty`, and public**, for the reason that
+    helper gives: it is a pure algorithm over values. A caller composing its
+    own source can fold forms the way the configured route does rather than
+    copying it.
+
+    Args:
+        forms: The surface forms, in order. Each is rendered with ``str`` and
+            stripped; ``None`` and blank forms are dropped. A bare string is
+            one form, not its characters, which is the alias key's own rule.
+        beside: The text the forms are folded into --- what the row embeds
+            besides them. Compared with, never included in, the result.
+        label: What goes in front of the forms, verbatim: no separator is
+            added, so a label that should be followed by a space ends in one.
+            ``""`` gives the forms bare.
+
+    Returns:
+        The label and the surviving forms joined by
+        :data:`ALIAS_FORM_SEPARATOR`, or ``""`` where none survived.
+    """
+    if isinstance(forms, str):
+        forms = (forms,)
+    held = beside.casefold()
+    rendered = [str(form).strip() for form in forms if form is not None]
+    kept = [form for form in rendered if form and form.casefold() not in held]
+    if not kept:
+        return ""
+    return f"{label}{ALIAS_FORM_SEPARATOR.join(kept)}"
+
+
+def refuse_non_sequence_of_names(
+    names: object, *, role: str, context: Mapping[str, Any] | None = None
+) -> None:
+    """Refuse anything but a sequence of strings where field names are declared.
+
+    **A string first, because the annotation admits it.** A ``str`` is a
+    ``Sequence[str]``, and iterating it yields its characters, so
+    ``fields="title"`` reads as five one-letter fields no record carries:
+    silently empty text in one source, and in another a refusal naming the
+    letters rather than the mistake.
+
+    **Then anything that is not a sequence** --- a set, a mapping, a
+    generator, a number. The names set the order a text is composed in, and
+    a set or a mapping's keys has no order to give. A generator is used up
+    by the first pass over it, so a source that checks its names at
+    construction was left holding none, and composed empty text for every
+    row. A number raised ``TypeError`` at the first iteration.
+
+    **Then a member that is not a string**, which escaped as a bare
+    ``TypeError`` from whichever string operation reached it first.
+
+    Whether an empty sequence is allowed is each source's own question,
+    answered in its own terms, so it is not asked here. Asked first by every
+    source taking a sequence of names, so the caller is told what they wrote.
+
+    Args:
+        names: What the caller passed as the sequence of names.
+        role: What the sequence is to the caller, for the message ---
+            ``"`fields` of MultiFieldSource"``.
+        context: What the caller's other refusals carry in their context,
+            so this one carries it too --- ``{"ontology_id": ...}``. Merged
+            under the keys this function writes.
+
+    Raises:
+        ValidationError: *names* is a string, is not a sequence, or holds a
+            member that is not a string.
+    """
+    base = dict(context or {})
+    if isinstance(names, str):
+        raise ValidationError(
+            f"{role} is the bare string {names!r}; it takes a sequence of field names, "
+            f"and a string is read as its characters rather than as a list of one",
+            context={**base, "value": names, "role": role},
+        )
+    if not isinstance(names, SequenceABC):
+        raise ValidationError(
+            f"{role} is {names!r}; it takes a sequence of field names, in the order "
+            f"the text is composed in",
+            context={**base, "value": names, "role": role},
+        )
+    strays = [name for name in names if not isinstance(name, str)]
+    if strays:
+        raise ValidationError(
+            f"{role} holds {strays!r}, which is not a string; each member is a field name",
+            context={**base, "value": list(names), "role": role},
+        )
 
 
 def refuse_unjoinable_field_name(name: str, *, role: str) -> None:
@@ -341,13 +473,18 @@ class AliasSource:
         there.** This class produces N items for one entity by design, and a
         vector store upserts on id conflict --- measured: three items sharing
         an id leave one row, carrying the *last* form rather than the
-        canonical name. Whether the extra rows need vector ids distinct from
-        the entity id, and under what grammar, is not settled by any ruling
-        this class could read, so it is not decided here. Use this source
-        where the reader de-duplicates by id, or where the store is keyed on
-        something else, until it is. The row that survives describes itself
-        correctly: it names :attr:`aliases_field` as its source field and
-        its text is among that field's values.
+        canonical name. Every ``VectorStore`` is keyed on id by its
+        ``add_vectors`` contract, so there is no store this class can be
+        indexed into whole. To index an entity's forms, list ``aliases`` in
+        :class:`~dataknobs_common.ontology.EntitySourceIndexSource`'s
+        ``fields``, which folds them into the entity's own row through
+        :func:`fold_forms`. Use this source where the reader de-duplicates by
+        id --- a caller reading :meth:`stream_items` itself. Whether the extra
+        rows need vector ids distinct from the entity id, and under what
+        grammar, is not settled by any ruling this class could read, so it is
+        not decided here. The row that survives describes itself correctly: it
+        names :attr:`aliases_field` as its source field and its text is among
+        that field's values.
 
     Example:
         ```python
@@ -415,7 +552,7 @@ class AliasSource:
         from a ``finally``, and ``RecordFieldSource`` over PostgreSQL yields
         from inside an acquired connection and an open transaction.
         Measured with this class in front of the ontology adapter --- the
-        composition an ``index:`` block with ``aliases: true`` builds --- the
+        composition an ``index:`` block with ``aliases: true`` used to build --- the
         leaf's report arrived after the consumer had already handled the
         failure instead of with it.
         """

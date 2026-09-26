@@ -27,7 +27,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dataknobs_common.async_iter import aclosing_iter
-from dataknobs_common.index import IndexItem, join_non_empty, refuse_unjoinable_field_name
+from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.index import (
+    IndexItem,
+    join_non_empty,
+    refuse_non_sequence_of_names,
+    refuse_unjoinable_field_name,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -159,11 +165,26 @@ class MultiFieldSource:
     declared: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        """Refuse a field name that :attr:`source_field` could not carry.
+        """Refuse anything but a non-empty sequence of names :attr:`source_field` can carry.
 
-        The names are comma-joined into that key, so one holding a comma
-        would be read back as several (see :attr:`source_field`).
+        A string is a ``Sequence[str]``, so ``fields="title"`` built a source
+        over the fields ``t, i, t, l, e`` and composed empty text for every
+        row; it is refused first, so ``"a,b"`` is named as the string it is
+        rather than as a field holding a comma. A generator was used up by
+        the comma check below and left the source composing from nothing, so
+        anything but a sequence is refused, and so is a member that is not a
+        string. No fields at all composes empty text for every row, so an
+        index over it holds nothing. The names are comma-joined into
+        :attr:`source_field`, so one holding a comma would be read back as
+        several.
         """
+        refuse_non_sequence_of_names(self.fields, role="`fields` of MultiFieldSource")
+        if not self.fields:
+            raise ValidationError(
+                "`fields` of MultiFieldSource names no fields; every row would compose "
+                "empty text, so an index over it would hold nothing",
+                context={"value": list(self.fields), "role": "`fields` of MultiFieldSource"},
+            )
         for name in self.fields:
             refuse_unjoinable_field_name(name, role="text field")
 

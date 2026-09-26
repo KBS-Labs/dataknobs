@@ -50,7 +50,8 @@ from dataknobs_common.ontology import (
     refuse_unbuildable_rungs,
     split_qualified,
 )
-from dataknobs_common.index import AliasSource, AsyncIndexSource
+from dataknobs_common.index import AsyncIndexSource, refuse_non_sequence_of_names
+from dataknobs_common.ontology.index_source import DEFAULT_FIELDS as _DEFAULT_INDEX_FIELDS
 from dataknobs_common.ontology.index_source import EntitySourceIndexSource
 from dataknobs_common.ontology.model import DK_ENTITY_TYPE, DK_RELATION_TYPE
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -91,7 +92,9 @@ from dataknobs_data.vector.types import DistanceMetric
 #: dropped the rest, which made ``metirc:`` a configuration the registry took,
 #: reported success over, and acted on in no way. The same silent-drop failure
 #: the ``embedder:`` refusal in that method exists to prevent.
-INDEX_BLOCK_KEYS = frozenset({"store", "embedder", "metric", "fields", "join", "aliases"})
+INDEX_BLOCK_KEYS = frozenset(
+    {"store", "embedder", "metric", "fields", "join", "aliases", "aliases_label"}
+)
 
 #: The keys a ``resolver:`` section is read for, and the only ones.
 #:
@@ -1929,30 +1932,35 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     def _index_source_from(
         self, block: Mapping[str, Any], ontology: AsyncOntology[str]
     ) -> AsyncIndexSource:
-        """The source an ``index:`` block describes, decorated if it asks to be.
+        """The source an ``index:`` block describes.
 
         The block used to build ``EntitySourceIndexSource(ontology)`` and
         nothing else, so a document could not name the fields its text is
-        composed from, could not set the separator between them, and could not
-        reach :class:`~dataknobs_common.index.AliasSource` at all --- which is
-        a published class whose only route was Python. A reference
-        implementation shipped beside a configured door that cannot name it is
-        a seam rather than a feature.
+        composed from or set the separator between them. It reads both now,
+        and ``aliases_label:``, which the adapter owns the refusals for.
+
+        **``aliases: true`` is refused, whatever ``fields:`` says.** It wrapped
+        the source in :class:`~dataknobs_common.index.AliasSource`, which
+        writes every surface form under its entity's id, and every store this
+        door can open keeps one row per id --- so the index held whichever
+        form came last and lost the text ``fields:`` composed. The route that
+        replaces it is ``aliases`` in ``fields:``, which folds the forms into
+        the entity's own row. ``aliases: false`` stays accepted and means
+        what it says.
 
         Args:
             block: The ``index:`` section, already checked for unread keys.
             ontology: The vocabulary the source enumerates.
 
         Returns:
-            The source, wrapped in the surface-form decorator where the block
-            asked for one.
+            The source.
 
         Raises:
-            ValidationError: When ``fields:``, ``join:`` or ``aliases:`` is
-                malformed, when the block names fields an entity does not
-                carry, or when the source cannot be enumerated. Every refusal
-                reachable from here is one, which is the guarantee the door
-                above it makes.
+            ValidationError: When ``fields:``, ``join:``, ``aliases:`` or
+                ``aliases_label:`` is malformed, when ``aliases:`` is true,
+                when the block names fields an entity does not carry, or when
+                the source cannot be enumerated. Every refusal reachable from
+                here is one, which is the guarantee the door above it makes.
         """
         # Built as kwargs rather than passed positionally so the adapter keeps
         # ownership of its own defaults: a block naming neither key gets
@@ -1963,18 +1971,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         fields = block.get("fields")
         if fields is not None:
             # A bare scalar in YAML is a string, so `fields: name` is what a
-            # consumer writes by hand -- and `tuple("name")` is four
-            # one-character field names, so the adapter's refusal would name
-            # 'a', 'e', 'm', 'n' rather than the mistake. A non-sequence raised
-            # `TypeError` past a door whose every other refusal is a
-            # `ValidationError` about a document.
-            if isinstance(fields, str) or not isinstance(fields, Sequence):
-                raise ValidationError(
-                    f"ontology {ontology.id!r} declares `index.fields: {fields!r}`; it takes "
-                    f"a list of entity field names, and a bare string is one name spelled "
-                    f"as its characters rather than a list of one",
-                    context={"ontology_id": ontology.id, "fields": fields},
-                )
+            # consumer writes by hand. The adapter asks the same question, but
+            # asked here the refusal names the document key.
+            refuse_non_sequence_of_names(
+                fields,
+                role=f"`index.fields:` of ontology {ontology.id!r}",
+                context={"ontology_id": ontology.id},
+            )
             configured["fields"] = tuple(fields)
 
         join = block.get("join")
@@ -1989,7 +1992,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 )
             configured["join"] = join
 
-        leaf = EntitySourceIndexSource(ontology, **configured)
+        # An explicit null is the key left out, as it is for `join:` above, so
+        # it is not forwarded and the adapter's label refusals never see it.
+        aliases_label = block.get("aliases_label")
+        if aliases_label is not None:
+            configured["aliases_label"] = aliases_label
 
         aliases = block.get("aliases")
         # Checked for being a boolean rather than for truthiness: `aliases: "no"`
@@ -2000,11 +2007,28 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 f"or off, so it is `true` or `false`",
                 context={"ontology_id": ontology.id, "aliases": aliases},
             )
-        if not aliases:
-            return leaf
-        # Pointed at the leaf's own key rather than at the constant, so the
-        # two ends of a one-key contract cannot be spelled apart here.
-        return AliasSource(leaf, leaf.aliases_key)
+        # Unconditional. The ruling refuses this over a store keyed on id, and
+        # every store this door can build is one: it builds only `VectorStore`s,
+        # whose `add_vectors` contract is to upsert on id conflict, so the
+        # exemption for a store keyed on something else has no member here. A
+        # class attribute declaring the keying would be the shape to read if
+        # such a store ever appears. Refused before the store opens, like
+        # everything else this method can refuse.
+        if aliases:
+            raise ValidationError(
+                f"ontology {ontology.id!r} declares `index.aliases: true`. Every surface "
+                f"form would be written under its entity's id, and a vector store keeps "
+                f"one row per id, so the index would hold whichever form came last and "
+                f"lose the text `fields:` composed. To index aliases, list `aliases` in "
+                f"`fields:`",
+                context={
+                    "ontology_id": ontology.id,
+                    "aliases": True,
+                    "fields": list(configured.get("fields", _DEFAULT_INDEX_FIELDS)),
+                },
+            )
+
+        return EntitySourceIndexSource(ontology, **configured)
 
     async def _vector_store_handle(self, block: dict[str, Any]) -> VectorStore:
         """A vector store for one resolved ``store:`` block, built once.

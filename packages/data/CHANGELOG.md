@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An ontology `index:` block with `aliases: true` is refused.** It indexed
+  each surface form as a row of its own under the entity's id, and every vector
+  store the block can open keeps one row per id, so the index held one row per
+  entity carrying whichever form came last, and the text `fields:` composed was
+  lost. The refusal is a `ValidationError` raised at load, before the store is
+  opened, whatever `fields:` says. `aliases: false` still loads and does
+  nothing.
+
+  **Migration:** to index aliases, remove `aliases: true` and list `aliases` in
+  `fields:`, for example `fields: [name, description, aliases]`. Each entity is
+  then one row whose text is followed by the forms its other fields do not
+  already contain (`Bolt -- a fastener -- Also called: Hex bolt`). Its source
+  field reads `name,description,aliases`. **Then rebuild the index**: a
+  persistent store (Chroma, pgvector, FAISS on disk) keeps its collapsed rows
+  until `build()` writes each entity's folded row over them, and nothing
+  reports the difference, because the staleness check compares the embedder's
+  model name alone. A caller who needs one item per form can still build
+  `AliasSource` in Python; its forms still collide in a store keyed on id.
+
 - **The `postgres` extra no longer installs `sqlalchemy`.** Nothing in this
   package imports it. **Migration:** code that imports `sqlalchemy` and relied
   on this extra to install it must declare that dependency itself.
@@ -838,6 +857,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`index.aliases_label:`** sets what goes in front of an entity's folded
+  surface forms when `aliases` is in `fields:`. It defaults to
+  `"Also called: "`, and `""` gives the forms bare. It is used verbatim, so
+  quote it and end it with the space you want (`aliases_label: "aka "`); a
+  plain YAML scalar drops a trailing space. It is refused when `aliases` is
+  not in `fields:`, since nothing would read it. An explicit `null` reads as
+  the key left out, as it does for `join:`.
+
 - **`HoldingStreamDatabase`**, in `dataknobs_data.testing` -- an
   `AsyncDatabase` whose `stream_read` acquires something at the top and
   releases it in a `finally`, so a test can assert that a consumer closed the
@@ -1237,6 +1264,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **`MultiFieldSource` takes a non-empty sequence of field names and refuses
+  anything else** with `ValidationError`. Each of these built a source that
+  composed nothing, or failed with a bare `TypeError`:
+  - **a bare string**: `MultiFieldSource(db, "title")` built a source over the
+    fields `t, i, t, l, e`, and every row composed empty text. `"a,b"` is now
+    refused as a bare string rather than as a field name holding a comma;
+  - **a generator**: the constructor's comma check used it up, so
+    `source_field` was `""`, every row composed nothing, and an index built
+    over the source wrote no rows and raised nothing;
+  - **a set or a mapping**: the fields set the order a text is composed in,
+    and neither has an order to give;
+  - **a member that is not a string**: `fields=[5]` raised a bare `TypeError`;
+  - **no fields at all**: `fields=[]` built, and every row composed empty text.
+
+  **Migration:** pass a list or a tuple of names, in order: `["title"]`.
 
 - **`dataknobs-data[postgres]` installs from wheels.** The extra required the
   `psycopg2` distribution, which is an sdist on macOS and Linux and builds only

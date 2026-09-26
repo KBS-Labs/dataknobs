@@ -25,11 +25,14 @@ import pytest
 
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.index import (
+    ALIAS_FORM_SEPARATOR,
+    DEFAULT_ALIASES_LABEL,
     AliasSource,
     AsyncIndexSource,
     CallableSource,
     IndexItem,
     MappingSource,
+    fold_forms,
 )
 
 if TYPE_CHECKING:
@@ -335,7 +338,7 @@ async def test_a_source_driving_another_closes_it_when_it_is_closed(
     is closed: its cleanup then runs when the interpreter finalizes it, a
     later turn of the loop, unordered against whatever the consumer does
     next. Measured through ``AliasSource`` in front of the ontology adapter
-    --- the composition an ``index:`` block with ``aliases: true`` builds ---
+    --- the composition an ``index:`` block with ``aliases: true`` used to build ---
     the leaf's report arrived after the consumer had already handled the
     failure rather than with it.
 
@@ -351,3 +354,63 @@ async def test_a_source_driving_another_closes_it_when_it_is_closed(
         assert holder.held == 1, "the inner iterator is open while the outer is being read"
 
     assert holder.held == 0, "closing the outer did not close the inner"
+
+
+# --------------------------------------------------------------------------
+# Folding an entity's forms into its own text
+# --------------------------------------------------------------------------
+
+
+def test_forms_the_text_does_not_hold_are_joined_behind_the_label() -> None:
+    """The survivors, in order, one separator between them and the label in front."""
+    folded = fold_forms(["Hex bolt", "Carriage bolt"], beside="Bolt -- a fastener")
+
+    assert folded == f"{DEFAULT_ALIASES_LABEL}Hex bolt{ALIAS_FORM_SEPARATOR}Carriage bolt"
+    assert folded == "Also called: Hex bolt; Carriage bolt"
+
+
+def test_a_form_the_text_already_holds_is_dropped_whatever_its_case() -> None:
+    """Embedding a form twice adds nothing a query can match on, so it is dropped."""
+    assert fold_forms(["BOLT", "Fastener", "Hex bolt"], beside="Bolt -- a fastener") == (
+        "Also called: Hex bolt"
+    )
+
+
+@pytest.mark.parametrize(
+    "forms",
+    [[], (), ["Bolt"], [None, "", "  "]],
+    ids=["no-forms", "an-empty-tuple", "every-form-present", "none-and-blank"],
+)
+def test_nothing_left_to_fold_is_the_empty_string_and_no_label(forms: list[object]) -> None:
+    """``""`` rather than a label with nothing after it.
+
+    ``join_non_empty`` drops an empty value, so an entity with nothing to
+    add composes exactly the text it would have composed without the slot.
+    """
+    assert fold_forms(forms, beside="Bolt") == ""
+
+
+def test_a_form_is_rendered_as_text_and_stripped() -> None:
+    assert fold_forms([42, "  Hex bolt  "], beside="Bolt") == "Also called: 42; Hex bolt"
+
+
+def test_a_bare_string_is_one_form_rather_than_its_characters() -> None:
+    """The alias key's own rule, which ``AliasSource`` reads the same way."""
+    assert fold_forms("Hex bolt", beside="Bolt") == "Also called: Hex bolt"
+
+
+def test_the_label_is_the_callers_and_the_empty_label_gives_bare_forms() -> None:
+    assert fold_forms(["Hex bolt"], beside="Bolt", label="aka ") == "aka Hex bolt"
+    assert fold_forms(["Hex bolt"], beside="Bolt", label="") == "Hex bolt"
+
+
+def test_already_present_means_a_substring_of_the_text_which_is_what_was_measured() -> None:
+    """The rule is containment, not equality, and this is its known hazard.
+
+    ``"Eagle"`` is a substring of ``"Beagle"``, so a form that names a
+    different thing is dropped beside it. That is the rule the retrieval
+    measurement scored, and it is pinned **as intended**: whole-word matching
+    is the obvious alternative, and it changes the embedded text, so it needs
+    a measurement of its own rather than a change here.
+    """
+    assert fold_forms(["Eagle"], beside="Beagle") == ""

@@ -613,3 +613,166 @@ async def test_closing_a_stream_whose_rows_carry_text_reports_nothing(
                 break
 
     assert [record for record in caplog.records if record.levelname == "WARNING"] == []
+
+
+# --------------------------------------------------------------------------
+# An entity's aliases, folded into its own row
+# --------------------------------------------------------------------------
+
+#: One entity carrying forms its text holds and forms it does not.
+#:
+#: ``THREE_TYPES`` cannot show the fold: every one of its forms is a
+#: substring of its entity's text, so it folds to nothing. ``Fastener`` is in
+#: the description and ``BOLT`` is the name recased, so both are dropped; the
+#: other two are kept. ``nut`` has no aliases and ``washer`` has only forms
+#: its name already holds, so neither gains a label.
+FASTENERS = """\
+ontology:
+  id: parts
+  version: "1.0"
+
+  entities:
+    - {id: bolt-2, type: Product, name: Bolt, description: a fastener,
+       aliases: [Fastener, "Hex bolt", BOLT, "Carriage bolt"]}
+    - {id: nut, type: Product, name: Nut}
+    - {id: washer, type: Product, name: Washer, aliases: [washer, WASHER]}
+"""
+
+
+async def _fasteners(tmp_path: Path) -> AsyncOntology[str]:
+    path = tmp_path / "parts.yaml"
+    path.write_text(FASTENERS)
+    return await async_load_ontology(path)
+
+
+async def _texts(source: EntitySourceIndexSource[str]) -> dict[str, str]:
+    return {item.id: item.text async for item in source.stream_items()}
+
+
+async def test_aliases_is_a_field_an_index_source_may_compose_from(tmp_path: Path) -> None:
+    """The route that replaces the decorator: the forms go in the entity's own row."""
+    parts = await _fasteners(tmp_path)
+
+    texts = await _texts(EntitySourceIndexSource(parts, fields=("name", "description", "aliases")))
+
+    assert texts["parts:bolt-2"] == "Bolt -- a fastener -- Also called: Hex bolt; Carriage bolt"
+    assert texts["parts:nut"] == "Nut"
+    assert texts["parts:washer"] == "Washer"
+
+
+async def test_the_forms_are_compared_with_every_other_chosen_field_and_follow_fields_order(
+    tmp_path: Path,
+) -> None:
+    """``fields:`` sets the position; the other chosen fields decide what is new.
+
+    Without ``description``, ``Fastener`` is no longer in the text, so it is
+    kept --- the comparison is with what this row actually embeds, not with
+    everything the entity carries.
+    """
+    parts = await _fasteners(tmp_path)
+
+    texts = await _texts(EntitySourceIndexSource(parts, fields=("aliases", "name")))
+
+    assert texts["parts:bolt-2"] == "Also called: Fastener; Hex bolt; Carriage bolt -- Bolt"
+
+
+async def test_the_forms_are_not_rendered_as_a_python_list(tmp_path: Path) -> None:
+    """``join_non_empty`` calls ``str()`` on a value, and a list's ``str()`` is its repr.
+
+    So admitting the name without a renderer embeds ``['Hex bolt', ...]``
+    in every row, and ``[]`` in every row with no aliases.
+    """
+    parts = await _fasteners(tmp_path)
+
+    texts = await _texts(EntitySourceIndexSource(parts, fields=("name", "aliases")))
+
+    assert not any("[" in text for text in texts.values()), texts
+
+
+async def test_a_folded_row_names_all_three_fields(tmp_path: Path) -> None:
+    """The comma-joined grammar, unchanged: a folded row's text came from all three."""
+    parts = await _fasteners(tmp_path)
+    source = EntitySourceIndexSource(parts, fields=("name", "description", "aliases"))
+
+    assert source.source_field == "name,description,aliases"
+
+
+async def test_the_label_is_configurable_and_empty_means_bare_forms(tmp_path: Path) -> None:
+    parts = await _fasteners(tmp_path)
+
+    labelled = await _texts(
+        EntitySourceIndexSource(parts, fields=("name", "aliases"), aliases_label="aka ")
+    )
+    bare = await _texts(
+        EntitySourceIndexSource(parts, fields=("name", "aliases"), aliases_label="")
+    )
+
+    assert labelled["parts:bolt-2"] == "Bolt -- aka Fastener; Hex bolt; Carriage bolt"
+    assert bare["parts:bolt-2"] == "Bolt -- Fastener; Hex bolt; Carriage bolt"
+
+
+async def test_a_label_that_configures_nothing_is_refused(tmp_path: Path) -> None:
+    """A label with ``aliases`` absent from ``fields`` is read by nothing.
+
+    Which is the silent drop the registry's key check exists to refuse, so the
+    constructor refuses it too --- a Python caller and a document get one
+    answer. The empty label is refused here as well: it configures the same
+    nothing.
+    """
+    parts = await _fasteners(tmp_path)
+
+    for label in ("aka ", ""):
+        with pytest.raises(ValidationError, match="aliases_label"):
+            EntitySourceIndexSource(parts, fields=("name",), aliases_label=label)
+
+
+async def test_a_label_that_is_not_a_string_is_refused(tmp_path: Path) -> None:
+    parts = await _fasteners(tmp_path)
+
+    with pytest.raises(ValidationError, match="aliases_label"):
+        EntitySourceIndexSource(
+            parts,
+            fields=("name", "aliases"),
+            aliases_label=5,  # type: ignore[arg-type]
+        )
+
+
+async def test_a_bare_string_of_fields_is_refused_by_its_own_name(tmp_path: Path) -> None:
+    """``fields="name"`` is a list of four one-letter names, so say what it was.
+
+    The refusal used to arrive from the field check, naming ``'a', 'e', 'm',
+    'n'``, which is not the mistake the caller made.
+    """
+    parts = await _fasteners(tmp_path)
+
+    with pytest.raises(ValidationError, match="bare string 'name'") as refused:
+        EntitySourceIndexSource(parts, fields="name")
+
+    assert "'a', 'e'" not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("fields", "match"),
+    [
+        ({"name"}, "sequence of field names"),
+        ({"name": 1}, "sequence of field names"),
+        ((name for name in ["name"]), "sequence of field names"),
+        (["name", 5], "not a string"),
+        ([None], "not a string"),
+    ],
+    ids=["a-set", "a-mapping", "a-generator", "a-number-member", "a-none-member"],
+)
+async def test_fields_that_are_not_a_sequence_of_names_are_refused_naming_the_ontology(
+    tmp_path: Path, fields: object, match: str
+) -> None:
+    """Each is refused as the mistake it is, with the ontology in its context.
+
+    A set used to load in an arbitrary order, and ``["name", 5]`` raised a
+    bare ``TypeError`` from sorting the unknown names.
+    """
+    parts = await _fasteners(tmp_path)
+
+    with pytest.raises(ValidationError, match=match) as refused:
+        EntitySourceIndexSource(parts, fields=fields)  # type: ignore[arg-type]
+
+    assert refused.value.context["ontology_id"] == "parts"

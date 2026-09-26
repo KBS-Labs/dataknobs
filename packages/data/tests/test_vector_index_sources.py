@@ -385,3 +385,62 @@ async def test_a_source_over_a_database_closes_the_read_it_opened(
         assert database.held == 1, "the read is open while the source is being read"
 
     assert database.held == 0, "closing the source did not close the read"
+
+
+@pytest.mark.parametrize("fields", ["title", "a,b"], ids=["a-name", "a-comma-list"])
+async def test_a_bare_string_of_fields_is_refused_by_its_own_name(
+    catalogue: AsyncMemoryDatabase, fields: str
+) -> None:
+    """``MultiFieldSource(db, "title")`` built, over the fields ``t, i, t, l, e``.
+
+    A string is a ``Sequence[str]``, so nothing stopped it, and every row then
+    composed empty text from five fields no record carries. ``"a,b"`` reached
+    the comma refusal instead, which names a different mistake than the one
+    made: the caller meant two names and wrote one string.
+    """
+    with pytest.raises(ValidationError, match=f"bare string {fields!r}") as refused:
+        MultiFieldSource(catalogue, fields)
+
+    assert "comma" not in str(refused.value)
+
+
+async def test_a_generator_of_fields_is_refused_rather_than_used_up(
+    catalogue: AsyncMemoryDatabase,
+) -> None:
+    """A generator of names built a source that composed nothing.
+
+    ``__post_init__`` iterated ``fields`` to check each name for a comma, which
+    used the generator up. So ``source_field`` joined nothing (``""``), every
+    row composed empty text, and an index built over the source wrote no rows
+    and raised nothing. A generator is not a sequence, so it is refused.
+    """
+    with pytest.raises(ValidationError, match="sequence of field names"):
+        MultiFieldSource(catalogue, (name for name in ["title", "summary"]))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"title", "summary"}, {"title": 1}],
+    ids=["a-set", "a-mapping"],
+)
+async def test_an_unordered_collection_of_fields_is_refused(
+    catalogue: AsyncMemoryDatabase, fields: object
+) -> None:
+    """The fields set the text's order, and a set or a mapping's keys has none to give."""
+    with pytest.raises(ValidationError, match="sequence of field names"):
+        MultiFieldSource(catalogue, fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("fields", [[5], ["title", None]], ids=["a-number", "a-none"])
+async def test_a_field_name_that_is_not_a_string_is_refused(
+    catalogue: AsyncMemoryDatabase, fields: list[object]
+) -> None:
+    """It escaped as a bare ``TypeError`` from the comma check, which no caller documents."""
+    with pytest.raises(ValidationError, match="not a string"):
+        MultiFieldSource(catalogue, fields)  # type: ignore[arg-type]
+
+
+async def test_no_fields_at_all_is_refused(catalogue: AsyncMemoryDatabase) -> None:
+    """``fields=[]`` built, and every row composed empty text, so the index held nothing."""
+    with pytest.raises(ValidationError, match="no fields"):
+        MultiFieldSource(catalogue, [])

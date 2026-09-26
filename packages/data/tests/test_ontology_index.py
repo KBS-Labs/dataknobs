@@ -16,6 +16,7 @@ assert on what the first wrote.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -25,6 +26,7 @@ from dataknobs_common.index import AliasSource, AsyncIndexSource, CallableSource
 from dataknobs_common.ontology import (
     ALIAS_FORMS_KEY,
     ONTOLOGY_ID_KEY,
+    EntitySourceIndexSource,
     OntologyConfig,
 )
 from dataknobs_common.testing import requires_chromadb, requires_faiss
@@ -576,6 +578,32 @@ async def test_the_forms_collide_in_a_store_keyed_on_id() -> None:
 # --------------------------------------------------------------------------
 
 
+@asynccontextmanager
+async def _aliased_index() -> AsyncIterator[SemanticIndex]:
+    """:data:`CATALOG`'s entities behind the surface-form decorator, built in Python.
+
+    What an ``index:`` block with ``aliases: true`` used to build. The registry
+    loads the vocabulary with no index section, and the composition is made
+    by hand from the published classes.
+    """
+    registry = await _registry(_document())
+    store = await _store()
+    try:
+        ontology = registry.get("catalog")
+        assert ontology is not None
+        yield SemanticIndex(
+            AliasSource(
+                EntitySourceIndexSource(ontology, fields=("name", "description")),
+                ALIAS_FORMS_KEY,
+            ),
+            DeterministicEmbedder(dimensions=DIMENSIONS),
+            store,
+        )
+    finally:
+        await store.close()
+        await registry.close()
+
+
 async def _hits_by_id(index: SemanticIndex) -> dict[str, Any]:
     """One hit per row, keyed by id --- the store holds one row per id."""
     hits = await index.search("Acme", k=10)
@@ -590,18 +618,12 @@ async def test_every_row_an_aliased_index_writes_says_what_its_text_came_from() 
     recorded ``None`` --- the value this pair exists to distinguish from.
     The row with no aliases is the plain case: its text is the leaf's
     composition, and it says so in the leaf's own spelling.
+
+    The registry now refuses ``aliases: true``, so this composition is
+    reachable only from Python, and the per-row label is that route's
+    guarantee.
     """
-    document = _document(
-        index={
-            "store": {"backend": "memory", "dimensions": DIMENSIONS},
-            "fields": ["name", "description"],
-            "aliases": True,
-        }
-    )
-    registry = await _registry(document)
-    try:
-        index = registry.index("catalog")
-        assert index is not None
+    async with _aliased_index() as index:
         await index.build()
 
         hits = await _hits_by_id(index)
@@ -612,8 +634,6 @@ async def test_every_row_an_aliased_index_writes_says_what_its_text_came_from() 
         bolt = hits["catalog:sku-8802"]
         assert bolt.source_text == "Bolt"
         assert bolt.vector_field == "name,description"
-    finally:
-        await registry.close()
 
 
 async def test_the_row_a_collapse_leaves_names_the_field_its_alias_came_from() -> None:
@@ -626,18 +646,11 @@ async def test_the_row_a_collapse_leaves_names_the_field_its_alias_came_from() -
     both. So each form states its own field, and the check here is the one a
     reader can make from the hit alone: the text is among the values of the
     field the row names.
+
+    Reachable only from Python now that the registry refuses ``aliases:
+    true``, as the test above says.
     """
-    document = _document(
-        index={
-            "store": {"backend": "memory", "dimensions": DIMENSIONS},
-            "fields": ["name", "description"],
-            "aliases": True,
-        }
-    )
-    registry = await _registry(document)
-    try:
-        index = registry.index("catalog")
-        assert index is not None
+    async with _aliased_index() as index:
         await index.build()
 
         hits = await _hits_by_id(index)
@@ -647,8 +660,6 @@ async def test_the_row_a_collapse_leaves_names_the_field_its_alias_came_from() -
             assert hit.source_text == last_form
             assert hit.vector_field == ALIAS_FORMS_KEY
             assert hit.source_text in hit.metadata[hit.vector_field]
-    finally:
-        await registry.close()
 
 
 async def test_an_item_s_own_source_field_outranks_the_one_its_metadata_carries() -> None:
@@ -1125,19 +1136,19 @@ async def test_an_index_block_that_is_not_a_mapping_is_refused(block: Any) -> No
 
 
 async def test_the_index_block_configures_the_source_it_builds() -> None:
-    """``AliasSource`` shipped reachable only from Python, which is half a feature.
+    """``fields:`` and ``join:`` reach the source the block builds.
 
     The block hard-coded ``EntitySourceIndexSource(ontology)`` with its
     default single field, so a document could not ask for ``description`` in
-    the embedded text, could not set the separator, and could not reach the
-    surface-form decorator at all --- the headline of the layer above it.
+    the embedded text or set the separator. (It also could not reach the
+    surface-form decorator; it later could, through ``aliases: true``, which
+    is now refused --- the tests below.)
     """
     document = _document(
         index={
             "store": {"backend": "memory", "dimensions": DIMENSIONS},
             "fields": ["name", "description"],
             "join": " / ",
-            "aliases": True,
         }
     )
     registry = await _registry(document)
@@ -1145,20 +1156,142 @@ async def test_the_index_block_configures_the_source_it_builds() -> None:
         index = registry.index("catalog")
         assert index is not None
 
-        # Collected as a list per id rather than a mapping: the decorator
-        # yields several items under one id by design, and a dict keeps
-        # whichever came last -- which is the collision this composition is
-        # documented to have, not something to assert around by accident.
-        widget = [
-            item.text async for item in index.source.stream_items() if item.id == "catalog:sku-4471"
-        ]
+        texts = {item.id: item.text async for item in index.source.stream_items()}
 
-        # `fields:` and `join:` both reached the leaf, and the canonical text
-        # is first, which is the decorator's own ordering guarantee.
-        assert widget[0] == "Acme Widget / a widget"
-        # `aliases: true` reached the decorator, so the forms are items of
-        # their own rather than sitting unread in metadata.
-        assert widget[1:] == ["Widget", "ACME widget"]
+        assert texts["catalog:sku-4471"] == "Acme Widget / a widget"
+    finally:
+        await registry.close()
+
+
+# --------------------------------------------------------------------------
+# `aliases: true` is refused; `aliases` in `fields:` is the route
+# --------------------------------------------------------------------------
+
+#: :data:`CATALOG`'s forms are all substrings of their entities' text, so they
+#: fold to nothing. This entity carries one its text does not hold.
+FASTENER: dict[str, Any] = {
+    "id": "bolt-2",
+    "type": "Product",
+    "name": "Bolt",
+    "description": "a fastener",
+    "aliases": ["Fastener", "Hex bolt", "BOLT"],
+}
+
+
+def _with_fastener(index: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **CATALOG,
+        "entities": [*CATALOG["entities"], FASTENER],
+        "index": {"store": {"backend": "memory", "dimensions": DIMENSIONS}, **index},
+    }
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [None, ["name", "description"], ["name", "description", "aliases"]],
+    ids=["no-fields", "name-description", "with-aliases"],
+)
+async def test_aliases_true_is_refused_whatever_fields_says(fields: list[str] | None) -> None:
+    """Every form was written under its entity's id, into a store keyed on id.
+
+    So the index held one row per entity carrying whichever form came last,
+    and the text ``fields:`` composed was overwritten. Refused unconditionally:
+    every vector store this door can build upserts on id, by the base class's
+    contract. Before the store opens, so nothing is left behind, and naming
+    the route that replaces it.
+    """
+    block: dict[str, Any] = {"aliases": True}
+    if fields is not None:
+        block["fields"] = fields
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_with_fastener(block)),
+        embedder=DeterministicEmbedder(dimensions=DIMENSIONS),
+    )
+
+    with pytest.raises(ValidationError, match=r"index\.aliases: true") as refused:
+        await registry.load()
+
+    assert "list `aliases` in `fields:`" in str(refused.value)
+    assert refused.value.context["aliases"] is True
+    # The fields in effect, which is the adapter's default where the block names none.
+    assert refused.value.context["fields"] == (fields or ["name"])
+    assert registry._vector_store_cache == {}
+
+
+async def test_aliases_false_still_loads_and_builds_the_plain_source() -> None:
+    """``false`` means what it says, and it loaded before; it still does."""
+    registry = await _registry(_with_fastener({"aliases": False}))
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        assert isinstance(index.source, EntitySourceIndexSource)
+    finally:
+        await registry.close()
+
+
+async def test_aliases_in_fields_folds_the_forms_into_the_entitys_own_row() -> None:
+    """The route, end to end: one row per entity, holding its text and its new forms.
+
+    Over the decorator a store keyed on id kept one row per entity and it
+    held the last form alone, so the composed text was lost. Folded, the row
+    keeps both, and a form that the text already holds is not repeated.
+    """
+    registry = await _registry(_with_fastener({"fields": ["name", "description", "aliases"]}))
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        entities = len(CATALOG["entities"]) + 1
+
+        assert await index.build() == entities
+        assert await index.store.count() == entities
+
+        hits = await _hits_by_id(index)
+        bolt = hits["catalog:bolt-2"]
+        assert bolt.source_text == "Bolt -- a fastener -- Also called: Hex bolt"
+        assert bolt.vector_field == "name,description,aliases"
+    finally:
+        await registry.close()
+
+
+async def test_the_index_block_sets_the_label_in_front_of_the_forms() -> None:
+    registry = await _registry(
+        _with_fastener({"fields": ["name", "aliases"], "aliases_label": "aka "})
+    )
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        texts = {item.id: item.text async for item in index.source.stream_items()}
+        assert texts["catalog:bolt-2"] == "Bolt -- aka Fastener; Hex bolt"
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"fields": ["name", "description"], "aliases_label": "aka "},
+        {"fields": ["name", "aliases"], "aliases_label": 5},
+    ],
+    ids=["no-aliases-in-fields", "not-a-string"],
+)
+async def test_a_label_the_block_cannot_use_is_refused(block: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="aliases_label"):
+        await _registry(_with_fastener(block))
+
+
+async def test_an_explicit_null_label_reads_as_absent() -> None:
+    """``aliases_label: null`` is the key left out, as ``join: null`` is.
+
+    So it loads without ``aliases`` in ``fields:``, and configures nothing
+    because it states nothing: YAML writes ``aliases_label:`` with no value
+    as a null, which is what a document half-edited back to the default holds.
+    """
+    registry = await _registry(_with_fastener({"fields": ["name"], "aliases_label": None}))
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        texts = {item.id: item.text async for item in index.source.stream_items()}
+        assert texts["catalog:bolt-2"] == "Bolt"
     finally:
         await registry.close()
 
@@ -1257,6 +1390,7 @@ async def test_a_build_that_fails_partway_says_how_far_it_got() -> None:
     [
         ({"fields": "name"}, "fields"),
         ({"fields": 5}, "fields"),
+        ({"fields": ["name", 5]}, "fields"),
         ({"join": 5}, "join"),
         ({"aliases": "yes"}, "aliases"),
     ],
@@ -1279,8 +1413,12 @@ async def test_a_malformed_source_key_is_refused_as_a_validation_error(
     """
     document = _document(index={"store": {"backend": "memory", "dimensions": DIMENSIONS}, **block})
 
-    with pytest.raises(ValidationError, match=match):
+    with pytest.raises(ValidationError, match=match) as refused:
         await _registry(document)
+
+    # Every refusal at this door says which document it came from.
+    assert refused.value.context["ontology_id"] == "catalog"
+    assert "''" not in str(refused.value)
 
 
 # --------------------------------------------------------------------------

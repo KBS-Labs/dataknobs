@@ -371,6 +371,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     # entities are keyed by.
     ("EntitySourceIndexSource", "<field>", "_source_id", "schema"),
     ("EntitySourceIndexSource", "<field>", "aliases_key", "payload"),
+    ("EntitySourceIndexSource", "<field>", "aliases_label", "text"),
     ("EntitySourceIndexSource", "<field>", "fields", "schema"),
     ("EntitySourceIndexSource", "<field>", "join", "text"),
     ("EntitySourceIndexSource", "<field>", "ontology", "key"),
@@ -521,7 +522,7 @@ _REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 358
+_ROWS = 359
 
 
 def _modules() -> Iterator[ast.Module]:

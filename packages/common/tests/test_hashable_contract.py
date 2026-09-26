@@ -80,7 +80,7 @@ OPEN: frozenset[str] = frozenset(
 #: reason: they validate a value out of a vocabulary the annotation does not
 #: carry, so the field is a plain ``str`` and only certain strings are
 #: accepted. The index source takes ``fields``, and ``"x"`` is not one of the
-#: two attributes an entity carries free text in.
+#: attributes an entity carries text in.
 #:
 #: Unmeasured is not unanswered, and the two answer differently. The index
 #: source is ``frozen=True, eq=False``: it hashes by identity, which cannot
