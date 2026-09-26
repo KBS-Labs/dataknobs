@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-26T01:00:12Z",
+  "timestamp": "2026-09-26T01:53:17Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -16,7 +16,7 @@
     "data": "d251958f15bf8a102b6bb3d31dc65d444759d6a961fad49cc878dd74cb53e0d2",
     "fsm": "e3a2dcf74844ffc72314ef4bb734de086a587074c6c8bcca102dcc0d6482fe33",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
-    "llm": "b0cea204d748736f5ac01bb509908a96bda3646d317c3c979ae5c7760e273696",
+    "llm": "16bdf9acfd24a9c0b9733af8de030042512a21b6ce9c5e1aef6be0b3f0a10488",
     "structures": "a3fe8b06685533e4584b60111289dac9f453c028ff21581cb9aa68a5447e09cf",
     "utils": "f254c768678fc6ae1a0f1b5bf427a911873d331b56967ea864f2370759febf9d",
     "xization": "e95bb9b090f5e41fd92e305ea4c555bdefb3c5af98e199bd65edb82c92516e5c",
@@ -29,7 +29,7 @@
     "workspace_tests": "7aa693eac9ba36923db17315b06855007145424fc3f52bfb5473e8f4d1177b5d",
     "docs": "a33a9a5ab203d73e95b68300032e831b832cc7a39debcd8d06e0a8bdda27e96d"
   },
-  "total_seconds": 221,
+  "total_seconds": 219,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -47,21 +47,21 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 44
+      "duration_seconds": 43
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 29
+      "duration_seconds": 28
     },
     "documentation_versions": {
       "status": "pass",
@@ -81,7 +81,7 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 114,
+      "duration_seconds": 115,
       "workspace_guards_seconds": 92
     },
     "integration_tests": {
