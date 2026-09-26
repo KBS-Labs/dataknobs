@@ -197,7 +197,10 @@ def _hashable(value: Any) -> Any:
         return frozenset((key, _hashable(item)) for key, item in value.items())
     if isinstance(value, AbstractSet):
         return frozenset(_hashable(item) for item in value)
-    if isinstance(value, (str, bytes, bytearray)):
+    if isinstance(value, bytearray):
+        # Unhashable, and equal to the ``bytes`` it holds, so it projects there.
+        return bytes(value)
+    if isinstance(value, (str, bytes)):
         return value
     if isinstance(value, Collection):
         # Every other collection a membership value may be --- a list, a tuple,
@@ -229,6 +232,23 @@ def membership_values(value: Collection[Any]) -> list[Any]:
     return [member for member in value if member is not None]
 
 
+def _is_member(value: Any, members: Collection[Any]) -> bool:
+    """Whether ``value`` equals one of ``members``, as ``in`` over a list asks.
+
+    ``in`` over a hashed collection --- a set, ``dict.keys()`` --- hashes the
+    value first, and a list or an object read from a JSON field does not hash.
+    Such a value cannot be an element of a hashed collection, but equality is
+    the question being asked, so it is answered by comparing, which is what
+    every SQL backend's answer amounts to.
+    """
+    if isinstance(members, AbstractSet):
+        try:
+            hash(value)
+        except TypeError:
+            return any(value == member for member in members)
+    return value in members
+
+
 @dataclass(frozen=True)
 class Filter:
     """Represents a filter condition.
@@ -252,12 +272,17 @@ class Filter:
     :meth:`__hash__` is written out over a projected value instead.
 
     **Membership.** ``IN`` and ``NOT_IN`` take a collection --- a list, tuple,
-    set or any other :class:`~collections.abc.Collection` that is not a string
-    --- and anything else is refused here, when the filter is built. A string
-    used to mean substring match in memory and single-character match in SQL.
-    Every backend then answers as :meth:`matches` does: nothing is in an empty
-    list, a ``None`` member matches nothing, and ``NOT_IN`` selects only
-    records whose field has a value, as ``NEQ`` does.
+    set, ``dict.keys()`` or any other :class:`~collections.abc.Collection` that
+    is neither a string nor a mapping --- and anything else is refused here,
+    when the filter is built. A string used to mean substring match in memory
+    and single-character match in SQL; a mapping is its keys in memory and in
+    SQL, and a terms *lookup* in Elasticsearch. The SQL backends and the
+    backends that filter in memory then answer as :meth:`matches` does: nothing
+    is in an empty list, a ``None`` member matches nothing, and ``NOT_IN``
+    selects only records whose field has a value, as ``NEQ`` does.
+    Elasticsearch does not yet: its ``NOT_IN`` also selects a document that
+    lacks the field, and it chooses a string field's exact-match path from
+    the first member only.
 
     Attributes:
         field: The field name to filter on
@@ -287,26 +312,32 @@ class Filter:
     value: Any = None
 
     def __post_init__(self) -> None:
-        """Refuse a membership value that is not a collection.
+        """Refuse a membership value that is not a collection of candidates.
 
         Raises:
             ValueError: If the operator is ``IN`` or ``NOT_IN`` and the value
-                is not a collection, or is a string. ``ValueError`` because it
-                is what this module raises for a bad operator or sort order,
-                so an ``except ValueError`` around query building catches it.
+                is not a collection, or is a string or a mapping.
+                ``ValueError`` because it is what this module raises for a bad
+                operator or sort order, so an ``except ValueError`` around
+                query building catches it.
         """
-        if self.operator in _MEMBERSHIP_OPERATORS and (
-            isinstance(self.value, (str, bytes, bytearray))
-            or not isinstance(self.value, Collection)
+        if self.operator not in _MEMBERSHIP_OPERATORS:
+            return
+        if isinstance(self.value, Mapping):
+            remedy = "Pass the mapping's keys, as a list or as .keys()."
+        elif isinstance(self.value, (str, bytes, bytearray)) or not isinstance(
+            self.value, Collection
         ):
-            shown = repr(self.value)
-            if len(shown) > _REFUSED_VALUE_REPR_LIMIT:
-                shown = shown[: _REFUSED_VALUE_REPR_LIMIT - 3] + "..."
-            raise ValueError(
-                f"Filter({self.field!r}, {self.operator.name}) needs a list of values; "
-                f"got {type(self.value).__name__} {shown}. "
-                "Wrap a single value in a list, or use EQ."
-            )
+            remedy = "Wrap a single value in a list, or use EQ."
+        else:
+            return
+        shown = repr(self.value)
+        if len(shown) > _REFUSED_VALUE_REPR_LIMIT:
+            shown = shown[: _REFUSED_VALUE_REPR_LIMIT - 3] + "..."
+        raise ValueError(
+            f"Filter({self.field!r}, {self.operator.name}) needs a list of values; "
+            f"got {type(self.value).__name__} {shown}. {remedy}"
+        )
 
     def __hash__(self) -> int:
         """Hash the condition, projecting a container value onto a hashable shape.
@@ -353,9 +384,9 @@ class Filter:
         elif self.operator == Operator.LTE:
             return self._compare_values(record_value, self.value, lambda a, b: a <= b)
         elif self.operator == Operator.IN:
-            return record_value in self.value
+            return _is_member(record_value, self.value)
         elif self.operator == Operator.NOT_IN:
-            return record_value not in self.value
+            return not _is_member(record_value, self.value)
         elif self.operator == Operator.BETWEEN:
             if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
                 return False
@@ -445,8 +476,16 @@ class Filter:
             return False
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert filter to dictionary representation."""
-        return {"field": self.field, "operator": self.operator.value, "value": self.value}
+        """Convert filter to dictionary representation.
+
+        A membership value that is not already a list or tuple --- a set,
+        ``dict.keys()`` --- is written as a list, so the representation is
+        JSON and :meth:`from_dict` reads back the same members.
+        """
+        value = self.value
+        if self.operator in _MEMBERSHIP_OPERATORS and not isinstance(value, (list, tuple)):
+            value = list(value)
+        return {"field": self.field, "operator": self.operator.value, "value": value}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Filter:

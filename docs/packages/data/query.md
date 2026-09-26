@@ -41,16 +41,27 @@ query = Query(filters=[
 | Operator | Description | Example |
 |----------|-------------|---------|
 | `EQ` | Equal to | `Filter("status", Operator.EQ, "active")` |
-| `NE` | Not equal to | `Filter("status", Operator.NE, "deleted")` |
+| `NEQ` | Not equal to | `Filter("status", Operator.NEQ, "deleted")` |
 | `GT` | Greater than | `Filter("age", Operator.GT, 18)` |
 | `GTE` | Greater than or equal | `Filter("score", Operator.GTE, 90)` |
 | `LT` | Less than | `Filter("price", Operator.LT, 100)` |
 | `LTE` | Less than or equal | `Filter("quantity", Operator.LTE, 10)` |
-| `IN` | In list | `Filter("color", Operator.IN, ["red", "blue"])` |
-| `NOT_IN` | Not in list | `Filter("status", Operator.NOT_IN, ["deleted", "archived"])` |
-| `CONTAINS` | Contains substring | `Filter("name", Operator.CONTAINS, "john")` |
+| `IN` | Equal to one of a collection | `Filter("color", Operator.IN, ["red", "blue"])` |
+| `NOT_IN` | Has a value, equal to none of a collection | `Filter("status", Operator.NOT_IN, ["deleted", "archived"])` |
+| `LIKE` | SQL-style pattern (`%`, `_`) | `Filter("name", Operator.LIKE, "%john%")` |
+| `NOT_LIKE` | Does not match a pattern | `Filter("name", Operator.NOT_LIKE, "test%")` |
+| `REGEX` | Regular-expression search | `Filter("code", Operator.REGEX, r"^A\d+")` |
+| `STARTS_WITH` | Literal, case-sensitive prefix | `Filter("path", Operator.STARTS_WITH, "docs/")` |
+| `EXISTS` | Field has a value | `Filter("email", Operator.EXISTS)` |
+| `NOT_EXISTS` | Field has no value | `Filter("deleted_at", Operator.NOT_EXISTS)` |
 | `BETWEEN` | Between range | `Filter("age", Operator.BETWEEN, (18, 65))` |
 | `NOT_BETWEEN` | Outside range | `Filter("temp", Operator.NOT_BETWEEN, (20, 30))` |
+
+`IN` and `NOT_IN` take a collection that is neither a string nor a mapping;
+anything else raises `ValueError` when the `Filter` is built. Nothing is in an
+empty collection, and a `None` member matches nothing. The full rules, and how
+Elasticsearch differs from the other backends, are in the
+[API reference](api-reference.md#query).
 
 ## Advanced Queries
 

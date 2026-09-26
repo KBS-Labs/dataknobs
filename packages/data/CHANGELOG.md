@@ -9,19 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **An `IN` or `NOT_IN` filter's value must be a collection, and anything else
-  is refused when the `Filter` is built.** A list, tuple, set or any other
-  collection that is not a string is accepted, as before. A string used to mean
-  substring match in memory (`"bl" in "blue"`) and a match on any single
-  character in SQL (`IN ('b', 'l', 'u', 'e')`), so the same filter selected
-  different records on different backends. A missing value raised a bare
-  `TypeError` on first use. Both now raise `ValueError` at construction, naming
-  the field, the operator and the type given, whether the filter is built
-  directly, through `Query.filter`, or from `Filter.from_dict` /
+- **An `IN` or `NOT_IN` filter's value must be a collection of candidates, and
+  anything else is refused when the `Filter` is built.** A list, tuple, set,
+  `dict.keys()` or any other collection that is neither a string nor a mapping
+  is accepted, as before. A string used to mean substring match in memory
+  (`"bl" in "blue"`) and a match on any single character in SQL
+  (`IN ('b', 'l', 'u', 'e')`), so the same filter selected different records on
+  different backends. A mapping was its keys in memory and in SQL, and a terms
+  lookup against another index in Elasticsearch. A missing value raised a bare
+  `TypeError` on first use. All three now raise `ValueError` at construction,
+  naming the field, the operator and the type given, whether the filter is
+  built directly, through `Query.filter`, or from `Filter.from_dict` /
   `Query.from_dict`. A `Filter` holding any accepted collection hashes, including
   `dict.keys()`, which used to raise `TypeError: unhashable type`.
 
-  **Migration.** Wrap a single value in a list (`["blue"]`), or use `EQ`.
+  **Migration.** Wrap a single value in a list (`["blue"]`), or use `EQ`. Pass
+  a mapping's keys (`list(d)` or `d.keys()`) rather than the mapping.
 
 - **A schema declaration is read, or it is refused by name.** A `schema:` in a
   database config, `DatabaseSchema.from_dict`, and an ontology binding's
@@ -1227,11 +1230,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **An `IN` or `NOT_IN` filter answers the same on every backend.** The SQL
-  backends rendered the list verbatim, and the memory matcher is the contract
-  they now follow:
+- **An `IN` or `NOT_IN` filter answers the same on every SQL backend as it does
+  in memory.** The SQL backends rendered the list verbatim, and the memory
+  matcher is the contract they now follow:
 
-  | Filter | Used to | Now, everywhere |
+  | Filter | Used to | Now, on SQLite, DuckDB and PostgreSQL |
   |---|---|---|
   | `IN []` | a syntax error on Postgres and DuckDB | matches nothing |
   | `NOT_IN []` | a syntax error on Postgres and DuckDB; on SQLite, every record, including those with no value | every record whose field has a value |
@@ -1240,8 +1243,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A `None` member never matches a record, so it is left out of the list a
   backend is sent. `NOT_IN` selects only records whose field has a value, as
-  `NEQ` does. `Filter`'s value, equality and `to_dict()` are unchanged: a
-  `None` member is ignored where the filter is evaluated, not removed from it.
+  `NEQ` does. `Filter`'s value and equality are unchanged: a `None` member is
+  ignored where the filter is evaluated, not removed from it. Elasticsearch is
+  not covered by this change: its `NOT_IN` still matches a document that lacks
+  the field, as each of its negations does.
+
+- **An `IN` or `NOT_IN` filter whose value is a set or `dict.keys()` answers
+  for a field holding a list or an object.** The memory matcher, which the
+  memory, file and S3 backends filter through, raised
+  `TypeError: unhashable type: 'list'` for such a record, while every SQL
+  backend answered. It now answers as a list of the same members does: the
+  field's value is not one of them.
+
+- **`Filter.to_dict()` writes a set or `dict.keys()` membership value as a
+  list**, so a `Query` or `ComplexQuery` holding one serialises to JSON.
+  `json.dumps` used to refuse it. A list or tuple value is written as given.
+
+- **A `Filter` whose value is a `bytearray` hashes**, equal to the same filter
+  holding `bytes`. It used to raise `TypeError: unhashable type: 'bytearray'`.
 
 - **An ontology registry refuses a `resolver:` or `index:` section that is not
   a mapping, by name.** `OntologyRegistry` checks a section's keys before

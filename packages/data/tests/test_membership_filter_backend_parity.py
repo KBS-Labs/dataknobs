@@ -28,6 +28,7 @@ reads results: it never raised.
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,7 +44,12 @@ from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.query import RESERVED_KEY_FIELD, Query
-from dataknobs_data.query_logic import ComplexQuery
+from dataknobs_data.query_logic import (
+    ComplexQuery,
+    FilterCondition,
+    LogicCondition,
+    LogicOperator,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -67,6 +73,8 @@ CORPUS: dict[str, dict[str, Any]] = {
     "n5": {"n": 5},
     "n7": {"n": 7},
     "n-null": {"n": None},
+    "tags-a": {"tags": "a"},
+    "tags-list": {"tags": ["a"]},
 }
 
 #: ``(case id, filter, expected record ids)``. The expectation is written out
@@ -82,6 +90,14 @@ CASES: list[tuple[str, Filter, set[str]]] = [
     ("in-tuple", Filter("colour", Operator.IN, ("red",)), {"red"}),
     ("key-in-empty", Filter(RESERVED_KEY_FIELD, Operator.IN, []), set()),
     ("key-not-in-empty", Filter(RESERVED_KEY_FIELD, Operator.NOT_IN, []), set(CORPUS)),
+    # A set does not hold a list, and a list does not hash: the matcher raised
+    # ``TypeError`` here while every SQL backend answered.
+    ("in-set-over-a-list-value", Filter("tags", Operator.IN, {"a"}), {"tags-a"}),
+    (
+        "not-in-set-over-a-list-value",
+        Filter("tags", Operator.NOT_IN, frozenset({"a"})),
+        {"tags-list"},
+    ),
 ]
 
 
@@ -300,3 +316,78 @@ def test_the_cast_is_chosen_from_a_member_that_can_match(
     sql, params = builder.build_search_query(Query(filters=[Filter("n", operator, [None, 5])]))
     assert cast in sql
     assert params == [5]
+
+
+#: Only the numbered styles can show a numbering fault: a ``qmark`` ``?`` is
+#: positional, so sqlite and duckdb bind correctly whatever number a clause
+#: was handed, and the backend cases above prove numbering only on Postgres ---
+#: which they skip when the service is down.
+NUMBERED_STYLES = {
+    "numeric": (r"\$(\d+)", 0),
+    "pyformat": (r"%\(p(\d+)\)s", 1),
+}
+
+#: ``(case id, filters)``: a clause binding fewer parameters than its filter
+#: holds, followed by clauses that bind. The numbering must still run 1..n.
+NUMBERING_CASES: list[tuple[str, list[Filter]]] = [
+    (
+        "empty-not-in-first",
+        [Filter("colour", Operator.NOT_IN, []), Filter("colour", Operator.IN, ["red"])],
+    ),
+    (
+        "only-none-in-first",
+        [Filter("colour", Operator.IN, [None]), Filter("colour", Operator.IN, ["red"])],
+    ),
+    (
+        "dropped-member-first",
+        [
+            Filter("colour", Operator.NOT_IN, [None, "green"]),
+            Filter("colour", Operator.IN, ["red", None, "blue"]),
+            Filter("n", Operator.IN, []),
+            Filter("n", Operator.IN, [5]),
+        ],
+    ),
+]
+
+
+def _placeholder_numbers(sql: str, param_style: str) -> list[int]:
+    """The 1-based parameter numbers ``sql`` refers to, in the order written."""
+    pattern, offset = NUMBERED_STYLES[param_style]
+    return [int(n) + offset for n in re.findall(pattern, sql)]
+
+
+@pytest.mark.parametrize("param_style", sorted(NUMBERED_STYLES))
+@pytest.mark.parametrize("filters", [pytest.param(f, id=case_id) for case_id, f in NUMBERING_CASES])
+class TestAPlaceholderAfterAClauseThatBindsLessIsNumberedByWhatWasBound:
+    """Every builder entry point numbers from what was bound, not from what was given."""
+
+    @staticmethod
+    def _assert_numbered(sql: str, params: list[Any], param_style: str) -> None:
+        assert _placeholder_numbers(sql, param_style) == list(range(1, len(params) + 1))
+        assert None not in params
+
+    def test_the_flat_search_query(self, param_style: str, filters: list[Filter]) -> None:
+        builder = SQLQueryBuilder("records", dialect="postgres", param_style=param_style)
+        sql, params = builder.build_search_query(Query(filters=list(filters)))
+        self._assert_numbered(sql, params, param_style)
+
+    def test_the_where_clause(self, param_style: str, filters: list[Filter]) -> None:
+        builder = SQLQueryBuilder("records", dialect="postgres", param_style=param_style)
+        sql, params = builder.build_where_clause(Query(filters=list(filters)), param_start=1)
+        self._assert_numbered(sql, params, param_style)
+
+    def test_the_complex_query(self, param_style: str, filters: list[Filter]) -> None:
+        builder = SQLQueryBuilder("records", dialect="postgres", param_style=param_style)
+        first, *rest = filters
+        # Nested, so the numbering threads through a branch as well as a sibling.
+        query = ComplexQuery(
+            condition=LogicCondition(
+                LogicOperator.AND,
+                [
+                    FilterCondition(first),
+                    LogicCondition(LogicOperator.OR, [FilterCondition(f) for f in rest]),
+                ],
+            )
+        )
+        sql, params = builder.build_complex_search_query(query)
+        self._assert_numbered(sql, params, param_style)
