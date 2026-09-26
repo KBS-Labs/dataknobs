@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `postgres` extra no longer installs `sqlalchemy`.** Nothing in this
+  package imports it. **Migration:** code that imports `sqlalchemy` and relied
+  on this extra to install it must declare that dependency itself.
+
+  A deployment that wants the source-built `psycopg2` driver, as psycopg
+  recommends for production, still installs it itself, next to the binary that
+  `dataknobs-utils` requires. That was true before this change too.
+
 - **An `IN` or `NOT_IN` filter's value must be a collection of candidates, and
   anything else is refused when the `Filter` is built.** A list, tuple, set,
   `dict.keys()` or any other collection that is neither a string nor a mapping
@@ -1229,6 +1237,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **`dataknobs-data[postgres]` installs from wheels.** The extra required the
+  `psycopg2` distribution, which is an sdist on macOS and Linux and builds only
+  where `pg_config` is on the path, so the install failed on a machine without
+  the PostgreSQL client headers. It now requires `psycopg2-binary>=2.9.10`, the
+  same module from wheels, at the floor `dataknobs-utils` already requires.
+  `dataknobs-utils` has always installed that binary as a base dependency, so an
+  environment that did build the sdist held two distributions of one module;
+  now it holds one. `asyncpg` is unchanged.
 
 - **A semantic index built over `AliasSource` records a source field on every
   row.** It recorded `None`, which is the value a row written through the raw

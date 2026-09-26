@@ -140,10 +140,8 @@ print(f"Xization: {dataknobs_xization.__version__}")
 The Data package supports multiple backends with additional dependencies:
 
 ```bash
-# PostgreSQL support
-pip install psycopg2-binary>=2.9.0
-# or for async
-pip install asyncpg>=0.27.0
+# PostgreSQL support (both drivers, from wheels: no pg_config needed)
+pip install "dataknobs-data[postgres]"
 
 # Elasticsearch support
 pip install elasticsearch>=8.0.0
@@ -249,12 +247,10 @@ uv pip install dataknobs-bots dataknobs-llm
 
 ### Platform-Specific Issues
 
-**macOS with Apple Silicon**:
-```bash
-# Some dependencies may need compilation
-brew install postgresql  # For psycopg2
-pip install psycopg2-binary  # Pre-compiled version
-```
+**PostgreSQL drivers**: `dataknobs-data[postgres]` installs `psycopg2-binary` and
+`asyncpg`, both from wheels, so no PostgreSQL client headers are needed. Only a
+deployment that chooses to build `psycopg2` from source needs `pg_config`
+(`brew install postgresql` on macOS, `libpq-dev` or `postgresql-devel` on Linux).
 
 **Windows**:
 ```bash
@@ -264,9 +260,9 @@ pip install psycopg2-binary  # Pre-compiled version
 
 **Linux**:
 ```bash
-# May need development headers
-sudo apt-get install python3-dev libpq-dev  # Ubuntu/Debian
-sudo yum install python3-devel postgresql-devel  # RHEL/CentOS
+# May need development headers for dependencies without a wheel
+sudo apt-get install python3-dev  # Ubuntu/Debian
+sudo yum install python3-devel  # RHEL/CentOS
 ```
 
 ## Production Deployment
@@ -276,21 +272,16 @@ For production environments:
 ### Docker
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Dataknobs packages
+# Install Dataknobs packages. The postgres extra's drivers install from
+# wheels, so the image needs no PostgreSQL client headers.
 RUN pip install --no-cache-dir \
     dataknobs-config \
-    dataknobs-data \
+    "dataknobs-data[postgres]" \
     dataknobs-fsm \
     dataknobs-llm \
     dataknobs-bots \
-    psycopg2-binary \
     boto3
 
 # Copy application
@@ -314,7 +305,7 @@ dataknobs-utils>=2.0.2
 dataknobs-xization>=2.2.1
 
 # Optional dependencies
-psycopg2-binary>=2.9.0
+dataknobs-data[postgres]
 elasticsearch>=8.0.0
 boto3>=1.26.0
 openai>=1.0.0

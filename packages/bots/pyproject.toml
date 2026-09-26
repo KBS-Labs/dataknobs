@@ -56,8 +56,8 @@ http = [
 # `DataKnobsRegistryAdapter`) via dataknobs-data, and the cross-replica
 # ingest lock (`IngestOrchestrator` -> `create_lock({"backend":
 # "postgres"})`) via dataknobs-common.  Forwarding to the owning
-# packages' extras keeps the psycopg2 / sqlalchemy / asyncpg floors in a
-# single place rather than re-pinning the drivers here.
+# packages' extras keeps the psycopg2-binary / asyncpg floors in a single
+# place rather than re-pinning the drivers here.
 postgres = [
     "dataknobs-data[postgres]",
     "dataknobs-common[postgres]",

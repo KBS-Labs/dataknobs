@@ -28,9 +28,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The two drivers `backends/postgres.py` imports at module top. Both twins
+# live in that module, so either one needs both. `psycopg2-binary` rather
+# than `psycopg2`: the sdist builds from source (it needs pg_config), and
+# `dataknobs-utils` already requires the binary distribution of the same
+# module, so declaring the sdist here added a second copy of one module
+# rather than a capability.
 postgres = [
-    "psycopg2>=2.9.0",
-    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.10",  # utils' floor: the lowest with cp312+cp313 wheels
     "asyncpg>=0.29.0",
 ]
 sqlite = [
