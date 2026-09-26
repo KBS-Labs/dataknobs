@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AliasSource` says where each item's text came from.** Its
+  `source_field` is the inner source's own answer, spelled as the inner
+  spells it, or `None` over an inner source that has none. It used to have
+  no `source_field` at all, so an index built over it recorded `None` on
+  every row. Each surface form it yields carries `source_field` set to
+  `aliases_field`, because a form's text was read from that key and not
+  composed from the inner source's fields. The canonical item carries
+  nothing and keeps the source's answer. Forms still share the entity's id
+  and still collide in a store keyed on id; the row that survives now names
+  the field its text is in.
+
 - **`FieldType.lookup(value)`: one reading of a declared record type.** It
   returns the member a value names (the member itself, or its name in any
   case) and `None` for anything else, leaving whether that is an error to the
@@ -326,6 +337,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`IndexItem.source_field`: an item can say where its own text came from.**
+  Optional and `None` by default, which leaves the source's `source_field`
+  to describe the item, so every existing construction and comparison is
+  unchanged. It is for a source that emits items of more than one kind,
+  such as a decorator, and for a `CallableSource`, which had no way to state
+  a field name. An index writes it beside the item's text in preference to
+  the source's answer.
 
 - **`aclosing_iter`**, in `dataknobs_common.async_iter` -- `contextlib.aclosing`
   for the population where *is it closable* is not answerable at the call

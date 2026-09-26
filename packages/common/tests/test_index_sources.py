@@ -116,6 +116,59 @@ async def test_a_form_equal_to_the_canonical_text_is_not_yielded_twice() -> None
 
 
 # --------------------------------------------------------------------------
+# Every row the decorator emits says where its text came from
+# --------------------------------------------------------------------------
+
+
+class _Composed(CallableSource):
+    """A source that can say what its text was composed from.
+
+    ``source_field`` is not a protocol member --- an index reads it with a
+    fall-back --- so a source either has one or does not, and the decorator
+    has to be right over both.
+    """
+
+    @property
+    def source_field(self) -> str:
+        return "name,description"
+
+
+def test_the_decorator_states_the_inner_source_field_as_the_inner_spells_it() -> None:
+    """Forwarded verbatim, and ``None`` over an inner source with nothing to say.
+
+    The decorator had no ``source_field`` at all, so an index reading it with
+    a fall-back recorded ``None`` on every row it wrote --- including the
+    canonical rows, whose text the inner source composed and could name. The
+    inner's value is forwarded as it is spelled: its key's reader splits on
+    commas, and a re-join here would be a second encoder of one grammar.
+    """
+    inner = _Composed(lambda: [])
+
+    assert AliasSource(inner, ALIASES).source_field == "name,description"
+    assert AliasSource(CallableSource(lambda: []), ALIASES).source_field is None
+
+
+async def test_a_form_says_it_came_from_the_alias_field_and_the_canonical_item_does_not() -> None:
+    """The aggregate answer describes the canonical row, not the forms.
+
+    A form's text was read from :attr:`AliasSource.aliases_field`, not from
+    whatever the inner source composed its text from. So each form states
+    that itself, and the canonical item states nothing, leaving the source's
+    aggregate answer to apply to it.
+    """
+    decorated = AliasSource(_one(**{ALIASES: ["ACME", "Acme Corporation"]}), ALIASES)
+
+    items = [item async for item in decorated.stream_items()]
+
+    assert [(item.text, item.source_field) for item in items] == [
+        ("Acme Corp", None),
+        ("ACME", ALIASES),
+        ("Acme Corporation", ALIASES),
+    ]
+    assert all(item.metadata == {ALIASES: ["ACME", "Acme Corporation"]} for item in items)
+
+
+# --------------------------------------------------------------------------
 # The escape hatch accepts the four shapes it documents
 # --------------------------------------------------------------------------
 

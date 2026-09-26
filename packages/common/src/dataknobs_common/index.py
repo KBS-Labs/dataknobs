@@ -100,11 +100,20 @@ class IndexItem:
             Whatever the source writes, plus whatever a decorator forwards;
             a reader that needs a key to be there asks the source that
             declares it.
+        source_field: Where **this** item's text came from, when that is not
+            what the source as a whole would answer. ``None`` --- the default,
+            and the common case --- leaves the source's own ``source_field``
+            to describe it. A decorator emitting items of more than one kind
+            needs it, because one aggregate answer can describe only one of
+            them; so does a callable-backed source, which has no other way to
+            state a field name. An index writes it beside the item's text, in
+            preference to the source's answer.
     """
 
     id: str
     text: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    source_field: str | None = None
 
 
 @runtime_checkable
@@ -254,12 +263,20 @@ class AliasSource:
     So this yields one item per surface form, **all carrying the inner item's
     id**.
 
-    **It decorates ``text`` and nothing else.** The id, the metadata and the
-    declared sets are the inner source's, forwarded unchanged. A decorator
-    that re-declares is a second translation site for a scope filter, and two
-    translation sites start disagreeing; a decorator that rewrites an id
-    breaks the one guarantee a hit carries. It decorates text; it does not
-    decorate identity or scope.
+    **It decorates ``text``, and states where that text came from --- nothing
+    else.** The id, the metadata and the declared sets are the inner
+    source's, forwarded unchanged. A decorator that re-declares is a second
+    translation site for a scope filter, and two translation sites start
+    disagreeing; a decorator that rewrites an id breaks the one guarantee a
+    hit carries. It decorates text; it does not decorate identity or scope.
+
+    **Two kinds of item, so two answers to where the text came from.** The
+    canonical item's text is the inner source's composition, so
+    :attr:`source_field` is the inner source's own answer, as it spells it.
+    A form's text was read from :attr:`aliases_field`, so each form carries
+    that as its :attr:`IndexItem.source_field`. One aggregate value could
+    describe only one of the two, and a row built from a form would then
+    name a field its text is not in.
 
     The forms are read from the inner item's own metadata, under
     :attr:`aliases_field`, so the leaf source is what decides which key
@@ -277,7 +294,9 @@ class AliasSource:
         the entity id, and under what grammar, is not settled by any ruling
         this class could read, so it is not decided here. Use this source
         where the reader de-duplicates by id, or where the store is keyed on
-        something else, until it is.
+        something else, until it is. The row that survives describes itself
+        correctly: it names :attr:`aliases_field` as its source field and
+        its text is among that field's values.
 
     Example:
         ```python
@@ -296,6 +315,21 @@ class AliasSource:
     #: it and this one reads it --- one key, two ends, and a literal at either
     #: end is how the two stop agreeing.
     aliases_field: str
+
+    @property
+    def source_field(self) -> str | None:
+        """What the canonical items' text was composed from --- the inner's answer.
+
+        Forwarded as the inner source spells it, with the same fall-back an
+        index reads it with: an inner source that cannot say leaves this one
+        unable to say. Not re-joined and not extended with
+        :attr:`aliases_field`, because that value would describe no single
+        row --- a canonical row was not built from the alias key, and a form
+        row was not built from the inner's fields. The forms state their own,
+        per item.
+        """
+        inner_field: str | None = getattr(self.inner, "source_field", None)
+        return inner_field
 
     def declares(self) -> frozenset[str]:
         """The inner source's declared sets, unchanged."""
@@ -329,7 +363,12 @@ class AliasSource:
                 for form in self._forms_of(item):
                     if not form or form == item.text:
                         continue
-                    yield IndexItem(id=item.id, text=form, metadata=dict(item.metadata))
+                    yield IndexItem(
+                        id=item.id,
+                        text=form,
+                        metadata=dict(item.metadata),
+                        source_field=self.aliases_field,
+                    )
 
     def _forms_of(self, item: IndexItem) -> tuple[str, ...]:
         """The surface forms on one item, reading the key's published rule.

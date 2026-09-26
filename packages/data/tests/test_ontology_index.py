@@ -572,6 +572,125 @@ async def test_the_forms_collide_in_a_store_keyed_on_id() -> None:
 
 
 # --------------------------------------------------------------------------
+# A row built through the decorator says what its text came from
+# --------------------------------------------------------------------------
+
+
+async def _hits_by_id(index: SemanticIndex) -> dict[str, Any]:
+    """One hit per row, keyed by id --- the store holds one row per id."""
+    hits = await index.search("Acme", k=10)
+    return {hit.record.id: hit for hit in hits}
+
+
+async def test_every_row_an_aliased_index_writes_says_what_its_text_came_from() -> None:
+    """``aliases: true`` wrapped the leaf in a decorator that could not say.
+
+    The index reads ``source_field`` off its source with a fall-back, and the
+    decorator had none, so every row an ``aliases: true`` document built
+    recorded ``None`` --- the value this pair exists to distinguish from.
+    The row with no aliases is the plain case: its text is the leaf's
+    composition, and it says so in the leaf's own spelling.
+    """
+    document = _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "fields": ["name", "description"],
+            "aliases": True,
+        }
+    )
+    registry = await _registry(document)
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        await index.build()
+
+        hits = await _hits_by_id(index)
+
+        bolt = hits["catalog:sku-8802"]
+        assert bolt.source_text == "Bolt"
+        assert bolt.vector_field == "name,description"
+    finally:
+        await registry.close()
+
+
+async def test_the_row_a_collapse_leaves_names_the_field_its_alias_came_from() -> None:
+    """The surviving row holds an alias, and its pair has to say so.
+
+    The forms collide in a store keyed on id and the last one survives, so
+    an aliased entity's only row holds an alias. Forwarding the leaf's answer
+    alone would label that row ``("Acme Corporation", "name,description")``
+    --- a text that is neither the name nor the description, attributed to
+    both. So each form states its own field, and the check here is the one a
+    reader can make from the hit alone: the text is among the values of the
+    field the row names.
+    """
+    document = _document(
+        index={
+            "store": {"backend": "memory", "dimensions": DIMENSIONS},
+            "fields": ["name", "description"],
+            "aliases": True,
+        }
+    )
+    registry = await _registry(document)
+    try:
+        index = registry.index("catalog")
+        assert index is not None
+        await index.build()
+
+        hits = await _hits_by_id(index)
+
+        for entity_id, last_form in (("catalog:acme", "ACME"), ("catalog:sku-4471", "ACME widget")):
+            hit = hits[entity_id]
+            assert hit.source_text == last_form
+            assert hit.vector_field == ALIAS_FORMS_KEY
+            assert hit.source_text in hit.metadata[hit.vector_field]
+    finally:
+        await registry.close()
+
+
+async def test_an_item_s_own_source_field_outranks_the_one_its_metadata_carries() -> None:
+    """``item.source_field`` > a metadata key the inner wrote > the batch value.
+
+    The decorator copies the inner item's metadata onto every form, so an
+    inner source that wrote ``source_field`` into its own metadata would
+    otherwise label each alias with the canonical text's field --- the false
+    pair above, arriving by another route. The middle rung still holds for a
+    row whose item says nothing: the store's per-row route is unchanged.
+
+    The same field gives the escape hatch a way to state what it indexed,
+    per item, with no constructor parameter to add.
+    """
+
+    async def inner() -> AsyncIterator[IndexItem]:
+        yield IndexItem(
+            id="acme",
+            text="Acme Corp",
+            metadata={"source_field": "name", ALIAS_FORMS_KEY: ["ACME"]},
+        )
+        yield IndexItem(id="bolt", text="Bolt", metadata={"source_field": "name"})
+
+    async def titled() -> AsyncIterator[IndexItem]:
+        yield IndexItem(id="guide", text="Acme guide", source_field="title")
+
+    store = await _store()
+    try:
+        embedder = DeterministicEmbedder(dimensions=DIMENSIONS)
+        aliased = SemanticIndex(
+            AliasSource(CallableSource(inner), ALIAS_FORMS_KEY), embedder, store
+        )
+        await aliased.build()
+        await SemanticIndex(CallableSource(titled), embedder, store).build()
+
+        hits = await _hits_by_id(aliased)
+
+        assert (hits["acme"].source_text, hits["acme"].vector_field) == ("ACME", ALIAS_FORMS_KEY)
+        assert (hits["bolt"].source_text, hits["bolt"].vector_field) == ("Bolt", "name")
+        assert (hits["guide"].source_text, hits["guide"].vector_field) == ("Acme guide", "title")
+    finally:
+        await store.close()
+
+
+# --------------------------------------------------------------------------
 # What the `index:` block reads, and what it refuses
 # --------------------------------------------------------------------------
 
