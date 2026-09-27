@@ -279,6 +279,34 @@ class TestWhatAStoredRowIsNotAskedToMean:
             "ollama:nomic-embed-text",
         ) == ["ollama:nomic-embed-text:latest"]
 
+    def test_a_variant_does_not_make_a_document_name_another_model(self) -> None:
+        """``#variant`` changes the vectors, not the weights a threshold belongs to.
+
+        ``LLMProviderEmbedder`` publishes one when something besides the model
+        decides the vectors --- the endpoint, or truncation being on. Read as
+        part of the model name it lands in the tag, and a document naming
+        the model it was calibrated against is refused over a detail of how
+        the vectors are fetched. A different tag still disagrees.
+        """
+        from dataknobs_data.ontology.registry import _model_id_readings, _same_model
+
+        published = "ollama:nomic-embed-text:latest#api-embed"
+
+        def agrees(stated: str) -> bool:
+            return any(_same_model(stated, model) for _, model in _model_id_readings(published))
+
+        for stated in (
+            "nomic-embed-text",
+            "nomic-embed-text:latest",
+            published,
+        ):
+            assert agrees(stated), stated
+        assert not agrees("nomic-embed-text:v1.5")
+        assert (
+            "ollama",
+            "nomic-embed-text:latest",
+        ) in _model_id_readings(published)
+
     async def test_the_whole_published_identity_is_always_one_of_its_readings(self) -> None:
         """The document may always name the identity it was shown, verbatim.
 

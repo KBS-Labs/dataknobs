@@ -227,7 +227,6 @@ class TestOllamaCapabilitiesLive:
             ModelCapability.FUNCTION_CALLING,
             ModelCapability.VISION,
             ModelCapability.JSON_MODE,
-            ModelCapability.EMBEDDINGS,
         }
 
     async def test_modern_family_pre_binding_missed(self) -> None:

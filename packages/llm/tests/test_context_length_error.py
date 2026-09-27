@@ -175,15 +175,9 @@ def _error_response(status: int, reason: str, body: str) -> FakeResponse:
     return FakeResponse(status, text=body, raise_exc=make_client_response_error(status, reason))
 
 
-#: Ollama's measured overflow body, on ``/api/embeddings`` (as a 500) and on
-#: ``/api/embed`` with ``truncate: false`` (as a 400). Ollama 0.33.2.
+#: Ollama's measured overflow body, on ``/api/embed`` with ``truncate: false``
+#: (as a 400). Ollama 0.33.2.
 _OLLAMA_OVERFLOW_BODY = '{"error":"the input length exceeds the context length"}'
-
-#: Ollama's measured answer when a completion model is asked to embed: also a
-#: 500 on ``/api/embeddings``, and not an overflow.
-_OLLAMA_NO_EMBEDDINGS_BODY = (
-    '{"error":"This server does not support embeddings. Start it with `--embeddings`"}'
-)
 
 
 def _bad_request_response(body: str) -> FakeResponse:
@@ -313,15 +307,13 @@ class TestAiohttpProviderContextLength:
     """
 
     async def test_ollama_context_length_via_body_marker(self) -> None:
-        """Ollama's embedding endpoint reports an overflow as a **500**.
+        """``/api/embed`` with ``truncate: false`` reports an overflow as a **400**.
 
-        The body and the status are the ones Ollama sends (measured, 0.33.2). An
-        earlier version of this test pinned a 400 with wording Ollama never
-        uses, and passed while the real path raised ``OperationError``;
+        The body and the status are the ones Ollama sends (measured, 0.33.2).
         ``test_ollama_context_overflow.py`` runs the same case against a live
         server.
         """
-        response = _error_response(500, "Internal Server Error", _OLLAMA_OVERFLOW_BODY)
+        response = _bad_request_response(_OLLAMA_OVERFLOW_BODY)
         provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
         with pytest.raises(ContextLengthExceededError) as excinfo:
             await provider.embed("an over-long text")
@@ -329,30 +321,24 @@ class TestAiohttpProviderContextLength:
         assert isinstance(excinfo.value, ValidationError)
         assert excinfo.value.__cause__ is response._raise_exc
 
-    async def test_ollama_context_length_as_a_400(self) -> None:
-        """``/api/embed`` with ``truncate: false`` sends the same words as a 400."""
-        response = _bad_request_response(_OLLAMA_OVERFLOW_BODY)
-        provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
-        with pytest.raises(ContextLengthExceededError):
-            await provider.embed("an over-long text")
+    async def test_an_ollama_500_is_the_servers_failure_even_with_the_marker(self) -> None:
+        """No Ollama endpoint in use reports an overflow as a 500 any more.
 
-    async def test_ollama_500_without_a_marker_stays_operation_error(self) -> None:
-        """A 500 alone is not an overflow: the marker decides.
-
-        Ollama answers a completion model asked to embed with a 500 too, and
-        that is the server's condition, not the caller's input.
+        ``/api/embeddings`` did, and the provider read a 500 as the caller's
+        input for its sake. ``embed`` no longer calls it, so a 500 is the
+        server's own failure again and is retried as one.
         """
-        response = _error_response(500, "Internal Server Error", _OLLAMA_NO_EMBEDDINGS_BODY)
+        response = _error_response(500, "Internal Server Error", _OLLAMA_OVERFLOW_BODY)
         provider = _ollama_provider(FakeSession([FakeSession.responding(response)]))
         with pytest.raises(OperationError) as excinfo:
-            await provider.embed("text")
+            await provider.embed("an over-long text")
         assert not isinstance(excinfo.value, ValidationError)
 
-    async def test_the_500_is_ollamas_alone(self) -> None:
+    async def test_huggingface_reads_no_500_as_an_overflow(self) -> None:
         """HuggingFace declares no 500, so the same response stays an OperationError.
 
-        Pins that the widened status set is a declaration of one provider, not a
-        change to the shared default.
+        Pins that the shared default admits a 400 only; a provider widens it
+        by declaring its own set.
         """
         response = _error_response(500, "Internal Server Error", _OLLAMA_OVERFLOW_BODY)
         provider = _hf_provider(FakeSession([FakeSession.responding(response)]))

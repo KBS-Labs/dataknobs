@@ -1186,6 +1186,8 @@ class BedrockProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 ``cohere.embed*``), or if the vectors are not the width that
                 was asked for.
         """
+        # Refuses ``embedding_overflow="truncate"`` by name, before any request.
+        self._embedding_overflow()
         if not self._is_initialized:
             await self.initialize()
 

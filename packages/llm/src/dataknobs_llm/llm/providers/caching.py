@@ -52,8 +52,8 @@ def _cache_key(model: str, text: str) -> str:
     return hashlib.sha256(f"{model}\x00{text}".encode()).hexdigest()
 
 
-def _cache_identity(model: str, dimensions: int | None) -> str:
-    """The identity a cached vector may be reused under.
+def _cache_identity(model: str, dimensions: int | None, variant: str | None = None) -> str:
+    """The identity a cached vector may be reused under: ``model#variant@dimensions``.
 
     A vector is reusable for a later call only when that call would have
     produced the same vector, and a stated width changes what the provider
@@ -62,19 +62,28 @@ def _cache_identity(model: str, dimensions: int | None) -> str:
     a wildcard: a caller who asks for nothing wants the model's native answer
     and must not be served a row written under an explicit request.
 
+    The provider's :meth:`~dataknobs_llm.llm.base.LLMProvider.embedding_variant`
+    qualifies it for the same reason: an endpoint that normalizes differently,
+    or truncation being on, changes the vector under an unchanged model name.
+    Without it a vector truncated while the opt-in was on would be served to
+    a caller whose configuration refuses to truncate. Each part is present
+    only when set.
+
     Qualifying the identity here rather than adding a parameter to
     :class:`EmbeddingCache` keeps every out-of-tree cache implementation
     working unchanged, and makes the stored identity self-describing: a
     persisted row records the width it was written at.
     """
-    return model if dimensions is None else f"{model}@{dimensions}"
+    identity = model if variant is None else f"{model}#{variant}"
+    return identity if dimensions is None else f"{identity}@{dimensions}"
 
 
 class EmbeddingCache(ABC):
     """Cache for embedding vectors, keyed by (identity, text).
 
-    *identity* is the model name, qualified by the requested width when the
-    call stated one -- see :func:`_cache_identity`.
+    *identity* is the model name, qualified by the provider's embedding
+    variant and by the requested width when there is one -- see
+    :func:`_cache_identity`.
     """
 
     @abstractmethod
@@ -390,6 +399,15 @@ class CachingEmbedProvider(AsyncLLMProvider):
         """Delegate capabilities to inner provider."""
         return self._inner.get_capabilities()
 
+    def embedding_variant(self) -> str | None:
+        """The inner provider's, unchanged.
+
+        Forwarded so that an embedder built on this wrapper publishes the same
+        ``model_id`` as one built on the bare provider: whether a cache sits
+        in the path must not change the key a stored vector carries.
+        """
+        return self._inner.embedding_variant()
+
     # -- Lifecycle ---------------------------------------------------------
 
     # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
@@ -487,8 +505,11 @@ class CachingEmbedProvider(AsyncLLMProvider):
         ``list[list[float]]``.
         """
         self._check_ready()
+        # The inner's policy gate, not this wrapper's: a hit never reaches the
+        # inner, and must not be served under a policy the inner would refuse.
+        self._inner._embedding_overflow()
         requested = self._requested_embedding_dimensions(kwargs)
-        model = _cache_identity(self.config.model, requested)
+        model = _cache_identity(self.config.model, requested, self.embedding_variant())
         single = isinstance(texts, str)
         text_list: list[str] = [texts] if isinstance(texts, str) else list(texts)
 

@@ -240,15 +240,26 @@ def _name_has(model_lower: str, families: tuple[str, ...]) -> bool:
     return any(fam in model_lower for fam in families)
 
 
+#: Name substrings of dedicated embedding models, for the heuristic fallback.
+#: ``embed`` covers most of the library (``nomic-embed-text``,
+#: ``mxbai-embed-large``, ``snowflake-arctic-embed``, ``granite-embedding``);
+#: the rest are the families whose names do not say so. Matters because a
+#: model the heuristic reads as a chat model is not granted EMBEDDINGS.
+_EMBEDDING_FAMILIES: tuple[str, ...] = ("embed", "bge-", "minilm", "paraphrase-multilingual")
+
+
 def _is_embedding_only_name(model_lower: str) -> bool:
     """Whether a model *name* denotes a dedicated embedding model.
 
     Used only by the heuristic fallback (the live path reads the server's
-    ``embedding`` / ``completion`` capabilities). A name carrying ``embed`` with
-    no code marker is treated as embedding-only so it resolves an
-    EMBEDDINGS-only disjoint set — matching how a modern server reports it.
+    ``embedding`` / ``completion`` capabilities). A name in
+    :data:`_EMBEDDING_FAMILIES` with no code marker is treated as
+    embedding-only so it resolves an EMBEDDINGS-only disjoint set — matching
+    how a modern server reports it.
     """
-    return "embed" in model_lower and not _name_has(model_lower, _CODE_FAMILIES)
+    return _name_has(model_lower, _EMBEDDING_FAMILIES) and not _name_has(
+        model_lower, _CODE_FAMILIES
+    )
 
 
 def _ollama_caps_from_server(model: str, reported: Iterable[str]) -> frozenset[ModelCapability]:
@@ -263,10 +274,12 @@ def _ollama_caps_from_server(model: str, reported: Iterable[str]) -> frozenset[M
 
     - JSON_MODE — Ollama's ``format: json`` is universal for chat models; the
       server does not report it as a capability.
-    - EMBEDDINGS — ``/api/embeddings`` accepts completion models too, so the
-      historical breadth is preserved; a pure embedding model (``embedding``
-      without ``completion``) stays EMBEDDINGS-only-disjoint.
     - CODE by model name — the server does not report it.
+
+    EMBEDDINGS is **not** added. ``/api/embeddings`` accepted completion models
+    too, and this once granted it to every one on that ground; ``/api/embed``,
+    which ``embed`` uses, answers them with a 501 (Ollama 0.33.2). EMBEDDINGS
+    comes only from the server's own ``embedding`` capability.
     """
     reported_set = {str(c).lower() for c in reported}
     caps: set[ModelCapability] = set()
@@ -274,7 +287,6 @@ def _ollama_caps_from_server(model: str, reported: Iterable[str]) -> frozenset[M
         caps |= _OLLAMA_CAPABILITY_MAP.get(name, frozenset())
     if "completion" in reported_set:
         caps.add(ModelCapability.JSON_MODE)
-        caps.add(ModelCapability.EMBEDDINGS)
         if _name_has(model.lower(), _CODE_FAMILIES):
             caps.add(ModelCapability.CODE)
     return frozenset(caps)
@@ -286,10 +298,12 @@ def _ollama_heuristic(model: str) -> ModelProfile:
     The corrected, demoted form of the pre-binding inline
     ``_detect_capabilities``: produces the SAME complete-set shape as
     :func:`_ollama_caps_from_server` from the model name alone. A dedicated
-    embedding model (name carrying ``embed``) resolves an EMBEDDINGS-only
-    disjoint set; every other model resolves the base chat set plus JSON_MODE
-    (universal ``format: json``) and broad EMBEDDINGS, plus FUNCTION_CALLING /
-    VISION / CODE by family. Contributes only the ``capabilities`` facet.
+    embedding model (see :func:`_is_embedding_only_name`) resolves an
+    EMBEDDINGS-only disjoint set; every other model resolves the base chat set
+    plus JSON_MODE (universal ``format: json``), plus FUNCTION_CALLING / VISION /
+    CODE by family --- and not EMBEDDINGS, for the reason
+    :func:`_ollama_caps_from_server` gives. Contributes only the
+    ``capabilities`` facet.
     """
     model_lower = model.lower()
     if _is_embedding_only_name(model_lower):
@@ -299,7 +313,6 @@ def _ollama_heuristic(model: str) -> ModelProfile:
         ModelCapability.CHAT,
         ModelCapability.STREAMING,
         ModelCapability.JSON_MODE,
-        ModelCapability.EMBEDDINGS,
     }
     if _name_has(model_lower, _TOOL_CAPABLE_FAMILIES):
         caps.add(ModelCapability.FUNCTION_CALLING)
@@ -1036,14 +1049,10 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         options = self._build_options(shaped_config)
         return self._apply_param_remaps(options, constraints.param_remaps)
 
-    # ``/api/embeddings`` reports an over-long input as a 500, with the body
-    # "the input length exceeds the context length" (measured, Ollama 0.33.2).
-    # A 500 there also means other things (a completion model asked to embed),
-    # so the marker, not the status, decides. The 500 is here only for
-    # ``embed()``'s endpoint: ``/api/embed`` reports the same overflow as a 400,
-    # so a change that moves ``embed()`` there drops the 500 or names what else
-    # still needs it.
-    _context_length_statuses = frozenset({400, 500})
+    # ``/api/embed`` takes a ``truncate`` flag, so both policies are honoured.
+    # Its overflow, and ``/api/chat``'s, is a 400, so the base's status set
+    # serves; the 500 declared here was ``/api/embeddings``' alone.
+    _embedding_overflow_policies = frozenset({"refuse", "truncate"})
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw aiohttp transport error into a dataknobs exception.
@@ -1057,7 +1066,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`,
-        - a context-window overflow, on a 400 or a 500 (see
+        - a context-window overflow, on a 400 (see
           :attr:`_context_length_statuses`) →
           :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`,
         - any other 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
@@ -1273,29 +1282,62 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         except Exception as exc:
             self._raise_translated(exc)
 
+    def embedding_variant(self) -> str | None:
+        """``"api-embed"``, and ``"+truncate"`` under the opt-in.
+
+        ``/api/embed`` returns unit-length vectors where ``/api/embeddings``,
+        which this provider used before it, returned some models' at their raw
+        norm (``nomic-embed-text``'s at about 22). The directions agree, so a
+        cosine store is unaffected, but a store under any other metric ranks
+        the two kinds against each other wrongly. Naming the endpoint makes
+        every vector written before the move read as another model's, so it is
+        re-embedded rather than compared.
+        """
+        variant = "api-embed"
+        if getattr(self.config, "embedding_overflow", "refuse") == "truncate":
+            variant += "+truncate"
+        return variant
+
     async def embed(
         self, texts: Union[str, List[str]], **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
-        """Generate embeddings, checking any width the caller asked for.
+        """Generate embeddings on ``/api/embed``, one text per request.
 
-        Ollama's ``/api/embeddings`` takes a model and a prompt: the width is
-        the model's and there is no parameter to change it. So a stated
-        ``dimensions`` cannot be forwarded, and the choice is between checking
-        it and ignoring it. This checks — a config asking for 512 from a
-        768-wide model used to receive 768 and say nothing, which is how a
-        width promised in config and a width written to a store come apart.
+        **Overflow.** ``/api/embed`` truncates an over-long input unless told
+        not to, so ``truncate`` is sent on every request, under both
+        policies: omitting it would turn the default refusal into truncation
+        with nobody having asked. Under ``"refuse"`` an over-long text raises
+        :class:`~dataknobs_llm.exceptions.ContextLengthExceededError` (the
+        server answers 400). Under ``"truncate"`` it is embedded, and a text
+        whose token count reached the model's window is reported as cut.
+        "Reached", not "exceeded": the server reports the window exactly for a
+        text it cut, so a text filling the window precisely is reported too.
 
-        Declaring the width a model *does* produce stays valid and silent;
-        the rule is that a stated width is never ignored, not that one may
-        not be stated.
+        **One text per request** so that a cut can be attributed. A batch's
+        token count is a sum, and a batch overflow fails the whole request
+        with no position.
+
+        **The window** is the server's, read from ``/api/show`` into the
+        model profile. The metadata is refreshed here at the request boundary,
+        as ``complete`` does (TTL-gated), so a provider used only to embed
+        learns it too. Where it stays unknown, truncation cannot be detected,
+        and that is said once per instance.
+
+        **Width.** ``/api/embed`` takes a ``dimensions`` parameter, but
+        nothing says which models were trained to be cut to one, so a stated
+        width is checked rather than forwarded. Declaring the width a model
+        *does* produce stays valid and silent; the rule is that a stated
+        width is never ignored.
 
         Args:
             texts: A single text or a batch.
             **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
-                for this call. Checked, not forwarded — see above.
+                for this call. Checked, not forwarded --- see above.
         """
+        truncate = self._embedding_overflow() == "truncate"
         if not self._is_initialized:
             await self.initialize()
+        await self._live_source.refresh_if_stale()
 
         if isinstance(texts, str):
             texts = [texts]
@@ -1304,20 +1346,30 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             single = False
 
         requested = self._requested_embedding_dimensions(kwargs)
+        window = self.get_constraints().max_input_tokens if truncate else None
+        if truncate and window is None:
+            self._warn_embedding_window_unknown()
+
         embeddings = []
-        for text in texts:
-            payload = {"model": self.config.model, "prompt": text}
+        cut: list[int] = []
+        for position, text in enumerate(texts):
+            payload = {"model": self.config.model, "input": text, "truncate": truncate}
 
             try:
                 async with self._session.post(
-                    f"{self.base_url}/api/embeddings", json=payload
+                    f"{self.base_url}/api/embed", json=payload
                 ) as response:
                     await raise_for_status_with_body(response)
                     data = await response.json()
-                    embeddings.append(data["embedding"])
             except Exception as exc:
                 self._raise_translated(exc)
 
+            embeddings.append(data["embeddings"][0])
+            if window is not None and data.get("prompt_eval_count", 0) >= window:
+                cut.append(position)
+
+        if window is not None:
+            self._warn_embedding_truncated(cut, window)
         self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
 

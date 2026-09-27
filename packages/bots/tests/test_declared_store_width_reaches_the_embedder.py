@@ -203,6 +203,23 @@ def test_every_key_the_flat_branch_forwards_is_one_this_can_project() -> None:
     )
 
 
+async def test_an_overflow_policy_reaches_the_provider_through_the_flat_form() -> None:
+    """A subsystem holding the policy as a typed field can get it to the provider.
+
+    The flat branch forwards a fixed set of top-level keys and drops the rest
+    without a word, which would leave a knowledge base configured to truncate
+    refusing its long chunks instead.
+    """
+    built = build_embedding_config(
+        embedding_provider="echo",
+        embedding_model="test",
+        embedding_overflow="truncate",
+    )
+    provider = await create_embedding_provider(built)
+
+    assert provider.config.embedding_overflow == "truncate"
+
+
 def test_the_nested_form_takes_the_width_only_where_it_is_read() -> None:
     """No top-level twin beside the section's own width.
 

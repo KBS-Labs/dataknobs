@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`build_embedding_config(embedding_overflow=...)`.** A knowledge base or
+  memory holding its embedder's overflow policy as a typed field can project
+  it onto the flat config form, which `create_embedding_provider` forwards to
+  the provider. `"truncate"` lets the embedder cut a text longer than its
+  model's window, reporting each cut; the default refuses it. See
+  `LLMConfig.embedding_overflow` in `dataknobs-llm`.
+
 ### Fixed
 
 - **`dataknobs-bots[postgres]` installs from wheels.** It forwards to

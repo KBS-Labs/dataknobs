@@ -424,6 +424,8 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
             **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
                 for this call. Checked, not forwarded.
         """
+        # Refuses ``embedding_overflow="truncate"`` by name, before any request.
+        self._embedding_overflow()
         if not self._is_initialized:
             await self.initialize()
 

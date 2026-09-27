@@ -246,7 +246,7 @@ provider = await create_embedding_provider({
 })
 ```
 
-Only `api_base`, `api_key`, and `dimensions` are forwarded from the top level.
+Only `api_base`, `api_key`, `dimensions` and `embedding_overflow` are forwarded from the top level.
 Other top-level keys (e.g., `backend`, `type`) are ignored.
 
 When the nested format is present, it takes precedence over legacy keys.
@@ -311,7 +311,8 @@ because a model whose width is selectable answers a 256-wide request and a
 512-wide one differently — so `(model, text)` no longer identifies a vector.
 Stating no width is its own identity too, not a wildcard. Two identical
 requests are still one call to the inner provider; only a differing width is
-a different row.
+a different row. The provider's embedding variant qualifies the key the same
+way (see [An input longer than the model's window](#an-input-longer-than-the-models-window)).
 
 `EMBEDDING_DIMENSIONS` resolves from the bundled model tables and is
 config-overridable through `model_profile_overrides`, so a model released
@@ -328,6 +329,78 @@ received 3072: valid vectors, six times wider than requested, at six times
 the storage and the price. Nothing raised at any layer; the first component
 to object was a vector store rejecting the write, and that message names the
 store rather than the misconfiguration.
+
+### An input longer than the model's window
+
+A model embeds at most its context window. What happens to a longer text is
+`embedding_overflow`'s to say, and the default is to **refuse** it:
+
+| `embedding_overflow` | An over-long text |
+|---|---|
+| `"refuse"` (default) | raises `ContextLengthExceededError`, a `ValidationError` subclass |
+| `"truncate"` | is embedded as its opening window, and reported |
+
+```python
+provider = await create_embedding_provider(
+    LLMConfig(provider="ollama", model="mxbai-embed-large", embedding_overflow="truncate")
+)
+```
+
+Refusing is the default because a cut text's vector describes its opening
+words only: a retrieval over it finds nothing the rest of the text said, and
+nothing on the vector shows it. Any other value is a `ValidationError` when the
+config is built. The key reaches the provider through every config form,
+including the legacy flat one, and `dataknobs-bots`' `build_embedding_config`
+takes it as `embedding_overflow=`. It is named for embeddings on purpose: it
+says nothing about chat.
+
+**Honoured or refused, never ignored** — the width rule again. A provider that
+cannot be told to truncate refuses `"truncate"` by name on the first `embed()`,
+before any request, instead of refusing each long text later:
+
+| Provider | `"truncate"` |
+|---|---|
+| Ollama | honoured: `/api/embed` is sent `truncate: true` |
+| Echo | honoured, against a synthetic window: `options["embedding_window"]`, counted in words |
+| OpenAI, HuggingFace, Bedrock | refused by name, as a `ValidationError` |
+| Anthropic | no embedding models; `embed()` raises `NotImplementedError` |
+
+**Each cut is reported**, at `WARNING`, with the model, its window and the
+positions of the texts that were cut in that call — never the texts, which are
+the caller's data. Ollama detects a cut from the token count the server
+reports: a single text whose count reaches the model's window was cut. That is
+*reaches*, not *exceeds*, so a text that fills the window exactly is reported
+too, since the two look the same. The window is the one the server reports for
+the model, which `embed()` refreshes at the request boundary as `complete()`
+does. Where it is unknown (live metadata disabled, or the server unreachable
+for it), a cut cannot be detected, and the provider says so once.
+
+**A truncated vector has its own identity.** It is not the vector of its whole
+text, so it must not be served, or judged current, where the whole text's
+vector was asked for. `LLMProvider.embedding_variant()` names what, besides the
+model and the width, decides the vectors, and both keys a vector is kept under
+carry it:
+
+| Key | Without a variant | With one |
+|---|---|---|
+| `LLMProviderEmbedder.model_id`, written beside a stored vector and used by `CachedEmbedder` | `echo:e` | `echo:e#truncate` |
+| `CachingEmbedProvider`'s cache identity | `e`, or `e@256` with a width | `e#truncate`, or `e#truncate@256` |
+
+So turning the opt-in off does not go on serving what it produced. A wrapper
+(`CachingEmbedProvider`, `CapturingProvider`) reports the variant of what it
+wraps, so a cache in the path does not change the key.
+
+**Ollama's variant is `api-embed`** (`api-embed+truncate` under the opt-in),
+because `embed()` moved from `/api/embeddings` to `/api/embed`, which returns
+unit-length vectors. The directions are the same, so a cosine store is
+unaffected, but `nomic-embed-text` vectors used to arrive at a norm of about 22,
+and a store under any other metric ranks old and new vectors against each other
+wrongly. Every vector an Ollama embedder wrote before the move therefore reads
+as another model's, so an index warns once, a synchronizer re-embeds, and both
+caches miss once. A store under a non-cosine metric holding `nomic` vectors must
+be rebuilt. The ontology registry, which compares a document's declared model by
+name, ignores everything from the `#`: a variant never changes which weights
+are meant.
 
 ### Config-lint validation
 
@@ -851,7 +924,10 @@ populated from the reported context window (previously dead for Ollama), and
 not-installed / unreachable → `False`), force-refreshing the live cache first so
 a model pulled since the last request is seen immediately (an authoritative
 liveness check, not a value that can lag by up to the metadata TTL). A dedicated
-embedding model resolves an `EMBEDDINGS`-only set. The name-based heuristic is
+embedding model resolves an `EMBEDDINGS`-only set, and only an embedding model
+claims `EMBEDDINGS`: `/api/embed` answers a completion model with a 501
+(measured on Ollama 0.33.2), where the older `/api/embeddings` accepted one.
+The name-based heuristic is
 the graceful-degradation fallback for older servers that predate the
 `capabilities` field — or any server reporting no usable capability array (an
 empty or all-unrecognized report degrades to the heuristic rather than resolving

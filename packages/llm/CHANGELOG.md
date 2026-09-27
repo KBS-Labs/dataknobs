@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`LLMConfig.embedding_overflow`: an embedding provider can opt in to
+  truncating an over-long text.** `"refuse"` (the default) raises
+  `ContextLengthExceededError`; `"truncate"` embeds the opening window and
+  logs a `WARNING` naming the model, the window and the positions of the texts
+  cut, never the texts. Any other value is a `ValidationError` when the config
+  is built. Ollama and Echo honour both; OpenAI, HuggingFace and Bedrock
+  refuse `"truncate"` by name on the first `embed()`, before any request,
+  rather than ignoring it. Ollama detects a cut from the server's token count
+  reaching the model's window, so a text exactly filling the window is
+  reported as cut too; where the window is unknown it says once that it
+  cannot tell. The key is forwarded by the flat config form
+  (`FLAT_EMBEDDING_PASSTHROUGHS`) as well as the nested one.
+- **`LLMProvider.embedding_variant()`** names what, besides the model and the
+  width, decides the vectors `embed()` returns: `"truncate"` under the opt-in
+  by default, and for Ollama `"api-embed"` (`"api-embed+truncate"`).
+  `LLMProviderEmbedder.model_id` appends it (`provider:model#variant`), and
+  `CachingEmbedProvider` qualifies its cache identity with it
+  (`model#variant@width`), so neither cache serves, and no staleness check
+  accepts, a vector made one way where another was asked for.
+  `CachingEmbedProvider`, `CapturingProvider` and `SyncProviderAdapter` report
+  the variant of what they wrap.
+- **`EchoProvider` has a synthetic embedding window**,
+  `options["embedding_window"]`, counted in words, and honours both overflow
+  policies against it, so the overflow path can be tested offline.
+
 - **`create_embedding_provider`'s two dict formats are now a question a
   caller can ask, not a condition they have to restate.** Anything building
   that dict must put each value where the reader will look for it, which
@@ -17,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers the first — a nested section is read only when it is non-empty
   **and** a dict, so an empty one and a non-dict one alike fall through to
   the legacy flat keys — and `FLAT_EMBEDDING_PASSTHROUGHS` is the second,
-  the three top-level keys the flat branch forwards. `create_embedding_provider`
+  the top-level keys the flat branch forwards. `create_embedding_provider`
   itself now reads both, so the published answer and the behaviour are one
   thing rather than two that agree today. `reads_nested_embedding` is a
   `TypeGuard`, so narrowing on it also types the section as the mapping it
@@ -27,16 +52,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An over-long text sent to an Ollama embedding model raises
   `ContextLengthExceededError`**, where it raised `OperationError (HTTP 500)`.
-  Ollama's embedding endpoint reports an overflow as a 500 with the words
-  `the input length exceeds the context length`, and the shared overflow
-  detection read only 400s and knew none of those words. Both are fixed: the
-  wording joins the shared markers, and the statuses read for a marker are now
-  declared per provider in `_context_length_statuses` — `{400}` by default,
-  `{400, 500}` for `OllamaProvider`. A 500 still needs the marker, so Ollama's
-  other 500s stay `OperationError`. The message stays free of the vendor's
-  text, which remains on `__cause__`. **One change for existing code:** an
-  `except OperationError` around `embed()` no longer catches an over-long
-  text; `except ContextLengthExceededError` or `except ValidationError` does.
+  Ollama words an embedding overflow `the input length exceeds the context
+  length`, which the shared overflow detection did not know; it joins the
+  shared markers. The statuses read for a marker are now declared per
+  provider in `_context_length_statuses` — `{400}` by default, which is the
+  status Ollama's `/api/embed` answers an overflow with. The message stays
+  free of the vendor's text, which remains on `__cause__`. **One change for
+  existing code:** an `except OperationError` around `embed()` no longer
+  catches an over-long text; `except ContextLengthExceededError` or
+  `except ValidationError` does.
+
+- **`OllamaProvider.embed` refreshes the server's model metadata**, as
+  `complete` and `stream_complete` do, at the request boundary and TTL-gated.
+  It never did, so a provider used only to embed never read `/api/show`: its
+  capabilities came from the model-name heuristic and its context window was
+  unknown until something called `refresh_model_metadata()`.
+
+- **An Ollama completion model no longer claims `EMBEDDINGS`.** It was granted
+  to every completion model because `/api/embeddings` accepted them;
+  `/api/embed`, which `embed` now uses, answers them with a 501 (measured on
+  Ollama 0.33.2 with `gemma3:1b` and `llama3.2:3b`). `EMBEDDINGS` now comes
+  from the server's own `embedding` capability, or, on the name-based
+  fallback, from an embedding-model name. That fallback also recognises
+  `bge-`, `minilm` and `paraphrase-multilingual` models as embedding models,
+  whose names do not say `embed`.
 
 - **The FSM integration's functions declare the `context` their interfaces
   do.** All six of `fsm_integration.functions` --- `PromptBuilder`,
@@ -156,6 +195,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synchronous helpers still answer over it.
 
 ### Changed
+
+- **`OllamaProvider.embed` calls `/api/embed` instead of `/api/embeddings`,
+  and every Ollama embedding identity changes with it.** The new endpoint
+  returns unit-length vectors; `/api/embeddings` returned some models' at
+  their raw norm (`nomic-embed-text` at about 22.6, `nomic-embed-text-v2-moe`
+  at about 14.4; `mxbai-embed-large` was already 1.0). The directions are
+  identical, so a cosine store is unaffected, but **a store under a euclidean
+  or inner-product metric that holds `nomic` vectors must be rebuilt**: old
+  and new vectors rank against each other wrongly. So that this cannot pass
+  unnoticed, an Ollama embedder's `model_id` is now
+  `ollama:<model>#api-embed`. Every index an Ollama embedder built before
+  reads as written by another model: it warns once, a synchronizer re-embeds
+  what it owns, and both embedding caches miss once. `truncate` is sent on
+  every request, because `/api/embed` truncates unless told not to. A stated
+  `dimensions` is still checked rather than forwarded. Measured on Ollama
+  0.33.2.
 
 - **Prompt libraries come in two flavours, and there are two named doors
   between them (breaking).** `AsyncPromptLibrary` joins `AbstractPromptLibrary`

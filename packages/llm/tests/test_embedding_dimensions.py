@@ -75,7 +75,9 @@ def _ollama(width: int, **config: Any) -> OllamaProvider:
     provider = OllamaProvider(LLMConfig(provider="ollama", model="nomic-embed-text", **config))
     provider._session = FakeSession(
         [
-            FakeSession.responding(FakeResponse(200, json_data={"embedding": [0.0] * width}))
+            FakeSession.responding(
+                FakeResponse(200, json_data={"embeddings": [[0.0] * width], "prompt_eval_count": 1})
+            )
             for _ in range(8)
         ]
     )
@@ -156,9 +158,9 @@ async def test_a_width_nobody_stated_is_not_invented() -> None:
 async def test_ollama_refuses_a_width_it_cannot_deliver() -> None:
     """The silent case, made loud.
 
-    Ollama's ``/api/embeddings`` takes a model and a prompt; the width is the
-    model's. A config asking for 512 from a 768-wide model used to return 768
-    vectors and say nothing, which is how a width promised by config and a
+    Ollama's provider does not forward a width, since nothing says which of
+    its models were trained to be cut to one. A config asking for 512 from a
+    768-wide model used to return 768 vectors and say nothing, which is how a width promised by config and a
     width written to a store come apart.
     """
     provider = _ollama(768, dimensions=512)

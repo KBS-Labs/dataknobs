@@ -2956,9 +2956,25 @@ def _model_id_readings(published: str) -> list[tuple[str | None, str]]:
     the format the protocol declines to promise. Two genuinely different
     model names still disagree under every reading, which is what this
     comparison exists for.
+
+    **A ``#variant`` is read past.** ``LLMProviderEmbedder`` appends one ---
+    ``ollama:nomic-embed-text:latest#api-embed`` --- when something besides
+    the model decides the vectors: the endpoint, or truncation being on. It
+    is there so a stored vector's staleness key changes when the vector
+    does, and it does not change which weights are meant, which is all a
+    calibrated ``threshold:`` depends on. Left in, it would land in the tag
+    and refuse a correctly configured deployment. So the readings after the
+    first are taken from the text before the first ``#``; the whole string
+    stays first, so a document naming the published identity verbatim still
+    agrees. ``#`` is safe to cut on because no model naming scheme in use
+    here contains one: Ollama tags follow a colon, and HuggingFace ids a
+    slash.
     """
     readings: list[tuple[str | None, str]] = [(None, published)]
-    provider, separator, model = published.partition(":")
+    identity, variant_mark, _variant = published.partition("#")
+    if variant_mark and identity:
+        readings.append((None, identity))
+    provider, separator, model = identity.partition(":")
     if separator and provider and model:
         readings.append((provider, model))
     return readings

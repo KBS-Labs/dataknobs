@@ -377,12 +377,12 @@ def create_llm_provider(
 #: caller building that dict has to know which top-level keys survive, and the
 #: alternative to reading them from here is writing the list out again
 #: somewhere else. ``dataknobs-bots``' ``build_embedding_config`` takes exactly
-#: these three as parameters, and a guard there compares the two sets rather
-#: than trusting that they still agree.
+#: these as parameters, and a guard there compares the two sets rather than
+#: trusting that they still agree.
 #:
 #: Dead on the nested branch, where the same values are read from inside the
 #: section instead.
-FLAT_EMBEDDING_PASSTHROUGHS = ("api_base", "api_key", "dimensions")
+FLAT_EMBEDDING_PASSTHROUGHS = ("api_base", "api_key", "dimensions", "embedding_overflow")
 
 
 def reads_nested_embedding(section: Any) -> TypeGuard[dict[str, Any]]:
@@ -442,8 +442,9 @@ async def create_embedding_provider(
       forwarded to the provider.
     - **Legacy prefix dict:** ``{"embedding_provider": "ollama",
       "embedding_model": "..."}`` -- ``embedding_`` prefixed keys at the
-      top level.  ``api_base``, ``api_key``, and ``dimensions`` are also
-      forwarded when present at the top level.
+      top level.  ``api_base``, ``api_key``, ``dimensions`` and
+      ``embedding_overflow`` are also forwarded when present at the top
+      level (:data:`FLAT_EMBEDDING_PASSTHROUGHS`).
 
     When neither dict format is present, *default_provider* / *default_model*
     are used (``ollama`` / ``nomic-embed-text``).

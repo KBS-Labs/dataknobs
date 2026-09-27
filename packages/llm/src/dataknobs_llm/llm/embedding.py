@@ -118,15 +118,31 @@ class LLMProviderEmbedder:
 
     @property
     def model_id(self) -> str:
-        """``provider:model`` --- the staleness key written beside a vector.
+        """``provider:model``, or ``provider:model#variant`` --- the staleness key.
 
-        Built from the provider's own name rather than a caller-supplied
-        label so that two embedders reaching the same model agree, and two
-        reaching different models do not. ``provider_name`` is the provider's
-        resolved name, so an override set at construction is reflected here.
+        Written beside every stored vector, and the key ``CachedEmbedder``
+        caches under. Built from the provider's own name rather than a
+        caller-supplied label so that two embedders reaching the same model
+        agree, and two reaching different models do not. ``provider_name`` is
+        the provider's resolved name, so an override set at construction is
+        reflected here.
+
+        The ``#variant`` is the provider's
+        :meth:`~dataknobs_llm.llm.base.LLMProvider.embedding_variant`, present
+        only when it has one. It is here because this key has to change
+        whenever the vector does, and a model name alone does not: Ollama's
+        endpoint returns some models' vectors at another norm than its old
+        one did, and a truncated vector is not the vector of its whole text.
+        A key that cannot tell those apart serves or keeps the wrong vector
+        with nothing raised. A variant never changes which weights are meant,
+        so a reader comparing model *names* --- the ontology registry checking
+        a document's declared model --- may drop everything from the ``#``.
         """
         name = getattr(self._provider, "provider_name", None) or type(self._provider).__name__
-        return f"{name}:{self._model or 'unknown'}"
+        identity = f"{name}:{self._model or 'unknown'}"
+        variant_of = getattr(self._provider, "embedding_variant", None)
+        variant = variant_of() if callable(variant_of) else None
+        return identity if variant is None else f"{identity}#{variant}"
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed every text, in order.

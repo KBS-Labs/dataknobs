@@ -737,6 +737,8 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
             **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
                 for this call. Other keys are ignored.
         """
+        # Refuses ``embedding_overflow="truncate"`` by name, before any request.
+        self._embedding_overflow()
         if not self._is_initialized:
             await self.initialize()
 
