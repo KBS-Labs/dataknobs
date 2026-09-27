@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **A knowledge base or vector memory can let its embedder truncate an
+  over-long text.** `RAGKnowledgeBaseConfig` and `VectorMemoryConfig` take
+  `embedding_overflow` as a flat key beside `embedding_provider`, typed as
+  `dataknobs_llm`'s `EmbeddingOverflow`, and
+  `build_embedding_config(embedding_overflow=...)` projects it onto the flat
+  config form, which `create_embedding_provider` forwards to the provider. The
+  nested `embedding:` section already carried it. `"truncate"` lets the
+  embedder cut a text longer than its model's window, reporting each cut; the
+  default refuses it. See `LLMConfig.embedding_overflow` in `dataknobs-llm`.
+  **Neither store records which model made its vectors**, so the change to
+  Ollama's embedding endpoint in `dataknobs-llm` is not detected here: a
+  persisted store holding `nomic-embed-text` vectors under a non-cosine metric
+  must be rebuilt.
+
 ### Fixed
 
 - **`dataknobs-bots[postgres]` installs from wheels.** It forwards to

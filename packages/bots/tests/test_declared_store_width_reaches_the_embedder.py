@@ -31,11 +31,14 @@ consumer actually calls.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import pytest
 
+from dataknobs_bots.knowledge.config import RAGKnowledgeBaseConfig
 from dataknobs_bots.knowledge.rag import RAGKnowledgeBase
+from dataknobs_bots.memory.config import VectorMemoryConfig
 from dataknobs_bots.memory.vector import VectorMemory
 from dataknobs_bots.providers import build_embedding_config, create_embedding_provider
 
@@ -201,6 +204,86 @@ def test_every_key_the_flat_branch_forwards_is_one_this_can_project() -> None:
     assert set(FLAT_EMBEDDING_PASSTHROUGHS) <= set(built), (
         f"a passthrough was accepted as a parameter and then dropped: {built}"
     )
+
+
+async def test_an_overflow_policy_reaches_the_provider_through_the_flat_form() -> None:
+    """A subsystem holding the policy as a typed field can get it to the provider.
+
+    The flat branch forwards a fixed set of top-level keys and drops the rest
+    without a word, which would leave a knowledge base configured to truncate
+    refusing its long chunks instead.
+    """
+    built = build_embedding_config(
+        embedding_provider="echo",
+        embedding_model="test",
+        embedding_overflow="truncate",
+    )
+    provider = await create_embedding_provider(built)
+
+    assert provider.config.embedding_overflow == "truncate"
+
+
+def test_the_helper_types_the_policy_as_the_provider_does() -> None:
+    """``str`` would let a checker pass a policy the provider refuses at runtime."""
+    import typing
+
+    from dataknobs_llm import EmbeddingOverflow
+
+    hints = typing.get_type_hints(build_embedding_config)
+    assert hints["embedding_overflow"] == EmbeddingOverflow | None
+
+
+@pytest.mark.parametrize("config_type", [RAGKnowledgeBaseConfig, VectorMemoryConfig])
+def test_every_flat_passthrough_is_a_field_of_each_subsystem(config_type: type) -> None:
+    """A key the helper forwards has to be one the subsystem can hold.
+
+    The guard above compares the helper with ``create_embedding_provider``,
+    and that is only half the route. A subsystem config with no field for a
+    passthrough drops the key when it is parsed, so the helper is never handed
+    it and a consumer writing it in the flat form is ignored without a word.
+    """
+    from dataknobs_llm import FLAT_EMBEDDING_PASSTHROUGHS
+
+    held = {f.name for f in dataclasses.fields(config_type)}
+    missing = sorted(set(FLAT_EMBEDDING_PASSTHROUGHS) - held)
+
+    assert not missing, (
+        f"{config_type.__name__} has no field for {missing}, so the flat form "
+        "cannot carry it to the embedder"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rag_base_takes_an_overflow_policy_in_the_flat_form() -> None:
+    kb = await RAGKnowledgeBase.from_config(
+        {
+            "vector_store": {"backend": "memory", "dimensions": WIDTH},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+            "embedding_overflow": "truncate",
+        }
+    )
+    try:
+        assert kb.embedding_provider.config.embedding_overflow == "truncate"
+    finally:
+        await kb.close()
+
+
+@pytest.mark.asyncio
+async def test_vector_memory_takes_an_overflow_policy_in_the_flat_form() -> None:
+    memory = await VectorMemory.from_config(
+        {
+            "backend": "memory",
+            "dimension": WIDTH,
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+            "embedding_overflow": "truncate",
+        }
+    )
+    try:
+        assert memory.embedding_provider.config.embedding_overflow == "truncate"
+    finally:
+        await memory.close()
 
 
 def test_the_nested_form_takes_the_width_only_where_it_is_read() -> None:

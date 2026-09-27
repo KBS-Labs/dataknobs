@@ -1,14 +1,14 @@
 """An over-long text sent to a real Ollama embedding model is refused by name.
 
-Ollama's ``/api/embeddings`` endpoint answers an input longer than the model's
-context window with **HTTP 500** and the body
+``embed`` posts to ``/api/embed`` with ``truncate: false`` unless the config
+opts in to truncation, and the server answers an input longer than the model's
+context window with **HTTP 400** and the body
 ``{"error":"the input length exceeds the context length"}`` (measured on Ollama
 0.33.2 against ``mxbai-embed-large``, ``nomic-embed-text`` and
-``nomic-embed-text-v2-moe``). Before the fix that surfaced as a generic
-``OperationError (HTTP 500)``: the status gate admitted only a 400, and the
-wording matched none of the shared overflow markers.
+``nomic-embed-text-v2-moe``). The older ``/api/embeddings`` sent the same words
+as a 500, which once surfaced as a generic ``OperationError``.
 
-These run against the real server, because the earlier unit test for this case
+These run against the real server, because an earlier unit test for this case
 pinned a status and a wording Ollama never sends, and passed while the real
 path was broken. ``mxbai-embed-large`` has the smallest window of the three
 (512 tokens), so a modest text overflows it.

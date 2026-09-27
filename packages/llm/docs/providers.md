@@ -246,7 +246,7 @@ provider = await create_embedding_provider({
 })
 ```
 
-Only `api_base`, `api_key`, and `dimensions` are forwarded from the top level.
+Only `api_base`, `api_key`, `dimensions` and `embedding_overflow` are forwarded from the top level.
 Other top-level keys (e.g., `backend`, `type`) are ignored. That set is
 published as `FLAT_EMBEDDING_PASSTHROUGHS`, so code building this dict can
 read it rather than repeat it.
@@ -335,7 +335,8 @@ because a model whose width is selectable answers a 256-wide request and a
 512-wide one differently — so `(model, text)` no longer identifies a vector.
 Stating no width is its own identity too, not a wildcard. Two identical
 requests are still one call to the inner provider; only a differing width is
-a different row.
+a different row. The provider's embedding variant qualifies the key the same
+way (see [An input longer than the model's window](#an-input-longer-than-the-models-window)).
 
 `EMBEDDING_DIMENSIONS` resolves from the bundled model tables and is
 config-overridable through `model_profile_overrides`, so a model released
@@ -352,6 +353,89 @@ received 3072: valid vectors, six times wider than requested, at six times
 the storage and the price. Nothing raised at any layer; the first component
 to object was a vector store rejecting the write, and that message names the
 store rather than the misconfiguration.
+
+### An input longer than the model's window
+
+A model embeds at most its context window. What happens to a longer text is
+`embedding_overflow`'s to say, and the default is to **refuse** it:
+
+| `embedding_overflow` | An over-long text |
+|---|---|
+| `"refuse"` (default) | raises `ContextLengthExceededError`, a `ValidationError` subclass |
+| `"truncate"` | is embedded as its opening window, and reported |
+
+```python
+provider = await create_embedding_provider(
+    LLMConfig(provider="ollama", model="mxbai-embed-large", embedding_overflow="truncate")
+)
+```
+
+Refusing is the default because a cut text's vector describes its opening
+words only: a retrieval over it finds nothing the rest of the text said, and
+nothing on the vector shows it. Any other value is a `ValidationError` when the
+config is built. The key reaches the provider through every config form,
+including the legacy flat one, and `dataknobs-bots`' `build_embedding_config`
+takes it as `embedding_overflow=`. It is named for embeddings on purpose: it
+says nothing about chat.
+
+**Honoured or refused, never ignored** — the width rule again. A provider that
+cannot be told to truncate refuses `"truncate"` by name on the first `embed()`,
+before any request, instead of refusing each long text later:
+
+| Provider | `"truncate"` |
+|---|---|
+| Ollama | honoured: a text the server refuses under `truncate: false` is sent again with `truncate: true` |
+| Echo | honoured, against a synthetic window: `options["embedding_window"]`, counted in words |
+| OpenAI, HuggingFace, Bedrock | refused by name, as a `ValidationError` |
+| Anthropic | no embedding models; `embed()` raises `NotImplementedError` |
+
+**Each cut is reported**, at `WARNING`, with the model, the length the texts
+were cut to and their positions in that call (the first ten, then "and N more")
+— never the texts, which are the caller's data. Ollama asks for every text with `truncate: false` first, under
+both policies, and under `"truncate"` sends a text again with `truncate: true`
+only when the server refused it as too long. The refusal is what decides,
+because the model's window cannot: the server cuts at the smallest of the
+model's trained window, `num_ctx` and its own micro-batch, and reports only the
+first. `bge-m3` reports 8192 and is cut at 2048 (Ollama 0.33.2). So every cut is
+reported, a text that fits exactly is not, and the cost is one extra request
+for each over-long text, refused before anything is embedded.
+
+A cut is reported when the vector is computed, not when it is served. A cache
+in the path (`CachingEmbedProvider`, `CachedEmbedder`) returns a truncated
+vector again without a second report.
+
+**A truncated vector has its own identity.** It is not the vector of its whole
+text, so it must not be served, or judged current, where the whole text's
+vector was asked for. `LLMProvider.embedding_variant()` names what, besides the
+model and the width, decides the vectors, and both keys a vector is kept under
+carry it:
+
+| Key | Without a variant | With one |
+|---|---|---|
+| `LLMProviderEmbedder.model_id`, written beside a stored vector and used by `CachedEmbedder` | `echo:e` | `echo:e#truncate` |
+| `CachingEmbedProvider`'s cache identity | `e`, or `e@256` with a width | `e#truncate`, or `e#truncate@256` |
+
+So turning the opt-in off does not go on serving what it produced. A wrapper
+(`CachingEmbedProvider`, `CapturingProvider`, `SyncProviderAdapter`) answers
+with what it wraps, for the variant and for the policy alike
+(`embedding_overflow_policy()`): a cache in the path does not change the key,
+and a wrapper over a provider that can truncate does not refuse to.
+
+**Ollama's variant is `api-embed`** (`api-embed+truncate` under the opt-in),
+because `embed()` moved from `/api/embeddings` to `/api/embed`, which returns
+unit-length vectors. The directions are the same, so a cosine store is
+unaffected, but `nomic-embed-text` vectors used to arrive at a norm of about 22,
+and a store under any other metric ranks old and new vectors against each other
+wrongly. Where a vector's identity is recorded, every vector an Ollama embedder
+wrote before the move reads as another model's: a `SemanticIndex` warns once, a
+`VectorTextSynchronizer` re-embeds, and both caches miss once. **Where it is not
+recorded, nothing notices.** `dataknobs-bots`' `RAGKnowledgeBase` and
+`VectorMemory` write no model identity beside their vectors, so a persisted one
+must be rebuilt by hand if it holds `nomic` vectors under a non-cosine metric.
+Any other store under such a metric holding `nomic` vectors must be rebuilt as
+well. The ontology registry, which compares a document's declared model by
+name, ignores everything from the `#`: a variant never changes which weights
+are meant.
 
 ### Config-lint validation
 
@@ -872,7 +956,10 @@ populated from the reported context window (previously dead for Ollama), and
 not-installed / unreachable → `False`), force-refreshing the live cache first so
 a model pulled since the last request is seen immediately (an authoritative
 liveness check, not a value that can lag by up to the metadata TTL). A dedicated
-embedding model resolves an `EMBEDDINGS`-only set. The name-based heuristic is
+embedding model resolves an `EMBEDDINGS`-only set, and only an embedding model
+claims `EMBEDDINGS`: `/api/embed` answers a completion model with a 501
+(measured on Ollama 0.33.2), where the older `/api/embeddings` accepted one.
+The name-based heuristic is
 the graceful-degradation fallback for older servers that predate the
 `capabilities` field — or any server reporting no usable capability array (an
 empty or all-unrecognized report degrades to the heuristic rather than resolving
@@ -913,17 +1000,18 @@ from the heuristic and lit up **only** by `model_profile_overrides` — exactly
 right for a provider whose "catalog" is whatever repo the consumer points at.
 
 The corrected heuristic classifies from the repo name and emits the complete
-capability set: `TEXT_GENERATION` always; `EMBEDDINGS` for the dominant embedding
-families (`sentence-transformers/*`, `feature-extraction`, and the `minilm` /
-`bge` / `gte` / `e5` / `instructor` family markers), **excluding** cross-encoder
-rerankers (any embed-marker match is dropped when the repo also carries a
+capability set: `TEXT_GENERATION` always; `EMBEDDINGS` for a name that
+`is_embedding_model_name()` reads as an embedding model (`embed`,
+`sentence-transformers/`, `feature-extraction`, `paraphrase-multilingual`, and
+the `minilm` / `bge` / `gte` / `e5` / `instructor` family markers; the Ollama
+heuristic uses the same function), **excluding** cross-encoder rerankers (any embed-marker match is dropped when the repo also carries a
 `reranker` token — a reranker is not an embedding model); `CHAT` for a `chat` /
 `instruct` / `conversational` **substring**, so fused real-world names such as
 `chatglm3` and `openchat` keep resolving `CHAT`. The embedding-family name markers
 (`minilm` / `bge` / `gte` / `e5` / `instructor`) are matched at token boundaries
 (so a short marker like `e5` does not fire inside an unrelated `phase5` run),
-while the longer descriptive markers (`sentence-transformers/`,
-`feature-extraction`) match as substrings. `EMBEDDINGS` and `CHAT` are **structurally
+while the longer descriptive markers (`embed`, `sentence-transformers/`,
+`feature-extraction`, `paraphrase-multilingual`) match as substrings. `EMBEDDINGS` and `CHAT` are **structurally
 disjoint** — an embedding repo never also resolves `CHAT` (the Inference API
 serves a repo as one task), a property guaranteed by the logic (embed is resolved
 first and suppresses chat), not merely by the tested names. That embed-first
@@ -1084,9 +1172,9 @@ its own key reports that key here too. If you write your own provider, note that
 *classification* material only — it decides context-window overflow from it and
 then discards it. You cannot set the message, which is the point: a provider
 this package has never seen inherits the same guarantee. If your vendor reports
-an overflow on a status other than 400, declare it on the class —
-`_context_length_statuses = frozenset({400, 500})`, as `OllamaProvider` does —
-and the shared gate reads those statuses for a marker too; the default is
+an overflow on a status other than 400, declare it on the class — for a vendor
+that answers one with a 500, `_context_length_statuses = frozenset({400, 500})`
+— and the shared gate reads those statuses for a marker too; the default is
 `{400}`, because a 5xx is otherwise the server's own failure and is retried as
 one.
 

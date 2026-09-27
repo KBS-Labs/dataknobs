@@ -5,7 +5,6 @@
 
 import asyncio
 import os
-import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
@@ -23,6 +22,7 @@ from ..model_profile import (
     ConfigOverrideSource,
     LayeredModelProfileResolver,
     ModelProfile,
+    is_embedding_model_name,
 )
 from ..profile_detection import ProfileDetectionMixin
 from ._aiohttp_shared import raise_for_status_with_body
@@ -47,45 +47,9 @@ _HF_DEFAULT_MAX_NEW_TOKENS = 100
 #: — which a whole-token match would silently drop. The ``instruct`` ⇄
 #: ``instructor`` false positive that motivated token matching is instead
 #: neutralized structurally: ``instructor`` is an embedding **token**
-#: (:data:`_HF_EMBED_TOKENS`) and embed is resolved first, suppressing the chat
-#: check (deep-review finding). So no chat marker needs token-boundary matching.
+#: (:func:`~..model_profile.is_embedding_model_name`) and embed is resolved
+#: first, suppressing the chat check. So no chat marker needs token-boundary matching.
 _HF_CHAT_SUBSTRINGS: tuple[str, ...] = ("chat", "instruct", "conversational")
-
-#: Distinctive multi-character embedding-family substrings (matched anywhere in
-#: the lowercased repo id). The pre-binding bare ``'embedding'`` test missed the
-#: dominant ``sentence-transformers`` / feature-extraction repos.
-_HF_EMBED_SUBSTRINGS: tuple[str, ...] = (
-    "embedding",
-    "sentence-transformers/",
-    "feature-extraction",
-)
-
-#: Short embedding-family name markers matched at **token** boundaries (not as
-#: substrings), so ``e5`` marks ``intfloat/e5-mistral-7b-instruct`` but not an
-#: unrelated ``phase5`` run, and ``bge`` marks the family without over-reaching.
-#: ``instructor`` (the Instructor embedding family) and ``e5`` are the correctness
-#: additions that reclassify names the substring chat markers previously stole.
-_HF_EMBED_TOKENS: tuple[str, ...] = (
-    "minilm",
-    "bge",
-    "gte",
-    "e5",
-    "instructor",
-)
-
-#: Token marking a cross-encoder **reranker** repo. A reranker matches an embed
-#: family prefix (``bge``/``gte``) but is not an embedding model, so this token
-#: suppresses the embed classification (deep-review finding).
-_HF_RERANKER_TOKEN = "reranker"
-
-#: Split a lowercased repo id into its alphanumeric tokens (``org/name-v1.5`` →
-#: ``{"org", "name", "v1", "5"}``) for token-boundary marker matching.
-_HF_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
-
-
-def _hf_repo_tokens(model_lower: str) -> frozenset[str]:
-    """The alphanumeric tokens of a lowercased repo id (empty runs dropped)."""
-    return frozenset(t for t in _HF_TOKEN_SPLIT.split(model_lower) if t)
 
 
 def hf_match_key(model_lower: str, keys: Iterable[str]) -> str | None:
@@ -116,11 +80,9 @@ def _hf_heuristic(model: str) -> ModelProfile:
 
     - ``TEXT_GENERATION`` — always (every HF text model; preserves the historical
       unconditional base capability).
-    - ``EMBEDDINGS`` — repo name matches an embedding-family marker (a distinctive
-      substring in :data:`_HF_EMBED_SUBSTRINGS` or a token in
-      :data:`_HF_EMBED_TOKENS`) **and** is not a reranker
-      (:data:`_HF_RERANKER_TOKEN` — a cross-encoder matches the ``bge``/``gte``
-      family prefix but is not an embedding model).
+    - ``EMBEDDINGS`` — the repo name reads as an embedding model under
+      :func:`~..model_profile.is_embedding_model_name`, the reading every
+      provider's heuristic shares (a reranker is not one).
     - ``CHAT`` — repo name has a chat substring (:data:`_HF_CHAT_SUBSTRINGS`)
       **and** the repo is not an embedding model.
 
@@ -145,13 +107,8 @@ def _hf_heuristic(model: str) -> ModelProfile:
     override to supply.
     """
     model_lower = model.lower()
-    tokens = _hf_repo_tokens(model_lower)
     caps: set[ModelCapability] = {ModelCapability.TEXT_GENERATION}
-    is_embed = _HF_RERANKER_TOKEN not in tokens and (
-        any(sub in model_lower for sub in _HF_EMBED_SUBSTRINGS)
-        or any(tok in tokens for tok in _HF_EMBED_TOKENS)
-    )
-    if is_embed:
+    if is_embedding_model_name(model_lower):
         caps.add(ModelCapability.EMBEDDINGS)
     elif any(sub in model_lower for sub in _HF_CHAT_SUBSTRINGS):
         caps.add(ModelCapability.CHAT)
@@ -424,6 +381,8 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
             **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
                 for this call. Checked, not forwarded.
         """
+        # Refuses ``embedding_overflow="truncate"`` by name, before any request.
+        self.embedding_overflow_policy()
         if not self._is_initialized:
             await self.initialize()
 

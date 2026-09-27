@@ -252,6 +252,14 @@ class SyncProviderAdapter(SyncBridgeAdapter):
         """Get capabilities synchronously."""
         return self.async_provider.get_capabilities()
 
+    def embedding_variant(self) -> str | None:
+        """What, besides the model and width, decides the vectors; the async provider's."""
+        return self.async_provider.embedding_variant()
+
+    def embedding_overflow_policy(self) -> str:
+        """The overflow policy the async provider honours, or its refusal by name."""
+        return self.async_provider.embedding_overflow_policy()
+
     @property
     def is_initialized(self) -> bool:
         """Check if provider is initialized."""

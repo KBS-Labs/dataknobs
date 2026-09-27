@@ -101,7 +101,8 @@ class _PostCtx:
 class FakeSession:
     """Minimal ``aiohttp.ClientSession`` stand-in with scripted ``post`` outcomes.
 
-    Each ``post()`` pops the next ``_PostCtx``. Construct outcomes with
+    Each ``post()`` pops the next ``_PostCtx``, recording the URL in
+    :attr:`calls` and the JSON body in :attr:`payloads`. Construct outcomes with
     :meth:`responding` (response, possibly raising on ``raise_for_status``) or
     :meth:`failing` (raises on context entry — connection error / timeout).
     """
@@ -109,9 +110,11 @@ class FakeSession:
     def __init__(self, outcomes: list[_PostCtx]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[str] = []
+        self.payloads: list[Any] = []
 
     def post(self, url: str, json: Any = None) -> _PostCtx:
         self.calls.append(url)
+        self.payloads.append(json)
         return (
             self._outcomes.pop(0) if self._outcomes else _PostCtx(FakeResponse(200, json_data={}))
         )

@@ -117,7 +117,7 @@ class TestNoneFiltering:
 
 
 class TestOllamaCapabilityDetection:
-    """Ollama should detect JSON_MODE and EMBEDDINGS."""
+    """Ollama should detect JSON_MODE, and EMBEDDINGS only for embedding models."""
 
     def _caps(self, model: str) -> list[ModelCapability]:
         config = LLMConfig.from_dict({"provider": "ollama", "model": model})
@@ -131,9 +131,20 @@ class TestOllamaCapabilityDetection:
         caps = self._caps("llama3.2")
         assert ModelCapability.FUNCTION_CALLING in caps
 
-    def test_embeddings_always_present(self):
-        caps = self._caps("llama3.2")
-        assert ModelCapability.EMBEDDINGS in caps
+    def test_a_chat_model_does_not_claim_embeddings(self):
+        """``/api/embed`` answers a completion model with a 501 (Ollama 0.33.2).
+
+        ``/api/embeddings`` accepted one, and every chat model used to claim
+        EMBEDDINGS on that ground.
+        """
+        assert ModelCapability.EMBEDDINGS not in self._caps("llama3.2")
+
+    @pytest.mark.parametrize(
+        "model", ["nomic-embed-text", "mxbai-embed-large", "bge-m3", "all-minilm"]
+    )
+    def test_an_embedding_model_claims_embeddings_by_name(self, model: str):
+        """Including the families whose names do not say ``embed``."""
+        assert self._caps(model) == [ModelCapability.EMBEDDINGS]
 
     def test_deepseek_has_json_mode(self):
         caps = self._caps("deepseek-r1")

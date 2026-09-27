@@ -21,6 +21,7 @@ from ..base import (
     ModelCapability,
     normalize_llm_config,
 )
+from dataknobs_llm.exceptions import ContextLengthExceededError
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
 if TYPE_CHECKING:
@@ -111,6 +112,11 @@ class EchoProvider(AsyncLLMProvider):
         ```
     """
 
+    # Both overflow policies, against a synthetic window
+    # (``options["embedding_window"]``), so the shared overflow machinery ---
+    # the gate, the report, the vector identity --- is testable offline.
+    _embedding_overflow_policies = frozenset({"refuse", "truncate"})
+
     # Class-level instance tracking
     _last_instance: EchoProvider | None = None
     _instance_collectors: ClassVar[list[list[EchoProvider]]] = []
@@ -163,6 +169,10 @@ class EchoProvider(AsyncLLMProvider):
             if llm_config.dimensions is not None
             else llm_config.options.get("embedding_dim", 768)
         )
+        # A synthetic context window for embed(), counted in words; ``None``
+        # (the default) is no window at all.
+        window = llm_config.options.get("embedding_window")
+        self.embedding_window: int | None = None if window is None else int(window)
         self.mock_tokens = llm_config.options.get("mock_tokens", True)
         self.stream_delay = llm_config.options.get("stream_delay", 0.0)  # seconds per char
 
@@ -861,6 +871,13 @@ class EchoProvider(AsyncLLMProvider):
         against that config a demonstration of the defect rather than a guard
         against it.
 
+        The window is synthetic too: ``options["embedding_window"]``, a word
+        count. A text with more words than that is refused under
+        ``embedding_overflow="refuse"``, and under ``"truncate"`` embedded as
+        its first *window* words and reported, as a real provider would.
+        Echo knows exactly which texts it cut, so unlike a server-measured
+        report its positions are never approximate.
+
         Args:
             texts: Input text(s)
             **kwargs: ``dimensions`` (int) overrides the configured width for
@@ -868,7 +885,12 @@ class EchoProvider(AsyncLLMProvider):
 
         Returns:
             Embedding vector(s)
+
+        Raises:
+            ContextLengthExceededError: A text has more words than the window
+                and the policy is ``"refuse"``.
         """
+        truncate = self.embedding_overflow_policy() == "truncate"
         if not self._is_initialized:
             await self.initialize()
 
@@ -876,7 +898,23 @@ class EchoProvider(AsyncLLMProvider):
 
         requested = self._requested_embedding_dimensions(kwargs)
         width = self.embedding_dim if requested is None else requested
-        if isinstance(texts, str):
-            return self._generate_embedding(texts, width)
-        else:
-            return [self._generate_embedding(text, width) for text in texts]
+        batch = [texts] if isinstance(texts, str) else list(texts)
+
+        window = self.embedding_window
+        cut: list[int] = []
+        if window is not None:
+            for position, text in enumerate(batch):
+                words = text.split()
+                if len(words) <= window:
+                    continue
+                if not truncate:
+                    raise ContextLengthExceededError(
+                        f"EchoProvider embedding input at position {position} has "
+                        f"{len(words)} words, over the {window}-word window"
+                    )
+                batch[position] = " ".join(words[:window])
+                cut.append(position)
+            self._warn_embedding_truncated(cut, window)
+
+        vectors = [self._generate_embedding(text, width) for text in batch]
+        return vectors[0] if isinstance(texts, str) else vectors

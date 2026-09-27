@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An ontology document's declared embedding model is compared without the
+  embedder's `#variant`.** `LLMProviderEmbedder.model_id` now carries one when
+  something besides the model decides the vectors
+  (`ollama:nomic-embed-text:latest#api-embed`). It changes the stored vector's
+  staleness key, which is its purpose, but not the weights a calibrated
+  `threshold:` belongs to, so the registry reads past it on both sides: a
+  document naming `nomic-embed-text`, or the published identity verbatim
+  with an earlier variant, still agrees, and one naming
+  `nomic-embed-text:v1.5` still does not. The comparison of stored rows is unchanged and exact, so a
+  row written without the variant reads as another model's.
+
 - **A failed `SemanticIndex.build()` words its error differently, and its
   `context` has more keys.** The message names the ids that did not reach the
   store, says the source was not read past them, and names a rebuild as the

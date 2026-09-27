@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import weakref
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -302,6 +303,56 @@ def match_family_key(model_lower: str, keys: Iterable[str]) -> str | None:
         elif model_lower in key and len(model_lower) > best_len:
             best, best_len = key, len(model_lower)
     return best
+
+
+#: Embedding-model markers matched **anywhere** in a lowercased model name.
+#: Long enough to be distinctive: ``embed`` covers ``nomic-embed-text``,
+#: ``mxbai-embed-large``, ``granite-embedding`` and every ``*-embedding`` repo.
+EMBEDDING_NAME_SUBSTRINGS: tuple[str, ...] = (
+    "embed",
+    "sentence-transformers/",
+    "feature-extraction",
+    "paraphrase-multilingual",
+)
+
+#: Short embedding-family markers matched at **token** boundaries, so ``e5``
+#: marks ``intfloat/e5-large-v2`` and not a ``qwen2.5`` or ``phase5`` run.
+#: ``instructor`` also keeps the Instructor family from reading as an
+#: instruction-tuned chat model.
+EMBEDDING_NAME_TOKENS: tuple[str, ...] = ("minilm", "bge", "gte", "e5", "instructor")
+
+#: A cross-encoder reranker carries an embedding family's name (``bge``,
+#: ``gte``) and embeds nothing, so this token vetoes the classification.
+RERANKER_NAME_TOKEN = "reranker"
+
+_NAME_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def is_embedding_model_name(model: str) -> bool:
+    """Whether a model's *name* says it is a dedicated embedding model.
+
+    The one reading every provider's name heuristic uses, so that a model is
+    not an embedding model to one provider and a chat model to another. It is
+    the fallback when a server cannot be asked: a provider that reports
+    capabilities (Ollama's ``/api/show``) is believed over this.
+
+    Args:
+        model: A model name or repo id, in any case (``bge-m3``,
+            ``BAAI/bge-large-en-v1.5``, ``nomic-embed-text:latest``).
+
+    Returns:
+        ``True`` when the name carries an embedding marker
+        (:data:`EMBEDDING_NAME_SUBSTRINGS` anywhere, or
+        :data:`EMBEDDING_NAME_TOKENS` as a whole token) and is not a reranker
+        (:data:`RERANKER_NAME_TOKEN`).
+    """
+    lowered = model.lower()
+    tokens = frozenset(t for t in _NAME_TOKEN_SPLIT.split(lowered) if t)
+    if RERANKER_NAME_TOKEN in tokens:
+        return False
+    return any(sub in lowered for sub in EMBEDDING_NAME_SUBSTRINGS) or any(
+        tok in tokens for tok in EMBEDDING_NAME_TOKENS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +850,9 @@ class LayeredModelProfileResolver:
 
 __all__ = [
     "CAPABILITY_ORDER",
+    "EMBEDDING_NAME_SUBSTRINGS",
+    "EMBEDDING_NAME_TOKENS",
+    "RERANKER_NAME_TOKEN",
     "BundledResourceSource",
     "CallableModelMetadataSource",
     "ConfigOverrideSource",
@@ -808,6 +862,7 @@ __all__ = [
     "ModelPricing",
     "ModelProfile",
     "PartialModelProfile",
+    "is_embedding_model_name",
     "match_family_key",
     "merge_partials",
     "model_metadata_sources",

@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 # Re-export from the canonical location in dataknobs-llm.
-from dataknobs_llm import create_embedding_provider, reads_nested_embedding
+from dataknobs_llm import EmbeddingOverflow, create_embedding_provider, reads_nested_embedding
 
 
 def build_embedding_config(
@@ -27,20 +27,22 @@ def build_embedding_config(
     store_dimensions: int | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
+    embedding_overflow: EmbeddingOverflow | None = None,
 ) -> dict[str, Any]:
     """Project typed embedding fields onto a ``create_embedding_provider`` dict.
 
     ``create_embedding_provider`` consumes a config dict, reading either
     a nested ``embedding`` sub-dict (preferred) or the legacy flat
     ``embedding_provider`` / ``embedding_model`` keys. For the legacy flat
-    form it also reads top-level ``api_base`` / ``api_key`` / ``dimensions``
-    as passthroughs. Subsystem consumers that hold these values as typed
+    form it also reads top-level ``api_base`` / ``api_key`` / ``dimensions`` /
+    ``embedding_overflow`` as passthroughs. Subsystem consumers that hold these values as typed
     config fields call this to build the minimal dict — only set
     (non-``None``) keys are included, so the result matches the sparse raw
     dict the helper saw before structured-config adoption (forwarding
     ``dimensions=None`` etc. is avoided).
 
-    The passthrough keys (``api_base`` / ``api_key`` / ``dimensions``) are
+    The passthrough keys (``api_base`` / ``api_key`` / ``dimensions`` /
+    ``embedding_overflow``) are
     only consumed by the helper's legacy-flat branch; when a nested
     ``embedding`` sub-dict is supplied the helper reads endpoint/key/dims
     from inside it, so any top-level values projected here are ignored —
@@ -74,6 +76,10 @@ def build_embedding_config(
             it when the caller does not build a store.
         api_base: Legacy flat custom embedder endpoint passthrough.
         api_key: Legacy flat embedder credential passthrough.
+        embedding_overflow: Legacy flat passthrough for what the embedder
+            does with a text longer than its model's window, ``"refuse"`` or
+            ``"truncate"``; see ``LLMConfig.embedding_overflow``. Validated
+            where the provider's config is built, not here.
 
     Returns:
         A dict containing only the keys whose values are not ``None``.
@@ -105,6 +111,8 @@ def build_embedding_config(
         config["api_base"] = api_base
     if api_key is not None:
         config["api_key"] = api_key
+    if embedding_overflow is not None:
+        config["embedding_overflow"] = embedding_overflow
     return config
 
 
