@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_llm import EmbeddingOverflow
 
 from .base import HistoryRedaction
 
@@ -105,6 +106,11 @@ class VectorMemoryConfig(StructuredConfig):
             provider as a legacy flat passthrough.
         api_key: Embedder credential, forwarded to the embedding provider
             as a legacy flat passthrough. Redacted from ``repr``.
+        embedding_overflow: What the embedder does with an over-long text
+            (``"refuse"``, the provider's default, or ``"truncate"``),
+            forwarded to the embedding provider as a legacy flat passthrough.
+            The provider validates it, and refuses by name a policy it cannot
+            honour.
         max_results: Maximum number of similar messages returned.
         similarity_threshold: Minimum similarity score (0-1) for results.
         default_metadata: Metadata merged into every ``add_message``.
@@ -129,7 +135,7 @@ class VectorMemoryConfig(StructuredConfig):
     #
     # Only the nested ``embedding`` dict is validated. The legacy flat
     # passthroughs (``embedding_provider`` / ``embedding_model`` / ``dimensions``
-    # / ``api_base`` / ``api_key``) are intentionally left unvalidated: legacy,
+    # / ``api_base`` / ``api_key`` / ``embedding_overflow``) are intentionally left unvalidated: legacy,
     # slated for removal, and without a ``provider`` discriminator to resolve on.
     _polymorphic_fields: ClassVar[Mapping[str, str]] = {"embedding": "embedding"}
 
@@ -163,6 +169,7 @@ class VectorMemoryConfig(StructuredConfig):
     dimensions: int | None = None
     api_base: str | None = None
     api_key: str | None = None
+    embedding_overflow: EmbeddingOverflow | None = None
     max_results: int = 5
     similarity_threshold: float = 0.7
     default_metadata: dict[str, Any] | None = None

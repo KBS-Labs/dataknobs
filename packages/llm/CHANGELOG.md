@@ -12,24 +12,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`LLMConfig.embedding_overflow`: an embedding provider can opt in to
   truncating an over-long text.** `"refuse"` (the default) raises
   `ContextLengthExceededError`; `"truncate"` embeds the opening window and
-  logs a `WARNING` naming the model, the window and the positions of the texts
-  cut, never the texts. Any other value is a `ValidationError` when the config
+  logs a `WARNING` naming the model, the length the texts were cut to and
+  their positions, never the texts. Every cut is counted, and past the first
+  `EMBEDDING_TRUNCATION_POSITIONS_SHOWN` (10) positions the rest read "and N
+  more", so a large batch logs one readable line. The policy's type,
+  `EmbeddingOverflow`, and its values, `EMBEDDING_OVERFLOW_POLICIES`, are
+  exported from `dataknobs_llm`. Any other value is a `ValidationError` when the config
   is built. Ollama and Echo honour both; OpenAI, HuggingFace and Bedrock
   refuse `"truncate"` by name on the first `embed()`, before any request,
-  rather than ignoring it. Ollama detects a cut from the server's token count
-  reaching the model's window, so a text exactly filling the window is
-  reported as cut too; where the window is unknown it says once that it
-  cannot tell. The key is forwarded by the flat config form
+  rather than ignoring it. Ollama asks for every text without truncation
+  first, and under `"truncate"` resends only a text the server refused as too
+  long, so the server's own refusal decides what was cut. The model's window
+  could not: the server also cuts at `num_ctx` and at its micro-batch, which
+  it does not report (`bge-m3`: 8192 reported, cut at 2048, Ollama 0.33.2).
+  A cut is reported when the vector is computed; a cache serving it again
+  does not report it again. The key is forwarded by the flat config form
   (`FLAT_EMBEDDING_PASSTHROUGHS`) as well as the nested one.
 - **`LLMProvider.embedding_variant()`** names what, besides the model and the
   width, decides the vectors `embed()` returns: `"truncate"` under the opt-in
-  by default, and for Ollama `"api-embed"` (`"api-embed+truncate"`).
+  on a provider that can truncate, and for Ollama `"api-embed"`
+  (`"api-embed+truncate"`). A provider that refuses `"truncate"` names no
+  variant for it, since it never produces such a vector.
   `LLMProviderEmbedder.model_id` appends it (`provider:model#variant`), and
   `CachingEmbedProvider` qualifies its cache identity with it
   (`model#variant@width`), so neither cache serves, and no staleness check
   accepts, a vector made one way where another was asked for.
-  `CachingEmbedProvider`, `CapturingProvider` and `SyncProviderAdapter` report
-  the variant of what they wrap.
+- **`LLMProvider.embedding_overflow_policy()`** returns the configured policy
+  when the provider can honour it and refuses it by name otherwise; every
+  `embed()` calls it first. `CachingEmbedProvider`, `CapturingProvider` and
+  `SyncProviderAdapter` answer both it and `embedding_variant()` with what they
+  wrap, so a wrapper over a provider that can truncate does not refuse to, and
+  a cache in the path does not change a vector's key.
 - **`EchoProvider` has a synthetic embedding window**,
   `options["embedding_window"]`, counted in words, and honours both overflow
   policies against it, so the overflow path can be tested offline.
@@ -73,9 +86,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/embed`, which `embed` now uses, answers them with a 501 (measured on
   Ollama 0.33.2 with `gemma3:1b` and `llama3.2:3b`). `EMBEDDINGS` now comes
   from the server's own `embedding` capability, or, on the name-based
-  fallback, from an embedding-model name. That fallback also recognises
-  `bge-`, `minilm` and `paraphrase-multilingual` models as embedding models,
-  whose names do not say `embed`.
+  fallback, from an embedding-model name.
+
+- **Ollama and HuggingFace read an embedding model's name the same way.**
+  Each heuristic had its own vocabulary, and they disagreed. HuggingFace
+  matched `embedding`, so `nomic-ai/nomic-embed-text-v1` was not an embedding
+  model to it. Ollama matched `bge-` anywhere, so a `bge` reranker was granted
+  `EMBEDDINGS`, and it did not know `e5`, `gte` or `instructor`. Both now call
+  `is_embedding_model_name()` (`dataknobs_llm.llm.model_profile`). It matches
+  `embed`, `sentence-transformers/`, `feature-extraction` and
+  `paraphrase-multilingual` anywhere in a name, and `minilm`, `bge`, `gte`,
+  `e5` and `instructor` as whole tokens, and it rejects any name holding the
+  token `reranker`. A server that reports capabilities is still believed over
+  the name.
+
+- **`OllamaProvider.embed` refuses an empty text with `ValueError`**, naming
+  its position, before any of the batch is sent. `/api/embed` answers `""`
+  with a 200 and no vector (Ollama 0.33.2), which surfaced as a bare
+  `IndexError`.
 
 - **The FSM integration's functions declare the `context` their interfaces
   do.** All six of `fsm_integration.functions` --- `PromptBuilder`,
@@ -203,12 +231,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at about 14.4; `mxbai-embed-large` was already 1.0). The directions are
   identical, so a cosine store is unaffected, but **a store under a euclidean
   or inner-product metric that holds `nomic` vectors must be rebuilt**: old
-  and new vectors rank against each other wrongly. So that this cannot pass
-  unnoticed, an Ollama embedder's `model_id` is now
-  `ollama:<model>#api-embed`. Every index an Ollama embedder built before
-  reads as written by another model: it warns once, a synchronizer re-embeds
-  what it owns, and both embedding caches miss once. `truncate` is sent on
-  every request, because `/api/embed` truncates unless told not to. A stated
+  and new vectors rank against each other wrongly. An Ollama embedder's
+  `model_id` is now `ollama:<model>#api-embed`, so where that identity is
+  recorded the change is noticed: a `SemanticIndex` an Ollama embedder built
+  before reads as written by another model and warns once, a
+  `VectorTextSynchronizer` re-embeds what it owns, and both embedding caches
+  miss once. **Where it is not recorded, nothing notices:** `dataknobs-bots`'
+  `RAGKnowledgeBase` and `VectorMemory` write no model identity beside their
+  vectors, so a persisted one holding `nomic` vectors under a non-cosine
+  metric must be rebuilt by hand. `truncate` is sent on every request, because
+  `/api/embed` truncates unless told not to. A stated
   `dimensions` is still checked rather than forwarded. Measured on Ollama
   0.33.2.
 

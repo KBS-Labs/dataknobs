@@ -26,15 +26,21 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 import pytest
 
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.testing import requires_ollama, requires_ollama_model
 from dataknobs_data.vector import CachedEmbedder
-from dataknobs_llm.exceptions import ContextLengthExceededError
-from dataknobs_llm.llm.base import LLMConfig, ModelCapability
+from dataknobs_llm.exceptions import ContextLengthExceededError, OperationError
+from dataknobs_llm.llm.base import (
+    EMBEDDING_TRUNCATION_POSITIONS_SHOWN,
+    AsyncLLMProvider,
+    EmbeddingOverflow,
+    LLMConfig,
+    ModelCapability,
+)
 from dataknobs_llm.llm.embedding import LLMProviderEmbedder
 from dataknobs_llm.llm.providers import (
     LLMProviderFactory,
@@ -46,11 +52,12 @@ from dataknobs_llm.llm.providers.caching import (
     MemoryEmbeddingCache,
     _cache_identity,
 )
+from dataknobs_llm.llm.providers.base import SyncProviderAdapter
 from dataknobs_llm.llm.providers.echo import EchoProvider
 from dataknobs_llm.llm.providers.ollama import OllamaProvider
 from dataknobs_llm.testing import CapturingProvider
 
-from _aiohttp_error_stub import FakeResponse, FakeSession
+from _aiohttp_error_stub import FakeResponse, FakeSession, make_client_response_error
 
 #: Four words, against Echo's three-word window below. Distinctive, so a
 #: report quoting any of it is caught.
@@ -133,6 +140,23 @@ async def test_every_provider_honours_truncation_or_refuses_it_by_name(name: str
     pytest.fail(f"{name} was asked to truncate and neither did nor refused")
 
 
+@pytest.mark.parametrize("name", LLMProviderFactory.list_providers())
+def test_a_provider_that_cannot_truncate_does_not_claim_it_in_its_identity(name: str) -> None:
+    """The variant names how the vectors were made, and a refusing provider made none.
+
+    Its ``embed`` refuses ``"truncate"``, but ``model_id`` can be read first ---
+    a registry compares it when a document is opened --- and would name a
+    truncated vector that no call of this provider can produce.
+    """
+    provider = create_llm_provider(
+        LLMConfig(provider=name, model="m", api_key="k", embedding_overflow="truncate")
+    )
+    if "truncate" in provider._embedding_overflow_policies:
+        return
+    assert "truncate" not in (provider.embedding_variant() or "")
+    assert "truncate" not in LLMProviderEmbedder(provider).model_id
+
+
 # ---------------------------------------------------------------------------
 # The two policies, offline
 # ---------------------------------------------------------------------------
@@ -163,6 +187,37 @@ async def test_truncate_embeds_the_opening_window(caplog: pytest.LogCaptureFixtu
     assert str(_WINDOW) in report
     for word in _OVER_LONG.split():
         assert word not in report, "the report quoted the caller's text"
+
+
+async def test_a_large_batch_is_reported_in_one_bounded_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every cut is counted; only the first positions are listed.
+
+    An ingest batch can hold thousands of long texts, and a warning listing
+    every position is a line nobody reads that the log still has to carry.
+    """
+    cut = EMBEDDING_TRUNCATION_POSITIONS_SHOWN + 5
+    with caplog.at_level(logging.WARNING):
+        await _echo("truncate").embed([_OVER_LONG] * cut + ["short"])
+
+    [report] = _warnings(caplog)
+    assert f"truncated {cut} " in report
+    shown = list(range(EMBEDDING_TRUNCATION_POSITIONS_SHOWN))
+    assert str(shown) in report
+    assert "and 5 more" in report
+    assert f", {cut - 1}]" not in report
+
+
+def test_the_policy_type_is_exported_where_the_config_is() -> None:
+    """A caller typing its own field names the policy, not ``str``."""
+    import dataknobs_llm
+    import dataknobs_llm.llm
+
+    for package in (dataknobs_llm, dataknobs_llm.llm):
+        assert package.EmbeddingOverflow is EmbeddingOverflow
+        assert package.EMBEDDING_OVERFLOW_POLICIES == ("refuse", "truncate")
+        assert {"EmbeddingOverflow", "EMBEDDING_OVERFLOW_POLICIES"} <= set(package.__all__)
 
 
 async def test_nothing_is_reported_when_nothing_was_cut(caplog: pytest.LogCaptureFixture) -> None:
@@ -210,6 +265,47 @@ def test_a_wrapper_reports_the_variant_of_what_it_wraps() -> None:
 
     assert LLMProviderEmbedder(CachingEmbedProvider(inner, MemoryEmbeddingCache())).model_id == bare
     assert LLMProviderEmbedder(CapturingProvider(inner)).model_id == bare
+
+
+def _cached(inner: AsyncLLMProvider) -> CachingEmbedProvider:
+    return CachingEmbedProvider(inner, MemoryEmbeddingCache())
+
+
+#: Wrappers composed over one another, each forwarding to the next. A wrapper
+#: that answers the policy question from its own class instead of the
+#: provider at the bottom refuses what that provider would honour.
+_COMPOSITIONS = {
+    "cache over capture": lambda p: _cached(CapturingProvider(p)),
+    "cache over cache": lambda p: _cached(_cached(p)),
+    "capture over cache": lambda p: CapturingProvider(_cached(p)),
+}
+
+
+@pytest.mark.parametrize("compose", _COMPOSITIONS.values(), ids=_COMPOSITIONS.keys())
+async def test_a_wrapper_carries_the_policy_of_what_it_wraps(
+    compose: Callable[[AsyncLLMProvider], AsyncLLMProvider],
+) -> None:
+    """The policy is the bottom provider's, however many wrappers sit above it.
+
+    The cache asks its inner whether a policy can be honoured before serving a
+    hit. When that inner is itself a wrapper, the answer has to come from the
+    provider it wraps, not from the wrapper's own class, which declares
+    nothing and so refuses ``"truncate"`` that the provider would have honoured.
+    """
+    cutting = compose(_echo("truncate"))
+    await cutting.initialize()
+    assert cutting.embedding_overflow_policy() == "truncate"
+    assert await cutting.embed(_OVER_LONG) == await _echo("truncate").embed("alpha bravo charlie")
+
+    refusing = compose(_echo("refuse"))
+    await refusing.initialize()
+    assert refusing.embedding_overflow_policy() == "refuse"
+    with pytest.raises(ContextLengthExceededError):
+        await refusing.embed(_OVER_LONG)
+
+
+def test_the_sync_adapter_carries_the_policy_of_what_it_wraps() -> None:
+    assert SyncProviderAdapter(_echo("truncate")).embedding_overflow_policy() == "truncate"
 
 
 def test_the_key_names_the_variant_and_only_when_there_is_one() -> None:
@@ -274,57 +370,102 @@ def _embedded(prompt_eval_count: int) -> FakeResponse:
     )
 
 
-#: The window reaches the provider the way the server's does, as the
-#: profile's context window --- here from a config override, offline.
-_WINDOW_512 = {"model_profile_overrides": {"context_window": 512}}
+def _overflow() -> FakeResponse:
+    """The server's refusal of an over-long text under ``truncate: false``."""
+    return FakeResponse(
+        400,
+        text='{"error":"the input length exceeds the context length"}',
+        raise_exc=make_client_response_error(400, "Bad Request"),
+    )
+
+
+def _truncating(*responses: FakeResponse, **config: object) -> tuple[OllamaProvider, FakeSession]:
+    return _ollama(*responses, embedding_overflow="truncate", **config)
 
 
 async def test_ollama_always_says_whether_it_may_truncate() -> None:
     """``/api/embed`` truncates unless told not to.
 
     So a request that omits the flag has turned the refusal into truncation
-    without anyone asking. Sent under both policies, not only the one that
-    differs from the endpoint's default.
+    without anyone asking. A text that fits is asked for without truncation
+    under both policies: the opt-in changes what happens after the server
+    refuses, not what is asked first.
     """
-    refusing, session = _ollama(_embedded(7))
-    await refusing.embed("text")
-    assert session.calls == [f"{refusing.base_url}/api/embed"]
-    assert session.payloads == [{"model": "mxbai-embed-large", "input": "text", "truncate": False}]
-
-    cutting, session = _ollama(_embedded(7), embedding_overflow="truncate")
-    await cutting.embed("text")
-    assert session.payloads[0]["truncate"] is True
+    for provider, session in (_ollama(_embedded(7)), _truncating(_embedded(7))):
+        await provider.embed("text")
+        assert session.calls == [f"{provider.base_url}/api/embed"]
+        assert session.payloads == [
+            {"model": "mxbai-embed-large", "input": "text", "truncate": False}
+        ]
 
 
-async def test_ollama_reports_a_text_that_reached_the_window(
+async def test_ollama_reports_a_cut_below_the_models_window(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A single text whose token count reaches the window was cut.
+    """The server's refusal says a text would be cut; the model's window cannot.
 
-    "Reaches", not "exceeds": the server reports the window exactly for a text
-    it cut, and a text that fills it precisely looks the same.
+    ``/api/show`` reports a model's trained window, but the server cuts at the
+    smallest of that, ``num_ctx`` and its micro-batch. ``bge-m3`` measured
+    8192 trained and 2048 cut (Ollama 0.33.2), so a count compared against
+    the trained window missed every cut. The opt-in therefore asks without
+    truncation first, and only a refused text is resent and reported, with the
+    length the server cut it to.
     """
-    provider, _ = _ollama(
-        _embedded(9), _embedded(512), embedding_overflow="truncate", **_WINDOW_512
+    provider, session = _truncating(
+        _embedded(9),
+        _overflow(),
+        _embedded(2048),
+        model_profile_overrides={"context_window": 8192},
     )
     with caplog.at_level(logging.WARNING):
-        await provider.embed(["short", "long"])
+        vectors = await provider.embed(["short", "xyzzy plugh"])
+
+    assert len(vectors) == 2
+    assert [p["truncate"] for p in session.payloads] == [False, False, True]
+    assert [p["input"] for p in session.payloads] == ["short", "xyzzy plugh", "xyzzy plugh"]
 
     [report] = _warnings(caplog)
     assert "[1]" in report
-    assert "512" in report
+    assert "2048" in report
     assert "mxbai-embed-large" in report
+    assert "xyzzy" not in report
 
 
-async def test_ollama_says_once_when_it_cannot_tell(caplog: pytest.LogCaptureFixture) -> None:
-    """With no window known, a cut is undetectable; saying so every call is noise."""
-    provider, _ = _ollama(_embedded(512), _embedded(512), embedding_overflow="truncate")
+async def test_ollama_reports_a_cut_with_no_window_known(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Live metadata off and no override: the refusal still says what was cut."""
+    provider, _ = _truncating(_overflow(), _embedded(512))
     with caplog.at_level(logging.WARNING):
-        await provider.embed("one")
-        await provider.embed("two")
+        await provider.embed("long")
 
-    [notice] = _warnings(caplog)
-    assert "cannot" in notice
+    [report] = _warnings(caplog)
+    assert "[0]" in report
+    assert "512" in report
+
+
+@pytest.mark.parametrize("texts", ["", ["text", ""]], ids=["single", "in a batch"])
+async def test_ollama_refuses_an_empty_text_by_position(texts: str | list[str]) -> None:
+    """``/api/embed`` answers ``""`` with 200 and no vector (Ollama 0.33.2).
+
+    Indexing that reply raised a bare ``IndexError``. The text is refused
+    before anything is sent, naming where it sits in the batch.
+    """
+    provider, session = _ollama()
+    with pytest.raises(ValueError, match="position 1" if isinstance(texts, list) else "position 0"):
+        await provider.embed(texts)
+    assert session.payloads == []
+
+
+async def test_ollama_resends_only_an_overflow(caplog: pytest.LogCaptureFixture) -> None:
+    """Any other failure is the server's, and truncating would not answer it."""
+    failing = FakeResponse(
+        500, text='{"error":"boom"}', raise_exc=make_client_response_error(500, "Server Error")
+    )
+    provider, session = _truncating(failing)
+    with pytest.raises(OperationError):
+        await provider.embed("text")
+    assert len(session.payloads) == 1
 
 
 async def test_ollama_refreshes_its_model_metadata_before_embedding() -> None:
@@ -391,6 +532,32 @@ class TestAgainstTheServer:
         provider = live["refuse"]
         await provider.embed("a short text")
         assert provider.get_constraints().max_input_tokens == _MXBAI_WINDOW
+
+
+@requires_ollama
+@requires_ollama_model("bge-m3")
+async def test_a_cut_below_the_trained_window_is_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``bge-m3`` is trained on 8192 tokens, and the server cuts it at 2048.
+
+    The trained window is what ``/api/show`` reports. The cut is set by the
+    server's micro-batch, which nothing reports, so a count compared against
+    the window stayed below it and the cut went unreported (Ollama 0.33.2).
+    """
+    provider = OllamaProvider(
+        LLMConfig(provider="ollama", model="bge-m3", embedding_overflow="truncate")
+    )
+    await provider.initialize()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await provider.embed(_SERVER_OVER_LONG)
+    finally:
+        await provider.close()
+
+    [report] = _warnings(caplog)
+    assert "[0]" in report
+    assert "lorem" not in report
 
 
 @requires_ollama

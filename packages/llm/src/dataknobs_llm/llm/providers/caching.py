@@ -69,6 +69,10 @@ def _cache_identity(model: str, dimensions: int | None, variant: str | None = No
     a caller whose configuration refuses to truncate. Each part is present
     only when set.
 
+    The identity keeps a truncated vector apart; it does not repeat the
+    report. The provider logs a cut when it computes the vector, and a hit
+    serves that vector again without a second warning.
+
     Qualifying the identity here rather than adding a parameter to
     :class:`EmbeddingCache` keeps every out-of-tree cache implementation
     working unchanged, and makes the stored identity self-describing: a
@@ -408,6 +412,15 @@ class CachingEmbedProvider(AsyncLLMProvider):
         """
         return self._inner.embedding_variant()
 
+    def embedding_overflow_policy(self) -> str:
+        """The inner provider's, refused by the inner's name when it cannot.
+
+        The policy is the embedding provider's to honour, and this wrapper
+        only serves what it produced. Answering from this class, which
+        declares nothing, would refuse ``"truncate"`` the inner honours.
+        """
+        return self._inner.embedding_overflow_policy()
+
     # -- Lifecycle ---------------------------------------------------------
 
     # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the
@@ -505,9 +518,9 @@ class CachingEmbedProvider(AsyncLLMProvider):
         ``list[list[float]]``.
         """
         self._check_ready()
-        # The inner's policy gate, not this wrapper's: a hit never reaches the
-        # inner, and must not be served under a policy the inner would refuse.
-        self._inner._embedding_overflow()
+        # Asked before the cache is read: a hit never reaches the inner, and
+        # must not be served under a policy the inner would refuse.
+        self.embedding_overflow_policy()
         requested = self._requested_embedding_dimensions(kwargs)
         model = _cache_identity(self.config.model, requested, self.embedding_variant())
         single = isinstance(texts, str)

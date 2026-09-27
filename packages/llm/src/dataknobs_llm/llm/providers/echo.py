@@ -890,7 +890,7 @@ class EchoProvider(AsyncLLMProvider):
             ContextLengthExceededError: A text has more words than the window
                 and the policy is ``"refuse"``.
         """
-        truncate = self._embedding_overflow() == "truncate"
+        truncate = self.embedding_overflow_policy() == "truncate"
         if not self._is_initialized:
             await self.initialize()
 

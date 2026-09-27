@@ -699,6 +699,11 @@ EmbeddingOverflow = Literal["refuse", "truncate"]
 #: The values :data:`EmbeddingOverflow` admits, in the order they are listed.
 EMBEDDING_OVERFLOW_POLICIES: tuple[str, ...] = get_args(EmbeddingOverflow)
 
+#: How many cut positions one truncation warning lists. Every cut is counted;
+#: past this many the rest are summarised as "and N more", so an ingest batch
+#: of thousands of long texts still logs one readable line.
+EMBEDDING_TRUNCATION_POSITIONS_SHOWN = 10
+
 
 @dataclass(frozen=True)
 class LLMConfig(StructuredConfig):
@@ -855,7 +860,7 @@ class LLMConfig(StructuredConfig):
     # ``"refuse"`` (the default) raises ``ContextLengthExceededError``;
     # ``"truncate"`` embeds the opening window and logs which texts were cut.
     # A provider whose API cannot truncate refuses ``"truncate"`` by name
-    # rather than ignoring it (``LLMProvider._embedding_overflow``). Named for
+    # rather than ignoring it (``LLMProvider.embedding_overflow_policy``). Named for
     # embeddings so it cannot be read as a policy for chat, which it is not.
     embedding_overflow: EmbeddingOverflow = "refuse"
 
@@ -1123,7 +1128,7 @@ class LLMProvider(ABC):
     #: carry out. ``{"refuse"}`` by default, because refusing needs nothing
     #: from the vendor: an over-long input is already an error there. A
     #: provider whose API can be told to truncate declares ``"truncate"`` too.
-    #: :meth:`_embedding_overflow` refuses the rest by name.
+    #: :meth:`embedding_overflow_policy` refuses the rest by name.
     _embedding_overflow_policies: ClassVar[frozenset[str]] = frozenset({"refuse"})
 
     def __init__(
@@ -1149,9 +1154,6 @@ class LLMProvider(ABC):
         self._is_initialized = False
         self._is_closing = False
         self._in_flight: set[asyncio.Task[Any]] = set()
-        # Whether this instance has already said it cannot detect truncation;
-        # see _warn_embedding_window_unknown.
-        self._embedding_window_unknown_reported = False
 
     @property
     def provider_name(self) -> str:
@@ -1893,7 +1895,7 @@ class LLMProvider(ABC):
     # honoured or refused, never ignored. The gate and the report live here
     # so every provider refuses in one message and reports in one shape.
 
-    def _embedding_overflow(self) -> str:
+    def embedding_overflow_policy(self) -> str:
         """The configured overflow policy, if this provider can carry it out.
 
         Every ``embed`` calls this first, before any request, so a config
@@ -1902,6 +1904,12 @@ class LLMProvider(ABC):
         not to see. The same shape as the width rule
         (:meth:`_check_embedding_width`): a stated setting is honoured or
         refused by name.
+
+        Public because a provider that wraps another answers with the wrapped
+        provider's, as it does for :meth:`embedding_variant`: whether a policy
+        can be honoured is a property of whatever finally embeds, and a
+        wrapper answering from its own class would refuse what that provider
+        honours.
 
         Returns:
             ``"refuse"`` or ``"truncate"``.
@@ -1938,52 +1946,47 @@ class LLMProvider(ABC):
 
         A variant never changes which *weights* are meant, and a reader
         comparing model names for that purpose may ignore it.
+
+        Only a policy this provider can carry out is named. One that cannot
+        truncate refuses the setting on the first ``embed`` and produces no
+        truncated vector, so its identity says nothing about truncation, even
+        where it is read before that refusal.
         """
         policy = getattr(self.config, "embedding_overflow", "refuse")
-        return "truncate" if policy == "truncate" else None
+        if policy == "truncate" and policy in self._embedding_overflow_policies:
+            return "truncate"
+        return None
 
-    def _warn_embedding_truncated(self, positions: Sequence[int], window: int) -> None:
-        """Say which texts of one ``embed`` call were cut to the window.
+    def _warn_embedding_truncated(self, positions: Sequence[int], length: int) -> None:
+        """Say which texts of one ``embed`` call were cut, and to what length.
 
         Positions and counts only, never the texts: they are the caller's
         data. At ``WARNING`` because a truncated vector changes what a
-        retrieval finds with nothing else to show it.
+        retrieval finds with nothing else to show it. Every cut is counted,
+        and the first :data:`EMBEDDING_TRUNCATION_POSITIONS_SHOWN` positions
+        are listed, with the rest summarised as "and N more".
 
         Args:
             positions: Indexes into the call's batch of the texts that were
                 cut. Nothing is logged when it is empty.
-            window: The model's window, in the unit the provider measures it.
+            length: What the texts were cut to, in the unit the provider
+                measures it (tokens for a server, words for ``EchoProvider``).
+                Where the texts were cut to different lengths, the longest.
         """
         if not positions:
             return
         model = getattr(self.config, "model", None) or "unknown"
+        shown = list(positions[:EMBEDDING_TRUNCATION_POSITIONS_SHOWN])
+        rest = len(positions) - len(shown)
         logger.warning(
-            "%s truncated %d embedding input(s) to %s's window of %d, at "
-            "position(s) %s; each vector describes only the opening of its text",
+            "%s truncated %d embedding input(s) for %s to a length of %d, at "
+            "position(s) %s%s; each vector describes only the opening of its text",
             type(self).__name__,
             len(positions),
             model,
-            window,
-            list(positions),
-        )
-
-    def _warn_embedding_window_unknown(self) -> None:
-        """Say, once per instance, that truncation cannot be detected here.
-
-        Under ``"truncate"`` a cut is detected against the model's window, and
-        with no window known (live metadata disabled, or its poll failed)
-        nothing can be reported. Once is enough to say so; per call would
-        bury the log.
-        """
-        if self._embedding_window_unknown_reported:
-            return
-        self._embedding_window_unknown_reported = True
-        model = getattr(self.config, "model", None) or "unknown"
-        logger.warning(
-            "%s may truncate embedding inputs for %s, and cannot report which: "
-            "the model's context window is unknown",
-            type(self).__name__,
-            model,
+            length,
+            shown,
+            f" and {rest} more" if rest else "",
         )
 
     def _shape_request_params(
@@ -2711,7 +2714,9 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         refused with :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`
         by default, or truncated and reported by position under
         ``"truncate"`` on a provider that can do it. A provider that cannot
-        refuses the setting itself, by name, before sending anything.
+        refuses the setting itself, by name, before sending anything. The
+        report is made when the vector is computed: a cache that serves it
+        again keeps it apart from an uncut one, and does not report it twice.
 
         Raises:
             ValueError: If texts is empty or invalid
@@ -3066,6 +3071,20 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
 
         Returns:
             Embedding vector(s)
+
+        A text longer than the model's window is refused or truncated as
+        ``LLMConfig.embedding_overflow`` says, by the same rule as the async
+        side: call :meth:`LLMProvider.embedding_overflow_policy` first, before
+        any request, and report each cut through
+        :meth:`LLMProvider._warn_embedding_truncated`. Both are on the shared
+        base, so a sync implementation honours or refuses the policy as an
+        async one does.
+
+        Raises:
+            ContextLengthExceededError: A text is longer than the model's
+                window and the policy is ``"refuse"``.
+            ValidationError: The configured ``embedding_overflow`` is one this
+                provider cannot carry out.
         """
         pass
 

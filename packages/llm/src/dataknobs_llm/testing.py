@@ -953,6 +953,10 @@ class CapturingProvider(AsyncLLMProvider):
         """The wrapped provider's, so capturing does not change a vector's key."""
         return self._delegate.embedding_variant()
 
+    def embedding_overflow_policy(self) -> str:
+        """The wrapped provider's, so capturing does not change what is honoured."""
+        return self._delegate.embedding_overflow_policy()
+
 
 # =============================================================================
 # CallTracker — collect calls across multiple CapturingProviders

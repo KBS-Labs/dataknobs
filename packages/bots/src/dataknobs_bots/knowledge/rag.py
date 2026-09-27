@@ -473,6 +473,7 @@ class RAGKnowledgeBase(
                 store_dimensions=self.config.vector_store.get("dimensions"),
                 api_base=self.config.api_base,
                 api_key=self.config.api_key,
+                embedding_overflow=self.config.embedding_overflow,
             )
         )
         self._owns_embedding_provider = True

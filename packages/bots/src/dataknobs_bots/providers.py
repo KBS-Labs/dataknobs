@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 # Re-export from the canonical location in dataknobs-llm.
-from dataknobs_llm import create_embedding_provider, reads_nested_embedding
+from dataknobs_llm import EmbeddingOverflow, create_embedding_provider, reads_nested_embedding
 
 
 def build_embedding_config(
@@ -27,7 +27,7 @@ def build_embedding_config(
     store_dimensions: int | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-    embedding_overflow: str | None = None,
+    embedding_overflow: EmbeddingOverflow | None = None,
 ) -> dict[str, Any]:
     """Project typed embedding fields onto a ``create_embedding_provider`` dict.
 

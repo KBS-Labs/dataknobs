@@ -6,6 +6,8 @@
 from dataknobs_llm.llm import (
     LLMProvider,
     LLMConfig,
+    EmbeddingOverflow,
+    EMBEDDING_OVERFLOW_POLICIES,
     LLMMessage,
     LLMResponse,
     LLMStreamResponse,
@@ -119,6 +121,8 @@ __all__ = [
     # Base classes
     "LLMProvider",
     "LLMConfig",
+    "EmbeddingOverflow",
+    "EMBEDDING_OVERFLOW_POLICIES",
     "LLMMessage",
     "LLMResponse",
     "LLMStreamResponse",

@@ -3025,9 +3025,16 @@ def _same_model(stated: str, published: str) -> bool:
     staleness guard miss exactly the version bump that invalidates a
     ``threshold:`` calibrated in one model's geometry, which is this
     function's own stated reason for comparing tags at all.
+
+    **Both sides are read past a ``#variant``**, for the reason
+    :func:`_model_id_readings` gives: a variant changes how the vectors were
+    fetched, not which weights made them. A document may name the published
+    identity verbatim, variant included, and that identity's variant changes
+    when truncation is turned on. Cut on one side only, the other side's
+    variant landed in its tag and the document was refused.
     """
-    stated_base, stated_tag = _split_tag(stated)
-    published_base, published_tag = _split_tag(published)
+    stated_base, stated_tag = _split_tag(stated.partition("#")[0])
+    published_base, published_tag = _split_tag(published.partition("#")[0])
     if stated_base != published_base:
         return False
     if stated_tag is None or published_tag is None:

@@ -738,7 +738,7 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
                 for this call. Other keys are ignored.
         """
         # Refuses ``embedding_overflow="truncate"`` by name, before any request.
-        self._embedding_overflow()
+        self.embedding_overflow_policy()
         if not self._is_initialized:
             await self.initialize()
 

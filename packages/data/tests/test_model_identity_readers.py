@@ -307,6 +307,25 @@ class TestWhatAStoredRowIsNotAskedToMean:
             "nomic-embed-text:latest",
         ) in _model_id_readings(published)
 
+    def test_a_document_naming_one_variant_agrees_with_another(self) -> None:
+        """Both sides are read past ``#``, not only the published one.
+
+        A document may name the published identity verbatim, variant and all.
+        Turning truncation on changes the published variant, and the weights a
+        calibrated threshold belongs to are the same, so the document still
+        agrees. Read as part of its tag, the stated variant refused it.
+        """
+        from dataknobs_data.ontology.registry import _model_id_readings, _same_model
+
+        published = "ollama:nomic-embed-text:latest#api-embed+truncate"
+
+        def agrees(stated: str) -> bool:
+            return any(_same_model(stated, model) for _, model in _model_id_readings(published))
+
+        assert agrees("ollama:nomic-embed-text:latest#api-embed")
+        assert agrees("nomic-embed-text:latest#api-embed")
+        assert not agrees("nomic-embed-text:v1.5#api-embed")
+
     async def test_the_whole_published_identity_is_always_one_of_its_readings(self) -> None:
         """The document may always name the identity it was shown, verbatim.
 

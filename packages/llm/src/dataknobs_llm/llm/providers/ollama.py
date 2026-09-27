@@ -114,8 +114,10 @@ from ..model_profile import (
     LayeredModelProfileResolver,
     LiveApiSource,
     ModelProfile,
+    is_embedding_model_name,
 )
 from ..profile_detection import ProfileDetectionMixin
+from dataknobs_llm.exceptions import ContextLengthExceededError
 from ._aiohttp_shared import raise_for_status_with_body
 from dataknobs_llm.prompts import AsyncPromptBuilder
 
@@ -240,26 +242,17 @@ def _name_has(model_lower: str, families: tuple[str, ...]) -> bool:
     return any(fam in model_lower for fam in families)
 
 
-#: Name substrings of dedicated embedding models, for the heuristic fallback.
-#: ``embed`` covers most of the library (``nomic-embed-text``,
-#: ``mxbai-embed-large``, ``snowflake-arctic-embed``, ``granite-embedding``);
-#: the rest are the families whose names do not say so. Matters because a
-#: model the heuristic reads as a chat model is not granted EMBEDDINGS.
-_EMBEDDING_FAMILIES: tuple[str, ...] = ("embed", "bge-", "minilm", "paraphrase-multilingual")
-
-
 def _is_embedding_only_name(model_lower: str) -> bool:
     """Whether a model *name* denotes a dedicated embedding model.
 
     Used only by the heuristic fallback (the live path reads the server's
-    ``embedding`` / ``completion`` capabilities). A name in
-    :data:`_EMBEDDING_FAMILIES` with no code marker is treated as
-    embedding-only so it resolves an EMBEDDINGS-only disjoint set — matching
+    ``embedding`` / ``completion`` capabilities). The shared
+    :func:`~..model_profile.is_embedding_model_name` decides, so this agrees
+    with every other provider's heuristic, and a name with a code marker is
+    kept out. Such a name resolves an EMBEDDINGS-only disjoint set, matching
     how a modern server reports it.
     """
-    return _name_has(model_lower, _EMBEDDING_FAMILIES) and not _name_has(
-        model_lower, _CODE_FAMILIES
-    )
+    return is_embedding_model_name(model_lower) and not _name_has(model_lower, _CODE_FAMILIES)
 
 
 def _ollama_caps_from_server(model: str, reported: Iterable[str]) -> frozenset[ModelCapability]:
@@ -1283,7 +1276,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             self._raise_translated(exc)
 
     def embedding_variant(self) -> str | None:
-        """``"api-embed"``, and ``"+truncate"`` under the opt-in.
+        """``"api-embed"``, joined by the base variant (``"+truncate"`` under the opt-in).
 
         ``/api/embed`` returns unit-length vectors where ``/api/embeddings``,
         which this provider used before it, returned some models' at their raw
@@ -1293,10 +1286,8 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         every vector written before the move read as another model's, so it is
         re-embedded rather than compared.
         """
-        variant = "api-embed"
-        if getattr(self.config, "embedding_overflow", "refuse") == "truncate":
-            variant += "+truncate"
-        return variant
+        policy = super().embedding_variant()
+        return f"api-embed+{policy}" if policy else "api-embed"
 
     async def embed(
         self, texts: Union[str, List[str]], **kwargs: Any
@@ -1304,24 +1295,30 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         """Generate embeddings on ``/api/embed``, one text per request.
 
         **Overflow.** ``/api/embed`` truncates an over-long input unless told
-        not to, so ``truncate`` is sent on every request, under both
-        policies: omitting it would turn the default refusal into truncation
-        with nobody having asked. Under ``"refuse"`` an over-long text raises
+        not to, so every text is first sent with ``truncate: false``: omitting
+        the flag would turn the default refusal into truncation with nobody
+        having asked. Under ``"refuse"`` an over-long text raises
         :class:`~dataknobs_llm.exceptions.ContextLengthExceededError` (the
-        server answers 400). Under ``"truncate"`` it is embedded, and a text
-        whose token count reached the model's window is reported as cut.
-        "Reached", not "exceeded": the server reports the window exactly for a
-        text it cut, so a text filling the window precisely is reported too.
+        server answers 400). Under ``"truncate"`` a text refused that way, and
+        only that way, is sent again with ``truncate: true``, and is reported
+        as cut, with the length the server cut it to.
 
-        **One text per request** so that a cut can be attributed. A batch's
-        token count is a sum, and a batch overflow fails the whole request
-        with no position.
+        **Why the refusal decides, not the model's window.** The server cuts
+        at the smallest of the model's trained window, ``num_ctx`` and its own
+        micro-batch, and ``/api/show`` reports only the first. ``bge-m3``
+        reports 8192 and is cut at 2048 (Ollama 0.33.2), so no count compared
+        against the window could see that cut. The refusal is the server's
+        own answer to "would this be cut?", so every cut is reported, and a
+        text that fits the window exactly is not mistaken for one. The cost is
+        one extra request per over-long text, refused before any embedding is
+        computed.
 
-        **The window** is the server's, read from ``/api/show`` into the
-        model profile. The metadata is refreshed here at the request boundary,
-        as ``complete`` does (TTL-gated), so a provider used only to embed
-        learns it too. Where it stays unknown, truncation cannot be detected,
-        and that is said once per instance.
+        **One text per request** so that a cut can be attributed. A batch
+        overflow fails the whole request with no position.
+
+        The live model metadata is refreshed here at the request boundary, as
+        ``complete`` does (TTL-gated), so a provider used only to embed learns
+        its model's capabilities from the server too.
 
         **Width.** ``/api/embed`` takes a ``dimensions`` parameter, but
         nothing says which models were trained to be cut to one, so a stated
@@ -1333,8 +1330,12 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             texts: A single text or a batch.
             **kwargs: ``dimensions`` (int) overrides ``LLMConfig.dimensions``
                 for this call. Checked, not forwarded --- see above.
+
+        Raises:
+            ValueError: A text is empty. The server answers one with no
+                vector, so it is refused, by position, before anything is sent.
         """
-        truncate = self._embedding_overflow() == "truncate"
+        truncate = self.embedding_overflow_policy() == "truncate"
         if not self._is_initialized:
             await self.initialize()
         await self._live_source.refresh_if_stale()
@@ -1345,33 +1346,50 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         else:
             single = False
 
+        # ``/api/embed`` answers "" with 200 and no vector (Ollama 0.33.2), so
+        # an empty text is refused here, before any of the batch is sent.
+        empty = [position for position, text in enumerate(texts) if not text]
+        if empty:
+            raise ValueError(
+                f"OllamaProvider cannot embed an empty text: position {empty[0]} of "
+                f"the batch is empty, and the server returns no vector for it"
+            )
+
         requested = self._requested_embedding_dimensions(kwargs)
-        window = self.get_constraints().max_input_tokens if truncate else None
-        if truncate and window is None:
-            self._warn_embedding_window_unknown()
 
         embeddings = []
         cut: list[int] = []
+        cut_to = 0
         for position, text in enumerate(texts):
-            payload = {"model": self.config.model, "input": text, "truncate": truncate}
-
             try:
-                async with self._session.post(
-                    f"{self.base_url}/api/embed", json=payload
-                ) as response:
-                    await raise_for_status_with_body(response)
-                    data = await response.json()
-            except Exception as exc:
-                self._raise_translated(exc)
-
-            embeddings.append(data["embeddings"][0])
-            if window is not None and data.get("prompt_eval_count", 0) >= window:
+                data = await self._post_embed(text, truncate=False)
+            except ContextLengthExceededError:
+                if not truncate:
+                    raise
+                data = await self._post_embed(text, truncate=True)
                 cut.append(position)
+                cut_to = max(cut_to, int(data.get("prompt_eval_count", 0)))
+            embeddings.append(data["embeddings"][0])
 
-        if window is not None:
-            self._warn_embedding_truncated(cut, window)
+        self._warn_embedding_truncated(cut, cut_to)
         self._check_embedding_width(embeddings, requested)
         return embeddings[0] if single else embeddings
+
+    async def _post_embed(self, text: str, *, truncate: bool) -> dict[str, Any]:
+        """One ``/api/embed`` request, its failure translated.
+
+        ``truncate`` is always sent, since the endpoint's own default is to
+        truncate. An overflow under ``truncate=False`` raises
+        :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`.
+        """
+        payload = {"model": self.config.model, "input": text, "truncate": truncate}
+        try:
+            async with self._session.post(f"{self.base_url}/api/embed", json=payload) as response:
+                await raise_for_status_with_body(response)
+                data: dict[str, Any] = await response.json()
+                return data
+        except Exception as exc:
+            self._raise_translated(exc)
 
     def _build_prompt(self, messages: List[LLMMessage]) -> str:
         """Build prompt from messages."""

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_llm import EmbeddingOverflow
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,11 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
             provider as a legacy flat passthrough.
         api_key: Embedder credential, forwarded to the embedding provider
             as a legacy flat passthrough. Redacted from ``repr``.
+        embedding_overflow: What the embedder does with an over-long text
+            (``"refuse"``, the provider's default, or ``"truncate"``),
+            forwarded to the embedding provider as a legacy flat passthrough.
+            The provider validates it, and refuses by name a policy it cannot
+            honour.
         chunking: Chunking config forwarded to ``create_chunker``.
         merger: Optional chunk-merger config (raw mapping projected onto
             ``MergerConfig``).
@@ -81,7 +87,7 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     #
     # Only the *nested* ``embedding`` dict is validated. The legacy flat
     # passthroughs (``embedding_provider`` / ``embedding_model`` / ``dimensions``
-    # / ``api_base`` / ``api_key``) are intentionally left unvalidated: they are
+    # / ``api_base`` / ``api_key`` / ``embedding_overflow``) are intentionally left unvalidated: they are
     # legacy and slated for removal, and lack a ``provider`` discriminator to
     # resolve on. A config using only flat keys has an empty nested ``embedding``
     # → ``validate()`` skips it (empty-section rule), so no false positive.
@@ -97,6 +103,7 @@ class RAGKnowledgeBaseConfig(StructuredConfig):
     dimensions: int | None = None
     api_base: str | None = None
     api_key: str | None = None
+    embedding_overflow: EmbeddingOverflow | None = None
     chunking: dict[str, Any] = field(default_factory=dict)
     merger: dict[str, Any] | None = None
     formatter: dict[str, Any] | None = None
