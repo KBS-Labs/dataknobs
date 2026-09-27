@@ -221,3 +221,62 @@ as portable and not be.
 So the capability is worth advertising in both directions. A consumer
 that wants the convenience can find the one backend offering it; a
 consumer that needs provenance can tell it is about to lose it.
+
+## A bulk write that fails partway
+
+`bulk_embed_and_store` is not atomic on any backend. It commits in pieces,
+and a raise partway through leaves the earlier pieces stored while its
+return value, the list of ids, never arrives. `on_stored` is how a caller
+learns what did arrive. It is keyword-only, and it is called once per
+commit with the ids that commit stored:
+
+| Lane | One commit is |
+|---|---|
+| `VectorStore.bulk_embed_and_store` | one `add_vectors` call: a `batch_size` slice of the input |
+| the database lanes (`BulkEmbedMixin`, `AsyncBulkEmbedMixin`) | one record |
+
+On the store lane the reported ids are always a prefix of the `ids` passed,
+in order, because `add_vectors` returns one id per vector it was given. So a
+caller holding its own list of ids knows exactly which of them arrived:
+
+```python
+done: list[str] = []
+
+async def checkpoint(stored: list[str]) -> None:
+    done.extend(stored)
+
+try:
+    await store.bulk_embed_and_store(texts, ids=ids, embedder=embedder,
+                                     on_stored=checkpoint)
+except Exception:
+    resume_at = len(done)          # ids[resume_at:] did not reach the store
+    raise
+```
+
+The exception is whatever the embedder or the store raised, unwrapped, so
+existing `except` clauses keep matching. On the async lanes an `async def`
+callback is awaited on the loop, and a plain function runs on a worker
+thread, so a blocking checkpoint write does not stall the loop. On the async
+database lane that costs one thread hop per record, so pass an `async def`
+there if the cost matters. The sync database lane cannot await, so it
+refuses an async callback with `TypeError` before writing anything. If the
+callback raises, the raise propagates and the commit it was told about
+stands.
+
+**Exact per commit, not inside one.** `PgVectorStore` writes each
+`add_vectors` call in a transaction. The memory, FAISS and Chroma stores
+refuse a mis-sized or out-of-scope batch before writing any of it. A
+backend fault partway through one non-transactional write has nothing to
+roll it back, and no report can say which of its rows landed.
+
+**Stored is not durable.** A report means the write returned.
+`PgVectorStore` has committed to its database by then, and Chroma to disk
+when it has a `persist_path`. The memory and FAISS stores write to disk only
+on `save()` or `close()`, and an in-memory database never does. A checkpoint
+that must survive the process should follow a `save()`, not a report.
+
+`SemanticIndex.build()` counts its writes this way. A failed build's
+`OperationError` carries `written`, how many items it had read that the
+store does not have (`unstored`), and the first and last of them. The
+remedy is a rebuild: `build()` takes no starting point, and a source need
+not stream in the same order twice.

@@ -196,6 +196,14 @@ class SemanticIndex:
         --- it never saw the stream --- which is what makes it this method's
         to report.
 
+        **Counted from the store's commits, not from this method's writes.**
+        One write here is several commits in the store, which embeds and
+        stores under its own ``batch_size``, so a write that raises has
+        usually committed some of them already. Counted per write, a build
+        failing on the 221st of 250 items reported nothing written over a
+        store holding 200. So the store reports each commit as it happens
+        (``on_stored``), and the count is the sum of those reports.
+
         The ids go to the store explicitly. Without that every backend mints a
         ``uuid4`` per row, identically, and the id the source took care to
         emit would be discarded one call below the decision to emit it ---
@@ -229,7 +237,10 @@ class SemanticIndex:
         with the field the canonical text came from.
 
         Returns:
-            How many items were **handed to the store**. ``0`` over an empty
+            How many items the store reported storing, which on success is
+            every item handed to it (:meth:`VectorStore.add_vectors
+            <dataknobs_data.vector.stores.base.VectorStore.add_vectors>`
+            returns one id per vector it was given). ``0`` over an empty
             source is a legitimate answer and not an error: a vocabulary that
             holds nothing is a vocabulary.
 
@@ -240,30 +251,72 @@ class SemanticIndex:
 
         Raises:
             OperationError: When the source, the embedder or the store fails
-                partway. ``context["written"]`` is how many items had already
-                reached the store, and the original failure is the cause.
+                partway, with the original failure as the cause. Its
+                ``context`` says what the store holds from this build:
+
+                - ``written``: how many items the store reported storing.
+                - ``unstored``: how many items this build had read that the
+                  store does not have --- the rest of a write that failed, or
+                  items read and not yet sent when the source failed. **Not
+                  the whole shortfall:** the source was not read past them,
+                  so anything it would have yielded later is missing too.
+                - ``first_unstored`` / ``last_unstored``: the first and last
+                  of those ids, or ``None``. They are ids as this index
+                  writes them --- on the ontology registry's route, the
+                  qualified ones.
+
+                **The remedy is a rebuild.** This method takes no starting
+                point, and the ids are the source's while the store upserts,
+                so a rebuild overwrites rather than duplicates.
+                ``first_unstored`` says where this build's account stops in
+                *this run's* order; it is not a resume point in general,
+                because a source need not stream in the same order twice
+                (``RecordFieldSource`` streams ``stream_read`` unsorted).
+
+                Exact per store commit; see
+                :meth:`VectorStore.bulk_embed_and_store
+                <dataknobs_data.vector.stores.base.VectorStore.bulk_embed_and_store>`
+                for what a commit is on each backend.
         """
         source_field = getattr(self.source, "source_field", None)
         written = 0
         ids: list[str] = []
         texts: list[str] = []
         metadata: list[dict[str, Any]] = []
+        # How much of the write in flight the store has reported. What it
+        # reports is a prefix of `ids`, so `ids[stored_of_write:]` is exactly
+        # what a failed write left behind.
+        stored_of_write = 0
+        writing = False
+        # Set once the source is exhausted and its last items are stored, so
+        # a failure after it --- closing the source --- is not reported as a
+        # partial build.
+        drained = False
 
-        async def flush() -> int:
+        async def stored(stored_ids: list[str]) -> None:
+            nonlocal written, stored_of_write
+            written += len(stored_ids)
+            stored_of_write += len(stored_ids)
+
+        async def flush() -> None:
+            nonlocal stored_of_write, writing
             if not texts:
-                return 0
+                return
+            stored_of_write = 0
+            writing = True
             await self.store.bulk_embed_and_store(
                 list(texts),
                 ids=list(ids),
                 metadata=list(metadata),
                 embedder=self.embedder,
                 source_field=source_field,
+                on_stored=stored,
             )
-            count = len(texts)
+            writing = False
+            stored_of_write = 0
             ids.clear()
             texts.clear()
             metadata.clear()
-            return count
 
         try:
             # `aclosing_iter` rather than a bare `async for`, because every exit
@@ -286,25 +339,61 @@ class SemanticIndex:
                         row["source_field"] = item.source_field
                     metadata.append(row)
                     if len(texts) >= BUILD_BATCH_SIZE:
-                        written += await flush()
-                written += await flush()
+                        await flush()
+                await flush()
+                drained = True
         except Exception as exc:
-            # `written` is the last completed flush, so it is exactly what the
-            # store holds from this build -- the partial batch in hand was
-            # never sent. Logged as well as raised: the raise reaches the
-            # caller, and the log reaches whoever is reading the process's
-            # output when the caller swallows it.
+            # `written` is what the store reported, commit by commit, so it
+            # counts the part of a failed write that did land. What is left
+            # in `ids` past that prefix did not: the rest of the failed write,
+            # or --- when the source failed --- items read and not yet sent.
+            # Logged as well as raised: the raise reaches the caller, and the
+            # log reaches whoever is reading the process's output when the
+            # caller swallows it.
+            unstored = ids[stored_of_write:]
+            first = unstored[0] if unstored else None
+            last = unstored[-1] if unstored else None
+            if drained:
+                state = (
+                    "every item the source yielded reached the store; the failure "
+                    "came after the last write, closing the source"
+                )
+            elif not unstored and written == 0:
+                state = "the source failed before yielding anything, so this build wrote nothing"
+            elif not unstored:
+                state = (
+                    "nothing it had read is missing, but the source failed before "
+                    "it was exhausted, so the store holds a partial build"
+                )
+            elif writing:
+                state = (
+                    f"the store holds a partial build: {len(unstored)} item(s) handed "
+                    f"to it did not arrive, {first!r} to {last!r}, the failure being "
+                    f"in its batch starting at {first!r}, and the source was not "
+                    f"read past {last!r}"
+                )
+            else:
+                state = (
+                    f"the store holds a partial build: {len(unstored)} item(s) read "
+                    f"from the source were never sent, {first!r} to {last!r}, and "
+                    f"the source failed before yielding more"
+                )
             logger.warning(
-                "semantic index build failed after %d item(s) were written; the store "
-                "holds a partial build",
+                "semantic index build failed after %d item(s) were written; %s",
                 written,
+                state,
                 exc_info=exc,
             )
             raise OperationError(
-                f"semantic index build failed after it wrote {written} item(s); the "
-                f"store holds a partial build. Rebuild, or resume from what is there -- "
-                f"the ids are the source's, so a rebuild overwrites rather than duplicates",
-                context={"written": written},
+                f"semantic index build failed after it wrote {written} item(s); "
+                f"{state}. To finish, rebuild -- the ids are the source's and the "
+                f"store upserts, so a rebuild overwrites rather than duplicates",
+                context={
+                    "written": written,
+                    "unstored": len(unstored),
+                    "first_unstored": first,
+                    "last_unstored": last,
+                },
             ) from exc
 
         if written == 0:

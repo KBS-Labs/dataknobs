@@ -759,16 +759,25 @@ async def test_a_bare_string_of_fields_is_refused_by_its_own_name(tmp_path: Path
         ((name for name in ["name"]), "sequence of field names"),
         (["name", 5], "not a string"),
         ([None], "not a string"),
+        ([5, "x"], "not a string"),
     ],
-    ids=["a-set", "a-mapping", "a-generator", "a-number-member", "a-none-member"],
+    ids=[
+        "a-set",
+        "a-mapping",
+        "a-generator",
+        "a-number-member",
+        "a-none-member",
+        "unknowns-of-mixed-types",
+    ],
 )
 async def test_fields_that_are_not_a_sequence_of_names_are_refused_naming_the_ontology(
     tmp_path: Path, fields: object, match: str
 ) -> None:
     """Each is refused as the mistake it is, with the ontology in its context.
 
-    A set used to load in an arbitrary order, and ``["name", 5]`` raised a
-    bare ``TypeError`` from sorting the unknown names.
+    A set used to load in an arbitrary order. ``["name", 5]`` was refused, but
+    as an unknown entity field rather than as a non-string, and ``[5, "x"]``
+    raised a bare ``TypeError`` from sorting unknown names of mixed types.
     """
     parts = await _fasteners(tmp_path)
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.callbacks import is_async_callable, run_callback_off_loop
+
 from ..fields import VectorField
 from .content import (
     DEFAULT_FIELD_SEPARATOR,
@@ -151,6 +153,8 @@ class BulkEmbedMixin:
         model_name: str | None = None,
         model_version: str | None = None,
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
+        *,
+        on_stored: Callable[[list[str]], None] | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -166,15 +170,28 @@ class BulkEmbedMixin:
             model_version: Version of the embedding model
             field_separator: What to join multiple text fields on. Was
                 hardcoded to a space, which is the value it still defaults to.
+            on_stored: Called with ``[record_id]`` after each record is
+                written. This lane commits one record at a time, so a raise
+                partway through leaves every earlier record stored, and the
+                return value never arrives to say which; this is what does.
+                Synchronous, like everything else on this lane.
 
         Returns:
             List of record IDs that were processed
 
         Raises:
             ValueError: If embedding_fn is not provided
+            TypeError: If *on_stored* is async. This lane cannot await it,
+                and an un-awaited callback raises nothing and runs nothing,
+                so every report would be lost.
         """
         if not embedding_fn:
             raise ValueError("embedding_fn is required for bulk_embed_and_store")
+        if is_async_callable(on_stored):
+            raise TypeError(
+                "on_stored is async, and the sync bulk_embed_and_store cannot await it; "
+                "pass a plain function, or use an async database"
+            )
 
         text_fields = resolve_text_fields(text_field)
         processed_ids = []
@@ -199,12 +216,17 @@ class BulkEmbedMixin:
                 )
                 track_vector_dimensions(self, record)
 
-                # Assumes self has create, update and exists (Database interface).
-                if record.id and self.exists(record.id):  # type: ignore[attr-defined]
-                    self.update(record.id, record)  # type: ignore[attr-defined]
-                    processed_ids.append(record.id)
+                # Assumes self has create and upsert (Database interface).
+                # `upsert`, not `exists` then `update`: it acts on update()'s
+                # answer, so a record deleted between the two is written
+                # rather than reported written.
+                if record.id:
+                    record_id = self.upsert(record.id, record)  # type: ignore[attr-defined]
                 else:
-                    processed_ids.append(self.create(record))  # type: ignore[attr-defined]
+                    record_id = self.create(record)  # type: ignore[attr-defined]
+                processed_ids.append(record_id)
+                if on_stored is not None:
+                    on_stored([record_id])
 
         return processed_ids
 
@@ -233,6 +255,7 @@ class AsyncBulkEmbedMixin:
         field_separator: str = DEFAULT_FIELD_SEPARATOR,
         *,
         embedder: TextEmbedder | None = None,
+        on_stored: Callable[[list[str]], Awaitable[None] | None] | None = None,
     ) -> list[str]:
         """Embed text fields and store vectors with records.
 
@@ -256,6 +279,11 @@ class AsyncBulkEmbedMixin:
             embedder: A :class:`~dataknobs_data.vector.TextEmbedder` --- async
                 by declaration, so this lane classifies nothing when it is
                 used.
+            on_stored: Called with ``[record_id]`` after each record is
+                written, for the sync lane's reason. An ``async def`` is
+                awaited on the loop; a plain function runs on a worker
+                thread, which costs one thread hop **per record** here ---
+                pass an ``async def`` where that matters.
 
         Returns:
             List of record IDs that were processed
@@ -293,12 +321,14 @@ class AsyncBulkEmbedMixin:
                 )
                 track_vector_dimensions(self, record)
 
-                # Assumes self has async create, update and exists
-                # (AsyncDatabase interface).
-                if record.id and await self.exists(record.id):  # type: ignore[attr-defined]
-                    await self.update(record.id, record)  # type: ignore[attr-defined]
-                    processed_ids.append(record.id)
+                # Assumes self has async create and upsert (AsyncDatabase
+                # interface); `upsert` for the sync lane's reason.
+                if record.id:
+                    record_id = await self.upsert(record.id, record)  # type: ignore[attr-defined]
                 else:
-                    processed_ids.append(await self.create(record))  # type: ignore[attr-defined]
+                    record_id = await self.create(record)  # type: ignore[attr-defined]
+                processed_ids.append(record_id)
+                if on_stored is not None:
+                    await run_callback_off_loop(on_stored, [record_id])
 
         return processed_ids

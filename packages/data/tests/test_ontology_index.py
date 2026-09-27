@@ -1805,7 +1805,8 @@ async def test_a_build_that_fails_partway_closes_the_stream_it_opened() -> None:
 
         assert source.held == 0, "the stream was still open when the caller got the error"
         assert source.releases == 1, "closed once, not left to the collector and closed twice"
-        assert failed.value.context == {"written": 0}
+        assert failed.value.context["written"] == 0
+        assert failed.value.context["unstored"] == 1, "the one-item write was refused whole"
     finally:
         module.BUILD_BATCH_SIZE = original
         await store.close()
