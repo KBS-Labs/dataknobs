@@ -1,3 +1,10 @@
+# Pinned so the project does not default to the checkout's directory name.
+# A git worktree lives in a directory with a different name, and without this
+# it resolves to a project of its own: `compose exec` there cannot see the
+# services the main checkout started, and `up` collides with them on the host
+# ports. Every checkout of this repository shares one set of services.
+name: dataknobs
+
 services:
   dataknobs-dev:
     build:
