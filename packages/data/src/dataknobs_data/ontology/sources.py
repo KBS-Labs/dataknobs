@@ -56,12 +56,12 @@ RECORD_SOURCE_KIND = "record"
 #:
 #: A bulk member sends one ``IN`` filter because a round trip per id is the
 #: cost it exists to avoid -- but one filter is one read, and a read is a
-#: thing a backend bounds. Two bounds are in reach and neither is this
-#: package's to set: ``AsyncElasticsearchDatabase.search`` answers an
-#: unbounded query with ``size=10000``, and the SQL backends bind one
-#: parameter per element of an ``IN`` list against a server ceiling --
-#: 65535 on Postgres, and 999 on a SQLite built before 3.32. So a batch
-#: larger than this is split, and each read stays under both.
+#: thing a backend bounds, and the bound is not this package's to set: the
+#: SQL backends bind one parameter per element of an ``IN`` list against a
+#: server ceiling -- 65535 on Postgres, and 999 on a SQLite built before
+#: 3.32. So a batch larger than this is split, and each read stays under it.
+#: (``AsyncElasticsearchDatabase.search`` once capped an unbounded query at
+#: ``size=10000`` too; it pages past its result window now.)
 #:
 #: 1000 because it is already this package's answer to *how many rows per
 #: read*: :attr:`~dataknobs_data.streaming.StreamConfig.batch_size` has
@@ -813,14 +813,15 @@ class RecordEntitySource(DynamicCapabilityMixin):
         Postgres shares the builder, and Elasticsearch shares the translator.
         The asymmetry was a workaround for that defect and went with it.
 
-        **Keeping it would now lose rows rather than save them.** An unbounded
-        ``search`` is the read a backend is free to cap, and one does:
-        ``AsyncElasticsearchDatabase`` answers a query carrying no ``limit``
-        with ``size=10000``. Elasticsearch declares ``index`` rather than
-        ``table``, so the registry gives a binding one handle, so the store is
-        shared, so a declared ``surface_forms:`` put the narrowed branch on
-        exactly that read -- and a binding of more rows than the cap answered
-        with the cap's worth and reported nothing. ``stream_read`` goes through
+        **Keeping it would have lost rows rather than saved them.** An
+        unbounded ``search`` is the read a backend is free to cap, and one did:
+        ``AsyncElasticsearchDatabase`` answered a query carrying no ``limit``
+        with ``size=10000``, until its search paged past the result window.
+        Elasticsearch declares ``index`` rather than ``table``, so the registry
+        gives a binding one handle, so the store is shared, so a declared
+        ``surface_forms:`` put the narrowed branch on exactly that read -- and
+        a binding of more rows than the cap answered with the cap's worth and
+        reported nothing. ``stream_read`` goes through
         the scroll API there, which the cap does not reach. Paging ``search``
         would not have served: past ``index.max_result_window`` a ``from``/
         ``size`` page *errors* rather than truncating, which is why that

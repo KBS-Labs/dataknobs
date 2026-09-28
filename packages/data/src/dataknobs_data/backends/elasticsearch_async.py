@@ -43,13 +43,21 @@ from .elasticsearch_mixins import (
     parse_es_version_token,
     vector_tracking_metadata,
 )
-from .elasticsearch_query import build_bool_query, build_complex_es_query
+from .elasticsearch_query import (
+    PIT_KEEP_ALIVE,
+    arun_search_plan,
+    build_bool_query,
+    build_complex_es_query,
+    client_search_kwargs,
+    plan_search,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
     from typing import ClassVar
 
     import numpy as np
+    from elasticsearch import AsyncElasticsearch
 
     from ..records import Record
 
@@ -125,7 +133,9 @@ class AsyncElasticsearchDatabase(
         self._pool_config = ElasticsearchPoolConfig.from_dict(pool_input)
         self.index_name = self._pool_config.index
         self.refresh = cfg.refresh
-        self._client = None
+        self.max_result_window = cfg.max_result_window
+        self.search_page_size = cfg.search_page_size
+        self._client: AsyncElasticsearch | None = None
         self._connected = False
 
     async def connect(self) -> None:
@@ -183,7 +193,7 @@ class AsyncElasticsearchDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         # Check if index exists
-        if not await self._client.indices.exists(index=self.index_name):  # type: ignore[unreachable]
+        if not await self._client.indices.exists(index=self.index_name):
             # Get mappings with vector field support
             mappings = self.get_index_mappings(self.vector_fields)
 
@@ -209,6 +219,12 @@ class AsyncElasticsearchDatabase(
         """Check if database is connected."""
         if not self._connected or not self._client:
             raise RuntimeError("Database not connected. Call connect() first.")
+
+    def _require_client(self) -> AsyncElasticsearch:
+        """The connected client, or the same error :meth:`_check_connection` raises."""
+        if not self._connected or self._client is None:
+            raise RuntimeError("Database not connected. Call connect() first.")
+        return self._client
 
     def _record_to_doc(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to an Elasticsearch document.
@@ -654,29 +670,21 @@ class AsyncElasticsearchDatabase(
                 )
                 sort.append({sort_path: {"order": direction}})
 
-        # Build request body
-        body = {"query": es_query}
-        if sort:
-            body["sort"] = sort
-
-        # Add size and from for pagination.  ``is not None`` so the
-        # caller-facing ``limit=0`` becomes ES ``size=0`` (count-only,
-        # zero hits) rather than being silently coerced to the default.
-        size = query.limit_value if query.limit_value is not None else 10000
-        from_param = query.offset_value if query.offset_value is not None else 0
-
-        # Execute search
-        response = await self._client.search(
-            index=self.index_name,
-            query=es_query,
-            sort=sort if sort else None,
-            size=size,
-            from_=from_param,
+        # One request inside the result window, ``search_after`` pages past
+        # it or for an unbounded read; the plan is shared with the sync twin.
+        plan = plan_search(
+            es_query,
+            sort,
+            query.offset_value,
+            query.limit_value,
+            window=self.max_result_window,
+            page_size=self.search_page_size,
         )
+        hits = await arun_search_plan(plan, self._search_hits, self._open_pit, self._close_pit)
 
         # Convert to records
         records = []
-        for hit in response["hits"]["hits"]:
+        for hit in hits:
             record = self._doc_to_record(hit)
 
             # Apply field projection if specified
@@ -686,6 +694,23 @@ class AsyncElasticsearchDatabase(
             records.append(record)
 
         return records
+
+    async def _search_hits(self, body: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+        """Send one planned search request; return its hits and point-in-time id."""
+        client = self._require_client()
+        response = await client.search(**client_search_kwargs(body, self.index_name))
+        return list(response["hits"]["hits"]), response.get("pit_id")
+
+    async def _open_pit(self) -> str:
+        """Open a point in time on this index for one paged read."""
+        opened = await self._require_client().open_point_in_time(
+            index=self.index_name, keep_alive=PIT_KEEP_ALIVE
+        )
+        return str(opened["id"])
+
+    async def _close_pit(self, pit_id: str) -> None:
+        """Close a paged read's point in time."""
+        await self._require_client().close_point_in_time(id=pit_id)
 
     async def count(self, query: Query | None = None) -> int:
         """Count records matching a query using efficient Elasticsearch count.

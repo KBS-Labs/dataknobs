@@ -359,12 +359,12 @@ are separate implementations on every backend and they did not agree —
 Postgres's `stream_read` open-coded its WHERE clause and silently dropped non-EQ
 filters, which is what this narrowing is. With that fixed, keeping the branch on
 `search()` would now *lose rows* rather than protect them: an unbounded `search`
-is the read a backend is free to cap, and Elasticsearch caps one at
-`size=10000`. Because Elasticsearch declares `index` rather than `table` it is
-always a shared store, so a binding of more than ten thousand rows with a
-declared `surface_forms:` was answering with ten thousand ids and reporting
-nothing. Its streaming door goes through the scroll API, which no such cap
-reaches.
+is the read a backend is free to cap, and Elasticsearch's async search capped
+one at `size=10000` until it paged past the result window. Because
+Elasticsearch declares `index` rather than `table` it is always a shared store,
+so a binding of more than ten thousand rows with a declared `surface_forms:` was
+answering with ten thousand ids and reporting nothing. Its streaming door goes
+through the scroll API, which no such cap reaches.
 
 ### One handle per table, opened and connected by the registry
 

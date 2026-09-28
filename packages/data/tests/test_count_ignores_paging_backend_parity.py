@@ -194,23 +194,7 @@ class TestACountIgnoresPaging:
         """The same query still pages a search: the count is what differs."""
         assert len(sync_db.search(query)) < len(RECORDS)
 
-    async def test_the_page_is_still_a_page_async(
-        self,
-        async_db: Any,
-        query: Query,
-        backend: tuple[str, dict[str, Any]],
-        request: pytest.FixtureRequest,
-    ) -> None:
-        if backend[0] == "elasticsearch" and query.limit_value is None:
-            # A known search defect, not a count one: with no limit the async
-            # Elasticsearch search asks for 10,000 hits, so any offset puts
-            # ``from + size`` past the index's result window and the search is
-            # refused. Strict, so fixing it turns this red.
-            request.applymarker(
-                pytest.mark.xfail(
-                    strict=True, reason="async Elasticsearch search: offset without limit"
-                )
-            )
+    async def test_the_page_is_still_a_page_async(self, async_db: Any, query: Query) -> None:
         assert len(await async_db.search(query)) < len(RECORDS)
 
 

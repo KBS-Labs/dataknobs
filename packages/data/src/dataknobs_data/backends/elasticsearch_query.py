@@ -65,7 +65,7 @@ from typing import TYPE_CHECKING, Any
 from ..query import Operator, is_storage_key_field
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Generator, Sequence
 
     from ..query import Filter
     from ..query_logic import Condition
@@ -256,3 +256,189 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
             return {"match_all": {}}
 
     return {"match_all": {}}
+
+
+# --------------------------------------------------------------------------
+# Reading a whole match: from/size inside the result window, search_after past it
+# --------------------------------------------------------------------------
+
+#: Elasticsearch's default ``index.max_result_window``. A ``from``/``size``
+#: request whose ``from + size`` passes it is refused, not truncated.
+DEFAULT_MAX_RESULT_WINDOW = 10_000
+
+#: Hits asked for per request when a read pages with ``search_after``.
+SEARCH_AFTER_PAGE_SIZE = 1_000
+
+#: How long a paged read's point in time is kept open between two requests.
+PIT_KEEP_ALIVE = "1m"
+
+#: The tiebreaker that makes a paged sort total. Elasticsearch's shard-local
+#: document order, which needs no mapping and is valid only in a point in time.
+_TIEBREAK: dict[str, Any] = {"_shard_doc": {"order": "asc"}}
+
+
+def plan_search(
+    query: dict[str, Any],
+    sort: list[dict[str, Any]],
+    offset: int | None,
+    limit: int | None,
+    *,
+    window: int = DEFAULT_MAX_RESULT_WINDOW,
+    page_size: int = SEARCH_AFTER_PAGE_SIZE,
+) -> Generator[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Plan the requests that answer one search, whatever page it names.
+
+    A ``Query`` with no ``limit`` means every match, and one request cannot
+    say that: with no ``size`` Elasticsearch answers ten hits, and a ``size``
+    large enough to mean "all" is refused once ``from + size`` passes
+    ``index.max_result_window``. So:
+
+    * a bounded read inside the window is one ``from``/``size`` request,
+      exactly as before (``limit=0`` is ``size=0``, zero hits);
+    * anything else pages with ``search_after`` in a point in time, over the
+      caller's sort (relevance when there is none) tie-broken on
+      ``_shard_doc``, so the order is total and the pages come from one
+      snapshot. An offset is skipped by reading past it, since
+      ``search_after`` has no ``from``.
+
+    A paged request carries a ``pit`` key holding only ``keep_alive``; the
+    driver opens the point in time and fills in its id. The plan does no I/O,
+    so the sync and async backends drive the same one
+    (:func:`run_search_plan`, :func:`arun_search_plan`) and cannot disagree on
+    which hits a query returns.
+
+    Args:
+        query: The Query DSL clause.
+        sort: The sort clauses, empty for relevance order.
+        offset: Hits to skip, or None.
+        limit: Hits to return, or None for every match.
+        window: The index's result window.
+        page_size: Hits per ``search_after`` request.
+
+    Yields:
+        Each request body, in order. The driver sends back that request's hits.
+
+    Returns:
+        The hits asked for, in order.
+    """
+    start = offset or 0
+    if limit is not None and start + limit <= window:
+        body: dict[str, Any] = {"query": query, "from": start, "size": limit}
+        if sort:
+            body["sort"] = sort
+        return (yield body)
+
+    paged_sort = [*(sort or [{"_score": {"order": "desc"}}]), _TIEBREAK]
+    hits: list[dict[str, Any]] = []
+    after: list[Any] | None = None
+    skip = start
+    while limit is None or len(hits) < limit:
+        body = {
+            "query": query,
+            "sort": paged_sort,
+            "size": page_size,
+            "pit": {"keep_alive": PIT_KEEP_ALIVE},
+        }
+        if after is not None:
+            body["search_after"] = after
+        page = yield body
+        if not page:
+            break
+        after = page[-1]["sort"]
+        hits.extend(page[skip:])
+        skip = max(0, skip - len(page))
+        if len(page) < page_size:
+            break
+    return hits if limit is None else hits[:limit]
+
+
+def client_search_kwargs(body: dict[str, Any], index: str) -> dict[str, Any]:
+    """Spell a planned request as keyword arguments to the official client.
+
+    A request in a point in time names no index, since the point in time does.
+
+    Args:
+        body: A request body from :func:`plan_search`, its ``pit`` id filled in.
+        index: The index a request outside a point in time searches.
+
+    Returns:
+        Keyword arguments for ``Elasticsearch.search`` / ``AsyncElasticsearch.search``.
+    """
+    kwargs: dict[str, Any] = {
+        "query": body["query"],
+        "size": body["size"],
+        "sort": body.get("sort"),
+        "from_": body.get("from"),
+        "search_after": body.get("search_after"),
+    }
+    if "pit" in body:
+        kwargs["pit"] = body["pit"]
+    else:
+        kwargs["index"] = index
+    return kwargs
+
+
+def run_search_plan(
+    plan: Generator[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]],
+    execute: Callable[[dict[str, Any]], tuple[list[dict[str, Any]], str | None]],
+    open_pit: Callable[[], str],
+    close_pit: Callable[[str], object],
+) -> list[dict[str, Any]]:
+    """Drive a search plan with sync I/O.
+
+    Opens a point in time for the first request that asks for one, sends each
+    later request with the newest id Elasticsearch returned, and closes it on
+    every path out.
+
+    Args:
+        plan: From :func:`plan_search`.
+        execute: Sends one request; returns its hits and point-in-time id.
+        open_pit: Opens a point in time on the index; returns its id.
+        close_pit: Closes a point in time by id.
+
+    Returns:
+        The hits the plan returns.
+    """
+    pit_id: str | None = None
+    try:
+        body = next(plan)
+        while True:
+            if "pit" in body:
+                if pit_id is None:
+                    pit_id = open_pit()
+                body = {**body, "pit": {**body["pit"], "id": pit_id}}
+            hits, returned_id = execute(body)
+            pit_id = returned_id or pit_id
+            body = plan.send(hits)
+    except StopIteration as done:
+        return list(done.value)
+    finally:
+        plan.close()
+        if pit_id is not None:
+            close_pit(pit_id)
+
+
+async def arun_search_plan(
+    plan: Generator[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]],
+    execute: Callable[[dict[str, Any]], Awaitable[tuple[list[dict[str, Any]], str | None]]],
+    open_pit: Callable[[], Awaitable[str]],
+    close_pit: Callable[[str], Awaitable[object]],
+) -> list[dict[str, Any]]:
+    """Drive a search plan with async I/O; see :func:`run_search_plan`."""
+    pit_id: str | None = None
+    try:
+        body = next(plan)
+        while True:
+            if "pit" in body:
+                if pit_id is None:
+                    pit_id = await open_pit()
+                body = {**body, "pit": {**body["pit"], "id": pit_id}}
+            hits, returned_id = await execute(body)
+            pit_id = returned_id or pit_id
+            body = plan.send(hits)
+    except StopIteration as done:
+        return list(done.value)
+    finally:
+        plan.close()
+        if pit_id is not None:
+            await close_pit(pit_id)
