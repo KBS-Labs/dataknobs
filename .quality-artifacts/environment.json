@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-27T03:23:06Z",
+  "timestamp": "2026-09-28T15:50:38Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.19 (Homebrew 2026-09-24 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "an-embedding-provider-can-opt-in-to-truncation",
-  "git_commit": "19081978a4f3e478ee8ef5f82316a4c68f4c7c42",
+  "git_branch": "dependabot/github_actions/github-actions-3a0b6790fd",
+  "git_commit": "b6f288d5a148cb540cfd5d6518044681c00c610a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
