@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from tests._workspace import ROOT, tracked_shell_files
+from tests._workspace import ROOT, load_bin_module, tracked_shell_files
 
 VALIDATOR = ROOT / "bin" / "validate-quality-artifacts.sh"
 
@@ -431,6 +431,70 @@ def test_an_unreadable_summary_is_named_on_the_main_path(tmp_path: Path) -> None
 
     assert "Could not read quality-summary.json" in report, (
         "an unparseable summary was not reported as unreadable:\n" + report
+    )
+
+
+def _current_hashes() -> dict[str, Any]:
+    """The hash fields a gate run on this tree would record, computed for real."""
+    hashes = load_bin_module("package-hashes")
+    packages: dict[str, Any] = dict(hashes.compute_all_hashes())
+    packages["_algorithm_version"] = hashes._HASH_ALGORITHM_VERSION
+    return {
+        "package_hashes": packages,
+        "workspace_hashes": hashes.compute_all_workspace_hashes(),
+    }
+
+
+def _without_package_hashes(fields: dict[str, Any]) -> dict[str, Any]:
+    return {"workspace_hashes": fields["workspace_hashes"]}
+
+
+def _with_an_older_algorithm(fields: dict[str, Any]) -> dict[str, Any]:
+    packages = dict(fields["package_hashes"])
+    packages["_algorithm_version"] -= 1
+    return {**fields, "package_hashes": packages}
+
+
+def _without_workspace_hashes(fields: dict[str, Any]) -> dict[str, Any]:
+    return {"package_hashes": fields["package_hashes"]}
+
+
+@pytest.mark.parametrize(
+    "incomplete",
+    [_without_package_hashes, _with_an_older_algorithm, _without_workspace_hashes],
+    ids=lambda f: f.__name__.lstrip("_"),
+)
+def test_an_artifact_that_cannot_be_compared_is_refused(tmp_path: Path, incomplete: Any) -> None:
+    """A staleness check that cannot run must not report the artifact fresh.
+
+    Each of these three returned ``valid`` with a warning, a verdict reached
+    without comparing anything. They were allowances for artifacts produced
+    before a hash was recorded; the gate has refused to write an artifact
+    without its hashes since it learned to "refuse what it cannot", so an
+    artifact missing them was not made by the gate CI stands in for, and
+    passing it is the green-on-nothing this repository treats as a defect.
+
+    The case also has to reach the hash check through ``--from``. It did not:
+    ``package-hashes.py validate`` read the committed ``.quality-artifacts/``
+    whatever directory the validator was pointed at, so a run's report joined
+    one artifact set's summary to another's hash verdict.
+    """
+    summary = {**_PRODUCER_ORDER, **incomplete(_current_hashes())}
+    report = _validate(_artifacts_dir(tmp_path, summary))
+
+    assert "Hash validation error" in report, (
+        f"an artifact {incomplete.__name__.lstrip('_').replace('_', ' ')} was not "
+        "refused by the hash check:\n" + report
+    )
+
+
+def test_a_complete_artifact_for_this_tree_passes_the_hash_check(tmp_path: Path) -> None:
+    """The positive control: the refusal above is about the case, not the harness."""
+    summary = {**_PRODUCER_ORDER, **_current_hashes()}
+    report = _validate(_artifacts_dir(tmp_path, summary))
+
+    assert "All packages unchanged since last quality run" in report, (
+        "a complete artifact computed from this tree did not pass:\n" + report
     )
 
 

@@ -392,16 +392,29 @@ def compute_all_workspace_hashes() -> dict[str, str]:
     return {scope: compute_workspace_hash(scope) for scope in WORKSPACE_QUALITY_INPUTS}
 
 
-def validate_artifacts() -> dict[str, Any]:
+def validate_artifacts(artifacts_dir: Path = _ARTIFACTS_DIR) -> dict[str, Any]:
     """Compare current content hashes against stored artifact hashes.
 
     Uses the dependency graph to compute the transitive dirty set:
     any package whose content changed, plus all packages that depend
     on a changed package.
 
+    An artifact that cannot be compared is refused, never passed with a note:
+    no package hashes, hashes from another algorithm, or no workspace hashes.
+    Each was once an allowance for artifacts that predated the field, returned
+    as ``valid`` with a warning. The gate has refused to write an artifact
+    without its hashes since then, so one arriving without them was not made
+    by the gate this check stands in for — and ``valid`` on a comparison that
+    never ran is a green result about nothing.
+
+    Args:
+        artifacts_dir: The artifact set to validate. Defaults to the committed
+            one; ``validate-quality-artifacts.sh --from`` passes another, so its
+            hash verdict describes the same set as the rest of its report.
+
     Returns a structured result dict with validity status and details.
     """
-    summary_path = _ARTIFACTS_DIR / "quality-summary.json"
+    summary_path = artifacts_dir / "quality-summary.json"
 
     if not summary_path.exists():
         return {
@@ -417,8 +430,8 @@ def validate_artifacts() -> dict[str, Any]:
 
     if not stored_hashes:
         return {
-            "valid": True,
-            "warning": "No package_hashes in quality-summary.json — skipping hash validation",
+            "valid": False,
+            "error": "No package_hashes in quality-summary.json — nothing to compare the tree against",
             "changed_packages": [],
             "dirty_packages": [],
             "changed_scopes": [],
@@ -427,10 +440,24 @@ def validate_artifacts() -> dict[str, Any]:
     stored_algorithm = stored_hashes.pop("_algorithm_version", 1)
     if stored_algorithm != _HASH_ALGORITHM_VERSION:
         return {
-            "valid": True,
-            "warning": (
+            "valid": False,
+            "error": (
                 f"Hash algorithm changed (stored: v{stored_algorithm}, "
-                f"current: v{_HASH_ALGORITHM_VERSION}) — skipping hash validation"
+                f"current: v{_HASH_ALGORITHM_VERSION}) — the stored hashes cannot "
+                "be compared with this tree's"
+            ),
+            "changed_packages": [],
+            "dirty_packages": [],
+            "changed_scopes": [],
+        }
+
+    stored_workspace = summary.get("workspace_hashes")
+    if stored_workspace is None:
+        return {
+            "valid": False,
+            "error": (
+                "No workspace_hashes in quality-summary.json — toolchain, docs and "
+                "workspace-test changes cannot be compared against the tree"
             ),
             "changed_packages": [],
             "dirty_packages": [],
@@ -445,26 +472,15 @@ def validate_artifacts() -> dict[str, Any]:
         if current_hashes[pkg] != stored_hashes.get(pkg):
             changed.add(pkg)
 
-    # Workspace-level scopes. Absent on artifacts generated before these were
-    # hashed at all — reported rather than treated as changed, because "this
-    # run predates the check" and "this file was edited" are different facts
-    # and only the second should fail a pull request.
-    stored_workspace = summary.get("workspace_hashes")
-    changed_scopes: set[str] = set()
-    workspace_warning: str | None = None
-
-    if stored_workspace is None:
-        workspace_warning = (
-            "No workspace_hashes in quality-summary.json — toolchain and workspace-test "
-            "changes are unvalidated until the next full quality run"
-        )
-    else:
-        current_workspace = compute_all_workspace_hashes()
-        changed_scopes = {
-            scope
-            for scope, digest in current_workspace.items()
-            if digest != stored_workspace.get(scope)
-        }
+    # Workspace-level scopes, compared the same way. Their absence is refused
+    # above rather than reported here: the gate always records them, so an
+    # artifact without them is not one the gate made.
+    current_workspace = compute_all_workspace_hashes()
+    changed_scopes = {
+        scope
+        for scope, digest in current_workspace.items()
+        if digest != stored_workspace.get(scope)
+    }
 
     # A global scope changes a recorded result everywhere, so every package
     # needs re-validation. *Which* result is the scope's name: the global tier
@@ -498,8 +514,6 @@ def validate_artifacts() -> dict[str, Any]:
         "status_ok": status_ok,
         "overall_status": overall_status,
     }
-    if workspace_warning:
-        result["warning"] = workspace_warning
     return result
 
 
@@ -614,20 +628,14 @@ def cmd_changed_since(packages_json: str | None, workspace_json: str | None) -> 
     sys.exit(1 if moved else 0)
 
 
-def cmd_validate(*, use_json: bool = False) -> None:
+def cmd_validate(*, use_json: bool = False, artifacts_dir: Path = _ARTIFACTS_DIR) -> None:
     """Validate that artifacts match current source content."""
-    result = validate_artifacts()
+    result = validate_artifacts(artifacts_dir)
 
     if use_json:
         json.dump(result, sys.stdout, indent=2)
         sys.stdout.write("\n")
     else:
-        # A warning is additive, not an alternative outcome. Reporting it in
-        # place of a failure would hide the failure while still exiting 1 —
-        # a red check that says nothing about why, which this repo has had.
-        if result.get("warning"):
-            logger.warning("%s", result["warning"])
-
         if result.get("error"):
             logger.error("Validation error: %s", result["error"])
         elif result["valid"]:
@@ -680,6 +688,12 @@ def main() -> None:
         dest="use_json",
         help="Output structured JSON result",
     )
+    validate_parser.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        default=_ARTIFACTS_DIR,
+        help="the artifact set to validate (default: the committed .quality-artifacts/)",
+    )
 
     args = parser.parse_args()
 
@@ -690,7 +704,7 @@ def main() -> None:
     elif args.command == "changed-since":
         cmd_changed_since(args.packages, args.workspace)
     elif args.command == "validate":
-        cmd_validate(use_json=args.use_json)
+        cmd_validate(use_json=args.use_json, artifacts_dir=args.artifacts_dir)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,14 @@ written against. Both failures in this file's history are that shape:
   CLI and in the shell — the same mistake twice, which is what makes it a class
   rather than an incident.
 
+The field is gone now, and with it the guard that kept it additive. Every
+warning the producer emitted was a comparison it had *not* made — no package
+hashes, another algorithm, no workspace hashes — reported beside ``valid``.
+Those are refused as errors instead, so there is no longer a result that
+carries a verdict and a caveat for a consumer to order wrongly. A field
+reintroduced later is still caught by the key-coverage check below, and the
+lesson above is the reason to print it beside the verdict, never before it.
+
 Both are checked here against the producer's *actual* emitted keys, read from
 its source, so a field added later is covered without an edit to this file.
 """
@@ -66,15 +74,19 @@ def _emitted_keys() -> set[str]:
     for node in ast.walk(func):
         # Dict literals: the early returns and the main result.
         if isinstance(node, ast.Dict):
-            keys |= {k.value for k in node.keys if isinstance(k, ast.Constant)}
-        # Later additions: result["warning"] = ...
+            keys |= {
+                k.value
+                for k in node.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+        # Later additions: result["<key>"] = ...
         elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
             if isinstance(node.value, ast.Name) and isinstance(node.slice.value, str):
                 keys.add(node.slice.value)
     return keys
 
 
-def test_producer_emits_the_keys_this_guard_expects():
+def test_producer_emits_the_keys_this_guard_expects() -> None:
     """Non-vacuity: the AST walk must actually find the payload.
 
     A renamed function or a restructured return would leave the extraction
@@ -82,11 +94,11 @@ def test_producer_emits_the_keys_this_guard_expects():
     """
     keys = _emitted_keys()
     assert keys, "no result keys extracted — the producer's shape changed"
-    missing = {"valid", "warning", "error", "changed_packages"} - keys
+    missing = {"valid", "error", "changed_packages"} - keys
     assert not missing, f"expected result keys not found: {sorted(missing)}"
 
 
-def test_consumer_reads_every_field_the_producer_emits():
+def test_consumer_reads_every_field_the_producer_emits() -> None:
     """A field the consumer never reads is a diagnostic that reaches no one.
 
     This is the ``changed_scopes`` failure exactly: the producer knew which
@@ -104,31 +116,6 @@ def test_consumer_reads_every_field_the_producer_emits():
         f"{CONSUMER.name} never reads {unread}, so that detail is computed and "
         "then dropped. Print it in the failure branch, or add it to "
         "NOT_CONSUMED_BY_DESIGN with the reason."
-    )
-
-
-def test_consumer_does_not_let_a_warning_shadow_the_verdict():
-    """``warning`` must be printed additively, never as a branch before the verdict.
-
-    A warning says what could *not* be checked. It carries no claim about what
-    was checked, so a chain that tests it first will, on any result carrying
-    both, print the warning and never reach the failure. The producer emits
-    exactly that pairing whenever artifacts predate workspace hashing and a
-    package is also dirty.
-    """
-    lines = CONSUMER.read_text(encoding="utf-8").splitlines()
-    branches = [
-        ln.strip() for ln in lines if "HASH_WARNING" in ln and re.match(r"^\s*(el)?if ", ln)
-    ]
-    assert branches, (
-        f"{CONSUMER.name} no longer branches on HASH_WARNING at all — if the "
-        "variable was renamed, update this guard rather than deleting it"
-    )
-    chained = [b for b in branches if b.startswith("elif")]
-    assert not chained, (
-        "The warning is tested as 'elif', so a result carrying both a warning "
-        f"and a failure reports only the warning: {chained}. Print it in its "
-        "own 'if' ahead of the verdict instead."
     )
 
 
@@ -170,7 +157,7 @@ def _is_committable(relative_path: str) -> bool:
     return result.returncode == 1
 
 
-def test_every_required_artifact_is_one_git_actually_keeps():
+def test_every_required_artifact_is_one_git_actually_keeps() -> None:
     """A required file that .gitignore drops fails every pull request at once.
 
     The two declarations sit in different files with nothing between them, and
@@ -237,7 +224,7 @@ def _excluded_by_gitignore(root: Path, paths: list[str], *, no_index: bool = Tru
     return [name for name in result.stdout.split("\0") if name]
 
 
-def test_no_committed_artifact_is_one_gitignore_excludes():
+def test_no_committed_artifact_is_one_gitignore_excludes() -> None:
     """A file both tracked and ignored is in the repository by accident.
 
     ``.gitignore`` declares the committed artifact set as an allowlist —
@@ -281,7 +268,7 @@ def _un_ignored_artifact_names() -> list[str]:
     ]
 
 
-def test_every_un_ignored_artifact_is_one_something_writes():
+def test_every_un_ignored_artifact_is_one_something_writes() -> None:
     """An allowance with no producer is a slot, and the slot is signed.
 
     The reverse of the guard above, and it used to be legitimately false, which
@@ -380,7 +367,7 @@ def _case_arm_names(code: str, subject: str) -> set[str]:
     return found
 
 
-def test_no_reader_names_a_check_the_summary_does_not_record():
+def test_no_reader_names_a_check_the_summary_does_not_record() -> None:
     """A reader asking for a key nobody writes gets a value, and it is wrong.
 
     ``jq -r '.checks.lint.status'`` on a summary with no ``lint`` check prints
@@ -437,7 +424,7 @@ def test_no_reader_names_a_check_the_summary_does_not_record():
     )
 
 
-def test_the_allowlist_check_reads_rules_rather_than_the_index(tmp_path):
+def test_the_allowlist_check_reads_rules_rather_than_the_index(tmp_path: Path) -> None:
     """Pins ``--no-index``, which the obvious implementation omits.
 
     This is worth a test rather than a comment because the omission produces a
@@ -479,7 +466,7 @@ def test_the_allowlist_check_reads_rules_rather_than_the_index(tmp_path):
     )
 
 
-def test_the_committed_style_artifact_is_a_result_and_not_an_accident():
+def test_the_committed_style_artifact_is_a_result_and_not_an_accident() -> None:
     """``style-check.json`` is committed, signed — and read by nothing at all.
 
     Not by ``validate-quality-artifacts.sh``, not by any other guard here. So
@@ -528,7 +515,7 @@ def test_the_committed_style_artifact_is_a_result_and_not_an_accident():
     )
 
 
-def test_no_coverage_report_is_committed():
+def test_no_coverage_report_is_committed() -> None:
     """Coverage XML is generated, multi-megabyte, and cannot fail the gate.
 
     It was committed on nearly every artifact run, conflicting on each one and
@@ -549,7 +536,7 @@ def test_no_coverage_report_is_committed():
     )
 
 
-def test_the_merge_driver_gitattributes_names_is_actually_defined():
+def test_the_merge_driver_gitattributes_names_is_actually_defined() -> None:
     """`merge=<name>` is a reference; an undefined driver silently does nothing.
 
     Git does not warn when a named merge driver has no `merge.<name>.driver`
@@ -873,7 +860,7 @@ def test_an_unusable_document_does_not_read_as_a_moved_tree() -> None:
     )
 
 
-def test_the_signature_covers_the_committed_set_on_both_sides():
+def test_the_signature_covers_the_committed_set_on_both_sides() -> None:
     """Producer and verifier must enumerate the signed files the same way.
 
     They did not: the producer signed every ``*.json``/``*.xml`` on disk, which
