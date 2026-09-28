@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-09-28T16:11:11Z",
+  "timestamp": "2026-09-28T17:00:54Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.19 (Homebrew 2026-09-24 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "pin-compose-project-name",
-  "git_commit": "0ad72d1a48ca4c04c7394627a3cec861c1252dd4",
+  "git_branch": "worktree-policy",
+  "git_commit": "65fd7288234880eedb1ff05a099cb0659ff26e46",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
