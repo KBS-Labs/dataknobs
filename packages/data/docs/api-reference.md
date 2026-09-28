@@ -89,7 +89,7 @@ backends share one `FileDatabaseConfig`.
 - `exists(id: str) -> bool`: Check if a record exists
 - `upsert(id: str, record: Record, *, expected_version: str | None = None) -> str`: Update or insert a record; with `expected_version`, a compare-and-set that never inserts
 - `search(query: Query) -> List[Record]`: Search for records
-- `count(query: Query | None) -> int`: Count matching records
+- `count(query: Query | None) -> int`: Count matching records. The whole match is counted: the query's `limit`, `offset` and sort are ignored
 - `clear() -> int`: Delete all records
 - `stream_read(query, config) -> Iterator[Record]`: Stream records, applying the
   same `query` filters `search` applies — the two doors over one `Query` return

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`count(query)` counts the whole match on every backend: it ignores the
+  query's `limit`, `offset` and sort.** One `Query` can now page a `search()`
+  and total it with `count()`. sqlite, DuckDB and Elasticsearch already
+  counted this way. The memory, file, S3 and PostgreSQL backends inherited a
+  `count` that was `len(search(query))`, so a paged query counted its page.
+
+  **Migration:** for the number of records on one page, use
+  `len(search(query))`.
+
 - **An ontology document's declared embedding model is compared without the
   embedder's `#variant`.** `LLMProviderEmbedder.model_id` now carries one when
   something besides the model decides the vectors
@@ -1305,6 +1314,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A count on sqlite or DuckDB raised a syntax error when a field or the
+  table was named with `ORDER BY`, `LIMIT` or `OFFSET` in it.** The count's
+  SQL was cut out of the search's at the first of those words found anywhere
+  in the text, so a filter on a field such as `LIMIT_x` or
+  `metadata.OFFSET_k`, or any filtered count on a table such as `LIMITS`,
+  lost the rest of the statement. The match was case-sensitive, so only
+  upper-case names were affected. The count now builds its `WHERE` from the
+  filters through the same code as the search. PostgreSQL and the in-memory,
+  file and S3 backends were not affected.
+
+- **A sqlite search with an `offset` and no `limit` raised a syntax error.**
+  SQLite accepts `OFFSET` only after a `LIMIT`, and none was written. It now
+  writes `LIMIT -1`, SQLite's "no limit", for both `Query` and
+  `ComplexQuery`.
 
 - **`bulk_embed_and_store` on a database reported a record written when it
   was not.** Both lanes (`BulkEmbedMixin`, `AsyncBulkEmbedMixin`) checked
