@@ -121,7 +121,7 @@ def _sections(script: GateScript) -> list[tuple[int, str, list[str]]]:
     return [(a + 1, lines[a].strip(), lines[a:b]) for a, b in bounds]
 
 
-def test_the_gate_scripts_still_look_the_way_this_guard_reads_them():
+def test_the_gate_scripts_still_look_the_way_this_guard_reads_them() -> None:
     """Non-vacuity, per script: sections exist and at least one can fail.
 
     A rename of either helper would leave the extraction empty, and every check
@@ -144,7 +144,7 @@ def test_the_gate_scripts_still_look_the_way_this_guard_reads_them():
         )
 
 
-def test_every_check_that_reports_a_failure_can_fail_the_gate():
+def test_every_check_that_reports_a_failure_can_fail_the_gate() -> None:
     """A section that announces a failure must carry it somewhere it counts.
 
     Printing is not accounting. The failure helpers write a red line and nothing
@@ -208,7 +208,7 @@ def _drops_the_status(call: str, name: str) -> bool:
     )
 
 
-def test_a_helper_that_returns_its_outcome_has_it_caught():
+def test_a_helper_that_returns_its_outcome_has_it_caught() -> None:
     """``return $rc`` only accounts for a check if the caller catches it.
 
     ``_accounts`` takes the ``return`` on trust — it sees one line and cannot
@@ -353,7 +353,7 @@ def _reported_in_summary() -> set[str]:
     return set(_STATUS.findall("\n".join(calls))) - {VERDICT}
 
 
-def test_the_status_exception_tables_still_describe_the_gate():
+def test_the_status_exception_tables_still_describe_the_gate() -> None:
     """An exception matching nothing is the failure mode this batch just paid for.
 
     Both tables below name specific variables, and a rename or a removal would
@@ -383,7 +383,7 @@ def test_the_status_exception_tables_still_describe_the_gate():
         )
 
 
-def test_every_status_the_gate_computes_gates_the_verdict():
+def test_every_status_the_gate_computes_gates_the_verdict() -> None:
     """A status nothing reads is a check whose result is discarded on arrival."""
     orphans = sorted(_assigned() - _gates_the_verdict() - set(AGGREGATED_INTO))
     assert not orphans, (
@@ -393,7 +393,7 @@ def test_every_status_the_gate_computes_gates_the_verdict():
     )
 
 
-def test_every_status_that_gates_the_verdict_reaches_the_artifact():
+def test_every_status_that_gates_the_verdict_reaches_the_artifact() -> None:
     """CI sees the artifact and nothing else, so an unreported check is invisible.
 
     This is the half that is easy to mistake for bookkeeping. It is not: the
@@ -450,7 +450,7 @@ def _pr_only_lines(lines: list[str]) -> frozenset[int]:
     return frozenset(gated)
 
 
-def test_every_status_the_summary_records_is_measured_on_a_dev_run():
+def test_every_status_the_summary_records_is_measured_on_a_dev_run() -> None:
     """A recorded status must not be able to reach the writer as its default.
 
     Writing one record per check closed the "absent reads as passing" half of
@@ -566,7 +566,7 @@ def _acts_on_the_missing_tool(tool: str, body: list[str]) -> bool:
     return any(tool in action for action in actions)
 
 
-def test_no_shell_script_continues_when_a_tool_it_probed_for_is_missing():
+def test_no_shell_script_continues_when_a_tool_it_probed_for_is_missing() -> None:
     """Skipping on a missing tool reports green while testing nothing.
 
     Which is worse than having no check, because it also reports success — and
@@ -620,4 +620,66 @@ def test_no_shell_script_continues_when_a_tool_it_probed_for_is_missing():
         "error naming the tool and exit non-zero, or install it — and if the "
         "branch does install it, name the tool in the command that does so, "
         "which is how this tells the two apart."
+    )
+
+
+_SYNC_ANNOUNCEMENT = 'print_status "Ensuring all packages are installed..."'
+
+
+def _package_sync_section() -> list[str]:
+    """The gate's package-sync step: its announcement up to the next one."""
+    lines = GATE.read_text().splitlines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == _SYNC_ANNOUNCEMENT]
+    assert len(starts) == 1, (
+        f"expected one {_SYNC_ANNOUNCEMENT!r} in {rel(GATE)}, found {len(starts)} "
+        "— if the sync step was reworded or moved, re-point this guard rather "
+        "than leaving it reading nothing"
+    )
+    section = []
+    for line in lines[starts[0] + 1 :]:
+        if re.match(r"^\s*print_status\s", line):
+            break
+        section.append(line)
+    return section
+
+
+def test_a_failed_package_sync_stops_the_gate() -> None:
+    """A sync that fails leaves the checks running against a stale environment.
+
+    The step printed ``Package sync had issues`` as a warning, discarded uv's
+    output, and then printed ``Packages synced`` unconditionally. Every check
+    after it then measured whatever happened to be installed, and the artifacts
+    it produced were committed as evidence — a bare ``uv sync`` under-installs
+    enough to move the mypy count, so a stale environment is not a cosmetic
+    difference.
+
+    It escaped ``test_every_check_that_reports_a_failure_can_fail_the_gate``
+    because that guard keys on ``print_error``, and this step reported its
+    failure with ``print_warning``: a failure announced as a warning is not
+    one any accounting can see.
+    """
+    code = [
+        line.strip()
+        for line in _package_sync_section()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert any(re.search(r"\buv sync\b|sync-packages\.sh", line) for line in code), (
+        f"the section after {_SYNC_ANNOUNCEMENT!r} runs no sync — re-point this guard"
+    )
+
+    discarded = [line for line in code if "/dev/null" in line]
+    assert not discarded, (
+        f"the package sync discards its output: {discarded}. When it fails, uv's "
+        "error is the only account of why; capture it and print it on failure."
+    )
+
+    downgraded = [line for line in code if re.search(r"\|\|\s*(print_warning|true)\b", line)]
+    assert not downgraded, (
+        f"the package sync turns a failure into a warning: {downgraded}. The "
+        "checks after it would run against a stale environment."
+    )
+
+    assert any(re.match(r"^exit\s+[1-9]", line) for line in code), (
+        "the package sync step has no failure path that exits non-zero, so a "
+        "failed sync cannot stop the gate"
     )
