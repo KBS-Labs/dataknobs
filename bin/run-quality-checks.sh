@@ -676,17 +676,24 @@ if [ -n "$PYTEST_ARGS" ]; then
 fi
 echo ""
 
-# Ensure all packages are installed
+# Ensure all packages are installed.
+#
+# A failed sync stops the gate. Every check after this measures whatever is
+# installed, and the artifacts they produce are committed as evidence, so
+# continuing past a failure records a stale environment as a verdict on the
+# code. The output is captured rather than streamed only to keep a passing run
+# quiet; on failure it is the one account of why, so it is printed.
 print_status "Ensuring all packages are installed..."
-if [ "$IN_DOCKER" = true ]; then
-    # Use sync-packages.sh if available in Docker
-    if [ -f "$SCRIPT_DIR/sync-packages.sh" ]; then
-        "$SCRIPT_DIR/sync-packages.sh" >/dev/null 2>&1 || print_warning "Package sync had issues"
-    else
-        uv sync --all-packages >/dev/null 2>&1 || print_warning "Package sync had issues"
-    fi
+if [ "$IN_DOCKER" = true ] && [ -f "$SCRIPT_DIR/sync-packages.sh" ]; then
+    SYNC_COMMAND=("$SCRIPT_DIR/sync-packages.sh")
 else
-    uv sync --all-packages >/dev/null 2>&1 || print_warning "Package sync had issues"
+    SYNC_COMMAND=(uv sync --all-packages)
+fi
+if ! SYNC_OUTPUT=$("${SYNC_COMMAND[@]}" 2>&1); then
+    printf '%s\n' "$SYNC_OUTPUT"
+    print_error "Package sync failed: ${SYNC_COMMAND[*]}"
+    print_error "The checks would run against a stale environment, so the gate stops here"
+    exit 1
 fi
 print_success "Packages synced"
 

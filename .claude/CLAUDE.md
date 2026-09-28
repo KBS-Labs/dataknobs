@@ -84,6 +84,8 @@ bin/dk up / down       # Start/stop dev services (Docker)
 
 Run `bin/dk help` for full command reference.
 
+**Working in a git worktree?** The services are shared across checkouts, and a branch's final `bin/dk pr` must run after merging the current `main` into it — see `rules/worktrees.md`.
+
 ## Testing Constructs (Provided by This Project)
 
 These exist for use by dataknobs tests AND all consuming projects:

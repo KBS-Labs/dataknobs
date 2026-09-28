@@ -183,21 +183,14 @@ fi
 
 # Check package content hashes
 print_check "Package content hashes"
-HASH_RESULT=$(uv run python "$SCRIPT_DIR/package-hashes.py" validate --json 2>/dev/null) || true
+# --artifacts-dir, so the hash verdict describes the same artifact set as the
+# rest of this report. Without it the check always read the committed set, and
+# a --from run joined one set's summary to another's hash verdict.
+HASH_RESULT=$(uv run python "$SCRIPT_DIR/package-hashes.py" validate --json --artifacts-dir "$ARTIFACTS_DIR" 2>/dev/null) || true
 
 if [ -n "$HASH_RESULT" ]; then
     HASH_VALID=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))")
     HASH_ERROR=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', ''))")
-
-    HASH_WARNING=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('warning', ''))")
-
-    # Printed additively, not as a branch. A warning describes what could not be
-    # checked; it says nothing about whether what *was* checked passed. Chaining
-    # it ahead of the verdict means any result carrying both reports the warning
-    # and silently skips the failure — which is a green gate on stale artifacts.
-    if [ -n "$HASH_WARNING" ]; then
-        print_info "$HASH_WARNING"
-    fi
 
     if [ -n "$HASH_ERROR" ]; then
         print_fail "Hash validation error: $HASH_ERROR"
