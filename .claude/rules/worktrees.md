@@ -99,9 +99,11 @@ what makes a worktree resolve to the same compose project as the main
 checkout; before it, a worktree's `manage-services.sh ensure` could not see the
 running containers and collided with them on the host ports.
 
-- **A worktree neither starts nor stops services.** `bin/dk pr` finds them
-  running and uses them. Start them with `bin/dk up` from any checkout when
-  they are down.
+- **Any checkout may start them; none stops them.** `bin/dk pr` runs
+  `manage-services.sh ensure`, which uses the services if they are running
+  and starts them in the shared project if they are not — so a worktree's
+  run needs no `bin/dk up` first, and what it starts is the same set every
+  other checkout uses.
 - **Leave them running between runs.** The automatic teardown in the test
   scripts has never fired, because the flag it checks is written under a
   different PID. Should it ever be fixed, it must not stop services another
