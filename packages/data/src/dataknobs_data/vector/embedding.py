@@ -222,6 +222,15 @@ class CachedEmbedder:
     Only the texts that miss reach the inner embedder, and they reach it in one
     batch, preserving the batching the protocol exists to keep.
 
+    **A hit at another width than the inner embedder's is a miss.**
+    ``model_id`` carries no width, so a width forwarded to a model (a
+    provider's ``dimensions`` option) can change behind an unchanged identity,
+    and the key alone cannot tell. Such a hit is embedded again and the cache
+    entry overwritten. The check needs a width to compare with: an inner
+    embedder whose ``dimensions`` raises ``ValueError`` (a provider-backed one
+    before its first call, with nothing declared) has its hits served
+    unchecked.
+
     Example:
         ```python
         embedder = CachedEmbedder(LLMProviderEmbedder(provider), cache)
@@ -287,6 +296,17 @@ class CachedEmbedder:
                 f"parallel to the texts it was asked about"
             )
 
+        # A hit at another width than the inner embedder's is a miss. The key
+        # carries `model_id`, and `model_id` carries no width, so a width
+        # forwarded to the model can change behind an unchanged identity; the
+        # cache then answers for a configuration that is no longer in use.
+        # Embedded again and overwritten below, rather than refused: the right
+        # vector is one call away, and a refusal would make a persistent cache
+        # unusable after a width change until someone cleared it.
+        width = self._known_width()
+        if width is not None:
+            cached = [hit if hit is None or len(hit) == width else None for hit in cached]
+
         # Positions rather than texts, because `texts` may repeat: two
         # occurrences of one string are two output slots, and a set of misses
         # would embed it twice or --- worse --- fill only the first slot.
@@ -304,6 +324,18 @@ class CachedEmbedder:
         await self._cache.put_batch(model, to_embed, fresh)
 
         return [by_text[wanted[i]] if hit is None else hit for i, hit in enumerate(cached)]
+
+    def _known_width(self) -> int | None:
+        """The inner embedder's width, or ``None`` where it cannot say yet.
+
+        A provider-backed embedder learns its width from its first response
+        and raises ``ValueError`` before it, when nothing was declared. There
+        is then nothing to hold a hit to, and it is served as it always was.
+        """
+        try:
+            return self._inner.dimensions
+        except ValueError:
+            return None
 
 
 if TYPE_CHECKING:

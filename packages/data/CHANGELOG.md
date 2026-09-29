@@ -1322,6 +1322,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`CachedEmbedder` served a cached vector at another width than its
+  embedder's.** The key is `(model_id, text)`, and `model_id` carries no width,
+  so when a width forwarded to the model changed behind an unchanged identity
+  (a provider's `dimensions` of 1536, then 256), a persistent cache handed the
+  narrower embedder the wider vector. Nothing raised; a store declaring its
+  width refused the write later, naming the store, and one declaring none kept
+  rows of mixed widths. A hit whose length differs from the inner embedder's
+  `dimensions` is now a miss, embedded again and overwritten. An inner
+  embedder that cannot say its width yet has its hits served as before.
+
 - **An Elasticsearch search with no `limit` did not return every match.**
   The sync backend sent no `size`, so Elasticsearch answered its default of
   ten hits, silently; `stream_read` reads through `search` there and was cut

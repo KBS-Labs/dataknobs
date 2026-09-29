@@ -286,6 +286,14 @@ costs one embedding and fills both output slots.
 cached embedder carries the same staleness key as one stored without it — a
 caller must not be able to tell from the metadata that a cache was in the path.
 
+`model_id` carries no width, so a hit whose length differs from the inner
+embedder's `dimensions` is treated as a miss: embedded again, and the entry
+overwritten. That catches a width forwarded to the model (a provider's
+`dimensions` option) changing behind an unchanged identity. The check needs a
+width to compare with, so an inner embedder whose `dimensions` raises
+`ValueError` (a provider-backed one before its first call, with nothing
+declared) has its hits served unchecked.
+
 ### Reaching an embedder from synchronous code
 
 Five sites in this package embed inside a plain `def`: `Query.near_text`,
