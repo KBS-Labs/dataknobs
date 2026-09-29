@@ -9,10 +9,12 @@ sorting, pagination, and vector similarity search for database operations.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from enum import Enum
+from functools import cmp_to_key
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -249,6 +251,71 @@ def _is_member(value: Any, members: Collection[Any]) -> bool:
     return value in members
 
 
+def _align_temporal(a: Any, b: Any) -> tuple[Any, Any]:
+    """Promote a plain ``date`` ordered against a ``datetime`` to midnight.
+
+    Python refuses to order a ``datetime`` against a ``date`` --- ``TypeError``,
+    although the one subclasses the other --- where PostgreSQL and DuckDB
+    promote the ``date`` to that day's midnight over a native ``timestamp``
+    column. This takes their reading, so the in-memory answer agrees with
+    theirs. A ``date`` carries no
+    zone, so its midnight is taken in the ``datetime``'s own zone, which also
+    keeps an aware ``datetime`` comparable.
+
+    Any other pair is returned as given.
+    """
+    if isinstance(a, datetime) and _is_plain_date(b):
+        return a, datetime.combine(b, time.min, tzinfo=a.tzinfo)
+    if isinstance(b, datetime) and _is_plain_date(a):
+        return datetime.combine(a, time.min, tzinfo=b.tzinfo), b
+    return a, b
+
+
+def _is_plain_date(value: Any) -> bool:
+    """A ``date`` that is not a ``datetime``, which subclasses it."""
+    return isinstance(value, date) and not isinstance(value, datetime)
+
+
+def _order(a: Any, b: Any) -> int:
+    """Three-way comparison under the same alignment ``Filter.matches`` uses."""
+    a, b = _align_temporal(a, b)
+    return int(a > b) - int(a < b)
+
+
+_aligned_key = cmp_to_key(_order)
+
+
+def _raw_key(value: Any) -> Any:
+    return value
+
+
+def sort_key_for(values: Iterable[Any]) -> Callable[[Any], Any]:
+    """The key an in-memory sort orders these values by.
+
+    A field mixing a plain ``date`` with a ``datetime`` is ordered under the
+    alignment ``Filter.matches`` uses, so a sort agrees with the ordering
+    operators. That key is a Python callback per comparison, so it is taken
+    only when the field needs it; any other field sorts by its raw values,
+    as it always has. Values no ordering relates still raise ``TypeError``,
+    as ``sorted`` does.
+
+    Args:
+        values: Every value the sort will order.
+
+    Returns:
+        A key function for ``sorted`` / ``list.sort``.
+    """
+    has_date = has_datetime = False
+    for value in values:
+        if isinstance(value, datetime):
+            has_datetime = True
+        elif isinstance(value, date):
+            has_date = True
+        if has_date and has_datetime:
+            return _aligned_key
+    return _raw_key
+
+
 @dataclass(frozen=True)
 class Filter:
     """Represents a filter condition.
@@ -442,8 +509,6 @@ class Filter:
         - Mixed numeric types are converted appropriately
         - String comparisons are case-sensitive
         """
-        from datetime import date, datetime
-
         # Handle datetime/date comparisons
         if isinstance(a, str) and isinstance(b, (datetime, date)):
             try:
@@ -463,6 +528,8 @@ class Filter:
                     b = datetime.fromisoformat(b.replace("Z", "+00:00"))
                 except (ValueError, AttributeError):
                     pass  # Keep as strings
+
+        a, b = _align_temporal(a, b)
 
         # Handle numeric comparisons
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):

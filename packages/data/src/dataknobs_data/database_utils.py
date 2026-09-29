@@ -3,8 +3,19 @@
 
 """Utility functions for database operations."""
 
-from .query import Query, is_storage_key_field
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, TypeVar
+
+from .query import Query, is_storage_key_field, sort_key_for
 from .records import Record
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from .query import SortSpec
+
+T = TypeVar("T")
 
 
 def ensure_record_id(record: Record, record_id: str) -> Record:
@@ -24,6 +35,39 @@ def ensure_record_id(record: Record, record_id: str) -> Record:
         record = record.copy(deep=True)
         record.storage_id = record_id
     return record
+
+
+def sort_in_memory(
+    items: list[T],
+    sort_specs: Sequence[SortSpec],
+    record_of: Callable[[T], Record],
+    storage_key_of: Callable[[T], str | None],
+) -> None:
+    """Sort ``items`` in place by ``sort_specs``, the first spec leading.
+
+    The one in-memory sort every Python-side search path uses. A field's
+    values are ordered by :func:`~dataknobs_data.query.sort_key_for`, so a
+    sort agrees with what ``Filter.matches`` says of the same values. The
+    reserved storage-key field sorts by the storage key, never a shadowed
+    ``data["id"]`` value.
+
+    Args:
+        items: What is sorted --- records, or ``(id, record)`` pairs.
+        sort_specs: The query's sort specs.
+        record_of: The record an item holds.
+        storage_key_of: The storage key an item is held under.
+    """
+    for sort_spec in reversed(sort_specs):
+        reverse = sort_spec.order.value == "desc"
+        if is_storage_key_field(sort_spec.field):
+            items.sort(key=lambda item: storage_key_of(item) or "", reverse=reverse)
+        else:
+            values = [record_of(item).get_value(sort_spec.field, "") for item in items]
+            key = sort_key_for(values)
+            ordered = sorted(
+                zip(values, items, strict=True), key=lambda pair: key(pair[0]), reverse=reverse
+            )
+            items[:] = [item for _, item in ordered]
 
 
 def process_search_results(
@@ -46,18 +90,12 @@ def process_search_results(
     Returns:
         Processed list of records
     """
-    # Apply sorting
-    if query.sort_specs:
-        for sort_spec in reversed(query.sort_specs):
-            reverse = sort_spec.order.value == "desc"
-            # The reserved storage-key field sorts by the storage key.
-            if is_storage_key_field(sort_spec.field):
-                results.sort(
-                    key=lambda x: x[0] or "",  # x[0] is the record ID
-                    reverse=reverse,
-                )
-            else:
-                results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
+    sort_in_memory(
+        results,
+        query.sort_specs,
+        record_of=lambda item: item[1],
+        storage_key_of=lambda item: item[0],
+    )
 
     # Extract records and ensure they have their IDs
     records = []

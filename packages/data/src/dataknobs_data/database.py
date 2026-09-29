@@ -35,9 +35,9 @@ from dataknobs_common.callbacks import is_async_callable, run_callback
 from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
-from .database_utils import ensure_record_id, process_search_results
+from .database_utils import ensure_record_id, process_search_results, sort_in_memory
 from .exceptions import ConcurrencyError, DuplicateRecordError
-from .query import Query, RESERVED_KEY_FIELD, is_storage_key_field
+from .query import Query, RESERVED_KEY_FIELD
 from .schema import FIELD_KEYS, DatabaseSchema, FieldSchema
 from .transactions import VALID_TRANSACTION_POLICIES, BufferedTransaction
 
@@ -933,23 +933,12 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 if query.matches(record):
                     results.append(record)
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    # The reserved storage-key field sorts by the storage key,
-                    # matching the flat-Query sort path (process_search_results),
-                    # never a shadowed ``data["id"]`` value.
-                    if is_storage_key_field(sort_spec.field):
-                        results.sort(
-                            key=lambda r: r.storage_id or "",
-                            reverse=reverse,
-                        )
-                    else:
-                        results.sort(
-                            key=lambda r: r.get_value(sort_spec.field, ""),
-                            reverse=reverse,
-                        )
+            sort_in_memory(
+                results,
+                query.sort_specs,
+                record_of=lambda record: record,
+                storage_key_of=lambda record: record.storage_id,
+            )
 
             # Apply offset and limit.  ``is not None`` so ``limit=0``
             # is honored as Python-slice semantics (empty result) and
@@ -1802,23 +1791,12 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 if query.matches(record):
                     results.append(record)
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    # The reserved storage-key field sorts by the storage key,
-                    # matching the flat-Query sort path (process_search_results),
-                    # never a shadowed ``data["id"]`` value.
-                    if is_storage_key_field(sort_spec.field):
-                        results.sort(
-                            key=lambda r: r.storage_id or "",
-                            reverse=reverse,
-                        )
-                    else:
-                        results.sort(
-                            key=lambda r: r.get_value(sort_spec.field, ""),
-                            reverse=reverse,
-                        )
+            sort_in_memory(
+                results,
+                query.sort_specs,
+                record_of=lambda record: record,
+                storage_key_of=lambda record: record.storage_id,
+            )
 
             # Apply offset and limit.  ``is not None`` so ``limit=0``
             # is honored as Python-slice semantics (empty result) and
