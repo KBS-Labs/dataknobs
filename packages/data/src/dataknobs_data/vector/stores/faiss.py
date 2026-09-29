@@ -61,6 +61,12 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
     # bare ``AssertionError`` out of the first ``add``, with no message.
     REQUIRES_DECLARED_DIMENSIONS: ClassVar[bool] = True
 
+    # How many dead nodes an index that cannot remove in place may carry,
+    # as a fraction of its live rows, before its graph is rebuilt from the
+    # side-car. Overridden per store by ``index_params
+    # ["tombstone_compaction_ratio"]``; see :meth:`_evict`.
+    TOMBSTONE_COMPACTION_RATIO: ClassVar[float] = 0.25
+
     # Per-instance only; see ``PathPersistedCapabilityMixin``. Union form
     # deliberate --- ``CapabilityMixin`` does not union across the MRO.
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = VectorStore.SUPPORTED_CAPABILITIES
@@ -125,6 +131,12 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         self.ef_construction = self.index_params.get("ef_construction", 200)  # For HNSW
         self.ef_search = self.index_params.get("ef_search", 50)  # For HNSW search
         self.nprobe = self.search_params.get("nprobe", 10)  # For IVF search
+        ratio = self.index_params.get("tombstone_compaction_ratio", self.TOMBSTONE_COMPACTION_RATIO)
+        if isinstance(ratio, bool) or not isinstance(ratio, int | float) or ratio < 0:
+            raise ValueError(
+                f"index_params['tombstone_compaction_ratio'] must be a number >= 0, got {ratio!r}"
+            )
+        self.tombstone_compaction_ratio = float(ratio)
 
         # ``faiss`` ships no type information, so the live index is typed
         # the way every helper that builds one already is: the concrete
@@ -172,6 +184,11 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         # same one-off remedy. Same per-instance shape, and the same
         # reason for it, as ``_timestamp_collision_warned``.
         self._sidecar_shortfall_warned: bool = False
+        # Internal ids still in the index but no longer rows of the store:
+        # an index that cannot ``remove_ids`` (HNSW) keeps an evicted node
+        # and every search skips it. Not persisted: :meth:`_load_from_disk`
+        # derives it as the index's ids that ``id_map`` no longer names.
+        self._tombstones: set[int] = set()
 
     async def initialize(self) -> None:
         """Initialize Faiss index."""
@@ -282,25 +299,124 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         the live index. The discarded temporary flat index held the
         same rows, so search/get_vectors stay correct across the swap.
         """
-        import numpy as np
-
-        items = list(self.vectors.items())  # (internal_id, row)
-        internal_ids = np.array([iid for iid, _ in items], dtype=np.int64)
-        matrix = np.ascontiguousarray(np.vstack([row for _, row in items]), dtype=np.float32)
-
-        raw = self._new_raw_index(self.index_type)
-        raw.train(matrix)
-        ivf = faiss.IndexIDMap2(raw)
-        ivf.add_with_ids(matrix, internal_ids)
-
-        self.index = ivf
+        self.index = self._index_from_sidecar()
         self._deferred_ivf = False
         logger.info(
             "FAISS: migrated deferred %s index to trained IVF (%d vectors, nlist=%d)",
             self.index_type,
-            len(items),
+            len(self.vectors),
             self.nlist,
         )
+
+    def _index_from_sidecar(self) -> Any:
+        """Build the configured index over exactly the side-car's rows.
+
+        The one rebuild path, shared by the deferred-IVF migration and by
+        tombstone compaction, so both answer from the authoritative stored
+        rows under their internal ids. Trains first when the index type
+        needs it (IVF); HNSW and flat arrive trained.
+        """
+        import numpy as np
+
+        raw = self._new_raw_index(self.index_type)
+        rebuilt = faiss.IndexIDMap2(raw)
+        items = list(self.vectors.items())  # (internal_id, row)
+        if items:
+            internal_ids = np.array([iid for iid, _ in items], dtype=np.int64)
+            matrix = np.ascontiguousarray(np.vstack([row for _, row in items]), dtype=np.float32)
+            if not raw.is_trained:
+                raw.train(matrix)
+            rebuilt.add_with_ids(matrix, internal_ids)
+        return rebuilt
+
+    def _removes_in_place(self) -> bool:
+        """Whether the live index implements ``remove_ids``.
+
+        FAISS does not implement it for HNSW, whose graph has no way to
+        unlink a node. Every other type this store builds removes.
+        """
+        return self.index_type != "hnsw"
+
+    def _evict(self, internal_ids: list[int]) -> int:
+        """Take ``internal_ids`` out of what the index answers.
+
+        Called before any of the store's own maps move, so an index that
+        refuses leaves the store exactly as it was. Where the index cannot
+        remove in place the nodes become tombstones, which every search
+        skips; :meth:`_compact_if_due` rebuilds once they pile up.
+
+        Returns:
+            How many rows were taken out.
+        """
+        import numpy as np
+
+        if not internal_ids:
+            return 0
+        if self._removes_in_place():
+            return int(self.index.remove_ids(np.array(internal_ids, dtype=np.int64)))
+        self._tombstones.update(internal_ids)
+        return len(internal_ids)
+
+    def _compact_if_due(self) -> None:
+        """Rebuild the index without its tombstones once they pass the ratio.
+
+        Runs after the maps have caught up with an eviction, so the
+        side-car holds exactly the live rows. A store whose side-car is
+        short of a live row (a ``.meta`` written before the side-car
+        existed) cannot be rebuilt without losing that row, so it keeps
+        its tombstones, which searches go on skipping.
+        """
+        live = self._live_count()
+        if not self._tombstones or len(self._tombstones) <= self.tombstone_compaction_ratio * live:
+            return
+        if any(internal_id not in self.vectors for internal_id in self.id_map.values()):
+            logger.debug(
+                "FAISS: %d tombstones kept; the side-car cannot rebuild every live row",
+                len(self._tombstones),
+            )
+            return
+        dead = len(self._tombstones)
+        self.index = self._index_from_sidecar()
+        self._tombstones.clear()
+        logger.info(
+            "FAISS: rebuilt %s index without %d removed node(s) (%d live)",
+            self.index_type,
+            dead,
+            live,
+        )
+
+    def _live_count(self) -> int:
+        """Rows the index answers for: its nodes, less the tombstones."""
+        return int(self.index.ntotal) - len(self._tombstones)
+
+    def _search_params(self) -> tuple[Any, ...]:
+        """Search parameters that skip the tombstones, or ``()`` when none.
+
+        The selector objects are returned with the parameters: the SWIG
+        wrapper does not own the selectors it points at, so they must stay
+        referenced for as long as the search runs.
+
+        Only HNSW holds tombstones (see :meth:`_evict`), and HNSW needs its
+        own parameter class: faiss 1.8 to 1.10 refuse the base
+        ``SearchParameters`` with "params type invalid". Passing parameters
+        also replaces the index's ``efSearch`` with the class default, so
+        the live index's own value is copied in. Before 1.8, ``IndexIDMap2``
+        took no search parameters at all, which is why that is the floor.
+        """
+        import numpy as np
+
+        if not self._tombstones:
+            return ()
+        dead = faiss.IDSelectorBatch(np.fromiter(self._tombstones, dtype=np.int64))
+        live = faiss.IDSelectorNot(dead)
+        # faiss ships the class but its bundled stubs omit it.
+        params = faiss.SearchParametersHNSW()  # type: ignore[attr-defined]
+        params.sel = live
+        inner = faiss.downcast_index(self.index.index)
+        params.efSearch = (
+            inner.hnsw.efSearch if isinstance(inner, faiss.IndexHNSW) else self.ef_search
+        )
+        return (params, live, dead)
 
     async def close(self) -> None:
         """Persist any unsaved changes, then release the store.
@@ -387,8 +503,8 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         # external→internal pointer, leaving the prior internal_id
         # as an unreachable orphan — silent residual under filtered
         # ``clear`` and ``get_vectors`` (both walk ``id_map``), but
-        # still scored by FAISS ``search``. ``index.remove_ids``
-        # is the same call used by ``delete_vectors``.
+        # still scored by FAISS ``search``. ``_evict`` is the same call
+        # ``delete_vectors`` makes, and runs before any map moves.
         # Upsert timestamp semantics: re-adding an external id creates a
         # NEW internal id (the old one is evicted below), so carry the
         # original created_at across the internal-id change. Mirrors
@@ -404,8 +520,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
 
         orphan_internal_ids = [self.id_map[ext_id] for ext_id in ids if ext_id in self.id_map]
         if orphan_internal_ids:
-            orphan_array = np.array(orphan_internal_ids, dtype=np.int64)
-            self.index.remove_ids(orphan_array)
+            self._evict(orphan_internal_ids)
             for orphan_id in orphan_internal_ids:
                 self.metadata_store.pop(orphan_id, None)
                 self.timestamps.pop(orphan_id, None)
@@ -438,6 +553,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         # holds every row including the ones just added).
         if self._deferred_ivf and len(self.vectors) >= self.nlist:
             self._build_deferred_ivf()
+        self._compact_if_due()
 
         if ids:
             self._mark_dirty()
@@ -507,30 +623,28 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         if not self._initialized:
             await self.initialize()
 
-        import numpy as np
+        # Each held, in-domain id once, in the caller's order.
+        targets = [
+            (ext_id, self.id_map[ext_id])
+            for ext_id in dict.fromkeys(ids)
+            if ext_id in self.id_map
+            and self._in_configured_domain(self.metadata_store.get(self.id_map[ext_id]))
+        ]
+        if not targets:
+            return 0
 
-        # Get internal IDs
-        internal_ids = []
-        for ext_id in ids:
-            if ext_id in self.id_map:
-                internal_id = self.id_map[ext_id]
-                if not self._in_configured_domain(self.metadata_store.get(internal_id)):
-                    continue
-                internal_ids.append(internal_id)
-                del self.id_map[ext_id]
-                if internal_id in self.metadata_store:
-                    del self.metadata_store[internal_id]
-                self.timestamps.pop(internal_id, None)
-                self.vectors.pop(internal_id, None)
-
-        if internal_ids:
-            # Remove from index
-            internal_ids_array = np.array(internal_ids, dtype=np.int64)
-            removed = self.index.remove_ids(internal_ids_array)
-            self._mark_dirty()
-            return removed
-
-        return 0
+        # The index first: if it refuses, no map has moved, and every
+        # reader still sees the row. Dropping the maps first is what used
+        # to leave an id absent to ``get_vectors`` yet counted and ranked.
+        removed = self._evict([internal_id for _, internal_id in targets])
+        for ext_id, internal_id in targets:
+            del self.id_map[ext_id]
+            self.metadata_store.pop(internal_id, None)
+            self.timestamps.pop(internal_id, None)
+            self.vectors.pop(internal_id, None)
+        self._compact_if_due()
+        self._mark_dirty()
+        return removed
 
     async def search(
         self,
@@ -583,11 +697,16 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
             return self._search_filtered(query, k, filter, include_metadata, inject)
 
         # Search
-        k = min(k, self.index.ntotal)  # Don't search for more than we have
+        k = min(k, self._live_count())  # Don't search for more than we have
         if k == 0:
             return []
 
-        scores, indices = self.index.search(query, k)
+        # ``held`` keeps the selectors alive for the length of the search.
+        held = self._search_params()
+        if held:
+            scores, indices = self.index.search(query, k, params=held[0])
+        else:
+            scores, indices = self.index.search(query, k)
 
         # Convert results
         reverse_id_map = {v: k for k, v in self.id_map.items()}
@@ -781,7 +900,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
             "filtered search. Reported once per store.",
             matched - scorable,
             matched,
-            self.index.ntotal,
+            self._live_count(),
         )
 
     def _score_partial(
@@ -857,6 +976,8 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         if not wanted:
             return []
 
+        # Every node, tombstones included: this search passes no selector,
+        # and a tombstone is never in ``wanted``, so it is simply dropped.
         found: dict[int, float] = {}
         for fetch in self._overfetch_sizes(k, has_post_filter=True, ceiling=self.index.ntotal):
             if fetch <= 0:
@@ -948,7 +1069,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
 
         filter = self._effective_filter(filter)
         if filter is None:
-            return self.index.ntotal
+            return self._live_count()
 
         # Count with filter
         count = 0
@@ -985,6 +1106,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         filter = self._effective_filter(filter)
         if filter is None:
             self.index = self._create_index()
+            self._tombstones.clear()
             self.id_map.clear()
             self.metadata_store.clear()
             self.timestamps.clear()
@@ -1181,6 +1303,13 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
                     # have been persisted pre-fix), so False is correct.
                     self._deferred_ivf = data.get("deferred_ivf", False)
                     self.next_idx = data["next_idx"]
+                # A node the index holds that no row names is dead. Derived
+                # rather than persisted, so it also recovers the nodes a
+                # failed HNSW delete used to strand in a saved store. An
+                # index that removes in place drops such a node instead.
+                held = set(faiss.vector_to_array(self.index.id_map).tolist())
+                self._tombstones = set()
+                self._evict(sorted(held - set(self.id_map.values())))
                 logger.info("FAISS: Loaded metadata with %d entries", len(self.id_map))
 
             # A reload can only have replaced the side-car this warns about.

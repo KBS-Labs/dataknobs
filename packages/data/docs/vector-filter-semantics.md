@@ -420,6 +420,24 @@ The only way to change a stored row is to call a mutator.
   same scale. An approximate index does not route to every row, so a
   filtered search on such a store can still return fewer than `k`. It is
   reported once per store at `WARNING`, and re-ingesting fixes it.
+- **FAISS HNSW removes by tombstone.** FAISS cannot unlink a node from
+  an HNSW graph, so when `index_type` is `hnsw`, a deleted row and the
+  old version of a rewritten one stay in the index as nodes every search
+  skips. `count()` and every read answer for the live rows only. Once
+  the dead nodes outnumber `tombstone_compaction_ratio` (an
+  `index_params` key, default `0.25`) times the live rows, the graph is
+  rebuilt from the vector side-car. `0` rebuilds on every removal; a
+  negative or non-numeric value is refused with `ValueError`. Measured
+  over 20,000 rows, recall@10 with a quarter of the nodes dead stayed
+  within 0.01 of the recall with none, and no search returned fewer than
+  `k`. A much larger ratio lets the dead crowd the graph, which is what
+  the rebuild exists to prevent. The rebuild runs synchronously inside
+  the `add_vectors` or `delete_vectors` call that crosses the ratio, and
+  costs what building the index from scratch costs. A side-car short of
+  a live row (see above) cannot rebuild without losing it, so such a
+  store keeps its tombstones until re-ingested. Flat and IVF indexes
+  remove in place. Skipping tombstones needs `faiss-cpu` 1.8 or later,
+  which is the `faiss` extra's floor.
 - **A file `persist_path` is single-writer.** This covers
   `FaissVectorStore` and `MemoryVectorStore` — both persist by
   serializing the instance's whole in-memory state over one file, which
