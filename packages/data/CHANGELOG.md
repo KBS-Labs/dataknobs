@@ -1322,6 +1322,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`LIKE` and `NOT_LIKE` treat only `%` and `_` as wildcards on the memory,
+  file and S3 backends, as published.** `Filter.matches`, which those backends
+  filter through, turned the pattern into a regular expression without
+  escaping it: `'a.c'` matched `'abc'`, `'a\b'` did not match itself, a `(` or
+  `[` raised `re.error`, and `%` stopped at a newline. A text search built by
+  `Query.hybrid`, which wraps free text in `%...%`, raised or matched wrongly
+  whenever the text held such punctuation, and `'abc'` matched `'abc\n'`.
+  Case folding there stays Unicode-aware.
+
+  **Migration:** a pattern that is not a string now raises `ValueError`, as on
+  Elasticsearch, whatever the record holds. It raised `AttributeError` against
+  a string value, and against any other value the filter answered no match, so
+  a search carrying one returned nothing where it now raises.
+
 - **`FaissVectorStore` with `index_type: hnsw` rewrites and deletes the ids
   it holds.** FAISS cannot remove a node from an HNSW graph, so a second
   `add_vectors` of an id, `delete_vectors` and `clear(filter=...)` raised

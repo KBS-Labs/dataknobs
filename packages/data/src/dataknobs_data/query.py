@@ -9,12 +9,13 @@ sorting, pagination, and vector similarity search for database operations.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from enum import Enum
-from functools import cmp_to_key
+from functools import cmp_to_key, lru_cache
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -251,6 +252,20 @@ def _is_member(value: Any, members: Collection[Any]) -> bool:
     return value in members
 
 
+@lru_cache(maxsize=256)
+def _like_regex(pattern: str) -> re.Pattern[str]:
+    r"""Compile a SQL ``LIKE`` pattern for a whole-value, case-insensitive match.
+
+    Only ``%`` (any run, newlines included) and ``_`` (any one character) are
+    wildcards; every other character, ``\`` among them, matches verbatim, as
+    in sqlite and DuckDB. Postgres reads ``\`` as an escape by default.
+    """
+    body = "".join(
+        ".*" if char == "%" else "." if char == "_" else re.escape(char) for char in pattern
+    )
+    return re.compile(body, re.IGNORECASE | re.DOTALL)
+
+
 def _align_temporal(a: Any, b: Any) -> tuple[Any, Any]:
     """Promote a plain ``date`` ordered against a ``datetime`` to midnight.
 
@@ -469,25 +484,16 @@ class Filter:
                 self._compare_values(record_value, lower, lambda a, b: a >= b)
                 and self._compare_values(record_value, upper, lambda a, b: a <= b)
             )
-        elif self.operator == Operator.LIKE:
+        elif self.operator in (Operator.LIKE, Operator.NOT_LIKE):
+            if not isinstance(self.value, str):
+                raise ValueError(f"LIKE/NOT_LIKE pattern must be a string, got: {self.value!r}")
             if not isinstance(record_value, str):
                 return False
-            import re
-
-            pattern = self.value.replace("%", ".*").replace("_", ".")
-            return bool(re.match(f"^{pattern}$", record_value, re.IGNORECASE))
-        elif self.operator == Operator.NOT_LIKE:
-            if not isinstance(record_value, str):
-                return False
-            import re
-
-            pattern = self.value.replace("%", ".*").replace("_", ".")
-            return not bool(re.match(f"^{pattern}$", record_value, re.IGNORECASE))
+            matched = _like_regex(self.value).fullmatch(record_value) is not None
+            return matched if self.operator == Operator.LIKE else not matched
         elif self.operator == Operator.REGEX:
             if not isinstance(record_value, str):
                 return False
-            import re
-
             return bool(re.search(self.value, record_value))
         elif self.operator == Operator.STARTS_WITH:
             # Literal, case-sensitive prefix match. Unlike LIKE, the prefix is
