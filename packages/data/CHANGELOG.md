@@ -1322,6 +1322,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `datetime` and a `date` are ordered against each other.** `>`, `>=`,
+  `<`, `<=`, `BETWEEN` and `NOT_BETWEEN` in `Filter.matches` answered as if
+  the two never matched, so `NOT_BETWEEN` also answered True for a
+  timestamp inside the range. The same happened to an ISO-string value
+  compared with a `date`, which parses to a `datetime`. Sorting a field that
+  held both raised `TypeError` out of `search()` on the memory, file and S3
+  backends, and on every backend's in-memory `ComplexQuery` path. A plain
+  `date` now orders as that day's midnight, as PostgreSQL and DuckDB promote
+  it over a native `timestamp` column, in the `datetime`'s own zone when it
+  has one. Equality is unchanged: a
+  midnight `datetime` still does not equal its `date`. One shared sort,
+  `sort_in_memory`, now serves every in-memory search path.
+
 - **`CachedEmbedder` served a cached vector at another width than its
   embedder's.** The key is `(model_id, text)`, and `model_id` carries no width,
   so when a width forwarded to the model changed behind an unchanged identity
