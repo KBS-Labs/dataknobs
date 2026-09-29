@@ -300,3 +300,54 @@ async def test_an_overlong_cache_answer_is_refused_too() -> None:
 
     with pytest.raises(ValueError, match="5 entries for 4 texts"):
         await embedder.embed(["a", "b", "c", "d"])
+
+
+# --------------------------------------------------------------------------
+# CachedEmbedder — a hit at another width is a miss
+# --------------------------------------------------------------------------
+
+
+class _WidthUnknown(DeterministicEmbedder):
+    """An embedder that cannot say its width, as a provider cannot before its first call."""
+
+    @property
+    def dimensions(self) -> int:
+        raise ValueError("width unknown until the first embed")
+
+
+async def test_a_hit_at_another_width_is_embedded_again() -> None:
+    """``model_id`` carries no width, so the cache key cannot see a width change.
+
+    A forwarded width can change behind an unchanged model identity (a
+    provider's ``dimensions`` option, 1536 then 256). Keyed on
+    ``(model_id, text)`` alone, the narrower embedder was served the wider
+    vector from a cache the wider one filled. Nothing raised; a store declaring
+    its width refused the write later naming the store, and one declaring none
+    kept rows of mixed widths.
+    """
+    cache = RecordingCache()
+    wide = DeterministicEmbedder(dimensions=8, model_id="shared")
+    narrow = DeterministicEmbedder(dimensions=4, model_id="shared")
+
+    await CachedEmbedder(wide, cache).embed(["shared text"])
+    [served] = await CachedEmbedder(narrow, cache).embed(["shared text"])
+
+    assert len(served) == 4
+    assert served == (await narrow.embed(["shared text"]))[0]
+    # Overwritten, so the next narrow read is a hit at the right width.
+    assert len(cache.store[embedding_cache_key("shared", "shared text")]) == 4
+
+
+async def test_a_hit_is_served_when_the_width_is_unknown() -> None:
+    """An embedder that cannot say its width has nothing to compare a hit with.
+
+    Served as it always was: guessing a width would refuse a correct hit, and
+    the stated limit is that the check needs a width to check against.
+    """
+    cache = RecordingCache()
+    wide = DeterministicEmbedder(dimensions=8, model_id="shared")
+    await CachedEmbedder(wide, cache).embed(["shared text"])
+
+    [served] = await CachedEmbedder(_WidthUnknown(model_id="shared"), cache).embed(["shared text"])
+
+    assert len(served) == 8
