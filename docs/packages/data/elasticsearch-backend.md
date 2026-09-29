@@ -44,6 +44,25 @@ db = AsyncElasticsearchDatabase({
 })
 ```
 
+### Reading a whole match
+
+A `search()` returns the page its `Query` names, and a query with no `limit`
+returns every match, on both backends. A bounded read whose `offset + limit`
+fits inside the index's result window is one `from`/`size` request. A larger
+read, and any read with no `limit`, pages with `search_after` inside a point in
+time, over the query's sort (relevance when it has none) tie-broken on
+`_shard_doc`. The pages come from one snapshot of the index, and the tiebreaker
+needs no mapping, so an index created outside the backend pages too. This
+needs Elasticsearch 7.12 or later. An offset is skipped by reading past it, so
+a large offset costs the rows it skips.
+
+Two keys, shared by both backends, tune this:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_result_window` | `10000` | The index's `index.max_result_window`. Set it when the index's own setting differs from Elasticsearch's default |
+| `search_page_size` | `1000` | Hits per request when a read pages. At most `max_result_window` |
+
 ## Index Mapping
 
 ```json

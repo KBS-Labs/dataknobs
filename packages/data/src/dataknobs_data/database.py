@@ -11,6 +11,7 @@ different backend database implementations.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import hashlib
 import json
@@ -99,6 +100,14 @@ _WARN_SHADOWED_ID_ENV = "DK_WARN_SHADOWED_ID"
 # the single transition to latched.
 _shadowed_id_state = {"warned": False}
 _shadowed_id_lock = threading.Lock()
+
+
+def _whole_match(query: Query) -> Query:
+    """The query a count searches: the same selection, without the page.
+
+    A copy, so the caller's ``Query`` keeps its paging.
+    """
+    return dataclasses.replace(query, sort_specs=[], limit_value=None, offset_value=None)
 
 
 def _shadowed_id_warned() -> bool:
@@ -1128,6 +1137,10 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
     async def count(self, query: Query | None = None) -> int:
         """Count records matching a query.
 
+        The count is of the whole match: the query's ``limit``, ``offset``
+        and sort are ignored, so one ``Query`` can page a :meth:`search` and
+        total it. For the size of one page, use ``len(await search(query))``.
+
         Args:
             query: Optional search query (counts all if None)
 
@@ -1135,7 +1148,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             Number of matching records
         """
         if query:
-            results = await self.search(query)
+            results = await self.search(_whole_match(query))
             return len(results)
         else:
             return await self._count_all()
@@ -1975,9 +1988,20 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         return results
 
     def count(self, query: Query | None = None) -> int:
-        """Count records matching a query."""
+        """Count records matching a query.
+
+        The count is of the whole match: the query's ``limit``, ``offset``
+        and sort are ignored, so one ``Query`` can page a :meth:`search` and
+        total it. For the size of one page, use ``len(search(query))``.
+
+        Args:
+            query: Optional search query (counts all if None)
+
+        Returns:
+            Number of matching records
+        """
         if query:
-            results = self.search(query)
+            results = self.search(_whole_match(query))
             return len(results)
         else:
             return self._count_all()

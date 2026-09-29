@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`count(query)` counts the whole match on every backend: it ignores the
+  query's `limit`, `offset` and sort.** One `Query` can now page a `search()`
+  and total it with `count()`. sqlite, DuckDB and Elasticsearch already
+  counted this way. The memory, file, S3 and PostgreSQL backends inherited a
+  `count` that was `len(search(query))`, so a paged query counted its page.
+
+  **Migration:** for the number of records on one page, use
+  `len(search(query))`.
+
 - **An ontology document's declared embedding model is compared without the
   embedder's `#variant`.** `LLMProviderEmbedder.model_id` now carries one when
   something besides the model decides the vectors
@@ -876,6 +885,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`max_result_window` and `search_page_size` on both Elasticsearch
+  backends' configs** (defaults `10000` and `1000`). The first is where a read
+  stops being one `from`/`size` request; set it when an index's own
+  `index.max_result_window` differs from the default. The second is the page
+  size past it. A non-positive value, or a page larger than the window, is
+  refused at load.
+
 - **`on_stored` on every `bulk_embed_and_store`**: `VectorStore`,
   `BulkEmbedMixin` and `AsyncBulkEmbedMixin`, and the two abstract declarations
   in `SyncVectorOperationsMixin` / `AsyncVectorOperationsMixin`. It is
@@ -1305,6 +1321,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **An Elasticsearch search with no `limit` did not return every match.**
+  The sync backend sent no `size`, so Elasticsearch answered its default of
+  ten hits, silently; `stream_read` reads through `search` there and was cut
+  the same way. The async backend sent `size=10000`, so any `offset` without a
+  `limit` passed the index's result window and the search was refused, and a
+  match larger than the window was cut at it. Both backends now drive one
+  shared plan: a bounded read inside the window is one `from`/`size` request
+  as before, and anything else pages with `search_after` inside a point in
+  time, tie-broken on `_shard_doc`, which needs Elasticsearch 7.12 or later.
+
+- **A count on sqlite or DuckDB raised a syntax error when a field or the
+  table was named with `ORDER BY`, `LIMIT` or `OFFSET` in it.** The count's
+  SQL was cut out of the search's at the first of those words found anywhere
+  in the text, so a filter on a field such as `LIMIT_x` or
+  `metadata.OFFSET_k`, or any filtered count on a table such as `LIMITS`,
+  lost the rest of the statement. The match was case-sensitive, so only
+  upper-case names were affected. The count now builds its `WHERE` from the
+  filters through the same code as the search. PostgreSQL and the in-memory,
+  file and S3 backends were not affected.
+
+- **A sqlite search with an `offset` and no `limit` raised a syntax error.**
+  SQLite accepts `OFFSET` only after a `LIMIT`, and none was written. It now
+  writes `LIMIT -1`, SQLite's "no limit", for both `Query` and
+  `ComplexQuery`.
 
 - **`bulk_embed_and_store` on a database reported a record written when it
   was not.** Both lanes (`BulkEmbedMixin`, `AsyncBulkEmbedMixin`) checked

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
@@ -560,21 +560,7 @@ class SQLQueryBuilder:
                 sql_parts.append(f"WHERE {where_clause}")
                 params.extend(where_params)
 
-        # Add ORDER BY
-        if query.sort_specs:
-            order_parts = []
-            for sort_spec in query.sort_specs:
-                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                sort_expr = self._build_sort_expr(sort_spec.field)
-                order_parts.append(f"{sort_expr} {direction}")
-            sql_parts.append("ORDER BY " + ", ".join(order_parts))
-
-        # Add LIMIT and OFFSET.  ``is not None`` so ``limit=0`` becomes
-        # ``LIMIT 0`` (zero rows) rather than being silently dropped.
-        if query.limit_value is not None:
-            sql_parts.append(f"LIMIT {query.limit_value}")
-        if query.offset_value is not None:
-            sql_parts.append(f"OFFSET {query.offset_value}")
+        sql_parts.extend(self._paging_clauses(query))
 
         return " ".join(sql_parts), params
 
@@ -649,21 +635,70 @@ class SQLQueryBuilder:
         """
         if not query or not query.filters:
             return "", []
+        where, params = self._filters_clause(query.filters, param_start)
+        return " AND " + where, params
 
+    def _filters_clause(
+        self, filters: Sequence[Filter], param_start: int = 1
+    ) -> tuple[str, list[Any]]:
+        """AND filters together, numbering placeholders from ``param_start``.
+
+        The one place a filter list becomes SQL, shared by the search, the
+        count and :meth:`build_where_clause`, so the three cannot disagree on
+        which rows a query selects.
+
+        Args:
+            filters: The filters to combine.
+            param_start: The number of the first placeholder.
+
+        Returns:
+            Tuple of (the clause without ``WHERE``, parameters), or
+            ``("", [])`` when there are no filters.
+        """
         where_clauses = []
-        params = []
+        params: list[Any] = []
         param_count = param_start - 1
 
-        for filter_spec in query.filters:
+        for filter_spec in filters:
             param_count += 1
             clause, new_params = self._build_filter_clause(filter_spec, param_count)
             where_clauses.append(clause)
             params.extend(new_params)
             param_count += len(new_params) - 1  # Adjust for multiple params
 
-        if where_clauses:
-            return " AND " + " AND ".join(where_clauses), params
-        return "", []
+        return " AND ".join(where_clauses), params
+
+    def _paging_clauses(self, query: Query | ComplexQuery) -> list[str]:
+        """The ``ORDER BY``, ``LIMIT`` and ``OFFSET`` clauses a query asks for.
+
+        Shared by the plain and the complex search. A count takes none of
+        them (see :meth:`build_count_query`).
+
+        Args:
+            query: The query whose sort and paging to render.
+
+        Returns:
+            The clauses in statement order; empty when the query names none.
+        """
+        clauses = []
+        if query.sort_specs:
+            order_parts = []
+            for sort_spec in query.sort_specs:
+                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
+                sort_expr = self._build_sort_expr(sort_spec.field)
+                order_parts.append(f"{sort_expr} {direction}")
+            clauses.append("ORDER BY " + ", ".join(order_parts))
+
+        # ``is not None`` so ``limit=0`` becomes ``LIMIT 0`` (zero rows)
+        # rather than being silently dropped.
+        if query.limit_value is not None:
+            clauses.append(f"LIMIT {query.limit_value}")
+        elif query.offset_value is not None and self.dialect == "sqlite":
+            # SQLite accepts OFFSET only after a LIMIT; -1 is its "no limit".
+            clauses.append("LIMIT -1")
+        if query.offset_value is not None:
+            clauses.append(f"OFFSET {query.offset_value}")
+        return clauses
 
     def build_search_query(self, query: Query) -> tuple[str, list[Any]]:
         """Build a SELECT query from a Query object.
@@ -678,36 +713,12 @@ class SQLQueryBuilder:
             ValueError: If any filter field contains invalid characters.
         """
         sql_parts = [f"SELECT * FROM {self.qualified_table}"]
-        params = []
-        param_count = 0
 
-        # Build WHERE clause
-        where_clauses = []
-        for filter_spec in query.filters:
-            param_count += 1
-            clause, new_params = self._build_filter_clause(filter_spec, param_count)
-            where_clauses.append(clause)
-            params.extend(new_params)
-            param_count += len(new_params) - 1  # Adjust for multiple params
+        where, params = self._filters_clause(query.filters)
+        if where:
+            sql_parts.append("WHERE " + where)
 
-        if where_clauses:
-            sql_parts.append("WHERE " + " AND ".join(where_clauses))
-
-        # Add ORDER BY
-        if query.sort_specs:
-            order_parts = []
-            for sort_spec in query.sort_specs:
-                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                sort_expr = self._build_sort_expr(sort_spec.field)
-                order_parts.append(f"{sort_expr} {direction}")
-            sql_parts.append("ORDER BY " + ", ".join(order_parts))
-
-        # Add LIMIT and OFFSET.  ``is not None`` so ``limit=0`` becomes
-        # ``LIMIT 0`` (zero rows) rather than being silently dropped.
-        if query.limit_value is not None:
-            sql_parts.append(f"LIMIT {query.limit_value}")
-        if query.offset_value is not None:
-            sql_parts.append(f"OFFSET {query.offset_value}")
+        sql_parts.extend(self._paging_clauses(query))
 
         return " ".join(sql_parts), params
 
@@ -955,23 +966,21 @@ class SQLQueryBuilder:
     def build_count_query(self, query: Query | None = None) -> tuple[str, list[Any]]:
         """Build a COUNT query.
 
+        The count is of the whole match: the query's sort, limit and offset
+        never enter the statement, so one ``Query`` can page a search and
+        total it.
+
         Args:
             query: Optional Query object for filtering
 
         Returns:
             Tuple of (SQL query, parameters)
         """
-        if query and query.filters:
-            search_query, params = self.build_search_query(query)
-            # Replace SELECT * with SELECT COUNT(*)
-            count_query = search_query.replace("SELECT *", "SELECT COUNT(*)", 1)
-            # Remove ORDER BY, LIMIT, OFFSET clauses
-            for clause in ["ORDER BY", "LIMIT", "OFFSET"]:
-                if clause in count_query:
-                    count_query = count_query[: count_query.index(clause)]
-            return count_query.strip(), params
-        else:
-            return f"SELECT COUNT(*) FROM {self.qualified_table}", []
+        sql = f"SELECT COUNT(*) FROM {self.qualified_table}"
+        if query is None or not query.filters:
+            return sql, []
+        where, params = self._filters_clause(query.filters)
+        return f"{sql} WHERE {where}", params
 
     def _build_sort_expr(self, field: str) -> str:
         """Build a SQL expression for ORDER BY, supporting dot-notation.

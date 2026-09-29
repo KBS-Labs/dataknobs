@@ -297,14 +297,16 @@ class ColumnHierarchy:
         filters are what decide whether a row is an edge; the check below
         cannot subtract from a bounded read without contradicting them.
 
-        **Streamed rather than searched, and the reason is a shipped defect one
+        **Streamed rather than searched, and the reason was a shipped defect one
         module over.** What this returns is bounded by the *data* and not by
         the caller's input: ``parent_edges()`` is the whole table, and
         ``children(k)`` over a wide node is however many rows name it. An
-        unbounded ``search`` is the read a backend is free to cap, and one does
-        -- ``AsyncElasticsearchDatabase`` answers a query carrying no ``limit``
-        with ``size=10000``, so a large axis would have answered with the cap's
-        worth of edges and reported nothing wrong.
+        unbounded ``search`` is the read a backend is free to cap, and one did
+        -- ``AsyncElasticsearchDatabase`` answered a query carrying no
+        ``limit`` with ``size=10000`` until its search paged past the result
+        window, so a large axis would have answered with the cap's worth of
+        edges and reported nothing wrong. The stream also keeps one batch
+        resident rather than the whole axis.
         :meth:`~dataknobs_data.ontology.sources.RecordEntitySource.by_type`
         carries the same reasoning for the same reason, and the streaming door
         honours the full operator set on every async backend.

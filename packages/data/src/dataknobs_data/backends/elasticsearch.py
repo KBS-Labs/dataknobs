@@ -36,7 +36,14 @@ from .elasticsearch_mixins import (
     parse_es_version_token,
     vector_tracking_metadata,
 )
-from .elasticsearch_query import build_bool_query, build_complex_es_query
+from .elasticsearch_query import (
+    PIT_KEEP_ALIVE,
+    build_bool_query,
+    build_complex_es_query,
+    client_search_kwargs,
+    plan_search,
+    run_search_plan,
+)
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
@@ -117,6 +124,8 @@ class SyncElasticsearchDatabase(
         self.port = cfg.port
         self.index_name = cfg.index
         self.refresh = cfg.refresh
+        self.max_result_window = cfg.max_result_window
+        self.search_page_size = cfg.search_page_size
 
         self.es_index = None  # Will be initialized in connect()
         self._connected = False
@@ -756,36 +765,19 @@ class SyncElasticsearchDatabase(
                 order = "desc" if sort_spec.order == SortOrder.DESC else "asc"
                 sort.append({field_path: {"order": order}})
 
-        # Build search body
-        search_body = {"query": es_query}
-        if sort:
-            search_body["sort"] = sort
-        # ``is not None`` so ``limit=0`` is sent as ``size=0`` (ES
-        # interprets that as a count-only request returning zero hits)
-        # rather than being silently dropped.
-        if query.limit_value is not None:
-            search_body["size"] = query.limit_value
-        if query.offset_value is not None:
-            search_body["from"] = query.offset_value
+        # One request inside the result window, ``search_after`` pages past
+        # it or for an unbounded read; the plan is shared with the async twin.
+        plan = plan_search(
+            es_query,
+            sort,
+            query.offset_value,
+            query.limit_value,
+            window=self.max_result_window,
+            page_size=self.search_page_size,
+        )
+        hits = run_search_plan(plan, self._search_hits, self._open_pit, self._close_pit)
 
-        # Execute search
-        response = self.es_index.search(body=search_body)
-
-        # Check if the response is valid (has the expected structure)
-        # An empty result set is still a valid response
-        if not hasattr(response, "json") or response.json is None:
-            raise DatabaseError(f"Invalid search response: {response}")
-
-        # Check for actual errors in the response
-        if "error" in response.json:
-            raise DatabaseError(f"Failed to search records: {response.json['error']}")
-
-        # Parse results
-        records = []
-        hits = response.json.get("hits", {}).get("hits", [])
-        for hit in hits:
-            doc = hit.get("_source", {})
-            records.append(self._doc_to_record(doc))
+        records = [self._doc_to_record(hit.get("_source", {})) for hit in hits]
 
         # Apply field projection if specified
         if query.fields:
@@ -797,6 +789,37 @@ class SyncElasticsearchDatabase(
                         del record.fields[field_name]
 
         return records
+
+    def _search_hits(self, body: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+        """Send one planned search request; return its hits and point-in-time id."""
+        if "pit" in body:
+            # A paged read runs in a point in time, which the index wrapper
+            # cannot address; the bulk client can.
+            paged = self.es_client.search(**client_search_kwargs(body, self.index_name))
+            return list(paged["hits"]["hits"]), paged.get("pit_id")
+
+        response = self.es_index.search(body=body)
+
+        # Check if the response is valid (has the expected structure)
+        # An empty result set is still a valid response
+        if not hasattr(response, "json") or response.json is None:
+            raise DatabaseError(f"Invalid search response: {response}")
+
+        # Check for actual errors in the response
+        if "error" in response.json:
+            raise DatabaseError(f"Failed to search records: {response.json['error']}")
+
+        hits: list[dict[str, Any]] = response.json.get("hits", {}).get("hits", [])
+        return hits, None
+
+    def _open_pit(self) -> str:
+        """Open a point in time on this index for one paged read."""
+        opened = self.es_client.open_point_in_time(index=self.index_name, keep_alive=PIT_KEEP_ALIVE)
+        return str(opened["id"])
+
+    def _close_pit(self, pit_id: str) -> None:
+        """Close a paged read's point in time."""
+        self.es_client.close_point_in_time(id=pit_id)
 
     def _count_all(self) -> int:
         """Count all records in the database."""

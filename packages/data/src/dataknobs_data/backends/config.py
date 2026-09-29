@@ -366,10 +366,38 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
     Attributes:
         index: Elasticsearch index name.
         refresh: Whether to refresh the index after write operations.
+        max_result_window: The index's ``index.max_result_window``. A search
+            whose ``offset + limit`` fits inside it is one ``from``/``size``
+            request; anything larger, and any search with no ``limit``, pages
+            with ``search_after``. Set it when the index's own setting differs
+            from Elasticsearch's default.
+        search_page_size: Hits per request when a search pages with
+            ``search_after``. At most ``max_result_window``.
     """
 
     index: str = "records"
     refresh: bool = True
+    max_result_window: int = 10_000
+    search_page_size: int = 1_000
+
+    def __post_init__(self) -> None:
+        # A value from YAML or the environment may arrive as a string.
+        for name in ("max_result_window", "search_page_size"):
+            value = getattr(self, name)
+            try:
+                number = int(value) if not isinstance(value, bool) else None
+            except (TypeError, ValueError):
+                number = None
+            if number is None or number < 1:
+                raise ValueError(
+                    f"Elasticsearch '{name}' must be a positive integer, got {value!r}"
+                )
+            object.__setattr__(self, name, number)
+        if self.search_page_size > self.max_result_window:
+            raise ValueError(
+                f"Elasticsearch 'search_page_size' ({self.search_page_size}) must not exceed "
+                f"'max_result_window' ({self.max_result_window})"
+            )
 
 
 @dataclass(frozen=True)

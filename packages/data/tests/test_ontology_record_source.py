@@ -1016,8 +1016,9 @@ async def test_the_type_scan_streams_whichever_branch_it_takes(
 
     What it is replaced with is stronger than symmetry for its own sake. An
     unbounded ``search`` is the read a backend is free to cap, and
-    ``AsyncElasticsearchDatabase`` caps one at ``size=10000``; the narrowed
-    branch was the branch that took it.
+    ``AsyncElasticsearchDatabase`` capped one at ``size=10000`` until its
+    search paged past the result window; the narrowed branch was the branch
+    that took it.
 
     **The door asserted is the first one, and the qualifier is not a hedge.**
     A ``search`` can still be recorded after it, because ``stream_read`` is
@@ -1099,12 +1100,14 @@ async def test_a_sql_backend_can_share_one_store_which_is_why_the_filter_must_su
 class _CappedSearchProbe(AsyncMemoryDatabase):
     """A real store whose ``search`` caps a query carrying no ``limit``.
 
-    This is ``AsyncElasticsearchDatabase``'s contract, at a size a test can
-    hold. That backend reads ``size = query.limit_value if query.limit_value
-    is not None else 10000``, so an unbounded ``search`` comes back truncated
-    -- silently, because a short list is what a matching read of a small table
-    looks like. ``stream_read`` there goes through the scroll API, which the
-    cap does not reach, and this probe splits the same way.
+    This was ``AsyncElasticsearchDatabase``'s behaviour, at a size a test can
+    hold, until its search paged past the result window. It read ``size =
+    query.limit_value if query.limit_value is not None else 10000``, so an
+    unbounded ``search`` came back truncated -- silently, because a short list
+    is what a matching read of a small table looks like. A backend is still
+    free to cap one, which is why the probe stays. ``stream_read`` there goes
+    through the scroll API, which the cap does not reach, and this probe splits
+    the same way.
 
     A subclass rather than a mock: both doors run the memory backend's own
     matching code and the rows come back for real. The cap is the only thing
