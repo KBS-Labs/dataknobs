@@ -1322,6 +1322,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`FaissVectorStore` with `index_type: hnsw` rewrites and deletes the ids
+  it holds.** FAISS cannot remove a node from an HNSW graph, so a second
+  `add_vectors` of an id, `delete_vectors` and `clear(filter=...)` raised
+  `RuntimeError`, and a `SemanticIndex` rebuild over such a store failed on
+  its first batch. A failed delete also left the id missing from
+  `get_vectors` while `count()` still counted it and `search()` still ranked
+  it, under its internal id. A removed node now stays in the graph as a
+  tombstone every search skips, and the graph is rebuilt from the stored
+  vectors once tombstones exceed `index_params["tombstone_compaction_ratio"]`
+  (default `0.25`) of the live rows. A negative or non-numeric ratio is
+  refused with `ValueError`. The `faiss` extra now requires `faiss-cpu>=1.8.0`
+  (was `>=1.7.4`): earlier releases accept no search parameters through the
+  id-mapping index this store wraps, so a search cannot skip a tombstone
+  there. A store saved after such a failed delete
+  reads the stranded node as removed when it loads. On every index type, a
+  delete now takes the rows out of the index before it updates the store's
+  own records, so an index that refuses leaves the store unchanged.
+
 - **A `datetime` and a `date` are ordered against each other.** `>`, `>=`,
   `<`, `<=`, `BETWEEN` and `NOT_BETWEEN` in `Filter.matches` answered as if
   the two never matched, so `NOT_BETWEEN` also answered True for a
