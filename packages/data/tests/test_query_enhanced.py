@@ -447,7 +447,10 @@ class TestAMembershipValueIsACollection:
     )
     def test_a_collection_is_accepted_and_hashes(self, value):
         spec = Filter("colour", Operator.IN, value)
-        assert spec.value is value
+        # The type it was given; a list or set as the filter's own copy.
+        assert type(spec.value) is type(value)
+        assert spec.value == value
+        assert (spec.value is value) is not isinstance(value, (list, set))
         hash(spec)
 
     @pytest.mark.parametrize("operator", [Operator.IN, Operator.NOT_IN])
@@ -508,7 +511,9 @@ class TestAMembershipValueIsACollection:
     @pytest.mark.parametrize("value", [["a"], ("a",)], ids=["list", "tuple"])
     def test_a_list_or_tuple_value_is_serialised_as_given(self, value):
         """Both are already JSON arrays, so ``to_dict()`` hands back the value it holds."""
-        assert Filter("tags", Operator.IN, value).to_dict()["value"] is value
+        spec = Filter("tags", Operator.IN, value)
+        assert spec.to_dict()["value"] is spec.value
+        assert spec.value == value
 
     def test_other_operators_are_not_checked(self):
         """``EQ`` against a list compares the list; that is not a membership test."""

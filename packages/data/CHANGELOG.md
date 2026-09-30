@@ -9,6 +9,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A boolean never equals or orders against a number in a filter.**
+  `Filter.matches`, which memory, file and S3 search with, followed Python,
+  where `True == 1`: `Filter("n", Operator.EQ, 1)` matched `true`,
+  `Filter("n", Operator.LT, 5)` matched `false`, and `IN [1]` matched `true`.
+  SQLite, which stores a JSON `true` as `1`, agreed. JSON keeps the two apart,
+  as PostgreSQL, DuckDB and Elasticsearch store them, and so do the memory,
+  file, S3, SQLite, DuckDB and PostgreSQL backends now: a comparison between a
+  boolean and a number is false, and its negation (`NEQ`, `NOT_IN`,
+  `NOT_BETWEEN`) true. A number is any real number type --- `Decimal` and
+  numpy's numbers included --- and a numpy boolean is a boolean.
+
+  **Migration:** a filter that relied on `1`/`0` selecting `true`/`false`, or
+  the reverse, names the boolean instead.
+
+- **A `BETWEEN` or `NOT_BETWEEN` value that is not two bounds is refused
+  with `ValueError` when the `Filter` is built.** One value, three, a string,
+  a set or a mapping named no range, and each backend answered it its own
+  way: memory, file and S3 matched nothing for `BETWEEN` and every present
+  value for `NOT_BETWEEN`; SQLite, DuckDB and PostgreSQL raised a driver
+  error or took a two-character string's characters as the bounds, and the
+  sync PostgreSQL backend answered a list of three without complaint;
+  Elasticsearch raised `ValueError` when the query was translated. The refusal is the one `IN` and `NOT_IN` already make for a
+  value that is not a list of candidates.
+
+  **Migration:** pass `[lower, upper]` or `(lower, upper)`. A caller that
+  relied on a malformed range matching nothing builds no filter instead, and a
+  stored filter with one --- through `from_dict` --- now fails when it is
+  loaded. Unpickling does not run the check, so a `Filter` pickled with a
+  malformed range fails when it is matched or rendered instead.
+
+- **A `Filter` holds its own copy of a list or set value.** Appending to the
+  list a filter was built from used to change what it matched in memory
+  while its hash stayed the same, and a backend rendered the list as it stood
+  at query time. The copy is taken when the filter is built; a tuple or
+  frozenset needs none, and any other collection (`dict.keys()`) is held as
+  handed and must not change while the filter is in use.
+
+- **Two strings compare as text on every backend, whatever either names.**
+  `Filter.matches` --- memory, file and S3 --- read two strings that both
+  looked like times as those times, while SQLite, DuckDB and PostgreSQL
+  compared the text, and the in-memory sort did too. So in memory
+  `"2024-01-01 10:00:00"` was after `"2024-01-01T09:00:00"` under `GT` and
+  before it in an ascending sort, `"2024-01-01"` was `>=` and `<=`
+  `"2024-01-01T00:00:00"` without equalling it, and one string that looks like
+  a date against one that does not (`"B"`) matched neither `<` nor `>`. The
+  bound's kind decides: a string bound compares text, by code point, and a
+  `date` or `datetime` bound reads a stored string as the time it names.
+
+  **Migration:** only data mixing forms answers differently --- a date alone
+  against a date and time, a space against a `T`, different offsets --- and
+  only in memory, file and S3. Strings one writer produced in one zone
+  (`isoformat()` on both sides) order the same as text and as times. To compare as times, pass
+  the bound as a `datetime`.
+
+- **`EQ`, `NEQ`, `IN` and `NOT_IN` read a string against a `date` or
+  `datetime` bound as the time it names, as the ordering operators already
+  did.** `Filter("t", Operator.EQ, datetime(2024, 1, 1))` did not match the
+  string `"2024-01-01T00:00:00"`, which is how every persistent backend holds
+  a timestamp, although `GTE` and `LTE` against the same bound both matched
+  it. A plain `date` also equals its own midnight now, as it already ordered.
+
+  A string names a time when it is ISO 8601 in extended form, each field in
+  range and naming a real day: `2024-01-02`, `2024-01-02T10:30`,
+  `2024-01-02 10:30:05.25`, optionally with `Z` or `+01:00`
+  (`dataknobs_data.query.read_timestamp`). This is now the one reading
+  wherever a string meets a time, and the SQL backends render the same one. The other forms Python's
+  `datetime.fromisoformat` reads --- `20240102`, `2024-W01-2`, an hour alone,
+  a comma fraction --- are strings, since no backend's query language reads
+  them as times.
+
 - **`count(query)` counts the whole match on every backend: it ignores the
   query's `limit`, `offset` and sort.** One `Query` can now page a `search()`
   and total it with `count()`. sqlite, DuckDB and Elasticsearch already
@@ -1321,6 +1391,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A comparison on SQLite, DuckDB and PostgreSQL matches only values of its
+  bound's kind, and one value of another kind no longer makes it raise.** A
+  string bound compared the field's text, so `t < "B"` matched `5` and `true`,
+  and SQLite ordered every number below every string. A number or boolean
+  bound cast every value in the field, so one string in it made `EQ`, `NEQ`,
+  the ordering operators, `IN` and `NOT_IN` raise on DuckDB and PostgreSQL. A
+  membership list was cast by its first member, so `IN [5, "c"]` raised and
+  `IN [5, "7"]` matched `7`. A plain `date` or a `Decimal` bound was not cast
+  at all, and raised on DuckDB and PostgreSQL. A `None` or NaN bound left a
+  negation unknown, so `NEQ None` matched nothing. And `id` against a
+  `datetime` matched every record on SQLite and raised on DuckDB. Each backend
+  now tests a value's JSON type before comparing, as `Filter.matches` does
+  (`dataknobs_data.query.value_kind`): a value of another kind is unmatched
+  by a positive comparison and matched by a negated one, a list may mix
+  kinds, and a `None` or NaN bound matches nothing, so its negation matches
+  every present value.
+  A `date` or `datetime` bound compares with a string naming a time without a
+  zone --- on `id` as on a data field --- and
+  SQLite compares it at full precision, `T` or space alike, where it compared
+  the text the driver's deprecated datetime adapter wrote. A string that names
+  no real time is a string there, as in `Filter.matches`, where SQLite read
+  `"2024-02-30"` as March 1st and DuckDB and PostgreSQL read hour 24 as the
+  next midnight.
+
+  **Migration:** answers change only on a field holding values of more than
+  one kind, or a timestamp on SQLite. An expression index added by hand on a
+  cast (`((data->>'n')::numeric)`) no longer serves the comparison; one on
+  `data->>'field'` still serves a string `EQ` or `IN` (an ordered string
+  comparison on PostgreSQL renders `COLLATE "C"`, which an index built under
+  the default collation does not serve). On PostgreSQL 15 a date
+  past its month's end (`"2024-02-30"`) still raises against a `datetime`
+  bound.
 
 - **PostgreSQL compares and sorts strings by code point, as every other
   backend does.** A comparison against a string (`GT`, `GTE`, `LT`, `LTE`,

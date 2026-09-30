@@ -9,14 +9,17 @@ sorting, pagination, and vector similarity search for database operations.
 
 from __future__ import annotations
 
+import copy
+import math
 import re
 from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from enum import Enum
-from functools import cmp_to_key, lru_cache
-from typing import TYPE_CHECKING, Any
+from functools import cached_property, cmp_to_key, lru_cache
+from numbers import Number
+from typing import TYPE_CHECKING, Any, SupportsFloat
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -185,7 +188,7 @@ def _hashable(value: Any) -> Any:
     whose value is most often written as a literal.
 
     The projection is for the hash and for nothing else --- :attr:`Filter.value`
-    keeps the object it was handed, so ``to_dict()`` answers in the shape
+    keeps the type it was handed (a list or set as a copy of it), so ``to_dict()`` answers in the shape
     ``from_dict()`` takes and every backend reads the list it was given.
     Normalising at construction instead would be cheaper here and wrong
     everywhere else: ``Filter("tags", Operator.EQ, ["a"])`` compares its value
@@ -216,6 +219,9 @@ def _hashable(value: Any) -> Any:
 #: The two operators whose value is a collection of candidates rather than one.
 _MEMBERSHIP_OPERATORS = frozenset({Operator.IN, Operator.NOT_IN})
 
+#: The two operators whose value is a range: a lower and an upper bound.
+_RANGE_OPERATORS = frozenset({Operator.BETWEEN, Operator.NOT_BETWEEN})
+
 #: How much of a refused value's ``repr`` a refusal quotes.
 _REFUSED_VALUE_REPR_LIMIT = 40
 
@@ -235,21 +241,258 @@ def membership_values(value: Collection[Any]) -> list[Any]:
     return [member for member in value if member is not None]
 
 
-def _is_member(value: Any, members: Collection[Any]) -> bool:
-    """Whether ``value`` equals one of ``members``, as ``in`` over a list asks.
+#: The date of an ISO timestamp in extended form, each field in its range and
+#: the year from 0001, as :class:`datetime` counts. ``[0-9]`` rather than
+#: ``\d``, which some regex engines read as any Unicode digit.
+_ISO_DATE = (
+    r"([1-9][0-9]{3}|0[1-9][0-9]{2}|00[1-9][0-9]|000[1-9])"
+    r"-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+)
+#: The optional time that follows it: hours and minutes, then optional seconds
+#: and a fraction of any length, after a ``T`` or a space.
+_ISO_TIME = r"[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?"
 
-    ``in`` over a hashed collection --- a set, ``dict.keys()`` --- hashes the
-    value first, and a list or an object read from a JSON field does not hash.
-    Such a value cannot be an element of a hashed collection, but equality is
-    the question being asked, so it is answered by comparing, which is what
-    every SQL backend's answer amounts to.
+#: The shape of a timestamp string with no zone: :func:`read_timestamp`'s
+#: shape without its zone. A backend that renders a filter as a query tests a
+#: stored string against this before reading it as a time, so it and
+#: ``Filter.matches`` read the same strings as times.
+NAIVE_TIMESTAMP_SHAPE = f"^{_ISO_DATE}({_ISO_TIME})?$"
+
+_TIMESTAMP = re.compile(f"^{_ISO_DATE}({_ISO_TIME}(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])?)?$")
+
+
+def read_timestamp(text: str) -> datetime | None:
+    """The time a string names, or ``None`` when it names none.
+
+    A timestamp is ISO 8601 in extended form: a date (``2024-01-02``),
+    optionally a time after ``T`` or a space (``10:30``, ``10:30:05``,
+    ``10:30:05.25``), and optionally a zone (``Z``, ``+01:00``), each field in
+    its range and naming a real day. That is the form ``datetime.isoformat``
+    writes and every backend stores. The other forms :meth:`datetime.fromisoformat`
+    also reads --- ``20240102``, ``2024-W01-2``, an hour alone --- are strings:
+    no backend's query language reads them as times, so a filter does not.
+
+    This is the one reading ``Filter.matches`` uses wherever a string meets a
+    date or datetime, and the one the SQL backends render
+    (:data:`NAIVE_TIMESTAMP_SHAPE`). Two strings never meet a time: they
+    compare as text.
     """
-    if isinstance(members, AbstractSet):
+    if not _TIMESTAMP.match(text):
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        # The right shape, and no real day: 2024-02-30.
+        return None
+
+
+def _python_scalar(value: Any) -> Any:
+    """A numpy scalar as the Python value it holds; any other value as given.
+
+    numpy's scalars compare with Python's own, but not with every numeric type
+    --- ``np.int64(5) == Decimal(5)`` raises --- so a filter compares the
+    Python value a numpy scalar stands for.
+    """
+    if type(value).__module__ == "numpy" and getattr(value, "ndim", None) == 0:
+        return value.item()
+    return value
+
+
+def _is_boolean(value: Any) -> bool:
+    """A ``bool``, or numpy's boolean scalar, which does not subclass it."""
+    kind = type(value)
+    return isinstance(value, bool) or (
+        kind.__module__ == "numpy" and kind.__name__ in ("bool", "bool_")
+    )
+
+
+def value_kind(value: Any) -> str | None:
+    """The kind a filter relates ``value`` by, as JSON types a stored value.
+
+    - ``"boolean"``: a ``bool`` (or numpy boolean). Never a number, although
+      Python makes ``True == 1``.
+    - ``"number"``: any other real number --- ``int``, ``float``,
+      ``Decimal``, a numpy number.
+    - ``"timestamp"``: a ``date`` or ``datetime``. A plain ``date`` is its own
+      midnight (see :func:`_align_temporal`).
+    - ``"string"``: a ``str``, which a timestamp bound reads through
+      :func:`read_timestamp`.
+    - ``"never"``: ``None`` or NaN, which equal nothing and order against
+      nothing, so a comparison with one matches nothing and its negation every
+      present value.
+    - ``None``: anything else (a list, a mapping), compared as it is.
+
+    ``Filter.matches`` and every backend that renders a comparison ask this,
+    so the two cannot disagree about which values a bound can relate to.
+    """
+    if value is None:
+        return "never"
+    if _is_boolean(value):
+        return "boolean"
+    if isinstance(value, Number) and not isinstance(value, complex):
         try:
-            hash(value)
+            if isinstance(value, SupportsFloat) and math.isnan(value):
+                return "never"
+        except OverflowError:
+            pass  # an integer too large for a float, and so no NaN
+        except ValueError:
+            # A signalling Decimal NaN refuses even to become a float.
+            return "never"
+        return "number"
+    if isinstance(value, date):
+        return "timestamp"
+    if isinstance(value, str):
+        return "string"
+    return None
+
+
+def _bool_against_number(a: Any, b: Any) -> bool:
+    """Whether one of two values is a boolean and the other a number.
+
+    Python makes ``bool`` a subclass of ``int``, so ``True == 1`` and
+    ``False < 5``. JSON keeps the two apart, as PostgreSQL, DuckDB and
+    Elasticsearch store them, so a filter never relates a boolean to a number:
+    a comparison between them is false, and its negation true.
+    """
+    return {value_kind(a), value_kind(b)} == {"boolean", "number"}
+
+
+def _string_against_temporal(a: Any, b: Any) -> bool:
+    """Whether one of two values is a string and the other a date or datetime."""
+    return (isinstance(a, str) and isinstance(b, date)) or (
+        isinstance(b, str) and isinstance(a, date)
+    )
+
+
+def _read_temporal_string(a: Any, b: Any) -> tuple[Any, Any] | None:
+    """Read the string of a string/temporal pair as the time it names.
+
+    A temporal value stored as JSON comes back a string, so the string is read
+    as the datetime it names (:func:`read_timestamp`). ``None`` when it names
+    none, since then the two are unrelated. Call only for a pair
+    :func:`_string_against_temporal` holds.
+    """
+    if isinstance(a, str):
+        read = read_timestamp(a)
+        return None if read is None else (read, b)
+    read = read_timestamp(b)
+    return None if read is None else (a, read)
+
+
+def _values_equal(a: Any, b: Any) -> bool:
+    """``a == b`` as a filter asks it, agreeing with its ordering.
+
+    A boolean never equals a number (see :func:`_bool_against_number`), and
+    ``None`` or NaN equals nothing. A string against a date or datetime is read
+    as the datetime it names, and a date against a datetime is aligned, as the
+    ordering operators do --- so a value that is ``>=`` and ``<=`` a bound also
+    equals it.
+
+    ``bool(...)``, because ``==`` between two values of unknown type is not
+    required to answer with one --- a numpy array answers with an array. A
+    caller that does ``if f.matches(v)`` was going to raise on the array
+    anyway; this raises at the comparison instead of one frame later.
+    """
+    a, b = _python_scalar(a), _python_scalar(b)
+    if _bool_against_number(a, b) or "never" in (value_kind(a), value_kind(b)):
+        return False
+    if _string_against_temporal(a, b):
+        pair = _read_temporal_string(a, b)
+        if pair is None:
+            return False
+        a, b = pair
+    a, b = _align_temporal(a, b)
+    return bool(a == b)
+
+
+class _Times:
+    """Dates and datetimes, indexed so a date or datetime probes them by hash.
+
+    :func:`_align_temporal` equates a plain date with a datetime at that
+    date's midnight in the datetime's own zone. So a datetime equals a member
+    date when it falls at midnight on it, and a date equals a member datetime
+    that does: the midnights are indexed by their date.
+    """
+
+    def __init__(self) -> None:
+        self.datetimes: set[datetime] = set()
+        self.dates: set[date] = set()
+        self.midnights: set[date] = set()
+
+    def add(self, value: date) -> None:
+        if isinstance(value, datetime):
+            self.datetimes.add(value)
+            if value.time() == time.min:
+                self.midnights.add(value.date())
+        else:
+            self.dates.add(value)
+
+    def __contains__(self, value: date) -> bool:
+        if isinstance(value, datetime):
+            return value in self.datetimes or (
+                value.time() == time.min and value.date() in self.dates
+            )
+        return value in self.dates or value in self.midnights
+
+
+class _Membership:
+    """The members of an ``IN`` / ``NOT IN`` value, indexed for equality.
+
+    Membership is :func:`_values_equal` against any member, and ``in`` answers
+    that wrongly across kinds: it finds ``True`` in ``[1]``, and never finds
+    ``'2024-01-01'`` in ``[date(2024, 1, 1)]``. So the members are split by
+    :func:`value_kind` once, when a filter is first matched, and every value
+    is looked up by hash among the members of its own kind. A string member
+    that names a time is read once, here, and found by a date or datetime
+    value; a string value that names one finds a date or datetime member.
+
+    A member that does not hash --- a list, for a field holding lists --- is
+    compared with ``==``, as ``in`` over a list compares it.
+    """
+
+    def __init__(self, members: Collection[Any]) -> None:
+        self.booleans: set[bool] = set()
+        self.numbers: set[Any] = set()
+        self.times = _Times()
+        self.named_times = _Times()
+        self.hashed: set[Any] = set()
+        self.unhashed: list[Any] = []
+        for member in members:
+            kind = value_kind(member)
+            if kind == "boolean":
+                self.booleans.add(bool(member))
+            elif kind == "number":
+                self.numbers.add(_python_scalar(member))
+            elif kind == "timestamp":
+                self.times.add(member)
+            elif kind != "never":
+                if kind == "string" and (named := read_timestamp(member)) is not None:
+                    self.named_times.add(named)
+                try:
+                    self.hashed.add(member)
+                except TypeError:
+                    self.unhashed.append(member)
+
+    def __contains__(self, value: Any) -> bool:
+        kind = value_kind(value)
+        if kind == "boolean":
+            return bool(value) in self.booleans
+        if kind == "number":
+            return _python_scalar(value) in self.numbers
+        if kind == "timestamp":
+            return value in self.times or value in self.named_times
+        if kind == "never":
+            return False
+        try:
+            if value in self.hashed:
+                return True
         except TypeError:
-            return any(value == member for member in members)
-    return value in members
+            # A value that does not hash equals no member that does.
+            pass
+        if kind == "string":
+            named = read_timestamp(value)
+            return named is not None and named in self.times
+        return any(value == member for member in self.unhashed)
 
 
 @lru_cache(maxsize=256)
@@ -353,6 +596,13 @@ class Filter:
     operators are not a corner here --- ``IN`` is the common case --- so
     :meth:`__hash__` is written out over a projected value instead.
 
+    **Its own copy of a list or set.** A list or set value is copied when the
+    filter is built, so appending to the caller's list afterwards changes
+    neither the filter's hash, nor what it matches in memory, nor the query a
+    backend renders from it. A tuple or frozenset needs no copy. Any other
+    collection --- ``dict.keys()`` among them --- is held as handed, and must
+    not change while the filter is in use.
+
     **Membership.** ``IN`` and ``NOT_IN`` take a collection --- a list, tuple,
     set, ``dict.keys()`` or any other :class:`~collections.abc.Collection` that
     is neither a string nor a mapping --- and anything else is refused here,
@@ -365,6 +615,9 @@ class Filter:
     Elasticsearch does not yet: its ``NOT_IN`` also selects a document that
     lacks the field, and it chooses a string field's exact-match path from
     the first member only.
+
+    **Range.** ``BETWEEN`` and ``NOT_BETWEEN`` take exactly two bounds, as a
+    list or tuple, and anything else is refused here too.
 
     Attributes:
         field: The field name to filter on
@@ -394,32 +647,51 @@ class Filter:
     value: Any = None
 
     def __post_init__(self) -> None:
-        """Refuse a membership value that is not a collection of candidates.
+        """Refuse a membership value or a range of the wrong shape, and own the value.
+
+        A list or set value is replaced by a copy (see the class docstring).
 
         Raises:
             ValueError: If the operator is ``IN`` or ``NOT_IN`` and the value
-                is not a collection, or is a string or a mapping.
-                ``ValueError`` because it is what this module raises for a bad
-                operator or sort order, so an ``except ValueError`` around
-                query building catches it.
+                is not a collection, or is a string or a mapping; or if it is
+                ``BETWEEN`` or ``NOT_BETWEEN`` and the value is not a list or
+                tuple of exactly two bounds (a set has no order to say which
+                bound is which). ``ValueError`` because it is what this module
+                raises for a bad operator or sort order, so an
+                ``except ValueError`` around query building catches it.
         """
-        if self.operator not in _MEMBERSHIP_OPERATORS:
-            return
-        if isinstance(self.value, Mapping):
-            remedy = "Pass the mapping's keys, as a list or as .keys()."
-        elif isinstance(self.value, (str, bytes, bytearray)) or not isinstance(
-            self.value, Collection
-        ):
-            remedy = "Wrap a single value in a list, or use EQ."
+        if self.operator in _MEMBERSHIP_OPERATORS:
+            if isinstance(self.value, Mapping):
+                remedy = "Pass the mapping's keys, as a list or as .keys()."
+            elif isinstance(self.value, (str, bytes, bytearray)) or not isinstance(
+                self.value, Collection
+            ):
+                remedy = "Wrap a single value in a list, or use EQ."
+            else:
+                self._own_value()
+                return
+            needs = "needs a list of values"
+        elif self.operator in _RANGE_OPERATORS:
+            if isinstance(self.value, (list, tuple)) and len(self.value) == 2:
+                self._own_value()
+                return
+            needs = "needs two bounds, as a list or tuple"
+            remedy = "Pass [lower, upper]."
         else:
+            self._own_value()
             return
         shown = repr(self.value)
         if len(shown) > _REFUSED_VALUE_REPR_LIMIT:
             shown = shown[: _REFUSED_VALUE_REPR_LIMIT - 3] + "..."
         raise ValueError(
-            f"Filter({self.field!r}, {self.operator.name}) needs a list of values; "
+            f"Filter({self.field!r}, {self.operator.name}) {needs}; "
             f"got {type(self.value).__name__} {shown}. {remedy}"
         )
+
+    def _own_value(self) -> None:
+        """Hold a copy of a list or set value, so the caller's cannot change it."""
+        if isinstance(self.value, (list, set)):
+            object.__setattr__(self, "value", copy.copy(self.value))
 
     def __hash__(self) -> int:
         """Hash the condition, projecting a container value onto a hashable shape.
@@ -435,6 +707,15 @@ class Filter:
         """
         return hash((self.field, self.operator, _hashable(self.value)))
 
+    @cached_property
+    def _membership(self) -> _Membership:
+        """The ``IN`` / ``NOT IN`` members, indexed once for every match.
+
+        A frozen filter's value is not reassigned, and a list or set value is
+        the filter's own copy, so the index stays true.
+        """
+        return _Membership(self.value)
+
     def matches(self, record_value: Any) -> bool:
         """Check if a record value matches this filter.
 
@@ -449,14 +730,9 @@ class Filter:
             return False
 
         if self.operator == Operator.EQ:
-            # `bool(...)`, because ``==`` between two values of unknown type is
-            # not required to answer with one --- a numpy array answers with an
-            # array. The signature has always promised a bool, and a caller
-            # that does `if f.matches(v)` was going to raise on the array
-            # anyway; this raises at the comparison instead of one frame later.
-            return bool(record_value == self.value)
+            return _values_equal(record_value, self.value)
         elif self.operator == Operator.NEQ:
-            return bool(record_value != self.value)
+            return not _values_equal(record_value, self.value)
         elif self.operator == Operator.GT:
             return self._compare_values(record_value, self.value, lambda a, b: a > b)
         elif self.operator == Operator.GTE:
@@ -466,19 +742,15 @@ class Filter:
         elif self.operator == Operator.LTE:
             return self._compare_values(record_value, self.value, lambda a, b: a <= b)
         elif self.operator == Operator.IN:
-            return _is_member(record_value, self.value)
+            return record_value in self._membership
         elif self.operator == Operator.NOT_IN:
-            return not _is_member(record_value, self.value)
+            return record_value not in self._membership
         elif self.operator == Operator.BETWEEN:
-            if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
-                return False
             lower, upper = self.value
             return self._compare_values(
                 record_value, lower, lambda a, b: a >= b
             ) and self._compare_values(record_value, upper, lambda a, b: a <= b)
         elif self.operator == Operator.NOT_BETWEEN:
-            if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
-                return True
             lower, upper = self.value
             return not (
                 self._compare_values(record_value, lower, lambda a, b: a >= b)
@@ -511,29 +783,25 @@ class Filter:
         """Compare two values with type awareness.
 
         Handles special cases:
-        - Datetime strings are parsed for comparison
+        - A string against a date or datetime is read as the time it names
+          (:func:`read_timestamp`); two strings compare as text, by code
+          point, whatever either names --- the bound's kind decides, so a
+          caller wanting time order passes a date or datetime
         - Mixed numeric types are converted appropriately
         - String comparisons are case-sensitive
+        - A boolean never orders against a number (see
+          :func:`_bool_against_number`)
         """
+        a, b = _python_scalar(a), _python_scalar(b)
+        if _bool_against_number(a, b):
+            return False
+
         # Handle datetime/date comparisons
-        if isinstance(a, str) and isinstance(b, (datetime, date)):
-            try:
-                a = datetime.fromisoformat(a.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
+        if _string_against_temporal(a, b):
+            pair = _read_temporal_string(a, b)
+            if pair is None:
                 return False
-        elif isinstance(b, str) and isinstance(a, (datetime, date)):
-            try:
-                b = datetime.fromisoformat(b.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                return False
-        elif isinstance(a, str) and isinstance(b, str):
-            # Check if both look like dates
-            if "T" in a or "-" in a:
-                try:
-                    a = datetime.fromisoformat(a.replace("Z", "+00:00"))
-                    b = datetime.fromisoformat(b.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    pass  # Keep as strings
+            a, b = pair
 
         a, b = _align_temporal(a, b)
 

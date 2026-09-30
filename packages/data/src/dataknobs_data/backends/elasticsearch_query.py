@@ -195,20 +195,14 @@ def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
         # Literal, case-sensitive prefix — no case_insensitive flag.
         return {"prefix": {field_path: value}}
     if op == Operator.BETWEEN:
-        lower, upper = _bounds(value)
+        # A Filter refuses a range that is not two bounds when it is built.
+        lower, upper = value
         return {"range": {field_path: {"gte": lower, "lte": upper}}}
     if op == Operator.NOT_BETWEEN:
-        lower, upper = _bounds(value)
+        lower, upper = value
         return {"bool": {"must_not": {"range": {field_path: {"gte": lower, "lte": upper}}}}}
 
     raise ValueError(f"Unsupported operator: {op}")
-
-
-def _bounds(value: Any) -> tuple[Any, Any]:
-    """Unpack a two-element BETWEEN bound, raising on a malformed value."""
-    if isinstance(value, (list, tuple)) and len(value) == 2:
-        return value[0], value[1]
-    raise ValueError(f"BETWEEN/NOT_BETWEEN requires a two-element bound, got: {value!r}")
 
 
 def build_bool_query(filters: Sequence[Filter]) -> dict[str, Any]:

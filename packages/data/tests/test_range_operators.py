@@ -183,16 +183,11 @@ class TestRangeOperators:
         assert len(results) == 2
         assert {r.id for r in results} == {"1", "2"}
 
-        # Test BETWEEN with invalid range format
-        query = Query(filters=[Filter("value", Operator.BETWEEN, 15)])  # Not a tuple
-        results = db.search(query)
-        assert len(results) == 0
-
-        # Test NOT_BETWEEN with invalid range
-        query = Query(filters=[Filter("value", Operator.NOT_BETWEEN, 15)])
-        results = db.search(query)
-        assert len(results) == 2  # All records with values
-        assert {r.id for r in results} == {"1", "2"}
+        # A range that is not two bounds is refused when the filter is built
+        with pytest.raises(ValueError, match="needs two bounds"):
+            Filter("value", Operator.BETWEEN, 15)  # Not a tuple
+        with pytest.raises(ValueError, match="needs two bounds"):
+            Filter("value", Operator.NOT_BETWEEN, 15)
 
         # Test BETWEEN inclusive boundaries
         query = Query(filters=[Filter("value", Operator.BETWEEN, (10, 20))])
