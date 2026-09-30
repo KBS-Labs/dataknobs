@@ -31,8 +31,15 @@ from dataknobs_data.query_logic import QueryBuilder
 
 
 def _operand(operator: Operator, scalar: object) -> object:
-    """A value ``operator`` accepts: membership takes a list, and a bare scalar is refused."""
-    return [scalar] if operator in (Operator.IN, Operator.NOT_IN) else scalar
+    """A value ``operator`` accepts: membership takes a list, a range two bounds.
+
+    A bare scalar is refused for either.
+    """
+    if operator in (Operator.IN, Operator.NOT_IN):
+        return [scalar]
+    if operator in (Operator.BETWEEN, Operator.NOT_BETWEEN):
+        return [scalar, scalar]
+    return scalar
 
 
 class TestAnOperatorTheEnumHasIsReachableFromTheFluentPath:

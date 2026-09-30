@@ -139,7 +139,7 @@ class TestMetadataFieldRouting:
         # "(data," which would indicate the data column is being queried).
         # Note: "metadata" contains "data" as a substring, so we check
         # for patterns specific to the data column being used as source.
-        assert clause.startswith("metadata") or clause.startswith("json_extract")
+        assert "data->" not in clause.replace("metadata->", "")
         # Verify the actual extraction targets metadata, not data
         assert "json_extract(data," not in clause
         assert "json_extract_string(data," not in clause
@@ -149,25 +149,36 @@ class TestMetadataFieldRouting:
         b = _builder("postgres")
         f = Filter("metadata.tenant_id", Operator.EQ, "T-1")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "metadata->>'tenant_id' = $1"
+        assert clause == (
+            "(jsonb_typeof(metadata->'tenant_id') = 'string' AND metadata->>'tenant_id' = $1)"
+        )
 
     def test_postgres_metadata_nested_key(self) -> None:
         b = _builder("postgres")
         f = Filter("metadata.tenant.region", Operator.EQ, "us-east")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "metadata->'tenant'->>'region' = $1"
+        assert clause == (
+            "(jsonb_typeof(metadata->'tenant'->'region') = 'string' "
+            "AND metadata->'tenant'->>'region' = $1)"
+        )
 
     def test_sqlite_metadata_key(self) -> None:
         b = _builder("sqlite", param_style="qmark")
         f = Filter("metadata.tenant_id", Operator.EQ, "T-1")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "json_extract(metadata, '$.tenant_id') = ?"
+        assert clause == (
+            "(json_type(metadata, '$.tenant_id') = 'text' "
+            "AND json_extract(metadata, '$.tenant_id') = ?)"
+        )
 
     def test_duckdb_metadata_key(self) -> None:
         b = _builder("duckdb", param_style="qmark")
         f = Filter("metadata.tenant_id", Operator.EQ, "T-1")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "json_extract_string(metadata, '$.tenant_id') = ?"
+        assert clause == (
+            "(json_type(metadata, '$.tenant_id') = 'VARCHAR' "
+            "AND json_extract_string(metadata, '$.tenant_id') = ?)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -182,25 +193,37 @@ class TestDataFieldDotNotation:
         b = _builder("postgres")
         f = Filter("config.timeout", Operator.EQ, "30")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "data->'config'->>'timeout' = $1"
+        assert clause == (
+            "(jsonb_typeof(data->'config'->'timeout') = 'string' "
+            "AND data->'config'->>'timeout' = $1)"
+        )
 
     def test_postgres_deep_nested_data_field(self) -> None:
         b = _builder("postgres")
         f = Filter("config.retry.max_attempts", Operator.EQ, "3")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "data->'config'->'retry'->>'max_attempts' = $1"
+        assert clause == (
+            "(jsonb_typeof(data->'config'->'retry'->'max_attempts') = 'string' "
+            "AND data->'config'->'retry'->>'max_attempts' = $1)"
+        )
 
     def test_sqlite_nested_data_field(self) -> None:
         b = _builder("sqlite", param_style="qmark")
         f = Filter("config.timeout", Operator.EQ, "30")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "json_extract(data, '$.config.timeout') = ?"
+        assert clause == (
+            "(json_type(data, '$.config.timeout') = 'text' "
+            "AND json_extract(data, '$.config.timeout') = ?)"
+        )
 
     def test_duckdb_nested_data_field(self) -> None:
         b = _builder("duckdb", param_style="qmark")
         f = Filter("config.timeout", Operator.EQ, "30")
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "json_extract_string(data, '$.config.timeout') = ?"
+        assert clause == (
+            "(json_type(data, '$.config.timeout') = 'VARCHAR' "
+            "AND json_extract_string(data, '$.config.timeout') = ?)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -215,35 +238,54 @@ class TestTypeCastingWithDotNotation:
         b = _builder("postgres")
         f = Filter("metadata.version", Operator.GT, 2)
         clause, params = b._build_filter_clause(f, 1)
-        assert clause == "(metadata->>'version')::numeric > $1"
+        is_number = "jsonb_typeof(metadata->'version') = 'number'"
+        assert clause == (
+            f"({is_number} AND CASE WHEN {is_number} THEN (metadata->>'version')::numeric END > $1)"
+        )
         assert params == [2]
 
     def test_postgres_data_nested_numeric_eq(self) -> None:
         b = _builder("postgres")
         f = Filter("config.timeout", Operator.EQ, 30)
         clause, params = b._build_filter_clause(f, 1)
-        assert clause == "(data->'config'->>'timeout')::numeric = $1"
+        is_number = "jsonb_typeof(data->'config'->'timeout') = 'number'"
+        assert clause == (
+            f"({is_number} AND CASE WHEN {is_number} "
+            "THEN (data->'config'->>'timeout')::numeric END = $1)"
+        )
         assert params == [30]
 
     def test_postgres_metadata_boolean_eq(self) -> None:
         b = _builder("postgres")
         f = Filter("metadata.active", Operator.EQ, True)
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "(metadata->>'active')::boolean = $1"
+        is_boolean = "jsonb_typeof(metadata->'active') = 'boolean'"
+        assert clause == (
+            f"({is_boolean} AND CASE WHEN {is_boolean} "
+            "THEN (metadata->>'active')::boolean END = $1)"
+        )
 
     def test_duckdb_metadata_numeric(self) -> None:
         b = _builder("duckdb", param_style="qmark")
         f = Filter("metadata.version", Operator.GTE, 3)
         clause, _ = b._build_filter_clause(f, 1)
-        assert clause == "CAST(json_extract_string(metadata, '$.version') AS DOUBLE) >= ?"
+        is_number = "json_type(metadata, '$.version') IN ('BIGINT', 'UBIGINT', 'DOUBLE')"
+        assert clause == (
+            f"({is_number} AND CASE WHEN {is_number} "
+            "THEN TRY_CAST(json_extract_string(metadata, '$.version') AS DOUBLE) END >= ?)"
+        )
 
     def test_sqlite_no_cast_needed(self) -> None:
         """SQLite json_extract returns typed values — no CAST is applied."""
         b = _builder("sqlite", param_style="qmark")
         f = Filter("metadata.version", Operator.GT, 2)
         clause, _ = b._build_filter_clause(f, 1)
-        # json_extract already returns the correct type in SQLite
-        assert clause == "json_extract(metadata, '$.version') > ?"
+        # json_extract already returns the correct type in SQLite; only the
+        # kind is tested, so a string never orders against a number.
+        assert clause == (
+            "(json_type(metadata, '$.version') IN ('integer', 'real') "
+            "AND json_extract(metadata, '$.version') > ?)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -277,14 +319,20 @@ class TestOperatorsThroughRefactoredPath:
         b = _builder("postgres")
         f = Filter("metadata.region", Operator.IN, ["us-east", "us-west"])
         clause, params = b._build_filter_clause(f, 1)
-        assert clause == "metadata->>'region' IN ($1, $2)"
+        assert clause == (
+            "(jsonb_typeof(metadata->'region') = 'string' AND metadata->>'region' IN ($1, $2))"
+        )
         assert params == ["us-east", "us-west"]
 
     def test_between_operator_with_nested_data(self) -> None:
         b = _builder("postgres")
         f = Filter("stats.score", Operator.BETWEEN, [80, 100])
         clause, params = b._build_filter_clause(f, 1)
-        assert clause == "(data->'stats'->>'score')::numeric BETWEEN $1 AND $2"
+        is_number = "jsonb_typeof(data->'stats'->'score') = 'number'"
+        assert clause == (
+            f"({is_number} AND CASE WHEN {is_number} "
+            "THEN (data->'stats'->>'score')::numeric END BETWEEN $1 AND $2)"
+        )
         assert params == [80, 100]
 
     def test_like_operator_with_metadata(self) -> None:
@@ -371,7 +419,8 @@ class TestSearchQueryIntegration:
         query = Query().filter("metadata.tenant_id", "=", "T-1")
         sql, params = b.build_search_query(query)
 
-        assert "WHERE metadata->>'tenant_id' = $1" in sql
+        assert "WHERE (jsonb_typeof(metadata->'tenant_id') = 'string'" in sql
+        assert "metadata->>'tenant_id' = $1" in sql
         assert params == ["T-1"]
 
     def test_postgres_mixed_data_and_metadata_filters(self) -> None:
@@ -392,7 +441,8 @@ class TestSearchQueryIntegration:
         query = Query().filter("metadata.tenant_id", "=", "T-1")
         sql, params = b.build_search_query(query)
 
-        assert "WHERE json_extract(metadata, '$.tenant_id') = ?" in sql
+        assert "WHERE (json_type(metadata, '$.tenant_id') = 'text'" in sql
+        assert "json_extract(metadata, '$.tenant_id') = ?" in sql
         assert params == ["T-1"]
 
 

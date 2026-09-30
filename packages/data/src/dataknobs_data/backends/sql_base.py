@@ -8,8 +8,11 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import Callable, Sequence
-from datetime import datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, time
+from decimal import Decimal
+from numbers import Integral
+from types import MappingProxyType
 from typing import Any, TYPE_CHECKING
 
 from dataknobs_utils.sql_utils import quote_ident
@@ -21,7 +24,9 @@ from ..query import (
     Query,
     SortOrder,
     is_storage_key_field,
+    NAIVE_TIMESTAMP_SHAPE,
     membership_values,
+    value_kind,
 )
 from ..records import Record
 
@@ -160,15 +165,41 @@ def prefix_upper_bound(prefix: str) -> str | None:
     return None
 
 
-def _first_bound(value: Any) -> Any:
-    """The value an ordered comparison's type is read from.
+#: Each negated operator, and the operator it is the negation of.
+_NEGATIONS: Mapping[Operator, Operator] = MappingProxyType(
+    {
+        Operator.NEQ: Operator.EQ,
+        Operator.NOT_IN: Operator.IN,
+        Operator.NOT_BETWEEN: Operator.BETWEEN,
+    }
+)
 
-    A ``BETWEEN`` bound is a pair, typed by its first member; any other value
-    is its own.
-    """
-    if isinstance(value, (list, tuple)) and len(value) > 0:
-        return value[0]
-    return value
+#: Each dialect's names for a JSON value's type, as its type function
+#: (``jsonb_typeof`` / ``json_type``) reports them. A dialect missing here
+#: cannot read a JSON type, and compares untyped.
+_JSON_TYPE_NAMES: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "postgres": {"number": ("number",), "boolean": ("boolean",), "string": ("string",)},
+        "sqlite": {
+            "number": ("integer", "real"),
+            "boolean": ("true", "false"),
+            "string": ("text",),
+        },
+        "duckdb": {
+            "number": ("BIGINT", "UBIGINT", "DOUBLE"),
+            "boolean": ("BOOLEAN",),
+            "string": ("VARCHAR",),
+        },
+    }
+)
+
+#: The type DuckDB casts a value of each non-string kind to.
+_DUCKDB_CASTS: Mapping[str, str] = MappingProxyType(
+    {"number": "DOUBLE", "boolean": "BOOLEAN", "timestamp": "TIMESTAMP"}
+)
+
+#: The date that opens that shape, as SQLite's ``GLOB`` states it.
+_DATE_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
 
 
 def is_duplicate_key_error(exc: BaseException) -> bool:
@@ -1112,59 +1143,6 @@ class SQLQueryBuilder:
         else:
             return field
 
-    def _apply_type_cast(self, base_expr: str, op: Operator, value: Any) -> str:
-        """Wrap a SQL expression with a type cast appropriate for the operator and value.
-
-        Args:
-            base_expr: The raw field-extraction SQL expression.
-            op: The filter ``Operator``.
-            value: The filter value (used to infer the target type).
-
-        Returns:
-            The expression, potentially wrapped with a dialect-specific cast.
-        """
-        needs_ordered_cast = op in self._ORDERED_OPERATORS
-        needs_equality_cast = op in [
-            Operator.EQ,
-            Operator.NEQ,
-            Operator.IN,
-            Operator.NOT_IN,
-        ]
-
-        # Determine target type from the value. A membership value is typed by
-        # its first member that can match: a leading ``None`` renders no
-        # placeholder, so it must not leave a numeric field compared as text.
-        if op in (Operator.IN, Operator.NOT_IN):
-            members = membership_values(value)
-            first_value = members[0] if members else None
-        else:
-            first_value = _first_bound(value)
-
-        target_type: str | None = None
-        if needs_ordered_cast or needs_equality_cast:
-            # bool must be checked before int — bool is a subclass of int
-            if isinstance(first_value, bool):
-                target_type = "boolean"
-            elif isinstance(first_value, (int, float)):
-                target_type = "numeric"
-            elif isinstance(first_value, datetime):
-                target_type = "timestamp"
-
-        if target_type is None:
-            return base_expr
-
-        if self.dialect == "postgres":
-            return f"({base_expr})::{target_type}"
-        elif self.dialect == "duckdb":
-            duckdb_types = {
-                "boolean": "BOOLEAN",
-                "numeric": "DOUBLE",
-                "timestamp": "TIMESTAMP",
-            }
-            return f"CAST({base_expr} AS {duckdb_types[target_type]})"
-        # SQLite: json_extract already returns typed values, no cast needed
-        return base_expr
-
     # Operators that order their operands, and so depend on a collation when
     # the operands are text.
     _ORDERED_OPERATORS = frozenset(
@@ -1178,6 +1156,15 @@ class SQLQueryBuilder:
         }
     )
 
+    # Operators that compare a value with a bound, and so match only a value
+    # of the bound's kind --- see :meth:`_build_typed_clause`.
+    _TYPED_OPERATORS = _ORDERED_OPERATORS | {
+        Operator.EQ,
+        Operator.NEQ,
+        Operator.IN,
+        Operator.NOT_IN,
+    }
+
     # Operators whose in-memory ``Filter.matches`` contract requires the field
     # value to be a string (a non-string value never matches). On a JSON field
     # the SQL text projection would otherwise coerce non-string values to text
@@ -1186,6 +1173,27 @@ class SQLQueryBuilder:
     _STRING_ONLY_OPERATORS = frozenset(
         {Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH}
     )
+
+    def _json_type_is(self, field: str, column: str, kind: str) -> str | None:
+        """A predicate that the JSON value at ``column.field`` is of ``kind``.
+
+        A ``timestamp`` is stored as a JSON string, so it asks for a string.
+        Returns ``None`` for a dialect that cannot read a JSON type. ``field``
+        is validated by the :meth:`_build_json_field_expr` call that precedes
+        every use; ``column`` is our own ``"data"``/``"metadata"``.
+        """
+        names = _JSON_TYPE_NAMES.get(self.dialect)
+        if names is None:
+            return None
+        options = names["string" if kind == "timestamp" else kind]
+        if self.dialect == "postgres":
+            json_expr = self._build_json_field_expr(field, column=column, as_text=False)
+            type_expr = f"jsonb_typeof({json_expr})"
+        else:
+            type_expr = f"json_type({column}, '$.{field}')"
+        if len(options) == 1:
+            return f"{type_expr} = '{options[0]}'"
+        return f"{type_expr} IN ({', '.join(f"'{name}'" for name in options)})"
 
     def _json_string_guard(self, field: str, column: str) -> str | None:
         """Return a predicate asserting the JSON value at ``column.field`` is a string.
@@ -1198,19 +1206,235 @@ class SQLQueryBuilder:
         matches it. AND'ing this guard in keeps SQL and in-memory in agreement.
 
         Returns ``None`` for a dialect without JSON type introspection (the
-        ``standard`` fallback), leaving behavior unchanged there. ``field`` is
-        pre-validated by the :meth:`_build_json_field_expr` call that precedes
-        every use of this guard; ``column`` is our own ``"data"``/``"metadata"``.
+        ``standard`` fallback), leaving behavior unchanged there.
+        """
+        return self._json_type_is(field, column, "string")
+
+    def _typed_json_value(self, field: str, column: str, kind: str) -> tuple[str, str] | None:
+        """A test that the value at ``column.field`` is of ``kind``, and the value.
+
+        The value is in ``kind``'s SQL type. A string needs no cast, so it is
+        the text projection itself, and an index on that serves an equality or
+        membership comparison. Any other kind is cast inside a ``CASE`` on the
+        same test, so a value of another kind is never cast: PostgreSQL does
+        not promise to evaluate an ``AND``-ed test before a cast.
+
+        A ``timestamp`` is a JSON string that names a time
+        (:meth:`_timestamp_reading`).
+
+        Returns ``None`` for a dialect that cannot read a JSON type.
+        """
+        text = self._build_json_field_expr(field, column=column)
+        is_kind = self._json_type_is(field, column, kind)
+        if is_kind is None:
+            return None
+        if kind == "timestamp":
+            names_time, value = self._timestamp_reading(text)
+            is_kind = f"{is_kind} AND {names_time}"
+        elif kind == "string" or self.dialect == "sqlite":
+            # SQLite's json_extract already answers in the value's own type.
+            return is_kind, text
+        elif self.dialect == "postgres":
+            value = f"({text})::{'numeric' if kind == 'number' else 'boolean'}"
+        else:
+            value = f"TRY_CAST({text} AS {_DUCKDB_CASTS[kind]})"
+        return is_kind, f"CASE WHEN {is_kind} THEN {value} END"
+
+    def _timestamp_reading(self, text: str) -> tuple[str, str]:
+        """A test that the string ``text`` names a time, and the time it names.
+
+        ``Filter.matches`` reads a string as a time through
+        :func:`~dataknobs_data.query.read_timestamp`: ISO extended form, each
+        field in its range, naming a real day. The test is that reading, with
+        no zone (:data:`~dataknobs_data.query.NAIVE_TIMESTAMP_SHAPE`), since
+        ``Filter.matches`` never orders a zoned value against a naive bound. A
+        string naming none is a string, as ``Filter.matches`` reads it:
+        unmatched, and matched by a negated operator. Refusing it in the test,
+        rather than letting its cast answer ``NULL``, is what keeps the clause
+        two-valued, so ``NOT`` over it still matches.
+
+        The shape bounds each field. What it cannot refuse is a day past its
+        month's end (``2024-02-30``): DuckDB's ``TRY_CAST`` answers ``NULL``
+        for it, and SQLite, which reads it as the next month, is asked whether
+        the date comes back as written. PostgreSQL 15 has no cast that answers
+        ``NULL`` (``pg_input_is_valid`` arrives in 16), so such a value still
+        raises there. SQLite has no timestamp type: ``strftime`` reads the
+        value and it is compared as fixed-width text, which the bound is
+        rendered to match (:meth:`_bind_bound`).
+
+        ``text`` is an expression over a JSON field or the ``id`` column; the
+        value is to be read only where the test holds.
         """
         if self.dialect == "postgres":
-            # ``->`` (jsonb, not ``->>`` text) so jsonb_typeof sees the real type.
-            json_expr = self._build_json_field_expr(field, column=column, as_text=False)
-            return f"jsonb_typeof({json_expr}) = 'string'"
-        elif self.dialect == "sqlite":
-            return f"json_type({column}, '$.{field}') = 'text'"
-        elif self.dialect == "duckdb":
-            return f"json_type({column}, '$.{field}') = 'VARCHAR'"
-        return None
+            return f"{text} ~ '{NAIVE_TIMESTAMP_SHAPE}'", f"({text})::timestamp"
+        if self.dialect == "duckdb":
+            readable = f"TRY_CAST({text} AS TIMESTAMP) IS NOT NULL"
+            return (
+                f"regexp_full_match({text}, '{NAIVE_TIMESTAMP_SHAPE}') "
+                f"AND {self._when_present(text, readable)}",
+                f"TRY_CAST({text} AS TIMESTAMP)",
+            )
+        # The date, alone or followed by a time made of digits, ':' and '.';
+        # a year from 0001; a date that comes back as written (SQLite rolls
+        # 02-30 over to 03-01, and only the date is re-read, since a time of
+        # .999999 rounds into the next day); an hour below 24, which SQLite
+        # keeps; and a minute and second ``strftime`` accepts. ``IS`` rather
+        # than ``=``, so an unreadable date is false, not ``NULL``.
+        readable = f"strftime('%H:%M:%S', {text}) IS NOT NULL"
+        names_time = (
+            f"({text} GLOB '{_DATE_GLOB}' OR ({text} GLOB "
+            f"'{_DATE_GLOB}[T ][0-9][0-9]:[0-9][0-9]*' AND substr({text}, 17) "
+            f"NOT GLOB '*[^0-9:.]*' AND substr({text}, 12, 2) < '24')) "
+            f"AND substr({text}, 1, 4) <> '0000' "
+            f"AND date(substr({text}, 1, 10), '+0 days') IS substr({text}, 1, 10) "
+            f"AND {self._when_present(text, readable)}"
+        )
+        fraction = (
+            f"CASE WHEN instr({text}, '.') > 0 THEN "
+            f"substr(substr({text}, instr({text}, '.')) || '000000', 1, 7) "
+            "ELSE '.000000' END"
+        )
+        return names_time, f"strftime('%Y-%m-%dT%H:%M:%S', {text}) || {fraction}"
+
+    @staticmethod
+    def _when_present(text: str, test: str) -> str:
+        """``test`` for a present value, and unknown (``NULL``) for a missing one.
+
+        A test that reads ``NULL`` as a fact (``x IS NOT NULL``) would make a
+        kind test false for a missing value where every other kind test is
+        unknown, and a ``NOT`` around the clause would then match the missing
+        value for this kind alone. How a ``NOT`` treats a missing value is a
+        question of its own, so it is answered the same way for every kind.
+        """
+        return f"CASE WHEN {text} IS NOT NULL THEN {test} END"
+
+    def _bind_bound(self, kind: str | None, bound: Any) -> Any:
+        """A bound as it is passed to be compared with a value of its kind.
+
+        - A plain ``date`` is its midnight, as ``Filter.matches`` reads it.
+          SQLite compares a timestamp as text --- fixed width, ``T``-separated,
+          to the microsecond, so text order is time order, as
+          :meth:`_timestamp_reading` renders the value --- rather than handed
+          to the driver's default datetime adapter, which writes a space for
+          the ``T``; the
+          zone of an aware bound is dropped there, as the ``timestamp`` cast
+          drops it elsewhere.
+        - A number no driver takes as it is --- a numpy number, a ``Decimal``
+          on SQLite, which cannot bind one --- is an ``int`` when integral and
+          a ``float`` otherwise. PostgreSQL compares a ``Decimal`` as
+          ``numeric``, exactly.
+        - A numpy boolean is a ``bool``.
+        """
+        if kind == "timestamp":
+            if not isinstance(bound, datetime):
+                bound = datetime.combine(bound, time.min)
+            if self.dialect == "sqlite":
+                return bound.replace(tzinfo=None).isoformat(sep="T", timespec="microseconds")
+            return bound
+        if kind == "boolean":
+            return bool(bound)
+        if kind == "number" and type(bound) not in (int, float):
+            if isinstance(bound, Integral):
+                return int(bound)
+            if not (self.dialect == "postgres" and isinstance(bound, Decimal)):
+                return float(bound)
+        return bound
+
+    def _build_typed_clause(
+        self,
+        op: Operator,
+        value: Any,
+        param_start: int,
+        expr_for: Callable[[str | None], tuple[str | None, str] | None],
+        present: str,
+        *,
+        bind: Callable[[str | None, Any], Any] | None = None,
+    ) -> tuple[str, list[Any]]:
+        """A comparison that matches only values of its bound's kind.
+
+        ``Filter.matches`` relates a value only to a bound of its own kind
+        (see :func:`~dataknobs_data.query.value_kind`), and never matches a missing value. So:
+
+        - A positive operator is the field's kind test ``AND``-ed in front of
+          the comparison (``expr_for``). A present value of another kind makes
+          the clause false rather than ``NULL``, so a ``NOT`` around it still
+          reads that value as unmatched, and the comparison itself is left as
+          an index on the expression can serve it.
+        - A membership list is split by kind, each part compared in its own,
+          and the parts ``OR``-ed: ``IN [5, 'c']`` matches ``5`` and ``'c'``.
+        - A ``BETWEEN`` whose bounds differ in kind matches nothing, and so
+          does a ``None`` or NaN bound, which equals and orders against
+          nothing (kind ``"never"``; ``expr_for`` answers ``None`` for it).
+        - A negated operator (``NEQ``, ``NOT_IN``, ``NOT_BETWEEN``) is every
+          ``present`` value its positive form does not match, so a value of
+          another kind matches it.
+
+        Args:
+            op: The filter's operator, one of :attr:`_TYPED_OPERATORS`.
+            value: The filter's value.
+            param_start: Starting parameter number for placeholders.
+            expr_for: For a bound of a kind (``None`` for a bound with none),
+                the predicate a value must meet to be of that kind (``None``
+                when every value is) and the expression compared; or ``None``
+                when no value of that kind can be stored there.
+            present: A predicate that the field holds a value.
+            bind: How a bound of a kind is passed as a parameter, when not as
+                given.
+
+        Returns:
+            Tuple of (SQL clause, parameters).
+        """
+        positive = _NEGATIONS.get(op, op)
+
+        def bound_as_bound(kind: str | None, bound: Any) -> Any:
+            return bound if bind is None else bind(kind, bound)
+
+        def guarded(kind_test: str | None, clause: str) -> str:
+            return clause if kind_test is None else f"({kind_test} AND {clause})"
+
+        parts: list[str] = []
+        params: list[Any] = []
+        if positive == Operator.IN:
+            groups: dict[str | None, list[Any]] = {}
+            for member in membership_values(value):
+                groups.setdefault(value_kind(member), []).append(member)
+            for kind, members in groups.items():
+                target = expr_for(kind)
+                if target is not None:
+                    part, part_params = self._build_membership_clause(
+                        target[1],
+                        Operator.IN,
+                        [bound_as_bound(kind, member) for member in members],
+                        param_start + len(params),
+                    )
+                    parts.append(guarded(target[0], part))
+                    params.extend(part_params)
+        else:
+            bounds = value if positive == Operator.BETWEEN else [value]
+            kinds = {value_kind(bound) for bound in bounds}
+            target = expr_for(next(iter(kinds))) if len(kinds) == 1 else None
+            if target is not None:
+                (kind,) = kinds
+                kind_test, expr = target
+                if kind == "string" and positive in self._ORDERED_OPERATORS:
+                    # Code-point order, as ``Filter.matches`` compares str.
+                    expr = self._code_point_order(expr)
+                bound = (
+                    [bound_as_bound(kind, b) for b in bounds]
+                    if positive == Operator.BETWEEN
+                    else bound_as_bound(kind, value)
+                )
+                part, params = self._build_operator_clause(expr, positive, bound, param_start)
+                parts.append(guarded(kind_test, part))
+
+        if not parts:
+            # Nothing of the bound's kind can match: the positive form is
+            # false, and its negation is every value the field holds.
+            return ("FALSE" if positive is op else present), []
+        matched = parts[0] if len(parts) == 1 else f"({' OR '.join(parts)})"
+        if positive is op:
+            return matched, params
+        return f"({present} AND NOT {matched})", params
 
     def _build_operator_clause(
         self,
@@ -1422,35 +1646,62 @@ class SQLQueryBuilder:
         op = filter_spec.operator
         value = filter_spec.value
 
-        # Track the JSON (column, path) for string-only-operator guarding; the
-        # 'id' real column has no JSON type and is always a string, so it stays
-        # None (unguarded).
-        json_target: tuple[str, str] | None = None
-
         # The reserved storage-key field is a real column, not inside JSON.
+        # It is always a string, so a string bound compares it as it is, a
+        # timestamp bound reads it as the time it names (if it names one), and
+        # a bound of any other kind never matches it.
         if is_storage_key_field(field):
-            field_expr = "id"
-        else:
-            # Non-storage-key fields target the data JSONB column, or the
-            # metadata column when prefixed ``metadata.`` (dot-notation nesting).
-            column, nested_path = resolve_json_column_and_path(field)
-            base_expr = self._build_json_field_expr(nested_path, column=column)
-            field_expr = self._apply_type_cast(base_expr, op, value)
-            json_target = (column, nested_path)
+            if op in self._TYPED_OPERATORS:
 
-        # An ordered comparison against a string compares text, which Postgres
-        # would otherwise do under the database collation.
-        if op in self._ORDERED_OPERATORS and isinstance(_first_bound(value), str):
-            field_expr = self._code_point_order(field_expr)
+                def storage_key_for(kind: str | None) -> tuple[str | None, str] | None:
+                    if kind is None or kind == "string":
+                        return None, "id"
+                    if kind == "timestamp" and self.dialect in _JSON_TYPE_NAMES:
+                        names_time, time_value = self._timestamp_reading("id")
+                        return names_time, f"CASE WHEN {names_time} THEN {time_value} END"
+                    return None
 
-        clause, params = self._build_operator_clause(field_expr, op, value, param_start)
+                return self._build_typed_clause(
+                    op,
+                    value,
+                    param_start,
+                    storage_key_for,
+                    "id IS NOT NULL",
+                    bind=self._bind_bound,
+                )
+            return self._build_operator_clause("id", op, value, param_start)
+
+        # Other fields target the data JSONB column, or the metadata column
+        # when prefixed ``metadata.`` (dot-notation nesting).
+        column, nested_path = resolve_json_column_and_path(field)
+        text_expr = self._build_json_field_expr(nested_path, column=column)
+
+        if op in self._TYPED_OPERATORS and self.dialect in _JSON_TYPE_NAMES:
+
+            def json_value_for(kind: str | None) -> tuple[str | None, str] | None:
+                if kind is None:
+                    return None, text_expr
+                if kind == "never":
+                    return None
+                return self._typed_json_value(nested_path, column, kind)
+
+            return self._build_typed_clause(
+                op,
+                value,
+                param_start,
+                json_value_for,
+                f"{text_expr} IS NOT NULL",
+                bind=self._bind_bound,
+            )
+
+        clause, params = self._build_operator_clause(text_expr, op, value, param_start)
 
         # String-only operators match only string values (in-memory contract).
         # On a JSON field, AND in a JSON-string-type guard so a non-string value
         # the text projection would coerce-and-match is excluded — keeping the
         # SQL push-down in agreement with Filter.matches across every backend.
-        if op in self._STRING_ONLY_OPERATORS and json_target is not None:
-            guard = self._json_string_guard(json_target[1], json_target[0])
+        if op in self._STRING_ONLY_OPERATORS:
+            guard = self._json_string_guard(nested_path, column)
             if guard:
                 clause = f"({guard} AND {clause})"
 

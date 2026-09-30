@@ -77,7 +77,10 @@ class TestSQLBase:
         # Test NOT_IN operator
         filter_spec = Filter("field", Operator.NOT_IN, [1, 2, 3])
         clause, params = builder._build_filter_clause(filter_spec, 1)
-        assert "NOT IN" in clause
+        # Every value that is not a number in the list, as ``Filter.matches``
+        # answers it: a value of another kind is not in a list of numbers.
+        assert " AND NOT (" in clause
+        assert "IN ($1, $2, $3)" in clause
         assert params == [1, 2, 3]
 
         # Test EXISTS operator (maps to IS NOT NULL)

@@ -353,9 +353,10 @@ def test_unsupported_operator_raises() -> None:
 @pytest.mark.parametrize("op", [Operator.BETWEEN, Operator.NOT_BETWEEN])
 @pytest.mark.parametrize("bad_value", [[1], [1, 2, 3], "not-a-pair", 5])
 def test_between_malformed_bounds_raise(op: Operator, bad_value: object) -> None:
-    # BETWEEN/NOT_BETWEEN require exactly a two-element bound; anything else
-    # fails loud rather than emitting a malformed range clause.
-    with pytest.raises(ValueError, match="two-element bound"):
+    # BETWEEN/NOT_BETWEEN require exactly two bounds; anything else fails loud
+    # rather than emitting a malformed range clause. The refusal is the
+    # Filter's own, so no translator ever receives such a value.
+    with pytest.raises(ValueError, match="needs two bounds"):
         build_filter_es_query(Filter("age", op, bad_value))
 
 

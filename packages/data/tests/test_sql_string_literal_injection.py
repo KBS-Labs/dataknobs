@@ -174,7 +174,10 @@ class TestStreamReadAppliesTheBuilderGrammar:
 
         builder = SQLQueryBuilder(table_name="records", dialect="postgres")
         where_clause, params = builder.build_where_clause(self._dotted_query())
-        assert where_clause == " AND metadata->>'work_order_id' = $1"
+        assert where_clause == (
+            " AND (jsonb_typeof(metadata->'work_order_id') = 'string'"
+            " AND metadata->>'work_order_id' = $1)"
+        )
         assert params == ["W-1"]
 
     def test_sync_stream_read_accepts_the_dotted_field(self):

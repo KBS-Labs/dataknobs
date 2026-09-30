@@ -460,6 +460,11 @@ any other collection that is neither a string nor a mapping). Anything else
 raises `ValueError` when the `Filter` is built: wrap a single value in a list
 or use `EQ`, and pass a mapping's keys rather than the mapping.
 
+`BETWEEN` and `NOT_BETWEEN` take exactly two bounds, as a list or tuple:
+`[lower, upper]`. Anything else --- one value, three, a string, a set (which
+has no order to say which bound is which) --- raises `ValueError` when the
+`Filter` is built.
+
 The SQL backends (SQLite, DuckDB, PostgreSQL) and the backends that filter in
 memory (memory, file, S3) answer a membership filter the same way: nothing is
 in an empty list, and a `None` member matches nothing. `NOT_IN` matches only
@@ -468,6 +473,57 @@ record that has one. Elasticsearch differs in two ways: its `NOT_IN` also
 matches a document that lacks the field, as each of its negations does, and it
 chooses a string field's exact-match (`.keyword`) path from the list's first
 member only.
+
+A comparison (`EQ`, `NEQ`, `GT`, `GTE`, `LT`, `LTE`, `BETWEEN`, `NOT_BETWEEN`,
+`IN`, `NOT_IN`) relates a field's value only to a bound of the same kind, as
+JSON types them: a number to a number, a string to a string, a boolean to a
+boolean. A boolean is not a number, so `Filter("n", Operator.EQ, 1)` does not
+match `true`, and `Filter("n", Operator.LT, 5)` does not match `false`. A value
+of another kind is unmatched by a positive comparison and matched by a negated
+one, and no comparison matches a missing field or a JSON `null`:
+
+| Field holds | `t > "B"` | `t == 5` | `t != 5` | `t IN [5, "c"]` |
+|---|---|---|---|---|
+| `"c"` | yes | no | yes | yes |
+| `5` | no | yes | no | yes |
+| `true` | no | no | yes | no |
+| `"5"` | no | no | yes | no |
+| no `t` | no | no | no | no |
+
+A membership list may mix kinds; each member is compared in its own. A
+`BETWEEN` whose bounds are of different kinds matches nothing. A `None` or NaN
+bound equals and orders against nothing, so it matches nothing and its
+negation every value present. A number is any real number type (`Decimal`
+and numpy's included), and a plain `date` is its own midnight.
+
+A `date` or `datetime` bound without a zone compares with a string that names
+a time without one, on a data field and on `id`. A string names a time when it
+is ISO 8601 in extended form, each field in range and naming a real day ---
+`"2024-01-02"`, `"2024-01-02T03:04"`, `"2024-01-02 03:04:05.25"` --- which is
+what `dataknobs_data.query.read_timestamp` reads. A string naming none
+(`"2024-02-30"`, `"2024-01-01T24:00:00"`, and the basic and week forms
+`"20240102"` and `"2024-W01-2"`), or one with a zone, counts as a value of
+another kind.
+
+Two strings compare as text, by code point, whatever either names: the
+bound's kind decides. So `"2024-01-01"` is `<` `"2024-01-01T00:00:00"` and
+`"2024-01-01 10:00:00"` is `<` `"2024-01-01T09:00:00"`, as a sort on the field
+orders them. To compare a field of time strings as times, pass the bound as a
+`date` or `datetime`. A bound with a zone is not yet
+answered the same way everywhere. `EQ` reads such a string the same way the ordering
+operators do, so a value that is `>=` and `<=` a bound also equals it.
+
+The SQL backends test each value's JSON type before comparing, so one value of
+another kind in a field neither matches wrongly nor makes the query raise. A
+number, boolean or `datetime` bound compares a cast of the value inside a
+`CASE` on that test, so an expression index added by hand on a cast
+(`((data->>'n')::numeric)`) no longer serves the comparison; a string bound
+compares `data->>'field'` itself, so an index on that still serves `EQ` and
+`IN`. An ordered string comparison on PostgreSQL renders `COLLATE "C"` (see
+below), which an index built under the default collation does not serve. On
+PostgreSQL 15 one string still raises: a date past its month's end
+(`"2024-02-30"`), which has timestamp shape with each field in range, because
+PostgreSQL has no cast that answers `NULL` there before version 16.
 
 Strings order by code point, as Python compares them: `GT`, `GTE`, `LT`,
 `LTE`, `BETWEEN` and `NOT_BETWEEN` against a string, and a sort on a string
