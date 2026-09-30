@@ -9,7 +9,7 @@ import json
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from numbers import Integral
 from types import MappingProxyType
@@ -25,6 +25,7 @@ from ..query import (
     SortOrder,
     is_storage_key_field,
     NAIVE_TIMESTAMP_SHAPE,
+    ZONED_TIMESTAMP_SHAPE,
     membership_values,
     value_kind,
 )
@@ -200,6 +201,64 @@ _DUCKDB_CASTS: Mapping[str, str] = MappingProxyType(
 
 #: The date that opens that shape, as SQLite's ``GLOB`` states it.
 _DATE_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
+
+#: The ways a stored string is read as a time. A naive time is a string with
+#: no zone; a zoned one is read by the instant it names or, against a
+#: ``date``, by its own wall clock. ``"timestamp"`` is :func:`value_kind`'s
+#: name for a time, which a naive time keeps.
+_NAIVE_TIME = "timestamp"
+_ZONED_INSTANT = "zoned timestamp"
+_ZONED_WALL_CLOCK = "zoned wall-clock timestamp"
+_TIME_READINGS = frozenset({_NAIVE_TIME, _ZONED_INSTANT, _ZONED_WALL_CLOCK})
+
+#: A zone at the end of a string of :data:`ZONED_TIMESTAMP_SHAPE`.
+_ZONE_SUFFIX = "(Z|[+-][0-9][0-9]:[0-9][0-9])$"
+
+
+def _readings(bound: Any) -> dict[str | None, str | None]:
+    """The values a bound relates to, each with the reading it compares them under.
+
+    Keyed by the population a value belongs to: its :func:`value_kind`, with
+    a time string split into naive and zoned, which Python never orders
+    against each other. So an aware ``datetime`` relates to zoned strings, by
+    instant; a naive one to naive strings; and a ``date`` to both, each by its
+    own wall-clock day, as :func:`~dataknobs_data.query._align_temporal`
+    reads it. Two bounds of one comparison relate to the populations both
+    relate to.
+    """
+    kind = value_kind(bound)
+    if kind != "timestamp":
+        return {kind: kind}
+    if not isinstance(bound, datetime):
+        return {"naive": _NAIVE_TIME, "zoned": _ZONED_WALL_CLOCK}
+    if bound.utcoffset() is None:
+        return {"naive": _NAIVE_TIME}
+    return {"zoned": _ZONED_INSTANT}
+
+
+def _utc_text(bound: datetime) -> str:
+    """An aware bound as SQLite writes the instant a zoned string names.
+
+    In UTC, fixed width, to the microsecond, and a day early. SQLite writes
+    the years 0000 to 9999; an offset moves a time Python holds by up to a
+    day either side of its own 0001 to 9999, so the instant a day early is
+    one SQLite can always write, and shifting both sides keeps their order.
+    Python cannot hold the year 0000, so a day in it is written by hand.
+    """
+    wall, offset = bound.replace(tzinfo=None), bound.utcoffset()
+    if offset is None:
+        raise ValueError(f"A naive datetime names no instant: {bound!r}")
+    try:
+        early = (
+            (wall - timedelta(days=1) - offset)
+            if offset < timedelta(0)
+            else (wall - offset - timedelta(days=1))
+        )
+    except OverflowError:
+        # Before 0001-01-01: two days later it is 0001-01-01 or -02.
+        later = wall + timedelta(days=1) - offset
+        return f"0000-12-{29 + later.day}T{later.time().isoformat(timespec='microseconds')}"
+    return early.isoformat(sep="T", timespec="microseconds")
 
 
 def is_duplicate_key_error(exc: BaseException) -> bool:
@@ -1181,7 +1240,7 @@ class SQLQueryBuilder:
     def _json_type_is(self, field: str, column: str, kind: str) -> str | None:
         """A predicate that the JSON value at ``column.field`` is of ``kind``.
 
-        A ``timestamp`` is stored as a JSON string, so it asks for a string.
+        A time is stored as a JSON string, so it asks for a string.
         Returns ``None`` for a dialect that cannot read a JSON type. ``field``
         is validated by the :meth:`_build_json_field_expr` call that precedes
         every use; ``column`` is our own ``"data"``/``"metadata"``.
@@ -1189,7 +1248,7 @@ class SQLQueryBuilder:
         names = _JSON_TYPE_NAMES.get(self.dialect)
         if names is None:
             return None
-        options = names["string" if kind == "timestamp" else kind]
+        options = names["string" if kind in _TIME_READINGS else kind]
         if self.dialect == "postgres":
             json_expr = self._build_json_field_expr(field, column=column, as_text=False)
             type_expr = f"jsonb_typeof({json_expr})"
@@ -1223,8 +1282,8 @@ class SQLQueryBuilder:
         same test, so a value of another kind is never cast: PostgreSQL does
         not promise to evaluate an ``AND``-ed test before a cast.
 
-        A ``timestamp`` is a JSON string that names a time
-        (:meth:`_timestamp_reading`).
+        A time is a JSON string that names one, read as ``kind`` says
+        (:meth:`_time_reading`).
 
         Returns ``None`` for a dialect that cannot read a JSON type.
         """
@@ -1232,8 +1291,8 @@ class SQLQueryBuilder:
         is_kind = self._json_type_is(field, column, kind)
         if is_kind is None:
             return None
-        if kind == "timestamp":
-            names_time, value = self._timestamp_reading(text)
+        if kind in _TIME_READINGS:
+            names_time, value = self._time_reading(text, kind)
             is_kind = f"{is_kind} AND {names_time}"
         elif kind == "string" or self.dialect == "sqlite":
             # SQLite's json_extract already answers in the value's own type.
@@ -1244,15 +1303,26 @@ class SQLQueryBuilder:
             value = f"TRY_CAST({text} AS {_DUCKDB_CASTS[kind]})"
         return is_kind, f"CASE WHEN {is_kind} THEN {value} END"
 
-    def _timestamp_reading(self, text: str) -> tuple[str, str]:
-        """A test that the string ``text`` names a time, and the time it names.
+    def _time_reading(self, text: str, reading: str) -> tuple[str, str]:
+        """A test that the string ``text`` names a time of ``reading``'s kind, and the time.
 
         ``Filter.matches`` reads a string as a time through
         :func:`~dataknobs_data.query.read_timestamp`: ISO extended form, each
-        field in its range, naming a real day. The test is that reading, with
-        no zone (:data:`~dataknobs_data.query.NAIVE_TIMESTAMP_SHAPE`), since
-        ``Filter.matches`` never orders a zoned value against a naive bound. A
-        string naming none is a string, as ``Filter.matches`` reads it:
+        field in its range, naming a real day, and with or without a zone.
+        With none it is a naive ``datetime``, which ``Filter.matches`` never
+        orders against an aware one, so the two are separate kinds here too:
+
+        - ``_NAIVE_TIME``: a string of
+          :data:`~dataknobs_data.query.NAIVE_TIMESTAMP_SHAPE`, read as the
+          time it names.
+        - ``_ZONED_INSTANT``: a string of
+          :data:`~dataknobs_data.query.ZONED_TIMESTAMP_SHAPE`, read as the
+          instant it names. Both sides carry their offset, so no session time
+          zone enters the comparison.
+        - ``_ZONED_WALL_CLOCK``: the same strings, read as the time on their
+          own clock, which is how a ``date`` bound orders one.
+
+        A string naming none is a string, as ``Filter.matches`` reads it:
         unmatched, and matched by a negated operator. Refusing it in the test,
         rather than letting its cast answer ``NULL``, is what keeps the clause
         two-valued, so ``NOT`` over it still matches.
@@ -1264,11 +1334,54 @@ class SQLQueryBuilder:
         ``NULL`` (``pg_input_is_valid`` arrives in 16), so such a value still
         raises there. SQLite has no timestamp type: ``strftime`` reads the
         value and it is compared as fixed-width text, which the bound is
-        rendered to match (:meth:`_bind_bound`).
+        rendered to match (:meth:`_bind_bound`), a zoned value in UTC and a
+        day early, since its date functions write only the years 0000 to 9999
+        (:func:`_utc_text`).
 
         ``text`` is an expression over a JSON field or the ``id`` column; the
         value is to be read only where the test holds.
         """
+        if reading == _NAIVE_TIME:
+            return self._naive_time_reading(text)
+        by_instant = reading == _ZONED_INSTANT
+        if self.dialect == "postgres":
+            # A zone in the input of a ``timestamp`` cast is ignored, which
+            # leaves the wall clock.
+            cast = "timestamptz" if by_instant else "timestamp"
+            return f"{text} ~ '{ZONED_TIMESTAMP_SHAPE}'", f"({text})::{cast}"
+        wall_clock_text = (
+            f"regexp_replace({text}, '{_ZONE_SUFFIX}', '')"
+            if self.dialect == "duckdb"
+            else f"substr({text}, 1, length({text}) - CASE WHEN {text} GLOB '*Z' THEN 1 ELSE 6 END)"
+        )
+        naive_test, wall_clock = self._naive_time_reading(wall_clock_text)
+        if self.dialect == "duckdb":
+            # DuckDB reads a zone only after the seconds.
+            with_seconds = (
+                f"CASE WHEN substr({text}, 17, 1) IN ('Z', '+', '-') "
+                f"THEN substr({text}, 1, 16) || ':00' || substr({text}, 17) ELSE {text} END"
+            )
+            instant = f"TRY_CAST({with_seconds} AS TIMESTAMPTZ)"
+            names_time = (
+                f"regexp_full_match({text}, '{ZONED_TIMESTAMP_SHAPE}') "
+                f"AND {self._when_present(text, f'{instant} IS NOT NULL')}"
+            )
+            return names_time, instant if by_instant else wall_clock
+        # A zone after a time, in range; the time before it as a naive one;
+        # and an instant SQLite reads, which it writes in UTC, a day early.
+        seconds_utc = f"strftime('%Y-%m-%dT%H:%M:%S', {text}, '-1 day')"
+        names_time = (
+            f"({text} GLOB '*Z' OR ({text} GLOB '*[+-][0-9][0-9]:[0-9][0-9]' "
+            f"AND substr({text}, -5, 2) < '24' AND substr({text}, -2) < '60')) "
+            f"AND length({wall_clock_text}) > 10 AND {naive_test} "
+            f"AND {self._when_present(text, f'{seconds_utc} IS NOT NULL')}"
+        )
+        if not by_instant:
+            return names_time, wall_clock
+        return names_time, f"{seconds_utc} || {self._sqlite_fraction(wall_clock_text)}"
+
+    def _naive_time_reading(self, text: str) -> tuple[str, str]:
+        """:meth:`_time_reading` for a string with no zone."""
         if self.dialect == "postgres":
             return f"{text} ~ '{NAIVE_TIMESTAMP_SHAPE}'", f"({text})::timestamp"
         if self.dialect == "duckdb":
@@ -1293,12 +1406,19 @@ class SQLQueryBuilder:
             f"AND date(substr({text}, 1, 10), '+0 days') IS substr({text}, 1, 10) "
             f"AND {self._when_present(text, readable)}"
         )
-        fraction = (
+        return (
+            names_time,
+            f"strftime('%Y-%m-%dT%H:%M:%S', {text}) || {self._sqlite_fraction(text)}",
+        )
+
+    @staticmethod
+    def _sqlite_fraction(text: str) -> str:
+        """The fraction of a second in the zone-less time ``text``, to six digits."""
+        return (
             f"CASE WHEN instr({text}, '.') > 0 THEN "
             f"substr(substr({text}, instr({text}, '.')) || '000000', 1, 7) "
             "ELSE '.000000' END"
         )
-        return names_time, f"strftime('%Y-%m-%dT%H:%M:%S', {text}) || {fraction}"
 
     @staticmethod
     def _when_present(text: str, test: str) -> str:
@@ -1316,25 +1436,26 @@ class SQLQueryBuilder:
         """A bound as it is passed to be compared with a value of its kind.
 
         - A plain ``date`` is its midnight, as ``Filter.matches`` reads it.
-          SQLite compares a timestamp as text --- fixed width, ``T``-separated,
+          SQLite compares a time as text --- fixed width, ``T``-separated,
           to the microsecond, so text order is time order, as
-          :meth:`_timestamp_reading` renders the value --- rather than handed
+          :meth:`_time_reading` renders the value --- rather than handed
           to the driver's default datetime adapter, which writes a space for
-          the ``T``; the
-          zone of an aware bound is dropped there, as the ``timestamp`` cast
-          drops it elsewhere.
+          the ``T``. An aware bound is written in UTC there
+          (:func:`_utc_text`), as a zoned value is read.
         - A number no driver takes as it is --- a numpy number, a ``Decimal``
           on SQLite, which cannot bind one --- is an ``int`` when integral and
           a ``float`` otherwise. PostgreSQL compares a ``Decimal`` as
           ``numeric``, exactly.
         - A numpy boolean is a ``bool``.
         """
-        if kind == "timestamp":
+        if kind in _TIME_READINGS:
             if not isinstance(bound, datetime):
                 bound = datetime.combine(bound, time.min)
-            if self.dialect == "sqlite":
-                return bound.replace(tzinfo=None).isoformat(sep="T", timespec="microseconds")
-            return bound
+            if self.dialect != "sqlite":
+                return bound
+            if kind == _ZONED_INSTANT:
+                return _utc_text(bound)
+            return bound.isoformat(sep="T", timespec="microseconds")
         if kind == "boolean":
             return bool(bound)
         if kind == "number" and type(bound) not in (int, float):
@@ -1364,11 +1485,15 @@ class SQLQueryBuilder:
           the clause false rather than ``NULL``, so a ``NOT`` around it still
           reads that value as unmatched, and the comparison itself is left as
           an index on the expression can serve it.
-        - A membership list is split by kind, each part compared in its own,
-          and the parts ``OR``-ed: ``IN [5, 'c']`` matches ``5`` and ``'c'``.
-        - A ``BETWEEN`` whose bounds differ in kind matches nothing, and so
-          does a ``None`` or NaN bound, which equals and orders against
-          nothing (kind ``"never"``; ``expr_for`` answers ``None`` for it).
+        - A time bound compares under each reading it has (:func:`_readings`):
+          a ``date`` is compared with naive and zoned values alike, one part
+          for each, ``OR``-ed.
+        - A membership list is split by reading, each part compared in its
+          own, and the parts ``OR``-ed: ``IN [5, 'c']`` matches ``5`` and ``'c'``.
+        - A ``BETWEEN`` compares the values both bounds relate to, each bound
+          under its own reading of them, so bounds of different kinds match
+          nothing; and so does a ``None`` or NaN bound, which equals and orders
+          against nothing (kind ``"never"``; ``expr_for`` answers ``None`` for it).
         - A negated operator (``NEQ``, ``NOT_IN``, ``NOT_BETWEEN``) is every
           ``present`` value its positive form does not match, so a value of
           another kind matches it.
@@ -1377,13 +1502,13 @@ class SQLQueryBuilder:
             op: The filter's operator, one of :attr:`_TYPED_OPERATORS`.
             value: The filter's value.
             param_start: Starting parameter number for placeholders.
-            expr_for: For a bound of a kind (``None`` for a bound with none),
-                the predicate a value must meet to be of that kind (``None``
-                when every value is) and the expression compared; or ``None``
-                when no value of that kind can be stored there.
+            expr_for: For a bound's reading (:func:`_readings`; ``None`` for a
+                bound with no kind), the predicate a value must meet to be
+                read so (``None`` when every value is) and the expression
+                compared; or ``None`` when no such value can be stored there.
             present: A predicate that the field holds a value.
-            bind: How a bound of a kind is passed as a parameter, when not as
-                given.
+            bind: How a bound is passed as a parameter for a reading, when not
+                as given.
 
         Returns:
             Tuple of (SQL clause, parameters).
@@ -1401,35 +1526,56 @@ class SQLQueryBuilder:
         if positive == Operator.IN:
             groups: dict[str | None, list[Any]] = {}
             for member in membership_values(value):
-                groups.setdefault(value_kind(member), []).append(member)
-            for kind, members in groups.items():
-                target = expr_for(kind)
+                for reading in _readings(member).values():
+                    groups.setdefault(reading, []).append(member)
+            for reading, members in groups.items():
+                target = expr_for(reading)
                 if target is not None:
                     part, part_params = self._build_membership_clause(
                         target[1],
                         Operator.IN,
-                        [bound_as_bound(kind, member) for member in members],
+                        [bound_as_bound(reading, member) for member in members],
                         param_start + len(params),
                     )
                     parts.append(guarded(target[0], part))
                     params.extend(part_params)
         else:
             bounds = value if positive == Operator.BETWEEN else [value]
-            kinds = {value_kind(bound) for bound in bounds}
-            target = expr_for(next(iter(kinds))) if len(kinds) == 1 else None
-            if target is not None:
-                (kind,) = kinds
-                kind_test, expr = target
-                if kind == "string" and positive in self._ORDERED_OPERATORS:
-                    # Code-point order, as ``Filter.matches`` compares str.
-                    expr = self._code_point_order(expr)
-                bound = (
-                    [bound_as_bound(kind, b) for b in bounds]
-                    if positive == Operator.BETWEEN
-                    else bound_as_bound(kind, value)
-                )
-                part, params = self._build_operator_clause(expr, positive, bound, param_start)
-                parts.append(guarded(kind_test, part))
+            readings = [_readings(bound) for bound in bounds]
+            for population in readings[0]:
+                per_bound = [r.get(population, "never") for r in readings]
+                targets = [t for t in map(expr_for, per_bound) if t is not None]
+                if len(targets) < len(per_bound):
+                    continue  # a bound relates to none of these values
+                # Strings order by code point, as ``Filter.matches`` compares str.
+                ordered = positive in self._ORDERED_OPERATORS
+                exprs = [
+                    self._code_point_order(expr) if r == "string" and ordered else expr
+                    for r, (_, expr) in zip(per_bound, targets, strict=True)
+                ]
+                bound_values = [
+                    bound_as_bound(r, b) for r, b in zip(per_bound, bounds, strict=True)
+                ]
+                start = param_start + len(params)
+                if positive != Operator.BETWEEN:
+                    part, part_params = self._build_operator_clause(
+                        exprs[0], positive, bound_values[0], start
+                    )
+                elif exprs[0] == exprs[1]:
+                    part, part_params = self._build_operator_clause(
+                        exprs[0], positive, bound_values, start
+                    )
+                else:
+                    # A date and an aware bound read a zoned value two ways.
+                    low, low_params = self._build_operator_clause(
+                        exprs[0], Operator.GTE, bound_values[0], start
+                    )
+                    high, high_params = self._build_operator_clause(
+                        exprs[1], Operator.LTE, bound_values[1], start + len(low_params)
+                    )
+                    part, part_params = f"({low} AND {high})", low_params + high_params
+                parts.append(guarded(targets[0][0], part))
+                params.extend(part_params)
 
         if not parts:
             # Nothing of the bound's kind can match: the positive form is
@@ -1652,16 +1798,16 @@ class SQLQueryBuilder:
 
         # The reserved storage-key field is a real column, not inside JSON.
         # It is always a string, so a string bound compares it as it is, a
-        # timestamp bound reads it as the time it names (if it names one), and
-        # a bound of any other kind never matches it.
+        # time bound reads it as the time it names (if it names one of the
+        # bound's kind), and a bound of any other kind never matches it.
         if is_storage_key_field(field):
             if op in self._TYPED_OPERATORS:
 
                 def storage_key_for(kind: str | None) -> tuple[str | None, str] | None:
                     if kind is None or kind == "string":
                         return None, "id"
-                    if kind == "timestamp" and self.dialect in _JSON_TYPE_NAMES:
-                        names_time, time_value = self._timestamp_reading("id")
+                    if kind in _TIME_READINGS and self.dialect in _JSON_TYPE_NAMES:
+                        names_time, time_value = self._time_reading("id", kind)
                         return names_time, f"CASE WHEN {names_time} THEN {time_value} END"
                     return None
 

@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import tempfile
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,6 +38,7 @@ from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data import query as query_module
 from dataknobs_data.query import (
     NAIVE_TIMESTAMP_SHAPE,
+    ZONED_TIMESTAMP_SHAPE,
     Filter,
     Operator,
     _values_equal,
@@ -600,6 +601,14 @@ def test_every_kind_of_bound_answers_as_the_oracle_does(
         ("2024-01-02T10:30", datetime(2024, 1, 2, 10, 30)),
         ("2024-01-02 10:30:05.25", datetime(2024, 1, 2, 10, 30, 5, 250000)),
         ("2024-01-02T10:30:05Z", datetime(2024, 1, 2, 10, 30, 5, tzinfo=UTC)),
+        (
+            "2024-01-02 10:30-05:00",
+            datetime(2024, 1, 2, 10, 30, tzinfo=timezone(-timedelta(hours=5))),
+        ),
+        ("2024-01-02Z", None),
+        ("2024-01-02T10:30+24:00", None),
+        ("2024-01-02T10:30+0500", None),
+        ("2024-01-02T10:30z", None),
         ("20240102", None),
         ("2024-W01-2", None),
         ("2024-01-02T10", None),
@@ -611,14 +620,16 @@ def test_every_kind_of_bound_answers_as_the_oracle_does(
     ],
 )
 def test_one_reading_of_a_timestamp(text: str, expected: datetime | None) -> None:
-    """The oracle's reading, and the shape the SQL backends test against.
+    """The oracle's reading, and the shapes the SQL backends test against.
 
     The shape admits a day past its month's end, which no regular expression
     refuses cheaply; each engine refuses it by its own reading of the date.
     """
     assert read_timestamp(text) == expected
     naive = expected is not None and expected.tzinfo is None
+    zoned = expected is not None and expected.tzinfo is not None
     assert (re.match(NAIVE_TIMESTAMP_SHAPE, text) is not None) is (naive or text == "2024-02-30")
+    assert (re.match(ZONED_TIMESTAMP_SHAPE, text) is not None) is zoned
 
 
 _POOL: list[Any] = [
@@ -774,3 +785,150 @@ def _text_answer(spec: Filter, value: str) -> bool:
         Operator.BETWEEN: lambda: bound[0] <= value <= bound[1],
         Operator.NOT_BETWEEN: lambda: not bound[0] <= value <= bound[1],
     }[spec.operator]()
+
+
+_PLUS5 = timezone(timedelta(hours=5))
+_MINUS5 = timezone(timedelta(hours=-5))
+
+#: Naive and zoned times, and strings a zone makes no time. The zoned rows at
+#: 05:00Z name one instant in three spellings; ``zEve`` is 2024-01-01 in UTC
+#: and 2023-12-31 on its own clock; ``zMidnight`` is its own day's midnight.
+ZONED: dict[str, Any] = {
+    "nAm": "2024-01-01T10:00:00",
+    "nEve": "2023-12-31T20:00:00",
+    "nDate": "2024-01-01",
+    "zPlus5": "2024-01-01T10:00:00+05:00",
+    "zZ": "2024-01-01T05:00:00Z",
+    "zSpace": "2024-01-01 05:00Z",
+    "zMinus5": "2024-01-01T23:00:00-05:00",
+    "zEve": "2023-12-31T22:00:00-05:00",
+    "zMidnight": "2024-01-01T00:00:00+05:00",
+    "zFrac": "2024-01-01T05:00:00.250000+00:00",
+    "zDateOnly": "2024-01-01Z",
+    "zHour24": "2024-01-01T10:00:00+24:00",
+    "zNoColon": "2024-01-01T10:00:00+0500",
+    "zLower": "2024-01-01T05:00:00z",
+    "zFeb30": "2024-02-30T10:00:00Z",
+    # In UTC, a day either side of the years Python and SQLite share.
+    "zYear1": "0001-01-01T01:00:00+05:00",
+    "zYear10000": "9999-12-31T23:00:00-05:00",
+    "2024-01-01T05:00:00Z": "a key that names a zoned time",
+    "x": "x",
+}
+_AWARE = datetime(2024, 1, 1, 5, tzinfo=UTC)
+_ZONED_BOUNDS: list[Any] = [
+    _AWARE,
+    datetime(2024, 1, 1, 10, tzinfo=_PLUS5),  # the same instant, another zone
+    datetime(2024, 1, 1, 5, 0, 0, 250000, tzinfo=UTC),
+    datetime(2024, 1, 1, 10),
+    date(2024, 1, 1),
+    datetime(1, 1, 1, 1, tzinfo=_PLUS5),
+    datetime(9999, 12, 31, 20, tzinfo=_MINUS5),
+]
+ZONED_FILTERS: list[Filter] = [
+    *(
+        Filter("t", op, bound)
+        for op in (
+            Operator.EQ,
+            Operator.NEQ,
+            Operator.GT,
+            Operator.GTE,
+            Operator.LT,
+            Operator.LTE,
+        )
+        for bound in _ZONED_BOUNDS
+    ),
+    *(
+        Filter("t", op, bounds)
+        for op in (Operator.BETWEEN, Operator.NOT_BETWEEN)
+        for bounds in (
+            [datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, 6, tzinfo=_MINUS5)],
+            # A date and an aware bound: each value's own day, then its instant.
+            [date(2024, 1, 1), datetime(2024, 1, 1, 6, tzinfo=UTC)],
+            [date(2023, 12, 31), datetime(2024, 1, 1, 12)],
+            [datetime(2023, 1, 1), _AWARE],
+        )
+    ),
+    *(
+        Filter("t", op, members)
+        for op in (Operator.IN, Operator.NOT_IN)
+        for members in (
+            [_AWARE, datetime(2024, 1, 1, 10)],
+            [date(2024, 1, 1), datetime(2024, 1, 2, 4, tzinfo=UTC)],
+            [datetime(2024, 1, 1, 10, tzinfo=_PLUS5), "x"],
+        )
+    ),
+    *(
+        Filter("id", op, bound)
+        for op in (Operator.EQ, Operator.NEQ, Operator.GT, Operator.LT)
+        for bound in (_AWARE, date(2024, 1, 1))
+    ),
+]
+
+
+def test_an_aware_bound_matches_zoned_times_by_instant(
+    backend: tuple[str, dict[str, Any]],
+) -> None:
+    """Naive and aware times are different kinds, as Python has them.
+
+    An aware bound matches only zoned values, by instant; a naive bound only
+    naive values; a date bound both, each by the value's own wall-clock day;
+    and a negated operator matches a value of the other kind. SQL read only
+    naive strings as times, so an aware bound matched naive values there ---
+    SQLite dropping the bound's zone, DuckDB and PostgreSQL reading the value
+    in the session time zone --- and never a zoned one.
+
+    PostgreSQL 15 raises on a day past the month's end, the residual pinned
+    above, so that row is left out there.
+    """
+    kind, config = backend
+    values = {k: v for k, v in ZONED.items() if not (kind == "postgres" and k == "zFeb30")}
+    assert _answers(kind, config, values, ZONED_FILTERS) == {}
+
+
+#: Session time zones far from UTC and from each other.
+_SESSION_ZONES = ["Pacific/Kiritimati", "Pacific/Pago_Pago"]
+
+
+@pytest.mark.parametrize("zone", _SESSION_ZONES)
+def test_duckdb_answers_the_same_in_every_session_time_zone(tmp_path: Path, zone: str) -> None:
+    """DuckDB read a naive value against an aware bound in its session zone."""
+    db = SyncDatabase.from_backend("duckdb", config={"path": str(tmp_path / "r.duckdb")})
+    try:
+        assert db.conn is not None
+        db.conn.execute(f"SET TimeZone = '{zone}'")
+        assert _zoned_disagreements(db) == {}
+    finally:
+        db.close()
+
+
+@requires_postgres
+@pytest.mark.parametrize("zone", _SESSION_ZONES)
+def test_postgres_answers_the_same_in_every_session_time_zone(
+    make_postgres_test_db: Any, monkeypatch: pytest.MonkeyPatch, zone: str
+) -> None:
+    """PostgreSQL read a naive value against an aware bound in its session zone.
+
+    libpq sets the session's ``TimeZone`` from ``PGTZ`` when it connects.
+    """
+    monkeypatch.setenv("PGTZ", zone)
+    for config in make_postgres_test_db("test_jtype_"):
+        db = SyncDatabase.from_backend("postgres", config=config)
+        try:
+            assert _zoned_disagreements(db) == {}
+        finally:
+            db.close()
+
+
+def _zoned_disagreements(db: SyncDatabase) -> dict[str, Answer]:
+    values = {k: v for k, v in ZONED.items() if k != "zFeb30"}
+    for row_id, value in values.items():
+        db.create(Record({"t": value}, storage_id=row_id))
+    wrong: dict[str, Answer] = {}
+    for spec in ZONED_FILTERS:
+        if spec.field != "t":
+            continue
+        want = sorted(r for r, value in values.items() if spec.matches(value))
+        if (got := _ids(db.search(Query(filters=[spec])))) != want:
+            wrong[f"{spec.operator.value} {spec.value!r}"] = got
+    return wrong
