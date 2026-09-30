@@ -61,6 +61,11 @@ from ..vector.types import DistanceMetric
 # index an expression whose width is not fixed, and saying so as a refusal
 # rather than as a required argument is what lets a caller written against the
 # mixin reach this method and be told why.
+#: asyncpg sends a statement's parameter count as a signed 16-bit integer, and
+#: refuses one binding more: "the number of query arguments cannot exceed
+#: 32767".
+_ASYNCPG_MAX_PARAMETERS = 32767
+
 _DIMENSIONS_REQUIRED = (
     "dimensions is required to build a pgvector index: the index expression "
     "casts to ``vector(n)`` and pgvector will not index a column whose width "
@@ -768,7 +773,9 @@ class SyncPostgresDatabase(
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
         # duplicate id).
-        query, params_list, ids = query_builder.build_batch_create_query(
+        # psycopg2 writes the parameters into the statement text, so no
+        # parameter ceiling applies and the builder returns one statement.
+        [(query, params_list)], ids = query_builder.build_batch_create_queries(
             records, id_factory=self._generate_id
         )
 
@@ -812,7 +819,7 @@ class SyncPostgresDatabase(
         query_builder = SQLQueryBuilder(
             self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
         )
-        query, params_list, ids = query_builder.build_batch_upsert_query(
+        [(query, params_list)], ids = query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id
         )
 
@@ -872,7 +879,8 @@ class SyncPostgresDatabase(
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently using a single query.
 
-        Uses PostgreSQL's CASE expressions for batch updates via shared SQL builder.
+        Each record takes its own update; a repeated id takes its last. The
+        updates are joined to the table as a ``VALUES`` list.
 
         Args:
             updates: List of (id, record) tuples to update
@@ -892,8 +900,9 @@ class SyncPostgresDatabase(
             self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
         )
 
-        # Use the shared batch update query builder
-        query, params_list = query_builder.build_batch_update_query(updates)
+        # Use the shared batch update query builder (one statement: no
+        # parameter ceiling applies, as for create_batch)
+        [(query, params_list)] = query_builder.build_batch_update_queries(updates)
 
         # Build params dict for psycopg2
         params_dict = {}
@@ -1889,17 +1898,44 @@ class AsyncPostgresDatabase(
             async with self._require_pool().acquire() as conn:
                 yield conn
 
-    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
-        """Create multiple records efficiently using a single query.
+    @asynccontextmanager
+    async def _batch_connection(self, _tx: Any) -> AsyncIterator[Any]:
+        """A connection whose statements commit or roll back as one.
 
-        Uses multi-value INSERT with RETURNING for better performance.
+        The threaded flush connection when ``_tx`` is supplied, whose
+        transaction the flush owns (see :meth:`_acquire`); otherwise a fresh
+        pooled connection in a transaction of its own, so a batch split across
+        statements is still all-or-nothing.
+        """
+        if _tx is not None:
+            yield _tx
+        else:
+            async with self._require_pool().acquire() as conn, conn.transaction():
+                yield conn
+
+    async def _existing_ids(self, ids: list[str]) -> set[str]:
+        """Which of ``ids`` are stored, asked in one statement on a fresh connection."""
+        if not ids:
+            return set()
+        from .sql_base import SQLQueryBuilder
+
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query, params = query_builder.build_existing_ids_query(ids)
+        async with self._require_pool().acquire() as conn:
+            return {row["id"] for row in await conn.fetch(query, *params)}
+
+    async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
+        """Create multiple records efficiently, in one transaction.
+
+        Uses multi-value INSERTs with RETURNING, as many as asyncpg's parameter
+        limit requires.
 
         Args:
             records: List of records to create
             _tx: Internal. When supplied (a multi-kind buffered-transaction
                 flush), the DML runs on that pinned connection inside the outer
                 :meth:`_transaction`; when ``None`` a fresh pooled connection
-                runs it as an implicit transaction (the pre-existing path).
+                runs it in a transaction of its own.
 
         Returns:
             List of created record IDs
@@ -1917,16 +1953,18 @@ class AsyncPostgresDatabase(
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
         # duplicate id).
-        query, params, ids = query_builder.build_batch_create_query(
-            records, id_factory=self._generate_id
+        statements, ids = query_builder.build_batch_create_queries(
+            records, id_factory=self._generate_id, max_parameters=_ASYNCPG_MAX_PARAMETERS
         )
 
         # Execute the batch insert with RETURNING. Like create(), a colliding id
-        # fails closed: the single INSERT is atomic, so the unique-violation
-        # aborts the whole batch (nothing written).
+        # fails closed: the INSERTs share one transaction, so the
+        # unique-violation aborts the whole batch (nothing written).
+        returned: list[str] = []
         try:
-            async with self._acquire(_tx) as conn:
-                rows = await conn.fetch(query, *params)
+            async with self._batch_connection(_tx) as conn:
+                for query, params in statements:
+                    returned.extend(row["id"] for row in await conn.fetch(query, *params))
         except asyncpg.exceptions.UniqueViolationError as e:
             colliding = ids[0]
             # Precise colliding-id naming needs a probe on a *fresh* connection.
@@ -1935,23 +1973,20 @@ class AsyncPostgresDatabase(
             # aborted transaction cannot be queried anyway. On the ``_tx`` path
             # report the first batch id and let the outer transaction roll back.
             if _tx is None:
-                for record in records:
-                    if record.id and await self.exists(record.id):
-                        colliding = record.id
-                        break
+                stored = await self._existing_ids([r.id for r in records if r.id])
+                colliding = next((r.id for r in records if r.id in stored), colliding)
             raise DuplicateRecordError(colliding) from e
         except asyncpg.exceptions.IntegrityConstraintViolationError as e:
             raise constraint_violation_error() from e
 
         # Return the actual inserted IDs from RETURNING clause
-        if rows:
-            return [row["id"] for row in rows]
-        return ids  # Fallback to generated IDs
+        return returned or ids
 
     async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
-        """Insert-or-overwrite multiple records in a single statement.
+        """Insert-or-overwrite multiple records, in one transaction.
 
-        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``, as many statements as
+        asyncpg's parameter limit requires. Honors a caller-supplied
         ``record.id`` (minting a uuid only when absent); a colliding id is
         overwritten (never raised). Returns ids in input order. When ``_tx`` is
         supplied the DML runs on the pinned flush connection (see
@@ -1965,12 +2000,13 @@ class AsyncPostgresDatabase(
         from .sql_base import SQLQueryBuilder
 
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
-        query, params, ids = query_builder.build_batch_upsert_query(
-            records, id_factory=self._generate_id
+        statements, ids = query_builder.build_batch_upsert_queries(
+            records, id_factory=self._generate_id, max_parameters=_ASYNCPG_MAX_PARAMETERS
         )
 
-        async with self._acquire(_tx) as conn:
-            await conn.execute(query, *params)
+        async with self._batch_connection(_tx) as conn:
+            for query, params in statements:
+                await conn.execute(query, *params)
 
         # RETURNING order is not guaranteed under ON CONFLICT, so return the
         # builder's input-order ids.
@@ -2017,9 +2053,11 @@ class AsyncPostgresDatabase(
         return results
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
-        """Update multiple records efficiently using a single query.
+        """Update multiple records efficiently, in one transaction.
 
-        Uses PostgreSQL's CASE expressions for batch updates with native asyncpg.
+        Each record takes its own update; a repeated id takes its last. The
+        updates are joined to the table as a ``VALUES`` list, in as many
+        statements as asyncpg's parameter limit requires.
 
         Args:
             updates: List of (id, record) tuples to update
@@ -2037,26 +2075,17 @@ class AsyncPostgresDatabase(
 
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
-        # Use the shared batch update query builder. It already
-        # produces positional parameters ($1, $2) AND appends
-        # ``RETURNING id`` when ``dialect="postgres"`` -- see
-        # ``SQLQueryBuilder.build_batch_update_query`` -- so do NOT append
-        # a second ``RETURNING id`` here, that produces invalid SQL.
-        query, params = query_builder.build_batch_update_query(updates)
+        # The builder's statements already return the ids they update.
+        statements = query_builder.build_batch_update_queries(
+            updates, max_parameters=_ASYNCPG_MAX_PARAMETERS
+        )
 
-        # Execute the batch update
-        async with self._require_pool().acquire() as conn:
-            rows = await conn.fetch(query, *params)
+        updated_ids: set[str] = set()
+        async with self._batch_connection(None) as conn:
+            for query, params in statements:
+                updated_ids.update(row["id"] for row in await conn.fetch(query, *params))
 
-        # Convert returned rows to set of updated IDs
-        updated_ids = {row["id"] for row in rows}
-
-        # Return results for each update
-        results = []
-        for record_id, _ in updates:
-            results.append(record_id in updated_ids)
-
-        return results
+        return [record_id in updated_ids for record_id, _ in updates]
 
     async def _vector_search(
         self,

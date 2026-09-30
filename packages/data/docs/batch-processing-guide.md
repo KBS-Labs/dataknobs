@@ -98,8 +98,9 @@ Every backend exposes two batch write verbs:
 new records and overwrites existing ones in one call, returns the ids in input
 order, and carries no version check (batch compare-and-set is not supported — a
 whole batch cannot carry a single version token). It uses the backend's native
-bulk verb where one exists — a single `INSERT ... ON CONFLICT (id) DO UPDATE` on
-SQLite / DuckDB / PostgreSQL, a bulk index-by-id on Elasticsearch, a single
+bulk verb where one exists — `INSERT ... ON CONFLICT (id) DO UPDATE` on
+SQLite / DuckDB / PostgreSQL, in as many statements as the driver's parameter
+limit requires and all in one transaction, a bulk index-by-id on Elasticsearch, a single
 file-rewrite (file) or single-lock pass (memory) — and a per-record loop on S3
 (per-key PUT). It is the batch verb the streaming `"upsert"` policy routes
 through.

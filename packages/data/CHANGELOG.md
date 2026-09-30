@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`SQLQueryBuilder`'s batch builders return a list of statements.**
+  `build_batch_create_query`, `build_batch_upsert_query` and
+  `build_batch_update_query` are replaced by `build_batch_create_queries`,
+  `build_batch_upsert_queries` and `build_batch_update_queries`, which take a
+  `max_parameters` ceiling and return `(sql, params)` pairs to run in one
+  transaction. `build_batch_delete_query` still returns one statement, and
+  `build_existing_ids_query` is new. A membership list is bound as one
+  parameter on PostgreSQL and SQLite, so a clause built by the builder carries
+  one parameter for it rather than one per member.
+
+  **Migration:** a caller of the old builders runs each returned statement in
+  one transaction; with no `max_parameters` there is exactly one.
+
 - **A boolean never equals or orders against a number in a filter.**
   `Filter.matches`, which memory, file and S3 search with, followed Python,
   where `True == 1`: `Filter("n", Operator.EQ, 1)` matched `true`,
@@ -1391,6 +1404,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **`update_batch` writes each record its own update on SQLite and DuckDB.**
+  The statement read its values by position, and the values were bound in a
+  different order than the statement read them, so in any batch of two or
+  more records the earlier half kept its old metadata, and the later half kept
+  its old data and had its new data written into its metadata instead. Every
+  update was still reported `True`. PostgreSQL, which numbers
+  its parameters, was not affected. The update is now a join on `id`, so each
+  row reads its own values by column.
+
+  **Migration:** records written through `update_batch` on SQLite or DuckDB
+  may hold stale data, or their data in their metadata. Rewrite
+  them from their source; nothing in the store records which were affected.
+
+- **A batch of any size is one call on SQLite and async PostgreSQL.** Each
+  batch write and each `IN` / `NOT IN` filter bound a parameter per record or
+  member, and SQLite (32766 by default) and asyncpg (32767) refuse a statement
+  past their cap, with the driver's own error: `create_batch` and
+  `upsert_batch` failed at 10,923 records, `update_batch` at 6,554 on SQLite
+  and 8,192 on asyncpg, and `delete_batch` and `IN` at about 32,767. That was
+  also reachable through a buffered transaction's commit, which writes its
+  records in one call. `create_batch`, `upsert_batch` and `update_batch` now
+  write in as many statements as the cap requires, all in one transaction,
+  so a batch is still all-or-nothing; SQLite takes the cap from its
+  connection, so a lowered limit is respected. `delete_batch`, the existence
+  checks the batch verbs make, and an `IN` / `NOT IN` filter bind their whole
+  list as one parameter (`= ANY(...)` on PostgreSQL, `json_each` on SQLite).
+
+- **`update_batch` costs in proportion to its size, and a repeated id takes
+  its last update.** The statement tested every update against every row, so
+  its work grew with the square of the batch: 8,000 records took over 3
+  seconds on PostgreSQL, and 33,000 ran for over 14 minutes, through both a
+  cancel and a terminate of its backend. A repeated id took its first update on SQLite, DuckDB and
+  PostgreSQL and its last on memory and file; every backend now takes the
+  last, as a loop of `update()` calls leaves it.
 
 - **A `datetime` bound with a zone matches the time strings that carry one,
   by instant, on SQLite, DuckDB and PostgreSQL, as it does on every other

@@ -45,6 +45,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _existing_ids(
+    conn: duckdb.DuckDBPyConnection, builder: SQLQueryBuilder, ids: list[str]
+) -> set[str]:
+    """Which of ``ids`` are stored, asked in one statement on ``conn``."""
+    if not ids:
+        return set()
+    query, params = builder.build_existing_ids_query(ids)
+    return {row[0] for row in conn.execute(query, params).fetchall()}
+
+
 class AsyncDuckDBDatabase(
     StructuredConfigConsumer[AsyncDuckDBDatabaseConfig],
     AsyncDatabase,
@@ -192,8 +202,18 @@ class AsyncDuckDBDatabase(
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
-        if not self._connected or not self.conn:
+        self._require_conn()
+
+    def _require_conn(self) -> duckdb.DuckDBPyConnection:
+        """The connection, or the refusal :meth:`_check_connection` gives.
+
+        The same test, returning what it tested: a caller that holds the
+        result has the connection narrowed for the type checker, which a
+        check in another method cannot give it.
+        """
+        if not self._connected or self.conn is None:
             raise RuntimeError("Database not connected. Call connect() first.")
+        return self.conn
 
     async def create(self, record: Record) -> str:
         """Create a new record.
@@ -542,7 +562,7 @@ class AsyncDuckDBDatabase(
         skips its own ``begin``/``commit``/``rollback``.
         """
         # Use the shared batch create query builder
-        query, params, ids = self.query_builder.build_batch_create_query(
+        statements, ids = self.query_builder.build_batch_create_queries(
             records, id_factory=self._generate_id
         )
 
@@ -551,7 +571,8 @@ class AsyncDuckDBDatabase(
             try:
                 if own_tx:
                     self.conn.begin()
-                self.conn.execute(query, params)
+                for query, params in statements:
+                    self.conn.execute(query, params)
                 if own_tx:
                     self.conn.commit()
                 return ids
@@ -573,14 +594,12 @@ class AsyncDuckDBDatabase(
                     # the raw connection directly rather than the async exists()
                     # coroutine.
                     if own_tx:
-                        for record in records:
-                            rid = record.id
-                            if not rid:
-                                continue
-                            read_query, read_params = self.query_builder.build_read_query(rid)
-                            if self.conn.execute(read_query, read_params).fetchone() is not None:
-                                colliding = rid
-                                break
+                        stored = _existing_ids(
+                            self._require_conn(),
+                            self.query_builder,
+                            [r.id for r in records if r.id],
+                        )
+                        colliding = next((r.id for r in records if r.id in stored), colliding)
                     raise DuplicateRecordError(colliding) from e
                 raise constraint_violation_error() from e
             except Exception:
@@ -612,7 +631,7 @@ class AsyncDuckDBDatabase(
 
     def _upsert_batch_sync(self, records: list[Record], own_tx: bool = True) -> list[str]:
         """Synchronous batch upsert implementation."""
-        query, params, ids = self.query_builder.build_batch_upsert_query(
+        statements, ids = self.query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id
         )
 
@@ -620,7 +639,8 @@ class AsyncDuckDBDatabase(
             try:
                 if own_tx:
                     self.conn.begin()
-                self.conn.execute(query, params)
+                for query, params in statements:
+                    self.conn.execute(query, params)
                 if own_tx:
                     self.conn.commit()
                 return ids
@@ -649,22 +669,22 @@ class AsyncDuckDBDatabase(
     def _update_batch_sync(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Synchronous batch update implementation."""
         # Use the shared batch update query builder
-        query, params = self.query_builder.build_batch_update_query(updates)
+        statements = self.query_builder.build_batch_update_queries(updates)
 
         # Execute the batch update in a transaction
         with self._lock:
             try:
                 self.conn.begin()
-                self.conn.execute(query, params)
+                for query, params in statements:
+                    self.conn.execute(query, params)
                 self.conn.commit()
 
-                # Check which records were actually updated
-                update_ids = [record_id for record_id, _ in updates]
-                placeholders = ", ".join(["?" for _ in update_ids])
-                check_query = f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
-
-                rows = self.conn.execute(check_query, update_ids).fetchall()
-                existing_ids = {row[0] for row in rows}
+                # DuckDB's UPDATE returns nothing here, so ask which ids exist.
+                existing_ids = _existing_ids(
+                    self._require_conn(),
+                    self.query_builder,
+                    [record_id for record_id, _ in updates],
+                )
 
                 # Return results for each update
                 results = []
@@ -704,13 +724,7 @@ class AsyncDuckDBDatabase(
         """Synchronous batch delete implementation."""
         with self._lock:
             # Check which IDs exist before deletion
-            placeholders = ", ".join(["?" for _ in ids])
-            check_query = (
-                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
-            )
-
-            rows = self.conn.execute(check_query, ids).fetchall()
-            existing_ids = {row[0] for row in rows}
+            existing_ids = _existing_ids(self._require_conn(), self.query_builder, ids)
 
             # Use the shared batch delete query builder
             query, params = self.query_builder.build_batch_delete_query(ids)
@@ -951,8 +965,18 @@ class SyncDuckDBDatabase(
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
-        if not self._connected or not self.conn:
+        self._require_conn()
+
+    def _require_conn(self) -> duckdb.DuckDBPyConnection:
+        """The connection, or the refusal :meth:`_check_connection` gives.
+
+        The same test, returning what it tested: a caller that holds the
+        result has the connection narrowed for the type checker, which a
+        check in another method cannot give it.
+        """
+        if not self._connected or self.conn is None:
             raise RuntimeError("Database not connected. Call connect() first.")
+        return self.conn
 
     def create(self, record: Record) -> str:
         """Create a new record.
@@ -1171,19 +1195,23 @@ class SyncDuckDBDatabase(
             return []
 
         self._check_connection()
-        query, params, ids = self.query_builder.build_batch_create_query(
+        statements, ids = self.query_builder.build_batch_create_queries(
             records, id_factory=self._generate_id
         )
 
         try:
             self.conn.begin()
-            self.conn.execute(query, params)
+            for query, params in statements:
+                self.conn.execute(query, params)
             self.conn.commit()
             return ids
         except duckdb.ConstraintException as e:
             self.conn.rollback()
             if is_duplicate_key_error(e):
-                colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
+                stored = _existing_ids(
+                    self._require_conn(), self.query_builder, [r.id for r in records if r.id]
+                )
+                colliding = next((r.id for r in records if r.id in stored), ids[0])
                 raise DuplicateRecordError(colliding) from e
             raise constraint_violation_error() from e
         except Exception:
@@ -1201,13 +1229,14 @@ class SyncDuckDBDatabase(
             return []
 
         self._check_connection()
-        query, params, ids = self.query_builder.build_batch_upsert_query(
+        statements, ids = self.query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id
         )
 
         try:
             self.conn.begin()
-            self.conn.execute(query, params)
+            for query, params in statements:
+                self.conn.execute(query, params)
             self.conn.commit()
             return ids
         except Exception:
@@ -1227,22 +1256,18 @@ class SyncDuckDBDatabase(
             return []
 
         self._check_connection()
-        query, params = self.query_builder.build_batch_update_query(updates)
+        statements = self.query_builder.build_batch_update_queries(updates)
 
         try:
             self.conn.begin()
-            self.conn.execute(query, params)
+            for query, params in statements:
+                self.conn.execute(query, params)
             self.conn.commit()
 
-            # Check which records were actually updated
-            update_ids = [record_id for record_id, _ in updates]
-            placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = (
-                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
+            # DuckDB's UPDATE returns nothing here, so ask which ids exist.
+            existing_ids = _existing_ids(
+                self._require_conn(), self.query_builder, [record_id for record_id, _ in updates]
             )
-
-            rows = self.conn.execute(check_query, update_ids).fetchall()
-            existing_ids = {row[0] for row in rows}
 
             results = []
             for record_id, _ in updates:
@@ -1268,13 +1293,8 @@ class SyncDuckDBDatabase(
         self._check_connection()
 
         # Check which IDs exist before deletion
-        placeholders = ", ".join(["?" for _ in ids])
-        check_query = (
-            f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
-        )
 
-        rows = self.conn.execute(check_query, ids).fetchall()
-        existing_ids = {row[0] for row in rows}
+        existing_ids = _existing_ids(self._require_conn(), self.query_builder, ids)
 
         query, params = self.query_builder.build_batch_delete_query(ids)
 

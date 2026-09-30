@@ -475,7 +475,7 @@ class RecordStorageMixin:
         ``record_id`` field); a fresh id is minted via :meth:`_generate_id` only
         when the record carries no id at all. This is the same rule the SQL
         query builders apply (``build_create_query`` /
-        ``build_batch_create_query``), so a caller-supplied id keys a record
+        ``build_batch_create_queries``), so a caller-supplied id keys a record
         identically on every backend and method. A colliding id fails closed at
         the backend's insert (the atomic-insert contract); ``upsert`` overwrites.
 

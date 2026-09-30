@@ -234,7 +234,7 @@
         {
           "path": "packages/data/src",
           "tier": "transitional",
-          "ceiling": 265,
+          "ceiling": 259,
           "reason": "ratchet group"
         },
         {

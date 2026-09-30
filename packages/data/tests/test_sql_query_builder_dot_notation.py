@@ -320,9 +320,9 @@ class TestOperatorsThroughRefactoredPath:
         f = Filter("metadata.region", Operator.IN, ["us-east", "us-west"])
         clause, params = b._build_filter_clause(f, 1)
         assert clause == (
-            "(jsonb_typeof(metadata->'region') = 'string' AND metadata->>'region' IN ($1, $2))"
+            "(jsonb_typeof(metadata->'region') = 'string' AND metadata->>'region' = ANY($1))"
         )
-        assert params == ["us-east", "us-west"]
+        assert params == [["us-east", "us-west"]]
 
     def test_between_operator_with_nested_data(self) -> None:
         b = _builder("postgres")

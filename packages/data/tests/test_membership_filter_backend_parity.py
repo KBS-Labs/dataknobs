@@ -28,6 +28,7 @@ reads results: it never raised.
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 from pathlib import Path
@@ -264,6 +265,18 @@ DIALECTS = [
 ]
 
 
+def _members(dialect: str, params: list[Any]) -> list[Any]:
+    """The members a membership clause bound, however its dialect binds them.
+
+    PostgreSQL binds the list as one array parameter and SQLite as one JSON
+    array; every other dialect binds one parameter per member.
+    """
+    if not params or dialect not in ("postgres", "sqlite"):
+        return params
+    [members] = params
+    return json.loads(members) if dialect == "sqlite" else members
+
+
 @pytest.mark.parametrize(("dialect", "param_style"), DIALECTS)
 class TestTheBuilderRendersOnlyMembersThatCanMatch:
     """What each dialect is sent, including ``standard``, which no backend runs."""
@@ -289,7 +302,7 @@ class TestTheBuilderRendersOnlyMembersThatCanMatch:
     ) -> None:
         sql, params = self._render(dialect, param_style, filter_spec)
         assert "()" not in sql
-        assert params == bound
+        assert _members(dialect, params) == bound
 
     def test_an_empty_in_is_false(self, dialect: str, param_style: str) -> None:
         sql, _ = self._render(dialect, param_style, Filter("colour", Operator.IN, []))
@@ -315,7 +328,7 @@ def test_the_cast_is_chosen_from_a_member_that_can_match(
     builder = SQLQueryBuilder("records", dialect=dialect, param_style=param_style)
     sql, params = builder.build_search_query(Query(filters=[Filter("n", operator, [None, 5])]))
     assert cast in sql
-    assert params == [5]
+    assert _members(dialect, params) == [5]
 
 
 #: Only the numbered styles can show a numbering fault: a ``qmark`` ``?`` is

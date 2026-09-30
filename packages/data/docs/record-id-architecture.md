@@ -149,7 +149,7 @@ the payload `id` field, ignoring any assigned storage id.
 
 The in-process and object-store backends resolve the write-keying rule through a
 single base helper; the SQL backends apply the identical rule in their query
-builders (`build_create_query` / `build_batch_create_query`). All express the
+builders (`build_create_query` / `build_batch_create_queries`). All express the
 same `record.id or self._generate_id()` resolution, so no backend re-derives the
 rule independently. The helpers live on `RecordStorageMixin`, a single class that
 both `SyncDatabase` and `AsyncDatabase` inherit, so the write-keying rule — and
@@ -204,8 +204,8 @@ Every `create` / `create_batch` **and** `upsert` / `upsert_batch` mint fallback
 routes through this hook — the base create helper above, the shared
 `_resolve_upsert_id` preamble (the single-`upsert` id resolution), the SQL
 create/upsert paths (which resolve `record.id or self._generate_id()` and pass
-an `id_factory=self._generate_id` into `build_batch_create_query` /
-`build_batch_upsert_query`), and the Postgres / Elasticsearch create/upsert
+an `id_factory=self._generate_id` into `build_batch_create_queries` /
+`build_batch_upsert_queries`), and the Postgres / Elasticsearch create/upsert
 paths. It is the single extension point for a custom storage-id scheme: override
 it once and every `create()` / `create_batch()` / `upsert()` / `upsert_batch()`
 path on that backend mints via your implementation, uniformly. A caller-supplied

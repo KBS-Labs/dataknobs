@@ -96,7 +96,7 @@ def test_sync_upsert_batch_within_batch_duplicate_is_last_wins(
     ids collapse to the **last** occurrence (matching a per-record ``upsert``
     loop) — while the returned id list still carries one entry per input record
     in input order. For the SQL backends this exercises the ``rows``-dict
-    coalescing in ``build_batch_upsert_query`` (the one branch where the number
+    coalescing in ``build_batch_upsert_queries`` (the one branch where the number
     of physical VALUES rows differs from ``len(ids)``); for memory/file it
     exercises the overwrite loop.
     """

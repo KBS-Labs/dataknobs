@@ -140,7 +140,7 @@ Backend notes:
   within the same batch — raises `DuplicateRecordError`, and `record.id` is
   honored (minted only when absent). On the transactional SQL backends (SQLite,
   DuckDB, PostgreSQL) the batch is atomic — a collision rolls back the whole
-  INSERT (nothing written); on Elasticsearch the bulk API is per-item, so — like
+  batch (nothing written); on Elasticsearch the bulk API is per-item, so — like
   a `create()` loop — non-colliding rows may be written before the conflict is
   raised. The *streaming* INSERT path fails closed on every backend too — see the
   batch-processing / migration guides.
@@ -149,11 +149,21 @@ Backend notes:
   `record.id` (minting one only when absent), **overwrites** a colliding id
   (never raised, never skipped), returns the ids in input order, and carries no
   version check (a whole batch cannot carry one optimistic-concurrency token).
-  It uses the backend's native bulk verb where one exists — a single
+  It uses the backend's native bulk verb where one exists —
   `INSERT ... ON CONFLICT (id) DO UPDATE` on SQLite / DuckDB / PostgreSQL, a bulk
   index-by-id on Elasticsearch, a single file-rewrite (file) / single-lock pass
   (memory) — and the per-record abstract-base loop (per-key PUT) on S3. This is
   the batch verb the streaming `"upsert"` conflict policy routes through.
+- **`update_batch(updates)`** replaces each record's data and metadata with its
+  update's and returns, per update, whether the id was stored. A repeated id
+  takes its **last** update, as a loop of `update()` calls would leave it.
+- **A batch of any size is one call.** Some drivers cap the parameters one
+  statement may bind: SQLite at its connection's variable limit (32766 by
+  default) and asyncpg (async PostgreSQL) at 32767. On those, `create_batch`,
+  `upsert_batch` and `update_batch` write in as many statements as the cap
+  requires, all in one transaction, so a batch stays all-or-nothing however
+  large it is. `delete_batch` and an `IN` / `NOT IN` filter bind their whole
+  list as one parameter, so the cap does not bound either.
 
 #### Allocating a new key under contention
 
