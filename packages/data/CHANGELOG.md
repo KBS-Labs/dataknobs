@@ -1392,6 +1392,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `datetime` bound with a zone matches the time strings that carry one,
+  by instant, on SQLite, DuckDB and PostgreSQL, as it does on every other
+  backend.** A time with a zone and one without are different kinds, as
+  Python has them: `Filter.matches`, which memory, file and S3 search with,
+  compares an aware bound only with a zoned value and a naive bound only with
+  a naive one, and a `date` bound with both, each by its own day. SQL read
+  only strings without a zone as times, so an aware bound never matched
+  `"2024-01-01T10:00:00+05:00"`, and it matched strings without a zone
+  instead: SQLite dropped the bound's zone, and DuckDB and PostgreSQL read
+  the value in the session time zone, so the answer changed with a setting
+  the query could not see. A `date` bound matched no string with a zone. Each
+  now answers as `Filter.matches` does, and no backend reads a time in the
+  session time zone.
+
+  **Migration:** a filter that used an aware bound over times stored without
+  a zone matched them by a zone it did not state; it now matches none of
+  them, and its negation all of them. Pass a bound without a zone for such a
+  field, or store its times with one.
+
 - **`NOT` matches a record without the field on SQLite, DuckDB and
   PostgreSQL, as it does on every other backend.** `NOT` is the complement
   of the condition it wraps, and a record with no `colour`, or a `null` one,

@@ -252,13 +252,21 @@ _ISO_DATE = (
 #: and a fraction of any length, after a ``T`` or a space.
 _ISO_TIME = r"[T ]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?"
 
+#: The zone that may follow the time: ``Z``, or an offset in hours and minutes.
+_ISO_ZONE = r"(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])"
+
 #: The shape of a timestamp string with no zone: :func:`read_timestamp`'s
 #: shape without its zone. A backend that renders a filter as a query tests a
 #: stored string against this before reading it as a time, so it and
 #: ``Filter.matches`` read the same strings as times.
 NAIVE_TIMESTAMP_SHAPE = f"^{_ISO_DATE}({_ISO_TIME})?$"
 
-_TIMESTAMP = re.compile(f"^{_ISO_DATE}({_ISO_TIME}(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])?)?$")
+#: The shape of a timestamp string with a zone, which follows a time: the
+#: strings :func:`read_timestamp` reads as an aware ``datetime``. A backend
+#: tests a stored string against this before reading it as an instant.
+ZONED_TIMESTAMP_SHAPE = f"^{_ISO_DATE}{_ISO_TIME}{_ISO_ZONE}$"
+
+_TIMESTAMP = re.compile(f"^{_ISO_DATE}({_ISO_TIME}{_ISO_ZONE}?)?$")
 
 
 def read_timestamp(text: str) -> datetime | None:
@@ -274,8 +282,12 @@ def read_timestamp(text: str) -> datetime | None:
 
     This is the one reading ``Filter.matches`` uses wherever a string meets a
     date or datetime, and the one the SQL backends render
-    (:data:`NAIVE_TIMESTAMP_SHAPE`). Two strings never meet a time: they
-    compare as text.
+    (:data:`NAIVE_TIMESTAMP_SHAPE`, :data:`ZONED_TIMESTAMP_SHAPE`). A string
+    with a zone is an aware ``datetime`` and one without is naive, and Python
+    orders neither against the other, so an aware bound relates only to zoned
+    strings and a naive bound only to naive ones; a ``date`` bound relates to
+    both, by each value's own wall-clock day (:func:`_align_temporal`). Two
+    strings never meet a time: they compare as text.
     """
     if not _TIMESTAMP.match(text):
         return None

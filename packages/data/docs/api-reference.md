@@ -496,21 +496,36 @@ bound equals and orders against nothing, so it matches nothing and its
 negation every value present. A number is any real number type (`Decimal`
 and numpy's included), and a plain `date` is its own midnight.
 
-A `date` or `datetime` bound without a zone compares with a string that names
-a time without one, on a data field and on `id`. A string names a time when it
-is ISO 8601 in extended form, each field in range and naming a real day ---
-`"2024-01-02"`, `"2024-01-02T03:04"`, `"2024-01-02 03:04:05.25"` --- which is
-what `dataknobs_data.query.read_timestamp` reads. A string naming none
-(`"2024-02-30"`, `"2024-01-01T24:00:00"`, and the basic and week forms
-`"20240102"` and `"2024-W01-2"`), or one with a zone, counts as a value of
-another kind.
+A `date` or `datetime` bound compares with a string that names a time, on a
+data field and on `id`. A string names a time when it is ISO 8601 in extended
+form, each field in range and naming a real day, with an optional zone after
+the time --- `"2024-01-02"`, `"2024-01-02T03:04"`,
+`"2024-01-02 03:04:05.25"`, `"2024-01-02T03:04:05Z"`,
+`"2024-01-02T03:04+05:00"` --- which is what
+`dataknobs_data.query.read_timestamp` reads. A string naming none
+(`"2024-02-30"`, `"2024-01-01T24:00:00"`, `"2024-01-02Z"`, and the basic and
+week forms `"20240102"` and `"2024-W01-2"`) counts as a value of another kind.
+
+A time with a zone and one without are different kinds, as Python has them,
+and which a bound matches depends on its own:
+
+| Bound | Matches a time string | Compared by |
+|---|---|---|
+| `datetime` with a zone | with a zone | the instant each names, whatever the zones |
+| `datetime` without one | without a zone | the time each names |
+| `date` | with or without a zone | the value's own day: its midnight on the value's clock |
+
+So `Filter("t", Operator.GT, datetime(2024, 1, 1, 5, tzinfo=UTC))` matches
+`"2024-01-01T23:00:00-05:00"` and not `"2024-01-01T23:00:00"`; `NEQ` of that
+bound matches the second, as it matches any value of another kind.
+No backend reads a time without a zone in a session time zone. To compare a
+field as one timeline, store every time in it with a zone.
 
 Two strings compare as text, by code point, whatever either names: the
 bound's kind decides. So `"2024-01-01"` is `<` `"2024-01-01T00:00:00"` and
 `"2024-01-01 10:00:00"` is `<` `"2024-01-01T09:00:00"`, as a sort on the field
 orders them. To compare a field of time strings as times, pass the bound as a
-`date` or `datetime`. A bound with a zone is not yet
-answered the same way everywhere. `EQ` reads such a string the same way the ordering
+`date` or `datetime`. `EQ` reads such a string the same way the ordering
 operators do, so a value that is `>=` and `<=` a bound also equals it.
 
 The SQL backends test each value's JSON type before comparing, so one value of
@@ -519,8 +534,10 @@ number, boolean or `datetime` bound compares a cast of the value inside a
 `CASE` on that test, so an expression index added by hand on a cast
 (`((data->>'n')::numeric)`) no longer serves the comparison; a string bound
 compares `data->>'field'` itself, so an index on that still serves `EQ` and
-`IN`. An ordered string comparison on PostgreSQL renders `COLLATE "C"` (see
-below), which an index built under the default collation does not serve. On
+`IN`. A time with a zone is cast to `timestamptz` on PostgreSQL and
+`TIMESTAMPTZ` on DuckDB, against a bound that carries its own zone, and SQLite
+compares it as UTC text. An ordered string comparison on PostgreSQL renders
+`COLLATE "C"` (see below), which an index built under the default collation does not serve. On
 PostgreSQL 15 one string still raises: a date past its month's end
 (`"2024-02-30"`), which has timestamp shape with each field in range, because
 PostgreSQL has no cast that answers `NULL` there before version 16.
