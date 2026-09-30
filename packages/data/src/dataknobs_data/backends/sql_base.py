@@ -160,6 +160,17 @@ def prefix_upper_bound(prefix: str) -> str | None:
     return None
 
 
+def _first_bound(value: Any) -> Any:
+    """The value an ordered comparison's type is read from.
+
+    A ``BETWEEN`` bound is a pair, typed by its first member; any other value
+    is its own.
+    """
+    if isinstance(value, (list, tuple)) and len(value) > 0:
+        return value[0]
+    return value
+
+
 def is_duplicate_key_error(exc: BaseException) -> bool:
     """Return True if a SQL integrity/constraint error is a primary-key
     (duplicate-id) collision rather than another column-constraint violation.
@@ -682,11 +693,12 @@ class SQLQueryBuilder:
         """
         clauses = []
         if query.sort_specs:
-            order_parts = []
+            order_parts: list[str] = []
             for sort_spec in query.sort_specs:
                 direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                sort_expr = self._build_sort_expr(sort_spec.field)
-                order_parts.append(f"{sort_expr} {direction}")
+                order_parts.extend(
+                    f"{key} {direction}" for key in self._build_sort_keys(sort_spec.field)
+                )
             clauses.append("ORDER BY " + ", ".join(order_parts))
 
         # ``is not None`` so ``limit=0`` becomes ``LIMIT 0`` (zero rows)
@@ -982,25 +994,59 @@ class SQLQueryBuilder:
         where, params = self._filters_clause(query.filters)
         return f"{sql} WHERE {where}", params
 
-    def _build_sort_expr(self, field: str) -> str:
-        """Build a SQL expression for ORDER BY, supporting dot-notation.
+    def _build_sort_keys(self, field: str) -> list[str]:
+        """Build the ``ORDER BY`` keys for one sorted field, supporting dot-notation.
 
         Routes ``id`` to the ``id`` column, ``metadata.*`` fields to the
         ``metadata`` column, and everything else to ``data``.  Uses the
-        JSON-preserving extraction operator (``->`` in Postgres) so that
-        sorting preserves JSON type ordering.
+        JSON-preserving extraction (``->`` in Postgres) so that sorting
+        preserves JSON type ordering.
+
+        Text sorts by code point, as the in-memory sort does. SQLite and
+        DuckDB already compare strings that way. Postgres compares ``jsonb``
+        strings under the database collation, and ``COLLATE`` cannot attach to
+        ``jsonb``, so a Postgres JSON field takes two keys: the ``jsonb`` value
+        with every string folded to ``""``, which keeps the JSON type order and
+        ties the strings, then the text value in code-point order, which breaks
+        that tie. See :meth:`_code_point_order` for the ``id`` column.
 
         Args:
             field: Field name, optionally dot-separated.
 
         Returns:
-            A SQL expression suitable for ORDER BY.
+            The SQL expressions to order by, most significant first; the
+            caller applies the direction to each.
         """
         if is_storage_key_field(field):
-            return "id"
+            return [self._code_point_order("id")]
 
         column, nested_path = resolve_json_column_and_path(field)
-        return self._build_json_field_expr(nested_path, column=column, as_text=False)
+        typed = self._build_json_field_expr(nested_path, column=column, as_text=False)
+        if self.dialect != "postgres":
+            return [typed]
+        text = self._build_json_field_expr(nested_path, column=column)
+        return [
+            f"CASE WHEN jsonb_typeof({typed}) = 'string' THEN '\"\"'::jsonb ELSE {typed} END",
+            self._code_point_order(text),
+        ]
+
+    def _code_point_order(self, expr: str) -> str:
+        """Make a text expression compare by code point, as ``Filter.matches`` does.
+
+        Postgres compares text under the database collation, so under
+        ``en_US.utf8`` ``'apple' > 'B'`` where Python says the opposite.
+        ``COLLATE "C"`` compares bytes, and UTF-8 byte order is code-point
+        order. SQLite (``BINARY``) and DuckDB compare that way already.
+
+        The records table declares ``id`` with ``COLLATE "C"``, so on a table
+        this package created the clause matches the primary-key index and the
+        index still serves range and sort. On a table created before that,
+        the answer is right and the index no longer serves those two; equality
+        never takes the clause.
+        """
+        if self.dialect == "postgres":
+            return f'({expr}) COLLATE "C"'
+        return expr
 
     def _build_json_field_expr(
         self,
@@ -1077,14 +1123,7 @@ class SQLQueryBuilder:
         Returns:
             The expression, potentially wrapped with a dialect-specific cast.
         """
-        needs_ordered_cast = op in [
-            Operator.GT,
-            Operator.GTE,
-            Operator.LT,
-            Operator.LTE,
-            Operator.BETWEEN,
-            Operator.NOT_BETWEEN,
-        ]
+        needs_ordered_cast = op in self._ORDERED_OPERATORS
         needs_equality_cast = op in [
             Operator.EQ,
             Operator.NEQ,
@@ -1095,12 +1134,11 @@ class SQLQueryBuilder:
         # Determine target type from the value. A membership value is typed by
         # its first member that can match: a leading ``None`` renders no
         # placeholder, so it must not leave a numeric field compared as text.
-        first_value = value
         if op in (Operator.IN, Operator.NOT_IN):
             members = membership_values(value)
             first_value = members[0] if members else None
-        elif isinstance(value, (list, tuple)) and len(value) > 0:
-            first_value = value[0]
+        else:
+            first_value = _first_bound(value)
 
         target_type: str | None = None
         if needs_ordered_cast or needs_equality_cast:
@@ -1126,6 +1164,19 @@ class SQLQueryBuilder:
             return f"CAST({base_expr} AS {duckdb_types[target_type]})"
         # SQLite: json_extract already returns typed values, no cast needed
         return base_expr
+
+    # Operators that order their operands, and so depend on a collation when
+    # the operands are text.
+    _ORDERED_OPERATORS = frozenset(
+        {
+            Operator.GT,
+            Operator.GTE,
+            Operator.LT,
+            Operator.LTE,
+            Operator.BETWEEN,
+            Operator.NOT_BETWEEN,
+        }
+    )
 
     # Operators whose in-memory ``Filter.matches`` contract requires the field
     # value to be a string (a non-string value never matches). On a JSON field
@@ -1387,6 +1438,11 @@ class SQLQueryBuilder:
             field_expr = self._apply_type_cast(base_expr, op, value)
             json_target = (column, nested_path)
 
+        # An ordered comparison against a string compares text, which Postgres
+        # would otherwise do under the database collation.
+        if op in self._ORDERED_OPERATORS and isinstance(_first_bound(value), str):
+            field_expr = self._code_point_order(field_expr)
+
         clause, params = self._build_operator_clause(field_expr, op, value, param_start)
 
         # String-only operators match only string values (in-memory contract).
@@ -1463,9 +1519,11 @@ class SQLTableManager:
             SQL statement for creating the table
         """
         if self.dialect == "postgres":
+            # ``COLLATE "C"`` so the primary-key index serves the code-point
+            # range and sort ``SQLQueryBuilder`` renders.
             return f"""
             CREATE TABLE IF NOT EXISTS {self.qualified_table} (
-                id VARCHAR(255) PRIMARY KEY,
+                id VARCHAR(255) COLLATE "C" PRIMARY KEY,
                 data JSONB NOT NULL,
                 metadata JSONB,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
