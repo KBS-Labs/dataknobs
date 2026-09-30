@@ -33,11 +33,13 @@ Field-path rules:
 Semantics:
 
 * ``LIKE``/``NOT_LIKE`` translate SQL wildcards (``%``→``*``, ``_``→``?``) and
-  match case-insensitively, consistent with the in-memory and SQL backends. Any
-  other character — including the Lucene wildcard metacharacters ``*`` ``?`` and
-  the backslash escape — is escaped so it matches literally, mirroring SQL
-  ``LIKE`` where only ``%`` and ``_`` are wildcards. The case-insensitive
-  ``wildcard`` form requires Elasticsearch ≥ 7.10.
+  match case-insensitively, consistent with the in-memory and SQL backends,
+  though Elasticsearch folds ASCII case only (``'é'`` does not match ``'É'``),
+  as SQLite does. Any other character — including the Lucene wildcard
+  metacharacters ``*`` ``?`` and the backslash escape — is escaped so it
+  matches literally, mirroring SQL ``LIKE`` where only ``%`` and ``_`` are
+  wildcards. The case-insensitive ``wildcard`` form requires Elasticsearch
+  ≥ 7.10.
 * ``REGEX`` runs against the **full field value** via the ``.keyword`` sub-field
   (case-sensitive), so a pattern matches the whole string — matching the
   in-memory (``re.search``) and SQL backends. Against the analyzed base path a

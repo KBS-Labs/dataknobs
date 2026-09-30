@@ -8,16 +8,32 @@ filter through it, read ``.``, ``+``, ``[...]``, ``(`` and ``\`` as regex
 syntax: ``'a.c'`` matched ``'abc'``, ``'a\b'`` did not match itself, and
 ``'(a%'`` raised ``re.error``. ``.`` also stopped at a newline, where SQL's
 ``%`` and ``_`` do not.
+
+Every backend is then held to that oracle. PostgreSQL and DuckDB pushed down a
+bare ``LIKE``, which is case-sensitive on both, and PostgreSQL's reads ``\`` as
+an escape character. Where an engine's case folding naturally stops short of
+the oracle's, the difference is declared below rather than skipped.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import tempfile
+import uuid
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
+from dataknobs_common.testing import (
+    requires_localstack,
+    requires_postgres,
+    requires_real_elasticsearch,
+)
 
-from dataknobs_data import Query, Record, SyncDatabase
+from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # (pattern, value, matches) under SQL LIKE with only % and _ special.
 CASES = [
@@ -39,6 +55,10 @@ CASES = [
     ("abc", "abc\n", False),
     ("%", "", True),
     ("_", "", False),
+    ("beagle", "Beagle", True),
+    ("BEAGLE", "beagle", True),
+    ("é", "É", True),
+    ("ς", "Σ", True),
 ]
 
 
@@ -78,53 +98,159 @@ def test_a_text_search_with_punctuation_finds_its_record_in_memory(text: str) ->
 VALUES = sorted({value for _, value, _ in CASES})
 PATTERNS = sorted({pattern for pattern, _, _ in CASES})
 
-# DuckDB's LIKE is case-sensitive and the SQL emission does not fold case there,
-# so the one pattern here whose case differs from its matches is a known
-# disagreement. Named rather than derived, and strict, so the mark has to go
-# when the emission is fixed.
-DUCKDB_CASE_PATTERNS = {"A_C"}
-DUCKDB_CASE = pytest.mark.xfail(
-    strict=True, reason="DuckDB's LIKE is case-sensitive; the SQL emission does not fold case"
-)
+BACKENDS = [
+    "memory",
+    "file",
+    "sqlite",
+    "duckdb",
+    pytest.param("postgres", marks=requires_postgres),
+    pytest.param("s3", marks=requires_localstack),
+    pytest.param("elasticsearch", marks=requires_real_elasticsearch),
+]
+
+_SQLITE_ASCII = "sqlite's LIKE folds ASCII case only"
+_ES_ASCII = "Elasticsearch's case-insensitive wildcard folds ASCII case only"
+_NO_SIGMA = "the engine folds one character at a time; Python's IGNORECASE also pairs final sigma"
+
+#: Where a backend's LIKE naturally answers differently from ``Filter.matches``,
+#: and why. Each entry is asserted to still differ, so one that stops holding
+#: fails rather than lingering as a stale excuse.
+DECLARED_VARIATIONS: dict[tuple[str, str], str] = {
+    ("sqlite", "é"): _SQLITE_ASCII,
+    ("sqlite", "ς"): _SQLITE_ASCII,
+    ("elasticsearch", "é"): _ES_ASCII,
+    ("elasticsearch", "ς"): _ES_ASCII,
+    ("duckdb", "ς"): _NO_SIGMA,
+    ("postgres", "ς"): _NO_SIGMA,
+}
+
+#: PostgreSQL's ILIKE folds case as the database's ``LC_CTYPE`` does, and these
+#: fold ASCII only. Read from the database under test rather than assumed.
+_ASCII_ONLY_CTYPES = {"C", "POSIX"}
 
 
-def _backend_pattern_params() -> list[object]:
-    params: list[object] = []
-    for backend in ("memory", "sqlite", "duckdb"):
-        for pattern in PATTERNS:
-            known = backend == "duckdb" and pattern in DUCKDB_CASE_PATTERNS
-            marks = [DUCKDB_CASE] if known else []
-            params.append(pytest.param(backend, pattern, marks=marks, id=f"{backend}-{pattern!r}"))
-    return params
+def _postgres_ctype(config: dict[str, Any]) -> str:
+    import psycopg2
 
-
-@pytest.fixture(scope="module")
-def databases() -> Iterator[dict[str, SyncDatabase]]:
-    opened: dict[str, SyncDatabase] = {}
+    conn = psycopg2.connect(
+        host=config["host"],
+        port=config["port"],
+        user=config["user"],
+        password=config["password"],
+        dbname=config["database"],
+    )
     try:
-        for backend in ("memory", "sqlite", "duckdb"):
-            config = {} if backend == "memory" else {"path": ":memory:"}
-            database = SyncDatabase.from_backend(backend, config=config)
-            database.connect()
-            opened[backend] = database
-            for value in VALUES:
-                database.create(Record({"t": value}))
-        yield opened
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW lc_ctype")
+            return str(cursor.fetchone()[0])
     finally:
-        for database in opened.values():
-            database.close()
+        conn.close()
 
 
-@pytest.mark.parametrize(("backend", "pattern"), _backend_pattern_params())
-def test_every_in_process_backend_answers_like_alike(
-    databases: dict[str, SyncDatabase], backend: str, pattern: str
-) -> None:
-    r"""Memory agrees with sqlite and DuckDB, whose LIKE is the engine's own.
+def _declared(kind: str, config: dict[str, Any]) -> set[str]:
+    """The patterns whose answer on ``kind`` is a declared variation."""
+    declared = {pattern for backend, pattern in DECLARED_VARIATIONS if backend == kind}
+    if kind == "postgres" and _postgres_ctype(config) in _ASCII_ONLY_CTYPES:
+        declared.add("é")
+    return declared
 
-    Postgres is left out on purpose: its ``LIKE`` takes ``\`` as an escape
-    character by default, which the contract does not, and that is a defect in
-    the SQL emission rather than in this oracle.
+
+@pytest.fixture(params=BACKENDS)
+def backend(request: pytest.FixtureRequest) -> Iterator[tuple[str, dict[str, Any]]]:
+    """One backend's kind and constructor config, resolved in a sync fixture."""
+    kind = request.param
+    if kind == "postgres":
+        yield from (
+            (kind, c) for c in request.getfixturevalue("make_postgres_test_db")("test_like_")
+        )
+    elif kind == "s3":
+        for config in request.getfixturevalue("make_localstack_s3_bucket")("dataknobs-like"):
+            yield kind, {**config, "prefix": f"like-{uuid.uuid4().hex[:10]}/"}
+    elif kind == "elasticsearch":
+        yield from (
+            (kind, c)
+            for c in request.getfixturevalue("make_elasticsearch_test_index")("test_like_")
+        )
+    else:
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            yield (
+                kind,
+                {
+                    "memory": {},
+                    "file": {"path": str(root / "records.json")},
+                    "sqlite": {"path": str(root / "records.db")},
+                    "duckdb": {"path": str(root / "records.duckdb"), "table": "records"},
+                }[kind],
+            )
+
+
+def _answers(found: list[Record]) -> list[str]:
+    return sorted(r["t"] for r in found)
+
+
+@pytest.fixture
+def declared(backend: tuple[str, dict[str, Any]]) -> set[str]:
+    """Declared variations for this backend, resolved before any loop runs."""
+    return _declared(*backend)
+
+
+def _disagreements(
+    declared: set[str], answers: dict[tuple[Operator, str], list[str]]
+) -> dict[str, object]:
+    """Searches whose answer differs from the oracle's, less the declared ones.
+
+    A declared variation that answers like the oracle is reported too.
     """
-    expected = [v for v in VALUES if Filter("t", Operator.LIKE, pattern).matches(v)]
-    query = Query(filters=[Filter("t", Operator.LIKE, pattern)])
-    assert sorted(r["t"] for r in databases[backend].search(query)) == expected
+    wrong: dict[str, object] = {}
+    for (operator, pattern), got in answers.items():
+        expected = [v for v in VALUES if Filter("t", operator, pattern).matches(v)]
+        is_declared = pattern in declared
+        if (got != expected) != is_declared:
+            key = f"{operator.value} {pattern!r}"
+            wrong[key] = "declared, but agrees" if is_declared else {"got": got, "want": expected}
+    return wrong
+
+
+SEARCHES = [(op, p) for op in (Operator.LIKE, Operator.NOT_LIKE) for p in PATTERNS]
+
+
+def _query(operator: Operator, pattern: str) -> Query:
+    return Query(filters=[Filter("t", operator, pattern)])
+
+
+def test_every_backend_answers_like_as_the_oracle_does_sync(
+    backend: tuple[str, dict[str, Any]], declared: set[str]
+) -> None:
+    r"""Case-insensitive, and ``%`` and ``_`` the only wildcards, on every backend.
+
+    Postgres and DuckDB matched case-sensitively, and Postgres read ``\`` as an
+    escape character, while the published contract says otherwise.
+    """
+    kind, config = backend
+    db = SyncDatabase.from_backend(kind, config=config)
+    try:
+        for value in VALUES:
+            db.create(Record({"t": value}))
+        answers = {s: _answers(db.search(_query(*s))) for s in SEARCHES}
+    finally:
+        if kind == "s3":
+            db.clear()
+        db.close()
+    assert _disagreements(declared, answers) == {}
+
+
+async def test_every_backend_answers_like_as_the_oracle_does_async(
+    backend: tuple[str, dict[str, Any]], declared: set[str]
+) -> None:
+    kind, config = backend
+    db = await AsyncDatabase.from_backend(kind, config=config)
+    try:
+        for value in VALUES:
+            await db.create(Record({"t": value}))
+        answers = {s: _answers(await db.search(_query(*s))) for s in SEARCHES}
+    finally:
+        if kind == "s3":
+            await db.clear()
+        await db.close()
+    assert _disagreements(declared, answers) == {}

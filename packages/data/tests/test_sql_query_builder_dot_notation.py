@@ -295,7 +295,7 @@ class TestOperatorsThroughRefactoredPath:
         # to keep non-string values from matching via text projection.
         assert clause == (
             "(jsonb_typeof(metadata->'description') = 'string' "
-            "AND metadata->>'description' LIKE $1)"
+            "AND metadata->>'description' ILIKE $1 ESCAPE '')"
         )
         assert params == ["%test%"]
 

@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-29T23:39:00Z",
+  "timestamp": "2026-09-30T00:08:02Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -15,7 +15,7 @@
     "bots": "04bcf340678d8c07f6b23ba26f94fbf4b198175802b165d47424872c0fd14e5a",
     "common": "2592010d3ef994cd98ac120e79ebd66cc94eea27abc3c21e6cf2cff56d90dd7c",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "d2217da02af26d5cfcc465a2f2602d7a2d9a4f9a936f15406784619c158f0415",
+    "data": "49bb8b0376733e78e2aafb3a83645edf33885d4258b760113477bb79b33bb648",
     "fsm": "94bd9fe316b45dc5138a261c6210a9c1f6b343449ddd55d96b2111adf43c8307",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "f0fc594dacbb2a98f54a9b72209e2a3f926ef7f04c489cbc63354e8621a3ff6a",
@@ -29,9 +29,9 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "96aa512feed216bd80b0242445f2d82b8d04e79c0f79ec4c4301256ff570ae19",
-    "docs": "57103a3c02a19d957d4a2663bf65f06ba4663495be10b05ff9738708f2652374"
+    "docs": "2ad7d4a64c9d4000dae3c1878a2583c14f3df9c0be9bcc49b22d191f1efcee49"
   },
-  "total_seconds": 303,
+  "total_seconds": 305,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -56,14 +56,14 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 77
+      "duration_seconds": 76
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 28
+      "duration_seconds": 29
     },
     "documentation_versions": {
       "status": "pass",
@@ -83,14 +83,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 137,
+      "duration_seconds": 138,
       "workspace_guards_seconds": 99
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 49
+      "duration_seconds": 51
     }
   }
 }

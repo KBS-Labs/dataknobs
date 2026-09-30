@@ -1322,6 +1322,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`LIKE` and `NOT_LIKE` match case-insensitively on PostgreSQL and DuckDB,
+  and PostgreSQL matches `\` verbatim, as published.** Both pushed down a bare
+  `LIKE`, which is case-sensitive on both engines, so searching `'beagle'`
+  found `'Beagle'` on memory and SQLite and nothing on DuckDB or PostgreSQL.
+  PostgreSQL's `LIKE` also reads `\` as an escape character, so `'a\%'` found
+  `'a%'` rather than `'a\b'`. They now emit `ILIKE`, and PostgreSQL adds
+  `ESCAPE ''`. Two variations remain and are documented: SQLite and
+  Elasticsearch fold ASCII case only, so `'é'` does not match `'É'` there, and
+  PostgreSQL folds as the database's `LC_CTYPE` does.
+
+  **Migration:** code that relied on a case-sensitive `LIKE` on PostgreSQL or
+  DuckDB now matches more rows. For a case-sensitive test use `REGEX`, or
+  `STARTS_WITH` for a prefix. The indexes this package creates serve neither
+  form; an index added by hand to serve `LIKE` on PostgreSQL (a trigram or
+  expression index) is worth checking against `ILIKE`.
+
 - **`LIKE` and `NOT_LIKE` treat only `%` and `_` as wildcards on the memory,
   file and S3 backends, as published.** `Filter.matches`, which those backends
   filter through, turned the pattern into a regular expression without

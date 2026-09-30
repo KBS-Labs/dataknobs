@@ -1195,10 +1195,8 @@ class SQLQueryBuilder:
             return f"{field_expr} < {param_placeholder}", [value]
         elif op == Operator.LTE:
             return f"{field_expr} <= {param_placeholder}", [value]
-        elif op == Operator.LIKE:
-            return f"{field_expr} LIKE {param_placeholder}", [value]
-        elif op == Operator.NOT_LIKE:
-            return f"{field_expr} NOT LIKE {param_placeholder}", [value]
+        elif op in (Operator.LIKE, Operator.NOT_LIKE):
+            return self._build_like_clause(field_expr, op, value, param_placeholder)
         elif op in (Operator.IN, Operator.NOT_IN):
             return self._build_membership_clause(field_expr, op, value, param_start)
         elif op == Operator.BETWEEN:
@@ -1224,6 +1222,38 @@ class SQLQueryBuilder:
             return self._build_starts_with_clause(field_expr, value, param_start)
         else:
             raise ValueError(f"Unsupported operator: {op}")
+
+    def _build_like_clause(
+        self,
+        field_expr: str,
+        op: Operator,
+        value: Any,
+        param_placeholder: str,
+    ) -> tuple[str, list[Any]]:
+        r"""Build a ``LIKE`` / ``NOT LIKE`` clause that answers as ``Filter.matches`` does.
+
+        The contract is case-insensitive, with ``%`` and ``_`` the only
+        wildcards and every other character, ``\`` among them, matched
+        verbatim. Each engine needs its own shape to say that:
+
+        - **postgres** --- ``ILIKE ... ESCAPE ''``. Its ``LIKE`` is
+          case-sensitive, and it reads ``\`` as an escape unless told there is
+          none. Case folding follows the database's ``LC_CTYPE``.
+        - **duckdb** --- ``ILIKE``. Its ``LIKE`` is case-sensitive and has no
+          escape character by default.
+        - **sqlite** (and any other dialect) --- plain ``LIKE``, which is
+          already case-insensitive with no escape character. It folds ASCII
+          case only, a documented variation.
+
+        No index is given up: the JSONB layout's GIN indexes serve neither
+        form, and ``STARTS_WITH`` keeps its own case-sensitive shape.
+        """
+        negate = "NOT " if op == Operator.NOT_LIKE else ""
+        if self.dialect == "postgres":
+            return f"{field_expr} {negate}ILIKE {param_placeholder} ESCAPE ''", [value]
+        if self.dialect == "duckdb":
+            return f"{field_expr} {negate}ILIKE {param_placeholder}", [value]
+        return f"{field_expr} {negate}LIKE {param_placeholder}", [value]
 
     def _build_membership_clause(
         self,
