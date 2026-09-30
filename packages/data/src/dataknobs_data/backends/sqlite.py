@@ -186,8 +186,18 @@ class SyncSQLiteDatabase(
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
-        if not self._connected or not self.conn:
+        self._require_conn()
+
+    def _require_conn(self) -> sqlite3.Connection:
+        """The connection, or the refusal :meth:`_check_connection` gives.
+
+        The same test, returning what it tested: a caller that holds the
+        result has the connection narrowed for the type checker, which a
+        check in another method cannot give it.
+        """
+        if not self._connected or self.conn is None:
             raise RuntimeError("Database not connected. Call connect() first.")
+        return self.conn
 
     def create(self, record: Record) -> str:
         """Create a new record."""
@@ -418,20 +428,36 @@ class SyncSQLiteDatabase(
             cursor.close()
 
     def _insert_batch_atomic(self) -> bool:
-        # create_batch runs a multi-value INSERT inside a transaction: a
-        # colliding id rolls the whole statement back, so nothing is written on
+        # create_batch runs its INSERT statements inside one transaction: a
+        # colliding id rolls the whole batch back, so nothing is written on
         # raise and the migrator's INSERT bulk fast-path is safe.
         return True
 
-    def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records efficiently using a single query.
+    def _max_parameters(self) -> int:
+        """The most parameters one statement may bind on this connection.
 
-        Uses a multi-value INSERT. Like ``create()``, this fails closed: a
-        colliding id (or a duplicate id within the batch) raises
-        ``DuplicateRecordError`` and, because the INSERT runs in a transaction,
-        the whole batch is rolled back so nothing is written. A caller-supplied
-        ``record.id`` is honored (the shared query builder mints a uuid only when
-        a record has none).
+        Read from the connection each time, since a connection may lower it
+        (``setlimit``) and a build may ship a default below 32766.
+        """
+        return int(self._require_conn().getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER))
+
+    def _existing_ids(self, cursor: sqlite3.Cursor, ids: list[str]) -> set[str]:
+        """Which of ``ids`` are stored, in one statement whatever their number."""
+        if not ids:
+            return set()
+        query, params = self.query_builder.build_existing_ids_query(ids)
+        cursor.execute(query, params)
+        return {row[0] for row in cursor.fetchall()}
+
+    def create_batch(self, records: list[Record]) -> list[str]:
+        """Create multiple records efficiently, in one transaction.
+
+        Uses multi-value INSERTs, as many as the connection's parameter limit
+        requires. Like ``create()``, this fails closed: a colliding id (or a
+        duplicate id within the batch) raises ``DuplicateRecordError`` and,
+        because the INSERTs run in one transaction, the whole batch is rolled
+        back so nothing is written. A caller-supplied ``record.id`` is honored
+        (the shared query builder mints a uuid only when a record has none).
         """
         if not records:
             return []
@@ -441,25 +467,24 @@ class SyncSQLiteDatabase(
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
         # duplicate id).
-        query, params, ids = self.query_builder.build_batch_create_query(
-            records, id_factory=self._generate_id
+        statements, ids = self.query_builder.build_batch_create_queries(
+            records, id_factory=self._generate_id, max_parameters=self._max_parameters()
         )
 
         cursor = self.conn.cursor()
         try:
-            # Execute the batch insert in a transaction
             cursor.execute("BEGIN TRANSACTION")
-            cursor.execute(query, params)
+            for query, params in statements:
+                cursor.execute(query, params)
             self.conn.commit()
-
-            # Return the generated IDs
             return ids
         except sqlite3.IntegrityError as e:
             self.conn.rollback()
             if is_duplicate_key_error(e):
                 # Name the colliding id precisely on the error path (cheap — only
                 # runs on a failed batch, never on the happy path).
-                colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
+                stored = self._existing_ids(cursor, [r.id for r in records if r.id])
+                colliding = next((r.id for r in records if r.id in stored), ids[0])
                 raise DuplicateRecordError(colliding) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
             # instead of mislabeling it as a duplicate id.
@@ -471,9 +496,10 @@ class SyncSQLiteDatabase(
             cursor.close()
 
     def upsert_batch(self, records: list[Record]) -> list[str]:
-        """Insert-or-overwrite multiple records efficiently in one statement.
+        """Insert-or-overwrite multiple records efficiently, in one transaction.
 
-        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``. Honors a caller-supplied
+        Uses ``INSERT ... ON CONFLICT (id) DO UPDATE``, as many statements as
+        the connection's parameter limit requires. Honors a caller-supplied
         ``record.id`` (minting a uuid only when absent); a colliding id is
         overwritten (never raised). Returns ids in input order.
         """
@@ -482,14 +508,15 @@ class SyncSQLiteDatabase(
 
         self._check_connection()
 
-        query, params, ids = self.query_builder.build_batch_upsert_query(
-            records, id_factory=self._generate_id
+        statements, ids = self.query_builder.build_batch_upsert_queries(
+            records, id_factory=self._generate_id, max_parameters=self._max_parameters()
         )
 
         cursor = self.conn.cursor()
         try:
             cursor.execute("BEGIN TRANSACTION")
-            cursor.execute(query, params)
+            for query, params in statements:
+                cursor.execute(query, params)
             self.conn.commit()
             return ids
         except Exception:
@@ -499,41 +526,29 @@ class SyncSQLiteDatabase(
             cursor.close()
 
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
-        """Update multiple records efficiently using a single query.
+        """Update multiple records efficiently, in one transaction.
 
-        Uses CASE expressions for batch updates, similar to PostgreSQL.
+        Each record takes its own update; a repeated id takes its last. An id
+        not stored is reported ``False`` and written nowhere.
         """
         if not updates:
             return []
 
         self._check_connection()
 
-        # Use the shared batch update query builder
-        query, params = self.query_builder.build_batch_update_query(updates)
+        # One statement per update rather than a join: UPDATE … FROM needs
+        # SQLite 3.33, and executemany binds three values per run.
+        query, rows = self.query_builder.build_batch_update_rows(updates)
 
         cursor = self.conn.cursor()
         try:
-            # Execute the batch update in a transaction
             cursor.execute("BEGIN TRANSACTION")
-            cursor.execute(query, params)
+            cursor.executemany(query, rows)
             self.conn.commit()
 
-            # Check which records were actually updated
-            # SQLite doesn't have RETURNING, so we need to verify each ID
-            update_ids = [record_id for record_id, _ in updates]
-            placeholders = ", ".join(["?" for _ in update_ids])
-            check_query = (
-                f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
-            )
-            cursor.execute(check_query, update_ids)
-            existing_ids = {row[0] for row in cursor.fetchall()}
-
-            # Return results for each update
-            results = []
-            for record_id, _ in updates:
-                results.append(record_id in existing_ids)
-
-            return results
+            # SQLite's UPDATE returns nothing here, so ask which ids exist.
+            existing_ids = self._existing_ids(cursor, [record_id for record_id, _ in updates])
+            return [record_id in existing_ids for record_id, _ in updates]
         except Exception:
             self.conn.rollback()
             raise
@@ -543,38 +558,24 @@ class SyncSQLiteDatabase(
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently using a single query.
 
-        Uses single DELETE with IN clause for better performance.
+        Uses a single DELETE, whatever the number of ids.
         """
         if not ids:
             return []
 
         self._check_connection()
 
-        # Check which IDs exist before deletion
-        placeholders = ", ".join(["?" for _ in ids])
-        check_query = (
-            f"SELECT id FROM {self.table_manager.qualified_table} WHERE id IN ({placeholders})"
-        )
-
         cursor = self.conn.cursor()
         try:
-            cursor.execute(check_query, ids)
-            existing_ids = {row[0] for row in cursor.fetchall()}
+            # Check which IDs exist before deletion
+            existing_ids = self._existing_ids(cursor, ids)
 
-            # Use the shared batch delete query builder
             query, params = self.query_builder.build_batch_delete_query(ids)
-
-            # Execute the batch delete in a transaction
             cursor.execute("BEGIN TRANSACTION")
             cursor.execute(query, params)
             self.conn.commit()
 
-            # Return results based on which IDs existed
-            results = []
-            for id in ids:
-                results.append(id in existing_ids)
-
-            return results
+            return [id in existing_ids for id in ids]
         except Exception:
             self.conn.rollback()
             raise

@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
+from contextlib import closing
+from functools import cache
 from typing import Any
 
 import numpy as np
@@ -20,6 +23,20 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+@cache
+def sqlite_max_parameters() -> int:
+    """The most parameters one statement may bind under this SQLite library.
+
+    The library's compiled default for a new connection (32766 since SQLite
+    3.32, 999 before), read once. A connection can lower its own limit, so a
+    backend that holds a :class:`sqlite3.Connection` reads the connection's;
+    one reached through aiosqlite has no public way to change it, so it keeps
+    this default.
+    """
+    with closing(sqlite3.connect(":memory:")) as probe:
+        return int(probe.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER))
 
 
 class SQLiteVectorSupport:

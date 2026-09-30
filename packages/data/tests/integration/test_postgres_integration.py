@@ -542,11 +542,9 @@ class TestPostgresAsyncIntegration:
     async def test_async_update_batch_executes_without_sql_syntax_error(self, postgres_test_db):
         """``update_batch`` produces valid SQL.
 
-        Pre-fix, the query was built by
-        ``SQLQueryBuilder.build_batch_update_query`` (which already
-        appends ``RETURNING id`` for the postgres dialect at
-        sql_base.py:559-561) and then ``" RETURNING id"`` was appended
-        a *second* time at postgres.py:1484, producing invalid SQL
+        Pre-fix, the shared batch update builder already appended
+        ``RETURNING id`` for the postgres dialect, and ``update_batch``
+        appended ``" RETURNING id"`` a *second* time, producing invalid SQL
         ending in ``RETURNING id RETURNING id``. asyncpg raised
         ``PostgresSyntaxError`` before any row was updated. No prior
         test exercised ``AsyncPostgresDatabase.update_batch`` (only

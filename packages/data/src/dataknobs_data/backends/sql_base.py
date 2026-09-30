@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -37,6 +38,28 @@ _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # A field prefixed ``metadata.`` addresses the metadata JSONB column; any other
 # (non-storage-key) field addresses the data JSONB column.
 _METADATA_FIELD_PREFIX = "metadata."
+
+#: One statement ready to run: its SQL, and the values its placeholders bind in
+#: order.
+SQLStatement = tuple[str, list[Any]]
+
+
+def _warn_renamed(old: str, new: str) -> None:
+    warnings.warn(
+        f"SQLQueryBuilder.{old} is deprecated; use {new}, which splits a batch "
+        "by a parameter ceiling and returns a list of statements",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def _json_can_carry(value: Any) -> bool:
+    """Whether ``value`` has a JSON form, and so could be a stored record's value."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def resolve_json_column_and_path(field: str) -> tuple[str, str]:
@@ -831,90 +854,145 @@ class SQLQueryBuilder:
 
         return " ".join(sql_parts), params
 
-    def build_batch_update_query(self, updates: list[tuple[str, Record]]) -> tuple[str, list[Any]]:
-        """Build a batch UPDATE query using CASE expressions.
+    def _values_statements(
+        self,
+        rows: Sequence[Sequence[Any]],
+        render: Callable[[str], str],
+        max_parameters: int | None,
+        *,
+        row_suffix: str = "",
+    ) -> list[SQLStatement]:
+        """``rows`` as a ``VALUES`` list, over as few statements as the ceiling allows.
 
-        This provides efficient batch updates for both PostgreSQL and SQLite.
+        Each statement numbers its placeholders from 1 and binds at most
+        ``max_parameters`` values (``None``: no ceiling, so one statement).
+        The caller runs them in one transaction; that is what keeps a batch
+        all-or-nothing however many statements it takes.
 
         Args:
-            updates: List of (id, record) tuples to update
+            rows: The rows, each the values its tuple binds, all one width.
+            render: The statement around the rendered ``VALUES`` list.
+            max_parameters: The most values one statement may bind.
+            row_suffix: Text closing each tuple after its placeholders.
+
+        Raises:
+            ValueError: a ceiling too low to carry one row.
+        """
+        width = len(rows[0])
+        per_statement = len(rows) if max_parameters is None else max_parameters // width
+        if per_statement < 1:
+            raise ValueError(
+                f"a statement of at most {max_parameters} parameters cannot carry "
+                f"one row of {width}"
+            )
+        statements: list[SQLStatement] = []
+        for start in range(0, len(rows), per_statement):
+            params: list[Any] = []
+            tuples: list[str] = []
+            for row in rows[start : start + per_statement]:
+                marks = ", ".join(
+                    self._get_param_placeholder(len(params) + k) for k in range(1, width + 1)
+                )
+                tuples.append(f"({marks}{row_suffix})")
+                params.extend(row)
+            statements.append((render(", ".join(tuples)), params))
+        return statements
+
+    def build_batch_update_queries(
+        self, updates: list[tuple[str, Record]], *, max_parameters: int | None = None
+    ) -> list[SQLStatement]:
+        """Build the statements that update records by id, as a join.
+
+        Each record's data and metadata are replaced by its update's. The
+        updates are a ``VALUES`` list joined to the table on ``id``, so the
+        work grows with the batch rather than with its square, and each row
+        reads its own values by column rather than by position. A repeated id
+        takes its **last** update, as a loop of ``update`` calls leaves it.
+
+        On PostgreSQL each statement returns the ids it updated; other dialects
+        return nothing, and the caller asks which ids exist
+        (:meth:`build_existing_ids_query`).
+
+        ``UPDATE … FROM`` needs SQLite 3.33 or later, so the SQLite backends
+        use :meth:`build_batch_update_rows` instead, which runs on any version.
+
+        Args:
+            updates: ``(id, record)`` pairs, in order.
+            max_parameters: The most values one statement may bind; ``None``
+                for no ceiling.
 
         Returns:
-            Tuple of (SQL query, parameters)
+            The statements, to run in one transaction; none for no updates.
+        """
+        if not updates:
+            return []
+
+        # Ordered id -> (data_json, metadata_json), last occurrence wins.
+        rows: dict[str, tuple[str, str | None]] = {}
+        for record_id, record in updates:
+            metadata_json = json.dumps(record.metadata) if record.metadata else None
+            rows[record_id] = (self._record_to_json(record), metadata_json)
+
+        if self.dialect == "sqlite":
+            # SQLite names the columns of a VALUES list column1, column2, ...
+            # and takes no alias list for them.
+            alias, id_col, data, metadata = "v", "v.column1", "v.column2", "v.column3"
+        else:
+            alias, id_col, data, metadata = "v(id, data, metadata)", "v.id", "v.data", "v.metadata"
+        if self.dialect == "postgres":
+            # A parameter in a VALUES list has no column to take a type from.
+            data, metadata = f"{data}::jsonb", f"{metadata}::jsonb"
+        returning = " RETURNING target.id" if self.dialect == "postgres" else ""
+
+        def render(values: str) -> str:
+            return (
+                f"UPDATE {self.qualified_table} AS target"
+                f" SET data = {data}, metadata = {metadata}, updated_at = CURRENT_TIMESTAMP"
+                f" FROM (VALUES {values}) AS {alias}"
+                f" WHERE target.id = {id_col}{returning}"
+            )
+
+        return self._values_statements(
+            [(record_id, *values) for record_id, values in rows.items()], render, max_parameters
+        )
+
+    def build_batch_update_rows(
+        self, updates: list[tuple[str, Record]]
+    ) -> tuple[str, list[list[Any]]]:
+        """Build one update by id and its parameters for each update, for ``executemany``.
+
+        The statement is :meth:`build_update_query`'s, so each row binds three
+        values whatever the batch's size, and each record reads its own. Run in
+        order, a repeated id ends as its **last** update.
+
+        Args:
+            updates: ``(id, record)`` pairs, in order.
+
+        Returns:
+            The statement and one parameter list per update; an empty query
+            for no updates.
         """
         if not updates:
             return "", []
+        query, _ = self.build_update_query(*updates[0])
+        return query, [self.build_update_query(rid, record)[1] for rid, record in updates]
 
-        update_ids = []
-        data_cases = []
-        metadata_cases = []
-        params = []
+    def build_batch_create_queries(
+        self,
+        records: list[Record],
+        id_factory: Callable[[], str] | None = None,
+        *,
+        max_parameters: int | None = None,
+    ) -> tuple[list[SQLStatement], list[str]]:
+        """Build the multi-row INSERT statements that create records.
 
-        # Build CASE expressions
-        for i, (record_id, record) in enumerate(updates):
-            update_ids.append(record_id)
-            data_json = self._record_to_json(record)
-            metadata_json = json.dumps(record.metadata) if record.metadata else None
-
-            # Generate placeholders for this update
-            if self.param_style == "qmark":
-                # SQLite uses ? placeholders and needs repeated IDs
-                data_cases.append("WHEN id = ? THEN ?")
-                metadata_cases.append("WHEN id = ? THEN ?")
-                params.extend([record_id, data_json, record_id, metadata_json])
-            else:
-                # PostgreSQL uses numbered/named placeholders
-                param_idx = i * 3 + 1
-                p1 = self._get_param_placeholder(param_idx)
-                p2 = self._get_param_placeholder(param_idx + 1)
-                p3 = self._get_param_placeholder(param_idx + 2)
-                data_cases.append(f"WHEN id = {p1} THEN {p2}")
-                metadata_cases.append(f"WHEN id = {p1} THEN {p3}")
-                params.extend([record_id, data_json, metadata_json])
-
-        # Build WHERE IN clause
-        id_param_start = len(updates) * 3 + 1 if self.param_style != "qmark" else 0
-        if self.param_style == "qmark":
-            # SQLite: add IDs for WHERE IN clause
-            id_placeholders = ["?" for _ in update_ids]
-        else:
-            # PostgreSQL with numbered/named placeholders
-            id_placeholders = [
-                self._get_param_placeholder(i)
-                for i in range(id_param_start, id_param_start + len(update_ids))
-            ]
-        params.extend(update_ids)
-
-        # Build the UPDATE query
-        # Add ELSE to preserve original value when no CASE matches
-        query = f"""
-        UPDATE {self.qualified_table}
-        SET
-            data = CASE {" ".join(data_cases)} ELSE data END,
-            metadata = CASE {" ".join(metadata_cases)} ELSE metadata END,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id IN ({", ".join(id_placeholders)})
-        """
-
-        # PostgreSQL can use RETURNING
-        if self.dialect == "postgres":
-            query += " RETURNING id"
-
-        return query, params
-
-    def build_batch_create_query(
-        self, records: list[Record], id_factory: Callable[[], str] | None = None
-    ) -> tuple[str, list[Any], list[str]]:
-        """Build a batch INSERT query for multiple records.
-
-        Generates an efficient multi-value INSERT statement. Like ``create()``,
-        a caller-supplied ``record.id`` is honored (an id is minted only when a
-        record has none); the id primary-key constraint makes a colliding id
-        fail closed at the store (the executor translates the driver violation
-        to ``DuplicateRecordError``). A duplicate id *within* the same batch —
-        which the single INSERT statement cannot express and which would surface
-        as an opaque constraint error — is detected here and raises
-        ``DuplicateRecordError`` before any SQL runs.
+        Like ``create()``, a caller-supplied ``record.id`` is honored (an id is
+        minted only when a record has none); the id primary-key constraint makes
+        a colliding id fail closed at the store (the executor translates the
+        driver violation to ``DuplicateRecordError``). A duplicate id *within*
+        the batch is detected here and raises ``DuplicateRecordError`` before
+        any SQL runs, since it would otherwise surface as an opaque constraint
+        error, or not at all when the two rows land in different statements.
 
         Args:
             records: List of records to insert
@@ -922,72 +1000,66 @@ class SQLQueryBuilder:
                 for a record that carries none — so a consumer overriding the
                 hook governs batch mints too. Defaults to a random UUID4 when a
                 direct caller supplies no factory.
+            max_parameters: The most values one statement may bind; ``None``
+                for no ceiling.
 
         Returns:
-            Tuple of (SQL query, parameters, ids in input order)
+            The statements, to run in one transaction, and the ids in input
+            order.
 
         Raises:
             DuplicateRecordError: two records in the batch share an id.
         """
         if not records:
-            return "", [], []
-
-        import uuid
+            return [], []
 
         mint = id_factory if id_factory is not None else (lambda: str(uuid.uuid4()))
 
-        # Honor record.id; mint only when absent. Detect within-batch duplicate
-        # ids up front (a single INSERT cannot insert the same PK twice), failing
-        # closed the same way create() does for a colliding id.
-        ids = []
-        values_clauses = []
-        params = []
+        ids: list[str] = []
+        rows: list[tuple[str, str, str | None]] = []
         seen: set[str] = set()
-
-        for i, record in enumerate(records):
+        for record in records:
             record_id = record.id or mint()
             if record_id in seen:
                 raise DuplicateRecordError(record_id)
             seen.add(record_id)
             ids.append(record_id)
-            data_json = self._record_to_json(record)
             metadata_json = json.dumps(record.metadata) if record.metadata else None
+            rows.append((record_id, self._record_to_json(record), metadata_json))
 
-            # Generate placeholders for this row
-            param_idx = i * 3 + 1
-            p1 = self._get_param_placeholder(param_idx)
-            p2 = self._get_param_placeholder(param_idx + 1)
-            p3 = self._get_param_placeholder(param_idx + 2)
-            values_clauses.append(f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
-            params.extend([record_id, data_json, metadata_json])
+        returning = " RETURNING id" if self.dialect == "postgres" else ""
 
-        # Build the INSERT query
-        query = f"""
-        INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
-        VALUES {", ".join(values_clauses)}
-        """
+        def render(values: str) -> str:
+            return (
+                f"INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)"
+                f" VALUES {values}{returning}"
+            )
 
-        # PostgreSQL can use RETURNING
-        if self.dialect == "postgres":
-            query += " RETURNING id"
+        statements = self._values_statements(
+            rows, render, max_parameters, row_suffix=", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP"
+        )
+        return statements, ids
 
-        return query, params, ids
+    def build_batch_upsert_queries(
+        self,
+        records: list[Record],
+        id_factory: Callable[[], str] | None = None,
+        *,
+        max_parameters: int | None = None,
+    ) -> tuple[list[SQLStatement], list[str]]:
+        """Build the INSERT ... ON CONFLICT DO UPDATE statements that upsert records.
 
-    def build_batch_upsert_query(
-        self, records: list[Record], id_factory: Callable[[], str] | None = None
-    ) -> tuple[str, list[Any], list[str]]:
-        """Build a batch INSERT ... ON CONFLICT DO UPDATE query.
-
-        The batch analogue of ``build_batch_create_query`` with upsert
+        The batch analogue of :meth:`build_batch_create_queries` with upsert
         semantics: a caller-supplied ``record.id`` is honored (an id is minted
         only when absent) and an id already present is overwritten (never
         raised). All three SQL dialects (PostgreSQL, SQLite, DuckDB) support
         ``ON CONFLICT (id) DO UPDATE``.
 
-        A single ``ON CONFLICT`` statement cannot affect the same row twice, so
+        One ``ON CONFLICT`` statement cannot affect the same row twice, so
         within-batch duplicate ids are coalesced keeping the **last** occurrence
-        (last-wins, matching a per-record ``upsert`` loop); the returned id list
-        still carries one entry per input record, in input order.
+        (last-wins, matching a per-record ``upsert`` loop) before the rows are
+        split into statements; the returned id list still carries one entry per
+        input record, in input order.
 
         Args:
             records: List of records to upsert
@@ -995,14 +1067,15 @@ class SQLQueryBuilder:
                 for a record that carries none — so a consumer overriding the
                 hook governs batch upsert mints too. Defaults to a random UUID4
                 when a direct caller supplies no factory.
+            max_parameters: The most values one statement may bind; ``None``
+                for no ceiling.
 
         Returns:
-            Tuple of (SQL query, parameters, ids in input order)
+            The statements, to run in one transaction, and the ids in input
+            order.
         """
         if not records:
-            return "", [], []
-
-        import uuid
+            return [], []
 
         mint = id_factory if id_factory is not None else (lambda: str(uuid.uuid4()))
 
@@ -1012,65 +1085,102 @@ class SQLQueryBuilder:
         for record in records:
             record_id = record.id or mint()
             ids.append(record_id)
-            data_json = self._record_to_json(record)
             metadata_json = json.dumps(record.metadata) if record.metadata else None
-            rows[record_id] = (data_json, metadata_json)
+            rows[record_id] = (self._record_to_json(record), metadata_json)
 
-        values_clauses = []
-        params: list[Any] = []
-        for i, (record_id, (data_json, metadata_json)) in enumerate(rows.items()):
-            param_idx = i * 3 + 1
-            p1 = self._get_param_placeholder(param_idx)
-            p2 = self._get_param_placeholder(param_idx + 1)
-            p3 = self._get_param_placeholder(param_idx + 2)
-            values_clauses.append(f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
-            params.extend([record_id, data_json, metadata_json])
+        returning = " RETURNING id" if self.dialect == "postgres" else ""
 
         # EXCLUDED.updated_at is the CURRENT_TIMESTAMP from this row's VALUES
         # clause (i.e. "now"); referencing it instead of a bare CURRENT_TIMESTAMP
         # in the SET clause keeps the statement portable — DuckDB's binder
         # rejects a bare CURRENT_TIMESTAMP there, PostgreSQL/SQLite accept both.
-        query = f"""
-        INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
-        VALUES {", ".join(values_clauses)}
-        ON CONFLICT (id) DO UPDATE SET
-            data = EXCLUDED.data,
-            metadata = EXCLUDED.metadata,
-            updated_at = EXCLUDED.updated_at
+        def render(values: str) -> str:
+            return (
+                f"INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)"
+                f" VALUES {values}"
+                " ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data,"
+                " metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at"
+                f"{returning}"
+            )
+
+        statements = self._values_statements(
+            [(record_id, *values) for record_id, values in rows.items()],
+            render,
+            max_parameters,
+            row_suffix=", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP",
+        )
+        return statements, ids
+
+    def build_batch_create_query(
+        self, records: list[Record], id_factory: Callable[[], str] | None = None
+    ) -> tuple[str, list[Any], list[str]]:
+        """Deprecated: use :meth:`build_batch_create_queries`.
+
+        The whole batch as one statement, with no parameter ceiling.
         """
-
-        if self.dialect == "postgres":
-            query += " RETURNING id"
-
+        _warn_renamed("build_batch_create_query", "build_batch_create_queries")
+        [(query, params)], ids = self.build_batch_create_queries(records, id_factory)
         return query, params, ids
 
-    def build_batch_delete_query(self, ids: list[str]) -> tuple[str, list[Any]]:
-        """Build a batch DELETE query for multiple records.
+    def build_batch_upsert_query(
+        self, records: list[Record], id_factory: Callable[[], str] | None = None
+    ) -> tuple[str, list[Any], list[str]]:
+        """Deprecated: use :meth:`build_batch_upsert_queries`.
 
-        Deletes multiple records in a single query.
+        The whole batch as one statement, with no parameter ceiling.
+        """
+        _warn_renamed("build_batch_upsert_query", "build_batch_upsert_queries")
+        [(query, params)], ids = self.build_batch_upsert_queries(records, id_factory)
+        return query, params, ids
+
+    def build_batch_update_query(self, updates: list[tuple[str, Record]]) -> SQLStatement:
+        """Deprecated: use :meth:`build_batch_update_queries`.
+
+        The whole batch as one statement, with no parameter ceiling. It is now
+        the join :meth:`build_batch_update_queries` builds, so on SQLite it
+        needs 3.33 or later; :meth:`build_batch_update_rows` does not.
+        """
+        _warn_renamed("build_batch_update_query", "build_batch_update_queries")
+        if not updates:
+            return "", []
+        [statement] = self.build_batch_update_queries(updates)
+        return statement
+
+    def build_batch_delete_query(self, ids: list[str]) -> SQLStatement:
+        """Build one DELETE statement for records by id, whatever their number.
+
+        The ids are a membership list, bound as :meth:`_build_membership_clause`
+        binds one, so a dialect whose driver caps a statement's parameters
+        still deletes any number in one statement. On PostgreSQL it returns
+        the ids it deleted.
 
         Args:
             ids: List of record IDs to delete
 
         Returns:
-            Tuple of (SQL query, parameters)
+            Tuple of (SQL query, parameters); an empty query for no ids.
         """
         if not ids:
             return "", []
+        clause, params = self._build_membership_clause("id", Operator.IN, ids, 1)
+        returning = " RETURNING id" if self.dialect == "postgres" else ""
+        return f"DELETE FROM {self.qualified_table} WHERE {clause}{returning}", params
 
-        # Generate placeholders for IDs
-        placeholders = [self._get_param_placeholder(i) for i in range(1, len(ids) + 1)]
+    def build_existing_ids_query(self, ids: list[str]) -> SQLStatement:
+        """Build one SELECT of which of ``ids`` are stored, whatever their number.
 
-        query = f"""
-        DELETE FROM {self.qualified_table}
-        WHERE id IN ({", ".join(placeholders)})
+        Bound as :meth:`build_batch_delete_query` binds its ids.
+
+        Args:
+            ids: Record IDs to look for.
+
+        Returns:
+            Tuple of (SQL query, parameters); an empty query for no ids.
         """
-
-        # PostgreSQL can use RETURNING
-        if self.dialect == "postgres":
-            query += " RETURNING id"
-
-        return query, ids
+        if not ids:
+            return "", []
+        clause, params = self._build_membership_clause("id", Operator.IN, ids, 1)
+        return f"SELECT id FROM {self.qualified_table} WHERE {clause}", params
 
     def build_count_query(self, query: Query | None = None) -> tuple[str, list[Any]]:
         """Build a COUNT query.
@@ -1707,12 +1817,39 @@ class SQLQueryBuilder:
 
         Neither binds a parameter, so the placeholders that follow are
         numbered as though the clause were absent.
+
+        A dialect whose driver caps how many parameters a statement binds
+        passes the whole list as one, so a list of any length is one clause:
+
+        - **postgres** --- ``= ANY(<array>)`` / ``<> ALL(<array>)``. Both
+          drivers pass a list as an array; asyncpg caps a statement at 32767
+          parameters.
+        - **sqlite** --- ``IN (SELECT value FROM json_each(<json>))``, the list
+          written as a JSON array. SQLite caps a statement at its connection's
+          variable limit, 32766 by default. A member JSON cannot carry
+          (``bytes``, a ``UUID``) is left out, as one no stored record holds.
+        - Any other dialect --- one placeholder per member.
         """
         members = membership_values(value)
+        if self.dialect == "sqlite":
+            # A record's data is stored as JSON, so a member JSON cannot carry
+            # is one no record holds, and it cannot go in the JSON array below.
+            members = [m for m in members if _json_can_carry(m)]
         if not members:
             if op == Operator.IN:
                 return "FALSE", []
             return f"{field_expr} IS NOT NULL", []
+        placeholder = self._get_param_placeholder(param_start)
+        if self.dialect == "postgres":
+            if op == Operator.IN:
+                return f"{field_expr} = ANY({placeholder})", [members]
+            return f"{field_expr} <> ALL({placeholder})", [members]
+        if self.dialect == "sqlite":
+            keyword = "IN" if op == Operator.IN else "NOT IN"
+            return (
+                f"{field_expr} {keyword} (SELECT value FROM json_each({placeholder}))",
+                [json.dumps(members)],
+            )
         placeholders = ", ".join(
             self._get_param_placeholder(i) for i in range(param_start, param_start + len(members))
         )

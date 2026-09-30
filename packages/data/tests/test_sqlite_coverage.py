@@ -69,10 +69,9 @@ class TestSQLBase:
         builder_pg = SQLQueryBuilder("test_table", dialect="postgres")
         filter_spec = Filter("field", Operator.IN, [1, 2, 3])
         clause, params = builder_pg._build_filter_clause(filter_spec, 1)
-        assert "$1" in clause
-        assert "$2" in clause
-        assert "$3" in clause
-        assert params == [1, 2, 3]
+        # The list is one array parameter, whatever its length.
+        assert "= ANY($1)" in clause
+        assert params == [[1, 2, 3]]
 
         # Test NOT_IN operator
         filter_spec = Filter("field", Operator.NOT_IN, [1, 2, 3])
@@ -80,8 +79,9 @@ class TestSQLBase:
         # Every value that is not a number in the list, as ``Filter.matches``
         # answers it: a value of another kind is not in a list of numbers.
         assert " AND NOT (" in clause
-        assert "IN ($1, $2, $3)" in clause
-        assert params == [1, 2, 3]
+        # SQLite reads the list from one JSON array parameter.
+        assert "IN (SELECT value FROM json_each($1))" in clause
+        assert params == ["[1, 2, 3]"]
 
         # Test EXISTS operator (maps to IS NOT NULL)
         filter_spec = Filter("field", Operator.EXISTS, None)

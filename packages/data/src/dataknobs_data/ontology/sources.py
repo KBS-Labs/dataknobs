@@ -56,10 +56,12 @@ RECORD_SOURCE_KIND = "record"
 #:
 #: A bulk member sends one ``IN`` filter because a round trip per id is the
 #: cost it exists to avoid -- but one filter is one read, and a read is a
-#: thing a backend bounds, and the bound is not this package's to set: the
-#: SQL backends bind one parameter per element of an ``IN`` list against a
-#: server ceiling -- 65535 on Postgres, and 999 on a SQLite built before
-#: 3.32. So a batch larger than this is split, and each read stays under it.
+#: thing a backend bounds, and the bound is not this package's to set: a SQL
+#: backend that binds one parameter per element of an ``IN`` list does so
+#: against a server ceiling -- 65535 on Postgres, and 999 on a SQLite built
+#: before 3.32. This package's SQLite and PostgreSQL backends bind the whole
+#: list as one parameter now, but a backend a consumer supplies may not. So a
+#: batch larger than this is split, and each read stays under it.
 #: (``AsyncElasticsearchDatabase.search`` once capped an unbounded query at
 #: ``size=10000`` too; it pages past its result window now.)
 #:
@@ -662,7 +664,8 @@ class RecordEntitySource(DynamicCapabilityMixin):
         **One ``IN`` per batch rather than one for the whole list.** The single
         filter is what makes a bulk member worth having, but one filter is one
         read, and a read is a thing a backend bounds -- by result size on
-        Elasticsearch, by bind parameters on the SQL backends. Splitting at
+        Elasticsearch, by bind parameters on a SQL backend that binds one per
+        member (see :data:`READ_BATCH_SIZE`). Splitting at
         :data:`READ_BATCH_SIZE` keeps each read under both, and the caller
         cannot tell: the rows are concatenated and both callers index them by
         the projection's id column afterwards, so order across batches carries

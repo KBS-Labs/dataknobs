@@ -28,8 +28,10 @@ reads results: it never raised.
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -255,6 +257,44 @@ class TestAnEmptyMembershipClauseBindsNothing:
         assert _ids(await async_db.search(query)) == {"red"}
 
 
+#: Members sqlite binds inside one JSON array, which a member JSON cannot
+#: carry must not break and a list or dict member must not lose: stored data
+#: is JSON, so the first can match no record and the second can match one.
+#: Bound one parameter per member, the driver refused all of them but
+#: ``bytes``. DuckDB and PostgreSQL refuse them still, so they are not listed.
+JSON_MEMBER_CASES: list[tuple[str, Filter, set[str]]] = [
+    ("in-bytes", Filter("colour", Operator.IN, [b"red"]), set()),
+    ("not-in-bytes", Filter("colour", Operator.NOT_IN, [b"red"]), {"red", "green"}),
+    (
+        "in-uuid-and-str",
+        Filter("colour", Operator.IN, [uuid.UUID(int=1), "red"]),
+        {"red"},
+    ),
+    ("in-list-member", Filter("tags", Operator.IN, [["a"]]), {"tags-list"}),
+    ("not-in-list-member", Filter("tags", Operator.NOT_IN, [["a"]]), {"tags-a"}),
+]
+JSON_MEMBER_BACKENDS = ["memory", "file", "sqlite"]
+
+
+@pytest.mark.parametrize(
+    ("filter_spec", "expected"),
+    [pytest.param(f, e, id=case_id) for case_id, f, e in JSON_MEMBER_CASES],
+)
+class TestAMemberJsonCannotCarryIsOneNoRecordHolds:
+    """sqlite answers a member of any type as the matcher does."""
+
+    def test_the_oracle_is_the_expectation(self, filter_spec: Filter, expected: set[str]) -> None:
+        assert _oracle(filter_spec) == expected
+
+    @pytest.mark.parametrize("sync_db", JSON_MEMBER_BACKENDS, indirect=True)
+    def test_sync(self, sync_db: Any, filter_spec: Filter, expected: set[str]) -> None:
+        assert _ids(sync_db.search(Query(filters=[filter_spec]))) == expected
+
+    @pytest.mark.parametrize("async_db", JSON_MEMBER_BACKENDS, indirect=True)
+    async def test_async(self, async_db: Any, filter_spec: Filter, expected: set[str]) -> None:
+        assert _ids(await async_db.search(Query(filters=[filter_spec]))) == expected
+
+
 DIALECTS = [
     ("postgres", "numeric"),
     ("postgres", "pyformat"),
@@ -262,6 +302,18 @@ DIALECTS = [
     ("duckdb", "qmark"),
     ("standard", "qmark"),
 ]
+
+
+def _members(dialect: str, params: list[Any]) -> list[Any]:
+    """The members a membership clause bound, however its dialect binds them.
+
+    PostgreSQL binds the list as one array parameter and SQLite as one JSON
+    array; every other dialect binds one parameter per member.
+    """
+    if not params or dialect not in ("postgres", "sqlite"):
+        return params
+    [members] = params
+    return json.loads(members) if dialect == "sqlite" else members
 
 
 @pytest.mark.parametrize(("dialect", "param_style"), DIALECTS)
@@ -289,7 +341,7 @@ class TestTheBuilderRendersOnlyMembersThatCanMatch:
     ) -> None:
         sql, params = self._render(dialect, param_style, filter_spec)
         assert "()" not in sql
-        assert params == bound
+        assert _members(dialect, params) == bound
 
     def test_an_empty_in_is_false(self, dialect: str, param_style: str) -> None:
         sql, _ = self._render(dialect, param_style, Filter("colour", Operator.IN, []))
@@ -315,7 +367,7 @@ def test_the_cast_is_chosen_from_a_member_that_can_match(
     builder = SQLQueryBuilder("records", dialect=dialect, param_style=param_style)
     sql, params = builder.build_search_query(Query(filters=[Filter("n", operator, [None, 5])]))
     assert cast in sql
-    assert params == [5]
+    assert _members(dialect, params) == [5]
 
 
 #: Only the numbered styles can show a numbering fault: a ``qmark`` ``?`` is

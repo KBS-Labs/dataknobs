@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`SQLQueryBuilder`'s batch builders return a list of statements.**
+  `build_batch_create_queries`, `build_batch_upsert_queries` and
+  `build_batch_update_queries` take a `max_parameters` ceiling and return
+  `(sql, params)` pairs to run in one transaction. `build_batch_delete_query`
+  still returns one statement, and `build_existing_ids_query` is new, as is
+  `build_batch_update_rows`: one update by id and a parameter list per record,
+  for `executemany`, which the SQLite backends use because the join needs
+  SQLite 3.33. A membership list is bound as one parameter on PostgreSQL and
+  SQLite, so a clause built by the builder carries one parameter for it rather
+  than one per member.
+
 - **A boolean never equals or orders against a number in a filter.**
   `Filter.matches`, which memory, file and S3 search with, followed Python,
   where `True == 1`: `Filter("n", Operator.EQ, 1)` matched `true`,
@@ -901,6 +912,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SPARSE_VECTOR`, which is also how a consumer's own `Field` subclass is
   reached; `Field.from_dict` no longer names any subclass.
 
+### Deprecated
+
+- **`build_batch_create_query`, `build_batch_upsert_query` and
+  `build_batch_update_query`** warn with `DeprecationWarning` and return the
+  one statement the plural builder builds with no ceiling, in their old
+  shapes. `build_batch_update_query` now builds the join, which on SQLite
+  needs 3.33 or later.
+
+  **Migration:** call the plural builder and run each statement it returns in
+  one transaction; with no `max_parameters` there is exactly one.
+
 ### Documentation
 
 - **The registry guide states what happens when a `fields:` names a column
@@ -944,14 +966,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `from_backend` has nowhere to put the table `_keyed_block` writes into the
   resolved block, it builds an instance per call where a handle here is cached
   and shared, and it connects without owning a mid-connect failure.
-
-- **Two source comments name a symbol rather than a line number.**
-  `AsyncPostgresDatabase.update_batch` cited `sql_base.py:559-561` for the
-  `RETURNING id` it must not append twice; that range had drifted into
-  `build_search_query`'s ORDER BY construction, ~200 lines from the append,
-  which is in `SQLQueryBuilder.build_batch_update_query`. A line number is a
-  citation that goes stale on the next edit above it and says nothing when it
-  does.
 
 ### Added
 
@@ -1391,6 +1405,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **`update_batch` writes each record its own update on SQLite and DuckDB.**
+  The statement read its values by position, and the values were bound in a
+  different order than the statement read them, so in any batch of two or
+  more records the earlier half kept its old metadata, and the later half kept
+  its old data and had its new data written into its metadata instead. Every
+  update was still reported `True`. PostgreSQL, which numbers
+  its parameters, was not affected. Each record's update is now bound as its
+  own row --- one statement per record on SQLite, a join on `id` on DuckDB and
+  PostgreSQL --- so each reads its own values by column.
+
+  **Migration:** records written through `update_batch` on SQLite or DuckDB
+  may hold stale data, or their data in their metadata. Rewrite
+  them from their source; nothing in the store records which were affected.
+
+- **A batch of any size is one call on SQLite and async PostgreSQL.** Each
+  batch write and each `IN` / `NOT IN` filter bound a parameter per record or
+  member, and SQLite (32766 by default) and asyncpg (32767) refuse a statement
+  past their cap, with the driver's own error: `create_batch` and
+  `upsert_batch` failed at 10,923 records, `update_batch` at 6,554 on SQLite
+  and 8,192 on asyncpg, and `delete_batch` and `IN` at about 32,767. That was
+  also reachable through a buffered transaction's commit, which writes its
+  records in one call. `create_batch`, `upsert_batch` and `update_batch` now
+  write in as many statements as the cap requires, all in one transaction,
+  so a batch is still all-or-nothing; SQLite takes the cap from its
+  connection, so a lowered limit is respected. `delete_batch`, the existence
+  checks the batch verbs make, and an `IN` / `NOT IN` filter bind their whole
+  list as one parameter (`= ANY(...)` on PostgreSQL, `json_each` on SQLite).
+
+- **An `IN` / `NOT IN` member of any type is answered on SQLite as memory
+  answers it.** A list or dict member matches the stored list or dict equal
+  to it; bound one parameter per member, the driver refused it. A member JSON
+  cannot carry, such as a `UUID`, matches no record, since none can hold it;
+  the driver refused that too. DuckDB and PostgreSQL still refuse both.
+
+- **A buffered transaction's commit names the id that collided on DuckDB and
+  PostgreSQL.** A commit mixing kinds of write reported a `create` colliding
+  with a stored record as `DuplicateRecordError` naming the batch's first id,
+  whichever collided: the transaction was aborted, so nothing could be asked
+  after the failure. The stored ids are now asked for before the batch is
+  written.
+
+- **`update_batch` costs in proportion to its size, and a repeated id takes
+  its last update.** The statement tested every update against every row, so
+  its work grew with the square of the batch: 8,000 records took over 3
+  seconds on PostgreSQL, and 33,000 ran for over 14 minutes, through both a
+  cancel and a terminate of its backend. A repeated id took its first update on SQLite, DuckDB and
+  PostgreSQL and its last on memory and file; every backend now takes the
+  last, as a loop of `update()` calls leaves it.
 
 - **A `datetime` bound with a zone matches the time strings that carry one,
   by instant, on SQLite, DuckDB and PostgreSQL, as it does on every other
