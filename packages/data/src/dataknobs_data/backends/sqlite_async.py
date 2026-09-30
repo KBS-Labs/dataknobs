@@ -413,6 +413,13 @@ class AsyncSQLiteDatabase(
         own_tx = _tx is None
         if own_tx:
             await self.db.execute("BEGIN TRANSACTION")
+        else:
+            # Inside a wider transaction a failed statement is undone alone, so
+            # the rows this batch's earlier statements wrote stay visible and a
+            # lookup after the failure could name one of them. Ask first.
+            stored = await self._existing_ids([r.id for r in records if r.id])
+            if stored:
+                raise DuplicateRecordError(next(r.id for r in records if r.id in stored))
 
         try:
             for query, params in statements:
@@ -424,9 +431,12 @@ class AsyncSQLiteDatabase(
             if own_tx:
                 await self.db.rollback()
             if is_duplicate_key_error(e):
-                # Name the colliding id precisely on the error path only.
-                stored = await self._existing_ids([r.id for r in records if r.id])
-                colliding = next((r.id for r in records if r.id in stored), ids[0])
+                colliding = ids[0]
+                # Name the colliding id precisely on the error path only, once
+                # the rollback has undone everything this batch wrote.
+                if own_tx:
+                    stored = await self._existing_ids([r.id for r in records if r.id])
+                    colliding = next((r.id for r in records if r.id in stored), colliding)
                 raise DuplicateRecordError(colliding) from e
             raise constraint_violation_error() from e
         except Exception:
@@ -479,14 +489,13 @@ class AsyncSQLiteDatabase(
 
         self._check_connection()
 
-        statements = self.query_builder.build_batch_update_queries(
-            updates, max_parameters=sqlite_max_parameters()
-        )
+        # One statement per update rather than a join: UPDATE … FROM needs
+        # SQLite 3.33, and executemany binds three values per run.
+        query, rows = self.query_builder.build_batch_update_rows(updates)
 
         await self.db.execute("BEGIN TRANSACTION")
         try:
-            for query, params in statements:
-                await self.db.execute(query, params)
+            await self.db.executemany(query, rows)
             await self.db.commit()
 
             # SQLite's UPDATE returns nothing here, so ask which ids exist.

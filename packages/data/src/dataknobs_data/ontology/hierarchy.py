@@ -356,7 +356,7 @@ class ColumnHierarchy:
         what a frontier read narrows by. One filter is what makes a bulk member
         worth having, but one filter is one read and a read is a thing a
         backend bounds -- by result size on Elasticsearch, by bind parameters
-        on the SQL backends -- so the list is split at
+        on a SQL backend that binds one per member -- so the list is split at
         :data:`~dataknobs_data.ontology.sources.READ_BATCH_SIZE`, which is this
         package's existing answer to *how many rows per read*.
         """

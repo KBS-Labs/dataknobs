@@ -536,15 +536,14 @@ class SyncSQLiteDatabase(
 
         self._check_connection()
 
-        statements = self.query_builder.build_batch_update_queries(
-            updates, max_parameters=self._max_parameters()
-        )
+        # One statement per update rather than a join: UPDATE … FROM needs
+        # SQLite 3.33, and executemany binds three values per run.
+        query, rows = self.query_builder.build_batch_update_rows(updates)
 
         cursor = self.conn.cursor()
         try:
             cursor.execute("BEGIN TRANSACTION")
-            for query, params in statements:
-                cursor.execute(query, params)
+            cursor.executemany(query, rows)
             self.conn.commit()
 
             # SQLite's UPDATE returns nothing here, so ask which ids exist.

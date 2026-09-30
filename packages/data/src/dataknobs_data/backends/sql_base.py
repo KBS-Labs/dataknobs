@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, time, timedelta
 from decimal import Decimal
@@ -41,6 +42,24 @@ _METADATA_FIELD_PREFIX = "metadata."
 #: One statement ready to run: its SQL, and the values its placeholders bind in
 #: order.
 SQLStatement = tuple[str, list[Any]]
+
+
+def _warn_renamed(old: str, new: str) -> None:
+    warnings.warn(
+        f"SQLQueryBuilder.{old} is deprecated; use {new}, which splits a batch "
+        "by a parameter ceiling and returns a list of statements",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def _json_can_carry(value: Any) -> bool:
+    """Whether ``value`` has a JSON form, and so could be a stored record's value."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def resolve_json_column_and_path(field: str) -> tuple[str, str]:
@@ -894,6 +913,9 @@ class SQLQueryBuilder:
         return nothing, and the caller asks which ids exist
         (:meth:`build_existing_ids_query`).
 
+        ``UPDATE … FROM`` needs SQLite 3.33 or later, so the SQLite backends
+        use :meth:`build_batch_update_rows` instead, which runs on any version.
+
         Args:
             updates: ``(id, record)`` pairs, in order.
             max_parameters: The most values one statement may bind; ``None``
@@ -933,6 +955,27 @@ class SQLQueryBuilder:
         return self._values_statements(
             [(record_id, *values) for record_id, values in rows.items()], render, max_parameters
         )
+
+    def build_batch_update_rows(
+        self, updates: list[tuple[str, Record]]
+    ) -> tuple[str, list[list[Any]]]:
+        """Build one update by id and its parameters for each update, for ``executemany``.
+
+        The statement is :meth:`build_update_query`'s, so each row binds three
+        values whatever the batch's size, and each record reads its own. Run in
+        order, a repeated id ends as its **last** update.
+
+        Args:
+            updates: ``(id, record)`` pairs, in order.
+
+        Returns:
+            The statement and one parameter list per update; an empty query
+            for no updates.
+        """
+        if not updates:
+            return "", []
+        query, _ = self.build_update_query(*updates[0])
+        return query, [self.build_update_query(rid, record)[1] for rid, record in updates]
 
     def build_batch_create_queries(
         self,
@@ -1067,6 +1110,41 @@ class SQLQueryBuilder:
             row_suffix=", CURRENT_TIMESTAMP, CURRENT_TIMESTAMP",
         )
         return statements, ids
+
+    def build_batch_create_query(
+        self, records: list[Record], id_factory: Callable[[], str] | None = None
+    ) -> tuple[str, list[Any], list[str]]:
+        """Deprecated: use :meth:`build_batch_create_queries`.
+
+        The whole batch as one statement, with no parameter ceiling.
+        """
+        _warn_renamed("build_batch_create_query", "build_batch_create_queries")
+        [(query, params)], ids = self.build_batch_create_queries(records, id_factory)
+        return query, params, ids
+
+    def build_batch_upsert_query(
+        self, records: list[Record], id_factory: Callable[[], str] | None = None
+    ) -> tuple[str, list[Any], list[str]]:
+        """Deprecated: use :meth:`build_batch_upsert_queries`.
+
+        The whole batch as one statement, with no parameter ceiling.
+        """
+        _warn_renamed("build_batch_upsert_query", "build_batch_upsert_queries")
+        [(query, params)], ids = self.build_batch_upsert_queries(records, id_factory)
+        return query, params, ids
+
+    def build_batch_update_query(self, updates: list[tuple[str, Record]]) -> SQLStatement:
+        """Deprecated: use :meth:`build_batch_update_queries`.
+
+        The whole batch as one statement, with no parameter ceiling. It is now
+        the join :meth:`build_batch_update_queries` builds, so on SQLite it
+        needs 3.33 or later; :meth:`build_batch_update_rows` does not.
+        """
+        _warn_renamed("build_batch_update_query", "build_batch_update_queries")
+        if not updates:
+            return "", []
+        [statement] = self.build_batch_update_queries(updates)
+        return statement
 
     def build_batch_delete_query(self, ids: list[str]) -> SQLStatement:
         """Build one DELETE statement for records by id, whatever their number.
@@ -1748,10 +1826,15 @@ class SQLQueryBuilder:
           parameters.
         - **sqlite** --- ``IN (SELECT value FROM json_each(<json>))``, the list
           written as a JSON array. SQLite caps a statement at its connection's
-          variable limit, 32766 by default.
+          variable limit, 32766 by default. A member JSON cannot carry
+          (``bytes``, a ``UUID``) is left out, as one no stored record holds.
         - Any other dialect --- one placeholder per member.
         """
         members = membership_values(value)
+        if self.dialect == "sqlite":
+            # A record's data is stored as JSON, so a member JSON cannot carry
+            # is one no record holds, and it cannot go in the JSON array below.
+            members = [m for m in members if _json_can_carry(m)]
         if not members:
             if op == Operator.IN:
                 return "FALSE", []

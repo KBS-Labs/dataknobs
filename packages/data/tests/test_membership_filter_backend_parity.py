@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -254,6 +255,44 @@ class TestAnEmptyMembershipClauseBindsNothing:
 
     async def test_async(self, async_db: Any, query: ComplexQuery | Query) -> None:
         assert _ids(await async_db.search(query)) == {"red"}
+
+
+#: Members sqlite binds inside one JSON array, which a member JSON cannot
+#: carry must not break and a list or dict member must not lose: stored data
+#: is JSON, so the first can match no record and the second can match one.
+#: Bound one parameter per member, the driver refused all of them but
+#: ``bytes``. DuckDB and PostgreSQL refuse them still, so they are not listed.
+JSON_MEMBER_CASES: list[tuple[str, Filter, set[str]]] = [
+    ("in-bytes", Filter("colour", Operator.IN, [b"red"]), set()),
+    ("not-in-bytes", Filter("colour", Operator.NOT_IN, [b"red"]), {"red", "green"}),
+    (
+        "in-uuid-and-str",
+        Filter("colour", Operator.IN, [uuid.UUID(int=1), "red"]),
+        {"red"},
+    ),
+    ("in-list-member", Filter("tags", Operator.IN, [["a"]]), {"tags-list"}),
+    ("not-in-list-member", Filter("tags", Operator.NOT_IN, [["a"]]), {"tags-a"}),
+]
+JSON_MEMBER_BACKENDS = ["memory", "file", "sqlite"]
+
+
+@pytest.mark.parametrize(
+    ("filter_spec", "expected"),
+    [pytest.param(f, e, id=case_id) for case_id, f, e in JSON_MEMBER_CASES],
+)
+class TestAMemberJsonCannotCarryIsOneNoRecordHolds:
+    """sqlite answers a member of any type as the matcher does."""
+
+    def test_the_oracle_is_the_expectation(self, filter_spec: Filter, expected: set[str]) -> None:
+        assert _oracle(filter_spec) == expected
+
+    @pytest.mark.parametrize("sync_db", JSON_MEMBER_BACKENDS, indirect=True)
+    def test_sync(self, sync_db: Any, filter_spec: Filter, expected: set[str]) -> None:
+        assert _ids(sync_db.search(Query(filters=[filter_spec]))) == expected
+
+    @pytest.mark.parametrize("async_db", JSON_MEMBER_BACKENDS, indirect=True)
+    async def test_async(self, async_db: Any, filter_spec: Filter, expected: set[str]) -> None:
+        assert _ids(await async_db.search(Query(filters=[filter_spec]))) == expected
 
 
 DIALECTS = [

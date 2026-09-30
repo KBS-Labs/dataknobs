@@ -159,9 +159,10 @@ Backend notes:
   takes its **last** update, as a loop of `update()` calls would leave it.
 - **A batch of any size is one call.** Some drivers cap the parameters one
   statement may bind: SQLite at its connection's variable limit (32766 by
-  default) and asyncpg (async PostgreSQL) at 32767. On those, `create_batch`,
-  `upsert_batch` and `update_batch` write in as many statements as the cap
-  requires, all in one transaction, so a batch stays all-or-nothing however
+  default) and asyncpg (async PostgreSQL) at 32767. On those, `create_batch`
+  and `upsert_batch` write in as many statements as the cap requires, and
+  `update_batch` does too on asyncpg and runs one statement per record on
+  SQLite, all in one transaction, so a batch stays all-or-nothing however
   large it is. `delete_batch` and an `IN` / `NOT IN` filter bind their whole
   list as one parameter, so the cap does not bound either.
 

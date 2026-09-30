@@ -571,6 +571,14 @@ class AsyncDuckDBDatabase(
             try:
                 if own_tx:
                     self.conn.begin()
+                else:
+                    # The probe after a failure cannot run inside a wider
+                    # transaction (see below), so ask before writing instead.
+                    stored = _existing_ids(
+                        self._require_conn(), self.query_builder, [r.id for r in records if r.id]
+                    )
+                    if stored:
+                        raise DuplicateRecordError(next(r.id for r in records if r.id in stored))
                 for query, params in statements:
                     self.conn.execute(query, params)
                 if own_tx:
@@ -588,8 +596,10 @@ class AsyncDuckDBDatabase(
                     # on the multi-kind flush path (own_tx=False) the transaction
                     # is still aborted — a probe would raise
                     # ``duckdb.TransactionException`` and mask the
-                    # ``DuplicateRecordError`` — so report the first batch id and
-                    # let the outer ``_transaction`` roll the whole flush back.
+                    # ``DuplicateRecordError`` — so that path asked before
+                    # writing, and a collision it did not see is reported as the
+                    # first batch id while the outer ``_transaction`` rolls the
+                    # whole flush back.
                     # We are on the executor thread holding the lock, so probe
                     # the raw connection directly rather than the async exists()
                     # coroutine.

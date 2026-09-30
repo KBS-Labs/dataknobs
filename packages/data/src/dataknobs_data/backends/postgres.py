@@ -775,6 +775,9 @@ class SyncPostgresDatabase(
         # duplicate id).
         # psycopg2 writes the parameters into the statement text, so no
         # parameter ceiling applies and the builder returns one statement.
+        # Unpacking exactly one is deliberate: each ``self.db.query`` commits
+        # on its own, so a second statement would fall outside the first one's
+        # transaction, and a loop would hide that.
         [(query, params_list)], ids = query_builder.build_batch_create_queries(
             records, id_factory=self._generate_id
         )
@@ -788,7 +791,7 @@ class SyncPostgresDatabase(
         # colliding id fails closed: the single INSERT is transactional, so the
         # unique-violation aborts the whole batch (nothing written).
         try:
-            result_df = self.db.query(query, params_dict)
+            self.db.query(query, params_dict)
         except psycopg2.errors.UniqueViolation as e:
             colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
             raise DuplicateRecordError(colliding) from e
@@ -797,9 +800,8 @@ class SyncPostgresDatabase(
             # constraint rather than the row that tripped it.
             raise constraint_violation_error() from e
 
-        # PostgreSQL RETURNING clause gives us the actual inserted IDs
-        if not result_df.empty:
-            return result_df["id"].tolist()
+        # The builder's ids are in input order and every one was written;
+        # RETURNING promises no order.
         return ids
 
     def upsert_batch(self, records: list[Record]) -> list[str]:
@@ -901,7 +903,7 @@ class SyncPostgresDatabase(
         )
 
         # Use the shared batch update query builder (one statement: no
-        # parameter ceiling applies, as for create_batch)
+        # parameter ceiling applies; see create_batch for why it is unpacked)
         [(query, params_list)] = query_builder.build_batch_update_queries(updates)
 
         # Build params dict for psycopg2
@@ -1960,18 +1962,29 @@ class AsyncPostgresDatabase(
         # Execute the batch insert with RETURNING. Like create(), a colliding id
         # fails closed: the INSERTs share one transaction, so the
         # unique-violation aborts the whole batch (nothing written).
-        returned: list[str] = []
         try:
             async with self._batch_connection(_tx) as conn:
+                if _tx is not None:
+                    # The probe after a failure cannot run on this path (see
+                    # below), so ask on the pinned connection before writing.
+                    explicit = [rid for r in records if (rid := r.id)]
+                    if explicit:
+                        query, params = query_builder.build_existing_ids_query(explicit)
+                        stored = {row["id"] for row in await conn.fetch(query, *params)}
+                        if stored:
+                            raise DuplicateRecordError(
+                                next(rid for rid in explicit if rid in stored)
+                            )
                 for query, params in statements:
-                    returned.extend(row["id"] for row in await conn.fetch(query, *params))
+                    await conn.execute(query, *params)
         except asyncpg.exceptions.UniqueViolationError as e:
             colliding = ids[0]
             # Precise colliding-id naming needs a probe on a *fresh* connection.
             # That is safe only off the pinned-tx path: inside a flush the pool
             # connection is held (a probe could exhaust a size-1 pool) and the
-            # aborted transaction cannot be queried anyway. On the ``_tx`` path
-            # report the first batch id and let the outer transaction roll back.
+            # aborted transaction cannot be queried anyway. The ``_tx`` path
+            # asked before writing; a collision it did not see is reported as
+            # the first batch id while the outer transaction rolls back.
             if _tx is None:
                 stored = await self._existing_ids([r.id for r in records if r.id])
                 colliding = next((r.id for r in records if r.id in stored), colliding)
@@ -1979,8 +1992,9 @@ class AsyncPostgresDatabase(
         except asyncpg.exceptions.IntegrityConstraintViolationError as e:
             raise constraint_violation_error() from e
 
-        # Return the actual inserted IDs from RETURNING clause
-        return returned or ids
+        # The builder's ids are in input order and every one was written;
+        # RETURNING promises no order.
+        return ids
 
     async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records, in one transaction.
@@ -2015,7 +2029,8 @@ class AsyncPostgresDatabase(
     async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently using a single query.
 
-        Uses single DELETE with IN clause and RETURNING for verification.
+        One DELETE whatever the number of ids (they bind as one array), with
+        RETURNING for verification.
 
         Args:
             ids: List of record IDs to delete

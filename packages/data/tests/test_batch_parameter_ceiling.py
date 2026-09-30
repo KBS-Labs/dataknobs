@@ -22,6 +22,7 @@ import pytest
 from dataknobs_common.testing import requires_postgres
 
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
+from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.exceptions import DuplicateRecordError
 from dataknobs_data.query import Filter, Operator
@@ -309,3 +310,94 @@ def test_update_batch_costs_in_proportion_to_its_size(tmp_path: Path) -> None:
         assert large < 3 * small, (small, large)
     finally:
         db.close()
+
+
+async def test_a_colliding_id_is_named_inside_a_wider_transaction(
+    backend: tuple[str, dict[str, Any]],
+) -> None:
+    """The error names the id that collided, not one the batch itself wrote.
+
+    A buffered transaction mixing kinds flushes each batch inside one native
+    transaction, so a batch past the ceiling fails with its earlier
+    statements' rows still visible.
+    """
+    kind, config = backend
+    db = await AsyncDatabase.from_backend(kind, config=config)
+    try:
+        await db.create(Record({"v": "kept"}, storage_id=f"r{N - 1}"))
+        tx = await db.begin_transaction()
+        await tx.delete("absent")
+        for record in _records(N):
+            await tx.create(record)
+        with pytest.raises(DuplicateRecordError) as raised:
+            await tx.commit()
+        assert raised.value.id == f"r{N - 1}"
+        assert await db.count() == 1
+    finally:
+        await db.close()
+
+
+def _update_statements(statements: list[str]) -> list[str]:
+    return [s for s in statements if s.lstrip().upper().startswith("UPDATE")]
+
+
+def test_sqlite_update_batch_needs_no_update_from_sync(tmp_path: Path) -> None:
+    """``update_batch`` runs on SQLite older than 3.33, which has no ``UPDATE … FROM``.
+
+    No older SQLite is at hand to run against, so this pins the grammar the
+    backend sends, read back through SQLite's own statement trace.
+    """
+    db = SyncSQLiteDatabase({"path": str(tmp_path / "records.db")})
+    db.connect()
+    try:
+        db.create_batch(_records(3))
+        sent: list[str] = []
+        db.conn.set_trace_callback(sent.append)
+        assert db.update_batch([(f"r{i}", Record({"v": -i})) for i in range(3)]) == [True] * 3
+        db.conn.set_trace_callback(None)
+        updates = _update_statements(sent)
+        assert updates, sent
+        assert not [s for s in updates if " FROM " in s.upper()], updates
+        assert [db.read(f"r{i}").get_value("v") for i in range(3)] == [0, -1, -2]
+    finally:
+        db.close()
+
+
+async def test_sqlite_update_batch_needs_no_update_from_async(tmp_path: Path) -> None:
+    """The async twin of the sync test."""
+    db = await AsyncDatabase.from_backend("sqlite", config={"path": str(tmp_path / "records.db")})
+    try:
+        await db.create_batch(_records(3))
+        sent: list[str] = []
+        await db.db.set_trace_callback(sent.append)
+        updates_in = [(f"r{i}", Record({"v": -i})) for i in range(3)]
+        assert await db.update_batch(updates_in) == [True] * 3
+        await db.db.set_trace_callback(None)
+        updates = _update_statements(sent)
+        assert updates, sent
+        assert not [s for s in updates if " FROM " in s.upper()], updates
+        assert [(await db.read(f"r{i}")).get_value("v") for i in range(3)] == [0, -1, -2]
+    finally:
+        await db.close()
+
+
+@pytest.mark.parametrize("dialect", ["postgres", "sqlite", "duckdb"])
+def test_the_old_builder_names_warn_and_build_the_whole_batch(dialect: str) -> None:
+    """The singular builders still answer, as the one statement of the plural."""
+    builder = SQLQueryBuilder("records", dialect=dialect)
+    records = [Record({"v": i}, storage_id=f"r{i}") for i in range(3)]
+    updates = [(f"r{i}", Record({"v": -i})) for i in range(3)]
+
+    with pytest.deprecated_call():
+        create = builder.build_batch_create_query(records)
+    [(query, params)], ids = builder.build_batch_create_queries(records)
+    assert create == (query, params, ids)
+
+    with pytest.deprecated_call():
+        upsert = builder.build_batch_upsert_query(records)
+    [(query, params)], ids = builder.build_batch_upsert_queries(records)
+    assert upsert == (query, params, ids)
+
+    with pytest.deprecated_call():
+        update = builder.build_batch_update_query(updates)
+    assert [update] == builder.build_batch_update_queries(updates)
