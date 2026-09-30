@@ -107,8 +107,12 @@ class TestSQLBase:
         query = Query().sort("name", SortOrder.ASC).sort("age", SortOrder.DESC)
         sql_query, _params = builder.build_search_query(query)
         assert "ORDER BY" in sql_query
-        assert "data->'name' ASC" in sql_query
-        assert "data->'age' DESC" in sql_query
+        # Each field sorts by its jsonb type order, then its text by code point.
+        name_type = sql_query.index("ELSE data->'name' END ASC")
+        name_text = sql_query.index("(data->>'name') COLLATE \"C\" ASC")
+        age_type = sql_query.index("ELSE data->'age' END DESC")
+        age_text = sql_query.index("(data->>'age') COLLATE \"C\" DESC")
+        assert name_type < name_text < age_type < age_text
 
     def test_query_builder_count(self):
         """Test count query building."""

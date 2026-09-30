@@ -325,30 +325,35 @@ class TestSortExprDotNotation:
 
     def test_postgres_simple_sort(self) -> None:
         b = _builder("postgres")
-        assert b._build_sort_expr("name") == "data->'name'"
+        assert b._build_sort_keys("name") == [
+            "CASE WHEN jsonb_typeof(data->'name') = 'string' THEN '\"\"'::jsonb"
+            " ELSE data->'name' END",
+            "(data->>'name') COLLATE \"C\"",
+        ]
 
     def test_postgres_metadata_sort(self) -> None:
         b = _builder("postgres")
-        assert b._build_sort_expr("metadata.version") == "metadata->'version'"
+        assert b._build_sort_keys("metadata.version")[1] == "(metadata->>'version') COLLATE \"C\""
 
     def test_postgres_nested_data_sort(self) -> None:
         b = _builder("postgres")
-        # sort uses -> (preserves jsonb type) for all segments
-        assert b._build_sort_expr("config.timeout") == "data->'config'->'timeout'"
+        # the type-order key uses -> (preserves jsonb type) for all segments
+        typed, text = b._build_sort_keys("config.timeout")
+        assert "ELSE data->'config'->'timeout' END" in typed
+        assert text == "(data->'config'->>'timeout') COLLATE \"C\""
 
     def test_postgres_id_sort(self) -> None:
         b = _builder("postgres")
-        assert b._build_sort_expr("id") == "id"
+        assert b._build_sort_keys("id") == ['(id) COLLATE "C"']
 
     def test_sqlite_metadata_sort(self) -> None:
         b = _builder("sqlite")
-        assert b._build_sort_expr("metadata.version") == "json_extract(metadata, '$.version')"
+        assert b._build_sort_keys("metadata.version") == ["json_extract(metadata, '$.version')"]
 
     def test_duckdb_nested_sort(self) -> None:
         """DuckDB sort uses json_extract (typed) not json_extract_string."""
         b = _builder("duckdb")
-        expr = b._build_sort_expr("config.timeout")
-        assert expr == "json_extract(data, '$.config.timeout')"
+        assert b._build_sort_keys("config.timeout") == ["json_extract(data, '$.config.timeout')"]
 
 
 # ---------------------------------------------------------------------------
@@ -468,10 +473,8 @@ class TestDuckDBAsTextParameter:
     def test_sort_expr_uses_typed_extraction(self) -> None:
         """Sort expressions use as_text=False, so DuckDB should use json_extract."""
         b = _builder("duckdb")
-        expr = b._build_sort_expr("config.timeout")
-        assert expr == "json_extract(data, '$.config.timeout')"
+        assert b._build_sort_keys("config.timeout") == ["json_extract(data, '$.config.timeout')"]
 
     def test_metadata_sort_uses_typed_extraction(self) -> None:
         b = _builder("duckdb")
-        expr = b._build_sort_expr("metadata.version")
-        assert expr == "json_extract(metadata, '$.version')"
+        assert b._build_sort_keys("metadata.version") == ["json_extract(metadata, '$.version')"]

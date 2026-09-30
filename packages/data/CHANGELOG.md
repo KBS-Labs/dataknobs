@@ -1322,6 +1322,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PostgreSQL compares and sorts strings by code point, as every other
+  backend does.** A comparison against a string (`GT`, `GTE`, `LT`, `LTE`,
+  `BETWEEN`, `NOT_BETWEEN`) and a sort on a string field used the database's
+  collation, so under `en_US.utf8` `name > 'B'` left out `'apple'` and an
+  ascending sort put `'apple'` before `'Banana'`, where memory, SQLite and
+  DuckDB answer the other way. PostgreSQL now renders `COLLATE "C"`, on a data
+  field and on `id`, and a new records table declares `id` `COLLATE "C"` so
+  its primary key still serves a range or sort on `id`.
+
+  **Migration:** results change only on a database whose collation is not
+  `C`: string comparisons and sorts now answer in code-point order. A table
+  created by an earlier version answers correctly but no longer uses its
+  primary key for a range or sort on `id`;
+  `ALTER TABLE <schema>.<table> ALTER COLUMN id TYPE <its type> COLLATE "C"`
+  restores it (`TEXT` for a table the PostgreSQL backends created,
+  `VARCHAR(255)` for one `SQLTableManager` created). That rebuilds the
+  primary-key index and locks the table while it runs. Equality and joins on
+  `id` are unaffected. An expression index added by hand on a data field
+  (`data->'field'`) no longer serves a sort on that field.
+
 - **`LIKE` and `NOT_LIKE` match case-insensitively on PostgreSQL and DuckDB,
   and PostgreSQL matches `\` verbatim, as published.** Both pushed down a bare
   `LIKE`, which is case-sensitive on both engines, so searching `'beagle'`

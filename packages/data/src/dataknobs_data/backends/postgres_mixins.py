@@ -184,6 +184,10 @@ class PostgresTableManager:
     def get_create_table_sql(schema_name: str, table_name: str) -> str:
         """Get SQL for creating the records table with indexes.
 
+        ``id`` is declared ``COLLATE "C"``, so the primary-key index serves the
+        code-point range and sort ``SQLQueryBuilder`` renders. A table created
+        without it answers the same, and scans for those two.
+
         Args:
             schema_name: Database schema name
             table_name: Database table name
@@ -197,7 +201,7 @@ class PostgresTableManager:
         q_idx_meta = quote_ident(f"idx_{table_name}_metadata")
         return f"""
         CREATE TABLE IF NOT EXISTS {q_schema}.{q_table} (
-            id TEXT PRIMARY KEY,
+            id TEXT COLLATE "C" PRIMARY KEY,
             data JSONB NOT NULL,
             metadata JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

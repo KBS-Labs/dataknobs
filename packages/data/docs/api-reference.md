@@ -469,6 +469,32 @@ matches a document that lacks the field, as each of its negations does, and it
 chooses a string field's exact-match (`.keyword`) path from the list's first
 member only.
 
+Strings order by code point, as Python compares them: `GT`, `GTE`, `LT`,
+`LTE`, `BETWEEN` and `NOT_BETWEEN` against a string, and a sort on a string
+field, put `'Banana'` before `'apple'` and `'Zebra'` before `'éclair'`. SQLite
+and DuckDB compare text that way already. PostgreSQL renders `COLLATE "C"`
+rather than the database's collation, and the records table it creates
+declares `id` `COLLATE "C"`, so the primary key still serves a range or sort on
+`id`. A table created by an earlier version gives the same answers but scans
+for those two; this restores the index, rebuilding it under a lock on the
+table:
+
+```sql
+-- TEXT for a table the PostgreSQL backends created;
+-- VARCHAR(255) for one SQLTableManager created.
+ALTER TABLE <schema>.<table> ALTER COLUMN id TYPE TEXT COLLATE "C";
+```
+
+A sort on a data field orders by two expressions on PostgreSQL, so an
+expression index added by hand on `data->'field'` does not serve it.
+
+Elasticsearch sorts by code point and compares `id` that way, but two
+defects remain there. A range with a string bound on a data field compares
+the field's analyzed, lowercased tokens. And a sort picks a field's
+`.keyword` path by guessing rather than from the mapping: the sync backend
+raises on a numeric field whose name it does not recognise, and the async
+backend raises on a text field.
+
 ### Querying by identifier and key prefix
 
 A record's identifier is a first-class query target. `Filter("id", ...)`
