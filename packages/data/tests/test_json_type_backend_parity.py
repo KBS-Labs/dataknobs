@@ -145,15 +145,6 @@ NEGATED: list[Filter] = [
     Filter("t", Operator.GT, NOON),
 ]
 
-#: The backends that render a filter as SQL. There a positive comparison on a
-#: missing field is ``NULL``, so a ``NOT`` around it leaves the record out, as
-#: ``Filter.matches`` does not. A negated operator is already false there. That
-#: is a defect of its own, in how ``NOT`` is rendered rather than in any one
-#: comparison, so its answer is modelled here rather than skipped, and this
-#: entry goes when it is fixed.
-SQL_KINDS = frozenset({"sqlite", "duckdb", "postgres"})
-NEGATED_OPERATORS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN})
-
 #: A search's answer: the matching ids, or what it raised.
 Answer = list[str] | str
 
@@ -204,11 +195,8 @@ def _expected(spec: Filter) -> list[str]:
     return sorted(row_id for row_id, value in ROWS.items() if spec.matches(value))
 
 
-def _expected_negated(kind: str, spec: Filter) -> list[str]:
-    unmatched = [row_id for row_id in IDS if row_id not in _expected(spec)]
-    if kind in SQL_KINDS and spec.operator not in NEGATED_OPERATORS:
-        return sorted(set(unmatched) - {MISSING})
-    return sorted(unmatched)
+def _expected_negated(spec: Filter) -> list[str]:
+    return sorted(row_id for row_id in IDS if row_id not in _expected(spec))
 
 
 def _negated(spec: Filter) -> ComplexQuery:
@@ -218,7 +206,6 @@ def _negated(spec: Filter) -> ComplexQuery:
 
 
 def _disagreements(
-    kind: str,
     answers: list[tuple[Filter, Answer]],
     negated: list[tuple[Filter, Answer]],
 ) -> dict[str, object]:
@@ -227,7 +214,7 @@ def _disagreements(
         if got != (want := _expected(spec)):
             wrong[f"{spec.field} {spec.operator.value} {spec.value!r}"] = {"got": got, "want": want}
     for spec, got in negated:
-        if got != (want := _expected_negated(kind, spec)):
+        if got != (want := _expected_negated(spec)):
             key = f"NOT {spec.field} {spec.operator.value} {spec.value!r}"
             wrong[key] = {"got": got, "want": want}
     return wrong
@@ -263,7 +250,7 @@ def test_every_backend_matches_only_the_bounds_json_type_sync(
         if kind == "s3":
             db.clear()
         db.close()
-    assert _disagreements(kind, answers, negated) == {}
+    assert _disagreements(answers, negated) == {}
 
 
 async def test_every_backend_matches_only_the_bounds_json_type_async(
@@ -287,7 +274,7 @@ async def test_every_backend_matches_only_the_bounds_json_type_async(
         if kind == "s3":
             await db.clear()
         await db.close()
-    assert _disagreements(kind, answers, negated) == {}
+    assert _disagreements(answers, negated) == {}
 
 
 class TestABooleanIsNotANumber:

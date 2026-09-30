@@ -170,23 +170,25 @@ class TestSQLBase:
         )
 
         clause, params = builder._build_complex_condition(condition, 1)
-        assert "NOT (" in clause
+        # IS NOT TRUE, so a record without the field -- a NULL comparison --
+        # matches the NOT, as LogicCondition.matches says it does.
+        assert clause.endswith(" IS NOT TRUE)")
         assert params == ["active"]
 
     def test_empty_complex_conditions(self):
         """Test complex queries with empty conditions."""
         builder = SQLQueryBuilder("test_table", dialect="sqlite")
 
-        # Empty AND
+        # Empty AND: every one of no conditions holds
         condition = LogicCondition(operator=LogicOperator.AND, conditions=[])
         clause, params = builder._build_complex_condition(condition, 1)
-        assert clause == ""
+        assert clause == "TRUE"
         assert params == []
 
-        # Empty OR
+        # Empty OR: none of no conditions holds
         condition = LogicCondition(operator=LogicOperator.OR, conditions=[])
         clause, params = builder._build_complex_condition(condition, 1)
-        assert clause == ""
+        assert clause == "FALSE"
         assert params == []
 
     def test_complex_query_with_pagination(self):

@@ -93,6 +93,12 @@ query = Query().not_(
 )
 ```
 
+`NOT` is the complement of the condition it wraps, so the query above also
+returns records with no `status`, or a `null` one: they are not deleted or
+archived. `Filter("status", Operator.NOT_IN, ["deleted", "archived"])` asks
+for a status outside the list, and returns neither. Add
+`Filter("status", Operator.EXISTS)` to leave them out of a `NOT`.
+
 ### Nested Field Queries (Dot-Notation)
 
 Query nested fields using dot notation.  Dots in field names are **always**

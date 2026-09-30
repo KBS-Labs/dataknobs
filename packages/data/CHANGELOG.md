@@ -1392,6 +1392,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`NOT` matches a record without the field on SQLite, DuckDB and
+  PostgreSQL, as it does on every other backend.** `NOT` is the complement
+  of the condition it wraps, and a record with no `colour`, or a `null` one,
+  does not match `colour == "blue"`, so it matches
+  `NOT(colour == "blue")`. SQL rendered the `NOT` as `NOT (<clause>)`, and a
+  comparison on a missing field is `NULL` there, so the record was dropped;
+  memory, file, S3 and Elasticsearch kept it. `NOT` is now rendered
+  `(<clause>) IS NOT TRUE`. A negated operator is unchanged:
+  `colour != "blue"` still asks for a colour that is not `"blue"`, and
+  matches neither record.
+
+  Three more disagreements with `LogicCondition.matches` in the same
+  rendering are fixed with it. A `NOT` over several conditions matches when
+  none of them does, where SQL and Elasticsearch negated only the first. An
+  empty `OR` matches nothing, where SQL and Elasticsearch matched every
+  record, and an empty group now constrains its parent rather than dropping
+  out of it, so `AND[x, OR[]]` matches nothing and `OR[x, AND[]]` everything.
+  And a `NOT` with no conditions matches every record, where SQL raised
+  `IndexError`. A condition in the tree that is neither a `FilterCondition`
+  nor a `LogicCondition` now raises `TypeError` on SQL and Elasticsearch,
+  where it rendered as no condition and matched every record whatever its
+  own `matches` answered.
+
+  **Migration:** a `NOT` query on a SQL backend may return more records ---
+  those without the field. Add `Filter(field, Operator.EXISTS)` beside the
+  `NOT` to leave them out, or use the negated operator where there is one
+  (`NEQ`, `NOT_IN`, `NOT_BETWEEN`), which never matches a missing value.
+
 - **A comparison on SQLite, DuckDB and PostgreSQL matches only values of its
   bound's kind, and one value of another kind no longer makes it raise.** A
   string bound compared the field's text, so `t < "B"` matched `5` and `true`,

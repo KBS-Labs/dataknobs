@@ -219,9 +219,14 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
     """Translate a ``ComplexQuery`` condition tree into a nested ``bool`` query.
 
     ``AND`` → ``must``, ``OR`` → ``should`` (``minimum_should_match: 1``),
-    ``NOT`` → ``must_not``; leaf filters delegate to
+    ``NOT`` → ``must_not`` over every condition it holds, which matches when
+    none of them does; leaf filters delegate to
     :func:`build_filter_es_query`. A single-clause ``AND``/``OR`` collapses to
-    that clause. An empty branch is ``{"match_all": {}}``.
+    that clause. An empty ``AND`` or ``NOT`` matches every document and an
+    empty ``OR`` matches none, as ``LogicCondition.matches`` answers them.
+
+    Raises ``TypeError`` for a condition other than a ``FilterCondition`` or
+    ``LogicCondition``, which no clause renders.
     """
     from ..query_logic import FilterCondition, LogicCondition, LogicOperator
 
@@ -230,7 +235,6 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
 
     if isinstance(condition, LogicCondition):
         clauses = [build_complex_es_query(sub) for sub in condition.conditions]
-        clauses = [c for c in clauses if c]
 
         if condition.operator == LogicOperator.AND:
             if not clauses:
@@ -241,17 +245,18 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
 
         if condition.operator == LogicOperator.OR:
             if not clauses:
-                return {"match_all": {}}
+                return {"match_none": {}}
             if len(clauses) == 1:
                 return clauses[0]
             return {"bool": {"should": clauses, "minimum_should_match": 1}}
 
         if condition.operator == LogicOperator.NOT:
             if clauses:
-                return {"bool": {"must_not": clauses[0]}}
+                return {"bool": {"must_not": clauses}}
             return {"match_all": {}}
 
-    return {"match_all": {}}
+    # Rendered as match_all, it matched every document whatever it answers.
+    raise TypeError(f"Cannot render {type(condition).__name__} as an Elasticsearch query")
 
 
 # --------------------------------------------------------------------------

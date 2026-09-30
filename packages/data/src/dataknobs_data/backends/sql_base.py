@@ -609,16 +609,34 @@ class SQLQueryBuilder:
     def _build_complex_condition(self, condition: Any, param_start: int) -> tuple[str, list[Any]]:
         """Build WHERE clause for complex boolean logic conditions.
 
+        The clause selects exactly the records ``condition.matches`` accepts.
+        A comparison on a missing field is ``NULL`` in SQL. Every leaf clause
+        :meth:`_build_filter_clause` renders is ``NULL`` only where
+        ``Filter.matches`` answers ``False``, and ``NOT`` relies on that: a
+        leaf that could be ``NULL`` on a match would make its ``NOT`` wrong.
+        ``AND`` and ``OR`` keep ``NULL`` where ``matches`` answers ``False``,
+        and ``NOT`` is rendered ``(<clause>) IS NOT TRUE``, which reads it as
+        ``False`` before negating it. So
+        ``NOT(colour == 'blue')`` matches a record without a colour, as
+        ``matches`` does, while ``colour != 'blue'`` does not.
+
+        ``NOT`` over several conditions matches when none of them does. An
+        empty ``AND`` is ``TRUE`` and an empty ``OR`` is ``FALSE``, so an
+        empty group constrains its parent as ``matches`` says it does.
+
         Args:
             condition: The Condition object (LogicCondition or FilterCondition)
             param_start: Starting parameter number
 
         Returns:
             Tuple of (SQL clause, parameters)
+
+        Raises:
+            TypeError: If the tree holds a condition other than a
+                ``FilterCondition`` or ``LogicCondition``, which no clause
+                renders.
         """
         from ..query_logic import FilterCondition, LogicCondition, LogicOperator
-
-        params = []
 
         # Handle FilterCondition (leaf node)
         if isinstance(condition, FilterCondition):
@@ -627,40 +645,26 @@ class SQLQueryBuilder:
 
         # Handle LogicCondition (branch node)
         elif isinstance(condition, LogicCondition):
-            if condition.operator == LogicOperator.AND:
-                clauses = []
-                current_param = param_start
-                for sub_condition in condition.conditions:
-                    sub_clause, sub_params = self._build_complex_condition(
-                        sub_condition, current_param
-                    )
-                    if sub_clause:
-                        clauses.append(sub_clause)
-                        params.extend(sub_params)
-                        current_param += len(sub_params)
-                return (f"({' AND '.join(clauses)})", params) if clauses else ("", [])
-
-            elif condition.operator == LogicOperator.OR:
-                clauses = []
-                current_param = param_start
-                for sub_condition in condition.conditions:
-                    sub_clause, sub_params = self._build_complex_condition(
-                        sub_condition, current_param
-                    )
-                    if sub_clause:
-                        clauses.append(sub_clause)
-                        params.extend(sub_params)
-                        current_param += len(sub_params)
-                return (f"({' OR '.join(clauses)})", params) if clauses else ("", [])
-
-            elif condition.operator == LogicOperator.NOT:
+            clauses: list[str] = []
+            params: list[Any] = []
+            for sub_condition in condition.conditions:
                 sub_clause, sub_params = self._build_complex_condition(
-                    condition.conditions[0], param_start
+                    sub_condition, param_start + len(params)
                 )
+                clauses.append(sub_clause)
                 params.extend(sub_params)
-                return (f"NOT ({sub_clause})", params) if sub_clause else ("", [])
 
-        return ("", [])
+            if condition.operator == LogicOperator.AND:
+                return (f"({' AND '.join(clauses)})" if clauses else "TRUE"), params
+
+            any_clause = f"({' OR '.join(clauses)})" if clauses else "FALSE"
+            if condition.operator == LogicOperator.OR:
+                return any_clause, params
+            if condition.operator == LogicOperator.NOT:
+                return f"({any_clause} IS NOT TRUE)", params
+
+        # Rendered as nothing, it matched every record whatever it answers.
+        raise TypeError(f"Cannot render {type(condition).__name__} as a SQL condition")
 
     def build_where_clause(
         self, query: Query | None, param_start: int = 1
