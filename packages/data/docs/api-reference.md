@@ -498,6 +498,24 @@ push down to the backend query engine where it supports them (a SQL range or
 > to `WARNING`) so the otherwise-silent footgun is discoverable when a query
 > returns nothing.
 
+`LIKE` and `NOT_LIKE` match the **whole value, case-insensitively**, with `%`
+(any run of characters, newlines included) and `_` (any one character) the only
+wildcards. Every other character, `\` among them, matches verbatim; there is no
+escape character. `Filter.matches` is the reference, and every backend answers
+as it does, with two stated variations in how far case folding reaches:
+
+| Backend | Non-ASCII case (`'é'` against `'É'`) |
+|---|---|
+| memory, file, S3 (`Filter.matches`) | folded |
+| DuckDB (`ILIKE`) | folded |
+| PostgreSQL (`ILIKE ... ESCAPE ''`) | folded as the database's `LC_CTYPE` folds it |
+| SQLite (`LIKE`) | **ASCII only** |
+| Elasticsearch (`wildcard`, `case_insensitive`) | **ASCII only** |
+
+Final sigma is the one pair Python folds and the engines do not: `'ς'` matches
+`'Σ'` in memory, file and S3 only. For a literal `%` or `_` inside a value, use
+`STARTS_WITH`, `EQ` or `REGEX`.
+
 `STARTS_WITH` is a **literal, case-sensitive** prefix match — unlike `LIKE`, a
 `_` or `%` in the prefix is matched verbatim rather than as a wildcard. Like
 `LIKE` and `REGEX`, it matches **string values only** — a non-string field value
@@ -1162,8 +1180,9 @@ pre-filters agree:
   `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
   look-around), which differs from Python `re`.
 - **`LIKE`/`NOT_LIKE`** treat only `%` and `_` as wildcards and match
-  case-insensitively; a literal `*`, `?`, or `\` in the pattern is escaped to
-  match verbatim. The case-insensitive form requires **Elasticsearch ≥ 7.10**.
+  case-insensitively, folding ASCII case only; a literal `*`, `?`, or `\` in
+  the pattern is escaped to match verbatim. The case-insensitive form requires
+  **Elasticsearch ≥ 7.10**.
 - **`Filter("id", ...)`** targets the record's storage key via a stamped
   top-level `id` keyword field. This is the cross-backend reserved-name contract
   (see [Querying by identifier and key prefix](#querying-by-identifier-and-key-prefix)
