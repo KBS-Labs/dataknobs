@@ -224,6 +224,9 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
     :func:`build_filter_es_query`. A single-clause ``AND``/``OR`` collapses to
     that clause. An empty ``AND`` or ``NOT`` matches every document and an
     empty ``OR`` matches none, as ``LogicCondition.matches`` answers them.
+
+    Raises ``TypeError`` for a condition other than a ``FilterCondition`` or
+    ``LogicCondition``, which no clause renders.
     """
     from ..query_logic import FilterCondition, LogicCondition, LogicOperator
 
@@ -232,7 +235,6 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
 
     if isinstance(condition, LogicCondition):
         clauses = [build_complex_es_query(sub) for sub in condition.conditions]
-        clauses = [c for c in clauses if c]
 
         if condition.operator == LogicOperator.AND:
             if not clauses:
@@ -253,7 +255,8 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
                 return {"bool": {"must_not": clauses}}
             return {"match_all": {}}
 
-    return {"match_all": {}}
+    # Rendered as match_all, it matched every document whatever it answers.
+    raise TypeError(f"Cannot render {type(condition).__name__} as an Elasticsearch query")
 
 
 # --------------------------------------------------------------------------

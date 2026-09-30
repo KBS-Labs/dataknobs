@@ -610,10 +610,13 @@ class SQLQueryBuilder:
         """Build WHERE clause for complex boolean logic conditions.
 
         The clause selects exactly the records ``condition.matches`` accepts.
-        A comparison on a missing field is ``NULL`` in SQL, and ``NULL`` only
-        ever stands where ``matches`` answers ``False``: ``AND`` and ``OR``
-        keep it there, and ``NOT`` is rendered ``(<clause>) IS NOT TRUE``,
-        which reads it as ``False`` before negating it. So
+        A comparison on a missing field is ``NULL`` in SQL. Every leaf clause
+        :meth:`_build_filter_clause` renders is ``NULL`` only where
+        ``Filter.matches`` answers ``False``, and ``NOT`` relies on that: a
+        leaf that could be ``NULL`` on a match would make its ``NOT`` wrong.
+        ``AND`` and ``OR`` keep ``NULL`` where ``matches`` answers ``False``,
+        and ``NOT`` is rendered ``(<clause>) IS NOT TRUE``, which reads it as
+        ``False`` before negating it. So
         ``NOT(colour == 'blue')`` matches a record without a colour, as
         ``matches`` does, while ``colour != 'blue'`` does not.
 
@@ -627,6 +630,11 @@ class SQLQueryBuilder:
 
         Returns:
             Tuple of (SQL clause, parameters)
+
+        Raises:
+            TypeError: If the tree holds a condition other than a
+                ``FilterCondition`` or ``LogicCondition``, which no clause
+                renders.
         """
         from ..query_logic import FilterCondition, LogicCondition, LogicOperator
 
@@ -643,9 +651,8 @@ class SQLQueryBuilder:
                 sub_clause, sub_params = self._build_complex_condition(
                     sub_condition, param_start + len(params)
                 )
-                if sub_clause:
-                    clauses.append(sub_clause)
-                    params.extend(sub_params)
+                clauses.append(sub_clause)
+                params.extend(sub_params)
 
             if condition.operator == LogicOperator.AND:
                 return (f"({' AND '.join(clauses)})" if clauses else "TRUE"), params
@@ -656,7 +663,8 @@ class SQLQueryBuilder:
             if condition.operator == LogicOperator.NOT:
                 return f"({any_clause} IS NOT TRUE)", params
 
-        return ("", [])
+        # Rendered as nothing, it matched every record whatever it answers.
+        raise TypeError(f"Cannot render {type(condition).__name__} as a SQL condition")
 
     def build_where_clause(
         self, query: Query | None, param_start: int = 1

@@ -38,6 +38,8 @@ from dataknobs_common.testing import (
 )
 
 from dataknobs_data import AsyncDatabase, Record, SyncDatabase
+from dataknobs_data.backends.elasticsearch_query import build_complex_es_query
+from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.query import Filter, Operator
 from dataknobs_data.query_logic import (
     ComplexQuery,
@@ -249,3 +251,39 @@ class TestTheOracle:
 
     def test_not_of_several_matches_none_of_them(self) -> None:
         assert _expected(_not(BLUE, RED)) == ["miss", "nul"]
+
+
+class _Unrenderable(Condition):
+    """A condition neither push-down translator knows how to render."""
+
+    def matches(self, record: Any) -> bool:
+        return False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "unrenderable"}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> _Unrenderable:
+        return cls()
+
+
+UNRENDERABLE: dict[str, Condition] = {
+    "alone": _Unrenderable(),
+    "under and": _and(RED, _Unrenderable()),
+    "under not": _not(_Unrenderable()),
+}
+
+
+@pytest.mark.parametrize("condition", UNRENDERABLE.values(), ids=UNRENDERABLE)
+class TestAConditionNoTranslatorKnowsIsRefused:
+    """Rendered as nothing, it matched every record, whatever it would answer."""
+
+    @pytest.mark.parametrize("dialect", ["sqlite", "duckdb", "postgres"])
+    def test_sql(self, condition: Condition, dialect: str) -> None:
+        builder = SQLQueryBuilder("records", dialect=dialect)
+        with pytest.raises(TypeError, match="_Unrenderable"):
+            builder.build_complex_search_query(ComplexQuery(condition=condition))
+
+    def test_elasticsearch(self, condition: Condition) -> None:
+        with pytest.raises(TypeError, match="_Unrenderable"):
+            build_complex_es_query(condition)

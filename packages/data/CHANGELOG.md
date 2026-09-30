@@ -1410,7 +1410,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record, and an empty group now constrains its parent rather than dropping
   out of it, so `AND[x, OR[]]` matches nothing and `OR[x, AND[]]` everything.
   And a `NOT` with no conditions matches every record, where SQL raised
-  `IndexError`.
+  `IndexError`. A condition in the tree that is neither a `FilterCondition`
+  nor a `LogicCondition` now raises `TypeError` on SQL and Elasticsearch,
+  where it rendered as no condition and matched every record whatever its
+  own `matches` answered.
 
   **Migration:** a `NOT` query on a SQL backend may return more records ---
   those without the field. Add `Filter(field, Operator.EXISTS)` beside the
