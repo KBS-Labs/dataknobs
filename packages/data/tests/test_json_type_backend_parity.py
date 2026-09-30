@@ -811,6 +811,7 @@ ZONED: dict[str, Any] = {
     "zFeb30": "2024-02-30T10:00:00Z",
     # In UTC, a day either side of the years Python and SQLite share.
     "zYear1": "0001-01-01T01:00:00+05:00",
+    "zYear1Late": "0001-01-01T20:00:00-05:00",
     "zYear10000": "9999-12-31T23:00:00-05:00",
     "2024-01-01T05:00:00Z": "a key that names a zoned time",
     "x": "x",
@@ -823,6 +824,7 @@ _ZONED_BOUNDS: list[Any] = [
     datetime(2024, 1, 1, 10),
     date(2024, 1, 1),
     datetime(1, 1, 1, 1, tzinfo=_PLUS5),
+    datetime(1, 1, 1, 20, tzinfo=_MINUS5),
     datetime(9999, 12, 31, 20, tzinfo=_MINUS5),
 ]
 ZONED_FILTERS: list[Filter] = [

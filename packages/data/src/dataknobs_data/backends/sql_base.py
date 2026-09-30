@@ -211,6 +211,9 @@ _ZONED_INSTANT = "zoned timestamp"
 _ZONED_WALL_CLOCK = "zoned wall-clock timestamp"
 _TIME_READINGS = frozenset({_NAIVE_TIME, _ZONED_INSTANT, _ZONED_WALL_CLOCK})
 
+_DAY = timedelta(days=1)
+_MICROSECOND = timedelta(microseconds=1)
+
 #: A zone at the end of a string of :data:`ZONED_TIMESTAMP_SHAPE`.
 _ZONE_SUFFIX = "(Z|[+-][0-9][0-9]:[0-9][0-9])$"
 
@@ -243,22 +246,22 @@ def _utc_text(bound: datetime) -> str:
     the years 0000 to 9999; an offset moves a time Python holds by up to a
     day either side of its own 0001 to 9999, so the instant a day early is
     one SQLite can always write, and shifting both sides keeps their order.
-    Python cannot hold the year 0000, so a day in it is written by hand.
+    The arithmetic is on whole microseconds, where no step can leave
+    Python's range; a result before 0001-01-01 falls on 0000-12-30 or -31,
+    which Python cannot hold, so it is written by hand.
     """
-    wall, offset = bound.replace(tzinfo=None), bound.utcoffset()
+    offset = bound.utcoffset()
     if offset is None:
         raise ValueError(f"A naive datetime names no instant: {bound!r}")
-    try:
-        early = (
-            (wall - timedelta(days=1) - offset)
-            if offset < timedelta(0)
-            else (wall - offset - timedelta(days=1))
+    since_min = (bound.replace(tzinfo=None) - datetime.min) // _MICROSECOND
+    early = since_min - (offset + _DAY) // _MICROSECOND
+    days, rest = divmod(early, _DAY // _MICROSECOND)
+    clock = (datetime.min + timedelta(microseconds=rest)).time()
+    if days >= 0:
+        return datetime.combine(datetime.min + timedelta(days=days), clock).isoformat(
+            sep="T", timespec="microseconds"
         )
-    except OverflowError:
-        # Before 0001-01-01: two days later it is 0001-01-01 or -02.
-        later = wall + timedelta(days=1) - offset
-        return f"0000-12-{29 + later.day}T{later.time().isoformat(timespec='microseconds')}"
-    return early.isoformat(sep="T", timespec="microseconds")
+    return f"0000-12-{32 + days}T{clock.isoformat(timespec='microseconds')}"
 
 
 def is_duplicate_key_error(exc: BaseException) -> bool:
@@ -1561,12 +1564,13 @@ class SQLQueryBuilder:
                     part, part_params = self._build_operator_clause(
                         exprs[0], positive, bound_values[0], start
                     )
-                elif exprs[0] == exprs[1]:
+                elif per_bound[0] == per_bound[1]:
                     part, part_params = self._build_operator_clause(
                         exprs[0], positive, bound_values, start
                     )
                 else:
-                    # A date and an aware bound read a zoned value two ways.
+                    # A date and an aware bound read a zoned value two ways,
+                    # each bound one parameter.
                     low, low_params = self._build_operator_clause(
                         exprs[0], Operator.GTE, bound_values[0], start
                     )
