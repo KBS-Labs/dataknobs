@@ -34,6 +34,24 @@ query = Query().filter("active", Operator.EQ, True).not_(
 )
 ```
 
+`NOT` is the complement of the condition it wraps, so it matches a record
+that has no `city`, or a `null` one: that record is not in New York. A
+negated operator asks a different question. `Filter("city", Operator.NEQ,
+"New York")` asks for a city that is not New York, and matches neither.
+
+| Record | `not_(city == "New York")` | `city != "New York"` |
+|---|---|---|
+| `{"city": "Boston"}` | matches | matches |
+| `{"city": "New York"}` | no | no |
+| `{"city": None}` | matches | no |
+| `{}` | matches | no |
+
+To leave out of a `NOT` the records without the field, or with a `null`
+one, add `Filter("city", Operator.EXISTS)` beside it.
+
+`NOT` over several conditions matches when none of them does. An empty `AND`
+matches every record and an empty `OR` matches none.
+
 ### 4. Complex Nested Conditions
 ```python
 from dataknobs_data import QueryBuilder
@@ -117,21 +135,21 @@ query = Query().or_(
 
 ## Backend Support
 
-### Memory Backend
-- Full support via shared implementation
-- Efficient in-memory filtering
+Every backend answers a `ComplexQuery` as `LogicCondition.matches` does. The
+one exception is on Elasticsearch: a negated operator (`NEQ`, `NOT_IN`,
+`NOT_LIKE`, `NOT_BETWEEN`) keeps a document without the field there, with or
+without a `NOT` around it.
 
-### PostgreSQL Backend
-- Uses shared implementation currently
-- Future: Could optimize with native SQL boolean operators
+### Memory, File and S3 Backends
+- Evaluate `LogicCondition.matches` over the stored records
+
+### PostgreSQL, SQLite and DuckDB Backends
+- Render the condition tree as one SQL `WHERE` clause
+- `NOT` is rendered `(<clause>) IS NOT TRUE`, so a comparison that is `NULL`
+  on a missing field counts as unmatched before it is negated
 
 ### Elasticsearch Backend
-- Uses shared implementation currently
-- Future: Could optimize with native bool queries
-
-### File/S3 Backends
-- Full support via shared implementation
-- Filters applied during record loading
+- Renders the condition tree as a nested `bool` query
 
 ## Performance Considerations
 

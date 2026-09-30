@@ -94,7 +94,19 @@ class FilterCondition(Condition):
 
 @dataclass
 class LogicCondition(Condition):
-    """A logical combination of conditions."""
+    """A logical combination of conditions.
+
+    ``AND`` matches when every condition does and ``OR`` when any does, so an
+    empty ``AND`` matches every record and an empty ``OR`` none. ``NOT``
+    matches when none of its conditions does, and with one condition it is
+    that condition's complement --- which is not the negated operator.
+    ``NOT(Filter("colour", Operator.EQ, "blue"))`` matches a record with no
+    colour, or a ``null`` one, because that record does not match
+    ``colour == "blue"``. ``Filter("colour", Operator.NEQ, "blue")`` asks for a
+    colour that is not ``"blue"``, and matches neither. Every backend answers
+    a ``ComplexQuery`` as :meth:`matches` does, apart from the Elasticsearch
+    rendering of a negated operator, which keeps a document without the field.
+    """
 
     operator: LogicOperator
     conditions: list[Condition] = field(default_factory=list)
@@ -243,7 +255,11 @@ class QueryBuilder:
         return self
 
     def not_(self, condition: QueryBuilder | Filter | Condition) -> QueryBuilder:
-        """Add NOT condition."""
+        """Add NOT condition.
+
+        A record without the condition's field matches the ``NOT``; see
+        :class:`LogicCondition`.
+        """
         if isinstance(condition, QueryBuilder):
             not_cond = LogicCondition(
                 operator=LogicOperator.NOT,

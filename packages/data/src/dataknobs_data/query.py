@@ -1415,6 +1415,11 @@ class Query:
     def not_(self, filter: Filter) -> ComplexQuery:
         """Create a ComplexQuery with NOT logic.
 
+        The ``NOT`` is the filter's complement, so it matches a record without
+        the filter's field, or with a ``null`` one: ``not_(Filter("c",
+        Operator.EQ, "x"))`` keeps such a record where ``Filter("c",
+        Operator.NEQ, "x")`` does not. See :class:`LogicCondition`.
+
         Args:
             filter: Filter to negate
 

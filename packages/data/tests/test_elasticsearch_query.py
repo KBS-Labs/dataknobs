@@ -27,6 +27,7 @@ Contract pinned here:
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -295,7 +296,7 @@ def test_complex_and_or_not_tree() -> None:
                         "minimum_should_match": 1,
                     }
                 },
-                {"bool": {"must_not": {"term": {"data.b.keyword": "y"}}}},
+                {"bool": {"must_not": [{"term": {"data.b.keyword": "y"}}]}},
             ]
         }
     }
@@ -324,11 +325,37 @@ def test_complex_single_clause_or_collapses() -> None:
     assert build_complex_es_query(condition) == {"term": {"data.a.keyword": "x"}}
 
 
-@pytest.mark.parametrize("logic_op", [LogicOperator.AND, LogicOperator.OR])
-def test_complex_empty_branch_is_match_all(logic_op: LogicOperator) -> None:
-    # An empty AND/OR branch is match_all — a no-constraint branch matches all.
-    assert build_complex_es_query(LogicCondition(operator=logic_op, conditions=[])) == {
-        "match_all": {}
+@pytest.mark.parametrize(
+    ("logic_op", "expected"),
+    [
+        (LogicOperator.AND, {"match_all": {}}),
+        (LogicOperator.OR, {"match_none": {}}),
+    ],
+)
+def test_complex_empty_branch_answers_as_matches_does(
+    logic_op: LogicOperator, expected: dict[str, Any]
+) -> None:
+    # Every condition of an empty AND holds; none of an empty OR does, so it
+    # matches nothing -- and constrains a parent AND rather than vanishing.
+    assert build_complex_es_query(LogicCondition(operator=logic_op, conditions=[])) == expected
+
+
+def test_complex_not_negates_every_condition() -> None:
+    # NOT over several conditions matches when none of them does.
+    condition = LogicCondition(
+        operator=LogicOperator.NOT,
+        conditions=[
+            FilterCondition(Filter("a", Operator.EQ, "x")),
+            FilterCondition(Filter("b", Operator.EQ, "y")),
+        ],
+    )
+    assert build_complex_es_query(condition) == {
+        "bool": {
+            "must_not": [
+                {"term": {"data.a.keyword": "x"}},
+                {"term": {"data.b.keyword": "y"}},
+            ]
+        }
     }
 
 
