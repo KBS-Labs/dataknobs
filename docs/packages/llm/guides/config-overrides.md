@@ -135,10 +135,13 @@ async for chunk in manager.stream_complete(
 | `frequency_penalty` | `float` | Frequency penalty (-2.0 to 2.0) |
 | `logit_bias` | `Dict[str, float]` | Token biases |
 | `response_format` | `str` | Output format ("text" or "json") |
-| `response_schema` | `Dict[str, Any]` | A JSON Schema the reply must satisfy. Ollama and OpenAI constrain generation to it; other providers ignore it, as they ignore `response_format` |
+| `response_schema` | `Dict[str, Any]` | A JSON Schema the reply must satisfy; honoured by Ollama, OpenAI and Anthropic, refused by name elsewhere (see [Asking for One Shape](#asking-for-one-shape)) |
+| `response_schema_strict` | `bool` | Whether OpenAI enforces the schema rather than following it as guidance (default `True`) |
 | `functions` | `List[Dict]` | Dynamic function definitions |
 | `function_call` | `str` or `Dict` | Function calling mode |
 | `options` | `Dict[str, Any]` | Provider-specific options (merged) |
+
+--8<-- "packages/llm/docs/user-guide.md:asking-for-one-shape"
 
 ## Override Presets
 
@@ -171,32 +174,6 @@ AsyncLLMProvider.register_preset("json_mode", {
     "temperature": 0.2
 })
 ```
-
-### Asking for One Shape
-
-`response_format="json"` asks for some JSON; a model in JSON mode can still
-answer in a shape the caller did not ask for, such as repeating a key once per
-item. `response_schema` asks for one shape, per call:
-
-```python
-TABLE = {
-    "type": "object",
-    "properties": {
-        "columns": {"type": "array", "items": {"type": "string"}},
-        "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-    },
-    "required": ["columns", "rows"],
-}
-response = await llm.complete(
-    "Compare these options as a table: ...",
-    config_overrides={"response_schema": TABLE},
-)
-```
-
-Ollama sends the schema as the request's `format`, and OpenAI as a
-`json_schema` response format, so generation is constrained to it. A schema
-is the narrower request, so it wins where `response_format` is also set.
-Other providers do not constrain output, so check what comes back.
 
 ### Using Presets
 

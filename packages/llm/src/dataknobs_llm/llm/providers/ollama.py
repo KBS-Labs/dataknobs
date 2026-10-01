@@ -1060,10 +1060,82 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         options = self._build_options(shaped_config)
         return self._apply_param_remaps(options, constraints.param_remaps)
 
+    def _build_chat_payload(
+        self,
+        config: LLMConfig,
+        messages: Union[str, List[LLMMessage]],
+        tools: list[Any] | None,
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        """Build the ``/api/chat`` request body ``complete`` and ``stream_complete`` send.
+
+        The single choke point for the request body, as ``_build_api_kwargs`` is
+        for OpenAI and Anthropic: the two entry points differ only in
+        ``stream`` and in how they read the reply, so a field added here
+        reaches both. Pure (no network); the caller refreshes the live model
+        metadata first so the shaped ``options`` see it.
+
+        Args:
+            config: Runtime config (with any ``config_overrides`` applied).
+            messages: A prompt, or the conversation.
+            tools: Tool objects for function calling, if any.
+            stream: Whether the server streams the reply.
+
+        Returns:
+            The request body.
+        """
+        if isinstance(messages, str):
+            messages = [LLMMessage(role="user", content=messages)]
+
+        # Add system prompt if configured
+        if config.system_prompt and (not messages or messages[0].role != "system"):
+            messages = [LLMMessage(role="system", content=config.system_prompt)] + list(messages)
+
+        # Options shaped by the model family's constraints — a no-op by
+        # default; honors a consumer constraints override
+        payload: Dict[str, Any] = {
+            "model": config.model,
+            "messages": self._messages_to_ollama(messages),
+            "stream": stream,
+            "options": self._build_shaped_options(config),
+        }
+
+        # A schema, else JSON mode
+        reply_format = self.adapter.adapt_format(config)
+        if reply_format is not None:
+            payload["format"] = reply_format
+
+        if tools:
+            payload["tools"] = self.adapter.adapt_tools(tools)
+            if reply_format is not None:
+                # Measured on Ollama 0.33.2 (qwen2.5:7b): with a format set, a
+                # model asked to use a tool writes the call as JSON text and
+                # makes none. Sent as asked, since a caller may want the format
+                # for a turn that needs no tool, but not silently.
+                logger.warning(
+                    "Ollama request for %s sets a format (%s) and %d tool(s): a "
+                    "constrained reply is unlikely to carry a tool call",
+                    config.model,
+                    "schema" if isinstance(reply_format, dict) else reply_format,
+                    len(tools),
+                )
+
+        # Forward 'think' parameter for reasoning models (e.g. qwen3, deepseek-r1).
+        # When True, the model emits <think>...</think> blocks before the answer.
+        think = config.options.get("think")
+        if think is not None:
+            payload["think"] = bool(think)
+
+        return payload
+
     # ``/api/embed`` takes a ``truncate`` flag, so both policies are honoured.
     # Its overflow, and ``/api/chat``'s, is a 400, so the base's status set
     # serves; the 500 declared here was ``/api/embeddings``' alone.
     _embedding_overflow_policies = frozenset({"refuse", "truncate"})
+
+    # A schema is sent as the chat request's ``format``.
+    _response_schema_supported = True
 
     def _translate_api_error(self, exc: Exception) -> Exception | None:
         """Translate a raw aiohttp transport error into a dataknobs exception.
@@ -1111,8 +1183,8 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
@@ -1122,47 +1194,12 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # Get runtime config (with overrides applied if provided)
         runtime_config = self._get_runtime_config(config_overrides)
 
-        # Convert to message list
-        if isinstance(messages, str):
-            messages = [LLMMessage(role="user", content=messages)]
-
-        # Add system prompt if configured
-        if runtime_config.system_prompt and (not messages or messages[0].role != "system"):
-            messages = [LLMMessage(role="system", content=runtime_config.system_prompt)] + list(
-                messages
-            )
-
-        # Convert to Ollama format
-        ollama_messages = self._messages_to_ollama(messages)
-
         # Keep the live model-metadata cache fresh (TTL-gated, ≤1 poll per TTL
         # per loop) so the constraint reads in _build_shaped_options see current
         # context-window / (consumer-overridden) shaping rules.
         await self._live_source.refresh_if_stale()
 
-        # Build payload for chat endpoint (options shaped by the model family's
-        # constraints — a no-op by default; honors a consumer constraints override)
-        payload = {
-            "model": runtime_config.model,
-            "messages": ollama_messages,
-            "stream": False,
-            "options": self._build_shaped_options(runtime_config),
-        }
-
-        # Add format if JSON mode or a schema was requested
-        reply_format = self.adapter.adapt_format(runtime_config)
-        if reply_format is not None:
-            payload["format"] = reply_format
-
-        # Handle tools if provided
-        if tools:
-            payload["tools"] = self.adapter.adapt_tools(tools)
-
-        # Forward 'think' parameter for reasoning models (e.g. qwen3, deepseek-r1).
-        # When True, the model emits <think>...</think> blocks before the answer.
-        think = runtime_config.options.get("think")
-        if think is not None:
-            payload["think"] = bool(think)
+        payload = self._build_chat_payload(runtime_config, messages, tools, stream=False)
 
         try:
             async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
@@ -1182,10 +1219,17 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
                             ),
                         )
                     else:
+                        # What identifies the request, never its content: the
+                        # messages and schema are the caller's data.
                         logger.error(
-                            "Ollama API error (status %s): %s", response.status, error_text
+                            "Ollama API error (status %s) for model %s, %d message(s), "
+                            "request keys %s: %s",
+                            response.status,
+                            runtime_config.model,
+                            len(payload["messages"]),
+                            sorted(payload),
+                            error_text,
                         )
-                        logger.error("Request payload: %s", json.dumps(payload, indent=2))
                         await raise_for_status_with_body(response, body=error_text)
                 else:
                     data = await response.json()
@@ -1213,8 +1257,8 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects for function calling.
             **kwargs: Additional provider-specific parameters.
         """
@@ -1224,44 +1268,11 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         # Get runtime config (with overrides applied if provided)
         runtime_config = self._get_runtime_config(config_overrides)
 
-        # Convert to message list
-        if isinstance(messages, str):
-            messages = [LLMMessage(role="user", content=messages)]
-
-        # Add system prompt if configured
-        if runtime_config.system_prompt and (not messages or messages[0].role != "system"):
-            messages = [LLMMessage(role="system", content=runtime_config.system_prompt)] + list(
-                messages
-            )
-
-        # Convert to Ollama format
-        ollama_messages = self._messages_to_ollama(messages)
-
         # Keep the live model-metadata cache fresh before shaping (mirrors
         # complete()) — same choke point, TTL-gated.
         await self._live_source.refresh_if_stale()
 
-        # Build payload for chat endpoint (mirrors complete())
-        payload: Dict[str, Any] = {
-            "model": runtime_config.model,
-            "messages": ollama_messages,
-            "stream": True,
-            "options": self._build_shaped_options(runtime_config),
-        }
-
-        # Add format if JSON mode or a schema was requested
-        reply_format = self.adapter.adapt_format(runtime_config)
-        if reply_format is not None:
-            payload["format"] = reply_format
-
-        # Handle tools if provided
-        if tools:
-            payload["tools"] = self.adapter.adapt_tools(tools)
-
-        # Forward 'think' parameter for reasoning models (mirrors complete())
-        think = runtime_config.options.get("think")
-        if think is not None:
-            payload["think"] = bool(think)
+        payload = self._build_chat_payload(runtime_config, messages, tools, stream=True)
 
         try:
             async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:

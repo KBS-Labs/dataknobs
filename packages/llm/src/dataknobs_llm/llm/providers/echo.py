@@ -117,6 +117,11 @@ class EchoProvider(AsyncLLMProvider):
     # the gate, the report, the vector identity --- is testable offline.
     _embedding_overflow_policies = frozenset({"refuse", "truncate"})
 
+    # Accepts a schema, as the providers it stands in for in tests do, so a
+    # consumer's test does not see a refusal production would not raise. It
+    # constrains nothing: a scripted response is returned as scripted.
+    _response_schema_supported = True
+
     # Class-level instance tracking
     _last_instance: EchoProvider | None = None
     _instance_collectors: ClassVar[list[list[EchoProvider]]] = []
@@ -686,8 +691,8 @@ class EchoProvider(AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects (recorded in call history)
             **kwargs: Additional parameters (ignored)
 
@@ -810,8 +815,8 @@ class EchoProvider(AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects (forwarded to complete())
             **kwargs: Additional parameters (ignored)
 

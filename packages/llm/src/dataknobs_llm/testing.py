@@ -957,6 +957,10 @@ class CapturingProvider(AsyncLLMProvider):
         """The wrapped provider's, so capturing does not change what is honoured."""
         return self._delegate.embedding_overflow_policy()
 
+    def supports_response_schema(self) -> bool:
+        """The wrapped provider's, so capturing does not change what is honoured."""
+        return self._delegate.supports_response_schema()
+
 
 # =============================================================================
 # CallTracker — collect calls across multiple CapturingProviders

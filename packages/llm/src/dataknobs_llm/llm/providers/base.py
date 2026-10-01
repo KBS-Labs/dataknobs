@@ -260,6 +260,10 @@ class SyncProviderAdapter(SyncBridgeAdapter):
         """The overflow policy the async provider honours, or its refusal by name."""
         return self.async_provider.embedding_overflow_policy()
 
+    def supports_response_schema(self) -> bool:
+        """Whether the async provider's requests can constrain a reply to a schema."""
+        return self.async_provider.supports_response_schema()
+
     @property
     def is_initialized(self) -> bool:
         """Check if provider is initialized."""

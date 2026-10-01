@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A persona review reaches the provider.** `ReviewExecutor` sent its
+  prompt as a plain dict, which no shipped provider reads as a message
+  (`'dict' object has no attribute 'role'`), so every persona review failed
+  with "Review failed"; and it asked for JSON with a `response_format=`
+  keyword argument that only OpenAI reads. It now sends an `LLMMessage` and
+  asks for JSON through `config_overrides={"response_format": "json"}`, which
+  every provider reads.
 - **`dataknobs-bots[postgres]` installs from wheels.** It forwards to
   `dataknobs-data[postgres]`, which required the source-built `psycopg2` and so
   failed to install without `pg_config`. That extra now requires

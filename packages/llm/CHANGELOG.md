@@ -14,12 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer in another shape: asked for a table as `{"columns", "rows"}`,
   `qwen2.5:7b` on Ollama repeated `"rows"` once per table row, which
   `json.loads` reads as the last row alone, or wrote cells as bare strings.
-  A schema constrains generation instead. Ollama sends it as the request's
-  `format` (`OllamaAdapter.adapt_format`, now shared by `complete` and
-  `stream_complete`), and OpenAI as a `json_schema` response format. A schema
-  wins where `response_format` is also set. Other providers ignore it, as
-  they ignore `response_format`. It is a per-call override
+  A schema constrains generation instead, and is honoured or refused by
+  name, never ignored, by the rule `embedding_overflow` set. Ollama sends it
+  as the chat request's `format`, OpenAI as a `json_schema` response format,
+  and Anthropic as `output_config.format`. Bedrock and HuggingFace refuse it
+  with `ValidationError` before any request, and
+  `LLMProvider.supports_response_schema()` (answered by a wrapping provider
+  from the provider it wraps) says which is which. `EchoProvider` accepts
+  one and returns its scripted reply unchanged. A schema wins where
+  `response_format` is also set; a per-call `response_format` keyword
+  argument is dropped with a warning. The value is checked when the config
+  is built: a string, an empty mapping, or one that does not serialize as
+  JSON raises `ValidationError`. It is a per-call override
   (`ALLOWED_CONFIG_OVERRIDES`).
+- **`LLMConfig.response_schema_strict`** (default `True`): OpenAI follows a
+  schema only as guidance unless it is sent `strict`, so it is, and strict
+  mode accepts only a closed schema (every object with
+  `additionalProperties: false` and every property `required`, as Anthropic
+  also requires). Set `False` to send a schema strict mode rejects.
 - **`LLMConfig.embedding_overflow`: an embedding provider can opt in to
   truncating an over-long text.** `"refuse"` (the default) raises
   `ContextLengthExceededError`; `"truncate"` embeds the opening window and
@@ -74,6 +86,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An Ollama completion error no longer logs the conversation.** A non-200
+  from `/api/chat` logged the whole request body at `ERROR`: every message,
+  and any schema. It now logs the model, the message count and the request's
+  keys beside the server's error text.
+- **Ollama warns when a request sets a `format` and offers tools.** Measured
+  on Ollama 0.33.2 with `qwen2.5:7b`: under a `format` (a schema or
+  `"json"`), a model asked to use a tool writes the call as JSON text and
+  makes none. The request is still sent as asked. `complete` and
+  `stream_complete` now build their request body in one place
+  (`OllamaProvider._build_chat_payload`), so the two cannot drift.
 - **An over-long text sent to an Ollama embedding model raises
   `ContextLengthExceededError`**, where it raised `OperationError (HTTP 500)`.
   Ollama words an embedding overflow `the input length exceeds the context

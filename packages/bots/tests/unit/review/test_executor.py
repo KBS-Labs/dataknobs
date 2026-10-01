@@ -1,8 +1,9 @@
 """Tests for review executor."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+
+from dataknobs_llm import EchoProvider
+from dataknobs_llm.llm.base import LLMMessage
 
 from dataknobs_bots.artifacts.models import Artifact, ArtifactTypeDefinition
 from dataknobs_bots.review.executor import ReviewExecutor
@@ -315,19 +316,22 @@ class TestReviewExecutorPersonaReview:
         assert "llm" in review.issues[0].lower()
 
     @pytest.mark.asyncio
-    async def test_persona_review_with_mock_llm(self) -> None:
-        """Test persona review with mocked LLM."""
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = '{"passed": true, "score": 0.85, "issues": [], "suggestions": ["Good job"], "feedback": ["Well done"]}'
-        mock_llm.complete = AsyncMock(return_value=mock_response)
+    async def test_persona_review_with_llm(self) -> None:
+        """A persona review parses the provider's JSON verdict."""
+        llm = EchoProvider({"provider": "echo", "model": "test"})
+        llm.set_responses(
+            [
+                '{"passed": true, "score": 0.85, "issues": [], '
+                '"suggestions": ["Good job"], "feedback": ["Well done"]}'
+            ]
+        )
 
         protocol = ReviewProtocolDefinition(
             id="persona_test",
             type="persona",
             persona_id="adversarial",
         )
-        executor = ReviewExecutor(protocols={"persona_test": protocol}, llm=mock_llm)
+        executor = ReviewExecutor(protocols={"persona_test": protocol}, llm=llm)
 
         artifact = Artifact(
             content={"data": "test"},
@@ -340,7 +344,30 @@ class TestReviewExecutorPersonaReview:
         assert review.score == 0.85
         assert review.suggestions == ["Good job"]
         assert review.feedback == ["Well done"]
-        mock_llm.complete.assert_called_once()
+        assert llm.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_persona_review_asks_for_json_in_the_provider_contract(self) -> None:
+        """Bug: the review sent plain dicts as messages and JSON mode as a
+        ``response_format={"type": "json_object"}`` kwarg, which only OpenAI
+        reads. Ollama dropped the kwarg, so no provider but OpenAI was asked
+        for JSON, and Ollama could not read a dict as a message at all, so
+        every persona review against it failed.
+        """
+        llm = EchoProvider({"provider": "echo", "model": "test"})
+        llm.set_responses(['{"passed": true, "score": 0.9}'])
+        protocol = ReviewProtocolDefinition(
+            id="persona_test", type="persona", persona_id="adversarial"
+        )
+        executor = ReviewExecutor(protocols={"persona_test": protocol}, llm=llm)
+
+        await executor.run_review(Artifact(content={"data": "x"}, name="A"), "persona_test")
+
+        call = llm.get_last_call()
+        assert call is not None
+        assert all(isinstance(message, LLMMessage) for message in call["messages"])
+        assert call["config_overrides"] == {"response_format": "json"}
+        assert call["kwargs"] == {}
 
     def test_persona_review_missing_persona(self) -> None:
         """Test persona review with missing persona reference."""
@@ -351,7 +378,7 @@ class TestReviewExecutorPersonaReview:
         )
         executor = ReviewExecutor(
             protocols={"missing_persona": protocol},
-            llm=MagicMock(),
+            llm=EchoProvider({"provider": "echo", "model": "test"}),
         )
 
         artifact = Artifact(content={"data": "test"}, name="Test")
