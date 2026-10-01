@@ -830,6 +830,12 @@ class LLMConfig(StructuredConfig):
     mode: CompletionMode = CompletionMode.CHAT
     system_prompt: str | None = None
     response_format: str | None = None  # 'text' or 'json'
+    # A JSON Schema the reply must satisfy. Implies JSON, and is the narrower
+    # request where both are set. A provider that can constrain its output to
+    # a schema sends it (Ollama as ``format``, OpenAI as a ``json_schema``
+    # response format); one that cannot ignores it as it ignores
+    # ``response_format``, so a caller still checks what comes back.
+    response_schema: Dict[str, Any] | None = None
 
     # Function calling
     functions: List[Dict[str, Any]] | None = None
@@ -2174,6 +2180,7 @@ class ConfigOverrideMixin:
         "frequency_penalty",
         "logit_bias",
         "response_format",
+        "response_schema",
         # Function calling (dynamic)
         "functions",
         "function_call",

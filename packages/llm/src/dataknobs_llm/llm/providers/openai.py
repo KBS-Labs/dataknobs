@@ -288,7 +288,12 @@ class OpenAIAdapter(LLMAdapter):
             params["logit_bias"] = config.logit_bias
         if config.user_id:
             params["user"] = config.user_id
-        if config.response_format == "json":
+        if config.response_schema is not None:
+            params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "reply", "schema": config.response_schema},
+            }
+        elif config.response_format == "json":
             params["response_format"] = {"type": "json_object"}
         if config.functions:
             params["functions"] = config.functions

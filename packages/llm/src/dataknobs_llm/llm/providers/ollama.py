@@ -579,6 +579,24 @@ class OllamaAdapter(LLMAdapter):
 
         return options
 
+    def adapt_format(self, config: LLMConfig) -> str | Dict[str, Any] | None:
+        """The ``format`` of an Ollama chat request: a JSON Schema, ``"json"``, or none.
+
+        A schema constrains generation to that shape, so it is sent where one
+        is set, even with ``response_format="json"`` too.
+
+        Args:
+            config: Standard LLMConfig.
+
+        Returns:
+            ``config.response_schema``, else ``"json"`` for JSON mode, else ``None``.
+        """
+        if config.response_schema is not None:
+            return config.response_schema
+        if config.response_format == "json":
+            return "json"
+        return None
+
     def adapt_tools(self, tools: list[Any]) -> list[Dict[str, Any]]:
         """Convert Tool objects to Ollama tools format.
 
@@ -1131,9 +1149,10 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             "options": self._build_shaped_options(runtime_config),
         }
 
-        # Add format if JSON mode requested
-        if runtime_config.response_format == "json":
-            payload["format"] = "json"
+        # Add format if JSON mode or a schema was requested
+        reply_format = self.adapter.adapt_format(runtime_config)
+        if reply_format is not None:
+            payload["format"] = reply_format
 
         # Handle tools if provided
         if tools:
@@ -1230,9 +1249,10 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
             "options": self._build_shaped_options(runtime_config),
         }
 
-        # Add format if JSON mode requested
-        if runtime_config.response_format == "json":
-            payload["format"] = "json"
+        # Add format if JSON mode or a schema was requested
+        reply_format = self.adapter.adapt_format(runtime_config)
+        if reply_format is not None:
+            payload["format"] = reply_format
 
         # Handle tools if provided
         if tools:

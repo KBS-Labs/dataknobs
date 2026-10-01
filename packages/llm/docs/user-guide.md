@@ -1335,6 +1335,7 @@ async for chunk in llm.stream_complete(
 | `frequency_penalty` | Frequency penalty (-2.0 to 2.0) |
 | `logit_bias` | Token biases |
 | `response_format` | Output format ("text" or "json") |
+| `response_schema` | A JSON Schema the reply must satisfy (constrained by Ollama and OpenAI) |
 | `functions` | Dynamic function definitions |
 | `function_call` | Function calling mode |
 | `options` | Provider-specific options (merged with base) |

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`LLMConfig.response_schema`: a JSON Schema the reply must satisfy.**
+  `response_format="json"` asks for some JSON, and a model in JSON mode can
+  answer in another shape: asked for a table as `{"columns", "rows"}`,
+  `qwen2.5:7b` on Ollama repeated `"rows"` once per table row, which
+  `json.loads` reads as the last row alone, or wrote cells as bare strings.
+  A schema constrains generation instead. Ollama sends it as the request's
+  `format` (`OllamaAdapter.adapt_format`, now shared by `complete` and
+  `stream_complete`), and OpenAI as a `json_schema` response format. A schema
+  wins where `response_format` is also set. Other providers ignore it, as
+  they ignore `response_format`. It is a per-call override
+  (`ALLOWED_CONFIG_OVERRIDES`).
 - **`LLMConfig.embedding_overflow`: an embedding provider can opt in to
   truncating an over-long text.** `"refuse"` (the default) raises
   `ContextLengthExceededError`; `"truncate"` embeds the opening window and
