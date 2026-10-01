@@ -288,7 +288,17 @@ class OpenAIAdapter(LLMAdapter):
             params["logit_bias"] = config.logit_bias
         if config.user_id:
             params["user"] = config.user_id
-        if config.response_format == "json":
+        if config.response_schema is not None:
+            params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "reply",
+                    "schema": config.response_schema,
+                    # Without ``strict`` OpenAI follows the schema as guidance.
+                    "strict": config.response_schema_strict,
+                },
+            }
+        elif config.response_format == "json":
             params["response_format"] = {"type": "json_object"}
         if config.functions:
             params["functions"] = config.functions
@@ -422,6 +432,10 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
         AsyncLLMProvider: Base provider interface
         OpenAIAdapter: Format conversion
     """
+
+    # A schema is sent as a ``json_schema`` response format, strict unless
+    # ``response_schema_strict`` is off.
+    _response_schema_supported = True
 
     def __init__(
         self,
@@ -577,8 +591,8 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
@@ -623,8 +637,8 @@ class OpenAIProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects for function calling.
             **kwargs: Additional provider-specific parameters
         """

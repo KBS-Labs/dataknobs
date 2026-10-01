@@ -705,6 +705,43 @@ EMBEDDING_OVERFLOW_POLICIES: tuple[str, ...] = get_args(EmbeddingOverflow)
 EMBEDDING_TRUNCATION_POSITIONS_SHOWN = 10
 
 
+def _check_response_schema(schema: object) -> None:
+    """Refuse a :attr:`LLMConfig.response_schema` no provider could send.
+
+    A JSON Schema is a mapping, and a provider sends it as JSON, so anything
+    else would reach the vendor as a 400 (OpenAI) or be read as a different
+    request (Ollama reads the string ``"json"`` as JSON mode). Only the shape
+    is checked here; whether the schema is one a vendor's strict mode accepts
+    is the vendor's to say.
+
+    Raises:
+        ValidationError: *schema* is not a non-empty mapping, or does not
+            serialize as JSON.
+    """
+    if isinstance(schema, type) and callable(getattr(schema, "model_json_schema", None)):
+        raise ValidationError(
+            f"response_schema must be a JSON Schema mapping; got the class "
+            f"{schema.__name__}. Pass {schema.__name__}.model_json_schema()."
+        )
+    if isinstance(schema, str):
+        raise ValidationError(
+            f"response_schema must be a JSON Schema mapping; got the string "
+            f"{schema!r}. For JSON without a shape, set response_format='json'."
+        )
+    if not isinstance(schema, Mapping):
+        raise ValidationError(
+            f"response_schema must be a JSON Schema mapping; got {type(schema).__name__}"
+        )
+    if not schema:
+        raise ValidationError(
+            "response_schema must not be empty; omit it for an unconstrained reply"
+        )
+    try:
+        json.dumps(schema)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"response_schema must serialize as JSON: {exc}") from exc
+
+
 @dataclass(frozen=True)
 class LLMConfig(StructuredConfig):
     """Configuration for LLM operations.
@@ -830,6 +867,22 @@ class LLMConfig(StructuredConfig):
     mode: CompletionMode = CompletionMode.CHAT
     system_prompt: str | None = None
     response_format: str | None = None  # 'text' or 'json'
+    # A JSON Schema the reply must satisfy. Implies JSON, and is the narrower
+    # request where both are set. Honoured or refused by name, never ignored:
+    # a provider that can constrain its output to a schema sends it (Ollama as
+    # ``format``, OpenAI as a ``json_schema`` response format, Anthropic as
+    # ``output_config.format``); one that cannot raises ``ValidationError``
+    # before any request (``LLMProvider.supports_response_schema``).
+    response_schema: Dict[str, Any] | None = None
+    # Whether a provider that can choose is told to enforce the schema rather
+    # than follow it as guidance. OpenAI treats a schema as guidance unless it
+    # is sent ``strict``, and strict mode accepts only a schema whose every
+    # object sets ``additionalProperties: false`` and lists every property in
+    # ``required``. Set ``False`` to send a schema strict mode rejects, and
+    # check what comes back. Ollama and Anthropic have no such choice: Ollama
+    # always constrains, and Anthropic always enforces (and requires that
+    # closed shape).
+    response_schema_strict: bool = True
 
     # Function calling
     functions: List[Dict[str, Any]] | None = None
@@ -903,16 +956,18 @@ class LLMConfig(StructuredConfig):
     # ``clone`` and ``generation_params`` below are LLM-specific and retained.
 
     def __post_init__(self) -> None:
-        """Refuse an ``embedding_overflow`` no provider could honour.
+        """Refuse an ``embedding_overflow`` or ``response_schema`` no provider could send.
 
         Checked here, when the config is built, so a typo fails where it was
         written rather than as a provider refusing an unknown policy on its
-        first ``embed``. ``from_dict`` and :meth:`clone` both construct, so
-        both are covered.
+        first ``embed``, or a vendor answering a malformed schema with a 400
+        on the first call. ``from_dict``, :meth:`clone` and a per-call
+        ``config_overrides`` all construct, so all are covered.
 
         Raises:
             ValidationError: *embedding_overflow* is not one of
-                :data:`EMBEDDING_OVERFLOW_POLICIES`.
+                :data:`EMBEDDING_OVERFLOW_POLICIES`, or *response_schema* is
+                not a non-empty mapping that serializes as JSON.
         """
         if self.embedding_overflow not in EMBEDDING_OVERFLOW_POLICIES:
             raise ValidationError(
@@ -920,6 +975,8 @@ class LLMConfig(StructuredConfig):
                 f"{', '.join(repr(p) for p in EMBEDDING_OVERFLOW_POLICIES)}; "
                 f"got {self.embedding_overflow!r}"
             )
+        if self.response_schema is not None:
+            _check_response_schema(self.response_schema)
 
     def clone(self, **overrides: Any) -> "LLMConfig":
         """Create a copy of this config with optional overrides.
@@ -1130,6 +1187,13 @@ class LLMProvider(ABC):
     #: provider whose API can be told to truncate declares ``"truncate"`` too.
     #: :meth:`embedding_overflow_policy` refuses the rest by name.
     _embedding_overflow_policies: ClassVar[frozenset[str]] = frozenset({"refuse"})
+
+    #: Whether this provider's requests can constrain a reply to
+    #: :attr:`LLMConfig.response_schema`. ``False`` by default, so a provider
+    #: refuses a stated schema by name (:meth:`_shape_request_params`) unless
+    #: it declares that it sends one; a new provider cannot ignore a schema by
+    #: omission.
+    _response_schema_supported: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -1929,6 +1993,46 @@ class LLMProvider(ABC):
             f"or use a provider that can."
         )
 
+    # ---- Response schema --------------------------------------------------
+    # A stated ``response_schema`` follows the overflow rule: honoured or
+    # refused by name, never ignored. The gate lives in
+    # ``_shape_request_params``, which every provider's build method calls, so
+    # ``complete`` and ``stream_complete`` cannot disagree about it.
+
+    def supports_response_schema(self) -> bool:
+        """Whether a request from this provider can constrain a reply to a schema.
+
+        A caller that can do without a schema asks this before setting one,
+        where a caller that cannot sets it and lets an unsupporting provider
+        refuse it by name.
+
+        Public because a provider that wraps another answers with the wrapped
+        provider's, as it does for :meth:`embedding_overflow_policy`: whether a
+        schema is honoured is a property of whatever finally sends the request.
+
+        Support is the provider's, not the model's: a model that cannot take a
+        schema behind a supporting provider is refused by its vendor, loudly,
+        as a :class:`~dataknobs_common.exceptions.ValidationError`.
+        """
+        return self._response_schema_supported
+
+    def _refuse_unsupported_response_schema(self, config: LLMConfig) -> None:
+        """Raise when *config* states a schema this provider cannot send.
+
+        Raises:
+            ValidationError: ``config.response_schema`` is set and
+                :meth:`supports_response_schema` is ``False``.
+        """
+        if config.response_schema is None or self.supports_response_schema():
+            return
+        raise ValidationError(
+            f"{type(self).__name__} cannot constrain a reply to `response_schema`: "
+            f"its API has no way to be told to, and sending the request without the "
+            f"schema would return a shape nobody asked for. Omit `response_schema` "
+            f"(and check the reply), or use a provider that can "
+            f"(supports_response_schema())."
+        )
+
     def embedding_variant(self) -> str | None:
         """What, besides the model and the width, decides the vectors ``embed`` returns.
 
@@ -2019,6 +2123,11 @@ class LLMProvider(ABC):
         empty ``wire_extra`` — the front-half is identical, only the split is
         skipped.
 
+        It is also where a stated :attr:`LLMConfig.response_schema` is honoured
+        or refused: a provider that cannot send one refuses it here, before any
+        request, and where one is set a per-call ``response_format`` kwarg is
+        dropped with a warning, because the schema is the narrower request.
+
         Args:
             config: Runtime config (with any ``config_overrides`` applied).
             extra: Per-call ``**kwargs`` to split into shaped-field folds and
@@ -2027,7 +2136,20 @@ class LLMProvider(ABC):
         Returns:
             A :class:`_ShapedRequest` of the shaped config, the wire-only kwarg
             remainder, and the resolved constraints.
+
+        Raises:
+            ValidationError: *config* states a ``response_schema`` this
+                provider cannot send.
         """
+        self._refuse_unsupported_response_schema(config)
+        if extra and config.response_schema is not None and "response_format" in extra:
+            logger.warning(
+                "%s: dropping the per-call response_format %r because response_schema "
+                "is set; the schema is the narrower request",
+                type(self).__name__,
+                extra["response_format"],
+            )
+            extra = {key: value for key, value in extra.items() if key != "response_format"}
         constraints = self.get_constraints(config)
         wire_extra: Dict[str, Any] = {}
         if extra:
@@ -2174,6 +2296,7 @@ class ConfigOverrideMixin:
         "frequency_penalty",
         "logit_bias",
         "response_format",
+        "response_schema",
         # Function calling (dynamic)
         "functions",
         "function_call",
@@ -2405,8 +2528,9 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             messages: Either a single string prompt or a list of LLMMessage
                 objects for multi-turn conversations.
             config_overrides: Optional dict to override config fields for this
-                request only. Supported fields: model, temperature, max_tokens,
-                top_p, stop_sequences, seed. The original config is not modified.
+                request only: any field in ``ALLOWED_CONFIG_OVERRIDES``, such as
+                ``model``, ``temperature`` or ``response_schema``. The original
+                config is not modified.
             tools: Optional list of Tool objects available for this completion.
                 Each tool should have ``name``, ``description``, and ``schema``
                 attributes. When provided, the LLM may return tool calls in the
@@ -2627,8 +2751,9 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         Args:
             messages: Either a single string prompt or list of LLMMessage objects
             config_overrides: Optional dict to override config fields for this
-                request only. Supported fields: model, temperature, max_tokens,
-                top_p, stop_sequences, seed. The original config is not modified.
+                request only: any field in ``ALLOWED_CONFIG_OVERRIDES``, such as
+                ``model``, ``temperature`` or ``response_schema``. The original
+                config is not modified.
             tools: Optional list of Tool objects available for this completion.
             **kwargs: Provider-specific parameters (same as complete())
 
@@ -2882,8 +3007,9 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         Args:
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields for this
-                request only. Supported fields: model, temperature, max_tokens,
-                top_p, stop_sequences, seed. The original config is not modified.
+                request only: any field in ``ALLOWED_CONFIG_OVERRIDES``, such as
+                ``model``, ``temperature`` or ``response_schema``. The original
+                config is not modified.
             tools: Optional list of Tool objects available for this completion.
             **kwargs: Additional parameters
 
@@ -3040,8 +3166,9 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         Args:
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields for this
-                request only. Supported fields: model, temperature, max_tokens,
-                top_p, stop_sequences, seed. The original config is not modified.
+                request only: any field in ``ALLOWED_CONFIG_OVERRIDES``, such as
+                ``model``, ``temperature`` or ``response_schema``. The original
+                config is not modified.
             tools: Optional list of Tool objects available for this completion.
             **kwargs: Additional parameters
 

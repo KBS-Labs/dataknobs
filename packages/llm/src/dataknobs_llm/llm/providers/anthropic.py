@@ -603,6 +603,13 @@ class AnthropicAdapter(LLMAdapter):
             params["top_p"] = gen["top_p"]
         if "stop_sequences" in gen:
             params["stop_sequences"] = gen["stop_sequences"]
+        if config.response_schema is not None:
+            # Structured outputs: always enforced, so the schema must close
+            # every object (``additionalProperties: false``); a model without
+            # structured outputs is refused by the API with a 400.
+            params["output_config"] = {
+                "format": {"type": "json_schema", "schema": config.response_schema}
+            }
         return params
 
     def adapt_tools(self, tools: list[Any]) -> list[Dict[str, Any]]:
@@ -735,6 +742,9 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
         AsyncLLMProvider: Base provider interface
         Anthropic API Docs: https://docs.anthropic.com/
     """
+
+    # A schema is sent as ``output_config.format`` (structured outputs).
+    _response_schema_supported = True
 
     def __init__(
         self,
@@ -1106,8 +1116,8 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
@@ -1158,8 +1168,8 @@ class AnthropicProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects for function calling.
             **kwargs: Additional provider-specific parameters
         """

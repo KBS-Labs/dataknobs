@@ -421,6 +421,10 @@ class CachingEmbedProvider(AsyncLLMProvider):
         """
         return self._inner.embedding_overflow_policy()
 
+    def supports_response_schema(self) -> bool:
+        """The inner provider's, since the inner sends every completion this serves."""
+        return self._inner.supports_response_schema()
+
     # -- Lifecycle ---------------------------------------------------------
 
     # Same finding as ``AsyncLLMProvider.initialize`` one level up, and the

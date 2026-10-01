@@ -1335,9 +1335,78 @@ async for chunk in llm.stream_complete(
 | `frequency_penalty` | Frequency penalty (-2.0 to 2.0) |
 | `logit_bias` | Token biases |
 | `response_format` | Output format ("text" or "json") |
+| `response_schema` | A JSON Schema the reply must satisfy; honoured by Ollama, OpenAI and Anthropic, refused by name elsewhere (see below) |
+| `response_schema_strict` | Whether OpenAI enforces the schema rather than following it as guidance (default `True`) |
 | `functions` | Dynamic function definitions |
 | `function_call` | Function calling mode |
 | `options` | Provider-specific options (merged with base) |
+
+<!-- --8<-- [start:asking-for-one-shape] -->
+#### Asking for One Shape
+
+`response_format="json"` asks for *some* JSON, and a model in JSON mode can
+still answer in a shape the caller did not ask for, such as repeating a key
+once per item. `response_schema` asks for one shape, per call or in the config:
+
+```python
+import json
+
+TABLE = {
+    "type": "object",
+    "properties": {
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+    },
+    "required": ["columns", "rows"],
+    "additionalProperties": False,
+}
+
+if llm.supports_response_schema():
+    response = await llm.complete(
+        "Compare these options as a table: ...",
+        config_overrides={"response_schema": TABLE},
+    )
+    table = json.loads(response.content)
+```
+
+A stated schema is honoured or refused by name, never ignored:
+
+| Provider | Sends the schema as | Enforced |
+|---|---|---|
+| Ollama | the chat request's `format` | always |
+| OpenAI | a `json_schema` response format | when `response_schema_strict` is `True` (the default); guidance otherwise |
+| Anthropic | `output_config.format` (structured outputs) | always |
+| Echo | recorded, not applied | no: a scripted reply is returned as scripted |
+| Bedrock, HuggingFace | refused with `ValidationError` before any request | |
+
+- **Write the schema closed.** OpenAI's strict mode and Anthropic require
+  every object to set `"additionalProperties": false`, and OpenAI's strict
+  mode also requires every property to be listed in `required`; a schema
+  without that is refused by the vendor with a 400, raised as
+  `ValidationError`. Ollama takes either. For a schema strict mode rejects,
+  set `response_schema_strict=False` on OpenAI and check what comes back.
+- **The model must support it too.** `supports_response_schema()` answers
+  for the provider, not the model. A model behind a supporting provider that
+  cannot take a schema (an older OpenAI or Claude model) is the vendor's to
+  refuse, and a vendor's 400 is raised as `ValidationError`.
+- **A schema wins over JSON mode.** Where `response_format` is also set, in the
+  config or as an OpenAI `response_format=` keyword argument, the schema is
+  sent; the keyword argument is dropped with a warning.
+- **Ollama does not make tool calls under a format.** Measured on Ollama
+  0.33.2: with `format` set (a schema or `"json"`) and tools offered, a model
+  asked to use a tool writes the call as JSON text and makes none. The
+  provider sends what was asked and logs a warning.
+- **The value is checked when the config is built.** A string (an easy slip
+  for `response_format: json`), an empty mapping, or a value that does not
+  serialize as JSON raises `ValidationError` there. Pass a Pydantic model as
+  `Model.model_json_schema()`.
+
+A caller that cannot do without the shape sets the schema unconditionally and
+lets a provider that cannot send it refuse; a caller that can parse an
+unconstrained reply asks `supports_response_schema()` first, as above.
+Wrapping providers (`CachingEmbedProvider`, `CapturingProvider`, the sync
+adapter) answer with the wrapped provider's support.
+<!-- --8<-- [end:asking-for-one-shape] -->
 
 #### Override Presets
 

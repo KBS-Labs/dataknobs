@@ -29,6 +29,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
+from dataknobs_llm.llm.base import LLMMessage
+
 from ..artifacts.models import Artifact
 from .personas import BUILT_IN_PERSONAS, ReviewPersona
 from .protocol import ReviewProtocolDefinition
@@ -358,9 +360,11 @@ class ReviewExecutor:
 
         # Call LLM
         try:
+            # JSON mode through the config, which every provider reads; a
+            # ``response_format`` kwarg is read by OpenAI alone.
             response = await self._llm.complete(
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
+                messages=[LLMMessage(role="user", content=prompt)],
+                config_overrides={"response_format": "json"},
             )
 
             # Parse response - handle different response formats
@@ -467,9 +471,9 @@ class ReviewExecutor:
             error_message = str(e)
             path_info = ""
             if hasattr(e, "message"):
-                error_message = e.message  # type: ignore[attr-defined]
+                error_message = e.message
             if hasattr(e, "absolute_path"):
-                path_info = ".".join(str(p) for p in e.absolute_path)  # type: ignore[attr-defined]
+                path_info = ".".join(str(p) for p in e.absolute_path)
 
             return ArtifactReview(
                 artifact_id=artifact.id,

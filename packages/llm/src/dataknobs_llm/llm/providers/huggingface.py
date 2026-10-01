@@ -282,8 +282,8 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects (not supported — raises
                 ToolsNotSupportedError if provided)
             **kwargs: Additional provider-specific parameters
@@ -347,8 +347,8 @@ class HuggingFaceProvider(ProfileDetectionMixin, AsyncLLMProvider):
 
         Args:
             messages: Input messages or prompt
-            config_overrides: Optional dict to override config fields (model,
-                temperature, max_tokens, top_p, stop_sequences, seed)
+            config_overrides: Optional dict to override config fields for this
+                request (any field in ``ALLOWED_CONFIG_OVERRIDES``)
             tools: Optional list of Tool objects (not supported — raises
                 ToolsNotSupportedError if provided)
             **kwargs: Additional provider-specific parameters
