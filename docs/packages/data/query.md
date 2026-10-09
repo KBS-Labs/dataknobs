@@ -156,7 +156,7 @@ is the table this package creates (`id`, and the record in the `data` and
 columns:
 
 ```python
-from dataknobs_data import Filter, Operator, Query
+from dataknobs_data import NATIVE_FIELD_KEYS, Filter, Operator, Query
 from dataknobs_data.backends.column_layout import NativeColumnLayout
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.schema import DatabaseSchema
@@ -166,7 +166,7 @@ schema = DatabaseSchema.from_dict({"fields": {
     "name": "string",
     "size": "integer",
     "status": "string",
-}})
+}}, keys=NATIVE_FIELD_KEYS)
 layout = NativeColumnLayout(
     schema,
     id_column="node_id",
@@ -185,6 +185,13 @@ backends adopt it in later releases. What the builder guarantees:
   (or a dotted path) raises `ValidationError` before SQL is built, and a
   statement selects the declared columns rather than `*`. `id` is the
   `id_column`.
+- **The key is the key column's text.** A record's storage id is that text,
+  and `id` is compared with it, as `Filter.matches` compares the storage id,
+  so a read finds a row by the key a search returned. A key column is a
+  `string`, `text`, `uuid` or `integer` column; any other is refused, since
+  engines write a float, boolean or time as different text. An integer key's
+  own text (`"10"`, not `"010"` or `10`) is compared in the column's type, so
+  its index serves a read.
 - **The scope is in every read**: search, count, `build_where_clause`, read and
   exists. A complex query's condition is nested under it, so an `OR` cannot
   reach rows outside it. A scope that could match no row is refused.
@@ -212,7 +219,9 @@ backends adopt it in later releases. What the builder guarantees:
 - **`NOT` over a native filter** matches a row whose column is `NULL`, as
   `NOT` does under the JSON layout and as `Filter.matches` answers.
 - **Text sorts by code point** on every engine (`COLLATE "C"` on
-  PostgreSQL), as the in-memory sort does.
+  PostgreSQL), as the in-memory sort does, and a key sorts as its text.
+  A time sorts by the time a filter reads it as: on SQLite, which keeps the
+  text it was given, a zoned value sorts by its instant, not its wall clock.
 
 !!! warning "Declare each column as the table holds it"
 

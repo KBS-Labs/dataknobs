@@ -149,7 +149,7 @@ from .query_logic import (
 )
 from .records import Record
 from .backends.sql_types import NAIVE_TIME, ZONED_INSTANT, SqlType, sql_types
-from .schema import SQL_TYPE_KEY
+from .schema import NATIVE_FIELD_KEYS, SQL_TYPE_KEY
 from .allocation import DEFAULT_MAX_ATTEMPTS, allocate, allocate_sync
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
@@ -202,6 +202,7 @@ __all__ = [
     "is_storage_key_field",
     # SQL types a native table's column can declare
     "SQL_TYPE_KEY",
+    "NATIVE_FIELD_KEYS",
     "SqlType",
     "sql_types",
     "NAIVE_TIME",

@@ -1236,6 +1236,7 @@ record = builder.record_from_row(row)
 | `read_layout_config(config, schema, *, origin=None, context=None)` | the same | reads `layout:`, `id_column:` and `scope:` |
 | `SqlType`, `sql_types` | `dataknobs_data` | what a declared SQL type holds; the registry of them (`uuid`, `timestamptz`) |
 | `SQL_TYPE_KEY` | `dataknobs_data` | `"sql_type"`, the field key naming one |
+| `NATIVE_FIELD_KEYS` | `dataknobs_data` | the field keys a native table's schema takes: `FIELD_KEYS` and `sql_type`, which every other door refuses |
 | `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
 
 See [Field Types](https://kbs-labs.github.io/dataknobs/packages/data/field-types/#sql-types-for-tables-with-their-own-columns) for registering one.

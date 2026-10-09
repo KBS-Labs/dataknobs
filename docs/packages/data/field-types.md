@@ -227,15 +227,18 @@ A table read through the native column layout
 ([Query System](query.md#tables-with-their-own-columns-native-layout)) has
 column types `FieldType` does not name. A schema field declares one with
 `sql_type:` (or `metadata: {sql_type: ...}`, which wins), naming an entry of
-the `sql_types` registry:
+the `sql_types` registry. Only the native layout reads it, so the `sql_type:`
+key is taken only through a door given `keys=NATIVE_FIELD_KEYS`, and every
+other door refuses it rather than load a column type nothing honours:
 
 ```python
+from dataknobs_data import NATIVE_FIELD_KEYS
 from dataknobs_data.schema import DatabaseSchema
 
 schema = DatabaseSchema.from_dict({"fields": {
     "node_id": {"type": "string", "sql_type": "uuid"},
     "seen_at": {"type": "datetime", "sql_type": "timestamptz"},
-}})
+}}, keys=NATIVE_FIELD_KEYS)
 ```
 
 Two ship:
@@ -272,6 +275,7 @@ An `SqlType` says:
 | `read` | a value the driver returned, as the record holds it |
 | `text` | `"stored"`: the column's SQL value is text, so it compares with strings, a time bound reads it as a time, and the text operators apply. `"cast"`: the column is not text, but the record holds its text, so strings and the text operators compare `CAST(column AS TEXT)`. `None` (the default): neither |
 | `holds` | for a `text="cast"` column, whether an equality bound can be compared in the column's own type |
+| `own` | a bound `holds` accepts, as the value of the column's own type it is sent as (default: the bound unchanged) |
 | `placeholder` | given the dialect and the bounds, the SQL type a bound is sent as |
 
 ## Best Practices

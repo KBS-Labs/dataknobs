@@ -997,16 +997,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   driver, and a numeric bound compared with a PostgreSQL column is sent as
   `bigint`, `double precision` or `numeric`, because asyncpg otherwise types
   it as the column and sends `3.5` to an `integer` column as `3`. A scope that
-  could match no row is refused. The new `record_from_row` turns a row a
-  builder selected into a record by its layout, each value in its declared
-  type's Python type on every engine. No backend takes the native layout yet.
+  could match no row is refused. The key is the key column's text, which is
+  the record's storage id, so a read finds a row by the key a search
+  returned; a key column is a `string`, `text`, `uuid` or `integer` column,
+  and an integer key's own text is compared in the column's type so its index
+  serves the read. A time column sorts by the time its filters read it as,
+  so SQLite orders a zoned value by its instant rather than its text. The new
+  `record_from_row` turns a row a builder selected into a record by its
+  layout, each value in its declared type's Python type on every engine. No
+  backend takes the native layout yet.
 - **SQL types a column can declare where `FieldType` names none.** A schema
   field's `sql_type:` (or `metadata.sql_type`, `SQL_TYPE_KEY`) names an entry
-  of `sql_types`, an open `Registry[SqlType]`; `uuid` and `timestamptz` (a
+  of `sql_types`, an open `Registry[SqlType]`. The `sql_type:` key is read
+  through a door given `keys=NATIVE_FIELD_KEYS` and refused by every other,
+  as only the native layout reads it; `uuid` and `timestamptz` (a
   zoned instant, read in UTC) ship. An `SqlType` says which kinds of value the
   column holds, how a bound and a read value are normalised, whether it is
   text or reads as text, and the type a bound is sent as. `SqlType`,
-  `sql_types`, `SQL_TYPE_KEY`, `NAIVE_TIME` and `ZONED_INSTANT` are exported
+  `sql_types`, `SQL_TYPE_KEY`, `NATIVE_FIELD_KEYS`, `NAIVE_TIME` and
+  `ZONED_INSTANT` are exported
   from `dataknobs_data`. The schema reader refuses a `sql_type` that is not a
   non-empty string; the native layout refuses one that is not registered.
 - **`read_layout_config`**, the one reader of a backend's `layout:`

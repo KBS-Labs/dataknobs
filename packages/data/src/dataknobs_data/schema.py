@@ -19,26 +19,22 @@ from .fields import FieldType
 SQL_TYPE_KEY = "sql_type"
 
 #: The keys a field declaration takes, in either spelling. ``dimensions`` and
-#: ``source_field`` are the vector shorthands, ``enum`` the allowed-values
-#: one that :class:`~dataknobs_data.sources.database.DatabaseSource` reads, and
-#: ``sql_type`` (:data:`SQL_TYPE_KEY`) a native column's SQL type; all four
-#: fold into ``metadata``. A door
+#: ``source_field`` are the vector shorthands, and ``enum`` the allowed-values
+#: one that :class:`~dataknobs_data.sources.database.DatabaseSource` reads; all
+#: three fold into ``metadata``. A door
 #: that uses less of a declaration narrows this set (``keys=`` on
 #: :func:`read_field_declarations`), so that a key it would discard is refused
 #: rather than loaded.
 FIELD_KEYS: frozenset[str] = frozenset(
-    {
-        "name",
-        "type",
-        "required",
-        "default",
-        "metadata",
-        "dimensions",
-        "source_field",
-        "enum",
-        SQL_TYPE_KEY,
-    }
+    {"name", "type", "required", "default", "metadata", "dimensions", "source_field", "enum"}
 )
+
+#: The keys a field takes through a door to a table read through the native
+#: column layout: :data:`FIELD_KEYS` and ``sql_type`` (:data:`SQL_TYPE_KEY`),
+#: which folds into ``metadata``. Only that layout reads ``sql_type``, so every
+#: other door refuses it rather than loading a column type nothing honours.
+#: Every key :func:`read_field_declarations` reads.
+NATIVE_FIELD_KEYS: frozenset[str] = FIELD_KEYS | {SQL_TYPE_KEY}
 
 #: The keys that fold into a field's ``metadata`` under their own name, where an
 #: explicit ``metadata`` entry wins.
@@ -442,11 +438,12 @@ def read_field_declarations(
     - **A mapping** of ``{<column>: <type name> | <field mapping>}``.
     - **A sequence of rows**, each a field mapping that carries its ``name``.
 
-    A field mapping takes the keys in ``keys`` (by default :data:`FIELD_KEYS`).
+    A field mapping takes the keys in ``keys`` (by default :data:`FIELD_KEYS`;
+    :data:`NATIVE_FIELD_KEYS` adds ``sql_type``).
     ``type`` defaults to ``string`` and is a type name in any case (``String``
     is ``string``); ``required`` is a boolean; ``enum`` is a list of the values
     a field allows, whichever of ``enum:`` and ``metadata.enum`` it is written
-    as; ``dimensions``, ``source_field`` and ``enum`` fold into
+    as; ``dimensions``, ``source_field``, ``enum`` and ``sql_type`` fold into
     ``metadata``, where an explicit ``metadata`` entry wins. A mapping entry may repeat its ``name`` (which is what
     :meth:`DatabaseSchema.to_dict` writes) and must then agree with its key. A
     key a field takes, given an explicit ``null``, reads as that key left out
@@ -462,9 +459,10 @@ def read_field_declarations(
             refusal adds, in the caller's own keys (an ontology binding's
             ``source_id``).
         keys: The keys a field takes through this door: :data:`FIELD_KEYS`,
-            or a subset of it for a door that reads less of a declaration (an
-            ontology binding reads a column's name and type), so that a key it
-            would load and discard is refused instead.
+            :data:`NATIVE_FIELD_KEYS` for a table read through the native
+            column layout, or a subset for a door that reads less of a
+            declaration (an ontology binding reads a column's name and type),
+            so that a key it would load and discard is refused instead.
 
     Returns:
         The declared fields, by name, in declaration order.
@@ -476,10 +474,10 @@ def read_field_declarations(
         ValueError: When ``keys`` names a key this reader does not read, which
             is a caller's error rather than a declaration's.
     """
-    unreadable = sorted(keys - FIELD_KEYS)
+    unreadable = sorted(keys - NATIVE_FIELD_KEYS)
     if unreadable:
         raise ValueError(
-            f"read_field_declarations reads {sorted(FIELD_KEYS)}; keys={unreadable} "
+            f"read_field_declarations reads {sorted(NATIVE_FIELD_KEYS)}; keys={unreadable} "
             f"would be admitted and then discarded"
         )
     prefix = f"{origin}: " if origin else ""

@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from dataknobs_data import NATIVE_FIELD_KEYS
 from dataknobs_data.backends.column_layout import NativeColumnLayout
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.backends.sql_types import sql_types
@@ -55,7 +56,8 @@ SCHEMA = DatabaseSchema.from_dict(
             "seen": {"type": "datetime", "sql_type": "timestamptz"},
             "note": "text",
         }
-    }
+    },
+    keys=NATIVE_FIELD_KEYS,
 )
 COLUMNS = list(SCHEMA.fields)
 
@@ -105,9 +107,35 @@ SHAPES = Table(
 )
 
 
+#: A table keyed by an integer, whose zoned times sort one way as text and
+#: another as instants: ``n = 5`` is written first as text and is the latest.
+COUNTED_SCHEMA = DatabaseSchema.from_dict(
+    {
+        "fields": {
+            "n": "integer",
+            "at": {"type": "datetime", "metadata": {"sql_type": "timestamptz"}},
+        }
+    }
+)
+COUNTED_ROWS: list[tuple[int, datetime]] = [
+    (5, datetime(2024, 1, 1, 23, tzinfo=timezone(timedelta(hours=-5)))),
+    (10, datetime(2024, 1, 2, 1, tzinfo=UTC)),
+    (9, datetime(2024, 1, 2, 2, tzinfo=UTC)),
+]
+COUNTED = Table(
+    "counted",
+    {
+        "n": {"postgres": "integer", "duckdb": "INTEGER", "sqlite": "INTEGER"},
+        "at": {"postgres": "timestamptz", "duckdb": "TIMESTAMPTZ", "sqlite": "TIMESTAMPTZ"},
+    },
+    [list(row) for row in COUNTED_ROWS],
+)
+COUNTED_LAYOUT = NativeColumnLayout(COUNTED_SCHEMA, id_column="n")
+
+
 @pytest.fixture(scope="module", params=ENGINES)
 def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
-    yield from engine_for(request, [SHAPES])
+    yield from engine_for(request, [SHAPES, COUNTED])
 
 
 LAYOUT = NativeColumnLayout(SCHEMA, id_column="k")
@@ -363,3 +391,78 @@ def test_an_integer_past_64_bits_matches_nothing_it_cannot_equal(
     ):
         found = _found(engine, builder, *builder.build_search_query(Query(filters=[spec])))
         assert found == _expected(records, spec), spec
+
+
+# -- a table keyed by an integer -------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def counted(engine: Engine) -> dict[str, Record]:
+    """Every row of the integer-keyed table, as the layout reads it, by key."""
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    rows = engine.fetch(*builder.build_search_query(Query()))
+    found = [builder.record_from_row(row) for row in rows]
+    return {record.storage_id: record for record in found if record.storage_id}
+
+
+def test_an_integer_key_reads_back_the_row_its_record_names(
+    engine: Engine, counted: dict[str, Record]
+) -> None:
+    """The key a search hands back is the key a read finds the row by."""
+    assert set(counted) == {"5", "9", "10"}
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    for key in counted:
+        rows = engine.fetch(*builder.build_read_query(key))
+        assert [builder.record_from_row(r).storage_id for r in rows] == [key]
+        assert engine.fetch(*builder.build_exists_query(key)) != []
+    assert engine.fetch(*builder.build_read_query("05")) == []
+    assert engine.fetch(*builder.build_exists_query("x")) == []
+
+
+KEY_FILTERS = [
+    Filter("id", Operator.EQ, "10"),
+    Filter("id", Operator.EQ, 10),
+    Filter("id", Operator.EQ, "010"),
+    Filter("id", Operator.NEQ, "5"),
+    Filter("id", Operator.GT, "6"),
+    Filter("id", Operator.BETWEEN, ["1", "6"]),
+    Filter("id", Operator.IN, ["5", "x", 9]),
+    Filter("id", Operator.NOT_IN, ["5"]),
+    Filter("id", Operator.LIKE, "1%"),
+    Filter("id", Operator.STARTS_WITH, "9"),
+]
+
+
+@pytest.mark.parametrize(
+    "spec", KEY_FILTERS, ids=lambda f: f"{f.field} {f.operator.value} {f.value!r}"
+)
+def test_an_integer_key_answers_as_the_oracle_does(
+    engine: Engine, counted: dict[str, Record], spec: Filter
+) -> None:
+    """A record's key is its storage id, a string, so the key is compared as its text."""
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    found = _found(engine, builder, *builder.build_search_query(Query(filters=[spec])))
+    assert found == {key for key in counted if spec.matches(key)}
+
+
+def test_an_integer_key_sorts_as_its_text(engine: Engine, counted: dict[str, Record]) -> None:
+    """As the in-memory sort orders storage ids: ``"10"`` before ``"5"``."""
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    for order in (SortOrder.ASC, SortOrder.DESC):
+        rows = engine.fetch(*builder.build_search_query(Query(sort_specs=[SortSpec("id", order)])))
+        got = [builder.record_from_row(row).storage_id for row in rows]
+        assert got == sorted(counted, reverse=order == SortOrder.DESC), order
+
+
+def test_a_zoned_time_sorts_by_the_instant_it_names(
+    engine: Engine, counted: dict[str, Record]
+) -> None:
+    """SQLite holds the text it was given, which orders these by wall clock, not instant."""
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    for order in (SortOrder.ASC, SortOrder.DESC):
+        rows = engine.fetch(*builder.build_search_query(Query(sort_specs=[SortSpec("at", order)])))
+        got = [builder.record_from_row(row).get_value("at") for row in rows]
+        expected = sorted(
+            (r.get_value("at") for r in counted.values()), reverse=order == SortOrder.DESC
+        )
+        assert got == expected, order

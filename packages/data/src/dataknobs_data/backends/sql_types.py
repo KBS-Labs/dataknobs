@@ -95,6 +95,9 @@ class SqlType:
         holds: For a column that reads as text, whether an equality bound (after
             ``bind``) can be compared with the column in its own type, which
             keeps an index on it. ``None``: always compared as text.
+        own: A bound ``holds`` accepts, as the value of the column's own type
+            it is sent as. A uuid column takes its text as it is; an integer
+            key's text ``"10"`` is sent as ``10``.
         placeholder: The SQL type a bound is sent as when it is compared in the
             column's own type, given the dialect and the bounds; ``None`` to
             send it untyped. A driver that infers the placeholder's type from
@@ -106,6 +109,7 @@ class SqlType:
     read: Callable[[Any], Any] = _same
     text: SqlText | None = None
     holds: Callable[[Any], bool] | None = None
+    own: Callable[[Any], Any] = _same
     placeholder: Callable[[str, Sequence[Any]], str | None] | None = None
 
     def __post_init__(self) -> None:
@@ -251,6 +255,60 @@ _FIELD_TYPE_ANSWERS: Mapping[FieldType, SqlType] = MappingProxyType(
         ),
     }
 )
+
+
+def _is_integer_text(value: Any) -> bool:
+    """Whether ``value`` is a 64-bit integer's text, as ``str`` writes it."""
+    if not isinstance(value, str):
+        return False
+    try:
+        number = int(value)
+    except ValueError:
+        return False
+    return str(number) == value and number in _INT64
+
+
+#: An integer column keying a row: compared as its text, which is the
+#: record's storage id, and in its own type for an integer's own text.
+_INTEGER_KEY = SqlType(
+    kinds=frozenset({"string"}),
+    text="cast",
+    holds=_is_integer_text,
+    own=int,
+    placeholder=_number_placeholder,
+)
+
+
+def key_answer(field_type: FieldType, sql_type: SqlType | None) -> SqlType | None:
+    """What a column keying a row is compared as, or ``None`` when it cannot key one.
+
+    A record's storage id is its key column's value as text, and the reserved
+    key field is compared with that text, as ``Filter.matches`` compares it
+    with the storage id. So a key column must have one text on every engine,
+    and the one Python writes:
+
+    - A column holding strings that is text or is read as its text (``string``,
+      ``text``, ``uuid``) is compared as it already is.
+    - An ``integer`` column is compared as its text, and in its own type for an
+      equality with an integer's own text, so an index on it still serves a
+      read by key.
+    - Anything else is ``None``: each engine writes a float, a boolean or a
+      time as different text, and a structured value has no text to key by.
+
+    Args:
+        field_type: The column's declared field type.
+        sql_type: What the column holds, as the layout resolved it.
+
+    Returns:
+        The :class:`SqlType` the key is compared as, or ``None``.
+    """
+    if sql_type is None:
+        return None
+    if "string" in sql_type.kinds and (sql_type.stores_text or sql_type.reads_as_text):
+        return sql_type
+    if field_type is FieldType.INTEGER and sql_type is _FIELD_TYPE_ANSWERS[FieldType.INTEGER]:
+        return _INTEGER_KEY
+    return None
 
 
 def field_type_answer(field_type: FieldType) -> SqlType | None:

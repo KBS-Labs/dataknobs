@@ -51,6 +51,7 @@ from .sql_types import (
     ZONED_WALL_CLOCK,
     SqlType,
     field_type_answer,
+    key_answer,
     sql_types,
 )
 
@@ -146,12 +147,17 @@ class JsonbLayout(ColumnLayout):
 
 @dataclass(frozen=True)
 class _Column:
-    """A declared column: its quoted name, and what it holds (``None``: structured)."""
+    """A declared column: its quoted name, and what it holds (``None``: structured).
+
+    ``declared`` is the type it was declared as: its ``sql_type`` when it names
+    one, and its field type otherwise.
+    """
 
     name: str
     quoted: str
     field_type: FieldType
     sql_type: SqlType | None
+    declared: str
 
 
 class NativeColumnLayout(ColumnLayout):
@@ -161,6 +167,12 @@ class NativeColumnLayout(ColumnLayout):
       column is refused before SQL is built, and a statement selects the
       declared columns rather than ``*``. The reserved key field
       (:data:`~dataknobs_data.query.RESERVED_KEY_FIELD`) is ``id_column``.
+    - **The key is the key column's text.** A record's storage id is the
+      column's value as text, and the reserved key field is compared with
+      that text, as ``Filter.matches`` compares it with the storage id, so a
+      read finds a row by the key a search returned (see
+      :func:`~dataknobs_data.backends.sql_types.key_answer`). A key column is a
+      ``string``, ``text``, ``uuid`` or ``integer`` column.
     - **Every filter answers as** :meth:`~dataknobs_data.query.Filter.matches`
       **answers over the record returned.** Each column's type says which
       kinds of value it holds (:class:`~dataknobs_data.backends.sql_types.SqlType`).
@@ -185,9 +197,9 @@ class NativeColumnLayout(ColumnLayout):
 
     Raises:
         ValidationError: When the schema declares no column, ``id_column`` is
-            not declared, a ``sql_type`` is not a non-empty string or is not
-            registered, or a scope filter names an undeclared column or a value
-            its column cannot hold.
+            not declared or cannot key a row, a ``sql_type`` is not a non-empty
+            string or is not registered, or a scope filter names an undeclared
+            column or a value its column cannot hold.
     """
 
     writable = False
@@ -217,12 +229,18 @@ class NativeColumnLayout(ColumnLayout):
                 f"{sorted(self._columns)}",
                 context={"id_column": id_column, "declared": sorted(self._columns)},
             )
-        if self._columns[id_column].sql_type is None:
+        key = self._columns[id_column]
+        key_type = key_answer(key.field_type, key.sql_type)
+        if key_type is None:
             raise ValidationError(
-                f"id_column {id_column!r} is declared {self._columns[id_column].field_type.value}, "
-                f"which a key cannot be compared as",
-                context={"id_column": id_column},
+                f"id_column {id_column!r} is declared {key.declared}, which cannot key a row: "
+                f"a record's key is the column's text, and engines write that type's text "
+                f"differently, so a key read back would not find its row. Key a native "
+                f"table by a string, text, uuid or integer column",
+                context={"id_column": id_column, "declared": key.declared},
             )
+        #: The key column as the reserved key field compares it: as its text.
+        self._key = _Column(key.name, key.quoted, key.field_type, key_type, key.declared)
         self.id_column = id_column
         for spec in scope:
             self._check_scope_filter(spec)
@@ -250,7 +268,7 @@ class NativeColumnLayout(ColumnLayout):
 
     def _column(self, field: str, *, table: str | None = None) -> _Column:
         if is_storage_key_field(field):
-            return self._columns[self.id_column]
+            return self._key
         column = self._columns.get(field)
         if column is None:
             where = f"table {table!r}" if table else "this native table"
@@ -398,6 +416,9 @@ class NativeColumnLayout(ColumnLayout):
                 # midnight there.
                 start = bound if isinstance(bound, datetime) else datetime.combine(bound, time.min)
                 return builder._bind_bound(ZONED_INSTANT, start.replace(tzinfo=UTC))
+            if reading == "string" and own_type and sql_type.reads_as_text:
+                # Compared in the column's own type, as a value of it.
+                return builder._bind_bound(reading, sql_type.own(bound))
             return builder._bind_bound(reading, bound)
 
         def cast_for(reading: str | None, bound_values: Sequence[Any]) -> str | None:
@@ -426,6 +447,12 @@ class NativeColumnLayout(ColumnLayout):
             )
         if sql_type.stores_text or sql_type.reads_as_text:
             return [builder._code_point_order(self._text(builder, column))]
+        times = sql_type.kinds & {NAIVE_TIME, ZONED_INSTANT}
+        if times:
+            # Ordered by the time a filter reads it as: on SQLite, which holds
+            # the text it was given, its text orders a zoned value by wall clock.
+            reading = ZONED_INSTANT if ZONED_INSTANT in times else NAIVE_TIME
+            return [self._time_expr(builder, column, reading)[1]]
         return [column.quoted]
 
     def select_list(self, builder: SQLQueryBuilder) -> str:
@@ -478,7 +505,7 @@ def _resolve_column(name: str, field_type: Any, metadata: Mapping[str, Any]) -> 
         )
     declared = metadata.get(SQL_TYPE_KEY)
     if declared is None:
-        return _Column(name, quote_ident(name), member, field_type_answer(member))
+        return _Column(name, quote_ident(name), member, field_type_answer(member), member.value)
     if not isinstance(declared, str) or not declared:
         raise ValidationError(
             f"column {name!r} declares `{SQL_TYPE_KEY}: {declared!r}`; it is the name of a "
@@ -497,7 +524,7 @@ def _resolve_column(name: str, field_type: Any, metadata: Mapping[str, Any]) -> 
                 "registered": sorted(sql_types.list_keys()),
             },
         )
-    return _Column(name, quote_ident(name), member, sql_type)
+    return _Column(name, quote_ident(name), member, sql_type, declared)
 
 
 def read_layout_config(

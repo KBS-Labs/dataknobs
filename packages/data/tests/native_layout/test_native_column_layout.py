@@ -15,13 +15,14 @@ from typing import Any
 import pytest
 from dataknobs_common.exceptions import OperationError, ValidationError
 
-from dataknobs_data import SQL_TYPE_KEY, SqlType, sql_types
+from dataknobs_data import NATIVE_FIELD_KEYS, SQL_TYPE_KEY, SqlType, sql_types
 from dataknobs_data.backends.column_layout import (
     JsonbLayout,
     NativeColumnLayout,
     read_layout_config,
 )
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
+from dataknobs_data.database import extract_schema_from_config
 from dataknobs_data.fields import FieldType
 from dataknobs_data.query import Filter, Operator, Query, SortSpec
 from dataknobs_data.query_logic import (
@@ -43,7 +44,8 @@ SCHEMA = DatabaseSchema.from_dict(
             "made": "datetime",
             "payload": "json",
         }
-    }
+    },
+    keys=NATIVE_FIELD_KEYS,
 )
 
 
@@ -95,6 +97,51 @@ def test_an_undeclared_scope_or_key_column_is_refused_at_construction() -> None:
         NativeColumnLayout(SCHEMA, id_column="key")
     with pytest.raises(ValidationError, match="declares none"):
         NativeColumnLayout(DatabaseSchema(), id_column="k")
+
+
+@pytest.mark.parametrize(
+    ("declaration", "named"),
+    [
+        ("float", "float"),
+        ("boolean", "boolean"),
+        ("datetime", "datetime"),
+        ({"type": "datetime", "metadata": {SQL_TYPE_KEY: "timestamptz"}}, "timestamptz"),
+        ("json", "json"),
+    ],
+    ids=["float", "boolean", "datetime", "timestamptz", "json"],
+)
+def test_a_key_column_whose_text_differs_by_engine_is_refused(declaration: Any, named: str) -> None:
+    """A record's key is the column's text, which a read must find the row by again.
+
+    Each engine writes a float, a boolean or a time as different text, and
+    none writes it as Python does, so a key read back would not find its row.
+    """
+    schema = DatabaseSchema.from_dict({"fields": {"k": declaration, "shape": "string"}})
+    with pytest.raises(ValidationError, match=f"id_column 'k' is declared {named}") as caught:
+        NativeColumnLayout(schema, id_column="k")
+    assert caught.value.context["id_column"] == "k"
+
+
+@pytest.mark.parametrize("declaration", ["string", "text", "integer"])
+def test_a_key_column_with_one_text_on_every_engine_is_taken(declaration: str) -> None:
+    schema = DatabaseSchema.from_dict({"fields": {"k": declaration, "shape": "string"}})
+    assert NativeColumnLayout(schema, id_column="k").id_column == "k"
+
+
+def test_an_integer_key_is_compared_in_its_own_type_only_for_its_own_text() -> None:
+    """``"10"`` is an integer's text, so it is sent as a ``bigint`` and the index serves it.
+
+    ``"010"`` is no integer's text, so the column is compared as text, where it
+    matches nothing.
+    """
+    schema = DatabaseSchema.from_dict({"fields": {"n": "integer", "shape": "string"}})
+    builder = _builder(layout=NativeColumnLayout(schema, id_column="n"))
+    sql, params = builder.build_read_query("10")
+    assert sql.endswith('WHERE "n" = CAST($1 AS bigint)')
+    assert params == [10]
+    sql, params = builder.build_read_query("010")
+    assert sql.endswith('WHERE CAST("n" AS TEXT) = $1')
+    assert params == ["010"]
 
 
 @pytest.mark.parametrize(
@@ -371,7 +418,8 @@ def test_a_placeholder_is_typed_by_its_bounds_on_postgres_only() -> None:
 
 def test_a_zoned_column_takes_a_date_as_its_midnight_in_utc() -> None:
     schema = DatabaseSchema.from_dict(
-        {"fields": {"k": "string", "seen": {"type": "datetime", "sql_type": "timestamptz"}}}
+        {"fields": {"k": "string", "seen": {"type": "datetime", "sql_type": "timestamptz"}}},
+        keys=NATIVE_FIELD_KEYS,
     )
     builder = _builder(layout=NativeColumnLayout(schema, id_column="k"))
     sql, params = builder.build_search_query(
@@ -464,10 +512,26 @@ def test_sql_type_reads_as_a_shorthand_and_an_explicit_entry_wins() -> None:
                     "metadata": {"sql_type": "inet"},
                 },
             ]
-        }
+        },
+        keys=NATIVE_FIELD_KEYS,
     )
     assert schema.fields["k"].metadata[SQL_TYPE_KEY] == "uuid"
     assert schema.fields["j"].metadata[SQL_TYPE_KEY] == "inet"
+
+
+def test_the_default_door_refuses_the_sql_type_shorthand() -> None:
+    """Only a native layout reads ``sql_type``, so a door that is not one refuses it.
+
+    Loaded, it would read as a column type a memory, file or JSON-layout store
+    honours, and none does.
+    """
+    declared = {"fields": {"k": {"type": "string", "sql_type": "uuid"}}}
+    with pytest.raises(ValidationError, match=r"declares \['sql_type'\]"):
+        DatabaseSchema.from_dict(declared)
+    with pytest.raises(ValidationError, match=r"declares \['sql_type'\]"):
+        extract_schema_from_config(declared)
+    schema = DatabaseSchema.from_dict(declared, keys=NATIVE_FIELD_KEYS)
+    assert schema.fields["k"].metadata[SQL_TYPE_KEY] == "uuid"
 
 
 @pytest.mark.parametrize(
@@ -482,7 +546,7 @@ def test_a_sql_type_that_is_not_a_name_is_refused(
     declaration: dict[str, Any], spelled: str
 ) -> None:
     with pytest.raises(ValidationError, match=re.escape(spelled)):
-        DatabaseSchema.from_dict({"fields": {"k": declaration}})
+        DatabaseSchema.from_dict({"fields": {"k": declaration}}, keys=NATIVE_FIELD_KEYS)
 
 
 @pytest.mark.parametrize(
