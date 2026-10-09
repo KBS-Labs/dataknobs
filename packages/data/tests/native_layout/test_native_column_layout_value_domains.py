@@ -229,15 +229,6 @@ def test_every_answer_is_the_oracles(
     expected: set[str],
 ) -> None:
     """No case raises; each selects what ``Filter.matches`` selects."""
-    if engine.name == "sqlite" and value == 2**70:
-        request.applymarker(
-            pytest.mark.xfail(
-                raises=OverflowError,
-                strict=True,
-                reason="SQLite's driver cannot bind an integer past 64 bits, under the "
-                "JSON layout as here",
-            )
-        )
     if engine.name == "sqlite" and op == Operator.REGEX:
         request.applymarker(
             pytest.mark.xfail(

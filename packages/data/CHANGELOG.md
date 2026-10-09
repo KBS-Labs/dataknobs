@@ -1001,9 +1001,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   driver, and a numeric bound compared with a PostgreSQL column is sent as
   `bigint`, `double precision` or `numeric`, because asyncpg otherwise types
   it as the column and sends `3.5` to an `integer` column as `3`; an
-  `integer` column is compared with a `float` bound exactly, past 2**53 too,
-  on every engine. A scope filter comparing a value its column cannot hold is
-  refused, since it would match no row or, negated, exclude only the rows
+  `integer` column is compared with a `float` or `Decimal` bound exactly,
+  past 2**53 too, on every engine (a whole bound past every integer the driver
+  binds is sent as the infinity on its side), and a bound no engine number
+  holds exactly is refused rather than rounded: a fractional `Decimal` past
+  2**52 on SQLite, and a fraction beside an integer past 37 digits in one
+  `BETWEEN` or `IN` on DuckDB. A scope filter comparing a value its column
+  cannot hold (`size == 2.5` on an integer column) is refused, since it would match no row or, negated, exclude only the rows
   where the column is NULL. The key is the key column's text, which is the
   record's storage id, so a read finds a row by the key a search
   returned; a key column is a `string`, `text`, `uuid` or `integer` column,
@@ -1020,7 +1024,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as only the native layout reads it; `uuid` and `timestamptz` (a
   zoned instant, read in UTC) ship. An `SqlType` says which kinds of value the
   column holds, how a bound and a read value are normalised, whether it is
-  text or reads as text, and the type a bound is sent as. `SqlType`,
+  text or reads as text, which bounds a value of it can equal (`holds`), the
+  value a bound is sent as on each dialect (`own(bound, dialect)`), and the
+  type it is sent as. `SqlType`,
   `sql_types`, `SQL_TYPE_KEY`, `NATIVE_FIELD_KEYS`, `NAIVE_TIME` and
   `ZONED_INSTANT` are exported
   from `dataknobs_data`. The schema reader refuses a `sql_type` that is not a
@@ -1036,7 +1042,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ORDERED_OPERATORS` and `STRING_ONLY_OPERATORS`. The readings `expr_for` is
   asked about are `"string"`, `"number"`, `"boolean"`, `NEVER` and
   `TIME_READINGS` (`dataknobs_data.backends.sql_types`). `NativeColumnLayout`
-  is built on these alone. A layout reads only: `writable` defaults to
+  is built on these alone. The primitives render for `NATIVE_DIALECTS`
+  (`postgres`, `sqlite`, `duckdb`), so a builder refuses a layout any other
+  dialect unless its `check_dialect` is overridden, as `JsonbLayout`'s is.
+  `bind_bound` sends a `Decimal` to DuckDB as a decimal, as to PostgreSQL,
+  rather than as a `float`. A layout reads only: `writable` defaults to
   `False`, and a builder refuses a layout other than `JsonbLayout` that sets
   it, since the write statements name the JSON layout's columns.
 - **`read_layout_config`**, the one reader of a backend's `layout:`

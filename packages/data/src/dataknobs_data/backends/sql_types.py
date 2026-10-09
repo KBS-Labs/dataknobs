@@ -37,6 +37,7 @@ from numbers import Integral
 from types import MappingProxyType
 from typing import Any, Final, Literal, get_args
 
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.registry import Registry
 
 from ..fields import FieldType
@@ -73,8 +74,18 @@ DECLARABLE_KINDS: frozenset[str] = frozenset(get_args(SqlKind))
 
 _INT64 = range(-(2**63), 2**63)
 
+#: The integers each dialect's driver binds as one, where it has a bound: past
+#: them a Python ``int`` raises, and so past them no integer column holds a value.
+_BOUND_INTEGERS: Mapping[str, range] = MappingProxyType(
+    {"sqlite": _INT64, "duckdb": range(-(2**127), 2**127)}
+)
+
 
 def _same(value: Any) -> Any:
+    return value
+
+
+def _same_sent(value: Any, dialect: str) -> Any:
     return value
 
 
@@ -98,15 +109,17 @@ class SqlType:
             ``REGEX``, ``STARTS_WITH``) apply. ``"cast"``: it is not text, but
             the record holds its text, so a string bound and the string-only
             operators compare ``CAST(column AS TEXT)``. ``None``: neither.
-        holds: For a column that reads as text, whether an equality bound (after
-            ``bind``) can be compared with the column in its own type, which
-            keeps an index on it. ``None``: always compared as text.
+        holds: Whether some value of the column can equal a bound (after
+            ``bind``) of a kind it holds; ``None``: any can. A scope equal to a
+            value no row holds is refused by it, and a column that reads as text
+            is compared with such a bound as its text, but in its own type, which
+            keeps an index on it, with one it holds.
         own: A bound compared with the column in its own type, as the value
-            it is sent as: one every value of the column compares with as it
-            compares with the bound. A uuid column takes its text as it is; an
-            integer key's text ``"10"`` is sent as ``10``; an integer column's
-            ``2.0`` is sent as ``2``, and ``2.25`` as ``2.5``, which no engine
-            rounds onto an integer.
+            sent for it on a dialect: one every value of the column compares
+            with as it compares with the bound. A uuid column takes its text as
+            it is; an integer key's text ``"10"`` is sent as ``10``; an integer
+            column's ``2.0`` is sent as ``2``, and ``2.25`` as ``2.5``, which no
+            engine rounds onto an integer.
         placeholder: The SQL type a bound is sent as when it is compared in the
             column's own type, given the dialect and the bounds; ``None`` to
             send it untyped. A driver that infers the placeholder's type from
@@ -118,7 +131,7 @@ class SqlType:
     read: Callable[[Any], Any] = _same
     text: SqlText | None = None
     holds: Callable[[Any], bool] | None = None
-    own: Callable[[Any], Any] = _same
+    own: Callable[[Any, str], Any] = _same_sent
     placeholder: Callable[[str, Sequence[Any]], str | None] | None = None
 
     def __post_init__(self) -> None:
@@ -166,43 +179,89 @@ def _number_placeholder(dialect: str, bounds: Sequence[Any]) -> str | None:
     return "double precision"
 
 
+#: The magnitude past which DuckDB has no decimal holding a number to a tenth.
+_DUCKDB_DECIMAL_LIMIT = 10**37
+
+
 def _integer_placeholder(dialect: str, bounds: Sequence[Any]) -> str | None:
-    """As :func:`_number_placeholder`, and on DuckDB ``DECIMAL`` for a fractional bound.
+    """As :func:`_number_placeholder`, refusing what DuckDB cannot compare exactly.
 
-    DuckDB compares an integer column with a ``DOUBLE`` bound as a ``DOUBLE``,
-    which rounds a value past 2**53 onto its neighbour; :func:`_integer_comparand`
-    leaves a fractional bound halfway between two integers, which a
-    ``DECIMAL(38,1)`` holds exactly.
+    DuckDB types a ``Decimal`` as the ``DECIMAL`` that holds it, and gives the
+    bounds of one ``BETWEEN`` or ``IN`` a common type: a fractional bound
+    beside an integer past 37 digits makes that a ``DECIMAL(38,1)`` the integer
+    does not fit, and a fraction that wide is typed ``DOUBLE``. Either compares
+    the column inexactly, so it is refused rather than answered.
     """
-    if dialect == "duckdb":
-        fractional = [b for b in bounds if not isinstance(b, Integral)]
-        if fractional and all(math.isfinite(b) for b in fractional):
-            return "DECIMAL(38,1)"
-        return None
-    return _number_placeholder(dialect, bounds)
+    if dialect != "duckdb":
+        return _number_placeholder(dialect, bounds)
+    numbers = [b for b in bounds if isinstance(b, (int, Decimal)) and not isinstance(b, bool)]
+    if any(isinstance(b, Decimal) for b in numbers):
+        for b in numbers:
+            if not -_DUCKDB_DECIMAL_LIMIT < b < _DUCKDB_DECIMAL_LIMIT:
+                raise ValidationError(
+                    f"DuckDB holds a number to a tenth only in a DECIMAL of 38 digits, which "
+                    f"{b!r} does not fit beside a fractional bound; compare it in a filter of "
+                    f"its own",
+                    context={"bound": str(b), "dialect": dialect},
+                )
+    return None
 
 
-def _integer_comparand(value: Any) -> Any:
-    """A number as an integer column compares with it, sent exactly.
+def _is_whole(value: Any) -> bool:
+    """Whether an integer column can hold ``value``: a number with no fraction."""
+    if isinstance(value, Integral):
+        return True
+    try:
+        return bool(value == math.floor(value))
+    except (TypeError, OverflowError, ValueError):
+        return False
 
-    A whole ``float`` or ``Decimal`` is its ``int``, so ``2.0**60`` is not sent
-    as a ``float`` an engine compares by rounding the column. A fractional one
-    is the ``Decimal`` halfway between the two integers it lies between, which
-    every integer compares with as it compares with the bound, and which no
-    engine rounds onto either. An infinity is left as it is, and so is a number
-    of another type (a ``Fraction``), which the builder sends as it would.
+
+def _integer_comparand(value: Any, dialect: str) -> Any:
+    """A number as an integer column compares with it, sent exactly on ``dialect``.
+
+    - A whole ``float`` or ``Decimal`` is its ``int``, so ``2.0**60`` is not
+      sent as a ``float`` an engine compares by rounding the column.
+    - A whole number past the integers the driver binds is past every value
+      the column holds, so it is the infinity on its side, which every engine
+      compares with an integer exactly.
+    - A fractional one is the ``Decimal`` halfway between the two integers it
+      lies between, which every integer compares with as it compares with the
+      bound, and which no engine rounds onto either. SQLite has no decimal, so
+      there it is the ``float`` that holds it, and short of 2**52 one does;
+      past that no SQLite number lies between two integers, and the bound is
+      refused rather than rounded onto one.
+
+    An infinity is left as it is, and so is a number of another type (a
+    ``Fraction``), which the builder sends as it would.
     """
     if isinstance(value, bool):
         return value
     if isinstance(value, Integral):
-        return int(value)
-    if not isinstance(value, (float, Decimal)):
+        whole = int(value)
+    elif isinstance(value, (float, Decimal)):
+        try:
+            whole = math.floor(value)
+        except (OverflowError, ValueError):
+            return value
+    else:
         return value
-    try:
-        whole = math.floor(value)
-    except (OverflowError, ValueError):
-        return value
-    return whole if value == whole else Decimal(whole) + Decimal("0.5")
+    bound = _BOUND_INTEGERS.get(dialect)
+    if bound is not None and whole not in bound:
+        return math.copysign(math.inf, whole)
+    if value == whole:
+        return whole
+    # Built from text: Decimal arithmetic rounds to 28 digits.
+    halfway = Decimal(f"{10 * whole + 5}E-1")
+    if dialect != "sqlite":
+        return halfway
+    if Decimal(float(halfway)) != halfway:
+        raise ValidationError(
+            f"SQLite has no number between {whole} and {whole + 1}, so an integer column "
+            f"cannot be compared with {value!r} exactly",
+            context={"bound": str(value), "dialect": dialect},
+        )
+    return float(halfway)
 
 
 def _canonical_uuid(value: Any) -> Any:
@@ -289,7 +348,10 @@ sql_types.register(
 _TEXT = SqlType(kinds=frozenset({"string"}), text="stored")
 _NUMBER = SqlType(kinds=frozenset({"number"}), placeholder=_number_placeholder)
 _INTEGER = SqlType(
-    kinds=frozenset({"number"}), own=_integer_comparand, placeholder=_integer_placeholder
+    kinds=frozenset({"number"}),
+    holds=_is_whole,
+    own=_integer_comparand,
+    placeholder=_integer_placeholder,
 )
 
 #: The built-in answer for each ``FieldType`` a column can be compared as.
@@ -320,13 +382,18 @@ def _is_integer_text(value: Any) -> bool:
     return str(number) == value and number in _INT64
 
 
+def _integer_of_text(value: str, dialect: str) -> int:
+    """An integer's text, which :func:`_is_integer_text` held, as the integer."""
+    return int(value)
+
+
 #: An integer column keying a row: compared as its text, which is the
 #: record's storage id, and in its own type for an integer's own text.
 _INTEGER_KEY = SqlType(
     kinds=frozenset({"string"}),
     text="cast",
     holds=_is_integer_text,
-    own=int,
+    own=_integer_of_text,
     placeholder=_number_placeholder,
 )
 

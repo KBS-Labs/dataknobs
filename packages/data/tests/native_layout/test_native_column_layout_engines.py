@@ -23,6 +23,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from dataknobs_common.exceptions import ValidationError
 
 from dataknobs_data import NATIVE_FIELD_KEYS
 from dataknobs_data.backends.column_layout import NativeColumnLayout
@@ -109,7 +110,8 @@ SHAPES = Table(
 
 #: A table keyed by an integer, whose zoned times sort one way as text and
 #: another as instants: ``n = 5`` is written first as text and is the latest.
-#: ``big`` holds integers no ``float`` holds, the nearest of which differs.
+#: ``big`` holds integers no ``float`` holds, the nearest of which differs, and
+#: one beside them that a ``float`` does hold.
 COUNTED_SCHEMA = DatabaseSchema.from_dict(
     {
         "fields": {
@@ -123,6 +125,7 @@ COUNTED_ROWS: list[tuple[int, datetime, int]] = [
     (5, datetime(2024, 1, 1, 23, tzinfo=timezone(timedelta(hours=-5))), 2**53 + 1),
     (10, datetime(2024, 1, 2, 1, tzinfo=UTC), 2**53 + 3),
     (9, datetime(2024, 1, 2, 2, tzinfo=UTC), 2**60 + 1),
+    (7, datetime(2024, 1, 2, 3, tzinfo=UTC), 2**53 + 4),
 ]
 COUNTED = Table(
     "counted",
@@ -374,18 +377,9 @@ def test_the_scope_reaches_every_read(engine: Engine) -> None:
 
 
 def test_an_integer_past_64_bits_matches_nothing_it_cannot_equal(
-    engine: Engine, records: dict[str, Record], request: pytest.FixtureRequest
+    engine: Engine, records: dict[str, Record]
 ) -> None:
     """No integer column holds it, and nothing raises."""
-    if engine.name == "sqlite":
-        request.applymarker(
-            pytest.mark.xfail(
-                raises=OverflowError,
-                strict=True,
-                reason="SQLite's driver cannot bind an integer past 64 bits, under the "
-                "JSON layout as here",
-            )
-        )
     builder = engine.builder("shapes", LAYOUT)
     for spec in (
         Filter("size", Operator.EQ, 2**70),
@@ -412,7 +406,7 @@ def test_an_integer_key_reads_back_the_row_its_record_names(
     engine: Engine, counted: dict[str, Record]
 ) -> None:
     """The key a search hands back is the key a read finds the row by."""
-    assert set(counted) == {"5", "9", "10"}
+    assert set(counted) == {"5", "7", "9", "10"}
     builder = engine.builder("counted", COUNTED_LAYOUT)
     for key in counted:
         rows = engine.fetch(*builder.build_read_query(key))
@@ -481,6 +475,12 @@ BIG_FILTERS = [
     Filter("big", Operator.NOT_IN, [2**53, 0.5]),
     Filter("big", Operator.BETWEEN, [2**53 + 2, float(2**60)]),
     Filter("big", Operator.LTE, 9.0e15),
+    # Whole bounds past every integer the engine binds, and one mixed with a
+    # fractional bound.
+    Filter("big", Operator.LT, 1e20),
+    Filter("big", Operator.GTE, -1e40),
+    Filter("big", Operator.NEQ, 1e40),
+    Filter("big", Operator.NOT_BETWEEN, [-1e300, 2**53 + 3.5]),
 ]
 
 
@@ -492,5 +492,38 @@ def test_an_integer_past_a_floats_precision_compares_exactly(
 ) -> None:
     """A fractional bound mixed with an integer one must not round the integers."""
     builder = engine.builder("counted", COUNTED_LAYOUT)
+    found = _found(engine, builder, *builder.build_search_query(Query(filters=[spec])))
+    assert found == _expected(counted, spec)
+
+
+#: Fractions an engine has no number to send exactly for, and the engine:
+#: SQLite has none between two integers past 2**52, and DuckDB no decimal
+#: holding a tenth beside an integer past 37 digits.
+WIDE_FRACTIONS = [
+    (Filter("big", Operator.GT, Decimal(2**53 + 3) + Decimal("0.5")), "sqlite"),
+    (Filter("big", Operator.LTE, Decimal(2**53 + 3) + Decimal("0.5")), "sqlite"),
+    (
+        Filter("big", Operator.BETWEEN, [Decimal("0.5"), Decimal(2**53 + 3) + Decimal("0.5")]),
+        "sqlite",
+    ),
+    (Filter("big", Operator.BETWEEN, [0.5, 1e38]), "duckdb"),
+    (Filter("big", Operator.IN, [0.5, -(10**37)]), "duckdb"),
+]
+
+
+@pytest.mark.parametrize(
+    ("spec", "refused_on"),
+    WIDE_FRACTIONS,
+    ids=[f"{f.field} {f.operator.value} {f.value!r}" for f, _ in WIDE_FRACTIONS],
+)
+def test_a_fraction_an_engine_cannot_send_exactly_is_refused_there(
+    engine: Engine, counted: dict[str, Record], spec: Filter, refused_on: str
+) -> None:
+    """Refused rather than rounded onto an integer; every other engine is exact."""
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    if engine.name == refused_on:
+        with pytest.raises(ValidationError, match=r"no number between|DECIMAL of 38 digits"):
+            builder.build_search_query(Query(filters=[spec]))
+        return
     found = _found(engine, builder, *builder.build_search_query(Query(filters=[spec])))
     assert found == _expected(counted, spec)

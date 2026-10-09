@@ -101,6 +101,10 @@ def _sqlite(tables: Sequence[Table]) -> Iterator[Engine]:
             # CPython 3.12 raises that stale error in place of the bind's own
             # OverflowError. One statement that succeeds clears it, so each
             # case sees only its own failure whatever order the cases run in.
+            # TEMPORARY MITIGATION: the shipped SQLite backends report the
+            # stale error too. The root fix is the builder deciding a bound
+            # SQLite cannot bind before it is sent, under the JSON layout as
+            # the native one already does; remove this with it.
             conn.execute("SELECT 1").fetchall()
             raise
 

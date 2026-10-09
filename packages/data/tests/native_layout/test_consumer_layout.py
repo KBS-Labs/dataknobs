@@ -197,3 +197,17 @@ def test_a_json_layout_of_ones_own_still_writes() -> None:
     builder = SQLQueryBuilder("records", dialect="sqlite", layout=Audited())
     sql, _ = builder.build_delete_query("a1")
     assert sql.startswith("DELETE")
+
+
+def test_a_layout_on_the_typed_primitives_is_refused_a_dialect_they_do_not_render() -> None:
+    """A time reading or a code-point order is written per dialect.
+
+    On another dialect they would render SQLite's SQL, so a layout is refused
+    one unless it says it takes any, as the JSON layout does.
+    """
+    with pytest.raises(ValidationError, match="renders for"):
+        SQLQueryBuilder("texts", layout=LAYOUT)
+    with pytest.raises(ValidationError, match="renders for"):
+        SQLQueryBuilder("texts", dialect="mysql", layout=LAYOUT)
+    sql, _ = SQLQueryBuilder("records", layout=JsonbLayout()).build_search_query(Query())
+    assert sql.startswith("SELECT")

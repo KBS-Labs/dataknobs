@@ -274,8 +274,8 @@ An `SqlType` says:
 | `bind` | a bound as a record would hold it, or `None` when no value can equal it |
 | `read` | a value the driver returned, as the record holds it |
 | `text` | `"stored"`: the column's SQL value is text, so it compares with strings, a time bound reads it as a time, and the text operators apply. `"cast"`: the column is not text, but the record holds its text, so strings and the text operators compare `CAST(column AS TEXT)`. `None` (the default): neither |
-| `holds` | for a `text="cast"` column, whether an equality bound can be compared in the column's own type |
-| `own` | a bound compared with the column in its own type, as the value it is sent as: one every value of the column compares with as it does with the bound (default: the bound unchanged) |
+| `holds` | whether some value of the column can equal a bound (default: any can). A scope equal to a value none holds is refused, and a `text="cast"` column is compared in its own type, keeping its index, with a bound it holds |
+| `own` | `own(bound, dialect)`: a bound compared with the column in its own type, as the value sent for it on that dialect: one every value of the column compares with as it does with the bound (default: the bound unchanged) |
 | `placeholder` | given the dialect and the bounds, the SQL type a bound is sent as |
 
 ## Best Practices

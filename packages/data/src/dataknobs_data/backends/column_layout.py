@@ -62,8 +62,9 @@ if TYPE_CHECKING:
     from ..schema import DatabaseSchema
     from .sql_base import SQLQueryBuilder
 
-#: The dialects a native layout renders for: each needs its own text cast,
-#: time reading and placeholder type.
+#: The dialects the builder's typed primitives render for, and so a layout on
+#: them: each needs its own text cast, time reading, code-point order and
+#: placeholder type.
 NATIVE_DIALECTS = frozenset({"postgres", "sqlite", "duckdb"})
 
 #: The values ``layout:`` takes.
@@ -100,6 +101,10 @@ class ColumnLayout(ABC):
       does, for a sort; :meth:`~.sql_base.SQLQueryBuilder.param_placeholder`
       is a parameter in the builder's style.
 
+    They render for the dialects in :data:`NATIVE_DIALECTS`, and the builder
+    refuses a layout any other: :meth:`check_dialect` says so, and a layout
+    that renders for more overrides it.
+
     A layout reads only: the builder's write statements are rendered for the
     JSON layout's columns, so it refuses any other layout that sets
     :attr:`writable`. :class:`NativeColumnLayout` is built on these alone, and
@@ -117,8 +122,18 @@ class ColumnLayout(ABC):
         """The filters every read is ANDed with: which rows the table holds for this store."""
         return ()
 
-    def check_dialect(self, dialect: str) -> None:  # noqa: B027 - most layouts take any
-        """Refuse a dialect this layout cannot render for. Called by the builder."""
+    def check_dialect(self, dialect: str) -> None:
+        """Refuse a dialect this layout cannot render for. Called by the builder.
+
+        One the typed primitives do not render for, unless overridden.
+        """
+        if dialect not in NATIVE_DIALECTS:
+            raise ValidationError(
+                f"{type(self).__name__} renders for {sorted(NATIVE_DIALECTS)}, not "
+                f"{dialect!r}: how a column is compared as text, as a time and with a "
+                f"typed placeholder differs by dialect",
+                context={"dialect": dialect, "layout": type(self).__name__},
+            )
 
     @abstractmethod
     def filter_clause(
@@ -153,6 +168,9 @@ class JsonbLayout(ColumnLayout):
     """
 
     writable = True
+
+    def check_dialect(self, dialect: str) -> None:
+        """Any: a dialect it has no JSON reading for compares untyped."""
 
     def filter_clause(
         self, builder: SQLQueryBuilder, spec: Filter, param_start: int
@@ -287,15 +305,6 @@ class NativeColumnLayout(ColumnLayout):
         """The declared columns, in declaration order."""
         return tuple(self._columns)
 
-    def check_dialect(self, dialect: str) -> None:
-        if dialect not in NATIVE_DIALECTS:
-            raise ValidationError(
-                f"a native layout renders for {sorted(NATIVE_DIALECTS)}, not {dialect!r}: "
-                f"how a column is compared as text, as a time and with a typed "
-                f"placeholder differs by dialect",
-                context={"dialect": dialect},
-            )
-
     # -- what a field is ------------------------------------------------------
 
     def _column(self, field: str, *, table: str | None = None) -> _Column:
@@ -352,6 +361,10 @@ class NativeColumnLayout(ColumnLayout):
             return sql_type.stores_text or sql_type.reads_as_text
         bounds = [sql_type.bind(b) for b in self._bounds(spec.operator, spec.value)]
         related = [self._relates(sql_type, value_kind(b)) for b in bounds]
+        if spec.operator in _EQUALITY and sql_type.holds is not None:
+            # Equal only to a value a row can hold: an integer column relates
+            # to 2.5, but no row equals it.
+            related = [r and sql_type.holds(b) for r, b in zip(related, bounds, strict=True)]
         if spec.operator in _RANGES:
             return all(related)
         return any(related)
@@ -456,7 +469,7 @@ class NativeColumnLayout(ColumnLayout):
                 return builder.bind_bound(ZONED_INSTANT, start.replace(tzinfo=UTC))
             if own_type and reading in sql_type.kinds:
                 # Compared in the column's own type, as a value of it.
-                return builder.bind_bound(reading, sql_type.own(bound))
+                return builder.bind_bound(reading, sql_type.own(bound, builder.dialect))
             return builder.bind_bound(reading, bound)
 
         def cast_for(reading: str | None, bound_values: Sequence[Any]) -> str | None:

@@ -195,7 +195,7 @@ backends adopt it in later releases. What the builder guarantees:
 - **The scope is in every read**: search, count, `build_where_clause`, read and
   exists. A complex query's condition is nested under it, so an `OR` cannot
   reach rows outside it. A scope filter comparing a value its column cannot
-  hold is refused: it would match no row, or, negated (`!=`, `NOT IN`,
+  hold (a string with an integer column, or `size == 2.5`) is refused: it would match no row, or, negated (`!=`, `NOT IN`,
   `NOT BETWEEN`), exclude only the rows where the column is NULL.
 - **Read-only.** Every statement that would write raises `OperationError`.
 - **Every filter answers as `Filter.matches` answers** over the record the
@@ -220,8 +220,15 @@ backends adopt it in later releases. What the builder guarantees:
     is compared exactly, as Python compares an `int` with a `float`: a whole
     bound is sent as its `int` (`2.0**60` as `2**60`), and a fractional one
     as the value halfway between the integers it lies between (`3.25` as
-    `3.5`, as `numeric` on PostgreSQL and `DECIMAL(38,1)` on DuckDB), since a
-    `float` bound is compared by rounding the column past 2**53.
+    `3.5`, a `Decimal` on PostgreSQL and DuckDB), since a `float` bound is
+    compared by rounding the column past 2**53. A whole bound past every
+    integer the driver binds (64 bits on SQLite, 128 on DuckDB) is past every
+    value the column holds, and is sent as the infinity on its side. Two
+    bounds no engine number holds exactly are refused rather than rounded: on
+    SQLite, a fractional `Decimal` past 2**52, where no number lies between two
+    integers; on DuckDB, a fractional bound beside one past 37 digits in a
+    single `BETWEEN` or `IN`, which it would compare as a `DECIMAL(38,1)` the
+    wider one does not fit.
 
 - **`NOT` over a native filter** matches a row whose column is `NULL`, as
   `NOT` does under the JSON layout and as `Filter.matches` answers.
@@ -244,6 +251,8 @@ a filter as `Filter.matches` does. Here, a legacy table that holds every value
 as text:
 
 ```python
+from dataknobs_common.exceptions import ValidationError
+
 from dataknobs_data import Filter, Operator, Query, Record
 from dataknobs_data.backends.column_layout import ColumnLayout
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
@@ -255,7 +264,12 @@ class TextTableLayout(ColumnLayout):
         self.columns, self.key = tuple(columns), key
 
     def _column(self, field):
-        return f'"{self.key if field == "id" else field}"'
+        # A field name can come from anywhere a filter does: only a declared
+        # column is ever written into the statement.
+        name = self.key if field == "id" else field
+        if name not in self.columns:
+            raise ValidationError(f"no column {field!r}", context={"column": field})
+        return f'"{name}"'
 
     def filter_clause(self, builder, spec, param_start):
         column = self._column(spec.field)
@@ -302,7 +316,10 @@ sql, params = builder.build_search_query(Query(filters=[Filter("name", Operator.
 what `expr_for` says a value is under each reading of a bound: `"string"`,
 `"number"`, `"boolean"`, `NEVER` (a `None` or NaN bound), or one of
 `TIME_READINGS`. Its kind test must be false, not `NULL`, for a value it
-excludes, so `NOT` over the clause still matches that value. A layout reads
+excludes, so `NOT` over the clause still matches that value. The primitives
+render for PostgreSQL, SQLite and DuckDB (`NATIVE_DIALECTS`), so the builder
+refuses a layout any other dialect, as its `check_dialect` says; one that
+renders for more overrides it, as `JsonbLayout` does. A layout reads
 only: the builder's write statements are rendered for the JSON layout's
 columns, so a layout other than `JsonbLayout` that sets `writable` is refused
 when a builder is given it.

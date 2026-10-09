@@ -153,6 +153,9 @@ def test_an_integer_key_is_compared_in_its_own_type_only_for_its_own_text() -> N
         Filter("size", Operator.LIKE, "3%"),
         Filter("solid", Operator.EQ, 1),
         Filter("made", Operator.GT, "not a time"),
+        # An integer column holds no fraction, though it compares with one.
+        Filter("size", Operator.EQ, 2.5),
+        Filter("size", Operator.IN, [2.5, "a"]),
     ],
     ids=lambda f: f"{f.field} {f.operator.value} {f.value!r}",
 )
@@ -169,6 +172,8 @@ def test_a_scope_that_can_match_no_row_is_refused(scope: Filter) -> None:
         Filter("size", Operator.NOT_IN, ["a", "b"]),
         Filter("size", Operator.NOT_BETWEEN, ["a", "b"]),
         Filter("made", Operator.NEQ, "not a time"),
+        Filter("size", Operator.NEQ, 2.5),
+        Filter("size", Operator.NOT_IN, [0.5]),
     ],
     ids=lambda f: f"{f.field} {f.operator.value} {f.value!r}",
 )
@@ -190,9 +195,11 @@ def test_a_scope_that_can_match_is_taken() -> None:
             Filter("shape", Operator.IN, ["apple", 5]),
             Filter("made", Operator.GT, "2024-01-01"),
             Filter("size", Operator.NOT_EXISTS),
+            Filter("size", Operator.IN, [3.0, 2.5]),
+            Filter("size", Operator.GT, 2.5),
         ]
     )
-    assert len(layout.scope) == 3
+    assert len(layout.scope) == 5
 
 
 def test_a_structured_column_is_refused_for_all_but_presence() -> None:
@@ -461,11 +468,47 @@ def test_an_integer_column_is_sent_a_number_it_compares_with_exactly() -> None:
         '"size" = ANY(CAST($1 AS numeric[]))',
         [[2**53, Decimal("0.5")]],
     )
+    # DuckDB types a Decimal as the DECIMAL that holds it; SQLite has no
+    # decimal, and a float holds every halfway value short of 2**52.
     assert where("duckdb", "qmark", Filter("size", Operator.LT, -2.75)) == (
-        '"size" < CAST(? AS DECIMAL(38,1))',
-        [-2.5],
+        '"size" < ?',
+        [Decimal("-2.5")],
     )
     assert where("sqlite", "qmark", Filter("size", Operator.LT, -2.75)) == ('"size" < ?', [-2.5])
+    # Halfway is exact however many digits the bound has.
+    wide = Decimal("1" + "0" * 30 + ".25")
+    assert where("postgres", "numeric", Filter("size", Operator.GT, wide)) == (
+        '"size" > CAST($1 AS numeric)',
+        [Decimal("1" + "0" * 30 + ".5")],
+    )
+    # A whole bound past every integer the driver binds is past every value
+    # the column holds, so it is sent as the infinity on its side.
+    assert where("sqlite", "qmark", Filter("size", Operator.LT, 2**63)) == (
+        '"size" < ?',
+        [float("inf")],
+    )
+    assert where("sqlite", "qmark", Filter("size", Operator.GT, -(2**63) - 1)) == (
+        '"size" > ?',
+        [float("-inf")],
+    )
+    assert where("sqlite", "qmark", Filter("size", Operator.EQ, -(2**63))) == (
+        '"size" = ?',
+        [-(2**63)],
+    )
+    assert where("duckdb", "qmark", Filter("size", Operator.GT, -1e40)) == (
+        '"size" > ?',
+        [float("-inf")],
+    )
+    assert where("duckdb", "qmark", Filter("size", Operator.EQ, 2**100)) == (
+        '"size" = ?',
+        [2**100],
+    )
+    assert where("postgres", "numeric", Filter("size", Operator.LT, 1e40)) == (
+        '"size" < CAST($1 AS numeric)',
+        [int(1e40)],
+    )
+    with pytest.raises(ValidationError, match="no number between"):
+        where("sqlite", "qmark", Filter("size", Operator.LT, Decimal(2**52) + Decimal("0.5")))
     assert where("postgres", "numeric", Filter("size", Operator.LT, float("inf"))) == (
         '"size" < CAST($1 AS double precision)',
         [float("inf")],

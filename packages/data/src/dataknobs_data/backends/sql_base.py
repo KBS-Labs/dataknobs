@@ -209,6 +209,9 @@ _NEGATIONS: Mapping[Operator, Operator] = MappingProxyType(
     }
 )
 
+#: The dialects whose drivers bind a ``Decimal`` as a decimal, exactly.
+_DECIMAL_DIALECTS = frozenset({"postgres", "duckdb"})
+
 #: Each dialect's names for a JSON value's type, as its type function
 #: (``jsonb_typeof`` / ``json_type``) reports them. A dialect missing here
 #: cannot read a JSON type, and compares untyped.
@@ -1666,8 +1669,8 @@ class SQLQueryBuilder:
           (:func:`_utc_text`), as a zoned value is read.
         - A number no driver takes as it is --- a numpy number, a ``Decimal``
           on SQLite, which cannot bind one --- is an ``int`` when integral and
-          a ``float`` otherwise. PostgreSQL compares a ``Decimal`` as
-          ``numeric``, exactly.
+          a ``float`` otherwise. PostgreSQL and DuckDB take a ``Decimal`` as
+          the decimal type that holds it, exactly.
         - A numpy boolean is a ``bool``.
         """
         if kind in _TIME_READINGS:
@@ -1683,7 +1686,7 @@ class SQLQueryBuilder:
         if kind == "number" and type(bound) not in (int, float):
             if isinstance(bound, Integral):
                 return int(bound)
-            if not (self.dialect == "postgres" and isinstance(bound, Decimal)):
+            if not (self.dialect in _DECIMAL_DIALECTS and isinstance(bound, Decimal)):
                 return float(bound)
         return bound
 
