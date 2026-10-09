@@ -19,7 +19,7 @@ from typing import Any, TYPE_CHECKING, TypeVar
 
 from dataknobs_utils.sql_utils import quote_ident
 
-from dataknobs_common.exceptions import OperationError
+from dataknobs_common.exceptions import OperationError, ValidationError
 
 from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import (
@@ -37,6 +37,7 @@ from ..records import Record
 from .column_layout import ColumnLayout, JsonbLayout
 from .sql_types import (
     NAIVE_TIME as _NAIVE_TIME,
+    NEVER as _NEVER,
     TIME_READINGS as _TIME_READINGS,
     ZONED_INSTANT as _ZONED_INSTANT,
     ZONED_WALL_CLOCK as _ZONED_WALL_CLOCK,
@@ -560,7 +561,9 @@ class SQLQueryBuilder:
                 package creates when omitted.
 
         Raises:
-            ValidationError: When ``layout`` cannot render for ``dialect``.
+            ValidationError: When ``layout`` cannot render for ``dialect``, or
+                is not a :class:`~.column_layout.JsonbLayout` and claims it
+                may write.
         """
         self.table_name = table_name
         self.schema_name = schema_name
@@ -568,6 +571,15 @@ class SQLQueryBuilder:
         self.param_style = param_style
         self.qualified_table = self._get_qualified_table_name()
         self._layout = layout if layout is not None else JsonbLayout()
+        if self._layout.writable and not isinstance(self._layout, JsonbLayout):
+            # Every statement that writes is rendered for the JSON layout's
+            # ``id``, ``data`` and ``metadata`` columns.
+            raise ValidationError(
+                f"{type(self._layout).__name__} claims it may write table {table_name!r}, "
+                f"but only the JSON layout writes: the builder's write statements name "
+                f"its id, data and metadata columns",
+                context={"table": table_name, "layout": type(self._layout).__name__},
+            )
         self._layout.check_dialect(dialect)
 
     @property
@@ -581,8 +593,11 @@ class SQLQueryBuilder:
             return f"{quote_ident(self.schema_name)}.{quote_ident(self.table_name)}"
         return quote_ident(self.table_name)
 
-    def _get_param_placeholder(self, param_num: int, param_name: str | None = None) -> str:
-        """Get the appropriate parameter placeholder based on param_style.
+    def param_placeholder(self, param_num: int, param_name: str | None = None) -> str:
+        """The placeholder for parameter ``param_num``, in the builder's ``param_style``.
+
+        A layout numbers its parameters from the ``param_start`` it is given,
+        and the next clause numbers on from however many it returned.
 
         Args:
             param_num: Parameter number (1-based)
@@ -625,9 +640,9 @@ class SQLQueryBuilder:
         data = SQLRecordSerializer.record_to_json(record)
         metadata = json.dumps(record.metadata) if record.metadata else None
 
-        p1 = self._get_param_placeholder(1)
-        p2 = self._get_param_placeholder(2)
-        p3 = self._get_param_placeholder(3)
+        p1 = self.param_placeholder(1)
+        p2 = self.param_placeholder(2)
+        p3 = self.param_placeholder(3)
 
         query = f"""
             INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
@@ -679,9 +694,9 @@ class SQLQueryBuilder:
             params = [data, metadata, record_id]
         else:
             # PostgreSQL: id first, then data, metadata
-            p1 = self._get_param_placeholder(1)
-            p2 = self._get_param_placeholder(2)
-            p3 = self._get_param_placeholder(3)
+            p1 = self.param_placeholder(1)
+            p2 = self.param_placeholder(2)
+            p3 = self.param_placeholder(3)
             query = f"""
                 UPDATE {self.qualified_table}
                 SET data = {p2}, metadata = {p3}, updated_at = CURRENT_TIMESTAMP
@@ -701,7 +716,7 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        p1 = self._get_param_placeholder(1)
+        p1 = self.param_placeholder(1)
         query = f"DELETE FROM {self.qualified_table} WHERE id = {p1}"
 
         return query, [record_id]
@@ -958,7 +973,7 @@ class SQLQueryBuilder:
             tuples: list[str] = []
             for row in rows[start : start + per_statement]:
                 marks = ", ".join(
-                    self._get_param_placeholder(len(params) + k) for k in range(1, width + 1)
+                    self.param_placeholder(len(params) + k) for k in range(1, width + 1)
                 )
                 tuples.append(f"({marks}{row_suffix})")
                 params.extend(row)
@@ -1224,7 +1239,7 @@ class SQLQueryBuilder:
     def build_batch_delete_query(self, ids: list[str]) -> SQLStatement:
         """Build one DELETE statement for records by id, whatever their number.
 
-        The ids are a membership list, bound as :meth:`_build_membership_clause`
+        The ids are a membership list, bound as :meth:`membership_clause`
         binds one, so a dialect whose driver caps a statement's parameters
         still deletes any number in one statement. On PostgreSQL it returns
         the ids it deleted.
@@ -1237,7 +1252,7 @@ class SQLQueryBuilder:
         """
         if not ids:
             return "", []
-        clause, params = self._build_membership_clause("id", Operator.IN, ids, 1)
+        clause, params = self.membership_clause("id", Operator.IN, ids, 1)
         returning = " RETURNING id" if self.dialect == "postgres" else ""
         return f"DELETE FROM {self.qualified_table} WHERE {clause}{returning}", params
 
@@ -1255,7 +1270,7 @@ class SQLQueryBuilder:
         """
         if not ids:
             return "", []
-        clause, params = self._build_membership_clause("id", Operator.IN, ids, 1)
+        clause, params = self.membership_clause("id", Operator.IN, ids, 1)
         return f"SELECT id FROM {self.qualified_table} WHERE {clause}", params
 
     def build_count_query(self, query: Query | None = None) -> tuple[str, list[Any]]:
@@ -1305,7 +1320,7 @@ class SQLQueryBuilder:
         ``jsonb``, so a Postgres JSON field takes two keys: the ``jsonb`` value
         with every string folded to ``""``, which keeps the JSON type order and
         ties the strings, then the text value in code-point order, which breaks
-        that tie. See :meth:`_code_point_order` for the ``id`` column.
+        that tie. See :meth:`code_point_order` for the ``id`` column.
 
         Args:
             field: Field name, optionally dot-separated.
@@ -1315,7 +1330,7 @@ class SQLQueryBuilder:
             caller applies the direction to each.
         """
         if is_storage_key_field(field):
-            return [self._code_point_order("id")]
+            return [self.code_point_order("id")]
 
         column, nested_path = resolve_json_column_and_path(field)
         typed = self._build_json_field_expr(nested_path, column=column, as_text=False)
@@ -1324,10 +1339,10 @@ class SQLQueryBuilder:
         text = self._build_json_field_expr(nested_path, column=column)
         return [
             f"CASE WHEN jsonb_typeof({typed}) = 'string' THEN '\"\"'::jsonb ELSE {typed} END",
-            self._code_point_order(text),
+            self.code_point_order(text),
         ]
 
-    def _code_point_order(self, expr: str) -> str:
+    def code_point_order(self, expr: str) -> str:
         """Make a text expression compare by code point, as ``Filter.matches`` does.
 
         Postgres compares text under the database collation, so under
@@ -1409,9 +1424,10 @@ class SQLQueryBuilder:
         else:
             return field
 
-    # Operators that order their operands, and so depend on a collation when
-    # the operands are text.
-    _ORDERED_OPERATORS = frozenset(
+    #: Operators that order their operands, and so depend on a collation when
+    #: the operands are text: a layout wraps a text expression compared by one
+    #: in :meth:`code_point_order`.
+    ORDERED_OPERATORS = frozenset(
         {
             Operator.GT,
             Operator.GTE,
@@ -1422,21 +1438,23 @@ class SQLQueryBuilder:
         }
     )
 
-    # Operators that compare a value with a bound, and so match only a value
-    # of the bound's kind --- see :meth:`_build_typed_clause`.
-    _TYPED_OPERATORS = _ORDERED_OPERATORS | {
+    #: Operators that compare a value with a bound, and so match only a value
+    #: of the bound's kind: the operators :meth:`typed_clause` renders.
+    TYPED_OPERATORS = ORDERED_OPERATORS | {
         Operator.EQ,
         Operator.NEQ,
         Operator.IN,
         Operator.NOT_IN,
     }
 
-    # Operators whose in-memory ``Filter.matches`` contract requires the field
-    # value to be a string (a non-string value never matches). On a JSON field
-    # the SQL text projection would otherwise coerce non-string values to text
-    # and match, so these get a JSON-string-type guard AND'd in — see
-    # :meth:`_json_string_guard` and :meth:`_build_filter_clause`.
-    _STRING_ONLY_OPERATORS = frozenset(
+    #: Operators whose in-memory ``Filter.matches`` contract requires the field
+    #: value to be a string (a non-string value never matches). A layout
+    #: renders one over a text expression with :meth:`operator_clause`, and
+    #: answers ``FALSE`` for a value that is not text. On a JSON field the
+    #: SQL text projection would otherwise coerce non-string values to text
+    #: and match, so these get a JSON-string-type guard AND'd in --- see
+    #: :meth:`_json_string_guard` and :meth:`_build_filter_clause`.
+    STRING_ONLY_OPERATORS = frozenset(
         {Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH}
     )
 
@@ -1486,7 +1504,7 @@ class SQLQueryBuilder:
         not promise to evaluate an ``AND``-ed test before a cast.
 
         A time is a JSON string that names one, read as ``kind`` says
-        (:meth:`_time_reading`).
+        (:meth:`time_reading`).
 
         Returns ``None`` for a dialect that cannot read a JSON type.
         """
@@ -1495,7 +1513,7 @@ class SQLQueryBuilder:
         if is_kind is None:
             return None
         if kind in _TIME_READINGS:
-            names_time, value = self._time_reading(text, kind)
+            names_time, value = self.time_reading(text, kind)
             is_kind = f"{is_kind} AND {names_time}"
         elif kind == "string" or self.dialect == "sqlite":
             # SQLite's json_extract already answers in the value's own type.
@@ -1506,7 +1524,7 @@ class SQLQueryBuilder:
             value = f"TRY_CAST({text} AS {_DUCKDB_CASTS[kind]})"
         return is_kind, f"CASE WHEN {is_kind} THEN {value} END"
 
-    def _time_reading(self, text: str, reading: str) -> tuple[str, str]:
+    def time_reading(self, text: str, reading: str) -> tuple[str, str]:
         """A test that the string ``text`` names a time of ``reading``'s kind, and the time.
 
         ``Filter.matches`` reads a string as a time through
@@ -1515,14 +1533,14 @@ class SQLQueryBuilder:
         With none it is a naive ``datetime``, which ``Filter.matches`` never
         orders against an aware one, so the two are separate kinds here too:
 
-        - ``_NAIVE_TIME``: a string of
+        - :data:`~.sql_types.NAIVE_TIME`: a string of
           :data:`~dataknobs_data.query.NAIVE_TIMESTAMP_SHAPE`, read as the
           time it names.
-        - ``_ZONED_INSTANT``: a string of
+        - :data:`~.sql_types.ZONED_INSTANT`: a string of
           :data:`~dataknobs_data.query.ZONED_TIMESTAMP_SHAPE`, read as the
           instant it names. Both sides carry their offset, so no session time
           zone enters the comparison.
-        - ``_ZONED_WALL_CLOCK``: the same strings, read as the time on their
+        - :data:`~.sql_types.ZONED_WALL_CLOCK`: the same strings, read as the time on their
           own clock, which is how a ``date`` bound orders one.
 
         A string naming none is a string, as ``Filter.matches`` reads it:
@@ -1537,12 +1555,13 @@ class SQLQueryBuilder:
         ``NULL`` (``pg_input_is_valid`` arrives in 16), so such a value still
         raises there. SQLite has no timestamp type: ``strftime`` reads the
         value and it is compared as fixed-width text, which the bound is
-        rendered to match (:meth:`_bind_bound`), a zoned value in UTC and a
+        rendered to match (:meth:`bind_bound`), a zoned value in UTC and a
         day early, since its date functions write only the years 0000 to 9999
         (:func:`_utc_text`).
 
-        ``text`` is an expression over a JSON field or the ``id`` column; the
-        value is to be read only where the test holds.
+        ``text`` is a text expression: a JSON field, the ``id`` column, or a
+        layout's text column. The value is to be read only where the test
+        holds, as ``CASE WHEN <test> THEN <time> END``.
         """
         if reading == _NAIVE_TIME:
             return self._naive_time_reading(text)
@@ -1584,7 +1603,7 @@ class SQLQueryBuilder:
         return names_time, f"{seconds_utc} || {self._sqlite_fraction(wall_clock_text)}"
 
     def _naive_time_reading(self, text: str) -> tuple[str, str]:
-        """:meth:`_time_reading` for a string with no zone."""
+        """:meth:`time_reading` for a string with no zone."""
         if self.dialect == "postgres":
             return f"{text} ~ '{NAIVE_TIMESTAMP_SHAPE}'", f"({text})::timestamp"
         if self.dialect == "duckdb":
@@ -1635,13 +1654,13 @@ class SQLQueryBuilder:
         """
         return f"CASE WHEN {text} IS NOT NULL THEN {test} END"
 
-    def _bind_bound(self, kind: str | None, bound: Any) -> Any:
+    def bind_bound(self, kind: str | None, bound: Any) -> Any:
         """A bound as it is passed to be compared with a value of its kind.
 
         - A plain ``date`` is its midnight, as ``Filter.matches`` reads it.
           SQLite compares a time as text --- fixed width, ``T``-separated,
           to the microsecond, so text order is time order, as
-          :meth:`_time_reading` renders the value --- rather than handed
+          :meth:`time_reading` renders the value --- rather than handed
           to the driver's default datetime adapter, which writes a space for
           the ``T``. An aware bound is written in UTC there
           (:func:`_utc_text`), as a zoned value is read.
@@ -1668,7 +1687,7 @@ class SQLQueryBuilder:
                 return float(bound)
         return bound
 
-    def _build_typed_clause(
+    def typed_clause(
         self,
         op: Operator,
         value: Any,
@@ -1680,6 +1699,11 @@ class SQLQueryBuilder:
         cast_for: Callable[[str | None, Sequence[Any]], str | None] | None = None,
     ) -> tuple[str, list[Any]]:
         """A comparison that matches only values of its bound's kind.
+
+        The clause a layout renders a filter's typed operator with
+        (:attr:`TYPED_OPERATORS`): the layout says what a value is under each
+        reading of a bound (``expr_for``), and this renders the rest as
+        ``Filter.matches`` answers it.
 
         ``Filter.matches`` relates a value only to a bound of its own kind
         (see :func:`~dataknobs_data.query.value_kind`), and never matches a missing value. So:
@@ -1697,22 +1721,30 @@ class SQLQueryBuilder:
         - A ``BETWEEN`` compares the values both bounds relate to, each bound
           under its own reading of them, so bounds of different kinds match
           nothing; and so does a ``None`` or NaN bound, which equals and orders
-          against nothing (kind ``"never"``; ``expr_for`` answers ``None`` for it).
+          against nothing (reading :data:`~.sql_types.NEVER`; ``expr_for``
+          answers ``None`` for it).
         - A negated operator (``NEQ``, ``NOT_IN``, ``NOT_BETWEEN``) is every
           ``present`` value its positive form does not match, so a value of
           another kind matches it.
 
         Args:
-            op: The filter's operator, one of :attr:`_TYPED_OPERATORS`.
+            op: The filter's operator, one of :attr:`TYPED_OPERATORS`.
             value: The filter's value.
             param_start: Starting parameter number for placeholders.
-            expr_for: For a bound's reading (:func:`_readings`; ``None`` for a
-                bound with no kind), the predicate a value must meet to be
-                read so (``None`` when every value is) and the expression
+            expr_for: For a bound's reading, the predicate a value must meet
+                to be read so (``None`` when every value is) and the expression
                 compared; or ``None`` when no such value can be stored there.
+                The predicate is ``AND``-ed in front of the comparison, so it
+                must be false, not ``NULL``, for a value it excludes. A reading
+                is :func:`~dataknobs_data.query.value_kind`'s name for the
+                bound (``"string"``, ``"number"``, ``"boolean"``, or
+                :data:`~.sql_types.NEVER`), one of
+                :data:`~.sql_types.TIME_READINGS` for a time, or ``None`` for a
+                bound with no kind.
             present: A predicate that the field holds a value.
-            bind: How a bound is passed as a parameter for a reading, when not
-                as given.
+            bind: How a bound is passed as a parameter for a reading;
+                :meth:`bind_bound` when omitted. A layout that sends a bound in
+                its column's own type wraps :meth:`bind_bound`.
             cast_for: For a reading and the bounds it binds (as bound), the SQL
                 type their placeholders are cast to, or ``None`` to leave them
                 untyped. For a column whose own type a driver would otherwise
@@ -1727,7 +1759,7 @@ class SQLQueryBuilder:
             return None if cast_for is None else cast_for(reading, bound_values)
 
         def bound_as_bound(kind: str | None, bound: Any) -> Any:
-            return bound if bind is None else bind(kind, bound)
+            return (self.bind_bound if bind is None else bind)(kind, bound)
 
         def guarded(kind_test: str | None, clause: str) -> str:
             return clause if kind_test is None else f"({kind_test} AND {clause})"
@@ -1743,7 +1775,7 @@ class SQLQueryBuilder:
                 target = expr_for(reading)
                 if target is not None:
                     bound_members = [bound_as_bound(reading, member) for member in members]
-                    part, part_params = self._build_membership_clause(
+                    part, part_params = self.membership_clause(
                         target[1],
                         Operator.IN,
                         bound_members,
@@ -1756,14 +1788,14 @@ class SQLQueryBuilder:
             bounds = value if positive == Operator.BETWEEN else [value]
             readings = [_readings(bound) for bound in bounds]
             for population in readings[0]:
-                per_bound = [r.get(population, "never") for r in readings]
+                per_bound = [r.get(population, _NEVER) for r in readings]
                 targets = [t for t in map(expr_for, per_bound) if t is not None]
                 if len(targets) < len(per_bound):
                     continue  # a bound relates to none of these values
                 # Strings order by code point, as ``Filter.matches`` compares str.
-                ordered = positive in self._ORDERED_OPERATORS
+                ordered = positive in self.ORDERED_OPERATORS
                 exprs = [
-                    self._code_point_order(expr) if r == "string" and ordered else expr
+                    self.code_point_order(expr) if r == "string" and ordered else expr
                     for r, (_, expr) in zip(per_bound, targets, strict=True)
                 ]
                 bound_values = [
@@ -1771,7 +1803,7 @@ class SQLQueryBuilder:
                 ]
                 start = param_start + len(params)
                 if positive != Operator.BETWEEN:
-                    part, part_params = self._build_operator_clause(
+                    part, part_params = self.operator_clause(
                         exprs[0],
                         positive,
                         bound_values[0],
@@ -1779,7 +1811,7 @@ class SQLQueryBuilder:
                         placeholder_type=cast(per_bound[0], bound_values),
                     )
                 elif per_bound[0] == per_bound[1]:
-                    part, part_params = self._build_operator_clause(
+                    part, part_params = self.operator_clause(
                         exprs[0],
                         positive,
                         bound_values,
@@ -1789,14 +1821,14 @@ class SQLQueryBuilder:
                 else:
                     # A date and an aware bound read a zoned value two ways,
                     # each bound one parameter.
-                    low, low_params = self._build_operator_clause(
+                    low, low_params = self.operator_clause(
                         exprs[0],
                         Operator.GTE,
                         bound_values[0],
                         start,
                         placeholder_type=cast(per_bound[0], bound_values[:1]),
                     )
-                    high, high_params = self._build_operator_clause(
+                    high, high_params = self.operator_clause(
                         exprs[1],
                         Operator.LTE,
                         bound_values[1],
@@ -1816,7 +1848,7 @@ class SQLQueryBuilder:
             return matched, params
         return f"({present} AND NOT {matched})", params
 
-    def _build_operator_clause(
+    def operator_clause(
         self,
         field_expr: str,
         op: Operator,
@@ -1844,7 +1876,7 @@ class SQLQueryBuilder:
         """
 
         def placeholder(param_num: int) -> str:
-            rendered = self._get_param_placeholder(param_num)
+            rendered = self.param_placeholder(param_num)
             return (
                 rendered if placeholder_type is None else f"CAST({rendered} AS {placeholder_type})"
             )
@@ -1866,7 +1898,7 @@ class SQLQueryBuilder:
         elif op in (Operator.LIKE, Operator.NOT_LIKE):
             return self._build_like_clause(field_expr, op, value, param_placeholder)
         elif op in (Operator.IN, Operator.NOT_IN):
-            return self._build_membership_clause(
+            return self.membership_clause(
                 field_expr, op, value, param_start, placeholder_type=placeholder_type
             )
         elif op == Operator.BETWEEN:
@@ -1925,7 +1957,7 @@ class SQLQueryBuilder:
             return f"{field_expr} {negate}ILIKE {param_placeholder}", [value]
         return f"{field_expr} {negate}LIKE {param_placeholder}", [value]
 
-    def _build_membership_clause(
+    def membership_clause(
         self,
         field_expr: str,
         op: Operator,
@@ -1964,7 +1996,7 @@ class SQLQueryBuilder:
         - Any other dialect --- one placeholder per member.
 
         ``placeholder_type`` casts the members as
-        :meth:`_build_operator_clause` casts a bound: the Postgres array as an
+        :meth:`operator_clause` casts a bound: the Postgres array as an
         array of it, and each placeholder of the other dialects. SQLite's
         JSON array is not cast; SQLite compares a member as it is.
         """
@@ -1977,7 +2009,7 @@ class SQLQueryBuilder:
             if op == Operator.IN:
                 return "FALSE", []
             return f"{field_expr} IS NOT NULL", []
-        placeholder = self._get_param_placeholder(param_start)
+        placeholder = self.param_placeholder(param_start)
         if self.dialect == "postgres":
             if placeholder_type is not None:
                 placeholder = f"CAST({placeholder} AS {placeholder_type}[])"
@@ -1992,9 +2024,9 @@ class SQLQueryBuilder:
             )
         placeholders = ", ".join(
             (
-                self._get_param_placeholder(i)
+                self.param_placeholder(i)
                 if placeholder_type is None
-                else f"CAST({self._get_param_placeholder(i)} AS {placeholder_type})"
+                else f"CAST({self.param_placeholder(i)} AS {placeholder_type})"
             )
             for i in range(param_start, param_start + len(members))
         )
@@ -2027,7 +2059,7 @@ class SQLQueryBuilder:
           row, diverging from ``str.startswith``.
         """
         if self.dialect in ("postgres", "duckdb"):
-            placeholder = self._get_param_placeholder(param_start)
+            placeholder = self.param_placeholder(param_start)
             escaped = escape_like_prefix(str(value)) + "%"
             return f"{field_expr} LIKE {placeholder} ESCAPE '\\'", [escaped]
 
@@ -2044,10 +2076,10 @@ class SQLQueryBuilder:
             # ``>= prefix`` matches exactly the strings at-or-above it (which are
             # precisely those starting with this all-maximal prefix), unlike a
             # bare ``IS NOT NULL`` that would return every row.
-            placeholder = self._get_param_placeholder(param_start)
+            placeholder = self.param_placeholder(param_start)
             return f"{field_expr} >= {placeholder}", [prefix]
-        placeholder1 = self._get_param_placeholder(param_start)
-        placeholder2 = self._get_param_placeholder(param_start + 1)
+        placeholder1 = self.param_placeholder(param_start)
+        placeholder2 = self.param_placeholder(param_start + 1)
         return (
             f"({field_expr} >= {placeholder1} AND {field_expr} < {placeholder2})",
             [prefix, upper],
@@ -2102,56 +2134,54 @@ class SQLQueryBuilder:
         # time bound reads it as the time it names (if it names one of the
         # bound's kind), and a bound of any other kind never matches it.
         if is_storage_key_field(field):
-            if op in self._TYPED_OPERATORS:
+            if op in self.TYPED_OPERATORS:
 
                 def storage_key_for(kind: str | None) -> tuple[str | None, str] | None:
                     if kind is None or kind == "string":
                         return None, "id"
                     if kind in _TIME_READINGS and self.dialect in _JSON_TYPE_NAMES:
-                        names_time, time_value = self._time_reading("id", kind)
+                        names_time, time_value = self.time_reading("id", kind)
                         return names_time, f"CASE WHEN {names_time} THEN {time_value} END"
                     return None
 
-                return self._build_typed_clause(
+                return self.typed_clause(
                     op,
                     value,
                     param_start,
                     storage_key_for,
                     "id IS NOT NULL",
-                    bind=self._bind_bound,
                 )
-            return self._build_operator_clause("id", op, value, param_start)
+            return self.operator_clause("id", op, value, param_start)
 
         # Other fields target the data JSONB column, or the metadata column
         # when prefixed ``metadata.`` (dot-notation nesting).
         column, nested_path = resolve_json_column_and_path(field)
         text_expr = self._build_json_field_expr(nested_path, column=column)
 
-        if op in self._TYPED_OPERATORS and self.dialect in _JSON_TYPE_NAMES:
+        if op in self.TYPED_OPERATORS and self.dialect in _JSON_TYPE_NAMES:
 
             def json_value_for(kind: str | None) -> tuple[str | None, str] | None:
                 if kind is None:
                     return None, text_expr
-                if kind == "never":
+                if kind == _NEVER:
                     return None
                 return self._typed_json_value(nested_path, column, kind)
 
-            return self._build_typed_clause(
+            return self.typed_clause(
                 op,
                 value,
                 param_start,
                 json_value_for,
                 f"{text_expr} IS NOT NULL",
-                bind=self._bind_bound,
             )
 
-        clause, params = self._build_operator_clause(text_expr, op, value, param_start)
+        clause, params = self.operator_clause(text_expr, op, value, param_start)
 
         # String-only operators match only string values (in-memory contract).
         # On a JSON field, AND in a JSON-string-type guard so a non-string value
         # the text projection would coerce-and-match is excluded — keeping the
         # SQL push-down in agreement with Filter.matches across every backend.
-        if op in self._STRING_ONLY_OPERATORS:
+        if op in self.STRING_ONLY_OPERATORS:
             guard = self._json_string_guard(nested_path, column)
             if guard:
                 clause = f"({guard} AND {clause})"

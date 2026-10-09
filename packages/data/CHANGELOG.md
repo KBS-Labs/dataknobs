@@ -1025,6 +1025,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ZONED_INSTANT` are exported
   from `dataknobs_data`. The schema reader refuses a `sql_type` that is not a
   non-empty string; the native layout refuses one that is not registered.
+- **A table neither layout reads takes a layout of its own.** `ColumnLayout`
+  is an extension point: a subclass renders its filters, sorts and key with
+  `SQLQueryBuilder`'s public clause primitives, which answer as
+  `Filter.matches` does --- `typed_clause` (the comparison, membership, range
+  and negation, from what the layout's `expr_for` says a value is under each
+  reading of a bound), `operator_clause` and `membership_clause` (each taking
+  a `placeholder_type`), `bind_bound`, `time_reading`, `code_point_order` and
+  `param_placeholder`, with the operator sets `TYPED_OPERATORS`,
+  `ORDERED_OPERATORS` and `STRING_ONLY_OPERATORS`. The readings `expr_for` is
+  asked about are `"string"`, `"number"`, `"boolean"`, `NEVER` and
+  `TIME_READINGS` (`dataknobs_data.backends.sql_types`). `NativeColumnLayout`
+  is built on these alone. A layout reads only: `writable` defaults to
+  `False`, and a builder refuses a layout other than `JsonbLayout` that sets
+  it, since the write statements name the JSON layout's columns.
 - **`read_layout_config`**, the one reader of a backend's `layout:`
   (`jsonb` or `native`), `id_column:` and `scope:` keys. `id_column:`,
   `scope:` and a declared `sql_type` are refused by name under the JSON

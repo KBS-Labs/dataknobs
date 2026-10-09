@@ -57,6 +57,11 @@ ZONED_WALL_CLOCK = "zoned wall-clock timestamp"
 #: Every reading of a time.
 TIME_READINGS = frozenset({NAIVE_TIME, ZONED_INSTANT, ZONED_WALL_CLOCK})
 
+#: The reading of a bound no value relates to: ``None`` or NaN, which equal
+#: nothing and order against nothing (:func:`~dataknobs_data.query.value_kind`'s
+#: name for them). A layout's ``expr_for`` answers ``None`` for it.
+NEVER: Final = "never"
+
 #: A kind of value a :class:`SqlType` may declare it holds.
 SqlKind = Literal["string", "number", "boolean", "timestamp", "zoned timestamp"]
 

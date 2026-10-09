@@ -16,6 +16,8 @@ and whether the table can be written.
   ANDs a scope into every read, refuses every write, and answers every filter
   as :meth:`~dataknobs_data.query.Filter.matches` answers it over the record
   it returns.
+- A table neither reads takes a layout of its own, a subclass of
+  :class:`ColumnLayout` (see there).
 
 :func:`read_layout_config` reads the three configuration keys a backend
 takes for this: ``layout:``, ``id_column:`` and ``scope:``.
@@ -46,6 +48,7 @@ from ..records import Record
 from ..schema import SQL_TYPE_KEY
 from .sql_types import (
     NAIVE_TIME,
+    NEVER,
     TIME_READINGS,
     ZONED_INSTANT,
     ZONED_WALL_CLOCK,
@@ -81,14 +84,33 @@ _TEXT_TYPE = MappingProxyType({"postgres": "TEXT", "sqlite": "TEXT", "duckdb": "
 class ColumnLayout(ABC):
     """How one table's rows are laid out: what a field is, and what a row becomes.
 
-    Not yet an extension point for a consumer's own layout: the two here render
-    through the builder's own clause primitives (``_build_typed_clause`` and
-    its neighbours), whose shape is not settled. A column type a consumer needs
-    is registered in :data:`~dataknobs_data.backends.sql_types.sql_types`.
+    A table neither layout here reads gets a layout of its own: subclass this
+    and render each method with the builder's public clause primitives, which
+    answer a filter as :meth:`~dataknobs_data.query.Filter.matches` answers it.
+
+    - :meth:`~.sql_base.SQLQueryBuilder.typed_clause` renders the operators in
+      ``TYPED_OPERATORS``: the layout says what a value is under each reading
+      of a bound, and it renders the comparison, membership, range and
+      negation. :meth:`~.sql_base.SQLQueryBuilder.bind_bound` is how a bound is
+      sent; :meth:`~.sql_base.SQLQueryBuilder.time_reading` reads text as the
+      time it names.
+    - :meth:`~.sql_base.SQLQueryBuilder.operator_clause` renders the operators
+      in ``STRING_ONLY_OPERATORS`` over a text expression.
+    - :meth:`~.sql_base.SQLQueryBuilder.code_point_order` orders text as Python
+      does, for a sort; :meth:`~.sql_base.SQLQueryBuilder.param_placeholder`
+      is a parameter in the builder's style.
+
+    A layout reads only: the builder's write statements are rendered for the
+    JSON layout's columns, so it refuses any other layout that sets
+    :attr:`writable`. :class:`NativeColumnLayout` is built on these alone, and
+    a column type it does not know is registered in
+    :data:`~dataknobs_data.backends.sql_types.sql_types` rather than needing a
+    layout.
     """
 
-    #: Whether the builder may build a statement that writes the table.
-    writable: ClassVar[bool]
+    #: Whether the builder may build a statement that writes the table. Only a
+    #: :class:`JsonbLayout` may: the builder refuses any other layout claiming it.
+    writable: ClassVar[bool] = False
 
     @property
     def scope(self) -> tuple[Filter, ...]:
@@ -146,7 +168,7 @@ class JsonbLayout(ColumnLayout):
     def key_clause(
         self, builder: SQLQueryBuilder, record_id: str, param_start: int
     ) -> tuple[str, list[Any]]:
-        return f"id = {builder._get_param_placeholder(param_start)}", [record_id]
+        return f"id = {builder.param_placeholder(param_start)}", [record_id]
 
     def record_from_row(self, row: Mapping[str, Any]) -> Record:
         from .sql_base import SQLRecordSerializer
@@ -300,7 +322,7 @@ class NativeColumnLayout(ColumnLayout):
     @staticmethod
     def _relates(sql_type: SqlType, reading: str | None) -> bool:
         """Whether a value of the column can be compared with a bound read so."""
-        if reading is None or reading == "never":
+        if reading is None or reading == NEVER:
             return False
         if reading in TIME_READINGS:
             if sql_type.stores_text:
@@ -378,7 +400,7 @@ class NativeColumnLayout(ColumnLayout):
         if sql_type.stores_text or builder.dialect == "sqlite":
             # Text, or SQLite, which has no time type and stores the text: read
             # it as the time it names, as a JSON string is read.
-            names_time, time_value = builder._time_reading(column.quoted, reading)
+            names_time, time_value = builder.time_reading(column.quoted, reading)
             return names_time, f"CASE WHEN {names_time} THEN {time_value} END"
         return None, column.quoted
 
@@ -401,11 +423,9 @@ class NativeColumnLayout(ColumnLayout):
                 # ``Filter.matches`` answers False for a value that is not a
                 # string, NOT_LIKE included.
                 return "FALSE", []
-            return builder._build_operator_clause(
-                self._text(builder, column), op, spec.value, param_start
-            )
+            return builder.operator_clause(self._text(builder, column), op, spec.value, param_start)
 
-        if op not in builder._TYPED_OPERATORS:
+        if op not in builder.TYPED_OPERATORS:
             raise ValueError(f"Unsupported operator: {op}")
 
         bounds = [sql_type.bind(b) for b in self._bounds(op, spec.value)]
@@ -433,18 +453,18 @@ class NativeColumnLayout(ColumnLayout):
                 # The record holds the instant in UTC, so a date is its
                 # midnight there.
                 start = bound if isinstance(bound, datetime) else datetime.combine(bound, time.min)
-                return builder._bind_bound(ZONED_INSTANT, start.replace(tzinfo=UTC))
+                return builder.bind_bound(ZONED_INSTANT, start.replace(tzinfo=UTC))
             if own_type and reading in sql_type.kinds:
                 # Compared in the column's own type, as a value of it.
-                return builder._bind_bound(reading, sql_type.own(bound))
-            return builder._bind_bound(reading, bound)
+                return builder.bind_bound(reading, sql_type.own(bound))
+            return builder.bind_bound(reading, bound)
 
         def cast_for(reading: str | None, bound_values: Sequence[Any]) -> str | None:
             if sql_type.placeholder is None or not own_type or reading in TIME_READINGS:
                 return None
             return sql_type.placeholder(builder.dialect, bound_values)
 
-        return builder._build_typed_clause(
+        return builder.typed_clause(
             op,
             value,
             param_start,
@@ -464,7 +484,7 @@ class NativeColumnLayout(ColumnLayout):
                 context={"table": builder.table_name, "column": column.name},
             )
         if sql_type.stores_text or sql_type.reads_as_text:
-            return [builder._code_point_order(self._text(builder, column))]
+            return [builder.code_point_order(self._text(builder, column))]
         times = sql_type.kinds & {NAIVE_TIME, ZONED_INSTANT}
         if times:
             # Ordered by the time a filter reads it as: on SQLite, which holds

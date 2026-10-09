@@ -1231,7 +1231,10 @@ record = builder.record_from_row(row)
 
 | Name | Import | Role |
 |---|---|---|
-| `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out; not yet a base for a consumer's own layout (register an `SqlType` for a column type) |
+| `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out; subclass it for a table neither layout reads (read-only: only `JsonbLayout` may set `writable`) |
+| `SQLQueryBuilder.typed_clause`, `operator_clause`, `membership_clause`, `bind_bound`, `time_reading`, `code_point_order`, `param_placeholder` | `dataknobs_data.backends.sql_base` | the clause primitives a layout renders with |
+| `SQLQueryBuilder.TYPED_OPERATORS`, `ORDERED_OPERATORS`, `STRING_ONLY_OPERATORS` | the same | which primitive renders which operator |
+| `TIME_READINGS`, `ZONED_WALL_CLOCK`, `NEVER` | `dataknobs_data.backends.sql_types` | the readings a layout's `expr_for` is asked about, beside `"string"`, `"number"` and `"boolean"` |
 | `JsonbLayout`, `NativeColumnLayout` | the same | the two layouts |
 | `read_layout_config(config, schema, *, origin=None, context=None)` | the same | reads `layout:`, `id_column:` and `scope:` |
 | `SqlType`, `sql_types` | `dataknobs_data` | what a declared SQL type holds; the registry of them (`uuid`, `timestamptz`) |

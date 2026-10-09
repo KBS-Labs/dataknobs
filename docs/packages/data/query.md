@@ -236,6 +236,77 @@ backends adopt it in later releases. What the builder guarantees:
     table to check it. An integer column declared `string` matches no number
     you filter it with.
 
+#### A Layout of Your Own
+
+A table neither layout reads takes its own: subclass `ColumnLayout` and
+render each method with the builder's public clause primitives, which answer
+a filter as `Filter.matches` does. Here, a legacy table that holds every value
+as text:
+
+```python
+from dataknobs_data import Filter, Operator, Query, Record
+from dataknobs_data.backends.column_layout import ColumnLayout
+from dataknobs_data.backends.sql_base import SQLQueryBuilder
+from dataknobs_data.backends.sql_types import TIME_READINGS
+
+
+class TextTableLayout(ColumnLayout):
+    def __init__(self, columns, key):
+        self.columns, self.key = tuple(columns), key
+
+    def _column(self, field):
+        return f'"{self.key if field == "id" else field}"'
+
+    def filter_clause(self, builder, spec, param_start):
+        column = self._column(spec.field)
+        if spec.operator == Operator.EXISTS:
+            return f"{column} IS NOT NULL", []
+        if spec.operator == Operator.NOT_EXISTS:
+            return f"{column} IS NULL", []
+        if spec.operator in builder.STRING_ONLY_OPERATORS:
+            return builder.operator_clause(column, spec.operator, spec.value, param_start)
+
+        def expr_for(reading):
+            # Each value is a string; a time bound reads the text as a time.
+            if reading == "string":
+                return None, column
+            if reading in TIME_READINGS:
+                names_time, value = builder.time_reading(column, reading)
+                return names_time, f"CASE WHEN {names_time} THEN {value} END"
+            return None  # a number or a boolean relates to no value here
+
+        return builder.typed_clause(
+            spec.operator, spec.value, param_start, expr_for, f"{column} IS NOT NULL"
+        )
+
+    def sort_keys(self, builder, field):
+        return [builder.code_point_order(self._column(field))]
+
+    def select_list(self, builder):
+        return ", ".join(f'"{c}"' for c in self.columns)
+
+    def key_clause(self, builder, record_id, param_start):
+        return f"{self._column('id')} = {builder.param_placeholder(param_start)}", [record_id]
+
+    def record_from_row(self, row):
+        return Record({c: row[c] for c in self.columns}, storage_id=row[self.key])
+
+
+builder = SQLQueryBuilder("legacy", dialect="postgres",
+                          layout=TextTableLayout(["k", "name"], key="k"))
+sql, params = builder.build_search_query(Query(filters=[Filter("name", Operator.IN, ["a", 5])]))
+# SELECT "k", "name" FROM "legacy" WHERE "name" = ANY($1)  -- params [['a']]
+```
+
+`typed_clause` renders the comparison, membership, range and negation from
+what `expr_for` says a value is under each reading of a bound: `"string"`,
+`"number"`, `"boolean"`, `NEVER` (a `None` or NaN bound), or one of
+`TIME_READINGS`. Its kind test must be false, not `NULL`, for a value it
+excludes, so `NOT` over the clause still matches that value. A layout reads
+only: the builder's write statements are rendered for the JSON layout's
+columns, so a layout other than `JsonbLayout` that sets `writable` is refused
+when a builder is given it.
+
 ### Range Queries
 
 Use BETWEEN for efficient range queries:
