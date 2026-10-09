@@ -270,9 +270,9 @@ class DataclassSweep:
         if base in _SEQUENCES:
             return self._sequence_witness(args, depth)
         if base in _SETS:
-            return set()
+            return set(self._set_members(args, depth))
         if base is frozenset:
-            return frozenset()
+            return frozenset(self._set_members(args, depth))
         if base is tuple:
             return self._tuple_witness(args, depth)
         if not isinstance(base, type):
@@ -326,6 +326,23 @@ class DataclassSweep:
                 return [self._witness(args[0], depth + 1)]
             except UnbuildableError:
                 pass
+        return []
+
+    def _set_members(self, args: tuple[object, ...], depth: int) -> list[object]:
+        """One member where the element type allows a hashable one, none otherwise.
+
+        Non-empty for the reason a sequence witness is: a type may refuse an
+        empty set of values from its vocabulary, and the sweep would then
+        report it unconstructible rather than measure it.
+        """
+        if args:
+            try:
+                member = self._witness(args[0], depth + 1)
+                hash(member)
+            except (UnbuildableError, TypeError):
+                pass
+            else:
+                return [member]
         return []
 
     def _tuple_witness(self, args: tuple[object, ...], depth: int) -> tuple[object, ...]:

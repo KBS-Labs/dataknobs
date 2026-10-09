@@ -157,7 +157,7 @@ def test_an_unregistered_sql_type_is_refused_listing_the_registered() -> None:
 
 def test_a_registered_sql_type_is_honoured() -> None:
     name = "test_citext_for_native_layout"
-    sql_types.register(name, SqlType(kinds=frozenset({"string"}), stores_text=True))
+    sql_types.register(name, SqlType(kinds=frozenset({"string"}), text="stored"))
     try:
         schema = DatabaseSchema(
             fields={
@@ -177,8 +177,8 @@ def test_a_registered_sql_type_is_honoured() -> None:
 def test_an_sql_type_declares_only_kinds_it_can_hold() -> None:
     with pytest.raises(ValueError, match="holds one or more of"):
         SqlType(kinds=frozenset({"vector"}))
-    with pytest.raises(ValueError, match="stores text or reads as text"):
-        SqlType(kinds=frozenset({"string"}), stores_text=True, reads_as_text=True)
+    with pytest.raises(ValueError, match="text is one of"):
+        SqlType(kinds=frozenset({"string"}), text="both")  # type: ignore[arg-type]
 
 
 def test_a_python_built_schema_passing_a_member_works() -> None:

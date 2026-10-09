@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DataclassSweep` builds a set field with one member.** Its witness for a
+  `set` or `frozenset` field was always empty, so a type that refuses an empty
+  set of values from its vocabulary could not be built and was reported
+  unconstructible rather than measured. The member is the element type's own
+  witness when that is hashable (a `Literal` gives its first value), and the
+  set is empty otherwise, as before.
+
 - **`AliasSource` says where each item's text came from.** Its
   `source_field` is the inner source's own answer, spelled as the inner
   spells it, or `None` over an inner source that has none. It used to have

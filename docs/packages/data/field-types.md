@@ -260,7 +260,7 @@ A registration does not change the built-in types: a `sql_type` naming
 from dataknobs_data import SqlType, sql_types
 
 # A case-insensitive text column, compared as text.
-sql_types.register("citext", SqlType(kinds=frozenset({"string"}), stores_text=True))
+sql_types.register("citext", SqlType(kinds=frozenset({"string"}), text="stored"))
 ```
 
 An `SqlType` says:
@@ -270,9 +270,8 @@ An `SqlType` says:
 | `kinds` | which values the column holds: `"string"`, `"number"`, `"boolean"`, `NAIVE_TIME`, `ZONED_INSTANT`. A bound of any other kind matches nothing |
 | `bind` | a bound as a record would hold it, or `None` when no value can equal it |
 | `read` | a value the driver returned, as the record holds it |
-| `stores_text` | the column's SQL value is text: it compares with strings, a time bound reads it as a time, and the text operators apply |
-| `reads_as_text` | the column is not text, but the record holds its text: strings and the text operators compare `CAST(column AS TEXT)` |
-| `holds` | for a column that reads as text, whether an equality bound can be compared in the column's own type |
+| `text` | `"stored"`: the column's SQL value is text, so it compares with strings, a time bound reads it as a time, and the text operators apply. `"cast"`: the column is not text, but the record holds its text, so strings and the text operators compare `CAST(column AS TEXT)`. `None` (the default): neither |
+| `holds` | for a `text="cast"` column, whether an equality bound can be compared in the column's own type |
 | `placeholder` | given the dialect and the bounds, the SQL type a bound is sent as |
 
 ## Best Practices

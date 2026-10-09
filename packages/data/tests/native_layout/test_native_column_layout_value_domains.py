@@ -327,7 +327,7 @@ def test_sql_types_are_an_open_registry(engine: Engine) -> None:
         "lowercase_text",
         SqlType(
             kinds=frozenset({"string"}),
-            stores_text=True,
+            text="stored",
             bind=lambda v: v if not isinstance(v, str) or v == v.lower() else None,
         ),
     )

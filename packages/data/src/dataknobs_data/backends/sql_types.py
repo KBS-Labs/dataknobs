@@ -18,7 +18,7 @@ Two ship: ``uuid`` and ``timestamptz``. A consumer registers its own::
 
     from dataknobs_data import SqlType, sql_types
 
-    sql_types.register("citext", SqlType(kinds=frozenset({"string"}), stores_text=True))
+    sql_types.register("citext", SqlType(kinds=frozenset({"string"}), text="stored"))
 
 The kinds are :func:`~dataknobs_data.query.value_kind`'s names, ``"string"``,
 ``"number"`` and ``"boolean"``, plus the two ways a time is held,
@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from numbers import Integral
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Final, Literal, get_args
 
 from dataknobs_common.registry import Registry
 
@@ -43,10 +43,10 @@ from ..query import read_timestamp
 
 #: A time held with no zone, compared by its own clock. The name is
 #: :func:`~dataknobs_data.query.value_kind`'s for a time, which a naive one keeps.
-NAIVE_TIME = "timestamp"
+NAIVE_TIME: Final = "timestamp"
 
 #: A time held with a zone, compared by the instant it names.
-ZONED_INSTANT = "zoned timestamp"
+ZONED_INSTANT: Final = "zoned timestamp"
 
 #: A zoned time compared by its own wall clock, which is how a plain ``date``
 #: bound orders one. Never declared: a column holding :data:`ZONED_INSTANT`
@@ -56,8 +56,14 @@ ZONED_WALL_CLOCK = "zoned wall-clock timestamp"
 #: Every reading of a time.
 TIME_READINGS = frozenset({NAIVE_TIME, ZONED_INSTANT, ZONED_WALL_CLOCK})
 
+#: A kind of value a :class:`SqlType` may declare it holds.
+SqlKind = Literal["string", "number", "boolean", "timestamp", "zoned timestamp"]
+
+#: How a column relates to text: its value is text, or it is compared as its text.
+SqlText = Literal["stored", "cast"]
+
 #: The kinds a :class:`SqlType` may declare.
-DECLARABLE_KINDS = frozenset({"string", "number", "boolean", NAIVE_TIME, ZONED_INSTANT})
+DECLARABLE_KINDS: frozenset[str] = frozenset(get_args(SqlKind))
 
 _INT64 = range(-(2**63), 2**63)
 
@@ -80,12 +86,12 @@ class SqlType:
             and the statement compare like with like.
         read: A value the driver returned for the column, as the record holds
             it. Every engine then gives the record one Python type per column.
-        stores_text: The column's SQL value is text, so it is compared as it
-            is with a string bound, read as a time by a time bound, and the
-            string-only operators (``LIKE``, ``REGEX``, ``STARTS_WITH``) apply.
-        reads_as_text: The column is not text, but the record holds its text,
-            so a string bound and the string-only operators compare
-            ``CAST(column AS TEXT)``.
+        text: How the column relates to text. ``"stored"``: its SQL value is
+            text, so it is compared as it is with a string bound, read as a time
+            by a time bound, and the string-only operators (``LIKE``,
+            ``REGEX``, ``STARTS_WITH``) apply. ``"cast"``: it is not text, but
+            the record holds its text, so a string bound and the string-only
+            operators compare ``CAST(column AS TEXT)``. ``None``: neither.
         holds: For a column that reads as text, whether an equality bound (after
             ``bind``) can be compared with the column in its own type, which
             keeps an index on it. ``None``: always compared as text.
@@ -95,11 +101,10 @@ class SqlType:
             the column can otherwise convert the bound, and answer wrongly.
     """
 
-    kinds: frozenset[str]
+    kinds: frozenset[SqlKind]
     bind: Callable[[Any], Any] = _same
     read: Callable[[Any], Any] = _same
-    stores_text: bool = False
-    reads_as_text: bool = False
+    text: SqlText | None = None
     holds: Callable[[Any], bool] | None = None
     placeholder: Callable[[str, Sequence[Any]], str | None] | None = None
 
@@ -110,8 +115,20 @@ class SqlType:
                 f"An SqlType holds one or more of {sorted(DECLARABLE_KINDS)}; got "
                 f"{sorted(self.kinds)!r}"
             )
-        if self.stores_text and self.reads_as_text:
-            raise ValueError("An SqlType stores text or reads as text, not both")
+        if self.text is not None and self.text not in get_args(SqlText):
+            raise ValueError(
+                f"An SqlType's text is one of {list(get_args(SqlText))} or None; got {self.text!r}"
+            )
+
+    @property
+    def stores_text(self) -> bool:
+        """Whether the column's SQL value is text."""
+        return self.text == "stored"
+
+    @property
+    def reads_as_text(self) -> bool:
+        """Whether the column is not text but the record holds its text."""
+        return self.text == "cast"
 
 
 #: The SQL types a schema can name through ``metadata["sql_type"]``.
@@ -201,7 +218,7 @@ sql_types.register(
         kinds=frozenset({"string"}),
         bind=_canonical_uuid,
         read=_canonical_uuid,
-        reads_as_text=True,
+        text="cast",
         holds=_is_canonical_uuid,
         placeholder=_uuid_placeholder,
     ),
@@ -216,7 +233,7 @@ sql_types.register(
     ),
 )
 
-_TEXT = SqlType(kinds=frozenset({"string"}), stores_text=True)
+_TEXT = SqlType(kinds=frozenset({"string"}), text="stored")
 _NUMBER = SqlType(kinds=frozenset({"number"}), placeholder=_number_placeholder)
 
 #: The built-in answer for each ``FieldType`` a column can be compared as.
