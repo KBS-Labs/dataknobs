@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-10-06T12:58:44Z",
+  "timestamp": "2026-10-09T21:49:30Z",
   "overall_status": "PASS",
-  "run_mode": "all",
+  "run_mode": "pr",
   "environment": "host",
-  "packages": "all",
+  "packages": "bots common config data fsm legacy llm structures utils xization",
   "tested_packages": [
     "bots",
     "common",
@@ -19,9 +19,9 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "95d39bd178e545cdb46f75ac780afee1c4be5aa16d742fe09b5761ac7462366a",
-    "common": "2592010d3ef994cd98ac120e79ebd66cc94eea27abc3c21e6cf2cff56d90dd7c",
+    "common": "3433aaf8d1bf297d01cfe6a2dde200b2691f58724c59863204187cca1a83864a",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "515849da59ed4fbad8189abce118d87065899b45e66cd05abb6f991b95df0a19",
+    "data": "1b80c16ef6f124c017eb1468d4168cd3c0e773a04c0a5243268963f4d32a1945",
     "fsm": "94bd9fe316b45dc5138a261c6210a9c1f6b343449ddd55d96b2111adf43c8307",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "1fac8c7048b7d7cc4d4d7b981b80059580ff16b821d666433e6bd85dbc5a6593",
@@ -35,27 +35,27 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "d1d35c329329fcd7b0b8ef6277e1509015276a8c4624796d7fbc7941d54366aa",
-    "docs": "086158fa400d7c15934692093370b16855231d4bf8090ce0ad0df8cd31d39522"
+    "docs": "245040743779c7bc9b3145e56a0267dc4bc88f5a5fd7dba07ea542a4c32d53ef"
   },
-  "total_seconds": 418,
+  "total_seconds": 401,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 12
+      "duration_seconds": 0
     },
     "validation": {
       "status": "pass",
@@ -89,14 +89,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 217,
-      "workspace_guards_seconds": 96
+      "duration_seconds": 215,
+      "workspace_guards_seconds": 97
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 53
+      "duration_seconds": 50
     }
   }
 }
