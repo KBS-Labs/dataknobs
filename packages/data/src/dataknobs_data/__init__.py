@@ -148,6 +148,8 @@ from .query_logic import (
     QueryBuilder,
 )
 from .records import Record
+from .backends.sql_types import NAIVE_TIME, ZONED_INSTANT, SqlType, sql_types
+from .schema import SQL_TYPE_KEY
 from .allocation import DEFAULT_MAX_ATTEMPTS, allocate, allocate_sync
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .keyed_store import AsyncKeyedRecordStore, SyncKeyedRecordStore
@@ -198,6 +200,12 @@ __all__ = [
     "coerce_operator",
     "coerce_sort_order",
     "is_storage_key_field",
+    # SQL types a native table's column can declare
+    "SQL_TYPE_KEY",
+    "SqlType",
+    "sql_types",
+    "NAIVE_TIME",
+    "ZONED_INSTANT",
     # Allocation
     "DEFAULT_MAX_ATTEMPTS",
     "allocate",

@@ -1206,6 +1206,40 @@ db = factory.create(
 await db.connect()
 ```
 
+### Native Column Layouts
+
+`SQLQueryBuilder` (`dataknobs_data.backends.sql_base`) reads its table through
+a `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout`, the
+default, is the table the SQL backends create. `NativeColumnLayout` reads a
+table with ordinary typed columns: only the declared columns, a scope ANDed
+into every read, every write refused, and every filter answered as
+`Filter.matches` answers it. No backend takes it yet. See
+[the Query System](https://kbs-labs.github.io/dataknobs/packages/data/query/#tables-with-their-own-columns-native-layout).
+
+```python
+from dataknobs_data.backends.column_layout import NativeColumnLayout, read_layout_config
+from dataknobs_data.backends.sql_base import SQLQueryBuilder
+
+layout = read_layout_config(
+    {"layout": "native", "id_column": "node_id",
+     "scope": [{"field": "status", "operator": "=", "value": "live"}]},
+    schema,
+)
+builder = SQLQueryBuilder("nodes", dialect="postgres", layout=layout)
+record = builder.record_from_row(row)
+```
+
+| Name | Import | Role |
+|---|---|---|
+| `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out |
+| `JsonbLayout`, `NativeColumnLayout` | the same | the two layouts |
+| `read_layout_config(config, schema, *, origin=None, context=None)` | the same | reads `layout:`, `id_column:` and `scope:` |
+| `SqlType`, `sql_types` | `dataknobs_data` | what a declared SQL type holds; the registry of them (`uuid`, `timestamptz`) |
+| `SQL_TYPE_KEY` | `dataknobs_data` | `"sql_type"`, the field key naming one |
+| `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
+
+See [Field Types](https://kbs-labs.github.io/dataknobs/packages/data/field-types/#sql-types-for-tables-with-their-own-columns) for registering one.
+
 ### S3 Backend
 
 AWS S3 storage:

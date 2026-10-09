@@ -10,13 +10,16 @@ import re
 import uuid
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from functools import wraps
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from numbers import Integral
 from types import MappingProxyType
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, TypeVar
 
 from dataknobs_utils.sql_utils import quote_ident
+
+from dataknobs_common.exceptions import OperationError
 
 from ..exceptions import DuplicateRecordError, RecordValidationError
 from ..query import (
@@ -31,6 +34,13 @@ from ..query import (
     value_kind,
 )
 from ..records import Record
+from .column_layout import ColumnLayout, JsonbLayout
+from .sql_types import (
+    NAIVE_TIME as _NAIVE_TIME,
+    TIME_READINGS as _TIME_READINGS,
+    ZONED_INSTANT as _ZONED_INSTANT,
+    ZONED_WALL_CLOCK as _ZONED_WALL_CLOCK,
+)
 
 # Field name segments must be valid identifiers to prevent SQL injection.
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -225,14 +235,11 @@ _DUCKDB_CASTS: Mapping[str, str] = MappingProxyType(
 #: The date that opens that shape, as SQLite's ``GLOB`` states it.
 _DATE_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
 
-#: The ways a stored string is read as a time. A naive time is a string with
-#: no zone; a zoned one is read by the instant it names or, against a
-#: ``date``, by its own wall clock. ``"timestamp"`` is :func:`value_kind`'s
-#: name for a time, which a naive time keeps.
-_NAIVE_TIME = "timestamp"
-_ZONED_INSTANT = "zoned timestamp"
-_ZONED_WALL_CLOCK = "zoned wall-clock timestamp"
-_TIME_READINGS = frozenset({_NAIVE_TIME, _ZONED_INSTANT, _ZONED_WALL_CLOCK})
+# The ways a stored string is read as a time (``_NAIVE_TIME``,
+# ``_ZONED_INSTANT``, ``_ZONED_WALL_CLOCK``, imported above from
+# :mod:`.sql_types`, where a native column's type declares its kinds). A naive
+# time is a string with no zone; a zoned one is read by the instant it names
+# or, against a ``date``, by its own wall clock.
 
 _DAY = timedelta(days=1)
 _MICROSECOND = timedelta(microseconds=1)
@@ -500,8 +507,39 @@ class SQLRecordSerializer:
         }
 
 
+_Builds = TypeVar("_Builds", bound=Callable[..., Any])
+
+
+def _writes(method: _Builds) -> _Builds:
+    """Mark a builder method as one that writes, refused under a read-only layout.
+
+    The refusal is in the builder, so a backend that forgets to refuse a write
+    still cannot emit one against a table it does not own.
+    """
+
+    @wraps(method)
+    def refused_unless_writable(self: SQLQueryBuilder, *args: Any, **kwargs: Any) -> Any:
+        if not self.layout.writable:
+            raise OperationError(
+                f"table {self.table_name!r} is read through a read-only layout; "
+                f"{method.__name__} would write it",
+                context={"table": self.table_name, "operation": method.__name__},
+            )
+        return method(self, *args, **kwargs)
+
+    refused_unless_writable.writes = True  # type: ignore[attr-defined]
+    return refused_unless_writable  # type: ignore[return-value]
+
+
 class SQLQueryBuilder:
-    """Builds SQL queries from Query objects."""
+    """Builds SQL queries from Query objects.
+
+    The builder reads its table through a :class:`~.column_layout.ColumnLayout`.
+    The default, :class:`~.column_layout.JsonbLayout`, is the table this package
+    creates; :class:`~.column_layout.NativeColumnLayout` reads a table with
+    ordinary typed columns, ANDs its scope into every read and refuses every
+    write.
+    """
 
     def __init__(
         self,
@@ -509,6 +547,7 @@ class SQLQueryBuilder:
         schema_name: str | None = None,
         dialect: str = "standard",
         param_style: str = "numeric",
+        layout: ColumnLayout | None = None,
     ):
         """Initialize the SQL query builder.
 
@@ -517,12 +556,24 @@ class SQLQueryBuilder:
             schema_name: Optional schema name
             dialect: SQL dialect ('postgres', 'sqlite', 'standard')
             param_style: Parameter style ('numeric' for $1, 'qmark' for ?, 'pyformat' for %(name)s)
+            layout: How the table's rows are laid out; the JSON layout this
+                package creates when omitted.
+
+        Raises:
+            ValidationError: When ``layout`` cannot render for ``dialect``.
         """
         self.table_name = table_name
         self.schema_name = schema_name
         self.dialect = dialect
         self.param_style = param_style
         self.qualified_table = self._get_qualified_table_name()
+        self._layout = layout if layout is not None else JsonbLayout()
+        self._layout.check_dialect(dialect)
+
+    @property
+    def layout(self) -> ColumnLayout:
+        """How the table's rows are laid out."""
+        return self._layout
 
     def _get_qualified_table_name(self) -> str:
         """Get the fully qualified table name."""
@@ -554,6 +605,7 @@ class SQLQueryBuilder:
             else:
                 return "?"
 
+    @_writes
     def build_create_query(
         self, record: Record, record_id: str | None = None
     ) -> tuple[str, list[Any]]:
@@ -597,11 +649,13 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        p1 = self._get_param_placeholder(1)
-        query = f"SELECT * FROM {self.qualified_table} WHERE id = {p1}"
+        where, params = self._keyed_clause(record_id)
+        return (
+            f"SELECT {self.layout.select_list(self)} FROM {self.qualified_table} WHERE {where}",
+            params,
+        )
 
-        return query, [record_id]
-
+    @_writes
     def build_update_query(self, record_id: str, record: Record) -> tuple[str, list[Any]]:
         """Build an UPDATE query for updating a record.
 
@@ -637,6 +691,7 @@ class SQLQueryBuilder:
 
         return query, params
 
+    @_writes
     def build_delete_query(self, record_id: str) -> tuple[str, list[Any]]:
         """Build a DELETE query for deleting a record.
 
@@ -660,10 +715,14 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        p1 = self._get_param_placeholder(1)
-        query = f"SELECT 1 FROM {self.qualified_table} WHERE id = {p1} LIMIT 1"
+        where, params = self._keyed_clause(record_id)
+        return f"SELECT 1 FROM {self.qualified_table} WHERE {where} LIMIT 1", params
 
-        return query, [record_id]
+    def _keyed_clause(self, record_id: str) -> tuple[str, list[Any]]:
+        """The row stored under ``record_id``, within the layout's scope."""
+        scope, params = self._filters_clause([])
+        key, key_params = self.layout.key_clause(self, record_id, 1 + len(params))
+        return (f"{scope} AND {key}" if scope else key), params + key_params
 
     def build_complex_search_query(self, query: ComplexQuery) -> tuple[str, list[Any]]:
         """Build a SELECT query from a ComplexQuery object with boolean logic.
@@ -677,15 +736,22 @@ class SQLQueryBuilder:
         Raises:
             ValueError: If any filter field contains invalid characters.
         """
-        sql_parts = [f"SELECT * FROM {self.qualified_table}"]
-        params = []
+        sql_parts = [f"SELECT {self.layout.select_list(self)} FROM {self.qualified_table}"]
 
-        # Build WHERE clause from complex conditions
+        # The layout's scope goes above the condition, so an OR in it cannot
+        # reach rows outside the scope.
+        scope, params = self._filters_clause([])
         if query.condition:
-            where_clause, where_params = self._build_complex_condition(query.condition, 1)
+            where_clause, where_params = self._build_complex_condition(
+                query.condition, 1 + len(params)
+            )
             if where_clause:
+                if scope:
+                    where_clause = f"{scope} AND ({where_clause})"
                 sql_parts.append(f"WHERE {where_clause}")
                 params.extend(where_params)
+        elif scope:
+            sql_parts.append(f"WHERE {scope}")
 
         sql_parts.extend(self._paging_clauses(query))
 
@@ -764,9 +830,9 @@ class SQLQueryBuilder:
             Tuple of (WHERE clause SQL, parameters)
             Returns empty string and empty list if no filters
         """
-        if not query or not query.filters:
+        where, params = self._filters_clause(query.filters if query else [], param_start)
+        if not where:
             return "", []
-        where, params = self._filters_clause(query.filters, param_start)
         return " AND " + where, params
 
     def _filters_clause(
@@ -776,7 +842,8 @@ class SQLQueryBuilder:
 
         The one place a filter list becomes SQL, shared by the search, the
         count and :meth:`build_where_clause`, so the three cannot disagree on
-        which rows a query selects.
+        which rows a query selects. The layout's scope comes first, so its
+        parameters are numbered first.
 
         Args:
             filters: The filters to combine.
@@ -790,7 +857,7 @@ class SQLQueryBuilder:
         params: list[Any] = []
         param_count = param_start - 1
 
-        for filter_spec in filters:
+        for filter_spec in [*self.layout.scope, *filters]:
             param_count += 1
             clause, new_params = self._build_filter_clause(filter_spec, param_count)
             where_clauses.append(clause)
@@ -844,7 +911,7 @@ class SQLQueryBuilder:
         Raises:
             ValueError: If any filter field contains invalid characters.
         """
-        sql_parts = [f"SELECT * FROM {self.qualified_table}"]
+        sql_parts = [f"SELECT {self.layout.select_list(self)} FROM {self.qualified_table}"]
 
         where, params = self._filters_clause(query.filters)
         if where:
@@ -898,6 +965,7 @@ class SQLQueryBuilder:
             statements.append((render(", ".join(tuples)), params))
         return statements
 
+    @_writes
     def build_batch_update_queries(
         self, updates: list[tuple[str, Record]], *, max_parameters: int | None = None
     ) -> list[SQLStatement]:
@@ -956,6 +1024,7 @@ class SQLQueryBuilder:
             [(record_id, *values) for record_id, values in rows.items()], render, max_parameters
         )
 
+    @_writes
     def build_batch_update_rows(
         self, updates: list[tuple[str, Record]]
     ) -> tuple[str, list[list[Any]]]:
@@ -977,6 +1046,7 @@ class SQLQueryBuilder:
         query, _ = self.build_update_query(*updates[0])
         return query, [self.build_update_query(rid, record)[1] for rid, record in updates]
 
+    @_writes
     def build_batch_create_queries(
         self,
         records: list[Record],
@@ -1040,6 +1110,7 @@ class SQLQueryBuilder:
         )
         return statements, ids
 
+    @_writes
     def build_batch_upsert_queries(
         self,
         records: list[Record],
@@ -1111,6 +1182,7 @@ class SQLQueryBuilder:
         )
         return statements, ids
 
+    @_writes
     def build_batch_create_query(
         self, records: list[Record], id_factory: Callable[[], str] | None = None
     ) -> tuple[str, list[Any], list[str]]:
@@ -1122,6 +1194,7 @@ class SQLQueryBuilder:
         [(query, params)], ids = self.build_batch_create_queries(records, id_factory)
         return query, params, ids
 
+    @_writes
     def build_batch_upsert_query(
         self, records: list[Record], id_factory: Callable[[], str] | None = None
     ) -> tuple[str, list[Any], list[str]]:
@@ -1133,6 +1206,7 @@ class SQLQueryBuilder:
         [(query, params)], ids = self.build_batch_upsert_queries(records, id_factory)
         return query, params, ids
 
+    @_writes
     def build_batch_update_query(self, updates: list[tuple[str, Record]]) -> SQLStatement:
         """Deprecated: use :meth:`build_batch_update_queries`.
 
@@ -1146,6 +1220,7 @@ class SQLQueryBuilder:
         [statement] = self.build_batch_update_queries(updates)
         return statement
 
+    @_writes
     def build_batch_delete_query(self, ids: list[str]) -> SQLStatement:
         """Build one DELETE statement for records by id, whatever their number.
 
@@ -1166,6 +1241,7 @@ class SQLQueryBuilder:
         returning = " RETURNING id" if self.dialect == "postgres" else ""
         return f"DELETE FROM {self.qualified_table} WHERE {clause}{returning}", params
 
+    @_writes
     def build_existing_ids_query(self, ids: list[str]) -> SQLStatement:
         """Build one SELECT of which of ``ids`` are stored, whatever their number.
 
@@ -1196,13 +1272,27 @@ class SQLQueryBuilder:
             Tuple of (SQL query, parameters)
         """
         sql = f"SELECT COUNT(*) FROM {self.qualified_table}"
-        if query is None or not query.filters:
+        where, params = self._filters_clause(query.filters if query is not None else [])
+        if not where:
             return sql, []
-        where, params = self._filters_clause(query.filters)
         return f"{sql} WHERE {where}", params
 
     def _build_sort_keys(self, field: str) -> list[str]:
-        """Build the ``ORDER BY`` keys for one sorted field, supporting dot-notation.
+        """Build the ``ORDER BY`` keys for one sorted field, through the layout.
+
+        Every sort reaches the layout through this method.
+
+        Args:
+            field: The sorted field.
+
+        Returns:
+            The SQL expressions to order by, most significant first; the
+            caller applies the direction to each.
+        """
+        return self.layout.sort_keys(self, field)
+
+    def _jsonb_sort_keys(self, field: str) -> list[str]:
+        """The JSON layout's ``ORDER BY`` keys for one field, supporting dot-notation.
 
         Routes ``id`` to the ``id`` column, ``metadata.*`` fields to the
         ``metadata`` column, and everything else to ``data``.  Uses the
@@ -1587,6 +1677,7 @@ class SQLQueryBuilder:
         present: str,
         *,
         bind: Callable[[str | None, Any], Any] | None = None,
+        cast_for: Callable[[str | None, Sequence[Any]], str | None] | None = None,
     ) -> tuple[str, list[Any]]:
         """A comparison that matches only values of its bound's kind.
 
@@ -1622,11 +1713,18 @@ class SQLQueryBuilder:
             present: A predicate that the field holds a value.
             bind: How a bound is passed as a parameter for a reading, when not
                 as given.
+            cast_for: For a reading and the bounds it binds (as bound), the SQL
+                type their placeholders are cast to, or ``None`` to leave them
+                untyped. For a column whose own type a driver would otherwise
+                give the placeholder, converting the bound.
 
         Returns:
             Tuple of (SQL clause, parameters).
         """
         positive = _NEGATIONS.get(op, op)
+
+        def cast(reading: str | None, bound_values: Sequence[Any]) -> str | None:
+            return None if cast_for is None else cast_for(reading, bound_values)
 
         def bound_as_bound(kind: str | None, bound: Any) -> Any:
             return bound if bind is None else bind(kind, bound)
@@ -1644,11 +1742,13 @@ class SQLQueryBuilder:
             for reading, members in groups.items():
                 target = expr_for(reading)
                 if target is not None:
+                    bound_members = [bound_as_bound(reading, member) for member in members]
                     part, part_params = self._build_membership_clause(
                         target[1],
                         Operator.IN,
-                        [bound_as_bound(reading, member) for member in members],
+                        bound_members,
                         param_start + len(params),
+                        placeholder_type=cast(reading, bound_members),
                     )
                     parts.append(guarded(target[0], part))
                     params.extend(part_params)
@@ -1672,20 +1772,36 @@ class SQLQueryBuilder:
                 start = param_start + len(params)
                 if positive != Operator.BETWEEN:
                     part, part_params = self._build_operator_clause(
-                        exprs[0], positive, bound_values[0], start
+                        exprs[0],
+                        positive,
+                        bound_values[0],
+                        start,
+                        placeholder_type=cast(per_bound[0], bound_values),
                     )
                 elif per_bound[0] == per_bound[1]:
                     part, part_params = self._build_operator_clause(
-                        exprs[0], positive, bound_values, start
+                        exprs[0],
+                        positive,
+                        bound_values,
+                        start,
+                        placeholder_type=cast(per_bound[0], bound_values),
                     )
                 else:
                     # A date and an aware bound read a zoned value two ways,
                     # each bound one parameter.
                     low, low_params = self._build_operator_clause(
-                        exprs[0], Operator.GTE, bound_values[0], start
+                        exprs[0],
+                        Operator.GTE,
+                        bound_values[0],
+                        start,
+                        placeholder_type=cast(per_bound[0], bound_values[:1]),
                     )
                     high, high_params = self._build_operator_clause(
-                        exprs[1], Operator.LTE, bound_values[1], start + len(low_params)
+                        exprs[1],
+                        Operator.LTE,
+                        bound_values[1],
+                        start + len(low_params),
+                        placeholder_type=cast(per_bound[1], bound_values[1:]),
                     )
                     part, part_params = f"({low} AND {high})", low_params + high_params
                 parts.append(guarded(targets[0][0], part))
@@ -1706,6 +1822,8 @@ class SQLQueryBuilder:
         op: Operator,
         value: Any,
         param_start: int,
+        *,
+        placeholder_type: str | None = None,
     ) -> tuple[str, list[Any]]:
         """Build the comparison clause for a given operator.
 
@@ -1714,13 +1832,24 @@ class SQLQueryBuilder:
             op: The filter ``Operator``.
             value: The filter value.
             param_start: Starting parameter number for placeholders.
+            placeholder_type: The SQL type each placeholder of a comparison,
+                membership or range is cast to; untyped when ``None``. The cast
+                is on the placeholder, never the field, so an index on the
+                field still serves the comparison.
 
         Returns:
             Tuple of (SQL clause, parameters). A clause may bind no parameters
             (``EXISTS``, an empty membership list), so the caller numbers the
             next placeholder from the length of the list returned.
         """
-        param_placeholder = self._get_param_placeholder(param_start)
+
+        def placeholder(param_num: int) -> str:
+            rendered = self._get_param_placeholder(param_num)
+            return (
+                rendered if placeholder_type is None else f"CAST({rendered} AS {placeholder_type})"
+            )
+
+        param_placeholder = placeholder(param_start)
 
         if op == Operator.EQ:
             return f"{field_expr} = {param_placeholder}", [value]
@@ -1737,14 +1866,16 @@ class SQLQueryBuilder:
         elif op in (Operator.LIKE, Operator.NOT_LIKE):
             return self._build_like_clause(field_expr, op, value, param_placeholder)
         elif op in (Operator.IN, Operator.NOT_IN):
-            return self._build_membership_clause(field_expr, op, value, param_start)
+            return self._build_membership_clause(
+                field_expr, op, value, param_start, placeholder_type=placeholder_type
+            )
         elif op == Operator.BETWEEN:
-            placeholder1 = self._get_param_placeholder(param_start)
-            placeholder2 = self._get_param_placeholder(param_start + 1)
+            placeholder1 = placeholder(param_start)
+            placeholder2 = placeholder(param_start + 1)
             return f"{field_expr} BETWEEN {placeholder1} AND {placeholder2}", list(value)
         elif op == Operator.NOT_BETWEEN:
-            placeholder1 = self._get_param_placeholder(param_start)
-            placeholder2 = self._get_param_placeholder(param_start + 1)
+            placeholder1 = placeholder(param_start)
+            placeholder2 = placeholder(param_start + 1)
             return f"{field_expr} NOT BETWEEN {placeholder1} AND {placeholder2}", list(value)
         elif op == Operator.EXISTS:
             return f"{field_expr} IS NOT NULL", []
@@ -1800,6 +1931,8 @@ class SQLQueryBuilder:
         op: Operator,
         value: Any,
         param_start: int,
+        *,
+        placeholder_type: str | None = None,
     ) -> tuple[str, list[Any]]:
         """Build an ``IN`` / ``NOT IN`` clause that answers as ``Filter.matches`` does.
 
@@ -1829,6 +1962,11 @@ class SQLQueryBuilder:
           variable limit, 32766 by default. A member JSON cannot carry
           (``bytes``, a ``UUID``) is left out, as one no stored record holds.
         - Any other dialect --- one placeholder per member.
+
+        ``placeholder_type`` casts the members as
+        :meth:`_build_operator_clause` casts a bound: the Postgres array as an
+        array of it, and each placeholder of the other dialects. SQLite's
+        JSON array is not cast; SQLite compares a member as it is.
         """
         members = membership_values(value)
         if self.dialect == "sqlite":
@@ -1841,6 +1979,8 @@ class SQLQueryBuilder:
             return f"{field_expr} IS NOT NULL", []
         placeholder = self._get_param_placeholder(param_start)
         if self.dialect == "postgres":
+            if placeholder_type is not None:
+                placeholder = f"CAST({placeholder} AS {placeholder_type}[])"
             if op == Operator.IN:
                 return f"{field_expr} = ANY({placeholder})", [members]
             return f"{field_expr} <> ALL({placeholder})", [members]
@@ -1851,7 +1991,12 @@ class SQLQueryBuilder:
                 [json.dumps(members)],
             )
         placeholders = ", ".join(
-            self._get_param_placeholder(i) for i in range(param_start, param_start + len(members))
+            (
+                self._get_param_placeholder(i)
+                if placeholder_type is None
+                else f"CAST({self._get_param_placeholder(i)} AS {placeholder_type})"
+            )
+            for i in range(param_start, param_start + len(members))
         )
         keyword = "IN" if op == Operator.IN else "NOT IN"
         return f"{field_expr} {keyword} ({placeholders})", members
@@ -1909,7 +2054,22 @@ class SQLQueryBuilder:
         )
 
     def _build_filter_clause(self, filter_spec: Filter, param_start: int) -> tuple[str, list[Any]]:
-        """Build a WHERE clause for a single filter.
+        """Build a WHERE clause for a single filter, through the layout.
+
+        Every filter, the layout's scope and a ``ComplexQuery``'s leaves
+        included, reaches the layout through this method.
+
+        Args:
+            filter_spec: The filter.
+            param_start: Starting parameter number for placeholders.
+
+        Returns:
+            Tuple of (SQL clause, parameters).
+        """
+        return self.layout.filter_clause(self, filter_spec, param_start)
+
+    def _jsonb_filter_clause(self, filter_spec: Filter, param_start: int) -> tuple[str, list[Any]]:
+        """The JSON layout's WHERE clause for a single filter.
 
         Supports dot-notation for nested JSON field access.  A field name
         like ``"metadata.work_order_id"`` is routed to the ``metadata`` JSONB
@@ -2004,7 +2164,7 @@ class SQLQueryBuilder:
 
     @staticmethod
     def row_to_record(row: dict[str, Any]) -> Record:
-        """Convert a database row to a Record.
+        """Convert a database row of the JSON layout to a Record.
 
         Args:
             row: Database row as dictionary
@@ -2013,6 +2173,17 @@ class SQLQueryBuilder:
             Record object
         """
         return SQLRecordSerializer.row_to_record(row)
+
+    def record_from_row(self, row: Mapping[str, Any]) -> Record:
+        """Convert a row this builder's statements selected to a Record, by its layout.
+
+        Args:
+            row: Database row, by column name.
+
+        Returns:
+            Record object
+        """
+        return self.layout.record_from_row(row)
 
 
 class SQLTableManager:

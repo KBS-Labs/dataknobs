@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A field's `enum` must allow something.** The schema reader, and
+  `DatabaseSource` for a schema built in Python, refuse an `enum` that is
+  empty, mixes strings with other values, names a value twice, or lists
+  integers on a field that is not an `integer` or `float` field, as they
+  already refused one that is not a list. Its members are all strings, or all
+  integers on a numeric field (a boolean does not count as an integer). An
+  empty enumeration allows no value, and reached an extraction model's filter
+  schema as a field it could match with nothing. **Migration:** drop an empty
+  `enum` (to allow any value), write its members all as strings or, on a
+  numeric field, all as integers, and remove the repeats.
+
 - **`SQLQueryBuilder`'s batch builders return a list of statements.**
   `build_batch_create_queries`, `build_batch_upsert_queries` and
   `build_batch_update_queries` take a `max_parameters` ceiling and return
@@ -968,6 +979,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and shared, and it connects without owning a mid-connect failure.
 
 ### Added
+
+- **`SQLQueryBuilder` reads a table through a column layout, and a table with
+  ordinary typed columns is one.** A new `layout=` argument takes a
+  `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout` is
+  the table this package creates, and is the default, so every existing
+  builder renders exactly the SQL it did. `NativeColumnLayout(schema,
+  id_column=..., scope=...)` reads a table somebody else owns: it selects and
+  filters only the columns the schema declares and refuses any other name
+  before SQL is built, routes the reserved `id` field to `id_column`, ANDs its
+  `scope` filters into every read the builder builds (search, complex search
+  with the caller's condition nested under it, count, `build_where_clause`,
+  read and exists), and refuses every statement that writes with
+  `OperationError`. Every filter answers as `Filter.matches` answers over the
+  record the layout returns: a bound of a kind the column's type cannot hold
+  matches nothing (its negation every present value) and is never sent to the
+  driver, and a numeric bound compared with a PostgreSQL column is sent as
+  `bigint`, `double precision` or `numeric`, because asyncpg otherwise types
+  it as the column and sends `3.5` to an `integer` column as `3`. A scope that
+  could match no row is refused. The new `record_from_row` turns a row a
+  builder selected into a record by its layout, each value in its declared
+  type's Python type on every engine. No backend takes the native layout yet.
+- **SQL types a column can declare where `FieldType` names none.** A schema
+  field's `sql_type:` (or `metadata.sql_type`, `SQL_TYPE_KEY`) names an entry
+  of `sql_types`, an open `Registry[SqlType]`; `uuid` and `timestamptz` (a
+  zoned instant, read in UTC) ship. An `SqlType` says which kinds of value the
+  column holds, how a bound and a read value are normalised, whether it is
+  text or reads as text, and the type a bound is sent as. `SqlType`,
+  `sql_types`, `SQL_TYPE_KEY`, `NAIVE_TIME` and `ZONED_INSTANT` are exported
+  from `dataknobs_data`. The schema reader refuses a `sql_type` that is not a
+  non-empty string; the native layout refuses one that is not registered.
+- **`read_layout_config`**, the one reader of a backend's `layout:`
+  (`jsonb` or `native`), `id_column:` and `scope:` keys. `id_column:`,
+  `scope:` and a declared `sql_type` are refused by name under the JSON
+  layout, which reads none of them.
+- **`_build_typed_clause` takes `cast_for`, and `_build_operator_clause` and
+  `_build_membership_clause` take `placeholder_type`**, the seam a layout
+  types a placeholder through (an array of the type for PostgreSQL's
+  one-parameter membership).
 
 - **`max_result_window` and `search_page_size` on both Elasticsearch
   backends' configs** (defaults `10000` and `1000`). The first is where a read

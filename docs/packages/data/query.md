@@ -147,6 +147,79 @@ comparisons on PostgreSQL and DuckDB.
     `Record.get_value()`, which uses the same convention.  If your data
     uses dots in key names, flatten or rename them before storage.
 
+### Tables With Their Own Columns (Native Layout)
+
+The SQL query builder reads a table through a **column layout**. The default
+is the table this package creates (`id`, and the record in the `data` and
+`metadata` JSON columns), and everything above describes it.
+`NativeColumnLayout` reads a table somebody else owns, with ordinary typed
+columns:
+
+```python
+from dataknobs_data import Filter, Operator, Query
+from dataknobs_data.backends.column_layout import NativeColumnLayout
+from dataknobs_data.backends.sql_base import SQLQueryBuilder
+from dataknobs_data.schema import DatabaseSchema
+
+schema = DatabaseSchema.from_dict({"fields": {
+    "node_id": {"type": "string", "sql_type": "uuid"},
+    "name": "string",
+    "size": "integer",
+    "status": "string",
+}})
+layout = NativeColumnLayout(
+    schema,
+    id_column="node_id",
+    scope=[Filter("status", Operator.EQ, "live")],
+)
+builder = SQLQueryBuilder("nodes", dialect="postgres", layout=layout)
+sql, params = builder.build_search_query(Query(filters=[Filter("size", Operator.GTE, 3.5)]))
+# SELECT "node_id", "name", "size", "status" FROM "nodes"
+#   WHERE "status" = $1 AND "size" >= CAST($2 AS double precision)
+```
+
+**No backend takes the native layout yet**: the PostgreSQL, SQLite and DuckDB
+backends adopt it in later releases. What the builder guarantees:
+
+- **Only declared columns.** A filter, sort or scope naming another column
+  (or a dotted path) raises `ValidationError` before SQL is built, and a
+  statement selects the declared columns rather than `*`. `id` is the
+  `id_column`.
+- **The scope is in every read**: search, count, `build_where_clause`, read and
+  exists. A complex query's condition is nested under it, so an `OR` cannot
+  reach rows outside it. A scope that could match no row is refused.
+- **Read-only.** Every statement that would write raises `OperationError`.
+- **Every filter answers as `Filter.matches` answers** over the record the
+  layout returns. Each column holds the kinds of value its declared type says
+  (see [Field Types](field-types.md#sql-types-for-tables-with-their-own-columns)):
+
+    | Declared | Compared with | Text operators (`LIKE`, `REGEX`, `STARTS_WITH`) |
+    |---|---|---|
+    | `string`, `text` | a string; a date or datetime, when the text names a time | yes |
+    | `integer`, `float` | a number (never a boolean) | no: they match nothing |
+    | `boolean` | a boolean (never a number) | no |
+    | `datetime` | a naive datetime, a date (as its midnight), a string naming one | no |
+    | `sql_type: timestamptz` | an aware datetime, a date (its midnight in UTC), a string naming one | no |
+    | `sql_type: uuid` | a string or `UUID`, as its canonical lower-case text | yes, over its text |
+    | `json`, `binary`, vectors | refused for every operator but `EXISTS` / `NOT_EXISTS` | — |
+
+    A bound of another kind matches nothing and its negation every present
+    value, and it is never sent to the driver, which might refuse it or,
+    worse, convert it and answer wrongly. On PostgreSQL a numeric bound is
+    sent as `bigint`, `double precision` or `numeric`, because asyncpg would
+    otherwise send `3.5` to an `integer` column as `3`.
+
+- **`NOT` over a native filter** matches a row whose column is `NULL`, as
+  `NOT` does under the JSON layout and as `Filter.matches` answers.
+- **Text sorts by code point** on every engine (`COLLATE "C"` on
+  PostgreSQL), as the in-memory sort does.
+
+!!! warning "Declare each column as the table holds it"
+
+    The declared type is what every answer rests on, and nothing reads the
+    table to check it. An integer column declared `string` matches no number
+    you filter it with.
+
 ### Range Queries
 
 Use BETWEEN for efficient range queries:

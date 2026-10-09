@@ -13,20 +13,76 @@ from dataknobs_common.exceptions import ValidationError
 
 from .fields import FieldType
 
+#: The ``metadata`` key naming a column's SQL type where ``FieldType`` names
+#: none (``uuid``, ``timestamptz``, or one a consumer registers), read by the
+#: native column layout (:mod:`dataknobs_data.backends.sql_types`).
+SQL_TYPE_KEY = "sql_type"
+
 #: The keys a field declaration takes, in either spelling. ``dimensions`` and
-#: ``source_field`` are the vector shorthands, and ``enum`` the allowed-values
-#: one that :class:`~dataknobs_data.sources.database.DatabaseSource` reads; all
-#: three fold into ``metadata``. A door
+#: ``source_field`` are the vector shorthands, ``enum`` the allowed-values
+#: one that :class:`~dataknobs_data.sources.database.DatabaseSource` reads, and
+#: ``sql_type`` (:data:`SQL_TYPE_KEY`) a native column's SQL type; all four
+#: fold into ``metadata``. A door
 #: that uses less of a declaration narrows this set (``keys=`` on
 #: :func:`read_field_declarations`), so that a key it would discard is refused
 #: rather than loaded.
 FIELD_KEYS: frozenset[str] = frozenset(
-    {"name", "type", "required", "default", "metadata", "dimensions", "source_field", "enum"}
+    {
+        "name",
+        "type",
+        "required",
+        "default",
+        "metadata",
+        "dimensions",
+        "source_field",
+        "enum",
+        SQL_TYPE_KEY,
+    }
 )
 
 #: The keys that fold into a field's ``metadata`` under their own name, where an
 #: explicit ``metadata`` entry wins.
-_METADATA_SHORTHANDS: tuple[str, ...] = ("dimensions", "source_field", "enum")
+_METADATA_SHORTHANDS: tuple[str, ...] = ("dimensions", "source_field", "enum", SQL_TYPE_KEY)
+
+
+#: The field types whose allowed values may be written as integers.
+_INTEGER_ENUM_TYPES = frozenset({FieldType.INTEGER, FieldType.FLOAT})
+
+
+def enum_problem(enum: Any, field_type: FieldType | None = None) -> str | None:
+    """What is wrong with a field's ``enum``, or ``None`` when it is a usable one.
+
+    One rule for every reader of the key: the schema reader, and a grounded
+    source given a schema built by hand.
+
+    - Not a list or tuple: a string is iterable, so it would reach a filter
+      schema as one allowed value per letter.
+    - Empty: it allows no value, and offers a model a field it can match with
+      nothing.
+    - Members that are not all strings or all integers. A boolean is not an
+      integer here, though Python counts it as one.
+    - Integers on a field that is not an integer or float field, whose filter
+      schema no integer satisfies. Checked when ``field_type`` is given.
+    - A member named twice.
+    """
+    if not isinstance(enum, (list, tuple)):
+        return "it is a list of the values the field allows"
+    if not enum:
+        return "an empty list allows no value; leave `enum` out to allow any"
+    if all(isinstance(member, str) for member in enum):
+        pass
+    elif all(isinstance(member, int) and not isinstance(member, bool) for member in enum):
+        if field_type is not None and field_type not in _INTEGER_ENUM_TYPES:
+            return (
+                f"integer members allow a value only on an integer or float field, "
+                f"and this is a {field_type.value} field"
+            )
+    else:
+        return "its members are the allowed values, all strings or all integers"
+    if len(set(enum)) != len(enum):
+        return "it names a value more than once"
+    return None
+
 
 #: The keys a schema declaration takes at its top level.
 SCHEMA_KEYS: frozenset[str] = frozenset({"fields", "metadata"})
@@ -564,14 +620,22 @@ def _field_schema(
     # Checked after the merge, because the value checked has to be the one that
     # wins: an explicit `metadata.enum` takes precedence over the shorthand.
     enum = metadata.get("enum")
-    if enum is not None and not isinstance(enum, (list, tuple)):
-        # A string is iterable, so it would reach a filter schema as one
-        # allowed value per letter.
+    if enum is not None:
         spelled = "metadata.enum" if "enum" in declared_metadata else "enum"
+        problem = enum_problem(enum, field_type)
+        if problem:
+            raise ValidationError(
+                f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; {problem}",
+                context={**field_context, "enum": enum},
+            )
+
+    sql_type = metadata.get(SQL_TYPE_KEY)
+    if sql_type is not None and (not isinstance(sql_type, str) or not sql_type):
+        spelled = f"metadata.{SQL_TYPE_KEY}" if SQL_TYPE_KEY in declared_metadata else SQL_TYPE_KEY
         raise ValidationError(
-            f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; it is a list of the "
-            f"values the field allows",
-            context={**field_context, "enum": enum},
+            f"{prefix}field {name!r} declares `{spelled}: {sql_type!r}`; it is the name of a "
+            f"SQL type, such as `uuid`",
+            context={**field_context, SQL_TYPE_KEY: sql_type},
         )
 
     return FieldSchema(

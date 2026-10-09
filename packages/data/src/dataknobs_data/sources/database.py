@@ -22,7 +22,7 @@ from dataknobs_common.exceptions import ValidationError
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.query import Filter, Operator, Query
-from dataknobs_data.schema import DatabaseSchema
+from dataknobs_data.schema import DatabaseSchema, enum_problem
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 
@@ -71,11 +71,12 @@ def _check_filter_metadata(schema: DatabaseSchema, source: str) -> None:
                 context={**context, "got": type(description).__name__},
             )
         enum = field_schema.metadata.get("enum")
-        if enum is not None and not isinstance(enum, (list, tuple)):
+        problem = None if enum is None else enum_problem(enum, field_schema.type)
+        if problem:
             raise ValidationError(
-                f"source {source!r}: field {field_name!r} has a `metadata.enum` of type "
-                f"{type(enum).__name__}; it is a list of the values the field allows",
-                context={**context, "got": type(enum).__name__},
+                f"source {source!r}: field {field_name!r} has a `metadata.enum` of "
+                f"{enum!r}; {problem}",
+                context={**context, "got": type(enum).__name__, "enum": enum},
             )
 
 
@@ -103,9 +104,10 @@ class DatabaseSource(GroundedSource):
 
     Raises:
         ValidationError: When a field's ``metadata["description"]`` is not a
-            string, or its ``metadata["enum"]`` is not a list or tuple. Both
-            become part of the filter schema, and a string ``enum`` would reach
-            it as one allowed value per letter.
+            string, or its ``metadata["enum"]`` is not a usable list of
+            allowed values (see :func:`~dataknobs_data.schema.enum_problem`).
+            Both become part of the filter schema, and a string ``enum`` would
+            reach it as one allowed value per letter.
 
     Example::
 
