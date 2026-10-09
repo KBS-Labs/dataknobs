@@ -22,7 +22,7 @@ from dataknobs_common.exceptions import ValidationError
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.query import Filter, Operator, Query
-from dataknobs_data.schema import DatabaseSchema, enum_problem
+from dataknobs_data.schema import FILTER_JSON_TYPES, DatabaseSchema, enum_problem
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 
@@ -34,17 +34,6 @@ from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 #: and never read (``required``, ``default``, the vector shorthands) is refused
 #: rather than read as honoured.
 SOURCE_FIELD_KEYS: frozenset[str] = frozenset({"name", "type", "metadata", "enum"})
-
-# FieldType → JSON schema type mapping
-_FIELD_TYPE_MAP: dict[FieldType, str] = {
-    FieldType.STRING: "string",
-    FieldType.TEXT: "string",
-    FieldType.INTEGER: "integer",
-    FieldType.FLOAT: "number",
-    FieldType.BOOLEAN: "boolean",
-    FieldType.DATETIME: "string",
-    FieldType.JSON: "object",
-}
 
 # Field types we skip in schema generation (not filterable)
 _SKIP_TYPES: set[FieldType] = {
@@ -179,7 +168,7 @@ class DatabaseSource(GroundedSource):
             if field_schema.type in _SKIP_TYPES:
                 continue
 
-            json_type = _FIELD_TYPE_MAP.get(field_schema.type)
+            json_type = FILTER_JSON_TYPES.get(field_schema.type)
             if json_type is None:
                 continue
 

@@ -93,7 +93,16 @@ def _sqlite(tables: Sequence[Table]) -> Iterator[Engine]:
         )
 
     def fetch(sql: str, params: list[Any]) -> list[dict[str, Any]]:
-        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+        try:
+            return [dict(row) for row in conn.execute(sql, params).fetchall()]
+        except sqlite3.Error:
+            # A failed statement leaves its error on the connection, and when a
+            # cached statement's bind fails later (an integer past 64 bits),
+            # CPython 3.12 raises that stale error in place of the bind's own
+            # OverflowError. One statement that succeeds clears it, so each
+            # case sees only its own failure whatever order the cases run in.
+            conn.execute("SELECT 1").fetchall()
+            raise
 
     try:
         yield Engine("sqlite", "sqlite", "qmark", None, fetch)

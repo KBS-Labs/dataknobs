@@ -175,7 +175,7 @@ layout = NativeColumnLayout(
 builder = SQLQueryBuilder("nodes", dialect="postgres", layout=layout)
 sql, params = builder.build_search_query(Query(filters=[Filter("size", Operator.GTE, 3.5)]))
 # SELECT "node_id", "name", "size", "status" FROM "nodes"
-#   WHERE "status" = $1 AND "size" >= CAST($2 AS double precision)
+#   WHERE "status" = $1 AND "size" >= CAST($2 AS numeric)
 ```
 
 **No backend takes the native layout yet**: the PostgreSQL, SQLite and DuckDB
@@ -194,7 +194,9 @@ backends adopt it in later releases. What the builder guarantees:
   its index serves a read.
 - **The scope is in every read**: search, count, `build_where_clause`, read and
   exists. A complex query's condition is nested under it, so an `OR` cannot
-  reach rows outside it. A scope that could match no row is refused.
+  reach rows outside it. A scope filter comparing a value its column cannot
+  hold is refused: it would match no row, or, negated (`!=`, `NOT IN`,
+  `NOT BETWEEN`), exclude only the rows where the column is NULL.
 - **Read-only.** Every statement that would write raises `OperationError`.
 - **Every filter answers as `Filter.matches` answers** over the record the
   layout returns. Each column holds the kinds of value its declared type says
@@ -214,7 +216,12 @@ backends adopt it in later releases. What the builder guarantees:
     value, and it is never sent to the driver, which might refuse it or,
     worse, convert it and answer wrongly. On PostgreSQL a numeric bound is
     sent as `bigint`, `double precision` or `numeric`, because asyncpg would
-    otherwise send `3.5` to an `integer` column as `3`.
+    otherwise send `3.5` to an `integer` column as `3`. An `integer` column
+    is compared exactly, as Python compares an `int` with a `float`: a whole
+    bound is sent as its `int` (`2.0**60` as `2**60`), and a fractional one
+    as the value halfway between the integers it lies between (`3.25` as
+    `3.5`, as `numeric` on PostgreSQL and `DECIMAL(38,1)` on DuckDB), since a
+    `float` bound is compared by rounding the column past 2**53.
 
 - **`NOT` over a native filter** matches a row whose column is `NULL`, as
   `NOT` does under the JSON layout and as `Filter.matches` answers.

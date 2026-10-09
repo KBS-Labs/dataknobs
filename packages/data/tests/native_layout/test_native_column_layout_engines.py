@@ -109,24 +109,27 @@ SHAPES = Table(
 
 #: A table keyed by an integer, whose zoned times sort one way as text and
 #: another as instants: ``n = 5`` is written first as text and is the latest.
+#: ``big`` holds integers no ``float`` holds, the nearest of which differs.
 COUNTED_SCHEMA = DatabaseSchema.from_dict(
     {
         "fields": {
             "n": "integer",
             "at": {"type": "datetime", "metadata": {"sql_type": "timestamptz"}},
+            "big": "integer",
         }
     }
 )
-COUNTED_ROWS: list[tuple[int, datetime]] = [
-    (5, datetime(2024, 1, 1, 23, tzinfo=timezone(timedelta(hours=-5)))),
-    (10, datetime(2024, 1, 2, 1, tzinfo=UTC)),
-    (9, datetime(2024, 1, 2, 2, tzinfo=UTC)),
+COUNTED_ROWS: list[tuple[int, datetime, int]] = [
+    (5, datetime(2024, 1, 1, 23, tzinfo=timezone(timedelta(hours=-5))), 2**53 + 1),
+    (10, datetime(2024, 1, 2, 1, tzinfo=UTC), 2**53 + 3),
+    (9, datetime(2024, 1, 2, 2, tzinfo=UTC), 2**60 + 1),
 ]
 COUNTED = Table(
     "counted",
     {
         "n": {"postgres": "integer", "duckdb": "INTEGER", "sqlite": "INTEGER"},
         "at": {"postgres": "timestamptz", "duckdb": "TIMESTAMPTZ", "sqlite": "TIMESTAMPTZ"},
+        "big": {"postgres": "bigint", "duckdb": "BIGINT", "sqlite": "INTEGER"},
     },
     [list(row) for row in COUNTED_ROWS],
 )
@@ -466,3 +469,28 @@ def test_a_zoned_time_sorts_by_the_instant_it_names(
             (r.get_value("at") for r in counted.values()), reverse=order == SortOrder.DESC
         )
         assert got == expected, order
+
+
+#: Bounds a ``float`` gives: an integer column's value is compared with each
+#: exactly, as Python compares an ``int`` with a ``float``.
+BIG_FILTERS = [
+    Filter("big", Operator.EQ, float(2**53)),
+    Filter("big", Operator.GT, float(2**53)),
+    Filter("big", Operator.GT, float(2**60)),
+    Filter("big", Operator.IN, [2**53, 0.5]),
+    Filter("big", Operator.NOT_IN, [2**53, 0.5]),
+    Filter("big", Operator.BETWEEN, [2**53 + 2, float(2**60)]),
+    Filter("big", Operator.LTE, 9.0e15),
+]
+
+
+@pytest.mark.parametrize(
+    "spec", BIG_FILTERS, ids=lambda f: f"{f.field} {f.operator.value} {f.value!r}"
+)
+def test_an_integer_past_a_floats_precision_compares_exactly(
+    engine: Engine, counted: dict[str, Record], spec: Filter
+) -> None:
+    """A fractional bound mixed with an integer one must not round the integers."""
+    builder = engine.builder("counted", COUNTED_LAYOUT)
+    found = _found(engine, builder, *builder.build_search_query(Query(filters=[spec])))
+    assert found == _expected(counted, spec)

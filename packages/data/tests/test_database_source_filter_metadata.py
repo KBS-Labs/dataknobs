@@ -40,9 +40,9 @@ def _source(**metadata: Any) -> DatabaseSource:
     ("enum", "problem"),
     [
         ([], "allows no value"),
-        (["CS", 5], "all strings"),
+        (["CS", 5], "takes strings, and 5"),
         (("CS", "CS"), "more than once"),
-        ([1, 2], "integer or float field"),
+        ([1, 2], "takes strings, and 1"),
     ],
 )
 def test_a_hand_built_enum_that_allows_nothing_usable_is_refused(enum: Any, problem: str) -> None:

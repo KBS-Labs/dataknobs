@@ -9,16 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A field's `enum` must allow something.** The schema reader, and
-  `DatabaseSource` for a schema built in Python, refuse an `enum` that is
-  empty, mixes strings with other values, names a value twice, or lists
-  integers on a field that is not an `integer` or `float` field, as they
-  already refused one that is not a list. Its members are all strings, or all
-  integers on a numeric field (a boolean does not count as an integer). An
-  empty enumeration allows no value, and reached an extraction model's filter
+- **A field's `enum` must allow something its filter can take.** The schema
+  reader, and `DatabaseSource` for a schema built in Python, refuse an `enum`
+  that is empty, names a value twice, or holds a member the field's filter
+  type does not take, as they already refused one that is not a list.
+  `DatabaseSource` publishes an `enum` under the field's JSON type
+  (`FILTER_JSON_TYPES` in `dataknobs_data.schema`), so a `string`, `text` or
+  `datetime` field takes strings, an `integer` field integers, a `float`
+  field finite numbers, and a `boolean` field booleans; a boolean is not a
+  number here. A `json`, `binary` or vector field takes no `enum`. An empty
+  enumeration allows no value, and reached an extraction model's filter
   schema as a field it could match with nothing. **Migration:** drop an empty
-  `enum` (to allow any value), write its members all as strings or, on a
-  numeric field, all as integers, and remove the repeats.
+  `enum` (to allow any value) or one on a `json`, `binary` or vector field,
+  write each member as a value of the field's type (`1`, not `"1"`, on an
+  `integer` field), and remove the repeats.
 
 - **`SQLQueryBuilder`'s batch builders return a list of statements.**
   `build_batch_create_queries`, `build_batch_upsert_queries` and
@@ -996,9 +1000,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matches nothing (its negation every present value) and is never sent to the
   driver, and a numeric bound compared with a PostgreSQL column is sent as
   `bigint`, `double precision` or `numeric`, because asyncpg otherwise types
-  it as the column and sends `3.5` to an `integer` column as `3`. A scope that
-  could match no row is refused. The key is the key column's text, which is
-  the record's storage id, so a read finds a row by the key a search
+  it as the column and sends `3.5` to an `integer` column as `3`; an
+  `integer` column is compared with a `float` bound exactly, past 2**53 too,
+  on every engine. A scope filter comparing a value its column cannot hold is
+  refused, since it would match no row or, negated, exclude only the rows
+  where the column is NULL. The key is the key column's text, which is the
+  record's storage id, so a read finds a row by the key a search
   returned; a key column is a `string`, `text`, `uuid` or `integer` column,
   and an integer key's own text is compared in the column's type so its index
   serves the read. A time column sorts by the time its filters read it as,
@@ -1022,11 +1029,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`jsonb` or `native`), `id_column:` and `scope:` keys. `id_column:`,
   `scope:` and a declared `sql_type` are refused by name under the JSON
   layout, which reads none of them.
-- **`_build_typed_clause` takes `cast_for`, and `_build_operator_clause` and
-  `_build_membership_clause` take `placeholder_type`**, the seam a layout
-  types a placeholder through (an array of the type for PostgreSQL's
-  one-parameter membership).
-
 - **`max_result_window` and `search_page_size` on both Elasticsearch
   backends' configs** (defaults `10000` and `1000`). The first is where a read
   stops being one `from`/`size` request; set it when an index's own

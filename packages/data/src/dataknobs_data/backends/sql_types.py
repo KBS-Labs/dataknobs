@@ -27,6 +27,7 @@ The kinds are :func:`~dataknobs_data.query.value_kind`'s names, ``"string"``,
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -95,9 +96,12 @@ class SqlType:
         holds: For a column that reads as text, whether an equality bound (after
             ``bind``) can be compared with the column in its own type, which
             keeps an index on it. ``None``: always compared as text.
-        own: A bound ``holds`` accepts, as the value of the column's own type
-            it is sent as. A uuid column takes its text as it is; an integer
-            key's text ``"10"`` is sent as ``10``.
+        own: A bound compared with the column in its own type, as the value
+            it is sent as: one every value of the column compares with as it
+            compares with the bound. A uuid column takes its text as it is; an
+            integer key's text ``"10"`` is sent as ``10``; an integer column's
+            ``2.0`` is sent as ``2``, and ``2.25`` as ``2.5``, which no engine
+            rounds onto an integer.
         placeholder: The SQL type a bound is sent as when it is compared in the
             column's own type, given the dialect and the bounds; ``None`` to
             send it untyped. A driver that infers the placeholder's type from
@@ -145,7 +149,8 @@ def _number_placeholder(dialect: str, bounds: Sequence[Any]) -> str | None:
     Only PostgreSQL needs it: asyncpg types a placeholder by the column it is
     compared with, so ``integer_column >= $1`` sends ``3.5`` as ``3``. The cast
     is on the placeholder, so an index on the column still serves it; a
-    fractional bound, compared as ``double precision``, is the one that cannot.
+    fractional bound, compared as ``numeric`` or ``double precision``, is the
+    one that cannot.
     """
     if dialect != "postgres":
         return None
@@ -154,6 +159,45 @@ def _number_placeholder(dialect: str, bounds: Sequence[Any]) -> str | None:
     if all(isinstance(b, Integral) for b in bounds):
         return "bigint" if all(int(b) in _INT64 for b in bounds) else "numeric"
     return "double precision"
+
+
+def _integer_placeholder(dialect: str, bounds: Sequence[Any]) -> str | None:
+    """As :func:`_number_placeholder`, and on DuckDB ``DECIMAL`` for a fractional bound.
+
+    DuckDB compares an integer column with a ``DOUBLE`` bound as a ``DOUBLE``,
+    which rounds a value past 2**53 onto its neighbour; :func:`_integer_comparand`
+    leaves a fractional bound halfway between two integers, which a
+    ``DECIMAL(38,1)`` holds exactly.
+    """
+    if dialect == "duckdb":
+        fractional = [b for b in bounds if not isinstance(b, Integral)]
+        if fractional and all(math.isfinite(b) for b in fractional):
+            return "DECIMAL(38,1)"
+        return None
+    return _number_placeholder(dialect, bounds)
+
+
+def _integer_comparand(value: Any) -> Any:
+    """A number as an integer column compares with it, sent exactly.
+
+    A whole ``float`` or ``Decimal`` is its ``int``, so ``2.0**60`` is not sent
+    as a ``float`` an engine compares by rounding the column. A fractional one
+    is the ``Decimal`` halfway between the two integers it lies between, which
+    every integer compares with as it compares with the bound, and which no
+    engine rounds onto either. An infinity is left as it is, and so is a number
+    of another type (a ``Fraction``), which the builder sends as it would.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Integral):
+        return int(value)
+    if not isinstance(value, (float, Decimal)):
+        return value
+    try:
+        whole = math.floor(value)
+    except (OverflowError, ValueError):
+        return value
+    return whole if value == whole else Decimal(whole) + Decimal("0.5")
 
 
 def _canonical_uuid(value: Any) -> Any:
@@ -239,6 +283,9 @@ sql_types.register(
 
 _TEXT = SqlType(kinds=frozenset({"string"}), text="stored")
 _NUMBER = SqlType(kinds=frozenset({"number"}), placeholder=_number_placeholder)
+_INTEGER = SqlType(
+    kinds=frozenset({"number"}), own=_integer_comparand, placeholder=_integer_placeholder
+)
 
 #: The built-in answer for each ``FieldType`` a column can be compared as.
 #: Held here, not in :data:`sql_types`, so a registration cannot change every
@@ -247,7 +294,7 @@ _FIELD_TYPE_ANSWERS: Mapping[FieldType, SqlType] = MappingProxyType(
     {
         FieldType.STRING: _TEXT,
         FieldType.TEXT: _TEXT,
-        FieldType.INTEGER: _NUMBER,
+        FieldType.INTEGER: _INTEGER,
         FieldType.FLOAT: _NUMBER,
         FieldType.BOOLEAN: SqlType(kinds=frozenset({"boolean"}), read=_read_boolean),
         FieldType.DATETIME: SqlType(

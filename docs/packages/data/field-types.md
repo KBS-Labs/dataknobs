@@ -275,7 +275,7 @@ An `SqlType` says:
 | `read` | a value the driver returned, as the record holds it |
 | `text` | `"stored"`: the column's SQL value is text, so it compares with strings, a time bound reads it as a time, and the text operators apply. `"cast"`: the column is not text, but the record holds its text, so strings and the text operators compare `CAST(column AS TEXT)`. `None` (the default): neither |
 | `holds` | for a `text="cast"` column, whether an equality bound can be compared in the column's own type |
-| `own` | a bound `holds` accepts, as the value of the column's own type it is sent as (default: the bound unchanged) |
+| `own` | a bound compared with the column in its own type, as the value it is sent as: one every value of the column compares with as it does with the bound (default: the bound unchanged) |
 | `placeholder` | given the dialect and the bounds, the SQL type a bound is sent as |
 
 ## Best Practices

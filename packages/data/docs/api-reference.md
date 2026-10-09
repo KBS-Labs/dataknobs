@@ -1231,7 +1231,7 @@ record = builder.record_from_row(row)
 
 | Name | Import | Role |
 |---|---|---|
-| `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out |
+| `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out; not yet a base for a consumer's own layout (register an `SqlType` for a column type) |
 | `JsonbLayout`, `NativeColumnLayout` | the same | the two layouts |
 | `read_layout_config(config, schema, *, origin=None, context=None)` | the same | reads `layout:`, `id_column:` and `scope:` |
 | `SqlType`, `sql_types` | `dataknobs_data` | what a declared SQL type holds; the registry of them (`uuid`, `timestamptz`) |

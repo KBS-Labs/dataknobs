@@ -71,12 +71,21 @@ _RANGES = frozenset({Operator.BETWEEN, Operator.NOT_BETWEEN})
 _MEMBERSHIP = frozenset({Operator.IN, Operator.NOT_IN})
 _STRING_ONLY = frozenset({Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH})
 _PRESENCE = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
+#: The negations whose positive compares a bound: ``NOT_LIKE`` is not one, as
+#: ``Filter.matches`` answers it False for a value that is not a string.
+_NEGATIONS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN})
 
 _TEXT_TYPE = MappingProxyType({"postgres": "TEXT", "sqlite": "TEXT", "duckdb": "VARCHAR"})
 
 
 class ColumnLayout(ABC):
-    """How one table's rows are laid out: what a field is, and what a row becomes."""
+    """How one table's rows are laid out: what a field is, and what a row becomes.
+
+    Not yet an extension point for a consumer's own layout: the two here render
+    through the builder's own clause primitives (``_build_typed_clause`` and
+    its neighbours), whose shape is not settled. A column type a consumer needs
+    is registered in :data:`~dataknobs_data.backends.sql_types.sql_types`.
+    """
 
     #: Whether the builder may build a statement that writes the table.
     writable: ClassVar[bool]
@@ -182,7 +191,8 @@ class NativeColumnLayout(ColumnLayout):
       every operator but ``EXISTS`` / ``NOT_EXISTS``: no engine compares one
       the way ``Filter.matches`` does.
     - **The scope** is ANDed into every read the builder builds, and a scope
-      that could match no row (a value its column cannot hold) is refused.
+      filter comparing a value its column cannot hold is refused: it would
+      match no row, or, negated, exclude only the rows where the column is NULL.
     - **Read-only.** The builder refuses every statement that writes.
 
     A declared type is what the answers rest on, and nothing reads the table
@@ -332,10 +342,18 @@ class NativeColumnLayout(ColumnLayout):
             )
         column = self._column(spec.field)
         if not self._admits(column, spec):
+            if spec.operator in _NEGATIONS:
+                # Its positive matches no value, so it matches every present
+                # one: the store would be every row with a value in the column.
+                outcome = (
+                    "excludes no row the column has a value in, so it would scope "
+                    "nothing but the rows where it is NULL"
+                )
+            else:
+                outcome = "can match no row, so the store would always be empty"
             raise ValidationError(
-                f"scope filter {spec.field} {spec.operator.value} {spec.value!r} can match no "
-                f"row: column {column.name!r} cannot hold that value, so the store would "
-                f"always be empty",
+                f"scope filter {spec.field} {spec.operator.value} {spec.value!r} {outcome}: "
+                f"column {column.name!r} cannot hold that value",
                 context={"column": column.name, "operator": spec.operator.value},
             )
 
@@ -416,7 +434,7 @@ class NativeColumnLayout(ColumnLayout):
                 # midnight there.
                 start = bound if isinstance(bound, datetime) else datetime.combine(bound, time.min)
                 return builder._bind_bound(ZONED_INSTANT, start.replace(tzinfo=UTC))
-            if reading == "string" and own_type and sql_type.reads_as_text:
+            if own_type and reading in sql_type.kinds:
                 # Compared in the column's own type, as a value of it.
                 return builder._bind_bound(reading, sql_type.own(bound))
             return builder._bind_bound(reading, bound)

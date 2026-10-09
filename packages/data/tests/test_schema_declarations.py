@@ -16,6 +16,7 @@ those, because every check keyed on it then passes over nothing.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -328,6 +329,65 @@ def test_an_enum_that_is_not_a_list_is_refused_naming_the_field(
     with pytest.raises(ValidationError) as excinfo:
         DatabaseSchema.from_dict({"fields": {"dept": spell(enum)}})
     assert "'dept'" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "spelled", "problem"),
+    [
+        ({"type": "string", "enum": []}, "`enum: []`", "allows no value"),
+        ({"type": "string", "metadata": {"enum": []}}, "`metadata.enum: []`", "allows no value"),
+        ({"type": "string", "enum": ["a", 1]}, "`enum: ['a', 1]`", "takes strings"),
+        ({"type": "string", "enum": [1, 2]}, "`enum: [1, 2]`", "takes strings"),
+        ({"type": "integer", "enum": [1, "a"]}, "`enum: [1, 'a']`", "takes integers"),
+        ({"type": "integer", "enum": ["1", "2"]}, "`enum: ['1', '2']`", "takes integers"),
+        ({"type": "integer", "enum": [1, 1.5]}, "`enum: [1, 1.5]`", "takes integers"),
+        ({"type": "integer", "enum": [True, False]}, "`enum: [True, False]`", "takes integers"),
+        ({"type": "float", "enum": ["0.5"]}, "`enum: ['0.5']`", "takes finite numbers"),
+        (
+            {"type": "float", "enum": [0.5, float("nan")]},
+            "`enum: [0.5, nan]`",
+            "takes finite numbers",
+        ),
+        ({"type": "float", "enum": [True]}, "`enum: [True]`", "takes finite numbers"),
+        ({"type": "boolean", "enum": [1]}, "`enum: [1]`", "takes booleans"),
+        ({"type": "json", "enum": [{"a": 1}]}, "`enum: [{'a': 1}]`", "no value an enum"),
+        ({"type": "vector", "enum": ["a"]}, "`enum: ['a']`", "no value an enum"),
+        ({"type": "integer", "enum": [1, 1]}, "`enum: [1, 1]`", "more than once"),
+        ({"type": "float", "enum": [1, 1.0]}, "`enum: [1, 1.0]`", "more than once"),
+        ({"type": "string", "enum": ["a", "a"]}, "`enum: ['a', 'a']`", "more than once"),
+        ({"type": "string", "enum": "ab"}, "`enum: 'ab'`", "it is a list"),
+    ],
+)
+def test_an_enum_whose_members_its_filter_schema_cannot_take_is_refused(
+    declaration: dict[str, Any], spelled: str, problem: str
+) -> None:
+    """``DatabaseSource`` publishes an ``enum`` under the field's JSON type.
+
+    A member that type does not take is one no filter value can satisfy: a
+    string on an ``integer`` field offers a model a value the schema refuses.
+    """
+    with pytest.raises(ValidationError, match=re.escape(spelled)) as caught:
+        DatabaseSchema.from_dict({"fields": {"colour": declaration}})
+    assert problem in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("field_type", "enum"),
+    [
+        ("string", ["red", "blue"]),
+        ("text", ["red", "blue"]),
+        ("datetime", ["2024-01-01T00:00:00"]),
+        ("integer", [1, 2]),
+        ("float", [0.5, 1.5]),
+        ("float", [1, 2.5]),
+        ("boolean", [True]),
+    ],
+)
+def test_an_enum_of_distinct_values_its_filter_schema_takes_reads(
+    field_type: str, enum: list[Any]
+) -> None:
+    schema = DatabaseSchema.from_dict({"fields": {"level": {"type": field_type, "enum": enum}}})
+    assert schema.fields["level"].metadata["enum"] == enum
 
 
 @pytest.mark.parametrize(

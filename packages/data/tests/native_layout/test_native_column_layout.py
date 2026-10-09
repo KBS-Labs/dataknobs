@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import re
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -158,6 +159,28 @@ def test_an_integer_key_is_compared_in_its_own_type_only_for_its_own_text() -> N
 def test_a_scope_that_can_match_no_row_is_refused(scope: Filter) -> None:
     """Rendered, it would be FALSE in every statement: a store that is always empty."""
     with pytest.raises(ValidationError, match="can match no row"):
+        _layout([scope])
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        Filter("shape", Operator.NEQ, 5),
+        Filter("size", Operator.NOT_IN, ["a", "b"]),
+        Filter("size", Operator.NOT_BETWEEN, ["a", "b"]),
+        Filter("made", Operator.NEQ, "not a time"),
+    ],
+    ids=lambda f: f"{f.field} {f.operator.value} {f.value!r}",
+)
+def test_a_negated_scope_whose_value_its_column_cannot_hold_is_refused_as_excluding_nothing(
+    scope: Filter,
+) -> None:
+    """A negation of a value no row holds is every present row: it scopes nothing.
+
+    ``Filter.matches`` answers it True for every value of the column, so it
+    could match every row; refusing it is right, but not as matching none.
+    """
+    with pytest.raises(ValidationError, match="excludes no row the column has a value in"):
         _layout([scope])
 
 
@@ -394,26 +417,68 @@ def test_a_scoped_query_with_no_filters_still_carries_the_scope() -> None:
     assert sql.endswith('WHERE "shape" = $1 AND "size" > CAST($2 AS bigint)')
 
 
-def test_a_placeholder_is_typed_by_its_bounds_on_postgres_only() -> None:
-    def where(dialect: str, style: str, spec: Filter) -> str:
-        return (
-            _builder(dialect, style).build_search_query(Query(filters=[spec]))[0].split("WHERE ")[1]
-        )
+def test_a_placeholder_is_typed_by_its_bounds() -> None:
+    def where(dialect: str, style: str, spec: Filter) -> tuple[str, list[Any]]:
+        sql, params = _builder(dialect, style).build_search_query(Query(filters=[spec]))
+        return sql.split("WHERE ")[1], params
 
-    assert where("postgres", "numeric", Filter("size", Operator.GTE, 3.5)) == (
-        '"size" >= CAST($1 AS double precision)'
-    )
     assert where("postgres", "numeric", Filter("size", Operator.IN, [3, 5])) == (
-        '"size" = ANY(CAST($1 AS bigint[]))'
+        '"size" = ANY(CAST($1 AS bigint[]))',
+        [[3, 5]],
     )
     assert where("postgres", "numeric", Filter("size", Operator.EQ, 2**70)) == (
-        '"size" = CAST($1 AS numeric)'
+        '"size" = CAST($1 AS numeric)',
+        [2**70],
     )
-    assert where("sqlite", "qmark", Filter("size", Operator.GTE, 3.5)) == '"size" >= ?'
-    assert where("duckdb", "qmark", Filter("size", Operator.GTE, 3.5)) == '"size" >= ?'
+    assert where("sqlite", "qmark", Filter("size", Operator.GTE, 3)) == ('"size" >= ?', [3])
+    assert where("duckdb", "qmark", Filter("size", Operator.GTE, 3)) == ('"size" >= ?', [3])
     assert where(
         "duckdb", "qmark", Filter("k", Operator.IN, ["12345678-1234-5678-1234-567812345678"])
-    ) == ('"k" IN (CAST(? AS UUID))')
+    ) == ('"k" IN (CAST(? AS UUID))', ["12345678-1234-5678-1234-567812345678"])
+
+
+def test_an_integer_column_is_sent_a_number_it_compares_with_exactly() -> None:
+    """A float bound would be compared by rounding the column past 2**53.
+
+    A whole one is sent as its ``int``; a fractional one as the value halfway
+    between the integers it lies between, which compares with each of them as
+    the bound does and which no engine rounds onto one.
+    """
+
+    def where(dialect: str, style: str, spec: Filter) -> tuple[str, list[Any]]:
+        sql, params = _builder(dialect, style).build_search_query(Query(filters=[spec]))
+        return sql.split("WHERE ")[1], params
+
+    assert where("postgres", "numeric", Filter("size", Operator.EQ, float(2**60))) == (
+        '"size" = CAST($1 AS bigint)',
+        [2**60],
+    )
+    assert where("postgres", "numeric", Filter("size", Operator.GTE, 3.25)) == (
+        '"size" >= CAST($1 AS numeric)',
+        [Decimal("3.5")],
+    )
+    assert where("postgres", "numeric", Filter("size", Operator.IN, [2**53, 0.5])) == (
+        '"size" = ANY(CAST($1 AS numeric[]))',
+        [[2**53, Decimal("0.5")]],
+    )
+    assert where("duckdb", "qmark", Filter("size", Operator.LT, -2.75)) == (
+        '"size" < CAST(? AS DECIMAL(38,1))',
+        [-2.5],
+    )
+    assert where("sqlite", "qmark", Filter("size", Operator.LT, -2.75)) == ('"size" < ?', [-2.5])
+    assert where("postgres", "numeric", Filter("size", Operator.LT, float("inf"))) == (
+        '"size" < CAST($1 AS double precision)',
+        [float("inf")],
+    )
+    # A float column holds what a float bound names: it is sent as it is.
+    weighed = NativeColumnLayout(
+        DatabaseSchema.from_dict({"fields": {"k": "string", "weight": "float"}}), id_column="k"
+    )
+    sql, params = _builder(layout=weighed).build_search_query(
+        Query(filters=[Filter("weight", Operator.GTE, 3.25)])
+    )
+    assert sql.endswith('WHERE "weight" >= CAST($1 AS double precision)')
+    assert params == [3.25]
 
 
 def test_a_zoned_column_takes_a_date_as_its_midnight_in_utc() -> None:
@@ -547,38 +612,3 @@ def test_a_sql_type_that_is_not_a_name_is_refused(
 ) -> None:
     with pytest.raises(ValidationError, match=re.escape(spelled)):
         DatabaseSchema.from_dict({"fields": {"k": declaration}}, keys=NATIVE_FIELD_KEYS)
-
-
-@pytest.mark.parametrize(
-    ("declaration", "spelled", "problem"),
-    [
-        ({"type": "string", "enum": []}, "`enum: []`", "allows no value"),
-        ({"type": "string", "metadata": {"enum": []}}, "`metadata.enum: []`", "allows no value"),
-        ({"type": "string", "enum": ["a", 1]}, "`enum: ['a', 1]`", "all strings"),
-        ({"type": "integer", "enum": [1, "a"]}, "`enum: [1, 'a']`", "all strings"),
-        ({"type": "integer", "enum": [True, False]}, "`enum: [True, False]`", "all strings"),
-        ({"type": "string", "enum": [1, 2]}, "`enum: [1, 2]`", "integer or float field"),
-        ({"type": "integer", "enum": [1, 1]}, "`enum: [1, 1]`", "more than once"),
-        ({"type": "string", "enum": ["a", "a"]}, "`enum: ['a', 'a']`", "more than once"),
-        ({"type": "string", "enum": "ab"}, "`enum: 'ab'`", "it is a list"),
-    ],
-)
-def test_an_enum_that_allows_nothing_usable_is_refused(
-    declaration: dict[str, Any], spelled: str, problem: str
-) -> None:
-    with pytest.raises(ValidationError, match=re.escape(spelled)) as caught:
-        DatabaseSchema.from_dict({"fields": {"colour": declaration}})
-    assert problem in str(caught.value)
-
-
-def test_an_enum_of_distinct_strings_reads() -> None:
-    schema = DatabaseSchema.from_dict(
-        {"fields": {"colour": {"type": "string", "enum": ["red", "blue"]}}}
-    )
-    assert schema.fields["colour"].metadata["enum"] == ["red", "blue"]
-
-
-@pytest.mark.parametrize("field_type", ["integer", "float"])
-def test_an_enum_of_distinct_integers_reads_on_a_numeric_field(field_type: str) -> None:
-    schema = DatabaseSchema.from_dict({"fields": {"level": {"type": field_type, "enum": [1, 2]}}})
-    assert schema.fields["level"].metadata["enum"] == [1, 2]

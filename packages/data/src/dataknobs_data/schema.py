@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from dataknobs_common.exceptions import ValidationError
@@ -41,40 +43,78 @@ NATIVE_FIELD_KEYS: frozenset[str] = FIELD_KEYS | {SQL_TYPE_KEY}
 _METADATA_SHORTHANDS: tuple[str, ...] = ("dimensions", "source_field", "enum", SQL_TYPE_KEY)
 
 
-#: The field types whose allowed values may be written as integers.
-_INTEGER_ENUM_TYPES = frozenset({FieldType.INTEGER, FieldType.FLOAT})
+#: The JSON schema type a field's filter takes, by field type, as
+#: :meth:`~dataknobs_data.sources.database.DatabaseSource.get_schema` publishes
+#: it. A field type absent here (``binary``, the vectors) has no filter.
+FILTER_JSON_TYPES: Mapping[FieldType, str] = MappingProxyType(
+    {
+        FieldType.STRING: "string",
+        FieldType.TEXT: "string",
+        FieldType.INTEGER: "integer",
+        FieldType.FLOAT: "number",
+        FieldType.BOOLEAN: "boolean",
+        FieldType.DATETIME: "string",
+        FieldType.JSON: "object",
+    }
+)
 
 
-def enum_problem(enum: Any, field_type: FieldType | None = None) -> str | None:
+def _is_number(member: Any) -> bool:
+    return (
+        isinstance(member, (int, float)) and not isinstance(member, bool) and math.isfinite(member)
+    )
+
+
+#: What each JSON type an ``enum`` can be published under takes as a member,
+#: and how a refusal names it. ``object`` is not one: an allowed object is no
+#: value a model can be offered to choose.
+_ENUM_MEMBERS: Mapping[str, tuple[Callable[[Any], bool], str]] = MappingProxyType(
+    {
+        "string": (lambda member: isinstance(member, str), "strings"),
+        "integer": (
+            lambda member: isinstance(member, int) and not isinstance(member, bool),
+            "integers (a boolean is not one)",
+        ),
+        "number": (_is_number, "finite numbers (a boolean is not one)"),
+        "boolean": (lambda member: isinstance(member, bool), "booleans"),
+    }
+)
+
+
+#: No member: what a search for a stray member answers when it finds none.
+_NONE = object()
+
+
+def enum_problem(enum: Any, field_type: FieldType) -> str | None:
     """What is wrong with a field's ``enum``, or ``None`` when it is a usable one.
 
     One rule for every reader of the key: the schema reader, and a grounded
-    source given a schema built by hand.
+    source given a schema built by hand. ``DatabaseSource`` publishes an
+    ``enum`` in its filter schema under the field's JSON type
+    (:data:`FILTER_JSON_TYPES`), so each member must be a value of that type.
 
     - Not a list or tuple: a string is iterable, so it would reach a filter
       schema as one allowed value per letter.
     - Empty: it allows no value, and offers a model a field it can match with
       nothing.
-    - Members that are not all strings or all integers. A boolean is not an
-      integer here, though Python counts it as one.
-    - Integers on a field that is not an integer or float field, whose filter
-      schema no integer satisfies. Checked when ``field_type`` is given.
-    - A member named twice.
+    - A member the field's filter type does not take: strings on a ``string``,
+      ``text`` or ``datetime`` field, integers on an ``integer`` field, finite
+      numbers on a ``float`` field, booleans on a ``boolean`` one. A boolean
+      is not a number here, though Python counts it as one. A ``json``,
+      ``binary`` or vector field takes no ``enum``.
+    - A member named twice (``1`` and ``1.0`` are one number).
     """
     if not isinstance(enum, (list, tuple)):
         return "it is a list of the values the field allows"
     if not enum:
         return "an empty list allows no value; leave `enum` out to allow any"
-    if all(isinstance(member, str) for member in enum):
-        pass
-    elif all(isinstance(member, int) and not isinstance(member, bool) for member in enum):
-        if field_type is not None and field_type not in _INTEGER_ENUM_TYPES:
-            return (
-                f"integer members allow a value only on an integer or float field, "
-                f"and this is a {field_type.value} field"
-            )
-    else:
-        return "its members are the allowed values, all strings or all integers"
+    members = _ENUM_MEMBERS.get(FILTER_JSON_TYPES.get(field_type, ""))
+    if members is None:
+        return f"a {field_type.value} field has no value an enum can allow; leave `enum` out"
+    takes, named = members
+    stray = next((member for member in enum if not takes(member)), _NONE)
+    if stray is not _NONE:
+        return f"a {field_type.value} field's filter takes {named}, and {stray!r} is not one"
     if len(set(enum)) != len(enum):
         return "it names a value more than once"
     return None
