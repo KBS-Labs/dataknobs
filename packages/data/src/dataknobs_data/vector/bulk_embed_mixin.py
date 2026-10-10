@@ -186,7 +186,6 @@ class BulkEmbedMixin(OperationGateMixin):
                 and an un-awaited callback raises nothing and runs nothing,
                 so every report would be lost.
         """
-        self._refuse_operation("bulk_embed_and_store")
         if not embedding_fn:
             raise ValueError("embedding_fn is required for bulk_embed_and_store")
         if is_async_callable(on_stored):
@@ -297,7 +296,6 @@ class AsyncBulkEmbedMixin(OperationGateMixin):
         # Checked before the loop, not inside it: an empty `records` never
         # reaches `embed_texts`, and "you gave me no embedder" must still be
         # an error there rather than a silently empty result.
-        self._refuse_operation("bulk_embed_and_store")
         require_embedding_source(embedder, embedding_fn)
 
         text_fields = resolve_text_fields(text_field)

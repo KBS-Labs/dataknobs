@@ -160,3 +160,19 @@ def test_a_changed_schema_rebuilds_the_layout(cls: type) -> None:
 
     with pytest.raises(ValidationError, match="id_column"):
         db.set_schema(DatabaseSchema.create(status=FieldType.STRING))
+
+
+def test_a_subclass_override_that_skips_super_is_refused() -> None:
+    """The gate is installed on each class that defines a body, so a consumer's
+    subclass reaching neither base body nor ``super()`` is refused as well.
+    """
+    ran: list[str] = []
+
+    class Ingesting(SyncPostgresDatabase):
+        def create(self, record: Record) -> str:
+            ran.append("create")
+            return "id"
+
+    with pytest.raises(OperationError, match=r"create.*'tickets'.*read-only"):
+        Ingesting(CONFIG).create(Record({"id": "a", "status": "open"}))
+    assert ran == []

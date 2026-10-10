@@ -1002,7 +1002,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         # Resolve the storage id, honoring an explicit id and minting via the
         # overridable _generate_id() hook when the record carries none.
-        self._refuse_operation("upsert")
         id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Conditional upsert: delegate to update()'s atomic compare-and-set. A
@@ -1045,7 +1044,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Returns:
             List of created record IDs
         """
-        self._refuse_operation("create_batch")
         ids = []
         for record in records:
             id = await self.create(record)
@@ -1071,7 +1069,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Returns:
             List of upserted record IDs, in input order
         """
-        self._refuse_operation("upsert_batch")
         ids = []
         for record in records:
             id = await self.upsert(record)
@@ -1103,7 +1100,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Returns:
             List of deletion results
         """
-        self._refuse_operation("delete_batch")
         results = []
         for id in ids:
             result = await self.delete(id)
@@ -1122,7 +1118,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Returns:
             List of success flags for each update
         """
-        self._refuse_operation("update_batch")
         results = []
         for id, record in updates:
             result = await self.update(id, record)
@@ -1159,7 +1154,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Returns:
             Number of records deleted
         """
-        self._refuse_operation("clear")
         raise NotImplementedError
 
     def supports_transactions(self) -> bool:
@@ -1235,7 +1229,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
             CapabilityNotSupportedError: ``policy="strict"`` on a
                 non-transactional backend.
         """
-        self._refuse_operation("begin_transaction")
         if policy not in VALID_TRANSACTION_POLICIES:
             raise ConfigurationError(
                 f"Unknown transaction policy '{policy}' "
@@ -1261,7 +1254,6 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         :class:`~dataknobs_data.transactions.BufferedTransaction` for the
         atomicity / isolation guarantees.
         """
-        self._refuse_operation("transaction")
         tx = await self.begin_transaction(policy=policy)
         try:
             yield tx
@@ -1861,7 +1853,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         """
         # Resolve the storage id, honoring an explicit id and minting via the
         # overridable _generate_id() hook when the record carries none.
-        self._refuse_operation("upsert")
         id, record = self._resolve_upsert_id(id_or_record, record)
 
         # Conditional upsert: delegate to update()'s atomic compare-and-set. A
@@ -1917,7 +1908,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch."""
-        self._refuse_operation("create_batch")
         ids = []
         for record in records:
             id = self.create(record)
@@ -1936,7 +1926,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         cannot carry a single optimistic-concurrency token, so ``upsert_batch``
         is always unconditional (batch CAS is a separate concern).
         """
-        self._refuse_operation("upsert_batch")
         ids = []
         for record in records:
             id = self.upsert(record)
@@ -1953,7 +1942,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records by ID."""
-        self._refuse_operation("delete_batch")
         results = []
         for id in ids:
             result = self.delete(id)
@@ -1972,7 +1960,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         Returns:
             List of success flags for each update
         """
-        self._refuse_operation("update_batch")
         results = []
         for id, record in updates:
             result = self.update(id, record)
@@ -2005,7 +1992,6 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
 
     def clear(self) -> int:
         """Clear all records from the database."""
-        self._refuse_operation("clear")
         raise NotImplementedError
 
     def connect(self) -> None:

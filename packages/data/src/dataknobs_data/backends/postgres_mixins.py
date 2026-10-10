@@ -10,20 +10,16 @@ reducing code duplication and ensuring consistent behavior.
 from __future__ import annotations
 
 import dataclasses
-import functools
-import inspect
 import logging
 import re
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common import normalize_postgres_connection_config
-from dataknobs_common.callbacks import is_async_callable
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_utils.sql_utils import quote_ident
 
-from ..operation_gate import OperationGateMixin
+from ..operation_gate import GATED_OPERATIONS, OperationGateMixin
 from ..query import Query, SortSpec
 from ..records import Record
 from ..schema import DatabaseSchema, FieldSchema
@@ -364,67 +360,10 @@ class PostgresConnectionValidator:
 
 
 #: What a Postgres backend refuses when it reads a table through the native
-#: layout: every method that writes, creates or drops something, and the
-#: vector reads, which search a JSON column a native table does not have.
-NATIVE_REFUSED: frozenset[str] = frozenset(
-    {
-        # writes
-        "create", "update", "delete", "upsert", "clear",
-        "create_batch", "upsert_batch", "delete_batch", "update_batch",
-        "stream_write", "bulk_embed_and_store", "update_vector", "delete_from_index",
-        "transaction", "begin_transaction",
-        # what creates or drops
-        "enable_vector_support", "create_vector_index", "drop_vector_index",
-        # reads of a column the native layout does not have
-        "vector_search", "hybrid_search", "get_vector_index_stats",
-    }
-)  # fmt: skip
-
-_C = TypeVar("_C", bound=type)
-
-
-def refuses_under_native(cls: _C) -> _C:
-    """Make each :data:`NATIVE_REFUSED` body ``cls`` defines ask the operation gate first.
-
-    Only the class's own bodies are wrapped. One it inherits from the database
-    bases or the vector and bulk-embed mixins asks the gate itself, and a copy
-    of it here would be the per-backend body the mixins' parity guards forbid.
-    Either way :meth:`PostgresLayoutMixin._refuse_operation` answers, before
-    the body runs, so no connection is touched and no row is read first. Each
-    wrapper keeps its method's flavour (a coroutine function stays one, and so
-    does an async generator), so a caller that dispatches on it sees what it
-    saw before.
-    """
-    for name in NATIVE_REFUSED & cls.__dict__.keys():
-        setattr(cls, name, _refusing(name, cls.__dict__[name]))
-    return cls
-
-
-def _refusing(name: str, method: Callable[..., Any]) -> Callable[..., Any]:
-    if inspect.isasyncgenfunction(method):
-
-        @functools.wraps(method)
-        async def refusing_async_gen(self: PostgresLayoutMixin, *args: Any, **kwargs: Any) -> Any:
-            self._refuse_operation(name)
-            async for item in method(self, *args, **kwargs):
-                yield item
-
-        return refusing_async_gen
-    if is_async_callable(method):
-
-        @functools.wraps(method)
-        async def refusing_async(self: PostgresLayoutMixin, *args: Any, **kwargs: Any) -> Any:
-            self._refuse_operation(name)
-            return await method(self, *args, **kwargs)
-
-        return refusing_async
-
-    @functools.wraps(method)
-    def refusing(self: PostgresLayoutMixin, *args: Any, **kwargs: Any) -> Any:
-        self._refuse_operation(name)
-        return method(self, *args, **kwargs)
-
-    return refusing
+#: layout: every gated operation -- each method that writes, creates or drops
+#: something, and the vector reads, which search a JSON column a native table
+#: does not have.
+NATIVE_REFUSED: frozenset[str] = GATED_OPERATIONS
 
 
 class PostgresLayoutMixin(OperationGateMixin):

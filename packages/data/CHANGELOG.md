@@ -1019,15 +1019,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its surface forms in a different table, which the block's columns and
   scope would otherwise be applied to (hand that store over as
   `forms_database=`).
-- **A backend instance can refuse an operation whose body it inherits.**
-  Each shared body of a write, of what creates or drops a vector index, and of
-  the vector search surface -- in `AsyncDatabase`, `SyncDatabase`, the vector
-  operation mixins and the bulk-embed mixins -- first calls
-  `_refuse_operation(operation)`, declared on `OperationGateMixin`
-  (`dataknobs_data.operation_gate`), which permits everything by default. An
+- **A backend instance can refuse an operation, whichever class defines it.**
+  Every body of a write, of what creates or drops a vector index, and of the
+  vector search surface (`GATED_OPERATIONS`, in `dataknobs_data.operation_gate`)
+  first calls `_refuse_operation(operation)`, which permits everything by
+  default. `OperationGateMixin.__init_subclass__` installs the call on each
+  such method a class defines -- in the database bases, the vector and
+  bulk-embed mixins, every backend, and a consumer's subclass -- so an
   override refuses before a row is read and before `bulk_embed_and_store`
-  calls the embedding function. The PostgreSQL backends refuse through it
-  under `layout: native`.
+  calls the embedding function, and no backend opts in by hand. A gated
+  method defined as an async generator is refused with a `TypeError` when its
+  class is defined. The PostgreSQL backends refuse through it under
+  `layout: native`.
 
 - **`SQLQueryBuilder` reads a table through a column layout, and a table with
   ordinary typed columns is one.** A new `layout=` argument takes a

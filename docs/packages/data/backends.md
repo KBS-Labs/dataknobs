@@ -396,15 +396,23 @@ migrate_data(file_db, sqlite_db)
 
 ## A Backend Instance That Refuses an Operation
 
-Each write, each method that creates or drops a vector index, and the vector
-search surface has one body, in the database base classes or in the vector and
-bulk-embed mixins, and a backend inherits it rather than restating it. An
-instance that cannot perform one of them therefore refuses it by overriding
-`_refuse_operation(operation)`, which every such body calls first: before a
-row is read, and before `bulk_embed_and_store` spends the caller's embedding
-function. `operation` is the public method's name, and the default permits
+An instance that cannot perform a write, a method that creates or drops a
+vector index, or the vector search surface refuses it by overriding
+`_refuse_operation(operation)`. Every body of those operations asks it first,
+before a row is read and before `bulk_embed_and_store` spends the caller's
+embedding function, whichever class defines the body: the database base
+classes, the vector and bulk-embed mixins, the backend itself, or a subclass
+of it. `operation` is the public method's name, and the default permits
 everything. The PostgreSQL backend refuses this way when it reads a table
 through `layout: native`.
+
+The operations asked about are `GATED_OPERATIONS`
+(`dataknobs_data.operation_gate`). No body calls the hook by hand:
+`OperationGateMixin.__init_subclass__` wraps each of those methods a class
+defines when the class is defined, so a backend or subclass written later is
+covered without opting in. A gated method must be a plain or coroutine
+function; one defined as an async generator is refused with a `TypeError`
+when its class is defined.
 
 ```python
 from dataknobs_common.exceptions import OperationError
@@ -420,23 +428,25 @@ class ReadOnlyMemoryDatabase(SyncMemoryDatabase):
             raise OperationError(f"{operation}: this database is read-only")
         super()._refuse_operation(operation)
 
-    def create(self, record: Record) -> str:
-        # A body of the backend's own asks too, so one override covers both.
-        self._refuse_operation("create")
-        return super().create(record)
-
 
 db = ReadOnlyMemoryDatabase()
-try:
-    db.bulk_embed_and_store(
+for attempt in (
+    lambda: db.create(Record({"text": "a"})),
+    lambda: db.bulk_embed_and_store(
         [Record({"text": "a"})], "text", embedding_fn=lambda texts: [[1.0]] * len(texts)
-    )
-except OperationError as e:
-    print(e)  # bulk_embed_and_store: this database is read-only
+    ),
+):
+    try:
+        attempt()
+    except OperationError as e:
+        print(e)
+# create: this database is read-only
+# bulk_embed_and_store: this database is read-only
 ```
 
-A body a backend defines itself does not ask unless it calls the hook, as
-`create` does above.
+`create` is a body the memory backend defines itself and
+`bulk_embed_and_store` one it inherits from a mixin; the one override refuses
+both.
 
 ## Performance Tips
 

@@ -45,7 +45,6 @@ from .postgres_mixins import (
     PostgresLayoutMixin,
     PostgresTableManager,
     PostgresVectorSupport,
-    refuses_under_native,
 )
 from .sql_base import (
     SQLRecordSerializer,
@@ -146,7 +145,6 @@ def _ssl_to_sslmode(ssl: Any) -> str | None:
     )
 
 
-@refuses_under_native
 class SyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
     PostgresLayoutMixin,
@@ -1246,7 +1244,6 @@ class SyncPostgresDatabase(
 _pool_manager = ConnectionPoolManager[asyncpg.Pool]()
 
 
-@refuses_under_native
 class AsyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
     PostgresLayoutMixin,
