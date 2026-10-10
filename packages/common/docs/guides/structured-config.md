@@ -134,21 +134,34 @@ class StoreConfig(StructuredConfig):
     @staticmethod
     def _sorted(side):
         out = dict(side)
-        if isinstance(out.get("schema"), str):
-            out["namespace"] = out.pop("schema")
-        elif "schema" in out:
-            out["fields"] = tuple(out.pop("schema"))
+        schema = out.pop("schema", None)  # None: nothing to sort
+        if isinstance(schema, str):
+            out["namespace"] = schema  # over this side's own `namespace`
+        elif schema is not None:
+            out["fields"] = tuple(schema)
         return out
 
 StoreConfig.from_dict(StoreConfig.merge_inputs({"schema": "reporting"}, {"schema": ["name", "size"]}))
 # StoreConfig(namespace='reporting', fields=('name', 'size'))
+StoreConfig.from_dict(StoreConfig.merge_inputs({"schema": "reporting"}, {"namespace": "staging"}))
+# StoreConfig(namespace='staging', fields=())
 ```
 
 Keep the sorting rule the same one `_normalize_dict` applies to a single
 mapping, so a value means the same thing whichever door it came through.
-`PostgresDatabaseConfig` in `dataknobs-data` is the in-tree example: its
-`schema` key is the SQL namespace when it is a string and the declared fields
-otherwise, and both of its hooks ask one predicate which it is.
+
+**Sorting can move a value onto a field the other side also gives**, and the
+merge then decides between them. Above, `{**config, **kwargs}` lets the
+keyword win, whichever spelling either side used, so the mapping's
+`schema: reporting` loses to `namespace="staging"`; within one side, `schema`
+wins over `namespace`. When the precedence within one mapping should hold
+across sides as well, the override has to say so rather than leave it to the
+merge.
+
+`PostgresDatabaseConfig` in `dataknobs-data` is the in-tree example of both:
+its `schema` key is the SQL namespace when it is a string and the declared
+fields otherwise, both of its hooks ask one predicate which it is, and a
+namespace given as `schema` wins over `schema_name` from either side.
 
 ### Unknown-key policy (`_UNKNOWN_KEYS`, `_INPUT_KEYS`)
 
