@@ -168,6 +168,29 @@ def test_a_layout_on_the_public_surface_sorts_reads_and_counts(engine: Engine) -
     assert engine.count(*builder.build_count_query(Query(filters=[present]))) == 2
 
 
+@pytest.mark.parametrize("order", [SortOrder.ASC, SortOrder.DESC])
+def test_a_layout_on_the_public_surface_pages_after_the_last_row(
+    engine: Engine, order: SortOrder
+) -> None:
+    """A stream's page after the first is found by the last row's sort keys,
+    which the engine reads back beside the row: a layout gets that from its
+    ``sort_keys`` alone, a missing value included.
+    """
+    builder = engine.builder("texts", LAYOUT)
+    query = Query(sort_specs=[SortSpec("name", order), SortSpec("id")], limit_value=1)
+    seen: list[Record] = []
+    after = None
+    while True:
+        sql, params, keys = builder.build_page_query(query, after)
+        page, after = builder.page_records(engine.fetch(sql, params), query, keys)
+        seen.extend(page)
+        if not page:
+            break
+    every = _records(engine, Query(sort_specs=query.sort_specs))
+    assert [r.storage_id for r in seen] == [r.storage_id for r in every]
+    assert [r.storage_id for r in seen][-1] == "a3", "a missing name sorts last either way"
+
+
 @pytest.mark.parametrize("layout", [NativeColumnLayout, TextTableLayout])
 def test_a_layout_reaches_for_nothing_private_on_the_builder(layout: type[ColumnLayout]) -> None:
     """The public surface is complete only while no layout needs more than it."""

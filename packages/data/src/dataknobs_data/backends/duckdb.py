@@ -35,7 +35,7 @@ from .sql_base import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Iterator, Sequence
     from typing import ClassVar
 
     from ..records import Record
@@ -219,10 +219,14 @@ class DuckDBLayoutMixin(FileLayoutMixin):
             sql, params = self.query_builder.build_complex_search_query(query)
         else:
             sql, params = self.query_builder.build_search_query(query)
-        records = [self.query_builder.record_from_row(row) for row in self._rows(sql, params)]
-        if fields := query.fields:
-            records = [record.project(fields) for record in records]
-        return records
+        return self.query_builder.records_from_rows(self._rows(sql, params), query)
+
+    def _page_rows(
+        self, page: Query, after: Sequence[Any] | None
+    ) -> tuple[list[Record], list[Any] | None]:
+        """One page of a stream: the body both twins' page reads run."""
+        sql, params, keys = self.query_builder.build_page_query(page, after)
+        return self.query_builder.page_records(self._rows(sql, params), page, keys)
 
     def _count_rows(self, query: Query | None = None) -> int:
         """How many records ``query`` matches: the body both twins' ``count`` run."""
@@ -838,19 +842,30 @@ class AsyncDuckDBDatabase(
     async def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
-        """Stream the records a query matches, a page of ``search`` at a time.
+        """Stream the records a query matches, a page at a time.
 
         Each page is its own statement, sorted by the query's sort and then by
-        the key (see :func:`~dataknobs_data.streaming.stream_page`), and runs
-        under the connection lock as every statement here does: a DuckDB
-        result left open between records is cut short, with no error, by the
-        next statement on its connection. The query's limit, offset and
-        projection hold; with no sort the stream promises no order.
+        the key, and each after the first begins after the last row read (see
+        :func:`~dataknobs_data.streaming.stream_page`). Each runs under the
+        connection lock as every statement here does: a DuckDB result left
+        open between records is cut short, with no error, by the next
+        statement on its connection. A row written or removed ahead of the
+        stream's position between two pages moves no other row. The query's
+        limit, offset and projection hold; with no sort the stream promises no
+        order.
         """
         from ..streaming import aiter_search_pages
 
-        async for record in aiter_search_pages(self.search, query, config):
+        async for record in aiter_search_pages(self._search_page, query, config):
             yield record
+
+    async def _search_page(
+        self, page: Query, after: Sequence[Any] | None
+    ) -> tuple[list[Record], list[Any] | None]:
+        """One page of a stream, after the row ``after`` holds the sort keys of."""
+        self._check_connection()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, self._page_rows, page, after)
 
     async def stream_write(
         self, records: AsyncIterator[Record], config: StreamConfig | None = None
@@ -1281,17 +1296,27 @@ class SyncDuckDBDatabase(
     def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
-        """Stream the records a query matches, a page of ``search`` at a time.
+        """Stream the records a query matches, a page at a time.
 
         Each page is its own statement, sorted by the query's sort and then by
-        the key (see :func:`~dataknobs_data.streaming.stream_page`): a DuckDB
-        result left open between records is cut short, with no error, by the
-        next statement on its connection. The query's limit, offset and
-        projection hold; with no sort the stream promises no order.
+        the key, and each after the first begins after the last row read (see
+        :func:`~dataknobs_data.streaming.stream_page`): a DuckDB result left
+        open between records is cut short, with no error, by the next
+        statement on its connection. A row written or removed ahead of the
+        stream's position between two pages moves no other row. The query's
+        limit, offset and projection hold; with no sort the stream promises no
+        order.
         """
         from ..streaming import iter_search_pages
 
-        yield from iter_search_pages(self.search, query, config)
+        yield from iter_search_pages(self._search_page, query, config)
+
+    def _search_page(
+        self, page: Query, after: Sequence[Any] | None
+    ) -> tuple[list[Record], list[Any] | None]:
+        """One page of a stream, after the row ``after`` holds the sort keys of."""
+        self._check_connection()
+        return self._page_rows(page, after)
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None

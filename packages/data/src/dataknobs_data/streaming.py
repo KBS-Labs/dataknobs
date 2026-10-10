@@ -18,9 +18,21 @@ from .query import Query, SortSpec, is_storage_key_field, RESERVED_KEY_FIELD
 
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+    from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+    from typing import TypeAlias
+
     from .query_logic import ComplexQuery
     from .records import Record
+
+    #: One page of a stream: ``(page, after)`` to the page's records and the
+    #: sort keys of its last row, ``None`` when it has none. ``after`` is the
+    #: previous page's keys, ``None`` for the first page.
+    SearchPage: TypeAlias = Callable[
+        [Query, Sequence[Any] | None], tuple[list[Record], Sequence[Any] | None]
+    ]
+    AsyncSearchPage: TypeAlias = Callable[
+        [Query, Sequence[Any] | None], Awaitable[tuple[list[Record], Sequence[Any] | None]]
+    ]
 
 
 class ConflictPolicy(str, Enum):
@@ -554,25 +566,32 @@ async def async_run_stream_write(
 
 
 def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
-    """The ``search`` that reads a stream's next page, or ``None`` when the stream is done.
+    """The query for a stream's next page, or ``None`` when the stream is done.
 
-    For a backend that streams by paging through ``search``. Each page is a
-    search of its own, so the pages agree with one another only if each sorts
-    the rows the same way: a sort that ties -- or no sort -- leaves the order
-    of the tied rows to the engine, page by page, and a row can then be read
-    twice or never. So each page sorts by the query's own sort and then by the
-    key (:data:`~dataknobs_data.query.RESERVED_KEY_FIELD`). That is how the
-    pages are made consistent, not an order the stream promises: as with
-    ``search``, a query with no sort promises none.
+    For a backend that streams a page at a time, each page its own statement
+    (see :meth:`~dataknobs_data.backends.sql_base.SQLQueryBuilder.build_page_query`).
+    Each page sorts by the query's own sort and then by the key
+    (:data:`~dataknobs_data.query.RESERVED_KEY_FIELD`), so the order is
+    total: no two rows tie, and a page can begin strictly after the last row
+    the stream read. That is how the pages fit together, not an order the
+    stream promises: as with ``search``, a query with no sort promises none.
 
-    Consistent, that is, while two things hold. No two rows may share the key,
-    which a table's primary key promises and a view does not. And nobody may
-    write the table during the stream: each page is found by its offset, so a
-    row added or removed ahead of the stream's position between two pages moves
-    the rows after it, and one is then read twice or skipped.
+    The first page skips the query's offset. Every later page skips nothing,
+    and is found instead by the last row's sort keys, so what it reads does
+    not depend on how many rows lie ahead of the stream's position:
 
-    The query's offset, limit and projection hold: the stream returns what
-    ``search(query)`` would, one page at a time.
+    - A row present for the whole stream, its sort value unchanged, is read
+      once, whatever else is written meanwhile.
+    - A row written meanwhile is read if it sorts after the stream's position,
+      and not if it sorts before. A row whose sort value changes moves with it,
+      so it can be read twice or not at all.
+    - The key must be unique, which a table's primary key promises and a view
+      need not. Of rows equal on every sort key and on the key, one ending a
+      page is read and the rest are not; none is read twice.
+
+    The query's offset, limit and projection hold: over a table nobody writes,
+    the stream returns the rows ``search(query)`` would, one page at a time,
+    ties in the sort broken by the key.
 
     Args:
         query: The caller's query, which is not changed.
@@ -591,24 +610,51 @@ def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
     page = query.copy()
     if not any(is_storage_key_field(spec.field) for spec in page.sort_specs):
         page.sort_specs.append(SortSpec(RESERVED_KEY_FIELD))
-    page.offset_value = (query.offset_value or 0) + streamed
+    page.offset_value = query.offset_value if streamed == 0 else None
     page.limit_value = limit
     return page
 
 
+def _moved_on(after: Sequence[Any] | None, last: Sequence[Any] | None) -> Sequence[Any] | None:
+    """``last``, the keys the next page is read after, once it is past ``after``.
+
+    A page begins strictly after the row ``after`` holds the keys of, so its
+    last row cannot hold them too. One that does was read by a page reader
+    that ignored ``after``, or over a key the driver did not return as it is
+    (see :meth:`~dataknobs_data.backends.column_layout.ColumnLayout.sort_keys`),
+    and every page after it would be the same page: a stream that never ends.
+    """
+    if after is not None and last is not None and list(last) == list(after):
+        raise OperationError(
+            "a stream's page did not move: it ended on the sort keys it was read after, "
+            "so every page after it would be the same page",
+            context={"after": list(after)},
+        )
+    return last
+
+
 def iter_search_pages(
-    search: Callable[[Query], list[Record]], query: Query | None, config: StreamConfig | None
+    search_page: SearchPage, query: Query | None, config: StreamConfig | None
 ) -> Iterator[Record]:
     """Stream what ``search(query)`` returns, a :func:`stream_page` at a time.
 
-    No statement is held open between pages, so no read a stream left open
+    ``search_page(page, after)`` reads ``page`` after the row whose sort keys
+    ``after`` holds -- ``None`` for the first page -- and returns its records
+    and its last row's sort keys, which the next page is read after. No
+    statement is held open between pages, so no read a stream left open
     blocks a writer, and nothing run between records cuts a page short.
+
+    Raises:
+        OperationError: When a page ends on the sort keys it was read after,
+            so the next page would be the same one (see :func:`_moved_on`).
     """
     query = query if query is not None else Query()
     batch_size = (config or StreamConfig()).batch_size
     streamed = 0
+    after: Sequence[Any] | None = None
     while (page := stream_page(query, streamed, batch_size)) is not None:
-        records = search(page)
+        records, last = search_page(page, after)
+        after = _moved_on(after, last)
         yield from records
         streamed += len(records)
         # A short page is the last; ``StreamConfig`` refuses a batch size of 0.
@@ -617,16 +663,16 @@ def iter_search_pages(
 
 
 async def aiter_search_pages(
-    search: Callable[[Query], Awaitable[list[Record]]],
-    query: Query | None,
-    config: StreamConfig | None,
+    search_page: AsyncSearchPage, query: Query | None, config: StreamConfig | None
 ) -> AsyncIterator[Record]:
-    """:func:`iter_search_pages` over an async ``search``."""
+    """:func:`iter_search_pages` over an async ``search_page``."""
     query = query if query is not None else Query()
     batch_size = (config or StreamConfig()).batch_size
     streamed = 0
+    after: Sequence[Any] | None = None
     while (page := stream_page(query, streamed, batch_size)) is not None:
-        records = await search(page)
+        records, last = await search_page(page, after)
+        after = _moved_on(after, last)
         for record in records:
             yield record
         streamed += len(records)

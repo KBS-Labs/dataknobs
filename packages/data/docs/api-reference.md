@@ -748,17 +748,35 @@ obligation: `db.stream_write(records)` stops consuming on a failed batch, and
 
 #### Paging through `search`
 
-A backend with no server-side cursor streams one `search` per page. The
+A backend with no server-side cursor streams one statement per page. The
 SQLite and DuckDB backends do, through `iter_search_pages` /
 `aiter_search_pages` (`dataknobs_data.streaming`), which take the backend's
-`search`, the query and the config. Each page is `stream_page(query,
+page reader, the query and the config. Each page is `stream_page(query,
 streamed, batch_size)`: the query's own sort and then the key, with the
-query's offset and limit honoured. So on a table nobody writes during the
-stream, a sort that ties still pages every row once, provided no two rows
-share a key. Each page is found by its offset, so a row added or removed ahead
-of the stream's position between pages moves the rest: one can then be read
-twice or skipped. The key is how the pages agree, not an order the stream
+query's limit honoured and its offset skipped on the first page. The reader,
+`search_page(page, after)`, returns the page's records and its last row's
+sort keys, and the next page begins strictly after a row holding them —
+`SQLQueryBuilder.build_page_query(page, after)` writes that statement and
+`page_records` splits its rows. So a stream of a table nobody writes reads
+the rows `search(query)` returns, ties in the sort broken by the key. On a
+table somebody writes meanwhile, a row present for the whole stream, its sort
+value unchanged, is read once; a row written meanwhile is read if it sorts
+after the stream's position; and a row whose sort value changes moves with
+it, so it can be read twice or not at all. The key must be unique: of two
+rows agreeing on every sort key and the key, the one after a page boundary is
+not read. The key is how the pages fit together, not an order the stream
 promises.
+
+The next page is placed by the keys as the driver returned them, so each key
+a layout sorts by must come back from its driver as exactly the value it is
+(`ColumnLayout.sort_keys`). A page that ends on the keys it was read after —
+a reader that ignored `after`, or a key the driver changed — raises
+`OperationError` rather than being read again forever.
+
+What a page costs depends on the sort. With no sort, a page is ordered by the
+key alone, and on a SQLite table this package created each page seeks the
+primary key's index from the last row read. A sort on a field reads every row
+the query matches, on each page.
 
 `StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
 it loads from a plain dict via `StreamConfig.from_dict({"batch_size":

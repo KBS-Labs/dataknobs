@@ -383,13 +383,22 @@ adds:
   `vector_enabled: true`. On DuckDB `read_only` is on by default under
   `layout: native`, and `read_only: false` is refused.
 - **A view is read in place**, as a table is.
-- **`stream_read` pages through `search`**, each page sorted by the query's
-  sort and then by the key, and the query's limit, offset and projection hold.
-  On a table nobody writes during the stream, every row is read once whatever
-  the batch size. Each page is found by its offset, so a row the owner adds or
-  removes ahead of the stream's position between two pages moves the rows
-  after it: one can then be read twice or skipped. The key settles ties only
-  if no two rows share it, which a view does not promise. No statement stays
+- **`stream_read` reads a page at a time**, each page sorted by the query's
+  sort and then by the key, and the query's limit, offset and projection hold:
+  on a table nobody writes, the stream reads the rows `search` returns, ties
+  in the sort broken by the key. Each page after the first begins strictly
+  after the last row read, by that row's sort keys, so the owner may write
+  the table meanwhile. A row present for the whole stream, its sort value
+  unchanged, is read once; a row written meanwhile is read if it sorts after
+  the stream's position; a row whose sort value changes moves with it, so it
+  can be read twice or not at all. The key must be unique, which a view does
+  not promise: of two rows agreeing on every sort key and the key, the one
+  after a page boundary is not read. A sort key is compared as the driver
+  returns it, so on DuckDB a column declared text sorts as its text (an enum
+  too, which DuckDB itself orders by its declaration), and a time sorts as
+  the driver returns it: cut to the microsecond, and an infinite one, or one
+  beyond the years Python holds, as the earliest or the latest Python holds.
+  No statement stays
   open between pages: an open SQLite read would lock the file's owner out of
   writing it, and a DuckDB result left open is cut short by the next statement
   on its connection. As with `search`, a query with no sort promises no order.

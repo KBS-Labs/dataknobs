@@ -81,6 +81,16 @@ _NEGATIONS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN})
 
 _TEXT_TYPE = MappingProxyType({"postgres": "TEXT", "sqlite": "TEXT", "duckdb": "VARCHAR"})
 
+#: What a page query selects its ``i``-th sort key as, beside a layout's own
+#: columns: ``f"{PAGE_KEY_PREFIX}{i}"``. No column a layout selects may begin
+#: with it (see
+#: :meth:`~dataknobs_data.backends.sql_base.SQLQueryBuilder.build_page_query`).
+PAGE_KEY_PREFIX = "_dk_page_key_"
+
+#: The earliest and the latest time DuckDB's driver returns as itself: a time
+#: beyond them, an infinite one included, comes back as one of them.
+_DUCKDB_TIME_RANGE = ("TIMESTAMP '0001-01-01 00:00:00'", "TIMESTAMP '9999-12-31 23:59:59.999999'")
+
 
 class ColumnLayout(ABC):
     """How one table's rows are laid out: what a field is, and what a row becomes.
@@ -117,6 +127,11 @@ class ColumnLayout(ABC):
     #: :class:`JsonbLayout` may: the builder refuses any other layout claiming it.
     writable: ClassVar[bool] = False
 
+    #: Whether the key column holds no ``NULL``. A page of a stream is then
+    #: found without asking for rows with no key, so an index on the column
+    #: serves it; claim it only of a column the table declares ``NOT NULL``.
+    key_never_null: ClassVar[bool] = False
+
     @property
     def scope(self) -> tuple[Filter, ...]:
         """The filters every read is ANDed with: which rows the table holds for this store."""
@@ -143,11 +158,22 @@ class ColumnLayout(ABC):
 
     @abstractmethod
     def sort_keys(self, builder: SQLQueryBuilder, field: str) -> list[str]:
-        """The ``ORDER BY`` keys for one field, most significant first."""
+        """The ``ORDER BY`` keys for one field, most significant first.
+
+        A stream also selects each key and compares rows with the value the
+        driver returns for it (see
+        :meth:`~dataknobs_data.backends.sql_base.SQLQueryBuilder.build_page_query`),
+        so the driver must return a key as exactly the value it is: bound back,
+        it must compare equal to itself and nowhere else, and order as the
+        sort does. A missing value is ``NULL``.
+        """
 
     @abstractmethod
     def select_list(self, builder: SQLQueryBuilder) -> str:
-        """What a statement reading whole rows selects."""
+        """What a statement reading whole rows selects.
+
+        No column it names may begin with :data:`PAGE_KEY_PREFIX`.
+        """
 
     @abstractmethod
     def key_clause(
@@ -168,6 +194,8 @@ class JsonbLayout(ColumnLayout):
     """
 
     writable = True
+    #: ``id`` is the table's primary key.
+    key_never_null = True
 
     def check_dialect(self, dialect: str) -> None:
         """Any: a dialect it has no JSON reading for compares untyped."""
@@ -246,8 +274,9 @@ class NativeColumnLayout(ColumnLayout):
         scope: Filters fixing which rows of the table this store is.
 
     Raises:
-        ValidationError: When the schema declares no column, ``id_column`` is
-            not declared or cannot key a row, a ``sql_type`` is not a non-empty
+        ValidationError: When the schema declares no column, a column begins
+            with :data:`PAGE_KEY_PREFIX`, ``id_column`` is not declared or
+            cannot key a row, a ``sql_type`` is not a non-empty
             string or is not registered, or a scope filter names an undeclared
             column or a value its column cannot hold.
     """
@@ -266,6 +295,13 @@ class NativeColumnLayout(ColumnLayout):
                 "a native layout reads the columns its schema declares, and this schema "
                 "declares none",
                 context={"id_column": id_column},
+            )
+        reserved = sorted(name for name in schema.fields if name.startswith(PAGE_KEY_PREFIX))
+        if reserved:
+            raise ValidationError(
+                f"columns {reserved} begin with {PAGE_KEY_PREFIX!r}, which a stream's page "
+                f"query selects its sort keys as",
+                context={"columns": reserved},
             )
         self._columns: Mapping[str, _Column] = MappingProxyType(
             {
@@ -497,14 +533,46 @@ class NativeColumnLayout(ColumnLayout):
                 context={"table": builder.table_name, "column": column.name},
             )
         if sql_type.stores_text or sql_type.reads_as_text:
-            return [builder.code_point_order(self._text(builder, column))]
+            text = self._text(builder, column)
+            if builder.dialect == "duckdb" and text == column.quoted:
+                # A column declared text may be an enum, which DuckDB orders by
+                # its declaration and compares with a string as text.
+                text = f"CAST({text} AS VARCHAR)"
+            return [builder.code_point_order(text)]
         times = sql_type.kinds & {NAIVE_TIME, ZONED_INSTANT}
         if times:
             # Ordered by the time a filter reads it as: on SQLite, which holds
             # the text it was given, its text orders a zoned value by wall clock.
             reading = ZONED_INSTANT if ZONED_INSTANT in times else NAIVE_TIME
-            return [self._time_expr(builder, column, reading)[1]]
+            key = self._time_expr(builder, column, reading)[1]
+            if builder.dialect == "duckdb":
+                key = self._duckdb_time_key(key, zoned=reading == ZONED_INSTANT)
+            return [key]
         return [column.quoted]
+
+    @staticmethod
+    def _duckdb_time_key(key: str, *, zoned: bool) -> str:
+        """A DuckDB time column's sort key, as its driver returns it.
+
+        A stream reads its keys back and binds them, so the key is the value
+        the driver returns rather than the column's own:
+
+        - a zoned time is its time in UTC, as the driver needs ``pytz`` to
+          return a zoned one, and that orders the same;
+        - a time finer than a microsecond is cut to one, as the driver cuts it;
+        - a time beyond the years Python holds, an infinite one included, is
+          the earliest or the latest Python holds, as the driver returns it.
+
+        Times the driver returns alike then tie, and the key breaks the tie.
+        """
+        if zoned:
+            key = f"timezone('UTC', {key})"
+        earliest, latest = _DUCKDB_TIME_RANGE
+        key = f"CAST({key} AS TIMESTAMP)"
+        return (
+            f"CASE WHEN {key} > {latest} THEN {latest} "
+            f"WHEN {key} < {earliest} THEN {earliest} ELSE {key} END"
+        )
 
     def select_list(self, builder: SQLQueryBuilder) -> str:
         """The declared columns, each under its own name.
