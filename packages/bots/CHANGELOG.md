@@ -194,10 +194,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A grounded `database` source builds its backend holding the declared
-  `schema:`**, where it used to set the schema after connecting. No backend
-  other than a native Postgres table reads it at construction, so for every
-  other backend the result is the same. A refusal from the backend's
-  configuration now names the source, as a schema refusal already did.
+  `schema:`**, where it used to set the schema after connecting. The
+  `schema:` option is now forwarded to the backend's configuration as well as
+  read by the source, so every backend parses it at construction, and a
+  native Postgres table derives its column layout from it. Two consequences:
+  a declaration the backend refuses fails before anything connects (a JSONB
+  Postgres table refuses a field naming a `sql_type`, which only a native
+  table reads), and a consumer-registered backend whose configuration refuses
+  keys it does not declare now receives `schema` and must accept it. A
+  refusal from the backend's configuration now names the source, as a schema
+  refusal already did.
 - **A `database` grounded source reads `schema:` through the shared schema
   reader.** Its `schema:` is read by `extract_schema_from_config`, the function
   a database config's `schema:` goes through, in place of a copy of its own,
