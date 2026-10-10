@@ -71,7 +71,10 @@ def test_a_schema_given_in_code_is_read_into_a_database_schema(cls: type, schema
     config = cls(schema=schema, **_required(cls))
     assert isinstance(config.schema, DatabaseSchema)
     assert list(config.schema.fields) == ["k"]
-    assert config == cls.from_dict({"schema": schema, **_required(cls)})
+    # The schema, not the whole config: ``from_dict`` also resolves a Postgres
+    # connection from ``POSTGRES_*`` / ``DATABASE_URL``, which a config built
+    # in code deliberately does not.
+    assert config.schema == cls.from_dict({"schema": schema, **_required(cls)}).schema
 
 
 @pytest.mark.parametrize("cls", CONFIGS, ids=_name)
