@@ -131,6 +131,26 @@ The context-manager form follows the same rule, so `with PostgresDB(connector) a
 
 Note that psycopg2's `with connection:` block commits or rolls back a **transaction** — it does not close the connection. That is why closing is explicit here.
 
+### Rows and streams
+
+`query()` returns a DataFrame, which widens an integer column holding a `NULL` to float `NaN` and turns a time into a pandas `Timestamp`. `query_rows()` returns the same rows as a list of dicts holding the driver's own values, and runs on the wrappers' connection, as `query()` does:
+
+```python
+rows = db.query_rows("SELECT id, n FROM events WHERE n > %(floor)s", {"floor": 3})
+```
+
+`stream_rows()` yields rows through a server-side cursor, `batch_size` per round trip, inside a read-only transaction:
+
+```python
+from contextlib import closing
+
+with closing(db.stream_rows("SELECT id, n FROM events", batch_size=500)) as rows:
+    for row in rows:
+        ...
+```
+
+A cursor lives only as long as its transaction, so the stream reads on a connection opened for that iterator alone (`DotenvPostgresConnector.open_conn()`), and anything you run on the object between rows — a `query()`, an `execute()`, a second stream — cannot end it. That connection closes when the iterator is exhausted or closed; close one you abandon part-way, as above, or it holds a server backend until `PostgresDB.close()` reaches it.
+
 ### `PostgresRecordFetcher`
 
 Fetches rows by ID, with `fields_to_retrieve` naming the **columns** to return — the same meaning the parameter has on the other `RecordFetcher` implementations, which use it for pandas column selection. Every identifier is quoted, so mixed-case and reserved-word column names work, and a value that is not a column name is rejected rather than becoming part of the statement.

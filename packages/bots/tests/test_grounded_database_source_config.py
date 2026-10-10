@@ -459,3 +459,44 @@ async def test_a_bot_whose_source_declares_an_unknown_type_is_not_built() -> Non
     with pytest.raises(ValidationError, match=r"source 'case_studies'.*'money'"):
         async with await BotTestHarness.create(bot_config=config, main_responses=[]):
             pass
+
+
+# --------------------------------------------------------------------------
+# ``schema:`` reaches the backend, which reads the columns it needs from it
+# --------------------------------------------------------------------------
+
+
+async def test_a_native_postgres_refusal_names_the_source() -> None:
+    """A native table's columns are read at construction, so the declaration must arrive then.
+
+    Built without it, the backend has no columns to find ``id_column`` among,
+    and its refusal named a table and nothing a reader of the bot config would
+    recognise. No server is needed: the refusal precedes any connection.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        await _create_database_source(
+            _config(
+                backend="postgres",
+                layout="native",
+                table="cases",
+                id_column="case_id",
+                schema={"fields": {"id": {"type": "string", "sql_type": "uuid"}}},
+            )
+        )
+    message = str(excinfo.value)
+    assert message.startswith("source 'case_studies': ")
+    assert "'case_id'" in message
+    assert excinfo.value.context["source"] == "case_studies"
+
+
+async def test_a_column_type_is_refused_where_no_layout_reads_one() -> None:
+    """``sql_type`` is read only by a native table's layout; elsewhere it is refused by name."""
+    with pytest.raises(ValidationError) as excinfo:
+        await _create_database_source(
+            _config(
+                backend="memory", schema={"fields": {"id": {"type": "string", "sql_type": "uuid"}}}
+            )
+        )
+    message = str(excinfo.value)
+    assert message.startswith("source 'case_studies': ")
+    assert "'sql_type'" in message

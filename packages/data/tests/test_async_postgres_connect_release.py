@@ -67,22 +67,19 @@ async def test_no_reader_reaches_the_query_builder_before_connect_binds_it():
     The asymmetry was the finding: one reader re-created the builder under a
     `hasattr` check and the other reached for it directly, so the pair read as
     though `stream_read` had lost a guard it needed. It never needed one.
-    `connect()` binds the builder before it sets `_connected`, and every reader
-    calls `_check_connection()` first, so the unbound state is unreachable from
-    the outside -- which is what makes the guard removable rather than merely
-    unused.
+    The builder is made at construction, from the table's layout, since it
+    needs no connection; and every reader calls `_check_connection()` first, so
+    no reader runs a statement before `connect()`.
 
     Pinned from the outside, through the two doors, because the claim is about
-    reachability rather than about either statement: an ordering change inside
-    `connect()` that set `_connected` first would make this fail without
-    touching either reader.
+    reachability rather than about either statement.
     """
     db = AsyncPostgresDatabase(
         host="127.0.0.1", port=1, database="x", user="u", password="p", table="t"
     )
     query = Query(filters=[Filter("a", Operator.EQ, 1)])
 
-    assert db.query_builder is None, "declared, unbound, and the sync twin's shape"
+    assert db.query_builder is not None, "made at construction, as in the sync twin"
 
     with pytest.raises(RuntimeError, match="not connected"):
         await db.search(query)

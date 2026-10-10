@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import asyncpg
 import psycopg2
+from psycopg2.errors import InsufficientPrivilege
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -42,11 +43,11 @@ from .postgres_mixins import (
     PostgresBaseConfig,
     PostgresConnectionValidator,
     PostgresErrorHandler,
+    PostgresLayoutMixin,
     PostgresTableManager,
     PostgresVectorSupport,
 )
 from .sql_base import (
-    SQLQueryBuilder,
     SQLRecordSerializer,
     SQLTableManager,
     constraint_violation_error,
@@ -147,6 +148,7 @@ def _ssl_to_sslmode(ssl: Any) -> str | None:
 
 class SyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
+    PostgresLayoutMixin,
     SyncDatabase,
     BulkEmbedMixin,  # Must come before SyncVectorOperationsMixin to override bulk_embed_and_store
     SyncVectorOperationsMixin,
@@ -167,6 +169,7 @@ class SyncPostgresDatabase(
     """
 
     CONFIG_CLS: ClassVar[type[PostgresDatabaseConfig]] = PostgresDatabaseConfig
+    _PARAM_STYLE: ClassVar[str] = "pyformat"
 
     def _setup(self) -> None:
         """Derive backend attributes from the typed config.
@@ -225,21 +228,14 @@ class SyncPostgresDatabase(
         # place that can be reached before ``connect()``.
         self.db: PostgresDB = None  # type: ignore[assignment]  # set in connect()
         self._owns_db = False  # set in _open_connection(), which builds it
-        # The same treatment, for the same reason: left inferred, this reads as
-        # ``None`` and every ``self.query_builder.build_*`` below becomes an
-        # attribute error on ``None``. It sits one line from the attribute that
-        # made the point, and had the identical defect.
-        self.query_builder: SQLQueryBuilder = None  # type: ignore[assignment]  # set in connect()
+        # The one query builder, made with the table's layout. It needs no
+        # connection, so a native configuration the layout refuses fails here.
+        self._setup_layout()
 
     def connect(self) -> None:
         """Connect to the PostgreSQL database."""
         if self._connected:
             return  # Already connected
-
-        # Initialize query builder with pyformat style for psycopg2
-        self.query_builder = SQLQueryBuilder(
-            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
-        )
 
         # Open connection and ensure table; if the database doesn't exist
         # and ensure_database is enabled, create it and retry.
@@ -275,8 +271,8 @@ class SyncPostgresDatabase(
 
         The config dict is normalized up-front by
         ``normalize_postgres_connection_config`` (via
-        ``_parse_postgres_config``), so ``host``/``database``/``user``/
-        ``port`` are already populated from ``connection_string``, explicit
+        ``PostgresDatabaseConfig._normalize_dict``), so ``host``/``database``/
+        ``user``/``port`` are already populated from ``connection_string``, explicit
         keys, or ``POSTGRES_*`` env-var fallbacks. No secondary dotenv
         lookup is needed here — the normalizer is the single env-var
         contract.
@@ -434,19 +430,15 @@ class SyncPostgresDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
-            # get_table_exists_sql returns a positional tuple or a named dict
-            # depending on param_style; this manager is built with
-            # param_style="pyformat" (see __init__), which pins the dict branch
-            # -- the one PostgresDB.query binds.
-            df = self.db.query(exists_sql, cast("dict[str, Any]", params))
-            exists = bool(df.iloc[0, 0]) if not df.empty else False
-            if not exists:
-                raise RuntimeError(
-                    f"Table {self.schema_name}.{self.table_name} does not exist "
-                    "and auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
+            exists_sql, params = self._relation_exists_query()
+            # The query is in this twin's ``pyformat`` style, so its parameters
+            # are the named dict ``PostgresDB.query_rows`` binds.
+            try:
+                rows = self.db.query_rows(exists_sql, cast("dict[str, Any]", params))
+            except InsufficientPrivilege as e:
+                raise self._schema_usage_error() from e
+            if not (rows and next(iter(rows[0].values()))):
+                raise self._missing_relation_error()
             return
 
         create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
@@ -473,8 +465,19 @@ class SyncPostgresDatabase(
         return {str(key): value for key, value in row.to_dict().items()}
 
     def _row_to_record(self, row: dict[str, Any]) -> Record:
-        """Convert a database row to a Record (delegates to shared serializer)."""
-        return self.row_to_record(row)
+        """A row as a record, through the table's layout."""
+        return self.query_builder.record_from_row(row)
+
+    def _rows(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        """The rows a read returns, each a plain mapping of column to value.
+
+        Read as rows rather than through a DataFrame, which would turn a
+        ``NULL`` in an integer column into a float ``NaN`` and a time into a
+        pandas ``Timestamp``: a table's own columns come back as the driver
+        reads them. Never on the connection ``self.db.get_conn()`` hands a
+        caller, whose transaction is the caller's to end.
+        """
+        return self.db.query_rows(sql, {f"p{i}": value for i, value in enumerate(params)})
 
     def create(self, record: Record) -> str:
         """Create a new record."""
@@ -502,17 +505,8 @@ class SyncPostgresDatabase(
     def read(self, id: str) -> Record | None:
         """Read a record by ID."""
         self._check_connection()
-        sql = f"""
-        SELECT id, data, metadata
-        FROM {self._q_qualified}
-        WHERE id = %(id)s
-        """
-        df = self.db.query(sql, {"id": id})
-
-        if df.empty:
-            return None
-
-        return self._row_to_record(self._frame_row_to_dict(df.iloc[0]))
+        rows = self._rows(*self.query_builder.build_read_query(id))
+        return self._row_to_record(rows[0]) if rows else None
 
     def get_version(self, id: str) -> str | None:
         """Return the row's ``xmin`` transaction id as the version token.
@@ -521,7 +515,12 @@ class SyncPostgresDatabase(
         transaction that last inserted/updated the row; it advances on every
         UPDATE, so it is a native monotonic-per-row version — ABA-safe, unlike
         the base content-hash default this overrides.
+
+        A native table claims no conditional writes, so its token is the
+        base content hash of the record a scoped read returns.
         """
+        if self.native:
+            return super().get_version(id)
         self._check_connection()
         sql = f"""
         SELECT xmin::text AS version
@@ -631,13 +630,7 @@ class SyncPostgresDatabase(
     def exists(self, id: str) -> bool:
         """Check if a record exists."""
         self._check_connection()
-        sql = f"""
-        SELECT 1 FROM {self._q_qualified}
-        WHERE id = %(id)s
-        LIMIT 1
-        """
-        df = self.db.query(sql, {"id": id})
-        return not df.empty
+        return bool(self._rows(*self.query_builder.build_exists_query(id)))
 
     def upsert(
         self,
@@ -699,20 +692,9 @@ class SyncPostgresDatabase(
         else:
             sql_query, params_list = self.query_builder.build_search_query(query)
 
-        # Build params dict for psycopg2
-        # The query builder now generates %(p0)s style placeholders directly
-        params_dict = {}
-        if params_list:
-            for i, param in enumerate(params_list):
-                params_dict[f"p{i}"] = param
-
-        # Execute query
-        df = self.db.query(sql_query, params_dict)
-
-        # Convert to records
         records = []
-        for _, row in df.iterrows():
-            record = self._row_to_record(self._frame_row_to_dict(row))
+        for row in self._rows(sql_query, params_list):
+            record = self._row_to_record(row)
 
             # Apply field projection if specified
             if query.fields:
@@ -722,12 +704,18 @@ class SyncPostgresDatabase(
 
         return records
 
+    def count(self, query: Query | None = None) -> int:
+        """Count the records a query matches, in one statement.
+
+        The whole match: sort, limit and offset are ignored, as in the base.
+        """
+        self._check_connection()
+        rows = self._rows(*self.query_builder.build_count_query(query))
+        return int(next(iter(rows[0].values()))) if rows else 0
+
     def _count_all(self) -> int:
         """Count all records in the database."""
-        self._check_connection()
-        sql = f"SELECT COUNT(*) as count FROM {self._q_qualified}"
-        df = self.db.query(sql)
-        return int(df.iloc[0]["count"]) if not df.empty else 0
+        return self.count()
 
     def clear(self) -> int:
         """Clear all records from the database."""
@@ -763,12 +751,7 @@ class SyncPostgresDatabase(
 
         self._check_connection()
 
-        # Create a query builder for PostgreSQL with pyformat style
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(
-            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
-        )
+        query_builder = self.query_builder
 
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
@@ -816,11 +799,7 @@ class SyncPostgresDatabase(
 
         self._check_connection()
 
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(
-            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
-        )
+        query_builder = self.query_builder
         [(query, params_list)], ids = query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id
         )
@@ -850,12 +829,7 @@ class SyncPostgresDatabase(
 
         self._check_connection()
 
-        # Create a query builder for PostgreSQL with pyformat style
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(
-            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
-        )
+        query_builder = self.query_builder
 
         # Use the shared batch delete query builder (includes RETURNING clause)
         query, params_list = query_builder.build_batch_delete_query(ids)
@@ -895,12 +869,7 @@ class SyncPostgresDatabase(
 
         self._check_connection()
 
-        # Create a query builder for PostgreSQL with pyformat style
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(
-            self.table_name, self.schema_name, dialect="postgres", param_style="pyformat"
-        )
+        query_builder = self.query_builder
 
         # Use the shared batch update query builder (one statement: no
         # parameter ceiling applies; see create_batch for why it is unpacked)
@@ -926,59 +895,35 @@ class SyncPostgresDatabase(
     def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
-        """Stream records from PostgreSQL."""
+        """Stream the records a query matches, through a server-side cursor.
+
+        The statement is the one :meth:`search` runs, so the query's sort and
+        limit hold, and it runs inside a read-only transaction on a connection
+        held for the life of the iterator alone, so anything else run on this
+        instance between records -- a :meth:`read`, a second stream -- leaves
+        it be. Close it (or exhaust it) to release the connection.
+        """
         # Pre-flight the field grammar before a connection is acquired, through
-        # the same check ``build_where_clause`` applies at the point of
-        # interpolation below. Both sites called a grammar of their own once,
-        # and the two disagreed about a dotted path.
+        # the same check the builder applies at the point of interpolation.
         if query and query.filters:
             for f in query.filters:
                 validate_field_path(f.field)
         self._check_connection()
         config = config or StreamConfig()
+        query = query if query is not None else Query()
+        sql, params = self.query_builder.build_search_query(query)
 
-        # Build SQL query
-        sql = f"SELECT id, data, metadata FROM {self._q_qualified}"
-        params = {}
-
-        # Through the same builder ``search`` uses, so the two doors apply one
-        # Query the same way. Open-coded here, this loop emitted a clause only
-        # for ``Operator.EQ`` and dropped every other operator in silence, so a
-        # caller who swapped ``search`` for ``stream_read`` to bound memory got
-        # back rows it had filtered out.
-        where_clause, filter_params = self.query_builder.build_where_clause(query)
-        if where_clause:
-            # ``build_where_clause`` is written to extend a predicate that is
-            # already there and so opens with " AND ". ``WHERE TRUE`` gives it
-            # the one it expects, which is cheaper to read than slicing the
-            # prefix back off and cannot go wrong when the clause changes shape.
-            sql += " WHERE TRUE" + where_clause
-            params.update({f"p{i}": value for i, value in enumerate(filter_params)})
-
-        # Use cursor for streaming
-        # Note: PostgresDB may need modification to support cursors
-        # For now, we'll fetch in batches
-        sql += f" LIMIT {config.batch_size} OFFSET %(offset)s"
-
-        offset = 0
-        while True:
-            params["offset"] = offset
-            df = self.db.query(sql, params)
-
-            if df.empty:
-                break
-
-            for _, row in df.iterrows():
-                record = self._row_to_record(self._frame_row_to_dict(row))
-                if query and query.fields:
+        rows = self.db.stream_rows(
+            sql,
+            {f"p{i}": value for i, value in enumerate(params)},
+            batch_size=config.batch_size,
+        )
+        with closing(rows):
+            for row in rows:
+                record = self._row_to_record(row)
+                if query.fields:
                     record = record.project(query.fields)
                 yield record
-
-            offset += config.batch_size
-
-            # If we got less than batch_size, we're done
-            if len(df) < config.batch_size:
-                break
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None
@@ -1296,6 +1241,7 @@ _pool_manager = ConnectionPoolManager[asyncpg.Pool]()
 
 class AsyncPostgresDatabase(
     StructuredConfigConsumer[PostgresDatabaseConfig],
+    PostgresLayoutMixin,
     AsyncDatabase,
     AsyncBulkEmbedMixin,  # Must come before AsyncVectorOperationsMixin to override bulk_embed_and_store
     AsyncVectorOperationsMixin,
@@ -1314,6 +1260,7 @@ class AsyncPostgresDatabase(
     """
 
     CONFIG_CLS: ClassVar[type[PostgresDatabaseConfig]] = PostgresDatabaseConfig
+    _PARAM_STYLE: ClassVar[str] = "numeric"
 
     def _setup(self) -> None:
         """Derive backend attributes from the typed config.
@@ -1335,14 +1282,10 @@ class AsyncPostgresDatabase(
         self.auto_create_table = cfg.auto_create_table
         self._init_vector_state()
 
-        # Declared here for the sync twin's stated reason, and it was the twin
-        # difference that made this class's own readers disagree: ``search``
-        # re-created the builder under ``hasattr`` while ``stream_read`` reached
-        # for it directly, which reads as one of the two missing a guard.
-        # Neither is. ``connect()`` binds this before it sets ``_connected``,
-        # and every reader passes ``_check_connection()`` first, so a builder
-        # that is not there yet is unreachable from any of them.
-        self.query_builder: SQLQueryBuilder = None  # type: ignore[assignment]  # set in connect()
+        # The one query builder, made with the table's layout, as in the sync
+        # twin: it needs no connection, so a refused native configuration fails
+        # at construction.
+        self._setup_layout()
 
         # Table manager for parameterized existence checks (asyncpg numeric style)
         self.table_manager = SQLTableManager(
@@ -1398,11 +1341,6 @@ class AsyncPostgresDatabase(
         # increment here rather than relying on the caller invoking close()
         # after a failed connect() (which would otherwise leak the holder).
         try:
-            # Initialize query builder
-            self.query_builder = SQLQueryBuilder(
-                self.table_name, self.schema_name, dialect="postgres"
-            )
-
             # Ensure table exists
             await self._ensure_table()
 
@@ -1484,15 +1422,14 @@ class AsyncPostgresDatabase(
         managing DDL via Alembic / Flyway / Sqitch.
         """
         if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
-            async with self._require_pool().acquire() as conn:
-                exists = await conn.fetchval(exists_sql, *params)
+            exists_sql, params = self._relation_exists_query()
+            try:
+                async with self._require_pool().acquire() as conn:
+                    exists = await conn.fetchval(exists_sql, *params)
+            except asyncpg.InsufficientPrivilegeError as e:
+                raise self._schema_usage_error() from e
             if not exists:
-                raise RuntimeError(
-                    f"Table {self.schema_name}.{self.table_name} does not exist "
-                    "and auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
+                raise self._missing_relation_error()
             return
 
         create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
@@ -1579,7 +1516,7 @@ class AsyncPostgresDatabase(
         mapping protocol; the explicit cast keeps the static helper's
         ``dict[str, Any]`` contract clean.
         """
-        return SQLRecordSerializer.row_to_record(dict(row))
+        return self.query_builder.record_from_row(dict(row))
 
     async def create(self, record: Record) -> str:
         """Create a new record with vector support."""
@@ -1607,14 +1544,10 @@ class AsyncPostgresDatabase(
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
         self._check_connection()
-        sql = f"""
-        SELECT id, data, metadata
-        FROM {self._q_qualified}
-        WHERE id = $1
-        """
+        sql, params = self.query_builder.build_read_query(id)
 
         async with self._require_pool().acquire() as conn:
-            row = await conn.fetchrow(sql, id)
+            row = await conn.fetchrow(sql, *params)
 
         if not row:
             return None
@@ -1628,7 +1561,12 @@ class AsyncPostgresDatabase(
         transaction that last inserted/updated the row; it advances on every
         UPDATE, so it is a native monotonic-per-row version — ABA-safe, unlike
         the base content-hash default this overrides.
+
+        A native table claims no conditional writes, so its token is the
+        base content hash of the record a scoped read returns.
         """
+        if self.native:
+            return await super().get_version(id)
         self._check_connection()
         sql = f"""
         SELECT xmin::text AS version
@@ -1745,14 +1683,10 @@ class AsyncPostgresDatabase(
     async def exists(self, id: str) -> bool:
         """Check if a record exists."""
         self._check_connection()
-        sql = f"""
-        SELECT 1 FROM {self._q_qualified}
-        WHERE id = $1
-        LIMIT 1
-        """
+        sql, params = self.query_builder.build_exists_query(id)
 
         async with self._require_pool().acquire() as conn:
-            row = await conn.fetchrow(sql, id)
+            row = await conn.fetchrow(sql, *params)
 
         return row is not None
 
@@ -1838,15 +1772,22 @@ class AsyncPostgresDatabase(
 
         return records
 
-    async def _count_all(self) -> int:
-        """Count all records in the database."""
+    async def count(self, query: Query | None = None) -> int:
+        """Count the records a query matches, in one statement.
+
+        The whole match: sort, limit and offset are ignored, as in the base.
+        """
         self._check_connection()
-        sql = f"SELECT COUNT(*) as count FROM {self._q_qualified}"
+        sql, params = self.query_builder.build_count_query(query)
 
         async with self._require_pool().acquire() as conn:
-            row = await conn.fetchrow(sql)
+            value = await conn.fetchval(sql, *params)
 
-        return row["count"] if row else 0
+        return int(value or 0)
+
+    async def _count_all(self) -> int:
+        """Count all records in the database."""
+        return await self.count()
 
     async def clear(self) -> int:
         """Clear all records from the database."""
@@ -1919,9 +1860,8 @@ class AsyncPostgresDatabase(
         """Which of ``ids`` are stored, asked in one statement on a fresh connection."""
         if not ids:
             return set()
-        from .sql_base import SQLQueryBuilder
 
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = self.query_builder
         query, params = query_builder.build_existing_ids_query(ids)
         async with self._require_pool().acquire() as conn:
             return {row["id"] for row in await conn.fetch(query, *params)}
@@ -1947,10 +1887,7 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = self.query_builder
 
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
@@ -2011,9 +1948,7 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = self.query_builder
         statements, ids = query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id, max_parameters=_ASYNCPG_MAX_PARAMETERS
         )
@@ -2045,10 +1980,7 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = self.query_builder
 
         # Use the shared batch delete query builder
         query, params = query_builder.build_batch_delete_query(ids)
@@ -2085,10 +2017,7 @@ class AsyncPostgresDatabase(
 
         self._check_connection()
 
-        # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
-
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = self.query_builder
 
         # The builder's statements already return the ids they update.
         statements = query_builder.build_batch_update_queries(
@@ -2366,52 +2295,31 @@ class AsyncPostgresDatabase(
     async def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
-        """Stream records from PostgreSQL using cursor."""
+        """Stream the records a query matches, through a server-side cursor.
+
+        As in the sync twin: the statement :meth:`search` runs, inside a
+        read-only transaction held for the life of the iterator. Drive it under
+        :func:`~dataknobs_common.async_iter.aclosing_iter` so abandoning it
+        releases the connection.
+        """
         # Pre-flight the field grammar -- see the sync twin.
         if query and query.filters:
             for f in query.filters:
                 validate_field_path(f.field)
         self._check_connection()
         config = config or StreamConfig()
+        query = query if query is not None else Query()
+        sql, params = self.query_builder.build_search_query(query)
 
-        # Build SQL query
-        sql = f"SELECT id, data, metadata FROM {self._q_qualified}"
-        params = []
-
-        # Through the same builder ``search`` uses -- see the sync twin for the
-        # half they shared. This one also had a louder half of its own: the
-        # placeholder counter advanced once per *filter* while ``params`` grew
-        # only for EQ, so one non-EQ filter ahead of an EQ one shifted every
-        # later placeholder past its argument and the SQL named a ``$N``
-        # nothing had bound.
-        where_clause, filter_params = self.query_builder.build_where_clause(query)
-        if where_clause:
-            sql += " WHERE TRUE" + where_clause
-            params.extend(filter_params)
-
-        # Use cursor for efficient streaming. asyncpg's
-        # ``conn.cursor(sql, *args)`` returns a ``CursorFactory`` that
-        # supports ``async for``; ``await``-ing it returns a ``Cursor``
-        # object intended for the explicit-fetch API
-        # (``await cur.fetch(n)``) and is NOT an async iterator.
+        # asyncpg's ``conn.cursor(sql, *args)`` returns a ``CursorFactory``
+        # that supports ``async for``, prefetching ``prefetch`` rows a trip.
         async with self._require_pool().acquire() as conn:
-            async with conn.transaction():
-                batch = []
-                async for row in conn.cursor(sql, *params):
+            async with conn.transaction(readonly=True):
+                async for row in conn.cursor(sql, *params, prefetch=config.batch_size):
                     record = self._row_to_record(row)
-                    if query and query.fields:
+                    if query.fields:
                         record = record.project(query.fields)
-
-                    batch.append(record)
-
-                    if len(batch) >= config.batch_size:
-                        for rec in batch:
-                            yield rec
-                        batch = []
-
-                # Yield remaining records
-                for rec in batch:
-                    yield rec
+                    yield record
 
     async def stream_write(
         self, records: AsyncIterator[Record], config: StreamConfig | None = None

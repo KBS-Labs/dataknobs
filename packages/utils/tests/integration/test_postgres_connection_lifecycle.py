@@ -780,3 +780,83 @@ class TestConnectorOwnsTheLifecycle:
             assert second is not first
         finally:
             connector.close()
+
+
+class TestRowsAndStreams:
+    """``query_rows`` and ``stream_rows``: reads that leave every transaction alone.
+
+    ``stream_rows`` holds a server-side cursor across a caller's calls, and a
+    cursor lives only as long as its transaction. On a lane's connection the
+    next ``query`` would end that transaction (the internal lane) or re-enter
+    it (the caller's), so it reads on a connection opened for it alone.
+    """
+
+    @pytest.fixture
+    def numbers(self, db: PostgresDB, lifecycle_db: dict[str, Any]) -> str:
+        table = lifecycle_db["table"]
+        db.execute(f'CREATE TABLE IF NOT EXISTS "{table}" (n integer)')
+        db.execute(f'INSERT INTO "{table}" (n) SELECT g FROM generate_series(1, 6) g')
+        db.execute(f'INSERT INTO "{table}" (n) VALUES (NULL)')
+        return table
+
+    def test_query_rows_returns_the_drivers_values(self, db: PostgresDB, numbers: str) -> None:
+        """A NULL integer is ``None`` and the rest stay ``int``, where a DataFrame
+        would have widened the column to float.
+        """
+        rows = db.query_rows(f'SELECT n FROM "{numbers}" ORDER BY n NULLS LAST')
+        assert rows == [{"n": n} for n in [1, 2, 3, 4, 5, 6, None]]
+        assert all(type(row["n"]) is int for row in rows[:-1])
+
+    def test_query_rows_leaves_the_callers_transaction_open(
+        self, db: PostgresDB, numbers: str
+    ) -> None:
+        conn = db.get_conn()
+        with conn.cursor() as curs:
+            curs.execute(f'DELETE FROM "{numbers}"')
+        db.query_rows("SELECT 1 AS one")
+        conn.rollback()
+        assert len(db.query_rows(f'SELECT n FROM "{numbers}"')) == 7
+
+    def test_a_stream_survives_queries_and_streams_between_its_rows(
+        self, db: PostgresDB, numbers: str
+    ) -> None:
+        sql = f'SELECT n FROM "{numbers}" WHERE n IS NOT NULL ORDER BY n'
+        outer = db.stream_rows(sql, batch_size=1)
+        seen = []
+        for row in outer:
+            db.query("SELECT 1")
+            db.execute("SELECT 1")
+            assert [r["n"] for r in db.stream_rows(sql, batch_size=2)] == [1, 2, 3, 4, 5, 6]
+            seen.append(row["n"])
+        assert seen == [1, 2, 3, 4, 5, 6]
+
+    def test_a_stream_reads_in_a_read_only_transaction(self, db: PostgresDB) -> None:
+        """A cursor declares only a query, so the setting is what to check."""
+        rows = list(db.stream_rows("SELECT current_setting('transaction_read_only') AS ro"))
+        assert rows == [{"ro": "on"}]
+
+    def test_a_stream_reads_on_a_connection_of_its_own(
+        self, db: PostgresDB, numbers: str, observer: Any
+    ) -> None:
+        """Its backend is neither lane's, and closing the stream ends it."""
+        stream = db.stream_rows("SELECT pg_backend_pid() AS pid")
+        pid = int(next(stream)["pid"])
+        assert pid != _backend_pid(db)
+        with db.get_conn().cursor() as curs:
+            curs.execute("SELECT pg_backend_pid()")
+            assert pid != int(curs.fetchone()[0])
+        db.get_conn().rollback()
+        stream.close()
+        assert _await_reclaimed(observer, [pid]) == set()
+
+    def test_close_reaches_an_abandoned_streams_connection(
+        self, db: PostgresDB, numbers: str, observer: Any
+    ) -> None:
+        """A stream never closed by its caller still has a connection
+        ``PostgresDB.close`` can reach, and finalizing it afterwards is quiet.
+        """
+        stream = db.stream_rows("SELECT pg_backend_pid() AS pid")
+        pid = int(next(stream)["pid"])
+        db.close()
+        assert _await_reclaimed(observer, [pid]) == set()
+        stream.close()  # the connection is already closed; nothing raises

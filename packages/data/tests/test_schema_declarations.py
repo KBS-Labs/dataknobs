@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_common.exceptions import ConfigurationError, ValidationError
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import OntologyConfig
 
 from dataknobs_data.backends.config import MemoryDatabaseConfig, PostgresDatabaseConfig
@@ -683,8 +683,8 @@ def test_postgres_still_reads_a_scalar_schema_as_its_namespace() -> None:
     assert PostgresDatabaseConfig.from_dict({"schema": "reporting"}).schema_name == "reporting"
 
 
-def test_postgres_still_refuses_a_structural_schema_by_configuration() -> None:
-    """Pinned, so that admitting one is a decision a change makes on purpose."""
-    with pytest.raises(ConfigurationError) as excinfo:
-        PostgresDatabaseConfig.from_dict({"schema": {"fields": {"sku": "string"}}})
-    assert "string identifier" in str(excinfo.value)
+def test_postgres_reads_a_structural_schema_from_configuration() -> None:
+    """A mapping is the declared fields on Postgres too; only a string is its namespace."""
+    config = PostgresDatabaseConfig.from_dict({"schema": {"fields": {"sku": "string"}}})
+    assert config.schema is not None and list(config.schema.fields) == ["sku"]
+    assert config.schema_name == "public"

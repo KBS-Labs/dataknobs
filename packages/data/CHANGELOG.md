@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Postgres reads go through the query builder.** `read`, `exists`, `count`
+  and `stream_read` run the builder's statements on both twins. `count` with a
+  query is one `COUNT(*)` statement rather than a search whose rows are
+  counted. `stream_read` now honours the query's sort and limit, runs inside a
+  read-only transaction, and on the sync twin streams through a server-side
+  cursor rather than `LIMIT`/`OFFSET` pages with no order, which could skip or
+  repeat a row at a page boundary. Each sync stream reads on a connection of
+  its own, so a `read` or a second stream between its records leaves it be,
+  and no sync read runs on the connection `db.get_conn()` hands a caller. The
+  sync twin's `search`, `read`, `exists`, `count` and `stream_read` return
+  rows as the driver reads them, not through a DataFrame, which turned a
+  `NULL` integer into a float `NaN`.
+- **A surface-form lookup answers only ids the entity store holds** when the
+  forms are a store of their own (`forms_database=`), so a form left behind
+  for a row the entity store cannot read is not a match.
+- **`add_field_schema` and `with_schema` go through `set_schema`** on
+  `AsyncDatabase` and `SyncDatabase`, so a backend whose state derives from
+  the schema overrides `set_schema` alone. `add_field_schema` sets a widened
+  copy rather than adding to the schema object in place, so a `set_schema`
+  that refuses it leaves the schema as it was; code holding the old schema
+  object no longer sees the added field on it.
+- **`vector_enabled` is read as a boolean on every backend.** The string
+  `"false"`, which YAML and environment substitution produce, was stored as
+  given and is truthy, so a backend told `vector_enabled: "false"` enabled
+  vector support. It is coerced as the other flags on these configs are, on
+  `VectorBackendConfig`; a subclass's `__post_init__` calls the base's.
+
 - **A field's `enum` must allow something its filter can take.** The schema
   reader, and `DatabaseSource` for a schema built in Python, refuse an `enum`
   that is empty, names a value twice, or holds a member the field's filter
@@ -984,6 +1011,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The PostgreSQL backends read a table they do not own** (`layout: native`,
+  `id_column:`, `scope:`, on both `AsyncPostgresDatabase` and
+  `SyncPostgresDatabase`). The table is read through `NativeColumnLayout`: only
+  its declared columns, a scope in every read (`search`, `read`, `exists`,
+  `count`, `get_version`, `stream_read`), and every filter answered as
+  `Filter.matches` answers it. Every method that writes, creates or drops
+  raises `OperationError` before it touches a connection, `connect()` runs no
+  DDL, and `auto_create_table`, `ensure_database` or `vector_enabled` set true
+  is refused. Left out or `null`, each is off, whether the config is read from
+  a mapping or built as a `PostgresDatabaseConfig`. A refused configuration
+  fails at construction. The table may be any relation a `SELECT` reads (a
+  table, a view, a materialized view), and `connect()` refuses one it cannot
+  find by name, saying it is not created here, and a role without `USAGE` on
+  the schema, naming that grant. The keys work in any configuration that
+  builds a database, an ontology binding's `database:` block included.
+- **A Postgres `schema:` from configuration may be the declared fields.** A
+  mapping or a list of field rows is read as on every other backend (with
+  `sql_type` under `layout: native`); a string is still the SQL namespace.
+- **An ontology load names the ontology and binding** in a store's
+  configuration refusal, and refuses a native `database:` block whose binding
+  keeps its surface forms in a different table, which the block's columns and
+  scope would otherwise be applied to (hand that store over as
+  `forms_database=`).
+- **A backend instance can refuse an operation, whichever class defines it.**
+  Every body of a write, of what creates or drops a vector index, and of the
+  vector search surface (`GATED_OPERATIONS`, in `dataknobs_data.operation_gate`)
+  first calls `_refuse_operation(operation)`, which permits everything by
+  default. `OperationGateMixin.__init_subclass__` installs the call on each
+  such method a class defines -- in the database bases, the vector and
+  bulk-embed mixins, every backend, and a consumer's subclass -- so an
+  override refuses before a row is read and before `bulk_embed_and_store`
+  calls the embedding function, and no backend opts in by hand. A gated
+  method defined as an async generator is refused with a `TypeError` when its
+  class is defined. The PostgreSQL backends refuse through it under
+  `layout: native`.
+
 - **`SQLQueryBuilder` reads a table through a column layout, and a table with
   ordinary typed columns is one.** A new `layout=` argument takes a
   `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout` is
@@ -1489,6 +1552,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A Postgres config holding declared fields reads back from its own
+  `to_dict()`.** It wrote the schema as a mapping, which `from_dict` took for
+  the SQL namespace and refused with `ConfigurationError: Postgres 'schema'
+  must be a string identifier, got dict`.
+- **A namespace and declared fields given two ways are both kept.**
+  `AsyncPostgresDatabase({"schema": "reporting"}, schema=fields)` (and the
+  sync twin) opened in `public`: the mapping and the keyword arguments were
+  merged under one `schema` key before the config could tell the namespace
+  from the fields, so the keyword replaced the namespace with no error. A
+  namespace given as `schema` still wins over `schema_name`, whichever of the
+  mapping and the keyword arguments each arrives in.
 
 - **`update_batch` writes each record its own update on SQLite and DuckDB.**
   The statement read its values by position, and the values were bound in a

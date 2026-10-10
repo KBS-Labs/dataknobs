@@ -6,10 +6,8 @@ These tests do NOT require a running PostgreSQL instance.
 import pytest
 
 from dataknobs_common.exceptions import ConfigurationError
-from dataknobs_data.backends.postgres_mixins import (
-    PostgresBaseConfig,
-    validate_database_name,
-)
+from dataknobs_data.backends.config import PostgresDatabaseConfig
+from dataknobs_data.backends.postgres_mixins import validate_database_name
 from dataknobs_data.pooling.postgres import PostgresPoolConfig
 
 
@@ -108,34 +106,21 @@ class TestValidateDatabaseName:
             validate_database_name(name)
 
 
-class TestParsePostgresConfigEnsureDatabase:
-    """Tests that _parse_postgres_config extracts ensure_database correctly."""
+class TestPostgresConfigEnsureDatabase:
+    """The typed config reads ``ensure_database`` (both backends construct from it)."""
 
     def test_default_true(self) -> None:
-        mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
-            {
-                "host": "localhost",
-                "database": "mydb",
-            }
-        )
-        assert ensure_db is True
-        assert "ensure_database" not in conn_config
+        cfg = PostgresDatabaseConfig.from_dict({"host": "localhost", "database": "mydb"})
+        assert cfg.ensure_database is True
 
     def test_explicit_false(self) -> None:
-        mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
-            {
-                "host": "localhost",
-                "database": "mydb",
-                "ensure_database": False,
-            }
+        cfg = PostgresDatabaseConfig.from_dict(
+            {"host": "localhost", "database": "mydb", "ensure_database": False}
         )
-        assert ensure_db is False
-        assert "ensure_database" not in conn_config
+        assert cfg.ensure_database is False
 
 
-class TestParsePostgresConfigBoolCoercion:
+class TestPostgresConfigBoolCoercion:
     """Tests that ensure_database string values are coerced correctly (A1)."""
 
     @pytest.mark.parametrize(
@@ -157,32 +142,22 @@ class TestParsePostgresConfigBoolCoercion:
         ],
     )
     def test_bool_coercion(self, value: bool | str, expected: bool) -> None:
-        mixin = PostgresBaseConfig()
-        _, _, _, ensure_db, _ = mixin._parse_postgres_config(
-            {
-                "ensure_database": value,
-            }
-        )
-        assert ensure_db is expected
+        cfg = PostgresDatabaseConfig.from_dict({"ensure_database": value})
+        assert cfg.ensure_database is expected
 
 
-class TestParsePostgresConfigConnectionString:
-    """Tests that _parse_postgres_config normalizes connection_string (P1)."""
+class TestPostgresConfigConnectionString:
+    """Tests that the typed config normalizes connection_string (P1)."""
 
     def test_normalizes_connection_string_into_individual_keys(self) -> None:
-        mixin = PostgresBaseConfig()
-        _, _, conn_config, _, _ = mixin._parse_postgres_config(
-            {
-                "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
-            }
+        cfg = PostgresDatabaseConfig.from_dict(
+            {"connection_string": "postgresql://admin:secret@dbhost:5433/mydb"}
         )
-        assert conn_config["host"] == "dbhost"
-        assert conn_config["port"] == 5433
-        assert conn_config["database"] == "mydb"
-        assert conn_config["user"] == "admin"
-        assert conn_config["password"] == "secret"
-        # connection_string still present for PostgresPoolConfig.from_dict
-        assert "connection_string" in conn_config
+        assert cfg.host == "dbhost"
+        assert cfg.port == 5433
+        assert cfg.database == "mydb"
+        assert cfg.user == "admin"
+        assert cfg.password == "secret"
 
     def test_individual_keys_win_over_connection_string(self) -> None:
         """When both are present, individual keys override URL fields.
@@ -193,36 +168,31 @@ class TestParsePostgresConfigConnectionString:
         way to aim a test suite at a non-default database while
         reusing a shared URL for the other fields.
         """
-        mixin = PostgresBaseConfig()
-        _, _, conn_config, _, _ = mixin._parse_postgres_config(
+        cfg = PostgresDatabaseConfig.from_dict(
             {
                 "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
                 "database": "override_db",
             }
         )
-        assert conn_config["database"] == "override_db"  # individual key wins
-        assert conn_config["host"] == "dbhost"  # from connection_string
+        assert cfg.database == "override_db"  # individual key wins
+        assert cfg.host == "dbhost"  # from connection_string
 
     def test_connection_string_with_ensure_database(self) -> None:
-        mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
+        cfg = PostgresDatabaseConfig.from_dict(
             {
                 "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
                 "ensure_database": False,
             }
         )
-        assert ensure_db is False
-        assert conn_config["database"] == "mydb"
+        assert cfg.ensure_database is False
+        assert cfg.database == "mydb"
 
     def test_connection_string_default_ensure_database_true(self) -> None:
-        mixin = PostgresBaseConfig()
-        _, _, conn_config, ensure_db, _ = mixin._parse_postgres_config(
-            {
-                "connection_string": "postgresql://admin:secret@dbhost:5433/mydb",
-            }
+        cfg = PostgresDatabaseConfig.from_dict(
+            {"connection_string": "postgresql://admin:secret@dbhost:5433/mydb"}
         )
-        assert ensure_db is True
-        assert conn_config["database"] == "mydb"
+        assert cfg.ensure_database is True
+        assert cfg.database == "mydb"
 
 
 class TestIsInvalidCatalogError:

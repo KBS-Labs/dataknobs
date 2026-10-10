@@ -8,9 +8,9 @@ through ``quote_ident()`` and producing broken DDL at first query.
 Coverage extends across all three Postgres consumers that flow user
 config into ``quote_ident()``:
 
-- ``Async/SyncPostgresDatabase`` via ``PostgresBaseConfig._parse_postgres_config``
-- ``PgVectorStoreConfig.__post_init__`` (the third call site that
-  bypasses ``_parse_postgres_config`` entirely)
+- ``Async/SyncPostgresDatabase`` via ``PostgresDatabaseConfig.__post_init__``
+- ``PgVectorStoreConfig.__post_init__`` (the vector store, which reads a
+  configuration of its own)
 
 Both go through the shared ``validate_pg_identifier`` helper.
 """

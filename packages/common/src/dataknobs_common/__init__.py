@@ -184,6 +184,7 @@ from dataknobs_common.exceptions import (
     SerializationError,
     TimeoutError,
     ValidationError,
+    naming_refusals,
 )
 from dataknobs_common.fields import (
     Field,
@@ -495,6 +496,7 @@ __all__ = [
     "DottedPathError",
     "DottedPathReason",
     "DottedPathTypeError",
+    "naming_refusals",
     # Dotted-path resolution
     #
     # Deliberately its own block, and deliberately NOT appended to the

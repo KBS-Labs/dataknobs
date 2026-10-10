@@ -7,16 +7,24 @@ These mixins provide common functionality for both sync and async PostgreSQL imp
 reducing code duplication and ensuring consistent behavior.
 """
 
+from __future__ import annotations
+
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common import normalize_postgres_connection_config
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.capabilities import Capability, CapabilityLike
+from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_utils.sql_utils import quote_ident
 
+from ..operation_gate import GATED_OPERATIONS, OperationGateMixin
 from ..records import Record
-from .sql_base import SQLTableManager
+from ..schema import DatabaseSchema
+from .column_layout import ColumnLayout, JsonbLayout, read_layout_config
+from .sql_base import SQLQueryBuilder, SQLTableManager
+
+if TYPE_CHECKING:
+    from .config import PostgresDatabaseConfig
 from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
@@ -80,101 +88,12 @@ def validate_pg_identifier(value: Any, key: str) -> str:
 
 
 class PostgresBaseConfig(VectorConfigMixin):
-    """Shared configuration logic for PostgreSQL backends."""
+    """The vector configuration both PostgreSQL backends share.
 
-    def _parse_postgres_config(
-        self,
-        config: dict[str, Any],
-    ) -> tuple[str, str, dict, bool, bool]:
-        """Extract table, schema, connection configuration, and boolean flags.
-
-        Args:
-            config: Configuration dictionary
-
-        Returns:
-            Tuple of (table_name, schema_name, connection_config,
-            ensure_database, auto_create_table)
-        """
-        config = config.copy() if config else {}
-
-        # Parse vector configuration using the mixin
-        self._parse_vector_config(config)
-
-        # Extract PostgreSQL-specific configuration.  Validate both
-        # ``table`` and ``schema`` early to catch non-string or
-        # malformed identifiers before they propagate to broken DDL
-        # at first query.
-        raw_table = config.pop("table", config.pop("table_name", "records"))
-        raw_schema = config.pop("schema", config.pop("schema_name", "public"))
-        table_name = validate_pg_identifier(raw_table, "table")
-        schema_name = validate_pg_identifier(raw_schema, "schema")
-
-        # Remove vector config parameters since they've been processed
-        config.pop("vector_enabled", None)
-        config.pop("vector_metric", None)
-
-        # Extract and validate boolean flags via the shared coerce_bool helper so
-        # that string values from YAML/env ("false", "0", "no") are handled
-        # consistently across all backends (security.md §8 anti-pattern: raw
-        # truthy check treats the string "false" as True).
-        ensure_database = SQLTableManager.coerce_bool(
-            config.pop("ensure_database", None), default=True
-        )
-        auto_create_table = SQLTableManager.coerce_bool(
-            config.pop("auto_create_table", None), default=True
-        )
-
-        # Normalize connection config via the shared helper so that every
-        # downstream postgres site reads host/port/database/... from the
-        # same canonical shape.
-        #
-        # ``require=False`` is intentional here — this is an internal
-        # helper called from ``__init__``, where database-backend
-        # contracts historically defer "is the connection resolvable"
-        # to ``connect()``. Direct postgres entry points
-        # (``PgVectorStore``, ``PostgresEventBus``) use ``require=True``
-        # and fail at construction; backend ``__init__`` stays
-        # permissive so consumers can construct, inspect, and swap
-        # implementations without triggering config errors. Connection
-        # failures surface at ``connect()`` time with asyncpg's native
-        # errors.
-        normalized = normalize_postgres_connection_config(
-            config,
-            require=False,
-        )
-        if normalized is not None:
-            config.update(normalized)
-
-        return table_name, schema_name, config, ensure_database, auto_create_table
-
-    def _init_postgres_attributes(
-        self,
-        table_name: str,
-        schema_name: str,
-        ensure_database: bool = True,
-        auto_create_table: bool = True,
-    ) -> None:
-        """Initialize common PostgreSQL attributes.
-
-        Args:
-            table_name: Name of the database table
-            schema_name: Name of the database schema
-            ensure_database: Auto-create database if missing (default: True)
-            auto_create_table: Create the records table on connect if missing
-                (default: True). Set to False when an external migration tool
-                (Alembic, Flyway, etc.) owns DDL.
-        """
-        self.table_name = table_name
-        self.schema_name = schema_name
-        self._q_table = quote_ident(table_name)
-        self._q_schema = quote_ident(schema_name)
-        self._q_qualified = f"{self._q_schema}.{self._q_table}"
-        self._connected = False
-        self._ensure_database_enabled = ensure_database
-        self.auto_create_table = auto_create_table
-
-        # Initialize vector state using the mixin
-        self._init_vector_state()
+    Configuration itself is read by
+    :class:`~dataknobs_data.backends.config.PostgresDatabaseConfig`; this
+    class carries the vector state ``_apply_vector_config`` sets from it.
+    """
 
 
 class PostgresTableManager:
@@ -346,3 +265,140 @@ class PostgresConnectionValidator:
         """
         if not getattr(self, "_connected", False) or not getattr(self, "_pool", None):
             raise RuntimeError("Database not connected. Call connect() first.")
+
+
+#: What a Postgres backend refuses when it reads a table through the native
+#: layout: every gated operation -- each method that writes, creates or drops
+#: something, and the vector reads, which search a JSON column a native table
+#: does not have.
+NATIVE_REFUSED: frozenset[str] = GATED_OPERATIONS
+
+
+class PostgresLayoutMixin(OperationGateMixin):
+    """The column layout a Postgres backend reads its table through, shared by both twins.
+
+    The layout and the one query builder are made at construction, from the
+    configuration and the declared schema, so a native configuration the
+    layout refuses fails before anything connects. A schema set afterwards
+    makes a new layout, and one the layout refuses leaves the backend as it
+    was.
+    """
+
+    #: The placeholder style of the twin's driver.
+    _PARAM_STYLE: ClassVar[str]
+
+    schema: DatabaseSchema
+    table_name: str
+    schema_name: str
+    layout: ColumnLayout
+    query_builder: SQLQueryBuilder
+    table_manager: SQLTableManager
+    _q_qualified: str
+
+    if TYPE_CHECKING:
+
+        @property
+        def config(self) -> PostgresDatabaseConfig:
+            """The consumer's typed configuration."""
+
+    @property
+    def native(self) -> bool:
+        """Whether the table is read through its own columns (``layout: native``)."""
+        return not isinstance(self.layout, JsonbLayout)
+
+    def _read_layout(self, schema: DatabaseSchema) -> ColumnLayout:
+        cfg = self.config
+        return read_layout_config(
+            {"layout": cfg.layout, "id_column": cfg.id_column, "scope": cfg.scope},
+            schema,
+            origin=f"{type(self).__name__} table {self.table_name!r}",
+            context={"table": self.table_name, "schema_name": self.schema_name},
+        )
+
+    def _use_layout(self, layout: ColumnLayout) -> None:
+        self.layout = layout
+        self.query_builder = SQLQueryBuilder(
+            self.table_name,
+            self.schema_name,
+            dialect="postgres",
+            param_style=self._PARAM_STYLE,
+            layout=layout,
+        )
+
+    def _setup_layout(self) -> None:
+        self._use_layout(self._read_layout(self.schema))
+
+    def _relation_exists_query(self) -> tuple[str, Any]:
+        """The statement and parameters asking whether the table is there, in the driver's style.
+
+        A native table may be any relation a ``SELECT`` reads -- a table, a
+        view, a materialized view, a foreign table -- so it is resolved by name
+        with ``to_regclass``, which needs no privilege on the relation itself.
+        ``information_schema.tables`` lists no materialized view. The table
+        this package creates is a table, and is looked up there as before.
+        """
+        if not self.native:
+            return self.table_manager.get_table_exists_sql()
+        placeholder = "%(relation)s" if self._PARAM_STYLE == "pyformat" else "$1"
+        sql = f"SELECT to_regclass({placeholder}) IS NOT NULL"
+        if self._PARAM_STYLE == "pyformat":
+            return sql, {"relation": self._q_qualified}
+        return sql, (self._q_qualified,)
+
+    def _schema_usage_error(self) -> RuntimeError:
+        """The refusal for a schema the connecting role cannot use.
+
+        ``to_regclass`` answers NULL for a relation that is not there, but
+        raises when the role has no ``USAGE`` on the schema it names -- even for
+        a table that is there. Each twin catches its driver's privilege error
+        around the existence check and raises this instead.
+        """
+        return RuntimeError(
+            f"The connecting role has no USAGE on schema {self.schema_name}, so "
+            f"table {self.schema_name}.{self.table_name} cannot be read. A table read "
+            f"through `layout: native` belongs to someone else: ask its owner to "
+            f"grant USAGE on the schema and SELECT on the declared columns."
+        )
+
+    def _missing_relation_error(self) -> RuntimeError:
+        """The refusal for a table that is not there, said as the layout would say it."""
+        qualified = f"{self.schema_name}.{self.table_name}"
+        if self.native:
+            return RuntimeError(
+                f"Table {qualified} does not exist. A table read through "
+                f"`layout: native` belongs to someone else and is never created "
+                f"here: check the table name and `schema_name`."
+            )
+        return RuntimeError(
+            f"Table {qualified} does not exist and auto_create_table is disabled. "
+            "Run your migrations before starting the application."
+        )
+
+    def _refuse_operation(self, operation: str) -> None:
+        """Refuse every :data:`NATIVE_REFUSED` operation on a table read through the native layout."""
+        if self.native and operation in NATIVE_REFUSED:
+            raise OperationError(
+                f"{type(self).__name__}.{operation} refused on {self.table_name!r}: a table read "
+                f"through `layout: native` is read-only, and is read only through its declared "
+                f"columns",
+                context={"table": self.table_name, "method": operation},
+            )
+        super()._refuse_operation(operation)
+
+    def instance_capabilities(self) -> frozenset[CapabilityLike]:
+        """The class's capabilities, less conditional writes on a native table."""
+        capabilities: frozenset[CapabilityLike] = super().instance_capabilities()  # type: ignore[misc]
+        if self.native:
+            return frozenset(c for c in capabilities if c != Capability.CONDITIONAL_WRITE)
+        return capabilities
+
+    def set_schema(self, schema: DatabaseSchema) -> None:
+        """Set the declared schema, and read the table through the layout it makes.
+
+        ``add_field_schema`` and ``with_schema`` come through here too, so a
+        schema whose layout is refused leaves the backend as it was, whichever
+        door it came through.
+        """
+        layout = self._read_layout(schema)
+        super().set_schema(schema)  # type: ignore[misc]
+        self._use_layout(layout)

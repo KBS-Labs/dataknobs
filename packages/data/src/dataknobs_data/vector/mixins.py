@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType, VectorField
+from ..operation_gate import OperationGateMixin
 from .bulk_embed_mixin import attach_vector_field
 from .content import (
     CONTENT_HASH_KEY,
@@ -340,7 +341,7 @@ def finish_vector_search(
     return results
 
 
-class SyncVectorOperationsMixin(ABC):
+class SyncVectorOperationsMixin(OperationGateMixin, ABC):
     """Vector operations for **synchronous** database backends.
 
     Mixed into a :class:`~dataknobs_data.database.SyncDatabase`. Its async
@@ -697,7 +698,7 @@ class SyncVectorOperationsMixin(ABC):
         return False
 
 
-class AsyncVectorOperationsMixin(ABC):
+class AsyncVectorOperationsMixin(OperationGateMixin, ABC):
     """Vector operations for **asynchronous** database backends.
 
     Mixed into an :class:`~dataknobs_data.database.AsyncDatabase`. Its sync

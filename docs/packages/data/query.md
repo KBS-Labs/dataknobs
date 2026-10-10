@@ -178,8 +178,9 @@ sql, params = builder.build_search_query(Query(filters=[Filter("size", Operator.
 #   WHERE "status" = $1 AND "size" >= CAST($2 AS numeric)
 ```
 
-**No backend takes the native layout yet**: the PostgreSQL, SQLite and DuckDB
-backends adopt it in later releases. What the builder guarantees:
+**The PostgreSQL backends take it by configuration**
+([below](#reading-a-native-table-through-the-postgresql-backend)); SQLite and
+DuckDB do not yet. What the builder guarantees:
 
 - **Only declared columns.** A filter, sort or scope naming another column
   (or a dotted path) raises `ValidationError` before SQL is built, and a
@@ -242,6 +243,88 @@ backends adopt it in later releases. What the builder guarantees:
     The declared type is what every answer rests on, and nothing reads the
     table to check it. An integer column declared `string` matches no number
     you filter it with.
+
+#### Reading a Native Table Through the PostgreSQL Backend
+
+Both PostgreSQL backends read a table through the native layout when their
+configuration says `layout: native`. The `schema:` is the table's columns, as
+on every other backend (only a string `schema:` is the SQL namespace, which is
+also spelled `schema_name:`):
+
+```python
+from dataknobs_data import Filter, Operator, Query, async_database_factory
+
+db = async_database_factory.create(
+    backend="postgres",
+    connection_string="postgresql://reader:secret@db.internal/catalog",
+    schema_name="inventory",
+    table="nodes",
+    layout="native",
+    id_column="node_id",
+    schema={"fields": {
+        "node_id": {"type": "string", "sql_type": "uuid"},
+        "name": "string",
+        "size": "integer",
+        "status": "string",
+    }},
+    scope=[{"field": "status", "operator": "=", "value": "live"}],
+)
+await db.connect()
+large = await db.search(Query(filters=[Filter("size", Operator.GTE, 3)]))
+```
+
+The same keys go in an ontology binding's `database:` block, or any other
+configuration that builds a database:
+
+```yaml
+database:
+  backend: postgres
+  schema_name: inventory
+  layout: native
+  id_column: node_id
+  schema:
+    fields:
+      node_id: {type: string, sql_type: uuid}
+      name: string
+      parent_id: {type: string, sql_type: uuid}
+      status: string
+  scope:
+    - {field: status, operator: "=", value: live}
+```
+
+What the backend adds to the layout:
+
+- **Every read goes through the layout**, so the scope reaches all of them:
+  `search`, `read`, `exists`, `count` (one `COUNT(*)` statement), `get_version`
+  and `stream_read`. A `Query.fields` projection keeps the fields asked for.
+- **A refused configuration fails at construction**, before anything
+  connects, and the message names the backend and table.
+- **Nothing is written, created or dropped.** Every method that writes
+  (`create`, `update`, `delete`, `upsert`, the batch methods, `clear`,
+  `stream_write`, `transaction`, `bulk_embed_and_store`, the vector index
+  methods) raises `OperationError` before it touches a connection, and so do
+  the vector searches, which read a JSON column a native table does not have.
+  `connect()` runs no DDL: `auto_create_table` and `ensure_database` are off,
+  and setting either, or `vector_enabled`, to `true` is refused. A native
+  backend does not claim `CONDITIONAL_WRITE`.
+- **The table may be any relation a `SELECT` reads**: a table, a view, a
+  materialized view or a foreign table. `connect()` checks that it is there
+  by name (`to_regclass`), which needs `USAGE` on the schema and no privilege
+  on the relation. It refuses one it cannot find, and a role without `USAGE`
+  on the schema is refused saying that grant is what is missing.
+- **`stream_read` runs the statement `search` runs**, so its sort and limit
+  hold, through a server-side cursor inside a read-only transaction held for
+  the life of the iterator, on a connection that iterator alone reads on. As
+  with `search`, a query with no sort promises no order.
+- **It reads only the declared columns**, so a role granted `SELECT` on
+  those columns alone, and not on the table, can read it.
+
+In an ontology, a binding whose surface forms are a **different table** than
+its entities cannot take a native `database:` block, since the block's
+columns, key and scope describe one table; hand the forms store to the
+registry as `forms_database=` instead. Where the forms are a store of their
+own, a surface-form lookup answers only the entity ids the entity store holds,
+so a form belonging to a row outside the scope is not a match.
 
 #### A Layout of Your Own
 

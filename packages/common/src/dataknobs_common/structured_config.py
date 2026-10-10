@@ -914,6 +914,29 @@ class StructuredConfig:
         """
         return raw
 
+    @classmethod
+    def merge_inputs(cls, config: Mapping[str, Any], kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """The one input a consumer's mapping and keyword arguments make.
+
+        :class:`StructuredConfigConsumer` calls this before :meth:`from_dict`
+        when it is given both. The default is a plain merge in which a keyword
+        replaces the mapping's value for the same key.
+
+        Override it when one key can mean two things depending on its value.
+        The merge happens before :meth:`_normalize_dict` sees the input, so
+        under the default a keyword replaces the mapping's value even when the
+        two would have landed on different fields. An override can normalise
+        each side first and so keep both.
+
+        Args:
+            config: The mapping the consumer was given.
+            kwargs: The keyword arguments it was given.
+
+        Returns:
+            One input dict, for :meth:`from_dict`.
+        """
+        return {**config, **kwargs}
+
     def to_dict(self) -> dict[str, Any]:
         """Symmetric serialization. Delegates to ``dataclasses.asdict``.
 
@@ -1414,8 +1437,7 @@ class StructuredConfigConsumer(Generic[ConfigT]):
                 f"{type(config).__name__}."
             )
         else:
-            merged: dict[str, Any] = dict(config or {})
-            merged.update(kwargs)
+            merged = self.CONFIG_CLS.merge_inputs(config or {}, kwargs)
             self._config = cast("ConfigT", self.CONFIG_CLS.from_dict(merged))
         # Continue the cooperative multiple-inheritance chain before
         # derived setup. For a single-base consumer (e.g. an event-bus

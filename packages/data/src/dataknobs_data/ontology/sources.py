@@ -752,6 +752,11 @@ class RecordEntitySource(DynamicCapabilityMixin):
         :meth:`str.casefold`, every engine primitive is simple lowercasing, and
         the two differ on the first European catalogue anyone binds.
 
+        **Only ids the entity store holds are answered.** Where the forms are
+        a store of their own, an id they name is checked against the entity
+        store, so a form belonging to a row outside that store's scope is not
+        a match.
+
         **A binding that declared no lookup refuses rather than answering.**
         ``frozenset()`` already means *ran and matched nothing*, and a cascade
         falls through to a guessing rung on exactly that reading -- so a source
@@ -775,10 +780,30 @@ class RecordEntitySource(DynamicCapabilityMixin):
         found = await self._forms_db.search(
             Query(filters=[Filter(lookup.form, Operator.EQ, folded)])
         )
-        return frozenset(
-            str(entity_id)
+        named = {
+            entity_id
             for entity_id in (record.get_value(lookup.entity) for record in found)
             if entity_id is not None
+        }
+        if self._shared_store or not named:
+            return frozenset(str(entity_id) for entity_id in named)
+        # The forms are another store, which may hold forms for entities this
+        # one cannot read: another hierarchy's rows in a table they share, kept
+        # out of the entity store by its scope. An id answered here would be
+        # one `get` resolves to nothing, read by a caller as a match, so only
+        # the ids the entity store holds are answered.
+        #
+        # An entity id is text, so two stores agree on an entity when its key
+        # has one text in both, whatever type each holds it as. No backend
+        # equates an integer with its text, so the read sends each value and
+        # its text -- whichever the entity store holds is the one that matches
+        # -- and the answer compares what came back as text.
+        named_text = {str(entity_id) for entity_id in named}
+        held = await self._read_ids(sorted({*named, *named_text}, key=str))
+        return frozenset(
+            text
+            for text in (str(record.get_value(self._projection.id)) for record in held)
+            if text in named_text
         )
 
     async def by_type(self, type_id: str) -> frozenset[str]:

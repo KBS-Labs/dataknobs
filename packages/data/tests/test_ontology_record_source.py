@@ -1276,3 +1276,70 @@ class _CountingSearchProbe(AsyncMemoryDatabase):
     async def search(self, query: Any) -> list[Record]:
         self.searches += 1
         return await super().search(query)
+
+
+async def test_a_separate_forms_store_scopes_integer_keys_by_their_values() -> None:
+    """Bug: with the forms in a store of their own, the ids they named were
+    checked against the entity store as text. An integer key is not equal to
+    its text -- on any backend, as ``Filter.matches`` answers -- so every id
+    was dropped and every lookup answered ``frozenset()``, which a resolution
+    cascade reads as *ran and matched nothing*.
+
+    The check also sends the forms' own values, so an integer key column finds
+    its rows; the answer is still the id as text, as every other member gives
+    it. A form naming a row the entity store does not hold is still dropped.
+    """
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, surface_forms=FOLDED_LOOKUP), binding="products"
+    )
+    entities = AsyncMemoryDatabase()
+    forms = AsyncMemoryDatabase()
+    await entities.create(Record({"sku": 4471, "title": "Beagle"}))
+    await forms.create(Record({"folded_form": "beagle", "sku": 4471}))
+    await forms.create(Record({"folded_form": "beagle", "sku": 9999}))  # not an entity here
+    source = RecordEntitySource(entities, projection, source_id="products", forms_database=forms)
+
+    assert await source.by_surface_form("Beagle") == frozenset({"4471"})
+
+
+async def test_a_separate_forms_store_scopes_a_key_its_entity_store_holds_as_text() -> None:
+    """Bug: the forms named ``4471`` and the entity store held ``"4471"``.
+
+    The scope read sent the forms' values alone, and ``4471`` does not equal
+    ``"4471"``, so the row was not found and the form named nothing. An entity
+    id is text, so a form naming the integer names the entity whose id is
+    that text: the read also sends each value's text.
+    """
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, surface_forms=FOLDED_LOOKUP), binding="products"
+    )
+    entities = AsyncMemoryDatabase()
+    forms = AsyncMemoryDatabase()
+    await entities.create(Record({"sku": "4471", "title": "Beagle"}))
+    await forms.create(Record({"folded_form": "beagle", "sku": 4471}))
+    source = RecordEntitySource(entities, projection, source_id="products", forms_database=forms)
+
+    assert await source.by_surface_form("Beagle") == frozenset({"4471"})
+
+
+async def test_a_separate_forms_store_scopes_a_key_read_back_in_another_type() -> None:
+    """Bug: the reserved key matched the forms' ``"4471"`` by its text, and the
+    row came back holding the integer ``4471``.
+
+    The answer then kept only the ids equal to a value the forms named, and
+    ``4471`` does not equal ``"4471"``, so the matched row was dropped. Two
+    stores agree on an entity when they agree on its id, which is text, so
+    the answer compares the ids as text.
+    """
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, id="id", surface_forms=dict(FOLDED_LOOKUP, entity="entity_id")),
+        binding="products",
+    )
+    entities = AsyncMemoryDatabase()
+    forms = AsyncMemoryDatabase()
+    await entities.create(Record({"id": 4471, "title": "Beagle"}))
+    await forms.create(Record({"folded_form": "beagle", "entity_id": "4471"}))
+    source = RecordEntitySource(entities, projection, source_id="products", forms_database=forms)
+
+    assert await source.get("4471") is not None  # the reserved key matches the text
+    assert await source.by_surface_form("Beagle") == frozenset({"4471"})

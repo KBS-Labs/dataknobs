@@ -380,9 +380,9 @@ too, rather than being discarded:
 factory.create(backend="postgres", hosst="db.internal", database="app")
 # ValueError: PostgresDatabaseConfig does not accept 'hosst' (did you mean
 # 'host'?). Accepted keys: auto_create_table, command_timeout,
-# connection_string, database, ensure_database, host, max_pool_size,
-# min_pool_size, password, port, schema, schema_name, ssl, table,
-# table_name, user, vector_enabled, vector_metric.
+# connection_string, database, ensure_database, host, id_column, layout,
+# max_pool_size, min_pool_size, password, port, schema, schema_name, scope,
+# ssl, table, table_name, user, vector_enabled, vector_metric.
 ```
 
 This is the same event as an unrecognised backend name, one layer in, and

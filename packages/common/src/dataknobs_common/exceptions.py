@@ -53,6 +53,8 @@ Package-Specific Extensions:
     ```
 """
 
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any, Dict
 
@@ -487,6 +489,50 @@ class DottedPathTypeError(ConfigurationError):
         self.expected = expected
 
 
+@contextmanager
+def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) -> Iterator[None]:
+    """Say where the configuration refused inside this block came from.
+
+    A component refuses its own configuration without knowing who configured
+    it: a database backend built for an ontology binding or a bot's grounded
+    source names its table, and nothing a reader of the ontology document or
+    the bot config would recognise. The caller that does know wraps the
+    construction, and a :class:`ValidationError` or :class:`ConfigurationError`
+    raised inside -- a subclass included -- is raised again **as the same
+    exception**, its message prefixed with ``"<origin>: "`` and its
+    ``context`` merged with ``context``, the caller's keys winning.
+
+    Amended rather than rebuilt, so its type and attributes survive: a
+    subclass may construct itself from other arguments
+    (:class:`DottedPathError` takes a ``ref`` and a ``reason``), and a handler
+    a caller already has for it keeps catching it. The context is replaced
+    with a merged copy, never updated in place, since the raiser may still
+    hold the mapping it passed. Any other exception passes through untouched.
+
+    Args:
+        origin: Where the configuration came from, as its reader would name
+            it (``"source 'cases'"``), in the form a schema reader's
+            ``origin=`` takes.
+        context: Keys that locate the origin (``{"source": "cases"}``),
+            merged into the refusal's ``context``.
+
+    Example:
+        ```python
+        with naming_refusals(f"source {name!r}", context={"source": name}):
+            db = database_factory.create(**options)
+        ```
+    """
+    try:
+        yield
+    except (ValidationError, ConfigurationError) as e:
+        message = e.args[0] if e.args else ""
+        e.args = (f"{origin}: {message}", *e.args[1:])
+        merged = {**dict(e.context or {}), **dict(context or {})}
+        e.context = merged
+        e.details = merged
+        raise
+
+
 __all__ = [
     "DataknobsError",
     "ValidationError",
@@ -502,4 +548,5 @@ __all__ = [
     "SerializationError",
     "TimeoutError",
     "RateLimitError",
+    "naming_refusals",
 ]

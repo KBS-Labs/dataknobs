@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from dataknobs_common.callbacks import is_async_callable, run_callback_off_loop
 
 from ..fields import VectorField
+from ..operation_gate import OperationGateMixin
 from .content import (
     DEFAULT_FIELD_SEPARATOR,
     assemble_source_text,
@@ -123,7 +124,7 @@ def iter_batches(records: list[Record], batch_size: int) -> Iterator[list[Record
         yield records[start : start + batch_size]
 
 
-class BulkEmbedMixin:
+class BulkEmbedMixin(OperationGateMixin):
     """Mixin providing default implementation of bulk_embed_and_store.
 
     This mixin can be used by any **sync** database backend to provide a
@@ -231,7 +232,7 @@ class BulkEmbedMixin:
         return processed_ids
 
 
-class AsyncBulkEmbedMixin:
+class AsyncBulkEmbedMixin(OperationGateMixin):
     """Async mixin providing default implementation of bulk_embed_and_store.
 
     Mixed into every async backend that offers the method. It was mixed into

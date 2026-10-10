@@ -394,6 +394,60 @@ sqlite_db = factory.create(backend="sqlite", path="app.db")
 migrate_data(file_db, sqlite_db)
 ```
 
+## A Backend Instance That Refuses an Operation
+
+An instance that cannot perform a write, a method that creates or drops a
+vector index, or the vector search surface refuses it by overriding
+`_refuse_operation(operation)`. Every body of those operations asks it first,
+before a row is read and before `bulk_embed_and_store` spends the caller's
+embedding function, whichever class defines the body: the database base
+classes, the vector and bulk-embed mixins, the backend itself, or a subclass
+of it. `operation` is the public method's name, and the default permits
+everything. The PostgreSQL backend refuses this way when it reads a table
+through `layout: native`.
+
+The operations asked about are `GATED_OPERATIONS`
+(`dataknobs_data.operation_gate`). No body calls the hook by hand:
+`OperationGateMixin.__init_subclass__` wraps each of those methods a class
+defines when the class is defined, so a backend or subclass written later is
+covered without opting in. A gated method must be a plain or coroutine
+function; one defined as an async generator is refused with a `TypeError`
+when its class is defined.
+
+```python
+from dataknobs_common.exceptions import OperationError
+from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_data.records import Record
+
+
+class ReadOnlyMemoryDatabase(SyncMemoryDatabase):
+    WRITES = frozenset({"create", "update", "delete", "upsert", "bulk_embed_and_store"})
+
+    def _refuse_operation(self, operation: str) -> None:
+        if operation in self.WRITES:
+            raise OperationError(f"{operation}: this database is read-only")
+        super()._refuse_operation(operation)
+
+
+db = ReadOnlyMemoryDatabase()
+for attempt in (
+    lambda: db.create(Record({"text": "a"})),
+    lambda: db.bulk_embed_and_store(
+        [Record({"text": "a"})], "text", embedding_fn=lambda texts: [[1.0]] * len(texts)
+    ),
+):
+    try:
+        attempt()
+    except OperationError as e:
+        print(e)
+# create: this database is read-only
+# bulk_embed_and_store: this database is read-only
+```
+
+`create` is a body the memory backend defines itself and
+`bulk_embed_and_store` one it inherits from a mixin; the one override refuses
+both.
+
 ## Performance Tips
 
 ### Memory Backend

@@ -1213,7 +1213,8 @@ a `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout`, the
 default, is the table the SQL backends create. `NativeColumnLayout` reads a
 table with ordinary typed columns: only the declared columns, a scope ANDed
 into every read, every write refused, and every filter answered as
-`Filter.matches` answers it. No backend takes it yet. See
+`Filter.matches` answers it. The PostgreSQL backends take it by
+configuration (`layout: native`); SQLite and DuckDB do not yet. See
 [the Query System](https://kbs-labs.github.io/dataknobs/packages/data/query/#tables-with-their-own-columns-native-layout).
 
 ```python

@@ -264,6 +264,35 @@ raise TimeoutError(
 )
 ```
 
+### Naming Where a Refusal Came From
+
+#### `naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None)`
+
+A component refuses its own configuration without knowing who configured it:
+a database backend built for a bot's grounded source names its table, and
+nothing a reader of the bot config would recognise. The caller that does know
+wraps the construction in this context manager. A `ValidationError` or
+`ConfigurationError` raised inside, a subclass included, is raised again as
+the same exception, with its message prefixed `"<origin>: "` and `context`
+merged into its own, the caller's keys winning.
+
+It is amended rather than rebuilt, so a subclass such as `DottedPathError`
+keeps its type and its attributes (`ref`, `reason`), and a handler a caller
+already has for it still catches it. Nested blocks prefix outermost first.
+Any other exception passes through untouched.
+
+**Example:**
+```python
+from dataknobs_common import ValidationError, naming_refusals
+
+try:
+    with naming_refusals("source 'cases'", context={"source": "cases"}):
+        raise ValidationError("field 'id' is not declared", context={"field": "id"})
+except ValidationError as e:
+    print(e)          # source 'cases': field 'id' is not declared
+    print(e.context)  # {'field': 'id', 'source': 'cases'}
+```
+
 ## Registry Module
 
 ### Base Registry

@@ -20,6 +20,7 @@ from dataknobs_common.exceptions import (
     DataknobsError,
     NotFoundError,
     OperationError,
+    naming_refusals,
 )
 from dataknobs_common.imports import resolve_optional_callable
 from dataknobs_common.registry import PluginFactory, PluginRegistry
@@ -466,7 +467,8 @@ def _build_heading_selection_llm(config: Any) -> Any | None:
 #: Options ``_create_database_source`` consumes itself. Every other key in
 #: a ``database`` source's options is the backend's, and is forwarded to the
 #: database factory, which accepts or rejects it against the chosen backend.
-_SOURCE_OPTIONS = frozenset({"content_field", "text_search_fields", "schema", "description"})
+#: ``schema`` is both: the source reads it, and so does the backend.
+_SOURCE_OPTIONS = frozenset({"content_field", "text_search_fields", "description"})
 
 
 async def _create_database_source(
@@ -477,7 +479,11 @@ async def _create_database_source(
 
     Options named in :data:`_SOURCE_OPTIONS` configure the source; every
     other option configures the backend it builds and is forwarded to the
-    database factory verbatim.
+    database factory verbatim. ``schema`` is read by both, so the backend is
+    built holding the declared fields rather than handed them afterwards: a
+    backend that reads its layout from them -- a Postgres table with
+    ``layout: native``, whose columns are the declaration -- has none until
+    then.
 
     Forwarding rather than transcribing is what lets a backend be pointed
     at a store: each one takes its own keys -- ``path`` for the file-backed
@@ -494,18 +500,22 @@ async def _create_database_source(
             ``{fields: ...}`` in either spelling, a bare list of field rows,
             or nothing. A field takes
             :data:`~dataknobs_data.sources.database.SOURCE_FIELD_KEYS`, the
-            keys :class:`DatabaseSource` reads.
+            keys :class:`DatabaseSource` reads, and ``sql_type``, which only
+            a backend whose layout reads it accepts.
         description: Human-readable source description.
 
     Raises:
         ValueError: If an option is neither a source option nor a key the
             chosen backend accepts.
         ValidationError: If ``schema`` declares something the shared reader
-            refuses, naming this source.
+            refuses, or the backend refuses its configuration, naming this
+            source.
+        ConfigurationError: If the backend refuses its configuration as
+            such, naming this source.
     """
     from dataknobs_data import async_database_factory
     from dataknobs_data.database import extract_schema_from_config
-    from dataknobs_data.schema import DatabaseSchema
+    from dataknobs_data.schema import SQL_TYPE_KEY, DatabaseSchema
     from dataknobs_data.sources.database import SOURCE_FIELD_KEYS, DatabaseSource
 
     opts = config.options
@@ -516,13 +526,16 @@ async def _create_database_source(
     # for; and a refused declaration should not first build a database, in a
     # worker thread importing its backend, only to throw it away. Read through
     # the door every ``schema:`` goes through, so this source takes the shapes
-    # a database config does, and with the field keys the source reads.
+    # a database config does, and with the field keys the source reads -- and
+    # ``sql_type``, which the source does not read but the backend does where
+    # its layout does (a native Postgres table), refusing it everywhere else.
+    origin = f"source {config.name!r}"
     schema = (
         extract_schema_from_config(
             opts.get("schema"),
-            origin=f"source {config.name!r}",
+            origin=origin,
             context={"source": config.name},
-            keys=SOURCE_FIELD_KEYS,
+            keys=SOURCE_FIELD_KEYS | {SQL_TYPE_KEY},
         )
         or DatabaseSchema()
     )
@@ -534,9 +547,13 @@ async def _create_database_source(
     db_config: dict[str, Any] = {k: v for k, v in opts.items() if k not in _SOURCE_OPTIONS}
 
     try:
-        # Off the loop: resolving a backend name imports its implementation
-        # from disk, and a file backend's config normalizes its path.
-        db = await asyncio.to_thread(async_database_factory.create, **db_config)
+        # The backend refuses its configuration -- the declaration as it reads
+        # it, a native table's key column -- without knowing a source opened
+        # it; a bot config can declare several, so name which one it was.
+        with naming_refusals(origin, context={"source": config.name}):
+            # Off the loop: resolving a backend name imports its implementation
+            # from disk, and a file backend's config normalizes its path.
+            db = await asyncio.to_thread(async_database_factory.create, **db_config)
     except ValueError as exc:
         # The factory names the config class and the offending key; a bot
         # config can declare several sources, so name which one it was.
@@ -550,10 +567,6 @@ async def _create_database_source(
     # being either. The base declares ``connect`` a no-op, so this is
     # safe for backends that need nothing.
     await db.connect()
-
-    # Set schema on the database if it supports it
-    if hasattr(db, "set_schema"):
-        db.set_schema(schema)
 
     content_field = opts.get("content_field", "content")
     text_search_fields = opts.get("text_search_fields", [])
