@@ -905,8 +905,6 @@ class SyncPostgresDatabase(
         held for the life of the iterator alone, so anything else run on this
         instance between records -- a :meth:`read`, a second stream -- leaves
         it be. Close it (or exhaust it) to release the connection.
-        A native table's records stream in key order when the query does not
-        sort, so a batch boundary skips and repeats nothing.
         """
         # Pre-flight the field grammar before a connection is acquired, through
         # the same check the builder applies at the point of interpolation.
@@ -915,7 +913,7 @@ class SyncPostgresDatabase(
                 validate_field_path(f.field)
         self._check_connection()
         config = config or StreamConfig()
-        query = self._stream_query(query)
+        query = query if query is not None else Query()
         sql, params = self.query_builder.build_search_query(query)
 
         rows = self.db.stream_rows(
@@ -2304,8 +2302,7 @@ class AsyncPostgresDatabase(
         """Stream the records a query matches, through a server-side cursor.
 
         As in the sync twin: the statement :meth:`search` runs, inside a
-        read-only transaction held for the life of the iterator, in key order
-        on a native table when the query does not sort. Drive it under
+        read-only transaction held for the life of the iterator. Drive it under
         :func:`~dataknobs_common.async_iter.aclosing_iter` so abandoning it
         releases the connection.
         """
@@ -2315,7 +2312,7 @@ class AsyncPostgresDatabase(
                 validate_field_path(f.field)
         self._check_connection()
         config = config or StreamConfig()
-        query = self._stream_query(query)
+        query = query if query is not None else Query()
         sql, params = self.query_builder.build_search_query(query)
 
         # asyncpg's ``conn.cursor(sql, *args)`` returns a ``CursorFactory``

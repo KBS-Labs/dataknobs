@@ -309,9 +309,8 @@ What the backend adds to the layout:
   backend does not claim `CONDITIONAL_WRITE`.
 - **`stream_read` runs the statement `search` runs**, so its sort and limit
   hold, through a server-side cursor inside a read-only transaction held for
-  the life of the iterator, on a connection that iterator alone reads on.
-  With no sort, a native table streams in key order, so a batch boundary
-  skips and repeats nothing.
+  the life of the iterator, on a connection that iterator alone reads on. As
+  with `search`, a query with no sort promises no order.
 - **It reads only the declared columns**, so a role granted `SELECT` on
   those columns alone, and not on the table, can read it.
 

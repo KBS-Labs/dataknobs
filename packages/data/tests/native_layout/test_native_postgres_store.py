@@ -217,13 +217,15 @@ def test_stream_read_batches_inside_the_scope(pg: tuple[dict[str, Any], str], tw
     assert [int(record.get_value("number")) for record in seen] == [101, 102, 103, 104]
 
 
-def test_stream_read_orders_by_the_key_when_the_query_does_not_sort(
+def test_stream_read_without_a_sort_streams_what_search_returns(
     pg: tuple[dict[str, Any], str], twin: str
 ) -> None:
-    """With no sort the stream still has an order, so a batch boundary skips and repeats nothing."""
+    """With no sort a stream promises no order, as ``search`` does, and one
+    cursor in one snapshot reads every row once whatever the batch size.
+    """
     with opened(twin, tickets(pg)) as db:
         seen = db.stream(Query(), StreamConfig(batch_size=3))
-    assert [record.storage_id for record in seen] == sorted(str(t) for t in (T1, T2, T3, T4))
+    assert sorted(record.storage_id for record in seen) == sorted(str(t) for t in (T1, T2, T3, T4))
 
 
 def test_stream_read_honours_a_limit(pg: tuple[dict[str, Any], str], twin: str) -> None:

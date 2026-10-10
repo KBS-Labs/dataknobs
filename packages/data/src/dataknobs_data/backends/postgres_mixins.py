@@ -9,7 +9,6 @@ reducing code duplication and ensuring consistent behavior.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -20,7 +19,6 @@ from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..operation_gate import GATED_OPERATIONS, OperationGateMixin
-from ..query import Query, SortSpec
 from ..records import Record
 from ..schema import DatabaseSchema, FieldSchema
 from .column_layout import ColumnLayout, JsonbLayout, read_layout_config
@@ -417,13 +415,6 @@ class PostgresLayoutMixin(OperationGateMixin):
 
     def _setup_layout(self) -> None:
         self._use_layout(self._read_layout(self.schema))
-
-    def _stream_query(self, query: Query | None) -> Query:
-        """The query a stream runs: a native table's, in key order unless it sorts."""
-        query = query if query is not None else Query()
-        if self.native and not query.sort_specs and self.config.id_column:
-            return dataclasses.replace(query, sort_specs=[SortSpec(self.config.id_column)])
-        return query
 
     def _refuse_operation(self, operation: str) -> None:
         """Refuse every :data:`NATIVE_REFUSED` operation on a table read through the native layout."""
