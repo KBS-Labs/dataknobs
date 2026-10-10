@@ -99,20 +99,30 @@ def test_a_read_leaves_the_callers_transaction_open(sync_pg: SyncPostgresDatabas
 def test_an_abandoned_stream_releases_its_connection(sync_pg: SyncPostgresDatabase) -> None:
     """Closing a stream part-way closes the connection it read on.
 
-    The stream's server backend is found by its cursor's name, which the last
-    statement it ran (a ``FETCH`` from that cursor) carries; once the stream is
-    closed no backend is left on it.
+    The stream's server backend is the one holding a lock on this test's
+    table: its cursor's transaction keeps one for as long as it is open, and
+    the table's name is this test's alone, so a stream another test holds open
+    on the same server is not counted. Once the stream is closed that backend
+    is gone.
+
+    With nothing else referencing the connection, reference counting would
+    close it even without the stream's own ``close()``; what this catches is a
+    connection something still holds -- a strong registry, a lingering frame --
+    that only the explicit close releases.
     """
     stream = sync_pg.stream_read(_by_rank(), StreamConfig(batch_size=1))
     next(stream)
-    probe = (
-        "SELECT count(*) AS n FROM pg_stat_activity "
-        "WHERE datname = current_database() AND pid <> pg_backend_pid() "
-        "AND query LIKE '%%dk_stream_%%'"
+    holders = sync_pg.db.query_rows(
+        "SELECT DISTINCT pid FROM pg_locks "
+        "WHERE relation = to_regclass(%(table)s) AND pid <> pg_backend_pid()",
+        {"table": sync_pg._q_qualified},
     )
-    assert int(sync_pg.db.query(probe)["n"].iloc[0]) == 1
+    assert len(holders) == 1, holders
+    pid = holders[0]["pid"]
+    alive = "SELECT count(*) AS n FROM pg_stat_activity WHERE pid = %(pid)s"
+    assert sync_pg.db.query_rows(alive, {"pid": pid})[0]["n"] == 1
     stream.close()
     deadline = time.monotonic() + 5.0
-    while int(sync_pg.db.query(probe)["n"].iloc[0]) and time.monotonic() < deadline:
+    while sync_pg.db.query_rows(alive, {"pid": pid})[0]["n"] and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert int(sync_pg.db.query(probe)["n"].iloc[0]) == 0
+    assert sync_pg.db.query_rows(alive, {"pid": pid})[0]["n"] == 0
