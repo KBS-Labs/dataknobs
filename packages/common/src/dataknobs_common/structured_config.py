@@ -346,6 +346,35 @@ def _declared_without_classvar(cls: type, name: str) -> bool:
     return annotation is not ClassVar and get_origin(annotation) is not ClassVar
 
 
+def _declare_unhashable(cls: type) -> None:
+    """Declare a subclass unhashable, unless its body writes ``__hash__`` itself.
+
+    Runs before the subclass's ``@dataclass``. ``dataclasses`` treats a
+    ``__hash__`` already in the class dict as explicit and does not regenerate
+    it, so ``None`` written here survives the decorator. Writing it on the base
+    alone would not: each subclass's own decorator generates a hash over its
+    fields, because the subclass's dict does not hold the base's ``None``.
+
+    A body that defines ``__eq__`` without ``__hash__`` is refused. Python
+    records that body with ``__hash__ = None`` in it, and ``dataclasses`` reads
+    the pair as *implicit* and generates a field hash the new equality does not
+    agree with. Nothing at this point can see the decorator's arguments, so the
+    refusal covers ``eq=False`` too, where the result would have been honest;
+    a subclass in that position writes ``__hash__`` as well.
+    """
+    if "__hash__" not in cls.__dict__:
+        # Deliberate: see the docstring. Both codes are mypy objecting to the
+        # assignment itself, which is the mechanism.
+        cls.__hash__ = None  # type: ignore[method-assign,assignment]
+    elif "__eq__" in cls.__dict__ and cls.__dict__["__hash__"] is None:
+        raise TypeError(
+            f"{cls.__qualname__} defines __eq__ without __hash__. A frozen "
+            "dataclass then generates a hash over every field, which the new "
+            "equality does not agree with. Define __hash__ consistent with "
+            "__eq__, or leave __eq__ to the dataclass."
+        )
+
+
 def _validate_policy_declaration(cls: type) -> None:
     """Reject a policy attribute this class declares with the wrong shape.
 
@@ -660,6 +689,20 @@ class StructuredConfig:
     A subclass that needs a genuinely custom ``__repr__`` may still
     define one in its body; :meth:`__init_subclass__` leaves an
     explicitly-defined repr untouched.
+
+    Compared field by field, and not hashable. Equality is the base's
+    contract -- ``type(cfg).from_dict(cfg.to_dict()) == cfg`` -- and a config
+    holding a list or a mapping cannot honour a hash over its fields as well.
+    A frozen dataclass with equality on would still generate one, so the type
+    would answer :class:`collections.abc.Hashable` True and ``hash()`` would
+    raise ``TypeError`` at the first container. ``frozen=False``, the ordinary
+    spelling of *equal but not hashable*, is unavailable: a dataclass may not
+    unfreeze a frozen base. So :meth:`__init_subclass__` sets ``__hash__`` to
+    ``None`` on every subclass before its ``@dataclass`` runs, and the check
+    answers False for the whole family, whatever one value happens to hold. A
+    subclass that writes ``__hash__`` in its body keeps it, and should write
+    ``__eq__`` to match; one that writes ``__eq__`` alone is refused at class
+    definition.
     """
 
     #: Field names masked by :meth:`_redacted_repr`. Empty by default,
@@ -713,7 +756,7 @@ class StructuredConfig:
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Install the redacting ``__repr__`` and validate the policy attributes.
+        """Install the redacting ``__repr__``, declare the subclass unhashable, and validate.
 
         Runs at class-creation time, *before* the subclass's
         ``@dataclass`` decorator is applied. Writing ``__repr__`` into the
@@ -742,6 +785,11 @@ class StructuredConfig:
         fail together -- each is consumed directly enough that a wrong
         shape means something else instead of raising, and ``str`` being
         both iterable and ``in``-testable is the shared way that happens.
+
+        Every subclass is declared unhashable here, by the same mechanism as
+        the repr and for the same reason: its own ``@dataclass`` would
+        otherwise generate one. See :func:`_declare_unhashable`, and the class
+        docstring for why a config is not hashable.
         """
         super().__init_subclass__(**kwargs)
         if "__repr__" not in cls.__dict__:
@@ -757,6 +805,7 @@ class StructuredConfig:
         # need this and is now one of five: each is read directly enough that
         # a misdeclaration means something else rather than failing.
         _validate_policy_declaration(cls)
+        _declare_unhashable(cls)
 
     def _redacted_repr(self) -> str:
         """Dataclass-style repr that masks sensitive values, scalar and nested.
@@ -1147,6 +1196,13 @@ class StructuredConfig:
         # round-trip and construction paths are unaffected.
         config_cls.from_dict(raw).validate()
 
+
+# The base answers the hashability check as every subclass does. Assigned here
+# rather than written in the class body, because mypy reads a body
+# ``__hash__ = None`` as the base's declared type, and every subclass that
+# writes its own ``__hash__`` would then fail ``[override]``. Same directive as
+# the assignment in ``_declare_unhashable``.
+StructuredConfig.__hash__ = None  # type: ignore[method-assign,assignment]
 
 # ``registry`` is imported above and cannot import this module back, so its
 # ``PluginConfig`` names this class as a forward reference. Handing the class

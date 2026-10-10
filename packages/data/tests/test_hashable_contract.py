@@ -19,7 +19,10 @@ Two answers are honest:
 * ``frozen=True, eq=False`` -- hashes by identity, the check answers True, and
   the call cannot raise.
 
-Only the third combination is wrong.
+A frozen type with equality on can still be honest by declaring ``__hash__``
+None, which is how every ``StructuredConfig`` answers: its base declares it for
+each subclass, because a frozen base cannot be unfrozen. Left to the generated
+hash, that combination is the wrong one.
 
 **This package had no census at all, and that is how it got one.** The
 equivalent suite in ``dataknobs-common`` had measured that package for some
@@ -32,7 +35,7 @@ the other way one package over. The guard that would have caught it swept a
 tree it could not see them in.
 
 **What this module does NOT assert, and why.** There is no test here saying
-*no type is in that state*, because twenty-one are, and the way out is per type:
+*no type is in that state*, because two are, and the way out is per type:
 identity for a built value nobody compares field-wise, unfrozen equality for a
 record two of which really can be equal. Both are behaviour changes to
 published types and neither is a default, so the choice is a ruling rather
@@ -61,42 +64,13 @@ from dataknobs_common.testing import DataclassSweep
 #: of which really can be equal -- and there is no third correct answer.
 #: Entries leave this list as they are decided; nothing is added without one.
 #:
-#: **Eighteen of the twenty-one are one defect inherited eighteen times.**
-#: ``DatabaseConfig`` is ``frozen=True`` with equality on and carries a
-#: ``schema: DatabaseSchema`` field; ``DatabaseSchema`` is a plain
-#: ``@dataclass``, so its ``__hash__`` is ``None`` and every config that holds
-#: a populated one raises. Sixteen backend configs inherit the field, and so
-#: does ``ColumnLayoutConfig``, the native-layout keys three of them share
-#: (its own ``scope`` list is the same shape again). So the
-#: count here overstates how many decisions are outstanding: the answer at the
-#: root settles the rest, and the two candidates differ in what they cost a
-#: consumer -- identity would stop two equal configs comparing equal, which
-#: the factory lane may rely on, and unfrozen equality would make a config
-#: assignable again, which freezing it was meant to stop.
-#:
-#: The other three each hold a ``dict`` directly.
+#: It held twenty-one. Nineteen were configs -- the eighteen backend configs,
+#: which inherit a ``schema: DatabaseSchema`` field from ``DatabaseConfig``, and
+#: ``UserStateSectionSpec`` -- and left when every ``StructuredConfig`` was
+#: declared unhashable. The two that remain each hold a ``dict`` directly.
 OPEN: frozenset[str] = frozenset(
     {
-        "backends.config.AsyncDuckDBDatabaseConfig",
-        "backends.config.AsyncElasticsearchDatabaseConfig",
-        "backends.config.AsyncS3DatabaseConfig",
-        "backends.config.AsyncSQLiteDatabaseConfig",
-        "backends.config.ColumnLayoutConfig",
-        "backends.config.DatabaseConfig",
-        "backends.config.DuckDBDatabaseConfigBase",
-        "backends.config.ElasticsearchDatabaseConfigBase",
-        "backends.config.FileDatabaseConfig",
-        "backends.config.MemoryDatabaseConfig",
-        "backends.config.PostgresDatabaseConfig",
-        "backends.config.S3DatabaseConfigBase",
-        "backends.config.SQLiteDatabaseConfigBase",
-        "backends.config.SyncDuckDBDatabaseConfig",
-        "backends.config.SyncElasticsearchDatabaseConfig",
-        "backends.config.SyncS3DatabaseConfig",
-        "backends.config.SyncSQLiteDatabaseConfig",
-        "backends.config.VectorBackendConfig",
         "sources.cluster_index.ClusterTopicConfig",
-        "user.config.UserStateSectionSpec",
         "user.migration.SectionMigrator",
     }
 )
@@ -104,28 +78,11 @@ OPEN: frozenset[str] = frozenset(
 #: Types the builder cannot construct, so the contract is unmeasured for them.
 #:
 #: A hole in the sweep rather than a verdict, declared so it cannot grow
-#: quietly. Every entry rejects the generic witness in a validating
-#: ``__post_init__``, for the reason the two in ``dataknobs-common`` do: the
-#: field validates a value out of a vocabulary the annotation does not carry,
-#: so it is a plain ``str`` and only certain strings are accepted. Six check
-#: ``timestamps.format`` against ``iso``, ``epoch`` and ``datetime``; the
-#: seventh checks a section name.
-#:
-#: Unmeasured is not unanswered. All seven are frozen with equality on and
-#: hold at least one ``Mapping``, so the reading the sweep would take is
-#: available by inspection and is the one :data:`OPEN` records for their
-#: siblings -- these are not a quiet third category.
-UNCONSTRUCTIBLE: frozenset[str] = frozenset(
-    {
-        "user.config.UserStateStoreConfig",
-        "vector.stores.config.ChromaVectorStoreConfig",
-        "vector.stores.config.FaissVectorStoreConfig",
-        "vector.stores.config.MemoryVectorStoreConfig",
-        "vector.stores.config.PgVectorStoreConfig",
-        "vector.stores.config.VectorStoreConfig",
-        "vector.stores.config.VectorStoreTimestampConfig",
-    }
-)
+#: quietly. Empty: the seven it held were configs, which no longer claim to be
+#: hashable and so are not asked. A type whose ``__post_init__`` rejects the
+#: generic witness -- a plain ``str`` validated against a vocabulary the
+#: annotation does not carry -- belongs here, with that reason.
+UNCONSTRUCTIBLE: frozenset[str] = frozenset()
 
 
 @pytest.fixture(scope="module")

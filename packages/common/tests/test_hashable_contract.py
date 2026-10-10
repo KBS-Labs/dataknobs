@@ -16,10 +16,13 @@ Two answers are already in this package and both are honest:
 * ``frozen=True, eq=False`` -- hashes by identity, the check answers True, and
   the call cannot raise.
 
-Only the third combination is wrong.
+A frozen type with equality on can still be honest by declaring ``__hash__``
+None, which is how every ``StructuredConfig`` answers: its base declares it for
+each subclass, because a frozen base cannot be unfrozen. Left to the generated
+hash, that combination is the wrong one.
 
 **What this module does NOT assert, and why.** There is no test here saying
-*no type is in that state*, because twenty-three are, and the way out is
+*no type is in that state*, because eleven are, and the way out is
 per type: identity for a built value nobody compares field-wise, unfrozen
 equality for a record two of which really can be equal. Both are behaviour
 changes to published types and neither is a default, so the choice is a ruling
@@ -50,11 +53,13 @@ from _dataclass_sweep import SWEEP
 #: of which really can be equal -- and there is no third correct answer.
 #: Entries leave this list as they are decided; nothing is added without one.
 #:
-#: It held twenty-three. The ten that left are the ontology and resolution
-#: types, each given one of the two answers before the package door published
-#: them -- the moment at which a declaration is still free to change. The
-#: thirteen that remain are reachable from a published distribution, so
-#: either answer is a migration for them and the decision is a different one.
+#: It held twenty-three. The ten that left first are the ontology and
+#: resolution types, each given one of the two answers before the package door
+#: published them -- the moment at which a declaration is still free to change.
+#: The two configs among the rest left when every ``StructuredConfig`` was
+#: declared unhashable. The eleven that remain are reachable from a published
+#: distribution, so either answer is a migration for them and the decision is a
+#: different one.
 OPEN: frozenset[str] = frozenset(
     {
         "_nested_core._MintedNode",
@@ -65,11 +70,9 @@ OPEN: frozenset[str] = frozenset(
         "entity_resolution.cascade.CascadeState",
         "packs._CompositionPlan",
         "packs._Contribution",
-        "ratelimit.types.RateLimiterConfig",
         "resolver.CompositeResolver",
         "resolver.JoiningPartitionResolver",
         "resolver.MappingResolver",
-        "retry.RetryConfig",
     }
 )
 

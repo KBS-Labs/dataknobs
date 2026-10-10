@@ -71,13 +71,10 @@ class TestOntologyConfigStructured:
 class TestOntologyConfigIsHonestlyUnhashable:
     """Equality and unhashability, which this type has to hold at once.
 
-    The base class is frozen, so ``frozen=False`` -- the ordinary way to say
-    *compared field-wise, not hashable* -- is unavailable: a dataclass may not
-    unfreeze an inherited one. The type reaches the same contract by setting
-    ``__hash__`` in its class body, and ``dataclasses`` honours that only
-    while no explicit ``__eq__`` sits beside it. That is a quiet condition, so
-    it is pinned rather than trusted: a later hand-written ``__eq__`` would
-    regenerate the hash and put the type back in the state it just left.
+    The type holds eight mappings and lists, so it is the clearest case of why
+    a ``StructuredConfig`` is not hashable, and the declaration that makes it
+    so is the base's rather than its own. Asserted here as well as across the
+    family, because this is the type a regression would hurt first.
     """
 
     def test_the_type_does_not_claim_to_be_hashable(self) -> None:
@@ -91,7 +88,7 @@ class TestOntologyConfigIsHonestlyUnhashable:
             hash(_populated())
         except TypeError:
             return
-        raise AssertionError("hash() succeeded on a type declaring __hash__ = None")
+        raise AssertionError("hash() succeeded on a type declared unhashable")
 
     def test_equality_still_compares_the_fields(self) -> None:
         """The half the base class's roundtrip property depends on.
