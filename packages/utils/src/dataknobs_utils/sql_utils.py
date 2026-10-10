@@ -13,14 +13,17 @@ import contextlib
 import operator
 import os
 import threading
+import uuid
 import weakref
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from types import TracebackType
 from typing import IO, Any, Dict, List, Self
 
 import numpy as np
 import pandas as pd
 import psycopg2
+import psycopg2.extras
 
 try:
     from dotenv import load_dotenv
@@ -383,18 +386,7 @@ class DotenvPostgresConnector:
         conn = conns.get(lane)
         if self._is_usable(conn):
             return conn
-        kwargs: dict[str, Any] = {
-            "host": self.host,
-            "database": self.database,
-            "user": self.user,
-            "password": self.password,
-            "port": self.port,
-        }
-        # Only pass sslmode when explicitly configured so libpq's own
-        # default applies otherwise (preserving prior behavior).
-        if self.sslmode is not None:
-            kwargs["sslmode"] = self.sslmode
-        new_conn = psycopg2.connect(**kwargs)
+        new_conn = self._connect()
         # Publication and registration under one lock, so a connection is never
         # live-but-unregistered. Assigning the thread-local first would leave a
         # window in which close() drains a registry this connection has not
@@ -415,6 +407,42 @@ class DotenvPostgresConnector:
             self._open_conns.add(new_conn)
             conns[lane] = new_conn
         return new_conn
+
+    def open_conn(self) -> Any:
+        """A new connection of the caller's own, which the caller closes.
+
+        For work that holds a transaction open across calls it does not
+        control -- a server-side cursor read while the caller runs other
+        statements between fetches. No lane can carry that: a lane's connection
+        is the one every later call on this thread is handed, so a statement
+        run on it in between joins, commits or re-enters the held transaction.
+
+        The connection is registered as a lane's is, so :meth:`close` still
+        reaches one the caller abandoned. Close it when done: until then it
+        holds a server backend.
+
+        Returns:
+            psycopg2.connection: A connection no other call is handed.
+        """
+        new_conn = self._connect()
+        with self._conns_lock:
+            self._open_conns.add(new_conn)
+        return new_conn
+
+    def _connect(self) -> Any:
+        """A new connection from the configured parameters."""
+        kwargs: dict[str, Any] = {
+            "host": self.host,
+            "database": self.database,
+            "user": self.user,
+            "password": self.password,
+            "port": self.port,
+        }
+        # Only pass sslmode when explicitly configured so libpq's own
+        # default applies otherwise (preserving prior behavior).
+        if self.sslmode is not None:
+            kwargs["sslmode"] = self.sslmode
+        return psycopg2.connect(**kwargs)
 
     def _lane_conns(self) -> dict[str, Any]:
         """This thread's connection-per-lane mapping, created on first use."""
@@ -668,6 +696,71 @@ class PostgresDB:
                 rowcount: int = curs.rowcount
                 conn.commit()
         return rowcount
+
+    def query_rows(self, query: str, params: Dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """Execute a SQL query and return its rows, each a mapping of column to value.
+
+        :meth:`query` builds a DataFrame, which turns a ``NULL`` in an integer
+        column into a float ``NaN`` and a time into a pandas ``Timestamp``. The
+        values here are the driver's, unconverted. Runs where :meth:`query`
+        does, so it commits nothing a caller of :meth:`get_conn` has open.
+
+        Args:
+            query: SQL query string, with ``%(name)s`` placeholders.
+            params: The values for those placeholders. Defaults to None.
+
+        Returns:
+            list[dict[str, Any]]: The rows, in the order the server returned them.
+        """
+        with self._internal_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as curs:
+                curs.execute(query, params)
+                return [dict(row) for row in curs.fetchall()]
+
+    def stream_rows(
+        self,
+        query: str,
+        params: Dict[str, Any] | None = None,
+        *,
+        batch_size: int = 1000,
+    ) -> Generator[dict[str, Any], None, None]:
+        """Yield a query's rows through a server-side cursor, ``batch_size`` a fetch.
+
+        The cursor reads inside one read-only transaction, on a connection
+        opened for this iterator alone (:meth:`DotenvPostgresConnector.open_conn`)
+        and closed when it is exhausted or closed. Its own connection is what
+        lets a caller run anything on this object between rows -- a
+        :meth:`query`, another stream -- since a statement on a shared
+        connection would end the transaction the cursor lives in.
+
+        Close an iterator abandoned part-way (``contextlib.closing``) to
+        release its connection promptly; :meth:`close` reaches it otherwise.
+
+        Args:
+            query: SQL query string, with ``%(name)s`` placeholders.
+            params: The values for those placeholders. Defaults to None.
+            batch_size: Rows fetched per round trip. Defaults to 1000.
+
+        Yields:
+            dict[str, Any]: Each row, as :meth:`query_rows` returns it.
+        """
+        conn = self._connector.open_conn()
+        try:
+            conn.set_session(readonly=True)
+            curs = conn.cursor(
+                name=f"dk_stream_{uuid.uuid4().hex}",
+                cursor_factory=psycopg2.extras.RealDictCursor,
+            )
+            curs.itersize = batch_size
+            curs.execute(query, params)
+            for row in curs:
+                yield dict(row)
+        finally:
+            # Closing ends the read-only transaction and the cursor with it;
+            # nothing in it is to commit. Not ``with conn``, whose exit raises
+            # on a connection :meth:`close` already reached -- which is where an
+            # iterator abandoned past the object's close is finalized.
+            conn.close()
 
     @staticmethod
     def _build_insert_columns(columns: list[str]) -> str:

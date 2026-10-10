@@ -15,9 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counted. `stream_read` now honours the query's sort and limit, runs inside a
   read-only transaction, and on the sync twin streams through a server-side
   cursor rather than `LIMIT`/`OFFSET` pages with no order, which could skip or
-  repeat a row at a page boundary. The sync twin's `search`, `read`,
-  `exists`, `count` and `stream_read` return rows as the driver reads them,
-  not through a DataFrame, which turned a `NULL` integer into a float `NaN`.
+  repeat a row at a page boundary. Each sync stream reads on a connection of
+  its own, so a `read` or a second stream between its records leaves it be,
+  and no sync read runs on the connection `db.get_conn()` hands a caller. The
+  sync twin's `search`, `read`, `exists`, `count` and `stream_read` return
+  rows as the driver reads them, not through a DataFrame, which turned a
+  `NULL` integer into a float `NaN`.
 - **A surface-form lookup answers only ids the entity store holds** when the
   forms are a store of their own (`forms_database=`), so a form left behind
   for a row the entity store cannot read is not a match.

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- **`PostgresDB.query_rows()` and `PostgresDB.stream_rows()`.** `query_rows`
+  returns rows as dicts of the driver's values rather than a DataFrame.
+  `stream_rows` yields them through a server-side cursor in a read-only
+  transaction, on a connection opened for that iterator alone
+  (`DotenvPostgresConnector.open_conn()`), so a statement run on the object
+  between rows cannot end the transaction the cursor lives in. The connection
+  closes when the iterator is exhausted or closed, and `close()` reaches one
+  that was abandoned.
+
 ### Changed
 
 - **The package door imports its submodules lazily (PEP 562).**

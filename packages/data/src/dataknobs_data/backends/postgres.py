@@ -6,13 +6,11 @@
 from __future__ import annotations
 
 import logging
-import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import asyncpg
 import psycopg2
-import psycopg2.extras
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -478,15 +476,13 @@ class SyncPostgresDatabase(
     def _rows(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         """The rows a read returns, each a plain mapping of column to value.
 
-        Read on the caller's connection with a dict cursor rather than through
-        a DataFrame, which would turn a ``NULL`` in an integer column into a
-        float ``NaN`` and a time into a pandas ``Timestamp``: a table's own
-        columns come back as the driver reads them.
+        Read as rows rather than through a DataFrame, which would turn a
+        ``NULL`` in an integer column into a float ``NaN`` and a time into a
+        pandas ``Timestamp``: a table's own columns come back as the driver
+        reads them. Never on the connection ``self.db.get_conn()`` hands a
+        caller, whose transaction is the caller's to end.
         """
-        conn = self.db.get_conn()
-        with conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, {f"p{i}": value for i, value in enumerate(params)})
-            return [dict(row) for row in cur.fetchall()]
+        return self.db.query_rows(sql, {f"p{i}": value for i, value in enumerate(params)})
 
     def create(self, record: Record) -> str:
         """Create a new record."""
@@ -907,8 +903,10 @@ class SyncPostgresDatabase(
         """Stream the records a query matches, through a server-side cursor.
 
         The statement is the one :meth:`search` runs, so the query's sort and
-        limit hold, and it runs inside a read-only transaction held for the
-        life of the iterator: close it (or exhaust it) to end the transaction.
+        limit hold, and it runs inside a read-only transaction on a connection
+        held for the life of the iterator alone, so anything else run on this
+        instance between records -- a :meth:`read`, a second stream -- leaves
+        it be. Close it (or exhaust it) to release the connection.
         A native table's records stream in key order when the query does not
         sort, so a batch boundary skips and repeats nothing.
         """
@@ -922,21 +920,17 @@ class SyncPostgresDatabase(
         query = self._stream_query(query)
         sql, params = self.query_builder.build_search_query(query)
 
-        conn = self.db.get_conn()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SET TRANSACTION READ ONLY")
-            with conn.cursor(
-                name=f"dk_stream_{uuid.uuid4().hex}",
-                cursor_factory=psycopg2.extras.RealDictCursor,
-            ) as cur:
-                cur.itersize = config.batch_size
-                cur.execute(sql, {f"p{i}": value for i, value in enumerate(params)})
-                for row in cur:
-                    record = self._row_to_record(dict(row))
-                    if query.fields:
-                        record = record.project(query.fields)
-                    yield record
+        rows = self.db.stream_rows(
+            sql,
+            {f"p{i}": value for i, value in enumerate(params)},
+            batch_size=config.batch_size,
+        )
+        with closing(rows):
+            for row in rows:
+                record = self._row_to_record(row)
+                if query.fields:
+                    record = record.project(query.fields)
+                yield record
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None
