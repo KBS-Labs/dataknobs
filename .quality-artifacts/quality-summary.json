@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-10-10T16:16:17Z",
-  "overall_status": "PASS",
+  "timestamp": "2026-10-10T17:09:51Z",
+  "overall_status": "FAIL",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots data fsm llm",
@@ -15,7 +15,7 @@
     "bots": "2af93edb611a4b9b0c2e37a882ebc267e8a820f71680eca325e889acb5b86346",
     "common": "00862b18a7be35f334ae184dd9fa3308e5266d1604b3af90577e108a99c24e82",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "29978185b46ceacbe99422fa54ffdadf9de13e9d6e3d0719f3d3464e11755257",
+    "data": "beda23a47f71424126f4b42c185143dfddb02d6515113927965e84fb51d92430",
     "fsm": "94bd9fe316b45dc5138a261c6210a9c1f6b343449ddd55d96b2111adf43c8307",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "1fac8c7048b7d7cc4d4d7b981b80059580ff16b821d666433e6bd85dbc5a6593",
@@ -28,16 +28,16 @@
     "toolchain": "b608e3237acaa9650a2e6ab32d7a070435e67cfb65bb66217dd8351395d3715e",
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
-    "workspace_tests": "54ed8ee6d582468932d8254d92aa0c577c5106d70875ddfb392221da6113ef9e",
-    "docs": "6e1df4f7415c73068662b7d791fa97babe0cc3390d32a0219826acea1f1ce00b"
+    "workspace_tests": "f42472e749b12ed32c9903140a66f9014718e8440edd76d09879bee7b6760d32",
+    "docs": "7e9c408dcbbcfff5574419573b081233d16bc60bc861c011df6bc63ab8d24938"
   },
-  "total_seconds": 343,
+  "total_seconds": 341,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "shell_lint": {
       "status": "pass",
@@ -56,7 +56,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 81
+      "duration_seconds": 77
     },
     "documentation": {
       "status": "pass",
@@ -73,8 +73,8 @@
       "duration_seconds": 0
     },
     "documentation_mirrors": {
-      "status": "pass",
-      "exit_code": 0,
+      "status": "fail",
+      "exit_code": 1,
       "skipped": false,
       "tool": "docs-mirror-check.py",
       "duration_seconds": 0
@@ -83,14 +83,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 173,
-      "workspace_guards_seconds": 96
+      "duration_seconds": 172,
+      "workspace_guards_seconds": 95
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 48
+      "duration_seconds": 51
     }
   }
 }
