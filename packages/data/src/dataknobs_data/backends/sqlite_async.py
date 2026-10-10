@@ -9,6 +9,7 @@ import asyncio
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -48,6 +49,12 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+#: The stores whose operation the running task is inside: a statement an
+#: operation makes through another public method is part of it, not a new one.
+_OPERATING: ContextVar[tuple[AsyncSQLiteDatabase, ...]] = ContextVar(
+    "sqlite_async_operating", default=()
+)
 
 
 class AsyncSQLiteDatabase(
@@ -106,6 +113,10 @@ class AsyncSQLiteDatabase(
 
         self.db: aiosqlite.Connection | None = None
         self._connected = False
+        # The operations running on the connection, which ``close`` waits for.
+        self._running = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
 
         # Serializes conditional (compare-and-set) writes so a concurrent pair
         # on one instance yields exactly one winner. aiosqlite queues each
@@ -156,11 +167,20 @@ class AsyncSQLiteDatabase(
         logger.info(f"Connected to async SQLite database: {self.db_path}")
 
     async def close(self) -> None:
-        """Close the database connection."""
-        if self.db:
-            await self.db.close()
-            self.db = None
-            self._connected = False
+        """Close the database connection.
+
+        Refuses every operation from the moment it starts, and closes the
+        connection once the operations already running on it are done. A
+        transaction is not one operation: closing in its body discards it, and
+        its commit is refused.
+        """
+        was_connected, self._connected = self._connected, False
+        while self._running:
+            await self._idle.wait()
+        db, self.db = self.db, None
+        if db is not None:
+            await db.close()
+        if was_connected:
             logger.info(f"Disconnected from async SQLite database: {self.db_path}")
 
     async def _configure_sqlite(self) -> None:
@@ -210,43 +230,88 @@ class AsyncSQLiteDatabase(
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
-        if not self._connected or not self.db:
+        self._require_conn()
+
+    def _require_conn(self) -> aiosqlite.Connection:
+        """The connection, or the refusal :meth:`_check_connection` gives.
+
+        The same test, returning what it tested: a caller that holds the
+        result has the connection narrowed for the type checker, which a
+        check in another method cannot give it.
+        """
+        if not self._connected or self.db is None:
             raise RuntimeError("Database not connected. Call connect() first.")
+        return self.db
+
+    @asynccontextmanager
+    async def _operation(self) -> AsyncIterator[aiosqlite.Connection]:
+        """The connection one operation runs on, held open until it is done.
+
+        Refused before :meth:`connect` and from the moment :meth:`close`
+        starts. Once admitted, the operation is counted until it returns, and
+        ``close`` closes the connection only when none is: an operation is
+        several statements, each its own await, and ``close`` may start between
+        two of them. An operation another one makes -- a conditional update
+        reading the record it compares -- is part of that one, and is admitted
+        whatever ``close`` has started.
+        """
+        operating = _OPERATING.get()
+        if any(store is self for store in operating):
+            if self.db is None:  # the outer operation holds it open
+                raise RuntimeError("Database not connected. Call connect() first.")
+            yield self.db
+            return
+        db = self._require_conn()
+        token = _OPERATING.set((*operating, self))
+        try:
+            async with self._counted():
+                yield db
+        finally:
+            _OPERATING.reset(token)
+
+    @asynccontextmanager
+    async def _counted(self) -> AsyncIterator[None]:
+        """Count what runs inside among the operations :meth:`close` waits for."""
+        self._running += 1
+        self._idle.clear()
+        try:
+            yield
+        finally:
+            self._running -= 1
+            if not self._running:
+                self._idle.set()
 
     async def create(self, record: Record) -> str:
         """Create a new record."""
-        self._check_connection()
+        async with self._operation() as db:
+            record_id = record.id or self._generate_id()
+            query, params = self.query_builder.build_create_query(record, record_id=record_id)
 
-        record_id = record.id or self._generate_id()
-        query, params = self.query_builder.build_create_query(record, record_id=record_id)
+            try:
+                await db.execute(query, params)
+                await db.commit()
 
-        try:
-            await self.db.execute(query, params)
-            await self.db.commit()
-
-            # SQLite doesn't support RETURNING, so we use the ID we generated
-            record_id = params[0]  # ID is the first parameter
-            return record_id
-        except aiosqlite.IntegrityError as e:
-            await self.db.rollback()
-            if is_duplicate_key_error(e):
-                raise DuplicateRecordError(params[0]) from e
-            # NOT NULL / CHECK / other column constraint — surface truthfully
-            # instead of mislabeling it as a duplicate id.
-            raise constraint_violation_error(params[0]) from e
+                # SQLite doesn't support RETURNING, so we use the ID we generated
+                return record_id
+            except aiosqlite.IntegrityError as e:
+                await db.rollback()
+                if is_duplicate_key_error(e):
+                    raise DuplicateRecordError(params[0]) from e
+                # NOT NULL / CHECK / other column constraint — surface truthfully
+                # instead of mislabeling it as a duplicate id.
+                raise constraint_violation_error(params[0]) from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
-        self._check_connection()
+        async with self._operation() as db:
+            query, params = self.query_builder.build_read_query(id)
 
-        query, params = self.query_builder.build_read_query(id)
+            async with db.execute(query, params) as cursor:
+                row = await cursor.fetchone()
 
-        async with self.db.execute(query, params) as cursor:
-            row = await cursor.fetchone()
-
-            if row:
-                return self.query_builder.record_from_row(dict(row))
-            return None
+                if row:
+                    return self.query_builder.record_from_row(dict(row))
+                return None
 
     async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
         """Update an existing record.
@@ -267,34 +332,33 @@ class AsyncSQLiteDatabase(
             ConcurrencyError: If ``expected_version`` does not match the
                 record's current version token.
         """
-        self._check_connection()
+        async with self._operation() as db:
+            # Conditional write: hold the CAS lock across the read-compare-write so
+            # a concurrent conditional pair on this instance yields exactly one
+            # winner. Reusing read() guarantees the token compared here matches the
+            # one get_version() returned. Cross-connection atomicity is out of
+            # scope (see the module docs on the in-process content-hash backends).
+            if expected_version is not None:
+                async with self._cas_lock:
+                    current = await self.read(id)
+                    if current is None:
+                        return False
+                    enforce_content_version(id, expected_version, current)
+                    query, params = self.query_builder.build_update_query(id, record)
+                    cursor = await db.execute(query, params)
+                    await db.commit()
+                    return cursor.rowcount > 0
 
-        # Conditional write: hold the CAS lock across the read-compare-write so
-        # a concurrent conditional pair on this instance yields exactly one
-        # winner. Reusing read() guarantees the token compared here matches the
-        # one get_version() returned. Cross-connection atomicity is out of
-        # scope (see the module docs on the in-process content-hash backends).
-        if expected_version is not None:
-            async with self._cas_lock:
-                current = await self.read(id)
-                if current is None:
-                    return False
-                enforce_content_version(id, expected_version, current)
-                query, params = self.query_builder.build_update_query(id, record)
-                cursor = await self.db.execute(query, params)
-                await self.db.commit()
-                return cursor.rowcount > 0
+            query, params = self.query_builder.build_update_query(id, record)
 
-        query, params = self.query_builder.build_update_query(id, record)
+            cursor = await db.execute(query, params)
+            await db.commit()
+            rows_affected = cursor.rowcount
 
-        cursor = await self.db.execute(query, params)
-        await self.db.commit()
-        rows_affected = cursor.rowcount
+            if rows_affected == 0:
+                logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
 
-        if rows_affected == 0:
-            logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
-
-        return rows_affected > 0
+            return rows_affected > 0
 
     async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
         """Delete a record by ID.
@@ -307,65 +371,61 @@ class AsyncSQLiteDatabase(
         backends). When ``None`` the delete is unconditional, byte-identical to
         prior behavior.
         """
-        self._check_connection()
+        async with self._operation() as db:
+            if expected_version is not None:
+                async with self._cas_lock:
+                    current = await self.read(id)
+                    if current is None:
+                        return False
+                    enforce_content_version(id, expected_version, current)
+                    query, params = self.query_builder.build_delete_query(id)
+                    cursor = await db.execute(query, params)
+                    await db.commit()
+                    return cursor.rowcount > 0
 
-        if expected_version is not None:
-            async with self._cas_lock:
-                current = await self.read(id)
-                if current is None:
-                    return False
-                enforce_content_version(id, expected_version, current)
-                query, params = self.query_builder.build_delete_query(id)
-                cursor = await self.db.execute(query, params)
-                await self.db.commit()
-                return cursor.rowcount > 0
+            query, params = self.query_builder.build_delete_query(id)
 
-        query, params = self.query_builder.build_delete_query(id)
-
-        cursor = await self.db.execute(query, params)
-        await self.db.commit()
-        return cursor.rowcount > 0
+            cursor = await db.execute(query, params)
+            await db.commit()
+            return cursor.rowcount > 0
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists."""
-        self._check_connection()
+        async with self._operation() as db:
+            query, params = self.query_builder.build_exists_query(id)
 
-        query, params = self.query_builder.build_exists_query(id)
-
-        async with self.db.execute(query, params) as cursor:
-            result = await cursor.fetchone()
-            return result is not None
+            async with db.execute(query, params) as cursor:
+                result = await cursor.fetchone()
+                return result is not None
 
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
-        self._check_connection()
+        async with self._operation() as db:
+            # Handle ComplexQuery with native SQL support
+            if isinstance(query, ComplexQuery):
+                sql_query, params = self.query_builder.build_complex_search_query(query)
+            else:
+                sql_query, params = self.query_builder.build_search_query(query)
 
-        # Handle ComplexQuery with native SQL support
-        if isinstance(query, ComplexQuery):
-            sql_query, params = self.query_builder.build_complex_search_query(query)
-        else:
-            sql_query, params = self.query_builder.build_search_query(query)
+            async with db.execute(sql_query, params) as cursor:
+                rows = await cursor.fetchall()
 
-        async with self.db.execute(sql_query, params) as cursor:
-            rows = await cursor.fetchall()
+                records = [self.query_builder.record_from_row(dict(row)) for row in rows]
 
-            records = [self.query_builder.record_from_row(dict(row)) for row in rows]
+                # Apply field projection if specified
+                if query.fields:
+                    records = [r.project(query.fields) for r in records]
 
-            # Apply field projection if specified
-            if query.fields:
-                records = [r.project(query.fields) for r in records]
-
-            return records
+                return records
 
     async def count(self, query: Query | None = None) -> int:
         """Count records matching a query."""
-        self._check_connection()
+        async with self._operation() as db:
+            sql_query, params = self.query_builder.build_count_query(query)
 
-        sql_query, params = self.query_builder.build_count_query(query)
-
-        async with self.db.execute(sql_query, params) as cursor:
-            result = await cursor.fetchone()
-            return result[0] if result else 0
+            async with db.execute(sql_query, params) as cursor:
+                result = await cursor.fetchone()
+                return result[0] if result else 0
 
     def supports_transactions(self) -> bool:
         """SQLite batch ops run inside an explicit ``BEGIN``/``COMMIT``."""
@@ -375,8 +435,8 @@ class AsyncSQLiteDatabase(
     async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
         """Open one native transaction on the shared aiosqlite connection.
 
-        Issues a single ``BEGIN TRANSACTION`` and yields ``self.db`` as the
-        handle; the batch methods run their DML on it and skip their own
+        Issues a single ``BEGIN TRANSACTION`` and yields the connection as
+        the handle; the batch methods run their DML on it and skip their own
         ``BEGIN``/``commit`` when a handle is threaded (``_tx is not None``), so
         a multi-kind buffered-transaction flush commits (or rolls back) as one
         unit. Concurrency: the connection is single, so — as the module docs
@@ -384,21 +444,35 @@ class AsyncSQLiteDatabase(
         instance concurrently; the ``BEGIN``/``COMMIT`` boundaries would
         interleave.
         """
-        self._check_connection()
-        await self.db.execute("BEGIN TRANSACTION")
+        async with self._operation() as db:
+            await db.execute("BEGIN TRANSACTION")
         try:
-            yield self.db
-            await self.db.commit()
+            yield db
+            async with self._operation() as current:
+                await current.commit()
         except BaseException:
-            await self.db.rollback()
+            await self._rollback_if_open()
             raise
 
-    async def _existing_ids(self, ids: list[str]) -> set[str]:
-        """Which of ``ids`` are stored, in one statement whatever their number."""
+    async def _rollback_if_open(self) -> None:
+        """Roll back the open transaction, unless :meth:`close` took the connection.
+
+        Closing the connection discarded the transaction, and a refusal here
+        would only bury the error that brought the rollback about. Not refused
+        while ``close`` waits, which then waits for it too.
+        """
+        db = self.db
+        if db is None:
+            return
+        async with self._counted():
+            await db.rollback()
+
+    async def _existing_ids(self, db: aiosqlite.Connection, ids: list[str]) -> set[str]:
+        """Which of ``ids`` are stored, asked on ``db`` in one statement whatever their number."""
         if not ids:
             return set()
         query, params = self.query_builder.build_existing_ids_query(ids)
-        async with self.db.execute(query, params) as cursor:
+        async with db.execute(query, params) as cursor:
             return {row[0] for row in await cursor.fetchall()}
 
     async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
@@ -419,48 +493,47 @@ class AsyncSQLiteDatabase(
         if not records:
             return []
 
-        self._check_connection()
+        async with self._operation() as db:
+            # Use the shared batch create query builder (honors record.id, mints via
+            # _generate_id; raises DuplicateRecordError up front on a within-batch
+            # duplicate id).
+            statements, ids = self.query_builder.build_batch_create_queries(
+                records, id_factory=self._generate_id, max_parameters=sqlite_max_parameters()
+            )
 
-        # Use the shared batch create query builder (honors record.id, mints via
-        # _generate_id; raises DuplicateRecordError up front on a within-batch
-        # duplicate id).
-        statements, ids = self.query_builder.build_batch_create_queries(
-            records, id_factory=self._generate_id, max_parameters=sqlite_max_parameters()
-        )
-
-        own_tx = _tx is None
-        if own_tx:
-            await self.db.execute("BEGIN TRANSACTION")
-        else:
-            # Inside a wider transaction a failed statement is undone alone, so
-            # the rows this batch's earlier statements wrote stay visible and a
-            # lookup after the failure could name one of them. Ask first.
-            stored = await self._existing_ids([r.id for r in records if r.id])
-            if stored:
-                raise DuplicateRecordError(next(r.id for r in records if r.id in stored))
-
-        try:
-            for query, params in statements:
-                await self.db.execute(query, params)
+            own_tx = _tx is None
             if own_tx:
-                await self.db.commit()
-            return ids
-        except aiosqlite.IntegrityError as e:
-            if own_tx:
-                await self.db.rollback()
-            if is_duplicate_key_error(e):
-                colliding = ids[0]
-                # Name the colliding id precisely on the error path only, once
-                # the rollback has undone everything this batch wrote.
+                await db.execute("BEGIN TRANSACTION")
+            else:
+                # Inside a wider transaction a failed statement is undone alone, so
+                # the rows this batch's earlier statements wrote stay visible and a
+                # lookup after the failure could name one of them. Ask first.
+                stored = await self._existing_ids(db, [r.id for r in records if r.id])
+                if stored:
+                    raise DuplicateRecordError(next(r.id for r in records if r.id in stored))
+
+            try:
+                for query, params in statements:
+                    await db.execute(query, params)
                 if own_tx:
-                    stored = await self._existing_ids([r.id for r in records if r.id])
-                    colliding = next((r.id for r in records if r.id in stored), colliding)
-                raise DuplicateRecordError(colliding) from e
-            raise constraint_violation_error() from e
-        except Exception:
-            if own_tx:
-                await self.db.rollback()
-            raise
+                    await db.commit()
+                return ids
+            except aiosqlite.IntegrityError as e:
+                if own_tx:
+                    await db.rollback()
+                if is_duplicate_key_error(e):
+                    colliding = ids[0]
+                    # Name the colliding id precisely on the error path only, once
+                    # the rollback has undone everything this batch wrote.
+                    if own_tx:
+                        stored = await self._existing_ids(db, [r.id for r in records if r.id])
+                        colliding = next((r.id for r in records if r.id in stored), colliding)
+                    raise DuplicateRecordError(colliding) from e
+                raise constraint_violation_error() from e
+            except Exception:
+                if own_tx:
+                    await db.rollback()
+                raise
 
     async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Insert-or-overwrite multiple records efficiently, in one transaction.
@@ -476,25 +549,24 @@ class AsyncSQLiteDatabase(
         if not records:
             return []
 
-        self._check_connection()
+        async with self._operation() as db:
+            statements, ids = self.query_builder.build_batch_upsert_queries(
+                records, id_factory=self._generate_id, max_parameters=sqlite_max_parameters()
+            )
 
-        statements, ids = self.query_builder.build_batch_upsert_queries(
-            records, id_factory=self._generate_id, max_parameters=sqlite_max_parameters()
-        )
-
-        own_tx = _tx is None
-        if own_tx:
-            await self.db.execute("BEGIN TRANSACTION")
-        try:
-            for query, params in statements:
-                await self.db.execute(query, params)
+            own_tx = _tx is None
             if own_tx:
-                await self.db.commit()
-            return ids
-        except Exception:
-            if own_tx:
-                await self.db.rollback()
-            raise
+                await db.execute("BEGIN TRANSACTION")
+            try:
+                for query, params in statements:
+                    await db.execute(query, params)
+                if own_tx:
+                    await db.commit()
+                return ids
+            except Exception:
+                if own_tx:
+                    await db.rollback()
+                raise
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records efficiently, in one transaction.
@@ -505,23 +577,22 @@ class AsyncSQLiteDatabase(
         if not updates:
             return []
 
-        self._check_connection()
+        async with self._operation() as db:
+            # One statement per update rather than a join: UPDATE … FROM needs
+            # SQLite 3.33, and executemany binds three values per run.
+            query, rows = self.query_builder.build_batch_update_rows(updates)
 
-        # One statement per update rather than a join: UPDATE … FROM needs
-        # SQLite 3.33, and executemany binds three values per run.
-        query, rows = self.query_builder.build_batch_update_rows(updates)
+            await db.execute("BEGIN TRANSACTION")
+            try:
+                await db.executemany(query, rows)
+                await db.commit()
 
-        await self.db.execute("BEGIN TRANSACTION")
-        try:
-            await self.db.executemany(query, rows)
-            await self.db.commit()
-
-            # SQLite's UPDATE returns nothing here, so ask which ids exist.
-            existing_ids = await self._existing_ids([record_id for record_id, _ in updates])
-            return [record_id in existing_ids for record_id, _ in updates]
-        except Exception:
-            await self.db.rollback()
-            raise
+                # SQLite's UPDATE returns nothing here, so ask which ids exist.
+                existing_ids = await self._existing_ids(db, [record_id for record_id, _ in updates])
+                return [record_id in existing_ids for record_id, _ in updates]
+            except Exception:
+                await db.rollback()
+                raise
 
     async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
         """Delete multiple records efficiently using a single query.
@@ -534,26 +605,25 @@ class AsyncSQLiteDatabase(
         if not ids:
             return []
 
-        self._check_connection()
+        async with self._operation() as db:
+            # Check which IDs exist before deletion
+            existing_ids = await self._existing_ids(db, ids)
 
-        # Check which IDs exist before deletion
-        existing_ids = await self._existing_ids(ids)
+            query, params = self.query_builder.build_batch_delete_query(ids)
 
-        query, params = self.query_builder.build_batch_delete_query(ids)
-
-        own_tx = _tx is None
-        if own_tx:
-            await self.db.execute("BEGIN TRANSACTION")
-
-        try:
-            await self.db.execute(query, params)
+            own_tx = _tx is None
             if own_tx:
-                await self.db.commit()
-            return [id in existing_ids for id in ids]
-        except Exception:
-            if own_tx:
-                await self.db.rollback()
-            raise
+                await db.execute("BEGIN TRANSACTION")
+
+            try:
+                await db.execute(query, params)
+                if own_tx:
+                    await db.commit()
+                return [id in existing_ids for id in ids]
+            except Exception:
+                if own_tx:
+                    await db.rollback()
+                raise
 
     def _initialize(self) -> None:
         """Initialize method - connection setup handled in connect()."""
@@ -627,12 +697,11 @@ class AsyncSQLiteDatabase(
         SQLite has no vector operators, so the similarity is computed here
         rather than in the query.
         """
-        self._check_connection()
-
-        return await self.python_vector_search_async(
-            query_vector=query_vector,
-            vector_field=vector_field,
-            k=k,
-            filter=filter,
-            metric=metric,
-        )
+        async with self._operation():
+            return await self.python_vector_search_async(
+                query_vector=query_vector,
+                vector_field=vector_field,
+                k=k,
+                filter=filter,
+                metric=metric,
+            )
