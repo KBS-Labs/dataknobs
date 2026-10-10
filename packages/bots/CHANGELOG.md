@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama's embedding endpoint in `dataknobs-llm` is not detected here: a
   persisted store holding `nomic-embed-text` vectors under a non-cosine metric
   must be rebuilt.
+- **A grounded `database` source can read a Postgres table it does not
+  own.** Its options take what `dataknobs-data`'s Postgres backend takes for
+  one — `layout: native`, `id_column`, `scope` — and a field in its `schema:`
+  may name a `sql_type`, which only that layout accepts. The source is
+  scoped to its rows, writes nothing, and offers the extractor only the
+  declared columns.
 
 ### Fixed
 
@@ -187,6 +193,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A grounded `database` source builds its backend holding the declared
+  `schema:`**, where it used to set the schema after connecting. No backend
+  other than a native Postgres table reads it at construction, so for every
+  other backend the result is the same. A refusal from the backend's
+  configuration now names the source, as a schema refusal already did.
 - **A `database` grounded source reads `schema:` through the shared schema
   reader.** Its `schema:` is read by `extract_schema_from_config`, the function
   a database config's `schema:` goes through, in place of a copy of its own,

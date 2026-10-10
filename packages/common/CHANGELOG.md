@@ -356,6 +356,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`StructuredConfig.merge_inputs(config, kwargs)`**, the one input a
+  `StructuredConfigConsumer` makes of a configuration mapping and keyword
+  arguments. The default is the merge it always did, a keyword replacing the
+  mapping's value; a config whose key means two things by its value
+  overrides it to sort each side first.
+
+- **`naming_refusals(origin, context=...)`** says where a refused
+  configuration came from. A component refuses its own configuration without
+  knowing who configured it, so a database backend built for an ontology
+  binding names its table and nothing the ontology document's reader would
+  recognise. Construction wrapped in it re-raises a `ValidationError` or
+  `ConfigurationError` as the same kind, prefixed with the origin and with the
+  caller's context merged in, from the original. Any other exception passes
+  through.
+
 - **An entity's aliases can be indexed in its own row.** `aliases` joins
   `TEXT_FIELDS`, so `EntitySourceIndexSource(onto, fields=("name",
   "description", "aliases"))` composes one item per entity, and its text is
@@ -1207,10 +1222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 354,
-  the fourteen beyond them being the operation family, the near-spelling rung,
-  the surface-form catalogue, the index-source family, `aclosing_iter` and
-  `PluginConfig`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
+  the resolution cascade — 134 names, taking the package's `__all__` to 355,
+  the fifteen beyond them being the operation family, the near-spelling rung,
+  the surface-form catalogue, the index-source family, `aclosing_iter`,
+  `PluginConfig` and `naming_refusals`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

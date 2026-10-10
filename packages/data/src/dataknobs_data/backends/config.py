@@ -26,14 +26,17 @@ knobs shared by every backend except DuckDB (which has no vector support).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from dataknobs_common import normalize_postgres_connection_config
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.structured_config import StructuredConfig
 
 from ..database import extract_schema_from_config
-from ..schema import DatabaseSchema
+from ..query import Filter
+from ..schema import NATIVE_FIELD_KEYS, DatabaseSchema
 from .postgres_mixins import validate_pg_identifier
 from .sql_base import SQLTableManager
 
@@ -226,17 +229,24 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     ``False`` → ``"disable"``, and an unsupported value such as an
     ``SSLContext`` raises rather than silently degrading).
 
-    **Schema-name overload.** Postgres uses the ``schema`` config key for
-    the SQL *schema name* (a string), which collides with the base
-    :attr:`DatabaseConfig.schema` (a ``DatabaseSchema``). ``_normalize_dict``
-    disambiguates by type: a *string* ``schema`` is the SQL schema name and
+    **What ``schema`` means is decided by its type.** Postgres also reads
+    the ``schema`` key as its SQL namespace. A *string* is the namespace and
     maps to ``schema_name`` (winning over an explicit ``schema_name``,
-    matching legacy precedence); a ``DatabaseSchema`` instance is the
-    structural schema and is left for the base, so the public
-    ``Database(config=..., schema=DatabaseSchema(...))`` kwarg works for
-    Postgres exactly as it does for every other backend; a ``None``
-    ``schema`` is the structural default and is also left for the base.
-    Identifiers are validated in ``__post_init__``.
+    matching legacy precedence). A mapping, a list of field rows or a
+    ``DatabaseSchema`` is the declared fields, read as every other backend
+    reads them. When a mapping and keyword arguments both carry ``schema``,
+    :meth:`merge_inputs` sorts each side first, so a namespace in one and
+    declared fields in the other are both kept. Identifiers are validated in
+    ``__post_init__``.
+
+    **A table this package did not create** is read with ``layout: native``.
+    The declared fields are then the table's columns, ``id_column`` names
+    its key, and ``scope`` (a list of filters) fixes which rows it is; see
+    :func:`~dataknobs_data.backends.column_layout.read_layout_config`, which
+    reads the three keys. A native table is read-only and is never created,
+    so ``auto_create_table`` and ``ensure_database`` default to ``False``
+    there, and setting either, or ``vector_enabled``, to ``True`` is
+    refused.
 
     Attributes:
         host/port/database/user/password: Connection parameters
@@ -251,6 +261,11 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         schema_name: SQL schema name.
         ensure_database: Auto-create the database if missing.
         auto_create_table: Create the records table on connect if missing.
+        layout: ``"jsonb"`` (the table this package creates, the default) or
+            ``"native"`` (a table with its own typed columns).
+        id_column: Under ``layout: native``, the column holding the key.
+        scope: Under ``layout: native``, the filters fixing which rows the
+            table is, each written as a ``{field, operator, value}`` mapping.
     """
 
     host: str = "localhost"
@@ -266,6 +281,10 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     schema_name: str = "public"
     ensure_database: bool = True
     auto_create_table: bool = True
+    layout: str = "jsonb"
+    id_column: str | None = None
+    #: Filters or ``{field, operator, value}`` mappings; held as mappings.
+    scope: list[Any] | None = None
 
     # Redacted from ``repr`` by the StructuredConfig base.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"password"})
@@ -279,25 +298,45 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"connection_string", "table_name"})
 
     @classmethod
+    def merge_inputs(cls, config: Mapping[str, Any], kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Merge after sorting each side's ``schema`` into namespace or fields.
+
+        A namespace in the mapping and declared fields as a keyword (or the
+        other way round) land on different fields, so both are kept. Where
+        both sides give the same one, the keyword wins, as in the default.
+        """
+        return {**cls._namespace_apart(config), **cls._namespace_apart(kwargs)}
+
+    @staticmethod
+    def _namespace_apart(side: Mapping[str, Any]) -> dict[str, Any]:
+        out = dict(side)
+        if isinstance(out.get("schema"), str):
+            out["schema_name"] = out.pop("schema")
+        return out
+
+    @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        # Disambiguate the overloaded ``schema`` key. The SQL schema-name
-        # overload is the *string* form (``schema="myschema"``) — route it
-        # to ``schema_name`` (it wins over an explicit ``schema_name``,
-        # matching legacy precedence). A ``DatabaseSchema`` instance is the
-        # structural schema (the public ``Database(config=..., schema=...)``
-        # kwarg, identical to every other backend) — leave it for the base
-        # so it lands on the inherited ``schema`` field. A ``None`` schema
-        # is the structural default emitted by ``to_dict`` — also left for
-        # the base (keeps round-trip stable). Any other non-``None`` type
-        # is routed to ``schema_name`` so it fails ``__post_init__``'s
-        # identifier validation with a clear error rather than being
-        # silently dropped.
-        if (
-            "schema" in raw
-            and raw["schema"] is not None
-            and not isinstance(raw["schema"], DatabaseSchema)
+        # Disambiguate the overloaded ``schema`` key by type. A mapping, a
+        # list of rows or a ``DatabaseSchema`` is the declared fields, left for
+        # the base, which reads them through ``extract_schema_from_config``; a
+        # native table's fields may also name a ``sql_type``, which only that
+        # layout reads. ``None`` is the structural default ``to_dict`` writes.
+        # Anything else is the SQL namespace: routed to ``schema_name`` (it
+        # wins over an explicit ``schema_name``, matching legacy precedence),
+        # where a value that is not a string fails identifier validation in
+        # ``__post_init__`` with the error it always has.
+        if "schema" in raw and not isinstance(
+            raw["schema"], (DatabaseSchema, Mapping, list, tuple, type(None))
         ):
             raw["schema_name"] = raw.pop("schema")
+        native = raw.get("layout") == "native"
+        if native and not isinstance(raw.get("schema"), (DatabaseSchema, type(None))):
+            raw["schema"] = extract_schema_from_config(raw["schema"], keys=NATIVE_FIELD_KEYS)
+        # A native table is never created: what creates one is off unless
+        # given, and refused in ``__post_init__`` if given true.
+        if native:
+            raw.setdefault("auto_create_table", False)
+            raw.setdefault("ensure_database", False)
         # ``table`` wins over the ``table_name`` alias (legacy precedence).
         if "table_name" in raw:
             if "table" not in raw:
@@ -346,6 +385,23 @@ class PostgresDatabaseConfig(VectorBackendConfig):
             "auto_create_table",
             SQLTableManager.coerce_bool(self.auto_create_table, default=True),
         )
+        if isinstance(self.scope, (list, tuple)):
+            # Held as mappings, so the config is what a config file holds and
+            # reads back from its own ``to_dict``.
+            object.__setattr__(
+                self,
+                "scope",
+                [spec.to_dict() if isinstance(spec, Filter) else spec for spec in self.scope],
+            )
+        if self.layout == "native":
+            for key in ("auto_create_table", "ensure_database", "vector_enabled"):
+                if getattr(self, key):
+                    raise ConfigurationError(
+                        f"Postgres `{key}: true` under `layout: native`: a native table "
+                        f"belongs to someone else and is read-only, so nothing creates "
+                        f"it or adds to it. Leave `{key}` out",
+                        context={"table": self.table, "key": key},
+                    )
 
 
 @dataclass(frozen=True)

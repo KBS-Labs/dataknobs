@@ -252,8 +252,9 @@ reasoning:
 ```
 
 A `database` source builds and connects its own backend. `content_field`,
-`text_search_fields`, `schema` and `description` configure the source;
-**every other key configures that backend and is passed to the database
+`text_search_fields` and `description` configure the source, and `schema`
+configures both: the source reads it, and the backend is built holding it.
+**Every other key configures that backend and is passed to the database
 factory**, which accepts or rejects it against the backend `backend` names
 — `path` and `table` above, `connection_string` (or
 `host`/`database`/`user`) for `postgres`, `bucket` for `s3`. A key no
@@ -287,11 +288,45 @@ hint:
           level: {type: integer, metadata: {description: "Course level, 100-400"}}
 ```
 
+A field may also take `sql_type`, which the source does not read but a
+Postgres backend reading a native table does (below); any other backend
+refuses it.
+
 Anything else is refused with a `ValidationError` naming the source: an
 unknown type, a key a field does not take (`required`, `default` and the
 vector shorthands included, since this source reads none of them), an `enum`
 or `metadata.enum` that is not a list, a field with no name or declared
-twice, and columns written beside `fields:` rather than under it.
+twice, and columns written beside `fields:` rather than under it. A
+refusal from the backend's own configuration names the source too.
+
+**A Postgres table you do not own** is read in place with `layout: native`.
+The declared fields are the table's columns, a `scope` fixes which rows the
+source may see, and nothing is written or created — building the source
+refuses a table that is not there rather than making one:
+
+```yaml
+    - type: database
+      name: tickets
+      backend: postgres
+      connection_string: ${HELPDESK_DATABASE_URL}
+      table: tickets
+      layout: native
+      id_column: id
+      scope:
+        - {field: tenant_id, operator: "=", value: acme}
+      content_field: subject
+      text_search_fields: [subject]
+      schema:
+        fields:
+          - {name: id, type: string, sql_type: uuid}
+          - {name: tenant_id, type: string}
+          - {name: subject, type: string}
+          - {name: status, type: string, enum: [open, pending, closed]}
+```
+
+A column left undeclared is never read, and the extractor is offered only
+the declared ones. What `layout: native` accepts is described under
+[Tables You Do Not Own](https://kbs-labs.github.io/dataknobs/packages/data/postgres-backend/#tables-you-do-not-own).
 
 Omitting `backend` builds the in-process store, which is unpersisted and
 answers every query with zero results until something writes to it. That

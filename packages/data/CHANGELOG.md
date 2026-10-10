@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Postgres reads go through the query builder.** `read`, `exists`, `count`
+  and `stream_read` run the builder's statements on both twins. `count` with a
+  query is one `COUNT(*)` statement rather than a search whose rows are
+  counted. `stream_read` now honours the query's sort and limit, runs inside a
+  read-only transaction, and on the sync twin streams through a server-side
+  cursor rather than `LIMIT`/`OFFSET` pages with no order, which could skip or
+  repeat a row at a page boundary. The sync twin's `search`, `read`,
+  `exists`, `count` and `stream_read` return rows as the driver reads them,
+  not through a DataFrame, which turned a `NULL` integer into a float `NaN`.
+- **A surface-form lookup answers only ids the entity store holds** when the
+  forms are a store of their own (`forms_database=`), so a form left behind
+  for a row the entity store cannot read is not a match.
+
 - **A field's `enum` must allow something its filter can take.** The schema
   reader, and `DatabaseSource` for a schema built in Python, refuse an `enum`
   that is empty, names a value twice, or holds a member the field's filter
@@ -984,6 +997,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The PostgreSQL backends read a table they do not own** (`layout: native`,
+  `id_column:`, `scope:`, on both `AsyncPostgresDatabase` and
+  `SyncPostgresDatabase`). The table is read through `NativeColumnLayout`: only
+  its declared columns, a scope in every read (`search`, `read`, `exists`,
+  `count`, `get_version`, `stream_read`), and every filter answered as
+  `Filter.matches` answers it. Every method that writes, creates or drops
+  raises `OperationError` before it touches a connection, `connect()` runs no
+  DDL, and `auto_create_table`, `ensure_database` or `vector_enabled` set true
+  is refused. A refused configuration fails at construction. The keys work in
+  any configuration that builds a database, an ontology binding's `database:`
+  block included.
+- **A Postgres `schema:` from configuration may be the declared fields.** A
+  mapping or a list of field rows is read as on every other backend (with
+  `sql_type` under `layout: native`); a string is still the SQL namespace.
+- **An ontology load names the ontology and binding** in a store's
+  configuration refusal, and refuses a native `database:` block whose binding
+  keeps its surface forms in a different table, which the block's columns and
+  scope would otherwise be applied to (hand that store over as
+  `forms_database=`).
+
 - **`SQLQueryBuilder` reads a table through a column layout, and a table with
   ordinary typed columns is one.** A new `layout=` argument takes a
   `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout` is
@@ -1489,6 +1522,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A Postgres config holding declared fields reads back from its own
+  `to_dict()`.** It wrote the schema as a mapping, which `from_dict` took for
+  the SQL namespace and refused with `ConfigurationError: Postgres 'schema'
+  must be a string identifier, got dict`.
+- **A namespace and declared fields given two ways are both kept.**
+  `AsyncPostgresDatabase({"schema": "reporting"}, schema=fields)` (and the
+  sync twin) opened in `public`: the mapping and the keyword arguments were
+  merged under one `schema` key before the config could tell the namespace
+  from the fields, so the keyword replaced the namespace with no error.
 
 - **`update_batch` writes each record its own update on SQLite and DuckDB.**
   The statement read its values by position, and the values were bound in a

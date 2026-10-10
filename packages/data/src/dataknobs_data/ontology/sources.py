@@ -752,6 +752,11 @@ class RecordEntitySource(DynamicCapabilityMixin):
         :meth:`str.casefold`, every engine primitive is simple lowercasing, and
         the two differ on the first European catalogue anyone binds.
 
+        **Only ids the entity store holds are answered.** Where the forms are
+        a store of their own, an id they name is checked against the entity
+        store, so a form belonging to a row outside that store's scope is not
+        a match.
+
         **A binding that declared no lookup refuses rather than answering.**
         ``frozenset()`` already means *ran and matched nothing*, and a cascade
         falls through to a guessing rung on exactly that reading -- so a source
@@ -775,11 +780,20 @@ class RecordEntitySource(DynamicCapabilityMixin):
         found = await self._forms_db.search(
             Query(filters=[Filter(lookup.form, Operator.EQ, folded)])
         )
-        return frozenset(
+        named = frozenset(
             str(entity_id)
             for entity_id in (record.get_value(lookup.entity) for record in found)
             if entity_id is not None
         )
+        if self._shared_store or not named:
+            return named
+        # The forms are another store, which may hold forms for entities this
+        # one cannot read: another hierarchy's rows in a table they share, kept
+        # out of the entity store by its scope. An id answered here would be
+        # one `get` resolves to nothing, read by a caller as a match, so only
+        # the ids the entity store holds are answered.
+        held = await self._read_ids(sorted(named))
+        return named & {str(record.get_value(self._projection.id)) for record in held}
 
     async def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type.

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 from dataknobs_common.entity_resolution import async_signal_backends
 from dataknobs_common.events import Event, EventType, create_event_bus
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import ValidationError, naming_refusals
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.hierarchy import AsyncEnumerableHierarchy
 from dataknobs_common.ontology import (
@@ -1195,12 +1195,22 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     context={"source_id": source_id},
                 )
             backend = str(database_block.get("backend", "")) or "unknown"
-            database = await self._database_handle(dict(database_block), projection.table)
-            forms_database = (
-                await self._database_handle(dict(database_block), projection.surface_forms.table)
-                if projection.surface_forms is not None
-                else database
-            )
+            _refuse_a_native_block_for_a_second_table(database_block, projection, binding=source_id)
+            # A backend refuses its configuration without knowing it was
+            # opened for a vocabulary, so its message names a table and
+            # nothing a reader of the ontology document would recognise.
+            with naming_refusals(
+                f"ontology {ontology_id!r}, binding {source_id!r}",
+                context={"ontology": ontology_id, "binding": source_id},
+            ):
+                database = await self._database_handle(dict(database_block), projection.table)
+                forms_database = (
+                    await self._database_handle(
+                        dict(database_block), projection.surface_forms.table
+                    )
+                    if projection.surface_forms is not None
+                    else database
+                )
         tables = (
             (projection.table,)
             if projection.surface_forms is None
@@ -2501,6 +2511,30 @@ def _refuse_a_second_binding_over_one_store(
                 "handle": type(database).__name__,
             },
         )
+
+
+def _refuse_a_native_block_for_a_second_table(
+    block: Mapping[str, Any], projection: EntityProjection, *, binding: str
+) -> None:
+    """Refuse a ``layout: native`` block when the binding's surface forms are another table.
+
+    The registry opens the forms handle from the same block, and a native
+    block's declared columns, key and scope describe the entity table: applied
+    to the forms table they would declare columns it does not have and scope
+    it by a column it may lack. Until a forms table can be given its own
+    declaration, its handle is injected.
+    """
+    lookup = projection.surface_forms
+    if block.get("layout") != "native" or lookup is None or lookup.table == projection.table:
+        return
+    raise ValidationError(
+        f"binding {binding!r} reads {projection.table!r} through `layout: native` and its "
+        f"surface forms from {lookup.table!r}, but one `database:` block opens both, and a "
+        f"native block's columns, key and scope describe one table. Keep the forms in "
+        f"{projection.table!r}, or hand the forms store to the registry as "
+        f"`forms_database=`",
+        context={"binding": binding, "table": projection.table, "forms_table": lookup.table},
+    )
 
 
 def _refuse_one_handle_for_two_tables(

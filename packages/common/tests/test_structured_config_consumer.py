@@ -286,3 +286,44 @@ class TestMappingSubtypes:
 
         c = _Consumer(_CustomMap({"x": 9}))
         assert c.config.x == 9
+
+
+# --- merging a mapping with keyword arguments ---------------------------------
+
+
+@dataclass(frozen=True)
+class _SplitKeyCfg(StructuredConfig):
+    """A config whose ``y`` key means one of two fields, by the value's type."""
+
+    x: int = 0
+    y: str = "default"
+    y_count: int = 0
+
+    @classmethod
+    def merge_inputs(cls, config: Mapping[str, Any], kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        def split(side: Mapping[str, Any]) -> dict[str, Any]:
+            out = dict(side)
+            if isinstance(out.get("y"), int):
+                out["y_count"] = out.pop("y")
+            return out
+
+        return {**split(config), **split(kwargs)}
+
+
+class _SplitKeyConsumer(StructuredConfigConsumer[_SplitKeyCfg]):
+    CONFIG_CLS: ClassVar[type[_SplitKeyCfg]] = _SplitKeyCfg
+
+    def _setup(self) -> None:
+        pass
+
+
+def test_the_default_merge_lets_a_keyword_replace_the_mapping() -> None:
+    """Unchanged behaviour: one key, two values, the keyword wins."""
+    assert _TestCfg.merge_inputs({"x": 1, "y": "a"}, {"y": "b"}) == {"x": 1, "y": "b"}
+    assert _Consumer({"x": 1, "y": "a"}, y="b").config == _TestCfg(x=1, y="b")
+
+
+def test_a_config_can_merge_a_key_that_means_two_things() -> None:
+    """The merge is the config's, so a key whose meaning depends on its value survives it."""
+    consumer = _SplitKeyConsumer({"y": "label"}, y=3)
+    assert consumer.config == _SplitKeyCfg(y="label", y_count=3)

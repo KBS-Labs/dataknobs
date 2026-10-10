@@ -36,6 +36,25 @@ supported by the shared
 a `connection_string`, individual keys as shown above, `DATABASE_URL`,
 or `POSTGRES_*` env vars. Explicit config always wins over env vars.
 
+### What `schema` Means
+
+A string `schema:` is the SQL namespace the table is in, also spelled
+`schema_name:`. A mapping, a list of field rows or a `DatabaseSchema` is the
+declared fields, as on every other backend. When a configuration mapping and a
+keyword argument both give `schema`, each is read by its type, so
+`AsyncPostgresDatabase({"schema": "reporting"}, schema=fields)` keeps the
+namespace and the fields.
+
+### Tables You Do Not Own
+
+`layout: native` reads a table with its own typed columns, created by someone
+else: only the declared columns, an optional `scope:` of filters fixing which
+rows the table is, and nothing written, created or dropped. See
+[Reading a Native Table Through the PostgreSQL Backend](query.md#reading-a-native-table-through-the-postgresql-backend).
+A grounded `database` source in `dataknobs-bots` takes the same keys; see its
+[Sources](https://kbs-labs.github.io/dataknobs/packages/bots/guides/grounded-reasoning/#sources)
+configuration.
+
 ## Schema Setup
 
 ```sql
