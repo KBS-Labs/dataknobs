@@ -105,26 +105,79 @@ class TestASubclassThatWritesItsOwnHashKeepsIt:
         assert a == b
 
 
-class TestEqualityWrittenWithoutAHashIsRefused:
-    """A subclass writing ``__eq__`` alone would get the field hash back.
+class TestEqualityWrittenWithoutAHashIsJudgedByTheResult:
+    """``__eq__`` without a hash of its own is refused only where it goes wrong.
 
     Python records a class body that defines ``__eq__`` without ``__hash__`` by
-    setting ``__hash__ = None`` in it, and ``dataclasses`` reads that pair as
-    *implicit* and generates a hash over the fields -- one the new equality does
-    not agree with. Refused at class definition, the way a misdeclared policy
-    attribute is, so it cannot ship quietly.
+    setting ``__hash__ = None`` in it, and an explicit ``__hash__ = None`` looks
+    the same. Under ``@dataclass`` with ``eq=True``, ``dataclasses`` reads that
+    pair as *implicit* and generates a hash over the fields, which the new
+    equality does not agree with. Under ``eq=False``, or with no decorator, the
+    ``None`` stays and the class is honest: its own equality, and unhashable.
+
+    Nothing at class definition can see which decorator follows, so the class
+    is judged at its first construction, by what the decorator actually did.
     """
 
-    def test_equality_alone_is_refused(self) -> None:
-        with pytest.raises(TypeError, match=r"ByName.*__hash__"):
-            # The missing `__hash__` is the subject: this is the class the
-            # hook refuses.
-            @dataclass(frozen=True)
-            class ByName(StructuredConfig):  # noqa: PLW1641
-                name: str = "x"
+    def test_equality_alone_under_the_default_decorator_is_refused(self) -> None:
+        # The missing `__hash__` is the subject: this is the class refused.
+        @dataclass(frozen=True)
+        class ByName(StructuredConfig):  # noqa: PLW1641
+            name: str = "x"
 
-                def __eq__(self, other: object) -> bool:
-                    return isinstance(other, ByName) and other.name == self.name
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, ByName) and other.name == self.name
+
+        with pytest.raises(TypeError, match=r"ByName defines __eq__.*eq=False"):
+            ByName()
+
+    def test_an_explicit_none_beside_equality_is_refused_the_same_way(self) -> None:
+        @dataclass(frozen=True)
+        class ByName(StructuredConfig):
+            name: str = "x"
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, ByName) and other.name == self.name
+
+            __hash__ = None  # type: ignore[assignment]
+
+        with pytest.raises(TypeError, match=r"ByName defines __eq__"):
+            ByName()
+
+    def test_a_subclass_of_a_refused_class_is_refused_too(self) -> None:
+        @dataclass(frozen=True)
+        class ByName(StructuredConfig):  # noqa: PLW1641
+            name: str = "x"
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, ByName) and other.name == self.name
+
+        @dataclass(frozen=True)
+        class Below(ByName):
+            extra: int = 0
+
+        with pytest.raises(TypeError, match=r"ByName defines __eq__"):
+            Below()
+
+    def test_equality_alone_under_eq_false_keeps_it_and_is_unhashable(self) -> None:
+        @dataclass(frozen=True, eq=False)
+        class ByName(StructuredConfig):  # noqa: PLW1641
+            name: str = "x"
+            notes: list[str] = field(default_factory=list)
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, ByName) and other.name == self.name
+
+        assert ByName(notes=["a"]) == ByName(notes=["b"])
+        assert not isinstance(ByName(), Hashable)
+
+    def test_equality_alone_on_an_undecorated_subclass_is_accepted(self) -> None:
+        class Loose(Listed):  # noqa: PLW1641
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, Loose) and other.name == self.name
+
+        assert Loose(tags=["a"]) == Loose(tags=["b"])
+        assert not isinstance(Loose(), Hashable)
 
     def test_equality_with_a_hash_is_accepted(self) -> None:
         @dataclass(frozen=True)
@@ -138,6 +191,17 @@ class TestEqualityWrittenWithoutAHashIsRefused:
                 return hash(self.name)
 
         assert hash(ByName()) == hash(ByName())
+
+    def test_a_slotted_class_with_equality_alone_is_refused(self) -> None:
+        @dataclass(frozen=True, slots=True)
+        class ByName(StructuredConfig):  # noqa: PLW1641
+            name: str = "x"
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, ByName) and other.name == self.name
+
+        with pytest.raises(TypeError, match=r"ByName defines __eq__"):
+            ByName()
 
 
 class TestSlotsAreSupported:
