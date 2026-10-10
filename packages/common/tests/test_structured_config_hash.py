@@ -311,7 +311,8 @@ class TestEqFalseMeansIdentity:
             n: int = 0
 
         built = Built(n=1)
-        assert built == built
+        # Comparing it with itself is the subject: identity equality.
+        assert built == built  # noqa: PLR0124
         assert built != Built(n=1)
 
     def test_an_identity_hash_is_written_like_any_other(self) -> None:
