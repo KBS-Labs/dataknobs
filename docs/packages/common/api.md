@@ -272,14 +272,14 @@ A component refuses its own configuration without knowing who configured it:
 a database backend built for a bot's grounded source names its table, and
 nothing a reader of the bot config would recognise. The caller that does know
 wraps the construction in this context manager. A `ValidationError` or
-`ConfigurationError` raised inside is raised again as the same kind, with the
-message prefixed `"<origin>: "` and `context` merged into the error's own, the
-caller's keys winning. The original is the new error's `__cause__`.
+`ConfigurationError` raised inside, a subclass included, is raised again as
+the same exception, with its message prefixed `"<origin>: "` and `context`
+merged into its own, the caller's keys winning.
 
-The base class is what is raised, even for a subclass such as
-`DottedPathError`, which builds itself from other arguments and so cannot be
-rebuilt around a new message; the original keeps its type as the cause. Any
-other exception passes through untouched.
+It is amended rather than rebuilt, so a subclass such as `DottedPathError`
+keeps its type and its attributes (`ref`, `reason`), and a handler a caller
+already has for it still catches it. Nested blocks prefix outermost first.
+Any other exception passes through untouched.
 
 **Example:**
 ```python

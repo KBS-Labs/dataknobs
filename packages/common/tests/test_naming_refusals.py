@@ -29,7 +29,7 @@ def test_a_validation_refusal_is_prefixed_and_keeps_its_kind() -> None:
 
     assert str(caught.value) == "source 'cases': field 'id' is not declared"
     assert caught.value.context == {"field": "id", "source": "cases"}
-    assert caught.value.__cause__ is original
+    assert caught.value is original
 
 
 def test_a_configuration_refusal_keeps_its_kind() -> None:
@@ -50,20 +50,34 @@ def test_the_callers_context_wins_over_the_refusals() -> None:
     assert caught.value.context == {"source": "b", "table": "t"}
 
 
-def test_a_subclass_is_raised_as_its_kind() -> None:
-    """A subclass may construct itself from other arguments, so its kind is what is raised.
+def test_a_subclass_keeps_its_type_and_attributes() -> None:
+    """Bug: a subclass was raised again as its base, so a handler for the
+    subclass a caller already had stopped catching it once a block named it.
 
-    The original, with its own type and attributes, is the cause.
+    The same exception is raised, amended in place: the origin prefixes its
+    message and the caller's context is merged into its own.
     """
     original = DottedPathError(
         "no attribute 'b'", ref="a.b", reason=DottedPathReason.ATTRIBUTE_NOT_FOUND
     )
-    with pytest.raises(ConfigurationError) as caught:
-        with naming_refusals("source 'cases'"):
+    with pytest.raises(DottedPathError) as caught:
+        with naming_refusals("source 'cases'", context={"source": "cases"}):
             raise original
 
-    assert type(caught.value) is ConfigurationError
-    assert caught.value.__cause__ is original
+    assert caught.value is original
+    assert caught.value.ref == "a.b"
+    assert caught.value.reason is DottedPathReason.ATTRIBUTE_NOT_FOUND
+    assert str(caught.value).startswith("source 'cases': ")
+    assert caught.value.context["source"] == "cases"
+
+
+def test_a_block_nested_in_another_names_both_origins() -> None:
+    with pytest.raises(ValidationError) as caught:
+        with naming_refusals("ontology 'helpdesk'"):
+            with naming_refusals("binding 'categories'"):
+                raise ValidationError("x")
+
+    assert str(caught.value) == "ontology 'helpdesk': binding 'categories': x"
 
 
 @pytest.mark.parametrize("error", [ValueError("bad key"), OperationError("read-only")])

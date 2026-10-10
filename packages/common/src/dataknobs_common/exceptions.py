@@ -498,15 +498,16 @@ def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) ->
     source names its table, and nothing a reader of the ontology document or
     the bot config would recognise. The caller that does know wraps the
     construction, and a :class:`ValidationError` or :class:`ConfigurationError`
-    raised inside is raised again as the same kind, its message prefixed with
-    ``"<origin>: "`` and its ``context`` merged with ``context``, the caller's
-    keys winning. The original is the new error's ``__cause__``.
+    raised inside -- a subclass included -- is raised again **as the same
+    exception**, its message prefixed with ``"<origin>: "`` and its
+    ``context`` merged with ``context``, the caller's keys winning.
 
-    The kind raised is the base class, not the original's own: a subclass may
-    construct itself from other arguments (:class:`DottedPathError` takes a
-    ``ref`` and a ``reason``), so it cannot be rebuilt around a new message. A
-    handler for the base catches the result; the original keeps its type and
-    attributes as the cause. Any other exception passes through untouched.
+    Amended rather than rebuilt, so its type and attributes survive: a
+    subclass may construct itself from other arguments
+    (:class:`DottedPathError` takes a ``ref`` and a ``reason``), and a handler
+    a caller already has for it keeps catching it. The context is replaced
+    with a merged copy, never updated in place, since the raiser may still
+    hold the mapping it passed. Any other exception passes through untouched.
 
     Args:
         origin: Where the configuration came from, as its reader would name
@@ -524,10 +525,12 @@ def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) ->
     try:
         yield
     except (ValidationError, ConfigurationError) as e:
-        refusal = ValidationError if isinstance(e, ValidationError) else ConfigurationError
-        raise refusal(
-            f"{origin}: {e}", context={**dict(e.context or {}), **dict(context or {})}
-        ) from e
+        message = e.args[0] if e.args else ""
+        e.args = (f"{origin}: {message}", *e.args[1:])
+        merged = {**dict(e.context or {}), **dict(context or {})}
+        e.context = merged
+        e.details = merged
+        raise
 
 
 __all__ = [

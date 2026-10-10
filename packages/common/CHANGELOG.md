@@ -367,9 +367,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knowing who configured it, so a database backend built for an ontology
   binding names its table and nothing the ontology document's reader would
   recognise. Construction wrapped in it re-raises a `ValidationError` or
-  `ConfigurationError` as the same kind, prefixed with the origin and with the
-  caller's context merged in, from the original. Any other exception passes
-  through.
+  `ConfigurationError` (a subclass included) as the same exception, its
+  message prefixed with the origin and the caller's context merged into its
+  own, so its type and attributes survive and an existing handler for a
+  subclass still catches it. Any other exception passes through.
 
 - **An entity's aliases can be indexed in its own row.** `aliases` joins
   `TEXT_FIELDS`, so `EntitySourceIndexSource(onto, fields=("name",
