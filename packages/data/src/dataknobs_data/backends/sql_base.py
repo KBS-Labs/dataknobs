@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import uuid
@@ -36,6 +37,15 @@ from ..query import (
 from ..records import Record
 from .column_layout import ColumnLayout, JsonbLayout
 from .sql_types import (
+    DOUBLE as _DOUBLE,
+    HUGEINT as _HUGEINT,
+    INT64_OR_DOUBLE as _INT64_OR_DOUBLE,
+    INTEGER_NUMBER as _INTEGER_NUMBER,
+    MATCHES_ALL as _MATCHES_ALL,
+    MATCHES_NONE as _MATCHES_NONE,
+    REAL_NUMBER as _REAL_NUMBER,
+    NumberDomain,
+    comparand,
     NAIVE_TIME as _NAIVE_TIME,
     NEVER as _NEVER,
     TIME_READINGS as _TIME_READINGS,
@@ -271,6 +281,29 @@ def _readings(bound: Any) -> dict[str | None, str | None]:
     if bound.utcoffset() is None:
         return {"naive": _NAIVE_TIME}
     return {"zoned": _ZONED_INSTANT}
+
+
+def _split_numbers(bound: Any) -> dict[str | None, str | None]:
+    """:func:`_readings`, with a number related to integers and reals apart."""
+    readings = _readings(bound)
+    if "number" not in readings:
+        return readings
+    return {"integer": _INTEGER_NUMBER, "real": _REAL_NUMBER}
+
+
+def _takes_operator(bind: Callable[..., Any]) -> bool:
+    """Whether a ``bind`` hook takes the operator as a third argument.
+
+    Before it did, a hook took the reading and the bound; one written then
+    is still called with those two.
+    """
+    try:
+        inspect.signature(bind).bind(None, None, Operator.EQ)
+    except TypeError:
+        return False
+    except ValueError:  # no signature to read: a builtin
+        return True
+    return True
 
 
 def _utc_text(bound: datetime) -> str:
@@ -898,11 +931,15 @@ class SQLQueryBuilder:
         """
         clauses = []
         if query.sort_specs:
+            # A record with no value for a sort field sorts last, in either
+            # direction and on every engine, as the in-memory sort places it.
+            # Here, once, so a consumer's layout gets it too.
             order_parts: list[str] = []
             for sort_spec in query.sort_specs:
                 direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
                 order_parts.extend(
-                    f"{key} {direction}" for key in self._build_sort_keys(sort_spec.field)
+                    f"{key} {direction} NULLS LAST"
+                    for key in self._build_sort_keys(sort_spec.field)
                 )
             clauses.append("ORDER BY " + ", ".join(order_parts))
 
@@ -1317,13 +1354,28 @@ class SQLQueryBuilder:
         JSON-preserving extraction (``->`` in Postgres) so that sorting
         preserves JSON type ordering.
 
-        Text sorts by code point, as the in-memory sort does. SQLite and
-        DuckDB already compare strings that way. Postgres compares ``jsonb``
-        strings under the database collation, and ``COLLATE`` cannot attach to
-        ``jsonb``, so a Postgres JSON field takes two keys: the ``jsonb`` value
-        with every string folded to ``""``, which keeps the JSON type order and
-        ties the strings, then the text value in code-point order, which breaks
-        that tie. See :meth:`code_point_order` for the ``id`` column.
+        Numbers sort by value and text by code point, as the in-memory sort
+        orders them, and a JSON ``null`` is no value, like a missing field:
+        every key is ``NULL`` for it, and :meth:`_paging_clauses` puts those
+        last.
+
+        - SQLite's ``json_extract`` answers in the value's own type, which it
+          compares that way already.
+        - Postgres compares ``jsonb`` strings under the database collation,
+          and ``COLLATE`` cannot attach to ``jsonb``, so a Postgres JSON field
+          takes two keys: the ``jsonb`` value with every string folded to
+          ``""``, which keeps the JSON type order and ties the strings, then
+          the text value in code-point order, which breaks that tie. See
+          :meth:`code_point_order` for the ``id`` column.
+        - DuckDB's ``json_extract`` answers JSON, which orders as its text: a
+          number by its digits, and a string by its escaped form. So a DuckDB
+          field takes four keys: the kind, in Postgres's ``jsonb`` order
+          (string, number, boolean, array, object); a number as a ``DOUBLE``;
+          then its exact integer value, which orders two numbers one
+          ``DOUBLE`` holds (a fractional double never equals an integer's);
+          then any other value as its text, a string unescaped and a boolean
+          as ``false`` / ``true``. An array or object orders by its JSON text,
+          which is deterministic and not otherwise promised.
 
         Args:
             field: Field name, optionally dot-separated.
@@ -1337,12 +1389,31 @@ class SQLQueryBuilder:
 
         column, nested_path = resolve_json_column_and_path(field)
         typed = self._build_json_field_expr(nested_path, column=column, as_text=False)
+        if self.dialect == "duckdb":
+            return self._duckdb_sort_keys(nested_path, column)
         if self.dialect != "postgres":
             return [typed]
         text = self._build_json_field_expr(nested_path, column=column)
         return [
-            f"CASE WHEN jsonb_typeof({typed}) = 'string' THEN '\"\"'::jsonb ELSE {typed} END",
+            f"CASE jsonb_typeof({typed}) WHEN 'string' THEN '\"\"'::jsonb "
+            f"WHEN 'null' THEN NULL ELSE {typed} END",
             self.code_point_order(text),
+        ]
+
+    def _duckdb_sort_keys(self, field: str, column: str) -> list[str]:
+        """DuckDB's four ``ORDER BY`` keys for a JSON field (see :meth:`_jsonb_sort_keys`)."""
+        text = self._build_json_field_expr(field, column=column)
+        kind = f"json_type({column}, '$.{field}')"
+        is_integer, _ = self._duckdb_number_populations(field, column)
+        number = f"{kind} IN ('BIGINT', 'UBIGINT', 'DOUBLE')"
+        return [
+            f"CASE {kind} WHEN 'VARCHAR' THEN 1 WHEN 'BIGINT' THEN 2 WHEN 'UBIGINT' THEN 2 "
+            f"WHEN 'DOUBLE' THEN 2 WHEN 'BOOLEAN' THEN 3 WHEN 'ARRAY' THEN 4 "
+            f"WHEN 'OBJECT' THEN 5 END",
+            f"CASE WHEN {number} THEN TRY_CAST({text} AS DOUBLE) END",
+            f"CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) "
+            f"WHEN {number} THEN TRY_CAST(TRY_CAST({text} AS DOUBLE) AS HUGEINT) END",
+            f"CASE WHEN {kind} NOT IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'NULL') THEN {text} END",
         ]
 
     def code_point_order(self, expr: str) -> str:
@@ -1512,6 +1583,11 @@ class SQLQueryBuilder:
         Returns ``None`` for a dialect that cannot read a JSON type.
         """
         text = self._build_json_field_expr(field, column=column)
+        if kind in (_INTEGER_NUMBER, _REAL_NUMBER):
+            is_integer, is_real = self._duckdb_number_populations(field, column)
+            if kind == _INTEGER_NUMBER:
+                return is_integer, f"CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) END"
+            return is_real, f"CASE WHEN {is_real} THEN TRY_CAST({text} AS DOUBLE) END"
         is_kind = self._json_type_is(field, column, kind)
         if is_kind is None:
             return None
@@ -1526,6 +1602,27 @@ class SQLQueryBuilder:
         else:
             value = f"TRY_CAST({text} AS {_DUCKDB_CASTS[kind]})"
         return is_kind, f"CASE WHEN {is_kind} THEN {value} END"
+
+    def _duckdb_number_populations(self, field: str, column: str) -> tuple[str, str]:
+        """Tests that the JSON number at ``column.field`` is an integer, or a real.
+
+        DuckDB has no type holding every JSON number exactly: a ``DOUBLE``
+        rounds an integer past 2**53, and a ``HUGEINT`` rounds a fraction. So
+        a number written as an integer literal that a ``HUGEINT`` holds is an
+        integer, read as one, and any other number is a real, read as a
+        ``DOUBLE``, which holds the float Python wrote exactly. DuckDB types an
+        integer literal past 64 bits ``DOUBLE``, so the literal is asked, not
+        the type. An integer past 128 bits is read as a ``DOUBLE``: the one
+        place DuckDB cannot read a JSON number exactly.
+
+        Each test is false, not ``NULL``, for a present value it excludes.
+        """
+        text = self._build_json_field_expr(field, column=column)
+        is_number = self._json_type_is(field, column, "number")
+        integral = (
+            f"regexp_full_match({text}, '-?[0-9]+') AND TRY_CAST({text} AS HUGEINT) IS NOT NULL"
+        )
+        return f"({is_number} AND {integral})", f"({is_number} AND NOT ({integral}))"
 
     def time_reading(self, text: str, reading: str) -> tuple[str, str]:
         """A test that the string ``text`` names a time of ``reading``'s kind, and the time.
@@ -1690,6 +1787,37 @@ class SQLQueryBuilder:
                 return float(bound)
         return bound
 
+    def number_domain(self, reading: str | None) -> NumberDomain | None:
+        """The numbers a JSON value read under ``reading`` can be, on this dialect.
+
+        ``None`` where a bound needs no comparand: a reading that is not a
+        number, or an engine that compares every number exactly as it is sent
+        (PostgreSQL reads a JSON number as ``numeric``).
+        """
+        if reading == "number" and self.dialect == "sqlite":
+            return _INT64_OR_DOUBLE
+        if reading == _INTEGER_NUMBER:
+            return _HUGEINT
+        if reading == _REAL_NUMBER:
+            return _DOUBLE
+        return None
+
+    def bind_comparand(self, reading: str | None, bound: Any, op: Operator) -> Any:
+        """A bound as it is passed to be compared by ``op`` under ``reading``.
+
+        :meth:`bind_bound`, except for a number read in a domain the engine
+        cannot hold every number in (:meth:`number_domain`): that bound is
+        replaced by :func:`~.sql_types.comparand`'s value for it, which the
+        engine compares exactly and the driver can always bind. So a bound
+        outside 64 bits neither raises on SQLite nor rounds on DuckDB.
+
+        The default ``bind`` of :meth:`typed_clause`.
+        """
+        domain = self.number_domain(reading)
+        if domain is None:
+            return self.bind_bound(reading, bound)
+        return comparand(domain, op, bound)
+
     def typed_clause(
         self,
         op: Operator,
@@ -1698,8 +1826,9 @@ class SQLQueryBuilder:
         expr_for: Callable[[str | None], tuple[str | None, str] | None],
         present: str,
         *,
-        bind: Callable[[str | None, Any], Any] | None = None,
+        bind: Callable[..., Any] | None = None,
         cast_for: Callable[[str | None, Sequence[Any]], str | None] | None = None,
+        readings: Callable[[Any], Mapping[str | None, str | None]] | None = None,
     ) -> tuple[str, list[Any]]:
         """A comparison that matches only values of its bound's kind.
 
@@ -1745,24 +1874,45 @@ class SQLQueryBuilder:
                 :data:`~.sql_types.TIME_READINGS` for a time, or ``None`` for a
                 bound with no kind.
             present: A predicate that the field holds a value.
-            bind: How a bound is passed as a parameter for a reading;
-                :meth:`bind_bound` when omitted. A layout that sends a bound in
-                its column's own type wraps :meth:`bind_bound`.
+            bind: How a bound is passed as a parameter, given its reading,
+                the bound and the operator it is compared by (``GTE`` and
+                ``LTE`` for the two sides of a ``BETWEEN``, ``IN`` for a
+                membership member); :meth:`bind_comparand` when omitted. A
+                layout that sends a bound in its column's own type wraps
+                :meth:`bind_bound`. A ``bind`` taking only the reading and the
+                bound is called with those two. ``bind`` may answer
+                :data:`~.sql_types.MATCHES_NONE` or
+                :data:`~.sql_types.MATCHES_ALL` (see
+                :func:`~.sql_types.comparand`) for a bound no stored value
+                equals, and the comparison is then that constant.
             cast_for: For a reading and the bounds it binds (as bound), the SQL
                 type their placeholders are cast to, or ``None`` to leave them
                 untyped. For a column whose own type a driver would otherwise
                 give the placeholder, converting the bound.
+            readings: The populations a bound relates to, each with the reading
+                it compares them under; by kind when omitted, with a time
+                split into naive and zoned. A layout whose engine reads two
+                populations of one kind in different types splits that kind
+                too, as DuckDB's JSON layout splits a number into
+                :data:`~.sql_types.INTEGER_NUMBER` and
+                :data:`~.sql_types.REAL_NUMBER`.
 
         Returns:
             Tuple of (SQL clause, parameters).
         """
         positive = _NEGATIONS.get(op, op)
+        read = _readings if readings is None else readings
+        bind_with_op = bind is None or _takes_operator(bind)
 
         def cast(reading: str | None, bound_values: Sequence[Any]) -> str | None:
             return None if cast_for is None else cast_for(reading, bound_values)
 
-        def bound_as_bound(kind: str | None, bound: Any) -> Any:
-            return (self.bind_bound if bind is None else bind)(kind, bound)
+        def bound_as_bound(kind: str | None, bound: Any, compared_by: Operator) -> Any:
+            if bind is None:
+                return self.bind_comparand(kind, bound, compared_by)
+            if bind_with_op:
+                return bind(kind, bound, compared_by)
+            return bind(kind, bound)
 
         def guarded(kind_test: str | None, clause: str) -> str:
             return clause if kind_test is None else f"({kind_test} AND {clause})"
@@ -1772,12 +1922,20 @@ class SQLQueryBuilder:
         if positive == Operator.IN:
             groups: dict[str | None, list[Any]] = {}
             for member in membership_values(value):
-                for reading in _readings(member).values():
+                for reading in read(member).values():
                     groups.setdefault(reading, []).append(member)
             for reading, members in groups.items():
                 target = expr_for(reading)
-                if target is not None:
-                    bound_members = [bound_as_bound(reading, member) for member in members]
+                if target is None:
+                    continue
+                bound_members = [
+                    bound
+                    for bound in (
+                        bound_as_bound(reading, member, Operator.IN) for member in members
+                    )
+                    if bound is not _MATCHES_NONE
+                ]
+                if bound_members:
                     part, part_params = self.membership_clause(
                         target[1],
                         Operator.IN,
@@ -1789,9 +1947,9 @@ class SQLQueryBuilder:
                     params.extend(part_params)
         else:
             bounds = value if positive == Operator.BETWEEN else [value]
-            readings = [_readings(bound) for bound in bounds]
-            for population in readings[0]:
-                per_bound = [r.get(population, _NEVER) for r in readings]
+            by_bound = [read(bound) for bound in bounds]
+            for population in by_bound[0]:
+                per_bound = [r.get(population, _NEVER) for r in by_bound]
                 targets = [t for t in map(expr_for, per_bound) if t is not None]
                 if len(targets) < len(per_bound):
                     continue  # a bound relates to none of these values
@@ -1801,11 +1959,23 @@ class SQLQueryBuilder:
                     self.code_point_order(expr) if r == "string" and ordered else expr
                     for r, (_, expr) in zip(per_bound, targets, strict=True)
                 ]
+                # Each bound with the operator it is compared by: a range's
+                # two sides are its low and high halves.
+                ops = [Operator.GTE, Operator.LTE] if positive == Operator.BETWEEN else [positive]
                 bound_values = [
-                    bound_as_bound(r, b) for r, b in zip(per_bound, bounds, strict=True)
+                    bound_as_bound(r, b, o) for r, b, o in zip(per_bound, bounds, ops, strict=True)
+                ]
+                if any(b is _MATCHES_NONE for b in bound_values):
+                    continue  # no value of this population meets a side
+                sides = [
+                    (expr, o, b, r)
+                    for expr, o, b, r in zip(exprs, ops, bound_values, per_bound, strict=True)
+                    if b is not _MATCHES_ALL
                 ]
                 start = param_start + len(params)
-                if positive != Operator.BETWEEN:
+                if not sides:
+                    part, part_params = "TRUE", []
+                elif positive != Operator.BETWEEN:
                     part, part_params = self.operator_clause(
                         exprs[0],
                         positive,
@@ -1813,7 +1983,7 @@ class SQLQueryBuilder:
                         start,
                         placeholder_type=cast(per_bound[0], bound_values),
                     )
-                elif per_bound[0] == per_bound[1]:
+                elif len(sides) == 2 and per_bound[0] == per_bound[1]:
                     part, part_params = self.operator_clause(
                         exprs[0],
                         positive,
@@ -1823,22 +1993,21 @@ class SQLQueryBuilder:
                     )
                 else:
                     # A date and an aware bound read a zoned value two ways,
-                    # each bound one parameter.
-                    low, low_params = self.operator_clause(
-                        exprs[0],
-                        Operator.GTE,
-                        bound_values[0],
-                        start,
-                        placeholder_type=cast(per_bound[0], bound_values[:1]),
-                    )
-                    high, high_params = self.operator_clause(
-                        exprs[1],
-                        Operator.LTE,
-                        bound_values[1],
-                        start + len(low_params),
-                        placeholder_type=cast(per_bound[1], bound_values[1:]),
-                    )
-                    part, part_params = f"({low} AND {high})", low_params + high_params
+                    # and a side every value meets drops out: each side that
+                    # is left is one parameter.
+                    halves: list[str] = []
+                    part_params = []
+                    for expr, side_op, side_value, reading in sides:
+                        half, half_params = self.operator_clause(
+                            expr,
+                            side_op,
+                            side_value,
+                            start + len(part_params),
+                            placeholder_type=cast(reading, [side_value]),
+                        )
+                        halves.append(half)
+                        part_params.extend(half_params)
+                    part = halves[0] if len(halves) == 1 else f"({' AND '.join(halves)})"
                 parts.append(guarded(targets[0][0], part))
                 params.extend(part_params)
 
@@ -2176,6 +2345,7 @@ class SQLQueryBuilder:
                 param_start,
                 json_value_for,
                 f"{text_expr} IS NOT NULL",
+                readings=_split_numbers if self.dialect == "duckdb" else None,
             )
 
         clause, params = self.operator_clause(text_expr, op, value, param_start)

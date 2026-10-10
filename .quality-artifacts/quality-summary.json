@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T17:29:50Z",
+  "timestamp": "2026-10-10T19:34:12Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -15,7 +15,7 @@
     "bots": "2af93edb611a4b9b0c2e37a882ebc267e8a820f71680eca325e889acb5b86346",
     "common": "00862b18a7be35f334ae184dd9fa3308e5266d1604b3af90577e108a99c24e82",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "beda23a47f71424126f4b42c185143dfddb02d6515113927965e84fb51d92430",
+    "data": "b685e59dee8ab3d964a9c21069ace8f4352d89c1ac39d42ea61225b0df2268b6",
     "fsm": "94bd9fe316b45dc5138a261c6210a9c1f6b343449ddd55d96b2111adf43c8307",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "1fac8c7048b7d7cc4d4d7b981b80059580ff16b821d666433e6bd85dbc5a6593",
@@ -29,9 +29,9 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "1865d6a2e2c0cf32c75933f9f1474f1772fbf5de6f60c4882fae5093ba98dbca",
-    "docs": "2e85e4698b0cd1c6fea4082fa4ca7a53c9bcccf2cba83dd4dc4f046684fcf560"
+    "docs": "ea662bfbc202420cff4e4805abce9f0bb06a493b70914e540aeb374af104013c"
   },
-  "total_seconds": 340,
+  "total_seconds": 349,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -43,7 +43,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 4
+      "duration_seconds": 5
     },
     "contract": {
       "status": "pass",
@@ -63,7 +63,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 29
+      "duration_seconds": 30
     },
     "documentation_versions": {
       "status": "pass",
@@ -83,14 +83,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 173,
-      "workspace_guards_seconds": 97
+      "duration_seconds": 181,
+      "workspace_guards_seconds": 99
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 48
+      "duration_seconds": 50
     }
   }
 }

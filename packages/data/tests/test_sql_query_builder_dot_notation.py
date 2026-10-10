@@ -269,10 +269,18 @@ class TestTypeCastingWithDotNotation:
         b = _builder("duckdb", param_style="qmark")
         f = Filter("metadata.version", Operator.GTE, 3)
         clause, _ = b._build_filter_clause(f, 1)
+        # A number is read as an integer or a real, each in a type that
+        # holds it exactly, one part for each.
+        text = "json_extract_string(metadata, '$.version')"
         is_number = "json_type(metadata, '$.version') IN ('BIGINT', 'UBIGINT', 'DOUBLE')"
+        integral = (
+            f"regexp_full_match({text}, '-?[0-9]+') AND TRY_CAST({text} AS HUGEINT) IS NOT NULL"
+        )
+        is_integer = f"({is_number} AND {integral})"
+        is_real = f"({is_number} AND NOT ({integral}))"
         assert clause == (
-            f"({is_number} AND CASE WHEN {is_number} "
-            "THEN TRY_CAST(json_extract_string(metadata, '$.version') AS DOUBLE) END >= ?)"
+            f"(({is_integer} AND CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) END >= ?)"
+            f" OR ({is_real} AND CASE WHEN {is_real} THEN TRY_CAST({text} AS DOUBLE) END >= ?))"
         )
 
     def test_sqlite_no_cast_needed(self) -> None:
@@ -374,8 +382,8 @@ class TestSortExprDotNotation:
     def test_postgres_simple_sort(self) -> None:
         b = _builder("postgres")
         assert b._build_sort_keys("name") == [
-            "CASE WHEN jsonb_typeof(data->'name') = 'string' THEN '\"\"'::jsonb"
-            " ELSE data->'name' END",
+            "CASE jsonb_typeof(data->'name') WHEN 'string' THEN '\"\"'::jsonb"
+            " WHEN 'null' THEN NULL ELSE data->'name' END",
             "(data->>'name') COLLATE \"C\"",
         ]
 
@@ -399,9 +407,12 @@ class TestSortExprDotNotation:
         assert b._build_sort_keys("metadata.version") == ["json_extract(metadata, '$.version')"]
 
     def test_duckdb_nested_sort(self) -> None:
-        """DuckDB sort uses json_extract (typed) not json_extract_string."""
+        """DuckDB sorts by the value at the nested path, never by its JSON text."""
         b = _builder("duckdb")
-        assert b._build_sort_keys("config.timeout") == ["json_extract(data, '$.config.timeout')"]
+        keys = b._build_sort_keys("config.timeout")
+        assert len(keys) == 4
+        assert all("(data, '$.config.timeout')" in key for key in keys)
+        assert not any(key.startswith("json_extract(") for key in keys)
 
 
 # ---------------------------------------------------------------------------
@@ -520,11 +531,13 @@ class TestDuckDBAsTextParameter:
         expr = b._build_json_field_expr("score", as_text=False)
         assert expr == "json_extract(data, '$.score')"
 
-    def test_sort_expr_uses_typed_extraction(self) -> None:
-        """Sort expressions use as_text=False, so DuckDB should use json_extract."""
+    def test_sort_keys_do_not_order_by_json_text(self) -> None:
+        """``json_extract`` answers JSON, which DuckDB orders as its text, so no key is it."""
         b = _builder("duckdb")
-        assert b._build_sort_keys("config.timeout") == ["json_extract(data, '$.config.timeout')"]
+        keys = b._build_sort_keys("config.timeout")
+        assert not any(key.startswith("json_extract(") for key in keys)
 
-    def test_metadata_sort_uses_typed_extraction(self) -> None:
+    def test_metadata_sort_reads_the_metadata_column(self) -> None:
         b = _builder("duckdb")
-        assert b._build_sort_keys("metadata.version") == ["json_extract(metadata, '$.version')"]
+        keys = b._build_sort_keys("metadata.version")
+        assert all("(metadata, '$.version')" in key for key in keys)

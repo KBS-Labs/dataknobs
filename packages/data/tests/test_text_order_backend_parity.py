@@ -37,7 +37,10 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 #: (id, t). Each column holds pairs whose collation order and code-point order
-#: disagree: case, a space or underscore a collation skips, and accents.
+#: disagree: case, a space or underscore a collation skips, and accents. The
+#: last four hold characters JSON writes escaped (a quote, a backslash, a
+#: newline, a control character), whose escaped text orders differently from
+#: the characters themselves.
 ROWS = [
     ("Apple", "apple"),
     ("banana", "Banana"),
@@ -48,6 +51,10 @@ ROWS = [
     ("Zed", "_x"),
     ("dune", "éclair"),
     ("Echo", "Émile"),
+    ("quote", 'a"b'),
+    ("slash", "a\\b"),
+    ("newline", "a\nb"),
+    ("control", "a\x01b"),
 ]
 IDS = [row_id for row_id, _ in ROWS]
 VALUES = [value for _, value in ROWS]

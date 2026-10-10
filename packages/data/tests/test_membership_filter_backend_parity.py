@@ -356,18 +356,25 @@ class TestTheBuilderRendersOnlyMembersThatCanMatch:
 
 
 @pytest.mark.parametrize(
-    ("dialect", "param_style", "cast"),
-    [("postgres", "numeric", "::numeric"), ("duckdb", "qmark", "AS DOUBLE")],
+    ("dialect", "param_style", "casts", "members"),
+    [
+        ("postgres", "numeric", ["::numeric"], [5]),
+        # DuckDB reads a number as an integer or a real, each in its own
+        # type, so a member is bound once for each.
+        ("duckdb", "qmark", ["AS HUGEINT", "AS DOUBLE"], [5, 5.0]),
+    ],
 )
 @pytest.mark.parametrize("operator", [Operator.IN, Operator.NOT_IN])
 def test_the_cast_is_chosen_from_a_member_that_can_match(
-    dialect: str, param_style: str, cast: str, operator: Operator
+    dialect: str, param_style: str, casts: list[str], members: list[Any], operator: Operator
 ) -> None:
     """A leading ``None`` used to leave a numeric field compared as text."""
     builder = SQLQueryBuilder("records", dialect=dialect, param_style=param_style)
     sql, params = builder.build_search_query(Query(filters=[Filter("n", operator, [None, 5])]))
-    assert cast in sql
-    assert _members(dialect, params) == [5]
+    assert all(cast in sql for cast in casts)
+    bound = _members(dialect, params)
+    assert bound == members
+    assert [type(m) for m in bound] == [type(m) for m in members]
 
 
 #: Only the numbered styles can show a numbering fault: a ``qmark`` ``?`` is
