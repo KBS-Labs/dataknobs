@@ -138,3 +138,34 @@ class TestEqualityWrittenWithoutAHashIsRefused:
                 return hash(self.name)
 
         assert hash(ByName()) == hash(ByName())
+
+
+class TestSlotsAreSupported:
+    """``slots=True`` rebuilds the class, which runs the hook a second time.
+
+    The rebuilt class's dict is the decorated one: it holds the ``__eq__`` the
+    decorator generated beside the ``None`` the hook wrote on the first pass.
+    Read as a body, that pair is the refused shape, so a rebuild has to be
+    recognised as one rather than judged again.
+    """
+
+    def test_a_slotted_config_is_defined_and_unhashable(self) -> None:
+        @dataclass(frozen=True, slots=True)
+        class Slotted(StructuredConfig):
+            n: int = 0
+            tags: list[str] = field(default_factory=list)
+
+        assert "__slots__" in Slotted.__dict__
+        assert not isinstance(Slotted(), Hashable)
+        assert Slotted(n=1) == Slotted(n=1)
+        assert_structured_config_roundtrip(Slotted(n=1, tags=["a"]))
+
+    def test_a_slotted_config_keeps_a_hash_it_writes(self) -> None:
+        @dataclass(frozen=True, slots=True)
+        class Slotted(StructuredConfig):
+            n: int = 0
+
+            def __hash__(self) -> int:
+                return hash(self.n)
+
+        assert hash(Slotted(n=3)) == hash(3)

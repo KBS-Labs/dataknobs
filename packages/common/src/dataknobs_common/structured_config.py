@@ -361,7 +361,14 @@ def _declare_unhashable(cls: type) -> None:
     agree with. Nothing at this point can see the decorator's arguments, so the
     refusal covers ``eq=False`` too, where the result would have been honest;
     a subclass in that position writes ``__hash__`` as well.
+
+    A class whose dict already holds ``__dataclass_params__`` is a rebuild,
+    not a body: ``@dataclass(slots=True)`` recreates the decorated class from
+    its dict, which runs this hook again over the ``__eq__`` the decorator
+    generated. Its hash was settled on the first pass, so it is left alone.
     """
+    if "__dataclass_params__" in cls.__dict__:
+        return
     if "__hash__" not in cls.__dict__:
         # Deliberate: see the docstring. Both codes are mypy objecting to the
         # assignment itself, which is the mechanism.
