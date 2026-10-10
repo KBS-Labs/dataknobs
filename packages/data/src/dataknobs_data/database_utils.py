@@ -49,7 +49,8 @@ def sort_in_memory(
     values are ordered by :func:`~dataknobs_data.query.sort_key_for`, so a
     sort agrees with what ``Filter.matches`` says of the same values. The
     reserved storage-key field sorts by the storage key, never a shadowed
-    ``data["id"]`` value.
+    ``data["id"]`` value. A record with no value for a field sorts after every
+    record with one, ascending or descending.
 
     Args:
         items: What is sorted --- records, or ``(id, record)`` pairs.
@@ -62,12 +63,16 @@ def sort_in_memory(
         if is_storage_key_field(sort_spec.field):
             items.sort(key=lambda item: storage_key_of(item) or "", reverse=reverse)
         else:
-            values = [record_of(item).get_value(sort_spec.field, "") for item in items]
-            key = sort_key_for(values)
-            ordered = sorted(
-                zip(values, items, strict=True), key=lambda pair: key(pair[0]), reverse=reverse
-            )
-            items[:] = [item for _, item in ordered]
+            # A record with no value for the field --- a missing key or a
+            # ``None`` --- sorts last in either direction, as every SQL engine
+            # is asked to place it, and in the order the earlier keys left it.
+            pairs = [(record_of(item).get_value(sort_spec.field), item) for item in items]
+            present = [pair for pair in pairs if pair[0] is not None]
+            key = sort_key_for(value for value, _ in present)
+            ordered = sorted(present, key=lambda pair: key(pair[0]), reverse=reverse)
+            items[:] = [item for _, item in ordered] + [
+                item for value, item in pairs if value is None
+            ]
 
 
 def process_search_results(

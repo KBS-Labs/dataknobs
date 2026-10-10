@@ -668,7 +668,9 @@ class AsyncElasticsearchDatabase(
                 sort_path = (
                     "id" if is_storage_key_field(sort_spec.field) else f"data.{sort_spec.field}"
                 )
-                sort.append({sort_path: {"order": direction}})
+                # A record with no value sorts last in either direction, as on
+                # every backend; stated rather than left to the default.
+                sort.append({sort_path: {"order": direction, "missing": "_last"}})
 
         # One request inside the result window, ``search_after`` pages past
         # it or for an unbounded read; the plan is shared with the sync twin.

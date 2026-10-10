@@ -235,7 +235,9 @@ What the builder guarantees:
 - **`NOT` over a native filter** matches a row whose column is `NULL`, as
   `NOT` does under the JSON layout and as `Filter.matches` answers.
 - **Text sorts by code point** on every engine (`COLLATE "C"` on
-  PostgreSQL), as the in-memory sort does, and a key sorts as its text.
+  PostgreSQL), as the in-memory sort does, and a key sorts as its text. A
+  `NULL` column sorts last in both directions, as a missing value does under
+  the JSON layout.
   A time sorts by the time a filter reads it as: on SQLite, which keeps the
   text it was given, a zoned value sorts by its instant, not its wall clock.
 
@@ -485,7 +487,15 @@ sql, params = builder.build_search_query(Query(filters=[Filter("name", Operator.
 `typed_clause` renders the comparison, membership, range and negation from
 what `expr_for` says a value is under each reading of a bound: `"string"`,
 `"number"`, `"boolean"`, `NEVER` (a `None` or NaN bound), or one of
-`TIME_READINGS`. Its kind test must be false, not `NULL`, for a value it
+`TIME_READINGS`. Its `bind=` hook sends each bound as a parameter. It is
+called with the reading, the bound and the operator the bound is compared by
+(`GTE` and `LTE` for the two sides of a `BETWEEN`, `IN` for a member), and a
+hook taking only the first two is called with those. Where a column holds
+numbers in a domain an engine cannot hold every bound in, the hook answers
+`comparand(domain, op, bound)` (`dataknobs_data.backends.sql_types`): the
+nearest stored value on the side the operator needs, or `MATCHES_NONE` /
+`MATCHES_ALL`, which the clause renders as that answer. The default,
+`builder.bind_comparand`, does so for a JSON number on SQLite and DuckDB. Its kind test must be false, not `NULL`, for a value it
 excludes, so `NOT` over the clause still matches that value. The primitives
 render for PostgreSQL, SQLite and DuckDB (`NATIVE_DIALECTS`), so the builder
 refuses a layout any other dialect, as its `check_dialect` says; one that
@@ -569,6 +579,10 @@ query = Query(
     ]
 )
 ```
+
+A record with no value for a sorted field, whether the key is missing or
+holds `None`, sorts after every record that has one, in either direction and
+on every backend. Numbers sort by value and text by code point everywhere.
 
 ### Pagination
 

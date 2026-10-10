@@ -555,8 +555,10 @@ PostgreSQL has no cast that answers `NULL` there before version 16.
 
 Strings order by code point, as Python compares them: `GT`, `GTE`, `LT`,
 `LTE`, `BETWEEN` and `NOT_BETWEEN` against a string, and a sort on a string
-field, put `'Banana'` before `'apple'` and `'Zebra'` before `'éclair'`. SQLite
-and DuckDB compare text that way already. PostgreSQL renders `COLLATE "C"`
+field, put `'Banana'` before `'apple'` and `'Zebra'` before `'éclair'`. A
+string holding a character JSON writes escaped (a quote, a backslash, a
+newline) orders by the character, not by its escape. SQLite and DuckDB compare
+text by code point already. PostgreSQL renders `COLLATE "C"`
 rather than the database's collation, and the records table it creates
 declares `id` `COLLATE "C"`, so the primary key still serves a range or sort on
 `id`. A table created by an earlier version gives the same answers but scans
@@ -571,6 +573,28 @@ ALTER TABLE <schema>.<table> ALTER COLUMN id TYPE TEXT COLLATE "C";
 
 A sort on a data field orders by two expressions on PostgreSQL, so an
 expression index added by hand on `data->'field'` does not serve it.
+
+Numbers compare and sort by value, exactly, as Python compares them: `2**53 + 1`
+is not `2**53`, and the float `1e30` is not the integer `10**30`. A bound no
+engine can bind (an integer past 64 bits on SQLite, past 128 on DuckDB)
+neither raises nor rounds: it is compared through the stored value nearest it
+on the side the operator needs. Two limits are the engines' own. SQLite reads
+a stored integer past 64 bits as a double, and DuckDB one past 128 bits, so
+past those magnitudes a stored integer compares as the double nearest it.
+DuckDB reads a JSON number for a sort or a filter in a type that holds it, an
+integer as `HUGEINT` and any other number as `DOUBLE`, so an expression index
+on a cast of the field does not serve those either.
+
+A sort on a field mixing kinds of value orders each kind together, in
+PostgreSQL's `jsonb` order: strings, numbers, booleans, arrays, objects. That
+holds on PostgreSQL and DuckDB; SQLite orders by its own type order, and the
+in-memory sort raises `TypeError`, as it does for any two values Python cannot
+order.
+
+A record with no value for a sorted field, a missing key or a `null` alike,
+sorts after every record that has one, ascending and descending, on every
+backend. SQL renders `NULLS LAST` on each sort key, and Elasticsearch is sent
+`missing: _last`.
 
 Elasticsearch sorts by code point and compares `id` that way, but two
 defects remain there. A range with a string bound on a data field compares
@@ -1258,7 +1282,8 @@ record = builder.record_from_row(row)
 |---|---|---|
 | `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out; subclass it for a table neither layout reads (read-only: only `JsonbLayout` may set `writable`; renders for `NATIVE_DIALECTS` unless `check_dialect` is overridden) |
 | `NATIVE_DIALECTS` | the same | the dialects the clause primitives render for: `postgres`, `sqlite`, `duckdb` |
-| `SQLQueryBuilder.typed_clause`, `operator_clause`, `membership_clause`, `bind_bound`, `time_reading`, `code_point_order`, `param_placeholder` | `dataknobs_data.backends.sql_base` | the clause primitives a layout renders with |
+| `SQLQueryBuilder.typed_clause`, `operator_clause`, `membership_clause`, `bind_bound`, `bind_comparand`, `time_reading`, `code_point_order`, `param_placeholder` | `dataknobs_data.backends.sql_base` | the clause primitives a layout renders with |
+| `comparand`, `NumberDomain`, `INT64_OR_DOUBLE`, `HUGEINT`, `DOUBLE`, `MATCHES_NONE`, `MATCHES_ALL` | `dataknobs_data.backends.sql_types` | what a number bound is compared with where a column cannot hold it |
 | `SQLQueryBuilder.TYPED_OPERATORS`, `ORDERED_OPERATORS`, `STRING_ONLY_OPERATORS` | the same | which primitive renders which operator |
 | `TIME_READINGS`, `ZONED_WALL_CLOCK`, `NEVER` | `dataknobs_data.backends.sql_types` | the readings a layout's `expr_for` is asked about, beside `"string"`, `"number"` and `"boolean"` |
 | `JsonbLayout`, `NativeColumnLayout` | `dataknobs_data.backends.column_layout` | the two layouts |
