@@ -213,7 +213,7 @@ class SyncSQLiteDatabase(
 
     def create(self, record: Record) -> str:
         """Create a new record."""
-        self._check_connection()
+        conn = self._require_conn()
 
         # Update vector dimensions tracking if needed
         if self._has_vector_fields(record):
@@ -230,14 +230,14 @@ class SyncSQLiteDatabase(
         query = f"INSERT INTO {self.table_manager.qualified_table} (id, data, metadata) VALUES (?, ?, ?)"
         params = [storage_id, data_json, metadata_json]
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(query, params)
-            self.conn.commit()
+            conn.commit()
             return storage_id
         except sqlite3.IntegrityError as e:
-            self.conn.rollback()
+            conn.rollback()
             if is_duplicate_key_error(e):
                 raise DuplicateRecordError(storage_id) from e
             # NOT NULL / CHECK / other column constraint — surface truthfully
@@ -248,10 +248,10 @@ class SyncSQLiteDatabase(
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID."""
-        self._check_connection()
+        conn = self._require_conn()
 
         query, params = self.query_builder.build_read_query(id)
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(query, params)
@@ -286,7 +286,7 @@ class SyncSQLiteDatabase(
             ConcurrencyError: If ``expected_version`` does not match the
                 record's current version token.
         """
-        self._check_connection()
+        conn = self._require_conn()
 
         # Update vector dimensions tracking if needed
         if self._has_vector_fields(record):
@@ -314,11 +314,11 @@ class SyncSQLiteDatabase(
                 return False
             enforce_content_version(id, expected_version, current)
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(query, params)
-            self.conn.commit()
+            conn.commit()
             rows_affected = cursor.rowcount
 
             if rows_affected == 0:
@@ -340,7 +340,7 @@ class SyncSQLiteDatabase(
         in-process content-hash backends). When ``None`` the delete is
         unconditional, byte-identical to prior behavior.
         """
-        self._check_connection()
+        conn = self._require_conn()
 
         if expected_version is not None:
             current = self.read(id)
@@ -349,21 +349,21 @@ class SyncSQLiteDatabase(
             enforce_content_version(id, expected_version, current)
 
         query, params = self.query_builder.build_delete_query(id)
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(query, params)
-            self.conn.commit()
+            conn.commit()
             return cursor.rowcount > 0
         finally:
             cursor.close()
 
     def exists(self, id: str) -> bool:
         """Check if a record exists."""
-        self._check_connection()
+        conn = self._require_conn()
 
         query, params = self.query_builder.build_exists_query(id)
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(query, params)
@@ -374,9 +374,9 @@ class SyncSQLiteDatabase(
 
     def clear(self) -> int:
         """Clear all records from the database."""
-        self._check_connection()
+        conn = self._require_conn()
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
         try:
             # Get count before clearing
             cursor.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}")
@@ -384,15 +384,15 @@ class SyncSQLiteDatabase(
 
             # Clear the table
             cursor.execute(f"DELETE FROM {self.table_manager.qualified_table}")
-            self.conn.commit()
+            conn.commit()
 
-            return count
+            return int(count)
         finally:
             cursor.close()
 
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
-        self._check_connection()
+        conn = self._require_conn()
 
         # Handle ComplexQuery with native SQL support
         if isinstance(query, ComplexQuery):
@@ -400,7 +400,7 @@ class SyncSQLiteDatabase(
         else:
             sql_query, params = self.query_builder.build_search_query(query)
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(sql_query, params)
@@ -419,10 +419,10 @@ class SyncSQLiteDatabase(
 
     def count(self, query: Query | None = None) -> int:
         """Count records matching a query."""
-        self._check_connection()
+        conn = self._require_conn()
 
         sql_query, params = self.query_builder.build_count_query(query)
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
 
         try:
             cursor.execute(sql_query, params)
@@ -466,7 +466,7 @@ class SyncSQLiteDatabase(
         if not records:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
 
         # Use the shared batch create query builder (honors record.id, mints via
         # _generate_id; raises DuplicateRecordError up front on a within-batch
@@ -475,15 +475,15 @@ class SyncSQLiteDatabase(
             records, id_factory=self._generate_id, max_parameters=self._max_parameters()
         )
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
         try:
             cursor.execute("BEGIN TRANSACTION")
             for query, params in statements:
                 cursor.execute(query, params)
-            self.conn.commit()
+            conn.commit()
             return ids
         except sqlite3.IntegrityError as e:
-            self.conn.rollback()
+            conn.rollback()
             if is_duplicate_key_error(e):
                 # Name the colliding id precisely on the error path (cheap — only
                 # runs on a failed batch, never on the happy path).
@@ -494,7 +494,7 @@ class SyncSQLiteDatabase(
             # instead of mislabeling it as a duplicate id.
             raise constraint_violation_error() from e
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
         finally:
             cursor.close()
@@ -510,21 +510,21 @@ class SyncSQLiteDatabase(
         if not records:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
 
         statements, ids = self.query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id, max_parameters=self._max_parameters()
         )
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
         try:
             cursor.execute("BEGIN TRANSACTION")
             for query, params in statements:
                 cursor.execute(query, params)
-            self.conn.commit()
+            conn.commit()
             return ids
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
         finally:
             cursor.close()
@@ -538,23 +538,23 @@ class SyncSQLiteDatabase(
         if not updates:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
 
         # One statement per update rather than a join: UPDATE … FROM needs
         # SQLite 3.33, and executemany binds three values per run.
         query, rows = self.query_builder.build_batch_update_rows(updates)
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
         try:
             cursor.execute("BEGIN TRANSACTION")
             cursor.executemany(query, rows)
-            self.conn.commit()
+            conn.commit()
 
             # SQLite's UPDATE returns nothing here, so ask which ids exist.
             existing_ids = self._existing_ids(cursor, [record_id for record_id, _ in updates])
             return [record_id in existing_ids for record_id, _ in updates]
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
         finally:
             cursor.close()
@@ -567,9 +567,9 @@ class SyncSQLiteDatabase(
         if not ids:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
 
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
         try:
             # Check which IDs exist before deletion
             existing_ids = self._existing_ids(cursor, ids)
@@ -577,11 +577,11 @@ class SyncSQLiteDatabase(
             query, params = self.query_builder.build_batch_delete_query(ids)
             cursor.execute("BEGIN TRANSACTION")
             cursor.execute(query, params)
-            self.conn.commit()
+            conn.commit()
 
             return [id in existing_ids for id in ids]
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
         finally:
             cursor.close()
