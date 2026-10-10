@@ -407,9 +407,12 @@ class TestSortExprDotNotation:
         assert b._build_sort_keys("metadata.version") == ["json_extract(metadata, '$.version')"]
 
     def test_duckdb_nested_sort(self) -> None:
-        """DuckDB sort uses json_extract (typed) not json_extract_string."""
+        """DuckDB sorts by the value at the nested path, never by its JSON text."""
         b = _builder("duckdb")
-        assert b._build_sort_keys("config.timeout") == ["json_extract(data, '$.config.timeout')"]
+        keys = b._build_sort_keys("config.timeout")
+        assert len(keys) == 4
+        assert all("(data, '$.config.timeout')" in key for key in keys)
+        assert not any(key.startswith("json_extract(") for key in keys)
 
 
 # ---------------------------------------------------------------------------
@@ -528,11 +531,13 @@ class TestDuckDBAsTextParameter:
         expr = b._build_json_field_expr("score", as_text=False)
         assert expr == "json_extract(data, '$.score')"
 
-    def test_sort_expr_uses_typed_extraction(self) -> None:
-        """Sort expressions use as_text=False, so DuckDB should use json_extract."""
+    def test_sort_keys_do_not_order_by_json_text(self) -> None:
+        """``json_extract`` answers JSON, which DuckDB orders as its text, so no key is it."""
         b = _builder("duckdb")
-        assert b._build_sort_keys("config.timeout") == ["json_extract(data, '$.config.timeout')"]
+        keys = b._build_sort_keys("config.timeout")
+        assert not any(key.startswith("json_extract(") for key in keys)
 
-    def test_metadata_sort_uses_typed_extraction(self) -> None:
+    def test_metadata_sort_reads_the_metadata_column(self) -> None:
         b = _builder("duckdb")
-        assert b._build_sort_keys("metadata.version") == ["json_extract(metadata, '$.version')"]
+        keys = b._build_sort_keys("metadata.version")
+        assert all("(metadata, '$.version')" in key for key in keys)

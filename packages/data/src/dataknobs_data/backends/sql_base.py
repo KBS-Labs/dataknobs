@@ -1350,13 +1350,28 @@ class SQLQueryBuilder:
         JSON-preserving extraction (``->`` in Postgres) so that sorting
         preserves JSON type ordering.
 
-        Text sorts by code point, as the in-memory sort does. SQLite and
-        DuckDB already compare strings that way. Postgres compares ``jsonb``
-        strings under the database collation, and ``COLLATE`` cannot attach to
-        ``jsonb``, so a Postgres JSON field takes two keys: the ``jsonb`` value
-        with every string folded to ``""``, which keeps the JSON type order and
-        ties the strings, then the text value in code-point order, which breaks
-        that tie. See :meth:`code_point_order` for the ``id`` column.
+        Numbers sort by value and text by code point, as the in-memory sort
+        orders them, and a JSON ``null`` is no value, like a missing field:
+        every key is ``NULL`` for it, and :meth:`_paging_clauses` puts those
+        last.
+
+        - SQLite's ``json_extract`` answers in the value's own type, which it
+          compares that way already.
+        - Postgres compares ``jsonb`` strings under the database collation,
+          and ``COLLATE`` cannot attach to ``jsonb``, so a Postgres JSON field
+          takes two keys: the ``jsonb`` value with every string folded to
+          ``""``, which keeps the JSON type order and ties the strings, then
+          the text value in code-point order, which breaks that tie. See
+          :meth:`code_point_order` for the ``id`` column.
+        - DuckDB's ``json_extract`` answers JSON, which orders as its text: a
+          number by its digits, and a string by its escaped form. So a DuckDB
+          field takes four keys: the kind, in Postgres's ``jsonb`` order
+          (string, number, boolean, array, object); a number as a ``DOUBLE``;
+          then its exact integer value, which orders two numbers one
+          ``DOUBLE`` holds (a fractional double never equals an integer's);
+          then any other value as its text, a string unescaped and a boolean
+          as ``false`` / ``true``. An array or object orders by its JSON text,
+          which is deterministic and not otherwise promised.
 
         Args:
             field: Field name, optionally dot-separated.
@@ -1370,12 +1385,30 @@ class SQLQueryBuilder:
 
         column, nested_path = resolve_json_column_and_path(field)
         typed = self._build_json_field_expr(nested_path, column=column, as_text=False)
+        if self.dialect == "duckdb":
+            return self._duckdb_sort_keys(nested_path, column)
         if self.dialect != "postgres":
             return [typed]
         text = self._build_json_field_expr(nested_path, column=column)
         return [
             f"CASE WHEN jsonb_typeof({typed}) = 'string' THEN '\"\"'::jsonb ELSE {typed} END",
             self.code_point_order(text),
+        ]
+
+    def _duckdb_sort_keys(self, field: str, column: str) -> list[str]:
+        """DuckDB's four ``ORDER BY`` keys for a JSON field (see :meth:`_jsonb_sort_keys`)."""
+        text = self._build_json_field_expr(field, column=column)
+        kind = f"json_type({column}, '$.{field}')"
+        is_integer, _ = self._duckdb_number_populations(field, column)
+        number = f"{kind} IN ('BIGINT', 'UBIGINT', 'DOUBLE')"
+        return [
+            f"CASE {kind} WHEN 'VARCHAR' THEN 1 WHEN 'BIGINT' THEN 2 WHEN 'UBIGINT' THEN 2 "
+            f"WHEN 'DOUBLE' THEN 2 WHEN 'BOOLEAN' THEN 3 WHEN 'ARRAY' THEN 4 "
+            f"WHEN 'OBJECT' THEN 5 END",
+            f"CASE WHEN {number} THEN TRY_CAST({text} AS DOUBLE) END",
+            f"CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) "
+            f"WHEN {number} THEN TRY_CAST(TRY_CAST({text} AS DOUBLE) AS HUGEINT) END",
+            f"CASE WHEN {kind} NOT IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'NULL') THEN {text} END",
         ]
 
     def code_point_order(self, expr: str) -> str:
