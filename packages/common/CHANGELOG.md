@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `eq=False` `StructuredConfig` compares by identity.** The base carried
+  an `__eq__` generated over its own fields, of which it has none, and a
+  subclass declaring `eq=False` inherited it, so any two instances of one class
+  compared equal whatever they held. The base is now `eq=False` itself, so such
+  a subclass compares by identity, as `eq=False` means on any other dataclass.
+
+- **`DataclassSweep.probe_hashability` reports a type whose `__hash__` is
+  `None` as `"unhashable"`**, answered from the class without building one. It
+  reported `"raises"`, the verdict for a type that claims `Hashable` and fails
+  at the call.
+
 - **`DataclassSweep` builds a set field with one member.** Its witness for a
   `set` or `frozenset` field was always empty, so a type that refuses an empty
   set of values from its vocabulary could not be built and was reported
@@ -355,6 +366,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`StructuredConfig.fingerprint()`: a stable key for a config that is not
+  hashable.** The SHA-256 of a canonical encoding of the config's class and
+  fields. Equal configs share it, set and mapping order included. Configs that
+  differ do not, including two classes holding the same values. It is stable
+  across processes, and a credential in the config does not appear in it.
+  Containers, nested configs, plain dataclasses, enum members, paths, dates,
+  decimals and UUIDs are encoded by value, and types and module-level functions
+  by import path. A value nothing identifies, such as a lambda, a bound method
+  or a live client, is refused with `TypeError` naming the field. Fields with
+  `compare=False` are left out. Two extension points: `_FINGERPRINT_EXCLUDE`, a
+  declared policy, leaves fields out, and overriding `_fingerprint_value`
+  encodes a value type of the config's own.
 
 - **`StructuredConfig.merge_inputs(config, kwargs)`**, the one input a
   `StructuredConfigConsumer` makes of a configuration mapping and keyword
@@ -1860,20 +1884,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `from_dict(to_dict()) == cfg` depends on, and was given a hash over its
   fields as well, because it is a frozen dataclass with equality on. So
   `isinstance(cfg, collections.abc.Hashable)` answered True for every config,
-  and `hash(cfg)` raised `TypeError` for any that held a list or a mapping,
-  which most do. `StructuredConfig.__init_subclass__` now sets `__hash__` to
-  `None` on each subclass before its `@dataclass` runs, and the base declares
-  it too, so the check answers False across the family and `hash()` raises
-  whatever the fields hold. Equality is unchanged.
+  and `hash(cfg)` raised `TypeError` for any that held a list or a mapping.
+  `StructuredConfig.__init_subclass__` now declares each subclass unhashable
+  before its `@dataclass` runs, and the base is declared the same, so the
+  check answers False across the family and `hash()` raises whatever the
+  fields hold. Equality is unchanged.
 
-  A config whose fields happened to be hashable could be used as a dict key or
-  set member before, and can't now. In this package those are
-  `EventBusConfig` and its four backend configs, `PostgresLockConfig`,
-  `PackSpec` and `RateLimit`. Key by something the config names instead, such
-  as `json.dumps(cfg.to_json_dict(), sort_keys=True)`. A subclass that writes
-  `__hash__` in its body keeps it. One that writes `__eq__` without `__hash__`
-  is refused at class definition with `TypeError`, since the dataclass would
-  otherwise generate a field hash the new equality does not agree with.
+  - A config whose values were all hashable could be a dict key, a set member
+    or an `lru_cache` argument, and can't now. Key by `cfg.fingerprint()`
+    instead (see Added). In this package that covers `EventBusConfig` and its
+    four backend configs, `PostgresLockConfig`, `PackSpec`, `RateLimit` and
+    `RetryConfig`, each always or with its defaults.
+  - A config can no longer be a dataclass field default, since dataclasses
+    refuses a default whose type is unhashable. Write
+    `field(default_factory=...)`.
+  - `@dataclass(unsafe_hash=True)` on a config is refused by dataclasses,
+    because the declaration is already in the class. Write `__hash__` instead.
+  - A subclass that writes `__hash__` in its body keeps it and hands it to its
+    own subclasses. One that writes `__eq__` alone keeps it and stays
+    unhashable under `eq=False`, and is refused with `TypeError` at its first
+    construction under `eq=True`, where the decorator would pair that equality
+    with a hash over every field.
 
 - **`fields` must be a sequence of strings.** `EntitySourceIndexSource`
   refuses, with `ValidationError` naming the value given and carrying the

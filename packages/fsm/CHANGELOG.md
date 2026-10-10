@@ -97,8 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING: FSM configs are no longer hashable**, as no `StructuredConfig`
   now is (see `dataknobs-common`). `BulkheadConfig`, `CircuitBreakerConfig`,
-  `PoolConfig` and `StreamConfig` hashed cleanly before and can no longer be
-  dict keys or set members. Equality is unchanged.
+  `FallbackConfig`, `PoolConfig` and `StreamConfig` hashed before, with their
+  defaults or always, and can no longer be dict keys or set members. Key by
+  `fingerprint()` instead. A config can no longer be a dataclass field default either, since dataclasses refuses an unhashable default: write `field(default_factory=...)`. Equality is unchanged.
 
 - **BREAKING: a name a configuration writes is at least one character.** Every
   name in the document schema is refused when empty --- the FSM's, a network's,

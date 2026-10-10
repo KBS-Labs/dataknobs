@@ -257,12 +257,13 @@ and in the accepted-key list of the errors the policy itself produces.
 
 A config compares field by field, since that is what the round-trip property
 `type(cfg).from_dict(cfg.to_dict()) == cfg` relies on, and it is not hashable.
-`__init_subclass__` sets `__hash__` to `None` on every subclass before its
-`@dataclass` runs, so `isinstance(cfg, collections.abc.Hashable)` answers
-False and `hash(cfg)` raises `TypeError` whatever the fields hold:
+`__init_subclass__` declares every subclass unhashable before its `@dataclass`
+runs, so `isinstance(cfg, collections.abc.Hashable)` answers False and
+`hash(cfg)` raises `TypeError` whatever the fields hold:
 
 ```python
 from collections.abc import Hashable
+from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ServiceConfig(StructuredConfig):
@@ -275,14 +276,81 @@ isinstance(ServiceConfig(), Hashable)   # False
 
 Left to `@dataclass(frozen=True)`, each subclass would get a hash over its
 fields. The type would then claim to be hashable and fail at the first list
-or mapping, and most configs hold one. To key a cache or a set by a config,
-key it by something the config names, such as `cfg.to_json_dict()` serialized
-to a string.
+or mapping, and most configs hold one.
 
-A subclass that writes `__hash__` in its body keeps it, and should write a
-matching `__eq__`. One that writes `__eq__` alone is refused at class
-definition with a `TypeError`, because the dataclass would otherwise generate
-a field hash that the new equality does not agree with.
+Two consequences follow from a type being unhashable:
+
+- **It cannot key a dict, a set or an `lru_cache`.** Key by
+  [`fingerprint()`](#fingerprint) instead.
+- **It cannot be a dataclass field default**, since dataclasses refuses a
+  default whose type is unhashable. Write `field(default_factory=...)`:
+
+  ```python
+  @dataclass(frozen=True)
+  class ClientConfig(StructuredConfig):
+      service: ServiceConfig = field(default_factory=ServiceConfig)
+  ```
+
+A subclass decides otherwise in its body:
+
+| The body writes | Result |
+|---|---|
+| `__hash__` | Kept, and handed to the subclass's own subclasses. Write `__eq__` beside it, so the two agree. |
+| `__hash__ = object.__hash__`, under `eq=False` | Compared and hashed by identity. |
+| `__eq__` alone, under `eq=False` | Its own equality, still unhashable. |
+| `__eq__` alone, under the default `eq=True` | Refused with `TypeError` at the first construction: the decorator pairs that equality with a hash over every field, which it does not agree with. |
+
+`@dataclass(unsafe_hash=True)` is refused by dataclasses itself, because the
+declaration is already in the class. Write `__hash__` instead.
+
+### `fingerprint()`
+
+A stable key for a config: the SHA-256 of a canonical encoding of its class
+and fields, as 64 hex characters.
+
+```python
+_clients: dict[str, Client] = {}
+
+def client_for(cfg: ServiceConfig) -> Client:
+    key = cfg.fingerprint()
+    if key not in _clients:
+        _clients[key] = Client(cfg)
+    return _clients[key]
+```
+
+- **Equal configs share it**, set and mapping order included. Fields with
+  `compare=False` are left out, as equality leaves them out.
+- **Configs that differ do not**, including two classes holding the same
+  values and a key against its spelling as a string.
+- **It is stable across processes** for the same version of this package, so
+  it can key something that outlives one.
+- **A credential does not appear in it.** A digest of a guessable one can
+  still be brute-forced, so it is no place to publish one.
+
+Containers, nested configs, plain dataclasses, enum members, paths, dates,
+decimals and UUIDs are encoded by value, and types and module-level functions
+by import path. A value nothing identifies, such as a lambda, a bound method or
+a live client, is refused with `TypeError` naming the field, because two such
+values could share a key and differ.
+
+Two extension points. `_FINGERPRINT_EXCLUDE` leaves fields out: name only
+fields that do not decide what is built from the config, since two configs
+differing only there share a fingerprint. Overriding `_fingerprint_value`
+encodes a value type of the config's own:
+
+```python
+@dataclass(frozen=True)
+class GatewayConfig(StructuredConfig):
+    endpoint: Endpoint
+    on_token: Callable[[str], None] | None = None
+
+    _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset({"on_token"})
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        if isinstance(value, Endpoint):
+            return value.url
+        return super()._fingerprint_value(value, path)
+```
 
 ### `accepts(key)` (classmethod)
 

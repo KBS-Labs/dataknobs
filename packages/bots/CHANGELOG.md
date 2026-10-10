@@ -194,13 +194,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING: bot configs are no longer hashable**, as no `StructuredConfig`
-  now is (see `dataknobs-common`). Most raised at `hash()` already. Those that
-  hashed cleanly, and can no longer be dict keys or set members, are
-  `ReasoningConfig`, `SimpleReasoningConfig`, `NavigationConfig`,
-  `NavigationCommandConfig`, `GroundedRetrievalConfig`,
-  `GroundedSynthesisConfig`, `DraftMetadata` and `SkipDefaultEntry`.
-  `ConfigVersion` keeps its own hash, by version number. Equality is
-  unchanged.
+  now is (see `dataknobs-common`). Most raised at `hash()` already. These
+  hashed, always or with their defaults, and can no longer be dict keys or set
+  members: `ReasoningConfig`, `SimpleReasoningConfig`, `ReActReasoningConfig`,
+  `NavigationConfig`, `NavigationCommandConfig`, `IntentDetectionConfig`,
+  `GroundedRetrievalConfig`, `GroundedSynthesisConfig`,
+  `GroundedResultProcessingConfig`, `HistoryCompactionConfig`,
+  `DraftMetadata` and `SkipDefaultEntry`. Key by `fingerprint()` instead.
+  `ConfigVersion` keeps its own hash, by version number, and hands it to its
+  subclasses. A config can no longer be a dataclass field default either, since dataclasses refuses an unhashable default: write `field(default_factory=...)`. Equality is unchanged.
 
 - **A grounded `database` source builds its backend holding the declared
   `schema:`**, where it used to set the schema after connecting. The
