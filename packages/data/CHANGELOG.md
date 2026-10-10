@@ -1616,8 +1616,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError`, or with `AttributeError` once the connection was cleared. It
   now refuses every operation with the store's `RuntimeError` from the moment
   it starts, and closes the connection once the operations already running
-  on it are done, as async DuckDB's does. A transaction is not one operation:
-  closing in its body discards it, and its commit is refused by name.
+  on it are done, as async DuckDB's does. A `connect` while it waits opens
+  afresh once it is done. A transaction is not one operation: closing in its
+  body discards it, and its commit is refused by name.
 - **Async DuckDB refuses a write queued behind `close` by name.** `close`
   refused reads from its first line, but a write already waiting for the
   connection's lock went on to read the cleared connection and failed with

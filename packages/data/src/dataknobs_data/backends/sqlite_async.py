@@ -117,6 +117,10 @@ class AsyncSQLiteDatabase(
         self._running = 0
         self._idle = asyncio.Event()
         self._idle.set()
+        # One of connect and close at a time: a connect while close waits for
+        # the running operations would otherwise open a second connection,
+        # which close then takes for the one it waited on.
+        self._lifecycle = asyncio.Lock()
 
         # Serializes conditional (compare-and-set) writes so a concurrent pair
         # on one instance yields exactly one winner. aiosqlite queues each
@@ -129,10 +133,16 @@ class AsyncSQLiteDatabase(
         self._init_vector_state()
 
     async def connect(self) -> None:
-        """Connect to the SQLite database."""
-        if self._connected:
-            return
+        """Connect to the SQLite database.
 
+        A connect while :meth:`close` runs waits for it, then opens afresh.
+        """
+        async with self._lifecycle:
+            if not self._connected:
+                await self._open()
+
+    async def _open(self) -> None:
+        """Open the connection and make the table ready, under the lifecycle lock."""
         # Off the loop. A native table is in somebody else's file, opened
         # read-only, never made.
         directory = self._directory_to_make()
@@ -172,14 +182,16 @@ class AsyncSQLiteDatabase(
         Refuses every operation from the moment it starts, and closes the
         connection once the operations already running on it are done. A
         transaction is not one operation: closing in its body discards it, and
-        its commit is refused.
+        its commit is refused. Not to be called from inside an operation on
+        this store, which it would wait for.
         """
         was_connected, self._connected = self._connected, False
-        while self._running:
-            await self._idle.wait()
-        db, self.db = self.db, None
-        if db is not None:
-            await db.close()
+        async with self._lifecycle:
+            while self._running:
+                await self._idle.wait()
+            db, self.db = self.db, None
+            if db is not None:
+                await db.close()
         if was_connected:
             logger.info(f"Disconnected from async SQLite database: {self.db_path}")
 
@@ -228,16 +240,11 @@ class AsyncSQLiteDatabase(
         await self.db.executescript(self.table_manager.get_create_table_sql())
         await self.db.commit()
 
-    def _check_connection(self) -> None:
-        """Check if database is connected."""
-        self._require_conn()
-
     def _require_conn(self) -> aiosqlite.Connection:
-        """The connection, or the refusal :meth:`_check_connection` gives.
+        """The connection, or the store's refusal when it has none.
 
-        The same test, returning what it tested: a caller that holds the
-        result has the connection narrowed for the type checker, which a
-        check in another method cannot give it.
+        A caller that holds the result has the connection narrowed for the
+        type checker, which a check in another method cannot give it.
         """
         if not self._connected or self.db is None:
             raise RuntimeError("Database not connected. Call connect() first.")

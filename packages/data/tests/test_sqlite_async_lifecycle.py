@@ -125,6 +125,37 @@ async def test_close_waits_for_an_operation_it_starts_partway_through(
     assert await _stored(path) == stored
 
 
+async def test_a_connect_while_close_waits_opens_after_it(tmp_path: Path) -> None:
+    """Bug: ``close`` refused new operations before it waited for the running
+    ones, so a ``connect`` in that wait saw the store disconnected and opened
+    a second connection. ``close`` then closed that one, leaving the store
+    connected with no connection, and the first connection was never closed.
+    """
+    path = tmp_path / "records.db"
+    db = await _seeded(path, HeldPartway)
+    first = db.db
+    assert first is not None
+    db.hold = "_existing_ids"
+    running = asyncio.ensure_future(db.delete_batch(["a"]))
+    await asyncio.wait_for(db.started.wait(), timeout=10)
+    closing = asyncio.create_task(db.close())
+    await asyncio.sleep(0)
+    connecting = asyncio.create_task(db.connect())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    db.release.set()
+    await running
+    await closing
+    await connecting
+    try:
+        first_left_open = first._connection is not None
+        assert await db.count() == 0
+    finally:
+        await db.close()
+        await first.close()  # leaked, its thread would keep the process alive
+    assert not first_left_open, "close closes the connection it waited on"
+
+
 def _chain(exc: BaseException) -> list[BaseException]:
     seen: list[BaseException] = []
     current: BaseException | None = exc
