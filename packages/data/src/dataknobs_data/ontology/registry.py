@@ -67,6 +67,8 @@ from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 import dataknobs_data.entity_resolution  # noqa: F401
 from dataknobs_data.backend_selection import normalize_backend
 from dataknobs_data.backends import async_backends
+from dataknobs_data.backends.column_layout import NativeColumnLayout
+from dataknobs_data.backends.layout_backend import ColumnLayoutMixin
 from dataknobs_data.factory import async_database_factory
 from dataknobs_data.ontology.hierarchy import (
     COLUMN_AXIS_KIND,
@@ -1211,6 +1213,21 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     if projection.surface_forms is not None
                     else database
                 )
+        _refuse_a_column_the_handle_does_not_read(
+            database,
+            projection.entity_columns(),
+            binding=source_id,
+            table=projection.table,
+            named_by="the projection",
+        )
+        if projection.surface_forms is not None:
+            _refuse_a_column_the_handle_does_not_read(
+                forms_database,
+                projection.form_columns(),
+                binding=source_id,
+                table=projection.surface_forms.table,
+                named_by="the projection's surface forms",
+            )
         tables = (
             (projection.table,)
             if projection.surface_forms is None
@@ -1316,6 +1333,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 (axis.parent_key,),
                 binding.schema,
                 binding=binding.source_id,
+                named_by=f"taxonomy {taxonomy_id!r}",
+            )
+            _refuse_a_column_the_handle_does_not_read(
+                binding.database,
+                (axis.parent_key,),
+                binding=binding.source_id,
+                table=binding.projection.table,
                 named_by=f"taxonomy {taxonomy_id!r}",
             )
             bound[taxonomy_id] = ColumnHierarchy(
@@ -2511,6 +2535,49 @@ def _refuse_a_second_binding_over_one_store(
                 "handle": type(database).__name__,
             },
         )
+
+
+def _refuse_a_column_the_handle_does_not_read(
+    database: AsyncDatabase,
+    columns: Sequence[str],
+    *,
+    binding: str,
+    table: str,
+    named_by: str,
+) -> None:
+    """Refuse a column a handle reading its table through native columns does not declare.
+
+    :func:`~dataknobs_data.ontology.sources.validate_against_schema` checks a
+    projection against the binding's own ``schema:`` rows. A handle reading
+    ``layout: native`` selects only the columns its ``database:`` block
+    declares, which is a second list: a column in the rows and not in the
+    block would read as missing on every entity rather than as an error. So
+    once the handle is open, each column is checked against it too.
+
+    A handle reading the JSON layout, or one this package did not build, has
+    no declared columns to ask, and passes.
+    """
+    if not isinstance(database, ColumnLayoutMixin):
+        return
+    layout = database.layout
+    if not isinstance(layout, NativeColumnLayout):
+        return
+    declared = layout.columns
+    for column in columns:
+        root = column.split(".", 1)[0]
+        if root not in declared:
+            raise ValidationError(
+                f"binding {binding!r}: {named_by} names column {column!r} of table "
+                f"{table!r}, which its `layout: native` handle does not declare, so no "
+                f"read selects it. Declared: {sorted(declared)}. Declare it in the "
+                f"`database:` block's `schema:`",
+                context={
+                    "binding": binding,
+                    "table": table,
+                    "column": column,
+                    "declared": sorted(declared),
+                },
+            )
 
 
 def _refuse_a_native_block_for_a_second_table(

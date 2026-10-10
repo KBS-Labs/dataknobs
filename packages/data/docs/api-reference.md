@@ -722,6 +722,16 @@ The second is why passing a stream *into* something does not transfer the
 obligation: `db.stream_write(records)` stops consuming on a failed batch, and
 `records` stays yours.
 
+#### Paging through `search`
+
+A backend with no server-side cursor streams one `search` per page. The
+SQLite and DuckDB backends do, through `iter_search_pages` /
+`aiter_search_pages` (`dataknobs_data.streaming`), which take the backend's
+`search`, the query and the config. Each page is `stream_page(query,
+streamed, batch_size)`: the query's own sort and then the key, so a sort that
+ties still pages every row once, with the query's offset and limit honoured.
+The key is how the pages agree, not an order the stream promises.
+
 `StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
 it loads from a plain dict via `StreamConfig.from_dict({"batch_size":
 100})` and is immutable — build a modified copy with
@@ -1088,6 +1098,13 @@ db = factory.create(
 db.connect()
 ```
 
+Each connection registers a `REGEXP` function, so `Operator.REGEX` answers as
+`Filter.matches` does: an unanchored `re.search` over a string, and no match
+for any other value (`sqlite_regexp` and `register_regexp`, in
+`dataknobs_data.backends.sqlite_mixins`, for a connection of your own). A
+table in somebody else's file is read with `layout: native`; see
+[Native Column Layouts](#native-column-layouts).
+
 #### Which metrics a backend can actually serve
 
 Four metrics, six spellings: `inner_product` and `dot_product` name one
@@ -1172,6 +1189,8 @@ await db.connect()
 - Supports complex queries with aggregations
 - Both file-based and in-memory modes
 - Ideal for data analysis, reporting, and ETL
+- Reads a table in somebody else's file with `layout: native`, opened
+  `read_only`; see [Native Column Layouts](#native-column-layouts)
 
 ### PostgreSQL Backend
 
@@ -1213,8 +1232,9 @@ a `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout`, the
 default, is the table the SQL backends create. `NativeColumnLayout` reads a
 table with ordinary typed columns: only the declared columns, a scope ANDed
 into every read, every write refused, and every filter answered as
-`Filter.matches` answers it. The PostgreSQL backends take it by
-configuration (`layout: native`); SQLite and DuckDB do not yet. See
+`Filter.matches` answers it. The PostgreSQL, SQLite and DuckDB backends take
+it by configuration (`layout: native`); SQLite and DuckDB open the file
+read-only. See
 [the Query System](https://kbs-labs.github.io/dataknobs/packages/data/query/#tables-with-their-own-columns-native-layout).
 
 ```python
@@ -1243,6 +1263,8 @@ record = builder.record_from_row(row)
 | `SQL_TYPE_KEY` | `dataknobs_data` | `"sql_type"`, the field key naming one |
 | `NATIVE_FIELD_KEYS` | `dataknobs_data` | the field keys a native table's schema takes: `FIELD_KEYS` and `sql_type`, which every other door refuses |
 | `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
+| `ColumnLayoutConfig` | `dataknobs_data.backends.config` | the `layout:`, `id_column:` and `scope:` keys a SQL backend's configuration carries, and the create switches it resolves from the layout |
+| `ColumnLayoutMixin`, `NATIVE_REFUSED` | `dataknobs_data.backends.layout_backend` | what reading through a layout means for a backend: the one builder, every `NATIVE_REFUSED` operation refused under the native layout, no `CONDITIONAL_WRITE` |
 
 See [Field Types](https://kbs-labs.github.io/dataknobs/packages/data/field-types/#sql-types-for-tables-with-their-own-columns) for registering one.
 

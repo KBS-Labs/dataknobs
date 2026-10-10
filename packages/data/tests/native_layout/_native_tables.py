@@ -9,6 +9,7 @@ statements a builder renders and returns rows by column name.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import uuid
 from collections.abc import Callable, Iterator, Sequence
@@ -22,6 +23,7 @@ from dataknobs_common.testing import requires_postgres
 
 from dataknobs_data.backends.column_layout import ColumnLayout
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
+from dataknobs_data.backends.sqlite_mixins import register_regexp
 
 #: The engines, as ``pytest.param`` ids for a module-scoped ``engine`` fixture.
 ENGINES = [
@@ -69,11 +71,13 @@ class Engine:
 
 
 def _sqlite_value(value: Any) -> Any:
-    """SQLite has no uuid or time type: it stores their text."""
+    """SQLite has no uuid, time or array type: it stores their text, a list as JSON."""
     if isinstance(value, uuid.UUID):
         return str(value)
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, list):
+        return json.dumps(value)
     return value
 
 
@@ -85,6 +89,8 @@ def _insert(table: Table, qualified: str, placeholder: str) -> str:
 def _sqlite(tables: Sequence[Table]) -> Iterator[Engine]:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
+    # SQLite has no REGEXP function of its own; the backends register this one.
+    register_regexp(conn)
     for table in tables:
         conn.execute(table.ddl("sqlite", f'"{table.name}"'))
         conn.executemany(

@@ -7,16 +7,19 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from contextlib import closing
 from functools import cache
-from typing import Any
+from pathlib import Path
+from typing import Any, ClassVar
 
 import numpy as np
 
 from typing import TYPE_CHECKING
 from ..fields import VectorField
 from ..vector.types import DistanceMetric
+from .layout_backend import ColumnLayoutMixin
 
 if TYPE_CHECKING:
     from ..records import Record
@@ -37,6 +40,75 @@ def sqlite_max_parameters() -> int:
     """
     with closing(sqlite3.connect(":memory:")) as probe:
         return int(probe.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER))
+
+
+def sqlite_regexp(pattern: Any, value: Any) -> bool:
+    """SQLite's ``value REGEXP pattern``, answered as ``Filter.matches`` answers ``REGEX``.
+
+    SQLite parses the operator and calls a function named ``REGEXP`` with the
+    pattern first, but ships none: :func:`register_regexp` registers this one.
+    An unanchored :func:`re.search` over a string, and no match for a value
+    that is not one -- ``NULL``, a number, a blob.
+    """
+    if not isinstance(value, str):
+        return False
+    return re.search(pattern, value) is not None
+
+
+#: The name and arity SQLite calls ``x REGEXP y`` through.
+REGEXP_FUNCTION: tuple[str, int] = ("REGEXP", 2)
+
+
+def register_regexp(conn: sqlite3.Connection) -> None:
+    """Register :func:`sqlite_regexp` on ``conn``, so ``Operator.REGEX`` answers there."""
+    conn.create_function(*REGEXP_FUNCTION, sqlite_regexp, deterministic=True)
+
+
+class SQLiteLayoutMixin(ColumnLayoutMixin):
+    """What reading a table through a column layout means on SQLite, for both twins.
+
+    A native table is in somebody else's file, opened read-only through a
+    ``file:`` URI with ``mode=ro``: SQLite then writes nothing to it and
+    creates no file that is not there. It may be a view as well as a table.
+    """
+
+    _DIALECT: ClassVar[str] = "sqlite"
+    _PARAM_STYLE: ClassVar[str] = "qmark"
+    _LOCATION_KEYS: ClassVar[str] = "the table name and `path`"
+
+    db_path: str
+
+    def _connect_target(self) -> tuple[str, bool]:
+        """What the driver opens, and whether it is a URI.
+
+        Under the native layout, the file as a read-only URI. The path is made
+        absolute and quoted by :meth:`pathlib.Path.as_uri`, so a name holding
+        ``?`` or ``#`` is the file's name rather than the URI's query.
+        """
+        if not self.native:
+            return self.db_path, False
+        return f"{Path(self.db_path).absolute().as_uri()}?mode=ro", True
+
+    def _unopened_file_error(self, error: Exception) -> RuntimeError:
+        """The refusal for a file that cannot be opened read-only: most often, one not there."""
+        return RuntimeError(
+            f"Database file {self.db_path} cannot be opened read-only ({error}). A table "
+            f"read through `layout: native` is in a file somebody else made, and no file is "
+            f"created here: check `path`."
+        )
+
+    def _relation_exists_query(self) -> tuple[str, Any]:
+        """Under the native layout, a view is read in place as a table is.
+
+        The engine's lookup reads ``sqlite_master`` for tables only, which is
+        right for the table this package creates.
+        """
+        if not self.native:
+            return super()._relation_exists_query()
+        return (
+            "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+            (self.table_name,),
+        )
 
 
 class SQLiteVectorSupport:

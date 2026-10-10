@@ -25,13 +25,12 @@ from ..vector.mixins import SyncVectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncSQLiteDatabaseConfig
 from .sql_base import (
-    SQLQueryBuilder,
     SQLRecordSerializer,
     SQLTableManager,
     constraint_violation_error,
     is_duplicate_key_error,
 )
-from .sqlite_mixins import SQLiteVectorSupport
+from .sqlite_mixins import SQLiteLayoutMixin, SQLiteVectorSupport, register_regexp
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
@@ -46,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 class SyncSQLiteDatabase(
     StructuredConfigConsumer[SyncSQLiteDatabaseConfig],
+    SQLiteLayoutMixin,
     SyncDatabase,
     VectorConfigMixin,
     PythonVectorSearchMixin,  # Provides python_vector_search_sync
@@ -60,6 +60,10 @@ class SyncSQLiteDatabase(
     documented config key is a typed field on that dataclass, so
     ``self.config`` is the typed config (not a dict) and the
     ``from_config`` / factory paths share one construction route.
+
+    With ``layout: native`` it reads a table in somebody else's file through
+    the table's own columns, opening the file read-only (see
+    :class:`~dataknobs_data.backends.config.SQLiteDatabaseConfigBase`).
     """
 
     CONFIG_CLS: ClassVar[type[SyncSQLiteDatabaseConfig]] = SyncSQLiteDatabaseConfig
@@ -83,8 +87,11 @@ class SyncSQLiteDatabase(
         self.synchronous = cfg.synchronous
         self.auto_create_table = cfg.auto_create_table
 
-        self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
+        # The one query builder, made with the table's layout. It needs no
+        # connection, so a native configuration the layout refuses fails here.
+        self._setup_layout()
+        self._connect_to = self._connect_target()
 
         self.conn: sqlite3.Connection | None = None
         self._connected = False
@@ -94,24 +101,35 @@ class SyncSQLiteDatabase(
         if self._connected:
             return
 
-        # Create directory if needed for file-based database
-        if self.db_path != ":memory:":
+        # Create directory if needed for file-based database. A native table
+        # is in somebody else's file, which is opened read-only and never made.
+        if self.db_path != ":memory:" and not self.native:
             db_file = Path(self.db_path)
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Connect to database
-        self.conn = sqlite3.connect(
-            self.db_path, timeout=self.timeout, check_same_thread=self.check_same_thread
-        )
+        target, uri = self._connect_to
+        try:
+            self.conn = sqlite3.connect(
+                target, timeout=self.timeout, check_same_thread=self.check_same_thread, uri=uri
+            )
+        except sqlite3.OperationalError as e:
+            if self.native:
+                raise self._unopened_file_error(e) from e
+            raise
+        register_regexp(self.conn)
 
         # Enable row factory for dict-like access
         self.conn.row_factory = sqlite3.Row
 
-        # Configure SQLite for better performance
-        self._configure_sqlite()
-
-        # Create table if it doesn't exist
-        self._ensure_table()
+        try:
+            self._configure_sqlite()
+            # Create table if it doesn't exist
+            self._ensure_table()
+        except BaseException:
+            # Refused after opening, so close what was opened.
+            self.conn.close()
+            self.conn = None
+            raise
 
         self._connected = True
         logger.info(f"Connected to SQLite database: {self.db_path}")
@@ -161,7 +179,7 @@ class SyncSQLiteDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
+            exists_sql, params = self._relation_exists_query()
             cursor = self.conn.cursor()
             try:
                 cursor.execute(exists_sql, params)
@@ -170,11 +188,7 @@ class SyncSQLiteDatabase(
             finally:
                 cursor.close()
             if not exists:
-                raise RuntimeError(
-                    f"Table {self.table_name} does not exist and "
-                    "auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
+                raise self._missing_relation_error()
             return
 
         cursor = self.conn.cursor()
@@ -246,8 +260,7 @@ class SyncSQLiteDatabase(
             row = cursor.fetchone()
 
             if row:
-                # Use the standard SQL serializer
-                record = self.row_to_record(dict(row))
+                record = self.query_builder.record_from_row(dict(row))
                 # Use centralized method to prepare record
                 return self._prepare_record_from_storage(record, id)
             return None
@@ -395,15 +408,8 @@ class SyncSQLiteDatabase(
             cursor.execute(sql_query, params)
             rows = cursor.fetchall()
 
-            records = []
-            for row in rows:
-                row_dict = dict(row)
-                record = self.row_to_record(row_dict)
-
-                # Populate storage_id from database ID
-                record.storage_id = str(row_dict["id"])
-
-                records.append(record)
+            # The layout sets each record's storage id from the row's key.
+            records = [self.query_builder.record_from_row(dict(row)) for row in rows]
 
             # Apply field projection if specified
             if query.fields:
@@ -587,44 +593,23 @@ class SyncSQLiteDatabase(
         pass
 
     def _count_all(self) -> int:
-        """Count all records in the database."""
-        self._check_connection()
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}")
-            result = cursor.fetchone()
-            return result[0] if result else 0
-        finally:
-            cursor.close()
+        """Count all records in the database: every row of a native table's scope."""
+        return self.count()
 
     def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
-        """Stream records from database."""
-        from ..streaming import StreamConfig
+        """Stream the records a query matches, a page of ``search`` at a time.
 
-        config = config or StreamConfig()
-        query = query or Query()
+        Each page is its own statement, sorted by the query's sort and then by
+        the key (see :func:`~dataknobs_data.streaming.stream_page`), so no
+        statement stays open between records: an open SQLite read would lock
+        the file's owner out of writing it. The query's limit, offset and
+        projection hold; with no sort the stream promises no order.
+        """
+        from ..streaming import iter_search_pages
 
-        # Use the existing stream method's logic but yield individual records
-        offset = 0
-        while True:
-            # Fetch a batch
-            query_copy = query.copy()
-            query_copy.offset(offset).limit(config.batch_size)
-            batch = self.search(query_copy)
-
-            if not batch:
-                break
-
-            for record in batch:
-                yield record
-
-            offset += len(batch)
-
-            # If we got less than batch_size, we're done
-            if len(batch) < config.batch_size:
-                break
+        yield from iter_search_pages(self.search, query, config)
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None

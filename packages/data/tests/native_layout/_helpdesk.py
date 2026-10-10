@@ -1,26 +1,34 @@
-"""A helpdesk in a multi-tenant application, in real Postgres native columns.
+"""A helpdesk in a multi-tenant application, in real native columns, on every engine.
 
 The data is authored for these tests. Two tenants, ``acme`` and ``zenith``,
 share three tables: ``tickets``, ``orders``, and the ``categories`` tickets are
 filed under. One tenant's reader must see only its own rows, which is what a
 scope is for. Each table also holds a column the reader is never told about.
 
-:func:`helpdesk_schema` creates the tables in a scratch schema dropped
-afterwards. :class:`Store` opens the Postgres backend over one of them, from
-configuration alone, as either twin, and gives both twins one synchronous
-surface so a test is written once: the async twin runs on a loop of its own.
+:func:`helpdesk_schema` creates the tables in a scratch Postgres schema dropped
+afterwards, and :func:`helpdesk_files` writes them to a SQLite file and a DuckDB
+file. :class:`Helpdesk` is one engine's copy, and makes the ``database:`` block
+a reader of one table would write. :class:`Store` opens a backend over one
+table, from configuration alone, as either twin, and gives both twins one
+synchronous surface so a test is written once: the async twin runs on a loop of
+its own.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from _native_tables import Table, _postgres_schema
+import pytest
+from _native_tables import Table, _insert, _postgres_schema, _sqlite_value
+from dataknobs_common.testing import requires_postgres
 
 from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_data.factory import AsyncDatabaseFactory, DatabaseFactory
@@ -30,8 +38,11 @@ from dataknobs_data.streaming import StreamConfig
 
 ACME, ZENITH = "acme", "zenith"
 
-#: The two Postgres classes, as the ``twin`` parameter names them.
+#: The two classes of one engine, as the ``twin`` parameter names them.
 TWINS = ["async", "sync"]
+
+#: The engines holding the helpdesk, as a module-scoped ``helpdesk`` fixture's params.
+ENGINES = ["sqlite", "duckdb", pytest.param("postgres", marks=requires_postgres)]
 
 
 def _id(n: int) -> uuid.UUID:
@@ -46,19 +57,39 @@ T5, T6 = _id(0x2001), _id(0x2002)
 O1, O2 = _id(0x3001), _id(0x3002)
 
 
-def _pg(**columns: str) -> dict[str, dict[str, str]]:
-    return {name: {"postgres": sql_type} for name, sql_type in columns.items()}
+def _cols(**columns: str | tuple[str, str, str]) -> dict[str, dict[str, str]]:
+    """Each column's SQL type: one for every engine, or ``(postgres, duckdb, sqlite)``.
+
+    SQLite has no array or uuid type: it holds a list as its JSON text and a
+    uuid as its string.
+    """
+    return {
+        name: dict(
+            zip(
+                ("postgres", "duckdb", "sqlite"),
+                (t, t, t) if isinstance(t, str) else t,
+                strict=True,
+            )
+        )
+        for name, t in columns.items()
+    }
+
+
+TEXT = ("TEXT", "VARCHAR", "TEXT")
+UUID_KEY = ("UUID PRIMARY KEY", "UUID PRIMARY KEY", "TEXT PRIMARY KEY")
+UUID_REF = ("UUID", "UUID", "TEXT")
+TEXT_LIST = ("TEXT[] NOT NULL DEFAULT '{}'", "VARCHAR[] NOT NULL", "TEXT NOT NULL")
 
 
 CATEGORIES = Table(
     "categories",
-    _pg(
-        id="UUID PRIMARY KEY",
+    _cols(
+        id=UUID_KEY,
         tenant_id="TEXT NOT NULL",
         name="TEXT NOT NULL",
-        parent_id="UUID",
-        aliases="TEXT[] NOT NULL DEFAULT '{}'",
-        owner_email="TEXT",
+        parent_id=UUID_REF,
+        aliases=TEXT_LIST,
+        owner_email=TEXT,
     ),
     [
         (HARDWARE, ACME, "Hardware", None, ["hw"], "it@acme.example"),
@@ -72,17 +103,17 @@ CATEGORIES = Table(
 #: Priority 1 is the most urgent. ``internal_note`` is never declared.
 TICKETS = Table(
     "tickets",
-    _pg(
-        id="UUID PRIMARY KEY",
+    _cols(
+        id=UUID_KEY,
         tenant_id="TEXT NOT NULL",
         number="INTEGER NOT NULL",
         subject="TEXT NOT NULL",
         status="TEXT NOT NULL",
         priority="INTEGER NOT NULL",
         opened_at="TIMESTAMPTZ NOT NULL",
-        category_id="UUID",
-        tags="TEXT[] NOT NULL DEFAULT '{}'",
-        internal_note="TEXT",
+        category_id=UUID_REF,
+        tags=TEXT_LIST,
+        internal_note=TEXT,
     ),
     [
         (T1, ACME, 101, "Laptop will not boot", "open", 2,
@@ -102,8 +133,8 @@ TICKETS = Table(
 
 ORDERS = Table(
     "orders",
-    _pg(
-        order_id="UUID PRIMARY KEY",
+    _cols(
+        order_id=UUID_KEY,
         tenant_id="TEXT NOT NULL",
         placed_at="TIMESTAMPTZ NOT NULL",
         quantity="INTEGER NOT NULL",
@@ -148,11 +179,98 @@ CATEGORY_FIELDS: dict[str, object] = {
 ACME_ONLY = [{"field": "tenant_id", "operator": "=", "value": ACME}]
 
 
+HELPDESK = (CATEGORIES, TICKETS, ORDERS)
+
+
 @contextmanager
 def helpdesk_schema(params: dict[str, Any]) -> Iterator[str]:
     """A scratch schema holding the populated helpdesk tables, dropped afterwards."""
-    with _postgres_schema(params, [CATEGORIES, TICKETS, ORDERS]) as schema:
+    with _postgres_schema(params, HELPDESK) as schema:
         yield schema
+
+
+def write_sqlite_file(path: Path, tables: tuple[Table, ...] = HELPDESK) -> Path:
+    """A SQLite file holding ``tables``, written and closed: somebody else's file."""
+    conn = sqlite3.connect(path)
+    try:
+        for table in tables:
+            conn.execute(table.ddl("sqlite", f'"{table.name}"'))
+            conn.executemany(
+                _insert(table, f'"{table.name}"', "?"),
+                [[_sqlite_value(v) for v in row] for row in table.rows],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+def write_duckdb_file(path: Path, tables: tuple[Table, ...] = HELPDESK) -> Path:
+    """A DuckDB file holding ``tables``, written and closed: somebody else's file.
+
+    Closed because DuckDB refuses, within one process, a read-only connection
+    to a file a read-write connection holds open.
+    """
+    duckdb = pytest.importorskip("duckdb")
+    conn = duckdb.connect(str(path))
+    try:
+        for table in tables:
+            conn.execute(table.ddl("duckdb", f'"{table.name}"'))
+            conn.executemany(_insert(table, f'"{table.name}"', "?"), [list(r) for r in table.rows])
+    finally:
+        conn.close()
+    return path
+
+
+@dataclass(frozen=True)
+class Helpdesk:
+    """One engine's copy of the helpdesk, and the ``database:`` block over one of its tables."""
+
+    engine: str
+    #: Connection keys: a Postgres server and scratch schema, or a file's path.
+    location: dict[str, Any]
+
+    def config(self, table: str, fields: dict[str, object], **overrides: object) -> dict[str, Any]:
+        """The configuration a registry's ``database:`` block would carry for one table."""
+        config: dict[str, Any] = {
+            "backend": self.engine,
+            **self.location,
+            "table": table,
+            "layout": "native",
+            "id_column": "id",
+            "schema": {"fields": fields},
+            "scope": ACME_ONLY,
+        }
+        config.update(overrides)
+        return config
+
+
+@contextmanager
+def helpdesk_on(request: pytest.FixtureRequest, engine: str) -> Iterator[Helpdesk]:
+    """The helpdesk on ``engine``: a scratch Postgres schema, or files in a fresh directory."""
+    if engine == "postgres":
+        request.getfixturevalue("ensure_postgres_ready")
+        params = request.getfixturevalue("postgres_connection_params")
+        with helpdesk_schema(params) as schema:
+            yield Helpdesk(engine, _postgres_location(params, schema))
+        return
+    directory = request.getfixturevalue("tmp_path_factory").mktemp(f"helpdesk-{engine}")
+    if engine == "sqlite":
+        path = write_sqlite_file(directory / "helpdesk.db")
+    else:
+        path = write_duckdb_file(directory / "helpdesk.duckdb")
+    yield Helpdesk(engine, {"path": str(path)})
+
+
+def _postgres_location(params: dict[str, Any], pg_schema: str) -> dict[str, Any]:
+    return {
+        "host": params["host"],
+        "port": params["port"],
+        "database": params["database"],
+        "user": params["user"],
+        "password": params["password"],
+        "schema_name": pg_schema,
+    }
 
 
 def native_config(
@@ -163,26 +281,13 @@ def native_config(
     **overrides: object,
 ) -> dict[str, Any]:
     """The configuration a registry's ``database:`` block would carry for one table."""
-    config: dict[str, Any] = {
-        "backend": "postgres",
-        "host": params["host"],
-        "port": params["port"],
-        "database": params["database"],
-        "user": params["user"],
-        "password": params["password"],
-        "table": table,
-        "schema_name": pg_schema,
-        "layout": "native",
-        "id_column": "id",
-        "schema": {"fields": fields},
-        "scope": ACME_ONLY,
-    }
-    config.update(overrides)
-    return config
+    return Helpdesk("postgres", _postgres_location(params, pg_schema)).config(
+        table, fields, **overrides
+    )
 
 
 class Store:
-    """One Postgres twin over one table, behind one synchronous surface.
+    """One twin over one table, behind one synchronous surface.
 
     The async twin runs on a loop owned by this object, so a test reads the
     same either way and neither twin's calls block a loop that anything else

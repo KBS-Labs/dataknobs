@@ -1,6 +1,7 @@
-"""A Postgres backend reading a native table refuses every write, by name, before any I/O.
+"""A backend reading a native table refuses every write, by name, before any I/O.
 
-The census below classifies every public method of both twins as a read or a
+The census below classifies every public method of every backend that reads a
+native table -- both twins of Postgres, SQLite and DuckDB -- as a read or a
 write. A write is refused before a connection is touched: the backends here
 are never connected, so a write that reached the database would fail on the
 missing connection instead, and the assertion on the message tells the two
@@ -16,12 +17,25 @@ from typing import Any
 import pytest
 
 from dataknobs_common.exceptions import OperationError
+from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase, SyncDuckDBDatabase
+from dataknobs_data.backends.layout_backend import NATIVE_REFUSED
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase, SyncPostgresDatabase
-from dataknobs_data.backends.postgres_mixins import NATIVE_REFUSED
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 
-TWINS = [AsyncPostgresDatabase, SyncPostgresDatabase]
+TWINS = [
+    AsyncPostgresDatabase,
+    SyncPostgresDatabase,
+    AsyncSQLiteDatabase,
+    SyncSQLiteDatabase,
+    AsyncDuckDBDatabase,
+    SyncDuckDBDatabase,
+]
+
+#: The backends kept in a file, which a native store must be given.
+FILE_BACKED = (AsyncSQLiteDatabase, SyncSQLiteDatabase, AsyncDuckDBDatabase, SyncDuckDBDatabase)
 
 #: What a native table answers: reads, and methods that touch no rows.
 ANSWERED = frozenset(
@@ -40,6 +54,10 @@ ANSWERED = frozenset(
         "get_create_table_sql", "get_table_exists_sql", "get_vector_extraction_sql",
         "handle_connection_error", "handle_query_error", "log_operation",
         "json_to_record", "record_to_json", "record_to_row", "row_to_record",
+        # The bodies ``vector_search`` runs once the gate permits it. Called
+        # directly, they read through ``search``, which the scope holds, and
+        # score a vector field no declared column carries: nothing.
+        "python_vector_search_async", "python_vector_search_sync",
     }
 )  # fmt: skip
 
@@ -49,6 +67,13 @@ CONFIG = {
     "id_column": "id",
     "schema": {"fields": {"id": "string", "status": "string"}},
 }
+
+
+def native(cls: type) -> Any:
+    """``cls`` over a native table, never connected: a file path is named, never opened."""
+    if cls in FILE_BACKED:
+        return cls({**CONFIG, "path": "never-opened.db"})
+    return cls(CONFIG)
 
 
 def _public(cls: type) -> set[str]:
@@ -65,6 +90,13 @@ def test_every_public_method_is_a_read_or_a_refused_write(cls: type) -> None:
     unclassified = public - ANSWERED - NATIVE_REFUSED
     assert not unclassified, f"classify as answered or refused: {sorted(unclassified)}"
     assert not ANSWERED & NATIVE_REFUSED
+
+
+def test_every_refused_name_is_a_method_some_backend_has() -> None:
+    """A name refused that no backend defines is stale. DuckDB has no vector surface,
+    so the six are asked together.
+    """
+    public = set().union(*(_public(cls) for cls in TWINS))
     assert public | {"begin_transaction", "transaction"} >= NATIVE_REFUSED
 
 
@@ -103,13 +135,15 @@ async def _enter(manager: Any) -> None:
 
 @pytest.mark.parametrize("cls", TWINS, ids=lambda c: c.__name__)
 def test_every_write_is_refused_before_any_io(cls: type) -> None:
-    db = cls(CONFIG)
+    db = native(cls)
     for name in sorted(NATIVE_REFUSED & _public(cls)):
         with pytest.raises(OperationError, match=rf"{name}.*'tickets'.*read-only"):
             _call(getattr(db, name))
 
 
-@pytest.mark.parametrize("cls", TWINS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize(
+    "cls", [c for c in TWINS if hasattr(c, "bulk_embed_and_store")], ids=lambda c: c.__name__
+)
 def test_bulk_embedding_never_reports_a_record_stored(cls: type) -> None:
     """Refused before the caller's embedding function is spent on records nothing may store."""
     stored: list[Any] = []
@@ -119,7 +153,7 @@ def test_bulk_embedding_never_reports_a_record_stored(cls: type) -> None:
         embedded.append(texts)
         return [[1.0] for _ in texts]
 
-    db = cls(CONFIG)
+    db = native(cls)
     with pytest.raises(OperationError, match=r"bulk_embed_and_store.*read-only"):
         result = db.bulk_embed_and_store(
             [Record({"id": "a", "status": "open"})],
@@ -157,9 +191,11 @@ def test_the_json_layout_refuses_nothing(cls: type) -> None:
     same calls, refused, so the sweep can tell the two apart.
     """
     names = sorted(NATIVE_REFUSED & _public(cls))
-    assert len(names) >= 15, "the sweep must reach the gated surface"
-    native, json_layout = cls(CONFIG), cls({"table": "records"})
-    assert all(_refused_read_only(native, name) for name in names)
+    # The sync DuckDB twin has the fewest: its ten writes, with no vector
+    # surface and no transaction.
+    assert len(names) >= 10, "the sweep must reach the gated surface"
+    native_db, json_layout = native(cls), cls({"table": "records"})
+    assert all(_refused_read_only(native_db, name) for name in names)
     refused = [name for name in names if _refused_read_only(json_layout, name)]
     assert refused == []
 
@@ -172,7 +208,7 @@ def test_a_changed_schema_rebuilds_the_layout(cls: type) -> None:
     from dataknobs_data.schema import DatabaseSchema, FieldSchema
     from dataknobs_data.query import Filter, Operator
 
-    db = cls(CONFIG)
+    db = native(cls)
     with pytest.raises(ValidationError, match="no declared column"):
         db.query_builder.build_search_query(Query(filters=[Filter("priority", Operator.EQ, 1)]))
 

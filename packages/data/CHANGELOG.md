@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SQLite and DuckDB resolve `auto_create_table` from the layout**, as
+  Postgres does: left out or `null`, it is on under the JSON layout and off
+  under `layout: native`. DuckDB's `read_only` resolves the same way, off and
+  on. Under the JSON layout nothing changes.
 - **Postgres reads go through the query builder.** `read`, `exists`, `count`
   and `stream_read` run the builder's statements on both twins. `count` with a
   query is one `COUNT(*)` statement rather than a search whose rows are
@@ -1011,21 +1015,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The PostgreSQL backends read a table they do not own** (`layout: native`,
-  `id_column:`, `scope:`, on both `AsyncPostgresDatabase` and
-  `SyncPostgresDatabase`). The table is read through `NativeColumnLayout`: only
-  its declared columns, a scope in every read (`search`, `read`, `exists`,
-  `count`, `get_version`, `stream_read`), and every filter answered as
-  `Filter.matches` answers it. Every method that writes, creates or drops
-  raises `OperationError` before it touches a connection, `connect()` runs no
-  DDL, and `auto_create_table`, `ensure_database` or `vector_enabled` set true
-  is refused. Left out or `null`, each is off, whether the config is read from
-  a mapping or built as a `PostgresDatabaseConfig`. A refused configuration
-  fails at construction. The table may be any relation a `SELECT` reads (a
-  table, a view, a materialized view), and `connect()` refuses one it cannot
-  find by name, saying it is not created here, and a role without `USAGE` on
-  the schema, naming that grant. The keys work in any configuration that
-  builds a database, an ontology binding's `database:` block included.
+- **The PostgreSQL, SQLite and DuckDB backends read a table they do not
+  own** (`layout: native`, `id_column:`, `scope:`, on both twins of each). The
+  table is read through `NativeColumnLayout`: only its declared columns, a
+  scope in every read (`search`, `read`, `exists`, `count`, `get_version`,
+  `stream_read`), and every filter answered as `Filter.matches` answers it.
+  Every method that writes, creates or drops raises `OperationError` before it
+  touches a connection, `connect()` runs no DDL, and each switch that would
+  create or add something -- `auto_create_table`, Postgres's
+  `ensure_database`, `vector_enabled` -- is refused set true. Left out or
+  `null`, each is off, whether the config is read from a mapping or built as
+  a dataclass. A refused configuration fails at construction. The keys work
+  in any configuration that builds a database, an ontology binding's and a
+  grounded `database` source's included.
+  - On PostgreSQL the table may be any relation a `SELECT` reads (a table, a
+    view, a materialized view), and `connect()` refuses one it cannot find by
+    name, saying it is not created here, and a role without `USAGE` on the
+    schema, naming that grant.
+  - On SQLite and DuckDB the table is in somebody else's file, opened
+    read-only by the driver (`mode=ro`; DuckDB's `read_only`, on by default
+    under `layout: native`, where `read_only: false` is refused). No
+    directory, file, table or journal mode is made, a file or table that is
+    not there is refused naming `path`, and a view is read in place. `path:
+    ":memory:"` and SQLite's `journal_mode` are refused.
+- **`ColumnLayoutConfig`** (`dataknobs_data.backends.config`) carries the
+  three keys and resolves a backend's create switches from the layout, and
+  **`ColumnLayoutMixin`** (`dataknobs_data.backends.layout_backend`) is what
+  reading through a layout means for a backend: the one builder, the
+  `NATIVE_REFUSED` operations refused, no `CONDITIONAL_WRITE`, and a schema
+  set afterwards rebuilding the layout. The PostgreSQL, SQLite and DuckDB
+  backends are built on both.
+- **`stream_page`, `iter_search_pages` and `aiter_search_pages`**
+  (`dataknobs_data.streaming`) stream what `search(query)` returns one page
+  at a time, for a backend with no server-side cursor.
+- **`sqlite_regexp` and `register_regexp`**
+  (`dataknobs_data.backends.sqlite_mixins`): the `REGEXP` function both
+  SQLite backends register on every connection.
 - **A Postgres `schema:` from configuration may be the declared fields.** A
   mapping or a list of field rows is read as on every other backend (with
   `sql_type` under `layout: native`); a string is still the SQL namespace.
@@ -1038,14 +1063,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every body of a write, of what creates or drops a vector index, and of the
   vector search surface (`GATED_OPERATIONS`, in `dataknobs_data.operation_gate`)
   first calls `_refuse_operation(operation)`, which permits everything by
-  default. `OperationGateMixin.__init_subclass__` installs the call on each
+  default. `add_vectors` is a write and is gated too.
+  `OperationGateMixin.__init_subclass__` installs the call on each
   such method a class defines -- in the database bases, the vector and
   bulk-embed mixins, every backend, and a consumer's subclass -- so an
   override refuses before a row is read and before `bulk_embed_and_store`
   calls the embedding function, and no backend opts in by hand. A gated
   method defined as an async generator is refused with a `TypeError` when its
-  class is defined. The PostgreSQL backends refuse through it under
-  `layout: native`.
+  class is defined. The PostgreSQL, SQLite and DuckDB backends refuse through
+  it under `layout: native`.
 
 - **`SQLQueryBuilder` reads a table through a column layout, and a table with
   ordinary typed columns is one.** A new `layout=` argument takes a
@@ -1078,8 +1104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serves the read. A time column sorts by the time its filters read it as,
   so SQLite orders a zoned value by its instant rather than its text. The new
   `record_from_row` turns a row a builder selected into a record by its
-  layout, each value in its declared type's Python type on every engine. No
-  backend takes the native layout yet.
+  layout, each value in its declared type's Python type on every engine.
 - **SQL types a column can declare where `FieldType` names none.** A schema
   field's `sql_type:` (or `metadata.sql_type`, `SQL_TYPE_KEY`) names an entry
   of `sql_types`, an open `Registry[SqlType]`. The `sql_type:` key is read
@@ -1553,6 +1578,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SQLite and DuckDB `stream_read` returns what `search` would.** Each page
+  set its own `LIMIT` and `OFFSET` over the query's, so a stream asked for
+  five rows returned all of them and the rows an offset skips were streamed
+  anyway. The pages had no order to agree on, so a row could be read twice
+  or never at a page boundary; each page now sorts by the query's sort and
+  then by the key. No statement is held open between pages.
+- **`Operator.REGEX` answers on SQLite** as `Filter.matches` does. Both SQLite
+  backends raised `no such function: REGEXP`; they now register one on every
+  connection.
+- **`count()` with no query is one statement through the query builder on
+  SQLite and DuckDB**, rather than a hand-written `COUNT(*)`.
+- **A refused SQLite or DuckDB connect closes what it opened.** A `connect()`
+  refused after the file was open -- a table that is not there, a file that
+  cannot be written -- left the connection open. On the async SQLite backend
+  its worker thread kept the process from exiting.
+- **An ontology binding over a native table refuses a column its block does
+  not declare.** A projection column, or a column taxonomy's `parent_key`,
+  listed in the binding's `schema:` rows but not in the native `database:`
+  block's read as missing on every entity, since a native read selects only
+  the declared columns. It is refused when the ontology loads, naming the
+  binding and the column.
 - **A Postgres config holding declared fields reads back from its own
   `to_dict()`.** It wrote the schema as a mapping, which `from_dict` took for
   the SQL namespace and refused with `ConfigurationError: Postgres 'schema'

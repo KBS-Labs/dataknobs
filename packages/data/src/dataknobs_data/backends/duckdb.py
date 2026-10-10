@@ -26,6 +26,7 @@ from ..exceptions import DuplicateRecordError
 from ..query import Query
 from ..query_logic import ComplexQuery
 from .config import AsyncDuckDBDatabaseConfig, SyncDuckDBDatabaseConfig
+from .layout_backend import ColumnLayoutMixin
 from .sql_base import (
     SQLQueryBuilder,
     SQLRecordSerializer,
@@ -55,8 +56,66 @@ def _existing_ids(
     return {row[0] for row in conn.execute(query, params).fetchall()}
 
 
+class DuckDBLayoutMixin(ColumnLayoutMixin):
+    """What reading a table through a column layout means on DuckDB, for both twins.
+
+    A native table is in somebody else's file, which the configuration opens
+    ``read_only``: DuckDB then writes nothing to it and creates no file that is
+    not there. DuckDB's table lookup lists views, so one is read in place.
+    """
+
+    _DIALECT: ClassVar[str] = "duckdb"
+    _PARAM_STYLE: ClassVar[str] = "qmark"
+    _LOCATION_KEYS: ClassVar[str] = "the table name and `path`"
+
+    db_path: str
+    read_only: bool
+    auto_create_table: bool
+
+    def _unopened_file_error(self, error: Exception) -> RuntimeError:
+        """The refusal for a file that cannot be opened read-only: most often, one not there."""
+        return RuntimeError(
+            f"Database file {self.db_path} cannot be opened read-only ({error}). A table "
+            f"read through `layout: native` is in a file somebody else made, and no file is "
+            f"created here: check `path`. DuckDB also refuses a read-only connection to a "
+            f"file another connection holds open for writing."
+        )
+
+    def _open(self) -> duckdb.DuckDBPyConnection:
+        """Open the file as configured; refuse by name a native table's that will not open."""
+        try:
+            return duckdb.connect(self.db_path, read_only=self.read_only)
+        except (duckdb.IOException, duckdb.ConnectionException) as e:
+            if self.native:
+                raise self._unopened_file_error(e) from e
+            raise
+
+    def _check_relation(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """Ensure the table is there, or that it may be created.
+
+        Under ``read_only`` with the JSON layout the check is skipped: no DDL
+        is meaningful in read-only mode. A native table is always read-only,
+        and is always checked, so a table that is not there is named on connect.
+        """
+        if self.read_only and not self.native:
+            if not self.auto_create_table:
+                logger.warning(
+                    "auto_create_table=False has no effect when read_only=True — "
+                    "the table existence check is skipped in read-only mode."
+                )
+            return
+        if not self.auto_create_table:
+            exists_sql, params = self._relation_exists_query()
+            row = conn.execute(exists_sql, list(params)).fetchone()
+            if not (row and row[0]):
+                raise self._missing_relation_error()
+            return
+        conn.execute(self.table_manager.get_create_table_sql())
+
+
 class AsyncDuckDBDatabase(
     StructuredConfigConsumer[AsyncDuckDBDatabaseConfig],
+    DuckDBLayoutMixin,
     AsyncDatabase,
 ):
     """Asynchronous DuckDB database backend for analytical workloads.
@@ -108,14 +167,11 @@ class AsyncDuckDBDatabase(
         # Thread pool for async operations (DuckDB has no native async support)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
 
-        # Reuse SQL infrastructure
-        self.query_builder = SQLQueryBuilder(
-            self.table_name,
-            dialect="duckdb",
-            param_style="qmark",  # DuckDB uses ? placeholders
-        )
         self.serializer = SQLRecordSerializer()
         self.table_manager = SQLTableManager(self.table_name, dialect="duckdb")
+        # The one query builder, made with the table's layout. It needs no
+        # connection, so a native configuration the layout refuses fails here.
+        self._setup_layout()
 
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
@@ -126,8 +182,9 @@ class AsyncDuckDBDatabase(
         if self._connected:
             return
 
-        # Create directory if needed for file-based database (off the loop).
-        if self.db_path != ":memory:":
+        # Create directory if needed for file-based database (off the loop). A
+        # native table is in somebody else's file, opened read-only, never made.
+        if self.db_path != ":memory:" and not self.native:
             db_file = Path(self.db_path)
             await asyncio.to_thread(db_file.parent.mkdir, parents=True, exist_ok=True)
 
@@ -135,15 +192,25 @@ class AsyncDuckDBDatabase(
         loop = asyncio.get_event_loop()
         self.conn = await loop.run_in_executor(self.executor, self._connect_sync)
 
-        # Create table if it doesn't exist
-        await self._ensure_table()
+        try:
+            # Create table if it doesn't exist
+            await self._ensure_table()
+        except BaseException:
+            # Refused after opening -- a native table that is not there -- so
+            # release the file and the pool's thread, and leave a fresh pool
+            # (which starts no thread until used) for a later connect.
+            await loop.run_in_executor(self.executor, self.conn.close)
+            self.conn = None
+            self.executor.shutdown(wait=True)
+            self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+            raise
 
         self._connected = True
         logger.info(f"Connected to async DuckDB database: {self.db_path}")
 
     def _connect_sync(self) -> duckdb.DuckDBPyConnection:
         """Synchronous connection helper."""
-        return duckdb.connect(self.db_path, read_only=self.read_only)
+        return self._open()
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -170,35 +237,17 @@ class AsyncDuckDBDatabase(
 
         When ``auto_create_table=True`` (default), creates the table. When
         ``False``, verifies it exists and raises ``RuntimeError`` if missing.
-        ``read_only=True`` skips this entirely — no DDL is meaningful in
-        read-only mode, and the fail-fast existence check is also skipped.
-        If you rely on ``auto_create_table=False`` to detect a missing table at
-        startup, do not combine it with ``read_only=True``; the check will not
-        run and no error will be raised.
+        ``read_only=True`` skips this entirely under the JSON layout — no DDL
+        is meaningful in read-only mode, and the fail-fast existence check is
+        also skipped. If you rely on ``auto_create_table=False`` to detect a
+        missing table at startup, do not combine it with ``read_only=True``;
+        the check will not run and no error will be raised. A native table is
+        read-only and is always checked.
         """
-        if self.read_only:
-            if not self.auto_create_table:
-                logger.warning(
-                    "auto_create_table=False has no effect when read_only=True — "
-                    "the table existence check is skipped in read-only mode."
-                )
-            return
-
+        if self.conn is None:
+            raise RuntimeError("Database not connected. Call connect() first.")
         with self._lock:
-            if not self.auto_create_table:
-                exists_sql, params = self.table_manager.get_table_exists_sql()
-                row = self.conn.execute(exists_sql, list(params)).fetchone()
-                exists = bool(row[0]) if row else False
-                if not exists:
-                    raise RuntimeError(
-                        f"Table {self.table_name} does not exist and "
-                        "auto_create_table is disabled. Run your migrations "
-                        "before starting the application."
-                    )
-                return
-
-            create_sql = self.table_manager.get_create_table_sql()
-            self.conn.execute(create_sql)
+            self._check_relation(self.conn)
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
@@ -272,7 +321,7 @@ class AsyncDuckDBDatabase(
                 # Convert tuple result to dict
                 columns = self.conn.description
                 row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
-                return SQLQueryBuilder.row_to_record(row_dict)
+                return self.query_builder.record_from_row(row_dict)
         return None
 
     async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
@@ -324,7 +373,7 @@ class AsyncDuckDBDatabase(
                     return False
                 columns = self.conn.description
                 row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
-                current = SQLQueryBuilder.row_to_record(row_dict)
+                current = self.query_builder.record_from_row(row_dict)
                 enforce_content_version(id, expected_version, current)
                 self.conn.execute(query, params)
                 return True
@@ -383,7 +432,7 @@ class AsyncDuckDBDatabase(
                     return False
                 columns = self.conn.description
                 row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
-                current = SQLQueryBuilder.row_to_record(row_dict)
+                current = self.query_builder.record_from_row(row_dict)
                 enforce_content_version(id, expected_version, current)
                 self.conn.execute(query, params)
                 return True
@@ -449,7 +498,7 @@ class AsyncDuckDBDatabase(
         for result in results:
             # Convert tuple result to dict
             row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
-            record = SQLQueryBuilder.row_to_record(row_dict)
+            record = self.query_builder.record_from_row(row_dict)
             records.append(record)
 
         # Apply field projection if specified
@@ -763,56 +812,25 @@ class AsyncDuckDBDatabase(
         pass
 
     async def _count_all(self) -> int:
-        """Count all records in the database."""
-        self._check_connection()
-
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.executor, self._count_all_sync)
-
-    def _count_all_sync(self) -> int:
-        """Synchronous count all implementation."""
-        with self._lock:
-            result = self.conn.execute(
-                f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}"
-            ).fetchone()
-        return result[0] if result else 0
+        """Count all records in the database: every row of a native table's scope."""
+        return await self.count()
 
     async def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
-        """Stream records from database.
+        """Stream the records a query matches, a page of ``search`` at a time.
 
-        Args:
-            query: Optional query specification
-            config: Stream configuration
-
-        Yields:
-            Records one at a time
+        Each page is its own statement, sorted by the query's sort and then by
+        the key (see :func:`~dataknobs_data.streaming.stream_page`), and runs
+        under the connection lock as every statement here does: a DuckDB
+        result left open between records is cut short, with no error, by the
+        next statement on its connection. The query's limit, offset and
+        projection hold; with no sort the stream promises no order.
         """
-        from ..streaming import StreamConfig
+        from ..streaming import aiter_search_pages
 
-        config = config or StreamConfig()
-        query = query or Query()
-
-        # Use the existing stream method's logic but yield individual records
-        offset = 0
-        while True:
-            # Fetch a batch
-            query_copy = query.copy()
-            query_copy.offset(offset).limit(config.batch_size)
-            batch = await self.search(query_copy)
-
-            if not batch:
-                break
-
-            for record in batch:
-                yield record
-
-            offset += len(batch)
-
-            # If we got less than batch_size, we're done
-            if len(batch) < config.batch_size:
-                break
+        async for record in aiter_search_pages(self.search, query, config):
+            yield record
 
     async def stream_write(
         self, records: AsyncIterator[Record], config: StreamConfig | None = None
@@ -858,6 +876,7 @@ class AsyncDuckDBDatabase(
 
 class SyncDuckDBDatabase(
     StructuredConfigConsumer[SyncDuckDBDatabaseConfig],
+    DuckDBLayoutMixin,
     SyncDatabase,
 ):
     """Synchronous DuckDB database backend for analytical workloads.
@@ -904,10 +923,11 @@ class SyncDuckDBDatabase(
         self.read_only = cfg.read_only
         self.auto_create_table = cfg.auto_create_table
 
-        # Reuse SQL infrastructure
-        self.query_builder = SQLQueryBuilder(self.table_name, dialect="duckdb", param_style="qmark")
         self.serializer = SQLRecordSerializer()
         self.table_manager = SQLTableManager(self.table_name, dialect="duckdb")
+        # The one query builder, made with the table's layout. It needs no
+        # connection, so a native configuration the layout refuses fails here.
+        self._setup_layout()
 
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
@@ -917,16 +937,22 @@ class SyncDuckDBDatabase(
         if self._connected:
             return
 
-        # Create directory if needed for file-based database
-        if self.db_path != ":memory:":
+        # Create directory if needed for file-based database. A native table
+        # is in somebody else's file, which is opened read-only and never made.
+        if self.db_path != ":memory:" and not self.native:
             db_file = Path(self.db_path)
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Connect to database
-        self.conn = duckdb.connect(self.db_path, read_only=self.read_only)
+        self.conn = self._open()
 
-        # Create table if it doesn't exist
-        self._ensure_table()
+        try:
+            # Create table if it doesn't exist
+            self._ensure_table()
+        except BaseException:
+            # Refused after opening, so release the file.
+            self.conn.close()
+            self.conn = None
+            raise
 
         self._connected = True
         logger.info(f"Connected to sync DuckDB database: {self.db_path}")
@@ -944,34 +970,13 @@ class SyncDuckDBDatabase(
 
         When ``auto_create_table=True`` (default), creates the table. When
         ``False``, verifies it exists and raises ``RuntimeError`` if missing.
-        ``read_only=True`` skips this entirely — no DDL is meaningful in
-        read-only mode.
+        ``read_only=True`` skips this entirely under the JSON layout — no DDL
+        is meaningful in read-only mode. A native table is read-only and is
+        always checked.
         """
         if not self.conn:
             raise RuntimeError("Database not connected. Call connect() first.")
-
-        if self.read_only:
-            if not self.auto_create_table:
-                logger.warning(
-                    "auto_create_table=False has no effect when read_only=True — "
-                    "the table existence check is skipped in read-only mode."
-                )
-            return
-
-        if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
-            row = self.conn.execute(exists_sql, list(params)).fetchone()
-            exists = bool(row[0]) if row else False
-            if not exists:
-                raise RuntimeError(
-                    f"Table {self.table_name} does not exist and "
-                    "auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
-            return
-
-        create_sql = self.table_manager.get_create_table_sql()
-        self.conn.execute(create_sql)
+        self._check_relation(self.conn)
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
@@ -1029,7 +1034,7 @@ class SyncDuckDBDatabase(
         if result:
             columns = self.conn.description
             row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
-            return SQLQueryBuilder.row_to_record(row_dict)
+            return self.query_builder.record_from_row(row_dict)
         return None
 
     def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
@@ -1155,7 +1160,7 @@ class SyncDuckDBDatabase(
         records = []
         for result in results:
             row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
-            record = SQLQueryBuilder.row_to_record(row_dict)
+            record = self.query_builder.record_from_row(row_dict)
             records.append(record)
 
         # Apply field projection if specified
@@ -1327,47 +1332,23 @@ class SyncDuckDBDatabase(
         pass
 
     def _count_all(self) -> int:
-        """Count all records in the database."""
-        self._check_connection()
-
-        result = self.conn.execute(
-            f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}"
-        ).fetchone()
-        return result[0] if result else 0
+        """Count all records in the database: every row of a native table's scope."""
+        return self.count()
 
     def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
-        """Stream records from database.
+        """Stream the records a query matches, a page of ``search`` at a time.
 
-        Args:
-            query: Optional query specification
-            config: Stream configuration
-
-        Yields:
-            Records one at a time
+        Each page is its own statement, sorted by the query's sort and then by
+        the key (see :func:`~dataknobs_data.streaming.stream_page`): a DuckDB
+        result left open between records is cut short, with no error, by the
+        next statement on its connection. The query's limit, offset and
+        projection hold; with no sort the stream promises no order.
         """
-        from ..streaming import StreamConfig
+        from ..streaming import iter_search_pages
 
-        config = config or StreamConfig()
-        query = query or Query()
-
-        offset = 0
-        while True:
-            query_copy = query.copy()
-            query_copy.offset(offset).limit(config.batch_size)
-            batch = self.search(query_copy)
-
-            if not batch:
-                break
-
-            for record in batch:
-                yield record
-
-            offset += len(batch)
-
-            if len(batch) < config.batch_size:
-                break
+        yield from iter_search_pages(self.search, query, config)
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None
