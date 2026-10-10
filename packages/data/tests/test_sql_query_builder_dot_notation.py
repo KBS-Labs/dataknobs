@@ -269,10 +269,18 @@ class TestTypeCastingWithDotNotation:
         b = _builder("duckdb", param_style="qmark")
         f = Filter("metadata.version", Operator.GTE, 3)
         clause, _ = b._build_filter_clause(f, 1)
+        # A number is read as an integer or a real, each in a type that
+        # holds it exactly, one part for each.
+        text = "json_extract_string(metadata, '$.version')"
         is_number = "json_type(metadata, '$.version') IN ('BIGINT', 'UBIGINT', 'DOUBLE')"
+        integral = (
+            f"regexp_full_match({text}, '-?[0-9]+') AND TRY_CAST({text} AS HUGEINT) IS NOT NULL"
+        )
+        is_integer = f"({is_number} AND {integral})"
+        is_real = f"({is_number} AND NOT ({integral}))"
         assert clause == (
-            f"({is_number} AND CASE WHEN {is_number} "
-            "THEN TRY_CAST(json_extract_string(metadata, '$.version') AS DOUBLE) END >= ?)"
+            f"(({is_integer} AND CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) END >= ?)"
+            f" OR ({is_real} AND CASE WHEN {is_real} THEN TRY_CAST({text} AS DOUBLE) END >= ?))"
         )
 
     def test_sqlite_no_cast_needed(self) -> None:

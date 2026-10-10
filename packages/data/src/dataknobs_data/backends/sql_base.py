@@ -1545,6 +1545,11 @@ class SQLQueryBuilder:
         Returns ``None`` for a dialect that cannot read a JSON type.
         """
         text = self._build_json_field_expr(field, column=column)
+        if kind in (_INTEGER_NUMBER, _REAL_NUMBER):
+            is_integer, is_real = self._duckdb_number_populations(field, column)
+            if kind == _INTEGER_NUMBER:
+                return is_integer, f"CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) END"
+            return is_real, f"CASE WHEN {is_real} THEN TRY_CAST({text} AS DOUBLE) END"
         is_kind = self._json_type_is(field, column, kind)
         if is_kind is None:
             return None
@@ -1559,6 +1564,27 @@ class SQLQueryBuilder:
         else:
             value = f"TRY_CAST({text} AS {_DUCKDB_CASTS[kind]})"
         return is_kind, f"CASE WHEN {is_kind} THEN {value} END"
+
+    def _duckdb_number_populations(self, field: str, column: str) -> tuple[str, str]:
+        """Tests that the JSON number at ``column.field`` is an integer, or a real.
+
+        DuckDB has no type holding every JSON number exactly: a ``DOUBLE``
+        rounds an integer past 2**53, and a ``HUGEINT`` rounds a fraction. So
+        a number written as an integer literal that a ``HUGEINT`` holds is an
+        integer, read as one, and any other number is a real, read as a
+        ``DOUBLE``, which holds the float Python wrote exactly. DuckDB types an
+        integer literal past 64 bits ``DOUBLE``, so the literal is asked, not
+        the type. An integer past 128 bits is read as a ``DOUBLE``: the one
+        place DuckDB cannot read a JSON number exactly.
+
+        Each test is false, not ``NULL``, for a present value it excludes.
+        """
+        text = self._build_json_field_expr(field, column=column)
+        is_number = self._json_type_is(field, column, "number")
+        integral = (
+            f"regexp_full_match({text}, '-?[0-9]+') AND TRY_CAST({text} AS HUGEINT) IS NOT NULL"
+        )
+        return f"({is_number} AND {integral})", f"({is_number} AND NOT ({integral}))"
 
     def time_reading(self, text: str, reading: str) -> tuple[str, str]:
         """A test that the string ``text`` names a time of ``reading``'s kind, and the time.
@@ -2281,6 +2307,7 @@ class SQLQueryBuilder:
                 param_start,
                 json_value_for,
                 f"{text_expr} IS NOT NULL",
+                readings=_split_numbers if self.dialect == "duckdb" else None,
             )
 
         clause, params = self.operator_clause(text_expr, op, value, param_start)
