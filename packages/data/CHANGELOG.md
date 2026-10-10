@@ -1015,6 +1015,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`creates_table` and `opens_read_only` on the SQL backend configs.** Each
+  reads `auto_create_table` or `read_only` as the bool `__post_init__`
+  resolved it to; the fields themselves stay `bool | None`, so that leaving
+  one out still means the layout's default. `opens_read_only` is on the
+  DuckDB configs, the only ones with `read_only`.
+
 - **The PostgreSQL, SQLite and DuckDB backends read a table they do not
   own** (`layout: native`, `id_column:`, `scope:`, on both twins of each). The
   table is read through `NativeColumnLayout`: only its declared columns, a
@@ -1595,6 +1601,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **Async SQLite's `close` refuses what has not started and waits for what
+  has.** It closed the connection before it refused anything, so an operation
+  racing it failed partway with the driver's own `ProgrammingError` or
+  `ValueError`, or with `AttributeError` once the connection was cleared. It
+  now refuses every operation with the store's `RuntimeError` from the moment
+  it starts, and closes the connection once the operations already running
+  on it are done, as async DuckDB's does. A transaction is not one operation:
+  closing in its body discards it, and its commit is refused by name.
+- **Async DuckDB refuses a write queued behind `close` by name.** `close`
+  refused reads from its first line, but a write already waiting for the
+  connection's lock went on to read the cleared connection and failed with
+  `AttributeError`; one holding the lock could fail the same way partway. A
+  write now takes the connection once, as it takes the lock, and a write that
+  had not started is refused with the store's `RuntimeError`.
+- **A transaction on async SQLite or DuckDB closed in its body raises one
+  error.** The rollback that handled the commit's failure raised a second,
+  which buried the first; closing has already discarded the transaction, so
+  the rollback now does nothing once the store is closed.
 
 - **SQLite and DuckDB `stream_read` returns what `search` would.** Each page
   set its own `LIMIT` and `OFFSET` over the query's, so a stream asked for
