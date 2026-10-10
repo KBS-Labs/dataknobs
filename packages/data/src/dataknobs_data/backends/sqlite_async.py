@@ -98,7 +98,7 @@ class AsyncSQLiteDatabase(
         self.timeout = cfg.timeout
         self.synchronous = cfg.synchronous
         self.pool_size = cfg.pool_size
-        self.auto_create_table = cfg.auto_create_table
+        self.auto_create_table = cfg.creates_table
 
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
         # The one query builder, made with the table's layout. It needs no

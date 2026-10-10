@@ -151,6 +151,22 @@ def test_a_config_built_directly_resolves_the_same_way(base: type) -> None:
     assert cls().auto_create_table is True
 
 
+@pytest.mark.parametrize("cls", [*CONFIGS, PostgresDatabaseConfig], ids=_name)
+@pytest.mark.parametrize("given", [{}, {"auto_create_table": "false"}, "native"])
+def test_the_resolved_switches_are_read_as_bools(cls: type, given: Any) -> None:
+    """A backend reads each switch as the bool the config resolved it to."""
+    if given == "native":
+        given = native()
+        if cls is PostgresDatabaseConfig:
+            del given["path"]
+    config = cls.from_dict(given)
+    assert config.creates_table is config.auto_create_table
+    assert isinstance(config.creates_table, bool)
+    if cls in DUCKDB:
+        assert config.opens_read_only is config.read_only
+        assert isinstance(config.opens_read_only, bool)
+
+
 @pytest.mark.parametrize("cls", CONFIGS, ids=_name)
 def test_scope_keys_are_refused_under_the_json_layout(cls: type) -> None:
     """``read_layout_config`` refuses them; the config only carries them."""

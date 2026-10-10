@@ -84,7 +84,7 @@ class SyncSQLiteDatabase(
         self.check_same_thread = cfg.check_same_thread
         self.journal_mode = cfg.journal_mode
         self.synchronous = cfg.synchronous
-        self.auto_create_table = cfg.auto_create_table
+        self.auto_create_table = cfg.creates_table
 
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
         # The one query builder, made with the table's layout. It needs no

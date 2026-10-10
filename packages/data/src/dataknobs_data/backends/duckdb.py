@@ -278,8 +278,8 @@ class AsyncDuckDBDatabase(
         self.table_name = cfg.table
         self.timeout = cfg.timeout
         self.max_workers = cfg.max_workers
-        self.read_only = cfg.read_only
-        self.auto_create_table = cfg.auto_create_table
+        self.read_only = cfg.opens_read_only
+        self.auto_create_table = cfg.creates_table
 
         # Thread pool for async operations (DuckDB has no native async support)
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
@@ -940,8 +940,8 @@ class SyncDuckDBDatabase(
         self.db_path = cfg.path
         self.table_name = cfg.table
         self.timeout = cfg.timeout
-        self.read_only = cfg.read_only
-        self.auto_create_table = cfg.auto_create_table
+        self.read_only = cfg.opens_read_only
+        self.auto_create_table = cfg.creates_table
 
         self.serializer = SQLRecordSerializer()
         self.table_manager = SQLTableManager(self.table_name, dialect="duckdb")

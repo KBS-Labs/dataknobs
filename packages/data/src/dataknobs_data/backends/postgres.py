@@ -187,7 +187,7 @@ class SyncPostgresDatabase(
         self._q_qualified = f"{self._q_schema}.{self._q_table}"
         self._connected = False
         self._ensure_database_enabled = cfg.ensure_database
-        self.auto_create_table = cfg.auto_create_table
+        self.auto_create_table = cfg.creates_table
         self._init_vector_state()
 
         # Table manager for parameterized existence checks (psycopg2 pyformat style)
@@ -1279,7 +1279,7 @@ class AsyncPostgresDatabase(
         self._q_qualified = f"{self._q_schema}.{self._q_table}"
         self._connected = False
         self._ensure_database_enabled = cfg.ensure_database
-        self.auto_create_table = cfg.auto_create_table
+        self.auto_create_table = cfg.creates_table
         self._init_vector_state()
 
         # The one query builder, made with the table's layout, as in the sync
