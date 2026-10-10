@@ -115,6 +115,16 @@ class VectorBackendConfig(DatabaseConfig):
     vector_enabled: bool = False
     vector_metric: str = "cosine"
 
+    def __post_init__(self) -> None:
+        # YAML and environment substitution hand over "false" as a string,
+        # which is truthy: coerced here, as every other flag on these configs
+        # is, so a subclass's ``__post_init__`` must call this one.
+        object.__setattr__(
+            self,
+            "vector_enabled",
+            SQLTableManager.coerce_bool(self.vector_enabled, default=False),
+        )
+
 
 @dataclass(frozen=True)
 class MemoryDatabaseConfig(VectorBackendConfig):
@@ -160,6 +170,7 @@ class SQLiteDatabaseConfigBase(VectorBackendConfig):
     auto_create_table: bool = True
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         # Match the legacy ``__init__`` which always coerced this knob,
         # so YAML/env string values ("false", "0", "no") behave correctly.
         object.__setattr__(
@@ -396,6 +407,7 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         return raw
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         # Validate identifiers early (a non-string ``schema``/``table`` —
         # e.g. a DatabaseSchema injected via the key collision — fails
         # fast with a clear ConfigurationError rather than emitting broken
@@ -403,15 +415,19 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         object.__setattr__(self, "table", validate_pg_identifier(self.table, "table"))
         object.__setattr__(self, "schema_name", validate_pg_identifier(self.schema_name, "schema"))
         object.__setattr__(self, "port", int(self.port))
+        # A key given with no value (YAML's ``null``) means the default, which
+        # under ``layout: native`` is off: ``_normalize_dict``'s ``setdefault``
+        # cannot supply it for a key that is present.
+        creates_by_default = self.layout != "native"
         object.__setattr__(
             self,
             "ensure_database",
-            SQLTableManager.coerce_bool(self.ensure_database, default=True),
+            SQLTableManager.coerce_bool(self.ensure_database, default=creates_by_default),
         )
         object.__setattr__(
             self,
             "auto_create_table",
-            SQLTableManager.coerce_bool(self.auto_create_table, default=True),
+            SQLTableManager.coerce_bool(self.auto_create_table, default=creates_by_default),
         )
         if isinstance(self.scope, (list, tuple)):
             # Held as mappings, so the config is what a config file holds and
@@ -465,6 +481,7 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
     search_page_size: int = 1_000
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         # A value from YAML or the environment may arrive as a string.
         for name in ("max_result_window", "search_page_size"):
             value = getattr(self, name)
@@ -618,6 +635,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         return super()._normalize_dict(raw)
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         if not self.bucket:
             raise ValueError("S3 backend requires 'bucket' in configuration")
 

@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A surface-form lookup answers only ids the entity store holds** when the
   forms are a store of their own (`forms_database=`), so a form left behind
   for a row the entity store cannot read is not a match.
+- **`vector_enabled` is read as a boolean on every backend.** The string
+  `"false"`, which YAML and environment substitution produce, was stored as
+  given and is truthy, so a backend told `vector_enabled: "false"` enabled
+  vector support. It is coerced as the other flags on these configs are, on
+  `VectorBackendConfig`; a subclass's `__post_init__` calls the base's.
 
 - **A field's `enum` must allow something its filter can take.** The schema
   reader, and `DatabaseSource` for a schema built in Python, refuse an `enum`
