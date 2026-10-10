@@ -1546,7 +1546,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AsyncPostgresDatabase({"schema": "reporting"}, schema=fields)` (and the
   sync twin) opened in `public`: the mapping and the keyword arguments were
   merged under one `schema` key before the config could tell the namespace
-  from the fields, so the keyword replaced the namespace with no error.
+  from the fields, so the keyword replaced the namespace with no error. A
+  namespace given as `schema` still wins over `schema_name`, whichever of the
+  mapping and the keyword arguments each arrives in.
 
 - **`update_batch` writes each record its own update on SQLite and DuckDB.**
   The statement read its values by position, and the values were bound in a

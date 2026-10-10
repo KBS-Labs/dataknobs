@@ -206,6 +206,11 @@ class AsyncSQLiteDatabaseConfig(SQLiteDatabaseConfigBase):
     pool_size: int = 5
 
 
+#: Sentinel for "this side gave no namespace as ``schema``" -- ``None`` is a
+#: value a side may hold.
+_NO_NAMESPACE: Any = object()
+
+
 @dataclass(frozen=True)
 class PostgresDatabaseConfig(VectorBackendConfig):
     """Unified configuration for ``SyncPostgresDatabase`` / ``AsyncPostgresDatabase``.
@@ -236,7 +241,9 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     ``DatabaseSchema`` is the declared fields, read as every other backend
     reads them. When a mapping and keyword arguments both carry ``schema``,
     :meth:`merge_inputs` sorts each side first, so a namespace in one and
-    declared fields in the other are both kept. Identifiers are validated in
+    declared fields in the other are both kept, and a namespace given as
+    ``schema`` wins over ``schema_name`` whichever side each arrives on.
+    Identifiers are validated in
     ``__post_init__``.
 
     **A table this package did not create** is read with ``layout: native``.
@@ -302,17 +309,40 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         """Merge after sorting each side's ``schema`` into namespace or fields.
 
         A namespace in the mapping and declared fields as a keyword (or the
-        other way round) land on different fields, so both are kept. Where
-        both sides give the same one, the keyword wins, as in the default.
+        other way round) land on different fields, so both are kept. A
+        namespace given as ``schema`` wins over ``schema_name`` whichever side
+        each arrives on, as it does within one mapping; given as ``schema`` on
+        both sides, the keyword's wins. Every other key merges as in the
+        default: the keyword wins.
         """
-        return {**cls._namespace_apart(config), **cls._namespace_apart(kwargs)}
+        config_rest, config_ns = cls._namespace_apart(config)
+        kwargs_rest, kwargs_ns = cls._namespace_apart(kwargs)
+        merged = {**config_rest, **kwargs_rest}
+        namespace = kwargs_ns if kwargs_ns is not _NO_NAMESPACE else config_ns
+        if namespace is not _NO_NAMESPACE:
+            # Onto ``schema_name``, over whatever either side gave there, and
+            # off ``schema``, where the other side's declared fields may be.
+            merged["schema_name"] = namespace
+        return merged
 
     @staticmethod
-    def _namespace_apart(side: Mapping[str, Any]) -> dict[str, Any]:
+    def _names_namespace(value: Any) -> bool:
+        """Whether a ``schema`` value is the SQL namespace rather than declared fields.
+
+        Declared fields are a mapping, a list of field rows or a
+        ``DatabaseSchema``; ``None`` is the structural default ``to_dict``
+        writes. Anything else is the namespace, where a value that is not a
+        string fails identifier validation by name.
+        """
+        return not isinstance(value, (DatabaseSchema, Mapping, list, tuple, type(None)))
+
+    @classmethod
+    def _namespace_apart(cls, side: Mapping[str, Any]) -> tuple[dict[str, Any], Any]:
+        """One side's keys without a namespace ``schema``, and that namespace."""
         out = dict(side)
-        if isinstance(out.get("schema"), str):
-            out["schema_name"] = out.pop("schema")
-        return out
+        if "schema" in out and cls._names_namespace(out["schema"]):
+            return out, out.pop("schema")
+        return out, _NO_NAMESPACE
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
@@ -325,9 +355,7 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         # wins over an explicit ``schema_name``, matching legacy precedence),
         # where a value that is not a string fails identifier validation in
         # ``__post_init__`` with the error it always has.
-        if "schema" in raw and not isinstance(
-            raw["schema"], (DatabaseSchema, Mapping, list, tuple, type(None))
-        ):
+        if "schema" in raw and cls._names_namespace(raw["schema"]):
             raw["schema_name"] = raw.pop("schema")
         native = raw.get("layout") == "native"
         if native and not isinstance(raw.get("schema"), (DatabaseSchema, type(None))):

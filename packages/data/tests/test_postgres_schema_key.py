@@ -104,6 +104,30 @@ def test_a_keyword_still_wins_over_the_same_meaning_in_the_mapping() -> None:
         assert cls({"table": "a"}, table="b").table_name == "b"
 
 
+def test_a_namespace_given_as_schema_wins_over_schema_name_from_either_side() -> None:
+    """Bug: a string ``schema`` in the mapping lost to a ``schema_name`` keyword.
+
+    Within one mapping a string ``schema`` has always won over ``schema_name``.
+    Sorting each side before merging moved the mapping's namespace onto
+    ``schema_name`` first, where the keyword's ``schema_name`` then replaced it,
+    so the answer depended on which side each key arrived on.
+    """
+    for cls in TWINS:
+        assert cls({"schema": "ns"}, schema_name="other").schema_name == "ns"
+        assert cls({"schema_name": "other"}, schema="ns").schema_name == "ns"
+        assert cls({"schema": "ns", "schema_name": "other"}).schema_name == "ns"
+        assert cls({"schema": "a"}, schema="b", schema_name="other").schema_name == "b"
+
+
+def test_a_keyword_that_is_neither_fields_nor_a_namespace_is_refused() -> None:
+    """Read as a namespace on either side, so it is refused by name rather than
+    replacing the mapping's declared fields.
+    """
+    for cls in TWINS:
+        with pytest.raises((ConfigurationError, ValidationError), match="schema"):
+            cls({"schema": {"fields": {"name": "string"}}}, schema=5)
+
+
 def test_a_value_that_is_neither_is_refused() -> None:
     with pytest.raises((ConfigurationError, ValidationError)):
         PostgresDatabaseConfig.from_dict({"schema": 5})
