@@ -1584,6 +1584,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anyway. The pages had no order to agree on, so a row could be read twice
   or never at a page boundary; each page now sorts by the query's sort and
   then by the key. No statement is held open between pages.
+- **A backend config built in code reads its `schema` as `from_dict` does.**
+  `SQLiteDatabaseConfig(schema={"fields": ...})` and its siblings kept the
+  mapping as given, so `db.schema` was a `dict` and a backend that reads the
+  declared fields at construction (Postgres) raised `AttributeError`. Every
+  config now reads a mapping or a list of field rows into a `DatabaseSchema`
+  at construction, and refuses any other value with `ValidationError`, as its
+  docstring always said.
 - **`Operator.REGEX` answers on SQLite** as `Filter.matches` does. Both SQLite
   backends raised `no such function: REGEXP`; they now register one on every
   connection.

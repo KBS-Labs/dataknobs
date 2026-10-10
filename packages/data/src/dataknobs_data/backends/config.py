@@ -36,7 +36,7 @@ from dataknobs_common.structured_config import StructuredConfig
 
 from ..database import extract_schema_from_config
 from ..query import Filter
-from ..schema import NATIVE_FIELD_KEYS, DatabaseSchema
+from ..schema import FIELD_KEYS, NATIVE_FIELD_KEYS, DatabaseSchema
 from .postgres_mixins import validate_pg_identifier
 from .sql_base import SQLTableManager
 
@@ -46,11 +46,12 @@ class DatabaseConfig(StructuredConfig):
     """Base configuration for every ``SyncDatabase`` / ``AsyncDatabase`` backend.
 
     The ``schema`` field carries the ``DatabaseSchema`` the base
-    ``Database`` accepts today. ``_normalize_dict`` routes any other
+    ``Database`` accepts today. ``__post_init__`` routes any other
     ``schema`` value through :func:`extract_schema_from_config` so it
-    becomes a ``DatabaseSchema`` before field projection -- a mapping, or a
-    list of field rows -- or is refused by name; a ``DatabaseSchema``
-    instance passes through unchanged. This preserves the public
+    becomes a ``DatabaseSchema`` -- a mapping, or a list of field rows -- or
+    is refused by name, whether the config was read from a mapping or built
+    by calling the class; a ``DatabaseSchema`` instance passes through
+    unchanged. This preserves the public
     ``Database(config=..., schema=...)`` kwarg: the consumer mixin merges
     ``schema=`` into the dict and this field captures it.
 
@@ -78,25 +79,21 @@ class DatabaseConfig(StructuredConfig):
     #: the warning is the one case it cannot see.
     _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
 
-    @classmethod
-    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        """Read a ``schema`` value into a ``DatabaseSchema``, or refuse it.
-
-        A mapping or a list of field rows goes through
-        :func:`extract_schema_from_config`, which refuses any other value by
-        name; a ``DatabaseSchema`` passes through unchanged.
-
-        Subclasses that override this for backend-specific normalization
-        (e.g. Postgres connection assembly) must call
-        ``super()._normalize_dict(raw)`` so the shared schema handling
-        still runs.
-        """
-        if "schema" in raw and not isinstance(raw["schema"], DatabaseSchema):
-            raw["schema"] = extract_schema_from_config(raw["schema"])
-        return raw
+    def _schema_field_keys(self) -> frozenset[str]:
+        """The keys a field declared in ``schema`` takes under this configuration."""
+        return FIELD_KEYS
 
     def __post_init__(self) -> None:
-        """The end of the ``__post_init__`` chain, so every subclass can call ``super()``."""
+        """Read ``schema`` into a ``DatabaseSchema``, or refuse it.
+
+        The end of the ``__post_init__`` chain, so every subclass can call
+        ``super()``.
+        """
+        object.__setattr__(
+            self,
+            "schema",
+            extract_schema_from_config(self.schema, keys=self._schema_field_keys()),
+        )
 
 
 @dataclass(frozen=True)
@@ -172,16 +169,10 @@ class ColumnLayoutConfig(DatabaseConfig):
         """Whether the table is read through its own columns."""
         return self.layout == "native"
 
-    @classmethod
-    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
+    def _schema_field_keys(self) -> frozenset[str]:
         # A native table's fields may name a ``sql_type``, which only that
-        # layout reads; the JSON layout's are read by the base, which refuses
-        # one. ``None`` is the structural default ``to_dict`` writes.
-        if raw.get("layout") == "native" and not isinstance(
-            raw.get("schema"), (DatabaseSchema, type(None))
-        ):
-            raw["schema"] = extract_schema_from_config(raw["schema"], keys=NATIVE_FIELD_KEYS)
-        return super()._normalize_dict(raw)
+        # layout reads; the JSON layout refuses one.
+        return NATIVE_FIELD_KEYS if self.native else super()._schema_field_keys()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -471,8 +462,8 @@ class PostgresDatabaseConfig(ColumnLayoutConfig, VectorBackendConfig):
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         # Disambiguate the overloaded ``schema`` key by type. A mapping, a
         # list of rows or a ``DatabaseSchema`` is the declared fields, left for
-        # the bases, which read them (``ColumnLayoutConfig`` a native table's,
-        # whose fields may also name a ``sql_type``). ``None`` is the
+        # ``DatabaseConfig.__post_init__`` to read (a native table's fields may
+        # also name a ``sql_type``). ``None`` is the
         # structural default ``to_dict`` writes.
         # Anything else is the SQL namespace: routed to ``schema_name`` (it
         # wins over an explicit ``schema_name``, matching legacy precedence),
