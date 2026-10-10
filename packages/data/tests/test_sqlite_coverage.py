@@ -268,6 +268,24 @@ class TestSyncSQLiteCoverage:
         with pytest.raises(RuntimeError, match="Database not connected"):
             db.count()
 
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.clear()
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.create_batch([Record(data={"test": "data"})])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.upsert_batch([Record(data={"test": "data"}, storage_id="test-id")])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.update_batch([("test-id", Record(data={"test": "data"}))])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            db.delete_batch(["test-id"])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            list(db.stream_read())
+
     def test_create_duplicate_id(self):
         """Test creating record with duplicate ID."""
         db = SyncSQLiteDatabase({"path": ":memory:"})
@@ -484,6 +502,21 @@ class TestAsyncSQLiteCoverage:
 
         with pytest.raises(RuntimeError, match="Database not connected"):
             await db.count()
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            await db.create_batch([Record(data={"test": "data"})])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            await db.upsert_batch([Record(data={"test": "data"}, storage_id="test-id")])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            await db.update_batch([("test-id", Record(data={"test": "data"}))])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            await db.delete_batch(["test-id"])
+
+        with pytest.raises(RuntimeError, match="Database not connected"):
+            [record async for record in db.stream_read()]
 
     @pytest.mark.asyncio
     async def test_create_duplicate_id(self):

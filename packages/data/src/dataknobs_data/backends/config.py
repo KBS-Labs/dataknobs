@@ -179,6 +179,23 @@ class ColumnLayoutConfig(DatabaseConfig):
         """Whether the table is read through its own columns."""
         return self.layout == "native"
 
+    @property
+    def creates_table(self) -> bool:
+        """``auto_create_table`` as :meth:`__post_init__` resolved it.
+
+        The field is ``bool | None`` so that leaving it out can mean the
+        layout's default; once the config is built it holds a bool, and this
+        is that bool, typed as one.
+        """
+        return self._resolved_flag("auto_create_table")
+
+    def _resolved_flag(self, key: str) -> bool:
+        """A flag ``__post_init__`` resolved from ``None`` to a bool."""
+        value = getattr(self, key)
+        if not isinstance(value, bool):
+            raise TypeError(f"{self._BACKEND} `{key}` was not resolved: {value!r}")
+        return value
+
     def _schema_field_keys(self) -> frozenset[str]:
         # A native table's fields may name a ``sql_type``, which only that
         # layout reads; the JSON layout refuses one.
@@ -841,6 +858,11 @@ class DuckDBDatabaseConfigBase(ColumnLayoutConfig):
     _BACKEND: ClassVar[str] = "DuckDB"
     _FILE_KEY: ClassVar[str | None] = "path"
     _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ("auto_create_table",)
+
+    @property
+    def opens_read_only(self) -> bool:
+        """``read_only`` as :meth:`__post_init__` resolved it, typed as the bool it holds."""
+        return self._resolved_flag("read_only")
 
     def __post_init__(self) -> None:
         super().__post_init__()

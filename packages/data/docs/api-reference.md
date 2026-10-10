@@ -1292,7 +1292,7 @@ record = builder.record_from_row(row)
 | `SQL_TYPE_KEY` | `dataknobs_data` | `"sql_type"`, the field key naming one |
 | `NATIVE_FIELD_KEYS` | `dataknobs_data` | the field keys a native table's schema takes: `FIELD_KEYS` and `sql_type`, which every other door refuses |
 | `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
-| `ColumnLayoutConfig` | `dataknobs_data.backends.config` | the `layout:`, `id_column:` and `scope:` keys a SQL backend's configuration carries, and the create switches it resolves from the layout |
+| `ColumnLayoutConfig` | `dataknobs_data.backends.config` | the `layout:`, `id_column:` and `scope:` keys a SQL backend's configuration carries, and the create switches it resolves from the layout; `creates_table` reads `auto_create_table` as the bool it resolved to (and, on the DuckDB configs, `opens_read_only` reads `read_only`) |
 | `ColumnLayoutMixin`, `NATIVE_REFUSED` | `dataknobs_data.backends.layout_backend` | what reading through a layout means for a backend: the one builder, every `NATIVE_REFUSED` operation refused under the native layout, no `CONDITIONAL_WRITE` |
 | `FileLayoutMixin` | `dataknobs_data.backends.layout_backend` | a `ColumnLayoutMixin` for a table in a database file, shared by the SQLite and DuckDB backends: the refusal by name of a file that will not open read-only or that its owner holds, which an engine's error each is, and the directory a file is made in |
 
