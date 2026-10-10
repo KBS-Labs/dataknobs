@@ -220,8 +220,8 @@ class DuckDBLayoutMixin(FileLayoutMixin):
         else:
             sql, params = self.query_builder.build_search_query(query)
         records = [self.query_builder.record_from_row(row) for row in self._rows(sql, params)]
-        if getattr(query, "fields", None):
-            records = [record.project(query.fields) for record in records]
+        if fields := query.fields:
+            records = [record.project(fields) for record in records]
         return records
 
     def _count_rows(self, query: Query | None = None) -> int:
@@ -351,9 +351,8 @@ class AsyncDuckDBDatabase(
 
         try:
             with self._lock:
-                self.conn.execute(query, params)
+                self._require_conn().execute(query, params)
             # DuckDB doesn't support RETURNING, so we use the ID we generated
-            record_id = params[0]  # ID is the first parameter
             return record_id
         except duckdb.ConstraintException as e:
             if is_duplicate_key_error(e):
@@ -412,29 +411,30 @@ class AsyncDuckDBDatabase(
         query, params = self.query_builder.build_update_query(id, record)
 
         with self._lock:
+            conn = self._require_conn()
             if expected_version is not None:
                 # Conditional write: read the current row and apply the update
                 # under the connection lock so the compare-and-set is atomic.
                 read_query, read_params = self.query_builder.build_read_query(id)
-                result = self.conn.execute(read_query, read_params).fetchone()
+                result = conn.execute(read_query, read_params).fetchone()
                 if result is None:
                     # Conditional update of an absent record is a documented
                     # False return, not a warning-worthy event (matches the
                     # SQLite backend's quiet miss).
                     return False
-                columns = self.conn.description
+                columns = conn.description
                 row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
                 current = self.query_builder.record_from_row(row_dict)
                 enforce_content_version(id, expected_version, current)
-                self.conn.execute(query, params)
+                conn.execute(query, params)
                 return True
 
             # Check if record exists
             exists_query, exists_params = self.query_builder.build_exists_query(id)
-            exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
+            exists = conn.execute(exists_query, exists_params).fetchone() is not None
 
             if exists:
-                self.conn.execute(query, params)
+                conn.execute(query, params)
                 return True
 
             logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
@@ -474,26 +474,27 @@ class AsyncDuckDBDatabase(
         query, params = self.query_builder.build_delete_query(id)
 
         with self._lock:
+            conn = self._require_conn()
             if expected_version is not None:
                 # Conditional delete: read the current row and apply the delete
                 # under the connection lock so the compare-and-set is atomic.
                 read_query, read_params = self.query_builder.build_read_query(id)
-                result = self.conn.execute(read_query, read_params).fetchone()
+                result = conn.execute(read_query, read_params).fetchone()
                 if result is None:
                     return False
-                columns = self.conn.description
+                columns = conn.description
                 row_dict = {columns[i][0]: result[i] for i in range(len(columns))}
                 current = self.query_builder.record_from_row(row_dict)
                 enforce_content_version(id, expected_version, current)
-                self.conn.execute(query, params)
+                conn.execute(query, params)
                 return True
 
             # First check if the record exists
             exists_query, exists_params = self.query_builder.build_exists_query(id)
-            exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
+            exists = conn.execute(exists_query, exists_params).fetchone() is not None
 
             if exists:
-                self.conn.execute(query, params)
+                conn.execute(query, params)
                 return True
         return False
 
@@ -541,12 +542,12 @@ class AsyncDuckDBDatabase(
         return True
 
     @asynccontextmanager
-    async def _transaction(self) -> AsyncIterator[Any]:
+    async def _transaction(self) -> AsyncIterator[duckdb.DuckDBPyConnection]:
         """Open one native transaction on the shared DuckDB connection.
 
         Runs the outer ``begin`` / ``commit`` / ``rollback`` on the executor
         under ``self._lock`` (matching how every op reaches the connection) and
-        yields ``self.conn`` as the handle. The batch sync cores run their DML
+        yields the connection the transaction began on as the handle. The batch sync cores run their DML
         under the same lock and skip their own ``begin``/``commit`` when a handle
         is threaded, so a multi-kind buffered-transaction flush commits (or rolls
         back) as one unit. As the module docs note, two buffered-transaction
@@ -554,9 +555,9 @@ class AsyncDuckDBDatabase(
         """
         self._check_connection()
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(self.executor, self._begin_sync)
+        conn = await loop.run_in_executor(self.executor, self._begin_sync)
         try:
-            yield self.conn
+            yield conn
             # Commit inside the ``try`` (not an ``else``) so a failure of the
             # commit itself rolls the connection back — otherwise the shared
             # connection is left with an open/aborted transaction and the next
@@ -567,20 +568,28 @@ class AsyncDuckDBDatabase(
             await loop.run_in_executor(self.executor, self._rollback_sync)
             raise
 
-    def _begin_sync(self) -> None:
-        """Begin a transaction on the connection (executor thread, under lock)."""
+    def _begin_sync(self) -> duckdb.DuckDBPyConnection:
+        """Begin a transaction on the connection, and return it (executor thread, under lock)."""
         with self._lock:
-            self.conn.begin()
+            conn = self._require_conn()
+            conn.begin()
+            return conn
 
     def _commit_sync(self) -> None:
         """Commit the connection's transaction (executor thread, under lock)."""
         with self._lock:
-            self.conn.commit()
+            self._require_conn().commit()
 
     def _rollback_sync(self) -> None:
-        """Roll back the connection's transaction (executor thread, under lock)."""
+        """Roll back the connection's transaction (executor thread, under lock).
+
+        Nothing to do once the store is closed: closing the connection
+        discarded the transaction, and a refusal here would only bury the
+        error that brought the rollback about.
+        """
         with self._lock:
-            self.conn.rollback()
+            if self.conn is not None:
+                self.conn.rollback()
 
     async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records efficiently.
@@ -624,25 +633,26 @@ class AsyncDuckDBDatabase(
 
         # Execute the batch insert in a transaction
         with self._lock:
+            conn = self._require_conn()
             try:
                 if own_tx:
-                    self.conn.begin()
+                    conn.begin()
                 else:
                     # The probe after a failure cannot run inside a wider
                     # transaction (see below), so ask before writing instead.
                     stored = _existing_ids(
-                        self._require_conn(), self.query_builder, [r.id for r in records if r.id]
+                        conn, self.query_builder, [r.id for r in records if r.id]
                     )
                     if stored:
                         raise DuplicateRecordError(next(r.id for r in records if r.id in stored))
                 for query, params in statements:
-                    self.conn.execute(query, params)
+                    conn.execute(query, params)
                 if own_tx:
-                    self.conn.commit()
+                    conn.commit()
                 return ids
             except duckdb.ConstraintException as e:
                 if own_tx:
-                    self.conn.rollback()
+                    conn.rollback()
                 if is_duplicate_key_error(e):
                     colliding = ids[0]
                     # Precise colliding-id naming needs a read probe, but DuckDB
@@ -661,7 +671,7 @@ class AsyncDuckDBDatabase(
                     # coroutine.
                     if own_tx:
                         stored = _existing_ids(
-                            self._require_conn(),
+                            conn,
                             self.query_builder,
                             [r.id for r in records if r.id],
                         )
@@ -670,7 +680,7 @@ class AsyncDuckDBDatabase(
                 raise constraint_violation_error() from e
             except Exception:
                 if own_tx:
-                    self.conn.rollback()
+                    conn.rollback()
                 raise
 
     async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
@@ -702,17 +712,18 @@ class AsyncDuckDBDatabase(
         )
 
         with self._lock:
+            conn = self._require_conn()
             try:
                 if own_tx:
-                    self.conn.begin()
+                    conn.begin()
                 for query, params in statements:
-                    self.conn.execute(query, params)
+                    conn.execute(query, params)
                 if own_tx:
-                    self.conn.commit()
+                    conn.commit()
                 return ids
             except Exception:
                 if own_tx:
-                    self.conn.rollback()
+                    conn.rollback()
                 raise
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
@@ -739,15 +750,16 @@ class AsyncDuckDBDatabase(
 
         # Execute the batch update in a transaction
         with self._lock:
+            conn = self._require_conn()
             try:
-                self.conn.begin()
+                conn.begin()
                 for query, params in statements:
-                    self.conn.execute(query, params)
-                self.conn.commit()
+                    conn.execute(query, params)
+                conn.commit()
 
                 # DuckDB's UPDATE returns nothing here, so ask which ids exist.
                 existing_ids = _existing_ids(
-                    self._require_conn(),
+                    conn,
                     self.query_builder,
                     [record_id for record_id, _ in updates],
                 )
@@ -759,7 +771,7 @@ class AsyncDuckDBDatabase(
 
                 return results
             except Exception:
-                self.conn.rollback()
+                conn.rollback()
                 raise
 
     async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
@@ -789,8 +801,9 @@ class AsyncDuckDBDatabase(
     def _delete_batch_sync(self, ids: list[str], own_tx: bool = True) -> list[bool]:
         """Synchronous batch delete implementation."""
         with self._lock:
+            conn = self._require_conn()
             # Check which IDs exist before deletion
-            existing_ids = _existing_ids(self._require_conn(), self.query_builder, ids)
+            existing_ids = _existing_ids(conn, self.query_builder, ids)
 
             # Use the shared batch delete query builder
             query, params = self.query_builder.build_batch_delete_query(ids)
@@ -798,10 +811,10 @@ class AsyncDuckDBDatabase(
             # Execute the batch delete in a transaction
             try:
                 if own_tx:
-                    self.conn.begin()
-                self.conn.execute(query, params)
+                    conn.begin()
+                conn.execute(query, params)
                 if own_tx:
-                    self.conn.commit()
+                    conn.commit()
 
                 # Return results based on which IDs existed
                 results = []
@@ -811,7 +824,7 @@ class AsyncDuckDBDatabase(
                 return results
             except Exception:
                 if own_tx:
-                    self.conn.rollback()
+                    conn.rollback()
                 raise
 
     def _initialize(self) -> None:
@@ -969,13 +982,12 @@ class SyncDuckDBDatabase(
         Returns:
             The record ID
         """
-        self._check_connection()
+        conn = self._require_conn()
         record_id = record.id or self._generate_id()
         query, params = self.query_builder.build_create_query(record, record_id=record_id)
 
         try:
-            self.conn.execute(query, params)
-            record_id = params[0]  # ID is the first parameter
+            conn.execute(query, params)
             return record_id
         except duckdb.ConstraintException as e:
             if is_duplicate_key_error(e):
@@ -1015,7 +1027,7 @@ class SyncDuckDBDatabase(
             ConcurrencyError: If ``expected_version`` does not match the
                 record's current version token.
         """
-        self._check_connection()
+        conn = self._require_conn()
         query, params = self.query_builder.build_update_query(id, record)
 
         # Conditional write: compare the current content-hash token before
@@ -1034,10 +1046,10 @@ class SyncDuckDBDatabase(
 
         # Check if record exists
         exists_query, exists_params = self.query_builder.build_exists_query(id)
-        exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
+        exists = conn.execute(exists_query, exists_params).fetchone() is not None
 
         if exists:
-            self.conn.execute(query, params)
+            conn.execute(query, params)
             return True
 
         logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
@@ -1061,7 +1073,7 @@ class SyncDuckDBDatabase(
             ConcurrencyError: If ``expected_version`` does not match the
                 record's current version token.
         """
-        self._check_connection()
+        conn = self._require_conn()
         query, params = self.query_builder.build_delete_query(id)
 
         if expected_version is not None:
@@ -1069,15 +1081,15 @@ class SyncDuckDBDatabase(
             if current is None:
                 return False
             enforce_content_version(id, expected_version, current)
-            self.conn.execute(query, params)
+            conn.execute(query, params)
             return True
 
         # First check if the record exists
         exists_query, exists_params = self.query_builder.build_exists_query(id)
-        exists = self.conn.execute(exists_query, exists_params).fetchone() is not None
+        exists = conn.execute(exists_query, exists_params).fetchone() is not None
 
         if exists:
-            self.conn.execute(query, params)
+            conn.execute(query, params)
             return True
         return False
 
@@ -1142,28 +1154,26 @@ class SyncDuckDBDatabase(
         if not records:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
         statements, ids = self.query_builder.build_batch_create_queries(
             records, id_factory=self._generate_id
         )
 
         try:
-            self.conn.begin()
+            conn.begin()
             for query, params in statements:
-                self.conn.execute(query, params)
-            self.conn.commit()
+                conn.execute(query, params)
+            conn.commit()
             return ids
         except duckdb.ConstraintException as e:
-            self.conn.rollback()
+            conn.rollback()
             if is_duplicate_key_error(e):
-                stored = _existing_ids(
-                    self._require_conn(), self.query_builder, [r.id for r in records if r.id]
-                )
+                stored = _existing_ids(conn, self.query_builder, [r.id for r in records if r.id])
                 colliding = next((r.id for r in records if r.id in stored), ids[0])
                 raise DuplicateRecordError(colliding) from e
             raise constraint_violation_error() from e
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
 
     def upsert_batch(self, records: list[Record]) -> list[str]:
@@ -1176,19 +1186,19 @@ class SyncDuckDBDatabase(
         if not records:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
         statements, ids = self.query_builder.build_batch_upsert_queries(
             records, id_factory=self._generate_id
         )
 
         try:
-            self.conn.begin()
+            conn.begin()
             for query, params in statements:
-                self.conn.execute(query, params)
-            self.conn.commit()
+                conn.execute(query, params)
+            conn.commit()
             return ids
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
 
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
@@ -1203,18 +1213,18 @@ class SyncDuckDBDatabase(
         if not updates:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
         statements = self.query_builder.build_batch_update_queries(updates)
 
         try:
-            self.conn.begin()
+            conn.begin()
             for query, params in statements:
-                self.conn.execute(query, params)
-            self.conn.commit()
+                conn.execute(query, params)
+            conn.commit()
 
             # DuckDB's UPDATE returns nothing here, so ask which ids exist.
             existing_ids = _existing_ids(
-                self._require_conn(), self.query_builder, [record_id for record_id, _ in updates]
+                conn, self.query_builder, [record_id for record_id, _ in updates]
             )
 
             results = []
@@ -1223,7 +1233,7 @@ class SyncDuckDBDatabase(
 
             return results
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
@@ -1238,18 +1248,18 @@ class SyncDuckDBDatabase(
         if not ids:
             return []
 
-        self._check_connection()
+        conn = self._require_conn()
 
         # Check which IDs exist before deletion
 
-        existing_ids = _existing_ids(self._require_conn(), self.query_builder, ids)
+        existing_ids = _existing_ids(conn, self.query_builder, ids)
 
         query, params = self.query_builder.build_batch_delete_query(ids)
 
         try:
-            self.conn.begin()
-            self.conn.execute(query, params)
-            self.conn.commit()
+            conn.begin()
+            conn.execute(query, params)
+            conn.commit()
 
             results = []
             for id in ids:
@@ -1257,7 +1267,7 @@ class SyncDuckDBDatabase(
 
             return results
         except Exception:
-            self.conn.rollback()
+            conn.rollback()
             raise
 
     def _initialize(self) -> None:
