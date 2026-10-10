@@ -382,6 +382,8 @@ class PostgresLayoutMixin(OperationGateMixin):
     schema_name: str
     layout: ColumnLayout
     query_builder: SQLQueryBuilder
+    table_manager: SQLTableManager
+    _q_qualified: str
 
     if TYPE_CHECKING:
 
@@ -415,6 +417,38 @@ class PostgresLayoutMixin(OperationGateMixin):
 
     def _setup_layout(self) -> None:
         self._use_layout(self._read_layout(self.schema))
+
+    def _relation_exists_query(self) -> tuple[str, Any]:
+        """The statement and parameters asking whether the table is there, in the driver's style.
+
+        A native table may be any relation a ``SELECT`` reads -- a table, a
+        view, a materialized view, a foreign table -- so it is resolved by name
+        with ``to_regclass``, which needs no privilege on the relation itself.
+        ``information_schema.tables`` lists no materialized view. The table
+        this package creates is a table, and is looked up there as before.
+        """
+        if not self.native:
+            return self.table_manager.get_table_exists_sql()
+        placeholder = "%(relation)s" if self._PARAM_STYLE == "pyformat" else "$1"
+        sql = f"SELECT to_regclass({placeholder}) IS NOT NULL"
+        if self._PARAM_STYLE == "pyformat":
+            return sql, {"relation": self._q_qualified}
+        return sql, (self._q_qualified,)
+
+    def _missing_relation_error(self) -> RuntimeError:
+        """The refusal for a table that is not there, said as the layout would say it."""
+        qualified = f"{self.schema_name}.{self.table_name}"
+        if self.native:
+            return RuntimeError(
+                f"Table {qualified} does not exist, or this role cannot see it. A "
+                f"table read through `layout: native` belongs to someone else and is "
+                f"never created here: check the table name, `schema_name`, and that "
+                f"the connecting role has USAGE on the schema."
+            )
+        return RuntimeError(
+            f"Table {qualified} does not exist and auto_create_table is disabled. "
+            "Run your migrations before starting the application."
+        )
 
     def _refuse_operation(self, operation: str) -> None:
         """Refuse every :data:`NATIVE_REFUSED` operation on a table read through the native layout."""

@@ -429,19 +429,12 @@ class SyncPostgresDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
-            # get_table_exists_sql returns a positional tuple or a named dict
-            # depending on param_style; this manager is built with
-            # param_style="pyformat" (see __init__), which pins the dict branch
-            # -- the one PostgresDB.query binds.
-            df = self.db.query(exists_sql, cast("dict[str, Any]", params))
-            exists = bool(df.iloc[0, 0]) if not df.empty else False
-            if not exists:
-                raise RuntimeError(
-                    f"Table {self.schema_name}.{self.table_name} does not exist "
-                    "and auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
+            exists_sql, params = self._relation_exists_query()
+            # The query is in this twin's ``pyformat`` style, so its parameters
+            # are the named dict ``PostgresDB.query_rows`` binds.
+            rows = self.db.query_rows(exists_sql, cast("dict[str, Any]", params))
+            if not (rows and next(iter(rows[0].values()))):
+                raise self._missing_relation_error()
             return
 
         create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
@@ -1425,15 +1418,11 @@ class AsyncPostgresDatabase(
         managing DDL via Alembic / Flyway / Sqitch.
         """
         if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
+            exists_sql, params = self._relation_exists_query()
             async with self._require_pool().acquire() as conn:
                 exists = await conn.fetchval(exists_sql, *params)
             if not exists:
-                raise RuntimeError(
-                    f"Table {self.schema_name}.{self.table_name} does not exist "
-                    "and auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
+                raise self._missing_relation_error()
             return
 
         create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)

@@ -301,6 +301,53 @@ def test_a_reader_granted_only_the_declared_columns_can_read(
         admin.close()
 
 
+def test_a_materialized_view_is_read_in_place(pg: tuple[dict[str, Any], str], twin: str) -> None:
+    """Bug: connecting looked the relation up in ``information_schema.tables``,
+    which lists tables and views but not materialized views, so a materialized
+    view -- a plausible thing to read in place -- was refused as missing.
+    """
+    psycopg2 = pytest.importorskip("psycopg2")
+    params, schema = pg
+    view = f"open_tickets_{uuid.uuid4().hex[:8]}"
+    admin = psycopg2.connect(
+        host=params["host"], port=params["port"], user=params["user"],
+        password=params["password"], dbname=params["database"],
+    )  # fmt: skip
+    admin.autocommit = True
+    fields = {name: TICKET_FIELDS[name] for name in ("id", "tenant_id", "status")}
+    try:
+        with admin.cursor() as cur:
+            cur.execute(
+                f'CREATE MATERIALIZED VIEW "{schema}"."{view}" AS '
+                f'SELECT id, tenant_id, status FROM "{schema}".tickets WHERE status = %s',
+                ["open"],
+            )
+        params_, _ = pg
+        config = native_config(params_, schema, view, fields)
+        with opened(twin, config) as db:
+            assert ids(db.search()) == named(T1, T3)
+    finally:
+        with admin.cursor() as cur:
+            cur.execute(f'DROP MATERIALIZED VIEW IF EXISTS "{schema}"."{view}"')
+        admin.close()
+
+
+def test_a_missing_table_is_named_as_one_somebody_else_owns(
+    pg: tuple[dict[str, Any], str], twin: str
+) -> None:
+    """Bug: the refusal told the reader to run their migrations, for a table
+    a native store reads and never creates.
+    """
+    params, schema = pg
+    config = native_config(params, schema, "no_such_table", {"id": TICKET_FIELDS["id"]}, scope=[])
+    with pytest.raises(RuntimeError) as caught:
+        with opened(twin, config):
+            pass
+    message = str(caught.value)
+    assert "no_such_table" in message and "layout: native" in message
+    assert "migrations" not in message
+
+
 def test_a_scope_on_an_undeclared_column_is_refused_at_construction(
     pg: tuple[dict[str, Any], str], twin: str
 ) -> None:
