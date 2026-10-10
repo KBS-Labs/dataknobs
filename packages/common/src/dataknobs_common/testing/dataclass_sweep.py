@@ -387,7 +387,10 @@ class DataclassSweep:
         built. ``"raises"`` is the defect: a type that claims it and fails at
         the call.
         """
-        if cls.__hash__ is None:
+        # Read through ``getattr``: the type checker takes ``type.__hash__`` to be
+        # a method and would call a ``None`` test of it unreachable, which a
+        # type that declares itself unhashable is not.
+        if getattr(cls, "__hash__", None) is None:
             return "unhashable", "declares __hash__ None"
         try:
             instance = self.construct(cls)
