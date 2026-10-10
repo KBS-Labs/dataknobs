@@ -728,9 +728,13 @@ A backend with no server-side cursor streams one `search` per page. The
 SQLite and DuckDB backends do, through `iter_search_pages` /
 `aiter_search_pages` (`dataknobs_data.streaming`), which take the backend's
 `search`, the query and the config. Each page is `stream_page(query,
-streamed, batch_size)`: the query's own sort and then the key, so a sort that
-ties still pages every row once, with the query's offset and limit honoured.
-The key is how the pages agree, not an order the stream promises.
+streamed, batch_size)`: the query's own sort and then the key, with the
+query's offset and limit honoured. So on a table nobody writes during the
+stream, a sort that ties still pages every row once, provided no two rows
+share a key. Each page is found by its offset, so a row added or removed ahead
+of the stream's position between pages moves the rest: one can then be read
+twice or skipped. The key is how the pages agree, not an order the stream
+promises.
 
 `StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
 it loads from a plain dict via `StreamConfig.from_dict({"batch_size":
@@ -1265,6 +1269,7 @@ record = builder.record_from_row(row)
 | `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
 | `ColumnLayoutConfig` | `dataknobs_data.backends.config` | the `layout:`, `id_column:` and `scope:` keys a SQL backend's configuration carries, and the create switches it resolves from the layout |
 | `ColumnLayoutMixin`, `NATIVE_REFUSED` | `dataknobs_data.backends.layout_backend` | what reading through a layout means for a backend: the one builder, every `NATIVE_REFUSED` operation refused under the native layout, no `CONDITIONAL_WRITE` |
+| `FileLayoutMixin` | `dataknobs_data.backends.layout_backend` | a `ColumnLayoutMixin` for a table in a database file, shared by the SQLite and DuckDB backends: the refusal of a file that will not open read-only, naming what the engine needs to open one |
 
 See [Field Types](https://kbs-labs.github.io/dataknobs/packages/data/field-types/#sql-types-for-tables-with-their-own-columns) for registering one.
 

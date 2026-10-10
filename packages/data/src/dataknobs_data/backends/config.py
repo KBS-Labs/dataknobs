@@ -31,12 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from dataknobs_common import normalize_postgres_connection_config
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.structured_config import StructuredConfig
 
 from ..database import extract_schema_from_config
 from ..query import Filter
 from ..schema import FIELD_KEYS, NATIVE_FIELD_KEYS, DatabaseSchema
+from .column_layout import LAYOUTS
 from .postgres_mixins import validate_pg_identifier
 from .sql_base import SQLTableManager
 
@@ -127,6 +128,10 @@ class VectorBackendConfig(DatabaseConfig):
         )
 
 
+#: The paths that name no file: SQLite's in-memory and temporary databases.
+_NO_FILE = (":memory:", "")
+
+
 @dataclass(frozen=True)
 class ColumnLayoutConfig(DatabaseConfig):
     """The keys a SQL backend reads a table it does not own by, shared by every such backend.
@@ -153,7 +158,8 @@ class ColumnLayoutConfig(DatabaseConfig):
             table is, each written as a ``{field, operator, value}`` mapping.
     """
 
-    layout: str = "jsonb"
+    #: ``None`` (YAML's ``null``) is read as the default, ``"jsonb"``.
+    layout: Literal["jsonb", "native"] | None = "jsonb"
     id_column: str | None = None
     #: Filters or ``{field, operator, value}`` mappings; held as mappings.
     scope: list[Any] | None = None
@@ -163,6 +169,10 @@ class ColumnLayoutConfig(DatabaseConfig):
     #: The backend's switches that create or add something: resolved from the
     #: layout when unset, and refused when set true under ``layout: native``.
     _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ()
+    #: The field naming the file a file-backed backend's table is in, or
+    #: ``None`` for a backend that reads a server: under ``layout: native`` it
+    #: must name one, since a new database holds no table somebody else made.
+    _FILE_KEY: ClassVar[str | None] = None
 
     @property
     def native(self) -> bool:
@@ -175,7 +185,22 @@ class ColumnLayoutConfig(DatabaseConfig):
         return NATIVE_FIELD_KEYS if self.native else super()._schema_field_keys()
 
     def __post_init__(self) -> None:
+        # Read first: what the schema's fields may declare depends on it.
+        layout = self.layout or "jsonb"
+        if layout not in LAYOUTS:
+            raise ValidationError(
+                f"{self._BACKEND} `layout:` is one of {list(LAYOUTS)}, got {self.layout!r}",
+                context={"table": getattr(self, "table", None), "layout": self.layout},
+            )
+        object.__setattr__(self, "layout", layout)
         super().__post_init__()
+        if self._FILE_KEY is not None and getattr(self, self._FILE_KEY) in _NO_FILE:
+            self._refuse_under_native(
+                f"`{self._FILE_KEY}: {getattr(self, self._FILE_KEY)!r}`",
+                "a new database holds no table somebody else made. Name the file that "
+                f"holds the table in `{self._FILE_KEY}`",
+                key=self._FILE_KEY,
+            )
         # Unset -- left out, or given with no value (YAML's ``null``) -- means
         # the layout's default: a native table is never created, so off; and
         # refused below if given true. Resolved here rather than when a mapping
@@ -221,10 +246,6 @@ class MemoryDatabaseConfig(VectorBackendConfig):
     """
 
 
-#: The paths that name no file: SQLite's in-memory and temporary databases.
-_NO_FILE = (":memory:", "")
-
-
 @dataclass(frozen=True)
 class SQLiteDatabaseConfigBase(ColumnLayoutConfig, VectorBackendConfig):
     """Shared SQLite configuration for the sync and async backends.
@@ -266,17 +287,11 @@ class SQLiteDatabaseConfigBase(ColumnLayoutConfig, VectorBackendConfig):
     auto_create_table: bool | None = None
 
     _BACKEND: ClassVar[str] = "SQLite"
+    _FILE_KEY: ClassVar[str | None] = "path"
     _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ("auto_create_table", "vector_enabled")
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.path in _NO_FILE:
-            self._refuse_under_native(
-                f"`path: {self.path!r}`",
-                "a new database holds no table somebody else made. Name the file that "
-                "holds the table in `path`",
-                key="path",
-            )
         if self.journal_mode is not None:
             self._refuse_under_native(
                 f"`journal_mode: {self.journal_mode}`",
@@ -502,6 +517,14 @@ class PostgresDatabaseConfig(ColumnLayoutConfig, VectorBackendConfig):
         return raw
 
     def __post_init__(self) -> None:
+        if isinstance(self.schema, str):
+            # ``from_dict`` routes a string ``schema`` to ``schema_name``; a
+            # config built in code names the field, so say which one.
+            raise ValidationError(
+                f"PostgresDatabaseConfig `schema` declares fields; got the string "
+                f"{self.schema!r}. Give a SQL namespace as `schema_name`",
+                context={"schema": self.schema},
+            )
         super().__post_init__()
         # Validate identifiers early (a non-string ``schema``/``table`` —
         # e.g. a DatabaseSchema injected via the key collision — fails
@@ -817,6 +840,7 @@ class DuckDBDatabaseConfigBase(ColumnLayoutConfig):
     auto_create_table: bool | None = None
 
     _BACKEND: ClassVar[str] = "DuckDB"
+    _FILE_KEY: ClassVar[str | None] = "path"
     _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ("auto_create_table",)
 
     def __post_init__(self) -> None:
@@ -829,13 +853,6 @@ class DuckDBDatabaseConfigBase(ColumnLayoutConfig):
                 "`read_only: false`",
                 "the file is somebody else's and is only read. Leave `read_only` out",
                 key="read_only",
-            )
-        if self.path in _NO_FILE:
-            self._refuse_under_native(
-                f"`path: {self.path!r}`",
-                "a new database holds no table somebody else made. Name the file that "
-                "holds the table in `path`",
-                key="path",
             )
 
 

@@ -145,12 +145,17 @@ class AsyncSQLiteDatabase(
             await self._configure_sqlite()
             # Create table if it doesn't exist
             await self._ensure_table()
-        except BaseException:
+        except BaseException as e:
             # Refused after opening -- a native table that is not there, a file
             # that cannot be written -- so close what was opened: its worker
             # thread would otherwise outlive the refusal and the process.
             await self.db.close()
             self.db = None
+            if self.native and isinstance(e, sqlite3.OperationalError):
+                # The first statements to read the file: what fails here on a
+                # native table is reading it, as a WAL file's side files that
+                # cannot be made.
+                raise self._unopened_file_error(e) from e
             raise
 
         self._connected = True

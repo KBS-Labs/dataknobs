@@ -561,9 +561,15 @@ def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
     the rows the same way: a sort that ties -- or no sort -- leaves the order
     of the tied rows to the engine, page by page, and a row can then be read
     twice or never. So each page sorts by the query's own sort and then by the
-    key (:data:`~dataknobs_data.query.RESERVED_KEY_FIELD`), which no two rows
-    share. That is how the pages are made consistent, not an order the stream
-    promises: as with ``search``, a query with no sort promises none.
+    key (:data:`~dataknobs_data.query.RESERVED_KEY_FIELD`). That is how the
+    pages are made consistent, not an order the stream promises: as with
+    ``search``, a query with no sort promises none.
+
+    Consistent, that is, while two things hold. No two rows may share the key,
+    which a table's primary key promises and a view does not. And nobody may
+    write the table during the stream: each page is found by its offset, so a
+    row added or removed ahead of the stream's position between two pages moves
+    the rows after it, and one is then read twice or skipped.
 
     The query's offset, limit and projection hold: the stream returns what
     ``search(query)`` would, one page at a time.
@@ -595,8 +601,8 @@ def iter_search_pages(
 ) -> Iterator[Record]:
     """Stream what ``search(query)`` returns, a :func:`stream_page` at a time.
 
-    No statement is held open between pages, so nothing a stream holds blocks
-    a writer, and nothing run between records cuts a page short.
+    No statement is held open between pages, so no read a stream left open
+    blocks a writer, and nothing run between records cuts a page short.
     """
     query = query if query is not None else Query()
     batch_size = (config or StreamConfig()).batch_size

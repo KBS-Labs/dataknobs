@@ -173,9 +173,12 @@ db = SyncSQLiteDatabase({
 db.connect()
 ```
 
-The file is opened read-only (`mode=ro`), so nothing is written, created or
-changed: no directory, no file, no table and no journal mode. A view is read
-as a table is. `":memory:"`, `journal_mode` and `auto_create_table: true` are
+The file is opened read-only (`mode=ro`), so nothing is written to it or
+changed: no directory, no database file, no table and no journal mode. A file
+in WAL mode is the exception to "nothing created": SQLite reads it through its
+`-wal` and `-shm` files and makes them beside it when they are not there, so
+it needs a directory this process can write unless the owner has the file
+open. A view is read as a table is. `":memory:"`, `journal_mode` and `auto_create_table: true` are
 refused, and every write raises `OperationError`. See
 [Reading a Native Table in a SQLite or DuckDB File](query.md#reading-a-native-table-in-a-sqlite-or-duckdb-file).
 

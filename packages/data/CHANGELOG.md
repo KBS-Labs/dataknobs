@@ -1035,16 +1035,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - On SQLite and DuckDB the table is in somebody else's file, opened
     read-only by the driver (`mode=ro`; DuckDB's `read_only`, on by default
     under `layout: native`, where `read_only: false` is refused). No
-    directory, file, table or journal mode is made, a file or table that is
-    not there is refused naming `path`, and a view is read in place. `path:
-    ":memory:"` and SQLite's `journal_mode` are refused.
+    directory, database file, table or journal mode is made, a file or table
+    that is not there is refused naming `path`, and a view is read in place.
+    `path: ":memory:"` and SQLite's `journal_mode` are refused.
+  - A SQLite file in WAL mode is read through its `-wal` and `-shm` files,
+    which SQLite makes beside it when they are not there. That needs a
+    directory this process can write, unless the owner has the file open; when
+    neither holds, `connect()` is refused saying so.
+  - A native DuckDB store holds no connection between reads, since DuckDB
+    locks a file against every writer for as long as a read-only connection
+    holds it. `connect()` opens the file to check the table and closes it, and
+    each read opens it for its own statement, so the owner is kept out only
+    while a statement runs.
 - **`ColumnLayoutConfig`** (`dataknobs_data.backends.config`) carries the
   three keys and resolves a backend's create switches from the layout, and
   **`ColumnLayoutMixin`** (`dataknobs_data.backends.layout_backend`) is what
   reading through a layout means for a backend: the one builder, the
   `NATIVE_REFUSED` operations refused, no `CONDITIONAL_WRITE`, and a schema
   set afterwards rebuilding the layout. The PostgreSQL, SQLite and DuckDB
-  backends are built on both.
+  backends are built on both, and **`FileLayoutMixin`** (the same module)
+  adds what a table in a file shares: the refusal of a file that will not
+  open read-only, naming what the engine needs to open one. A `layout:` other
+  than `jsonb` or `native` is refused by the config.
 - **`stream_page`, `iter_search_pages` and `aiter_search_pages`**
   (`dataknobs_data.streaming`) stream what `search(query)` returns one page
   at a time, for a backend with no server-side cursor.
@@ -1590,7 +1602,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared fields at construction (Postgres) raised `AttributeError`. Every
   config now reads a mapping or a list of field rows into a `DatabaseSchema`
   at construction, and refuses any other value with `ValidationError`, as its
-  docstring always said.
+  docstring always said. A Postgres config given a string `schema` in code is
+  refused naming `schema_name`, the field that takes a SQL namespace there.
 - **`Operator.REGEX` answers on SQLite** as `Filter.matches` does. Both SQLite
   backends raised `no such function: REGEXP`; they now register one on every
   connection.
@@ -1599,7 +1612,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A refused SQLite or DuckDB connect closes what it opened.** A `connect()`
   refused after the file was open -- a table that is not there, a file that
   cannot be written -- left the connection open. On the async SQLite backend
-  its worker thread kept the process from exiting.
+  its worker thread kept the process from exiting. The async DuckDB backend
+  also shuts down its pool's thread, off the event loop, whether the file
+  would not open or its table was refused, and on `close()`.
+- **SQLite and DuckDB find a table whatever case names it.** The check run
+  with `auto_create_table: false` compared the name exactly, though both
+  engines read a table name whatever its case, so a table created as
+  `records` and configured as `RECORDS` was refused as missing.
 - **An ontology binding over a native table refuses a column its block does
   not declare.** A projection column, or a column taxonomy's `parent_key`,
   listed in the binding's `schema:` rows but not in the native `database:`

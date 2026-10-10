@@ -363,8 +363,15 @@ adds:
 - **The file is opened read-only**, by the driver as well as by name: SQLite
   through a `file:` URI with `mode=ro`, DuckDB with `read_only`. So a file
   shared without write permission reads, and nothing a store does can change
-  the file: `connect()` makes no directory, no file, no table and no journal.
-  A file that is not there is refused, naming `path`, and nothing is created.
+  the file: `connect()` makes no directory, no database file, no table and no
+  journal. A file that is not there is refused, naming `path`, and nothing is
+  created.
+- **A SQLite file in WAL mode is read through its `-wal` and `-shm` files**,
+  and SQLite makes them beside the file when they are not there, read-only or
+  not. They are the files the owner's own connections make and use, and hold
+  none of the store's data. Making them needs a directory this process can
+  write, unless the owner has the file open and they are there already; when
+  neither holds, `connect()` is refused, saying so.
 - **`path` must name the file.** `":memory:"` (the default) and `""` are
   refused: a new database holds no table somebody else made.
 - **What would change the file is refused**: `auto_create_table: true`, and on
@@ -373,21 +380,29 @@ adds:
   `layout: native`, and `read_only: false` is refused.
 - **A view is read in place**, as a table is.
 - **`stream_read` pages through `search`**, each page sorted by the query's
-  sort and then by the key, so every row is read once whatever the batch size,
-  and the query's limit, offset and projection hold. No statement stays open
-  between pages: an open SQLite read would lock the file's owner out of
+  sort and then by the key, and the query's limit, offset and projection hold.
+  On a table nobody writes during the stream, every row is read once whatever
+  the batch size. Each page is found by its offset, so a row the owner adds or
+  removes ahead of the stream's position between two pages moves the rows
+  after it: one can then be read twice or skipped. The key settles ties only
+  if no two rows share it, which a view does not promise. No statement stays
+  open between pages: an open SQLite read would lock the file's owner out of
   writing it, and a DuckDB result left open is cut short by the next statement
   on its connection. As with `search`, a query with no sort promises no order.
+- **The table's name is matched whatever its case**, as both engines read it.
 - **A `json` column reads as the driver returns it.** DuckDB returns an array
   column as a list; SQLite, which has no array type, returns the JSON text the
   column holds.
 
 !!! note "DuckDB and a file open for writing"
 
-    DuckDB refuses a read-only connection to a file another connection holds
-    open for writing -- another process, or a JSON-layout store over the same
-    file in this one. Read a DuckDB file under `layout: native` while nothing
-    is writing it.
+    DuckDB lets one process hold a file open for writing, or any number hold
+    it read-only, never both. So a native DuckDB store holds no connection:
+    `connect()` opens the file to check the table and closes it, and each read
+    opens the file for its own statement. The owner is kept out of its file
+    only while a statement runs, and a read is refused while the owner -- or a
+    JSON-layout store over the same file in this process -- holds it open for
+    writing.
 
 #### A Layout of Your Own
 

@@ -19,7 +19,7 @@ import numpy as np
 from typing import TYPE_CHECKING
 from ..fields import VectorField
 from ..vector.types import DistanceMetric
-from .layout_backend import ColumnLayoutMixin
+from .layout_backend import FileLayoutMixin
 
 if TYPE_CHECKING:
     from ..records import Record
@@ -64,19 +64,29 @@ def register_regexp(conn: sqlite3.Connection) -> None:
     conn.create_function(*REGEXP_FUNCTION, sqlite_regexp, deterministic=True)
 
 
-class SQLiteLayoutMixin(ColumnLayoutMixin):
+class SQLiteLayoutMixin(FileLayoutMixin):
     """What reading a table through a column layout means on SQLite, for both twins.
 
     A native table is in somebody else's file, opened read-only through a
-    ``file:`` URI with ``mode=ro``: SQLite then writes nothing to it and
-    creates no file that is not there. It may be a view as well as a table.
+    ``file:`` URI with ``mode=ro``: SQLite then writes nothing to the file and
+    makes no database file that is not there. It may be a view as well as a
+    table.
+
+    **A file in WAL mode is the exception to "makes nothing".** SQLite reads
+    one through its ``-wal`` and ``-shm`` files even read-only, and makes them
+    beside the file when they are not there. They are what the owner's own
+    connections make and use, and they hold none of the store's data; but they
+    need a directory this process can write, unless the owner has the file
+    open and they are there already.
     """
 
     _DIALECT: ClassVar[str] = "sqlite"
     _PARAM_STYLE: ClassVar[str] = "qmark"
-    _LOCATION_KEYS: ClassVar[str] = "the table name and `path`"
-
-    db_path: str
+    _READ_ONLY_NEEDS: ClassVar[str] = (
+        "A file in WAL mode is read through its `-wal` and `-shm` files, which SQLite "
+        "makes beside it when they are not there, so it needs a directory this process "
+        "can write unless the owner has the file open."
+    )
 
     def _connect_target(self) -> tuple[str, bool]:
         """What the driver opens, and whether it is a URI.
@@ -89,14 +99,6 @@ class SQLiteLayoutMixin(ColumnLayoutMixin):
             return self.db_path, False
         return f"{Path(self.db_path).absolute().as_uri()}?mode=ro", True
 
-    def _unopened_file_error(self, error: Exception) -> RuntimeError:
-        """The refusal for a file that cannot be opened read-only: most often, one not there."""
-        return RuntimeError(
-            f"Database file {self.db_path} cannot be opened read-only ({error}). A table "
-            f"read through `layout: native` is in a file somebody else made, and no file is "
-            f"created here: check `path`."
-        )
-
     def _relation_exists_query(self) -> tuple[str, Any]:
         """Under the native layout, a view is read in place as a table is.
 
@@ -106,7 +108,8 @@ class SQLiteLayoutMixin(ColumnLayoutMixin):
         if not self.native:
             return super()._relation_exists_query()
         return (
-            "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type IN ('table', 'view') AND name = ? COLLATE NOCASE",
             (self.table_name,),
         )
 

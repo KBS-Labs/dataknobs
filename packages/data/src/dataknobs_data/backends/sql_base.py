@@ -2366,17 +2366,23 @@ class SQLTableManager:
             if self.param_style == "pyformat":
                 return sql, {"schema": schema, "table": self.table_name}
             return sql, (schema, self.table_name)
+        # DuckDB and SQLite resolve a table name, quoted or not, whatever its
+        # case, so the lookup does too: otherwise a table their queries read is
+        # reported missing.
         elif self.dialect == "duckdb":
             sql = (
                 "SELECT EXISTS ("
                 "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = ? AND table_name = ?"
+                "WHERE lower(table_schema) = lower(?) AND lower(table_name) = lower(?)"
                 ")"
             )
             schema = self.schema_name or "main"
             return sql, (schema, self.table_name)
         elif self.dialect == "sqlite":
-            sql = "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)"
+            sql = (
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = ? COLLATE NOCASE)"
+            )
             return sql, (self.table_name,)
         else:
             sql = "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = ?)"

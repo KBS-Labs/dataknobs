@@ -18,6 +18,7 @@ from dataknobs_data.backends.config import (
     AsyncDuckDBDatabaseConfig,
     AsyncSQLiteDatabaseConfig,
     DuckDBDatabaseConfigBase,
+    PostgresDatabaseConfig,
     SQLiteDatabaseConfigBase,
     SyncDuckDBDatabaseConfig,
     SyncSQLiteDatabaseConfig,
@@ -165,3 +166,35 @@ def test_scope_keys_are_refused_under_the_json_layout(cls: type) -> None:
     }[cls]
     with pytest.raises(ValidationError, match="scope"):
         backend({"scope": [{"field": "status", "operator": "=", "value": "open"}]})
+
+
+@pytest.mark.parametrize("cls", [*CONFIGS, PostgresDatabaseConfig], ids=_name)
+@pytest.mark.parametrize("layout", ["NATIVE", "json", "columns"])
+def test_a_layout_the_backend_does_not_read_is_refused_by_the_config(
+    cls: type, layout: str
+) -> None:
+    """Bug: the config compared ``layout`` with ``"native"`` and took anything
+    else for the JSON layout, so ``NATIVE`` made a config that would create
+    its table, refused only once a backend was built from it.
+    """
+    with pytest.raises(ValidationError, match="layout"):
+        cls.from_dict({"layout": layout})
+    with pytest.raises(ValidationError, match="layout"):
+        cls(layout=layout)
+
+
+def test_the_layout_annotation_names_the_layouts_the_backend_reads() -> None:
+    """The annotation carries the vocabulary, so a config can be built from it.
+
+    ``Literal["jsonb", "native"] | None``: the layouts the backend reads, and
+    ``None`` for YAML's ``null``, which reads as the default.
+    """
+    import typing
+
+    from dataknobs_data.backends.column_layout import LAYOUTS
+    from dataknobs_data.backends.config import ColumnLayoutConfig
+
+    literal, none = typing.get_args(typing.get_type_hints(ColumnLayoutConfig)["layout"])
+    assert typing.get_args(literal) == LAYOUTS
+    assert none is type(None)
+    assert SyncSQLiteDatabaseConfig.from_dict({"layout": None}).layout == "jsonb"

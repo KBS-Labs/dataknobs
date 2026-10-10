@@ -125,10 +125,15 @@ class SyncSQLiteDatabase(
             self._configure_sqlite()
             # Create table if it doesn't exist
             self._ensure_table()
-        except BaseException:
+        except BaseException as e:
             # Refused after opening, so close what was opened.
             self.conn.close()
             self.conn = None
+            if self.native and isinstance(e, sqlite3.OperationalError):
+                # The first statements to read the file: what fails here on a
+                # native table is reading it, as a WAL file's side files that
+                # cannot be made.
+                raise self._unopened_file_error(e) from e
             raise
 
         self._connected = True

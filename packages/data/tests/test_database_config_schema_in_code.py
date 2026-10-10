@@ -136,3 +136,14 @@ def test_a_backend_given_a_config_built_in_code_holds_its_declared_fields(
     db = db_cls(cfg_cls(schema=SCHEMA, **location))
     assert isinstance(db.schema, DatabaseSchema)
     assert list(db.schema.fields) == ["k"]
+
+
+def test_a_postgres_namespace_given_as_schema_in_code_is_refused_naming_schema_name() -> None:
+    """A string ``schema`` is the SQL namespace when a mapping is read, and is
+    routed to ``schema_name`` there. Built in code it is refused, naming the
+    field that takes it, rather than with the generic refusal of a schema that
+    declares nothing.
+    """
+    assert PostgresDatabaseConfig.from_dict({"schema": "reporting"}).schema_name == "reporting"
+    with pytest.raises(ValidationError, match="schema_name"):
+        PostgresDatabaseConfig(schema="reporting")

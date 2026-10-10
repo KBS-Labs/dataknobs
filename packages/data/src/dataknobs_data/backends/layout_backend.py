@@ -158,3 +158,27 @@ class ColumnLayoutMixin(OperationGateMixin):
         layout = self._read_layout(schema)
         super().set_schema(schema)  # type: ignore[misc]
         self._use_layout(layout)
+
+
+class FileLayoutMixin(ColumnLayoutMixin):
+    """The column layout of a table in a database file, shared by SQLite's and DuckDB's twins.
+
+    A native table is in somebody else's file, which is opened read-only and is
+    never made. A backend names what its engine needs, beyond a readable file,
+    to open one read-only, and the refusal of a file that will not open says it.
+    """
+
+    _LOCATION_KEYS: ClassVar[str] = "the table name and `path`"
+    #: What the engine needs, beyond a readable file, to open one read-only.
+    _READ_ONLY_NEEDS: ClassVar[str] = ""
+
+    db_path: str
+
+    def _unopened_file_error(self, error: Exception) -> RuntimeError:
+        """The refusal for a native table's file that cannot be read: most often, one not there."""
+        needs = f" {self._READ_ONLY_NEEDS}" if self._READ_ONLY_NEEDS else ""
+        return RuntimeError(
+            f"Database file {self.db_path} cannot be opened read-only ({error}). A table "
+            f"read through `layout: native` is in a file somebody else made, and no database "
+            f"file is created here: check `path`.{needs}"
+        )

@@ -299,7 +299,11 @@ class Store:
         self._loop: asyncio.AbstractEventLoop | None = None
         if twin == "async":
             self._loop = asyncio.new_event_loop()
-            self.db: Any = self._loop.run_until_complete(_create_async(config))
+            try:
+                self.db: Any = self._loop.run_until_complete(_create_async(config))
+            except BaseException:
+                self._close_loop()
+                raise
         else:
             self.db = DatabaseFactory().create(**config)
             self.db.connect()
@@ -334,7 +338,12 @@ class Store:
 
     def close(self) -> None:
         self.call("close")
+        self._close_loop()
+
+    def _close_loop(self) -> None:
+        """End the loop as ``asyncio.run`` would, its default executor's threads included."""
         if self._loop is not None:
+            self._loop.run_until_complete(self._loop.shutdown_default_executor())
             self._loop.close()
 
 

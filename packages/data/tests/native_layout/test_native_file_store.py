@@ -10,8 +10,12 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+import subprocess
+import sys
+import threading
 from collections.abc import Iterator
 from pathlib import Path
+
 import pytest
 from _helpdesk import (
     T1,
@@ -153,12 +157,18 @@ def test_a_missing_file_is_refused_and_nothing_is_created(tmp_path: Path, twin: 
             pytest.importorskip("duckdb")
         path = tmp_path / "never" / f"made.{engine}"
         config = _desk(engine, path).config("tickets", TICKET_FIELDS)
+        threads = set(threading.enumerate())
         with pytest.raises(RuntimeError) as caught:
             with opened(twin, config):
                 pass
         message = str(caught.value)
         assert str(path) in message and "layout: native" in message
         assert not path.parent.exists(), "neither the directory nor the file is made"
+        # Bug: async DuckDB left its pool's worker thread running when the
+        # file would not open, though it replaced the pool on a later refusal.
+        assert set(threading.enumerate()) - threads == set(), (
+            f"nothing the refused {engine} connect started runs on"
+        )
 
 
 def test_two_twins_read_one_file_at_once(owned: tuple[str, Path]) -> None:
@@ -176,8 +186,6 @@ def test_a_refused_connect_leaves_nothing_open(owned: tuple[str, Path], twin: st
     the process from exiting; on DuckDB the file stayed held, so its owner
     could not open it for writing in the same process.
     """
-    import threading
-
     engine, path = owned
     config = _desk(engine, path).config("no_such_table", {"id": TICKET_FIELDS["id"]}, scope=[])
     threads = set(threading.enumerate())
@@ -190,3 +198,104 @@ def test_a_refused_connect_leaves_nothing_open(owned: tuple[str, Path], twin: st
     if engine == "duckdb":
         duckdb = pytest.importorskip("duckdb")
         duckdb.connect(str(path)).close()
+
+
+#: What the file's owner runs, in a process of its own, to change every subject.
+OWNER_WRITES = {
+    "sqlite": (
+        "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); "
+        "c.execute(\"UPDATE tickets SET subject = 'changed'\"); c.commit(); c.close()"
+    ),
+    "duckdb": (
+        "import duckdb, sys; c = duckdb.connect(sys.argv[1]); "
+        "c.execute(\"UPDATE tickets SET subject = 'changed'\"); c.close()"
+    ),
+}
+
+
+def test_the_owner_writes_while_a_store_is_connected(owned: tuple[str, Path], twin: str) -> None:
+    """Bug: a connected DuckDB store held its read-only connection, and with it
+    a lock on the file, until it closed: the owner's own process could not open
+    its file for writing for as long as the store lived.
+
+    The owner writes from a process of its own, as it would: within one process
+    DuckDB refuses a second connection to a file with a different configuration
+    whatever this store does.
+    """
+    engine, path = owned
+    with opened(twin, _desk(engine, path).config("tickets", TICKET_FIELDS)) as db:
+        assert db.count() == 4
+        owner = subprocess.run(
+            [sys.executable, "-c", OWNER_WRITES[engine], str(path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert owner.returncode == 0, owner.stderr
+        assert {record["subject"] for record in db.search()} == {"changed"}
+
+
+@pytest.fixture
+def wal_file(tmp_path: Path) -> Path:
+    """An owner's SQLite file in WAL mode, closed: its ``-wal`` and ``-shm`` are gone."""
+    path = write_sqlite_file(tmp_path / "owner.db", (TICKETS,))
+    conn = sqlite3.connect(path)
+    assert conn.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    conn.close()
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["owner.db"]
+    return path
+
+
+def test_a_wal_file_is_read(wal_file: Path, twin: str) -> None:
+    with opened(twin, _desk("sqlite", wal_file).config("tickets", TICKET_FIELDS)) as db:
+        assert db.count() == 4
+
+
+def test_a_wal_file_whose_side_files_cannot_be_made_is_refused_by_name(
+    wal_file: Path, twin: str
+) -> None:
+    """Bug: SQLite reads a WAL file through ``-wal`` and ``-shm`` files it makes
+    beside it, even read-only. In a directory it cannot write it cannot make
+    them, and the store raised SQLite's own ``attempt to write a readonly
+    database`` rather than saying why.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root writes to a directory whatever its permissions")
+    wal_file.parent.chmod(0o555)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            with opened(twin, _desk("sqlite", wal_file).config("tickets", TICKET_FIELDS)):
+                pass
+    finally:
+        wal_file.parent.chmod(0o755)
+    message = str(caught.value)
+    assert str(wal_file) in message and "layout: native" in message
+    assert "-wal" in message and "-shm" in message
+
+
+def test_a_wal_file_its_owner_holds_open_reads_in_a_directory_this_process_cannot_write(
+    wal_file: Path, twin: str
+) -> None:
+    """With the owner connected, its ``-wal`` and ``-shm`` are there to read through."""
+    if os.geteuid() == 0:
+        pytest.skip("root writes to a directory whatever its permissions")
+    owner = sqlite3.connect(wal_file)
+    owner.execute("SELECT COUNT(*) FROM tickets").fetchone()
+    wal_file.parent.chmod(0o555)
+    try:
+        with opened(twin, _desk("sqlite", wal_file).config("tickets", TICKET_FIELDS)) as db:
+            assert db.count() == 4
+    finally:
+        wal_file.parent.chmod(0o755)
+        owner.close()
+
+
+def test_the_table_is_found_whatever_case_names_it(owned: tuple[str, Path], twin: str) -> None:
+    """Bug: the existence check compared the name exactly, though both engines
+    read an unquoted or quoted name whatever its case: ``TICKETS`` was refused
+    as missing over a table its query would have read.
+    """
+    engine, path = owned
+    with opened(twin, _desk(engine, path).config("TICKETS", TICKET_FIELDS)) as db:
+        assert db.count() == 4
