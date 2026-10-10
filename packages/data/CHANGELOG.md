@@ -1610,7 +1610,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-<<<<<<< HEAD
 - **Async SQLite's `close` refuses what has not started and waits for what
   has.** It closed the connection before it refused anything, so an operation
   racing it failed partway with the driver's own `ProgrammingError` or
@@ -1629,7 +1628,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error.** The rollback that handled the commit's failure raised a second,
   which buried the first; closing has already discarded the transaction, so
   the rollback now does nothing once the store is closed.
-=======
 - **A JSON number compares and sorts as a number, exactly, on every SQL
   engine.** DuckDB sorted a JSON field by its JSON text, so `[9, 12, 100]`
   sorted ascending as `[100, 12, 9]`, and a string holding a quote, backslash
@@ -1643,7 +1641,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   descending, on every backend; a missing key and a `null` alike. The
   in-memory sort raised `TypeError` over a sparse number field, SQLite put
   such records first ascending, and PostgreSQL first descending.
->>>>>>> origin/main
 
 - **SQLite and DuckDB `stream_read` returns what `search` would.** Each page
   set its own `LIMIT` and `OFFSET` over the query's, so a stream asked for
