@@ -327,6 +327,7 @@ READS = {
     "build_read_query",
     "build_exists_query",
     "build_search_query",
+    "build_page_query",
     "build_complex_search_query",
     "build_count_query",
     "build_where_clause",
@@ -406,6 +407,14 @@ def test_the_scope_is_numbered_first_and_every_placeholder_after_it(style: str) 
     where, params = builder.build_where_clause(Query(filters=filters), param_start=3)
     assert where.startswith(" AND ")
     assert _placeholders(where, style) == _expected_placeholders(len(params), style, start=3)
+
+    page = Query(filters=filters, sort_specs=[SortSpec("shape"), SortSpec("id")], limit_value=2)
+    sql, params, keys = builder.build_page_query(
+        page, after=["pear"] * len(builder.page_keys(page))
+    )
+    assert params[:6] == ["apple", 1, ["x"], 1, 9, datetime(2024, 1, 1)]
+    assert params[6:] == ["pear"] * (2 * keys - 1), "the last row's keys come after the scope"
+    assert _placeholders(sql, style) == _expected_placeholders(len(params), style)
 
     for build in (builder.build_read_query, builder.build_exists_query):
         sql, params = build("12345678-1234-5678-1234-567812345678")

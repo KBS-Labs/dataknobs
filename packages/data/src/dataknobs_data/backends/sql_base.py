@@ -60,6 +60,9 @@ _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # (non-storage-key) field addresses the data JSONB column.
 _METADATA_FIELD_PREFIX = "metadata."
 
+#: What a page query selects its ``i``-th sort key as: ``f"{PAGE_KEY_PREFIX}{i}"``.
+PAGE_KEY_PREFIX = "_dk_page_key_"
+
 #: One statement ready to run: its SQL, and the values its placeholders bind in
 #: order.
 SQLStatement = tuple[str, list[Any]]
@@ -930,18 +933,17 @@ class SQLQueryBuilder:
             The clauses in statement order; empty when the query names none.
         """
         clauses = []
-        if query.sort_specs:
+        if keys := self.page_keys(query):
             # A record with no value for a sort field sorts last, in either
             # direction and on every engine, as the in-memory sort places it.
             # Here, once, so a consumer's layout gets it too.
-            order_parts: list[str] = []
-            for sort_spec in query.sort_specs:
-                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                order_parts.extend(
-                    f"{key} {direction} NULLS LAST"
-                    for key in self._build_sort_keys(sort_spec.field)
+            clauses.append(
+                "ORDER BY "
+                + ", ".join(
+                    f"{key} {'DESC' if order == SortOrder.DESC else 'ASC'} NULLS LAST"
+                    for key, order in keys
                 )
-            clauses.append("ORDER BY " + ", ".join(order_parts))
+            )
 
         # ``is not None`` so ``limit=0`` becomes ``LIMIT 0`` (zero rows)
         # rather than being silently dropped.
@@ -975,6 +977,144 @@ class SQLQueryBuilder:
         sql_parts.extend(self._paging_clauses(query))
 
         return " ".join(sql_parts), params
+
+    def page_keys(self, query: Query | ComplexQuery) -> list[tuple[str, SortOrder]]:
+        """Every ``ORDER BY`` key of ``query``'s sort, with its direction, most significant first.
+
+        Each sort field's keys come from the layout (:meth:`_build_sort_keys`)
+        and take the field's direction. A missing value -- a ``NULL`` key --
+        sorts last in either direction.
+
+        Args:
+            query: The query whose sort to expand.
+
+        Returns:
+            ``(expression, direction)`` per key; empty when the query has no sort.
+        """
+        return [
+            (key, spec.order)
+            for spec in query.sort_specs
+            for key in self._build_sort_keys(spec.field)
+        ]
+
+    def build_page_query(
+        self, query: Query, after: Sequence[Any] | None = None
+    ) -> tuple[str, list[Any], int]:
+        """A search statement that also reads each row's sort keys, and starts after a row.
+
+        A stream reads one page at a time, each its own statement. Finding a
+        page by its offset counts the rows ahead of it, so a row written ahead
+        of the stream's position between two pages moves every row after it.
+        This statement finds a page by where the last row read sorts instead:
+
+        - Each of :meth:`page_keys`' expressions is selected too, after the
+          layout's own columns, as ``PAGE_KEY_PREFIX`` and its position.
+          :meth:`page_records` splits them off, so the next page is placed by
+          the values the engine itself sorted by.
+        - With ``after``, a row is selected only if it sorts strictly after a
+          row holding those key values: later on the first key, or equal on it
+          and later on the rest. A missing value sorts after every present one
+          and ties with another missing one. Each key takes its own direction,
+          which a row-value comparison cannot express.
+
+        The query's filters, limit and offset are rendered as
+        :meth:`build_search_query` renders them; a stream's page after the
+        first carries no offset (:func:`~dataknobs_data.streaming.stream_page`).
+        Sorting by the key last, as a stream's page does, is what makes the
+        key list total, so no row ties the one ``after`` names.
+
+        Args:
+            query: The page's query.
+            after: The sort keys of the last row read, as :meth:`page_records`
+                returned them; ``None`` for the first page.
+
+        Returns:
+            Tuple of (SQL, parameters, how many sort keys each row carries).
+
+        Raises:
+            ValueError: If ``after`` holds a value for a different number of keys.
+        """
+        keys = self.page_keys(query)
+        selected = [self.layout.select_list(self)]
+        selected.extend(
+            f"{key} AS {quote_ident(f'{PAGE_KEY_PREFIX}{i}')}" for i, (key, _) in enumerate(keys)
+        )
+        sql_parts = [f"SELECT {', '.join(selected)} FROM {self.qualified_table}"]
+
+        where, params = self._filters_clause(query.filters)
+        if after is not None:
+            if len(after) != len(keys):
+                raise ValueError(
+                    f"a page after a row needs a value for each of its {len(keys)} sort keys, "
+                    f"not {len(after)}"
+                )
+            later, later_params = self._after_clause(keys, after, len(params) + 1)
+            where = f"{where} AND {later}" if where else later
+            params.extend(later_params)
+        if where:
+            sql_parts.append("WHERE " + where)
+
+        sql_parts.extend(self._paging_clauses(query))
+        return " ".join(sql_parts), params, len(keys)
+
+    def _after_clause(
+        self, keys: Sequence[tuple[str, SortOrder]], after: Sequence[Any], param_start: int
+    ) -> tuple[str, list[Any]]:
+        """The rows sorting strictly after one whose keys hold ``after`` (see :meth:`build_page_query`).
+
+        ``k1 later OR (k1 same AND (k2 later OR (k2 same AND ...)))``. Later
+        than a present value is a value beyond it in the key's direction, or
+        a missing one; nothing is later than a missing value, and the same as
+        it is another missing one.
+        """
+        params: list[Any] = []
+
+        def bound(value: Any) -> str:
+            params.append(value)
+            return self.param_placeholder(param_start + len(params) - 1)
+
+        def from_key(i: int) -> str:
+            key, order = keys[i]
+            value = after[i]
+            later: str | None = None
+            if value is not None:
+                beyond = "<" if order == SortOrder.DESC else ">"
+                later = f"({key} {beyond} {bound(value)} OR {key} IS NULL)"
+            if i == len(keys) - 1:
+                return later if later is not None else "FALSE"
+            same = f"{key} IS NULL" if value is None else f"{key} = {bound(value)}"
+            tie = f"({same} AND {from_key(i + 1)})"
+            return f"({later} OR {tie})" if later is not None else tie
+
+        # Parameters are bound in the order they appear, as ``?`` needs.
+        return (from_key(0) if keys else "TRUE"), params
+
+    def page_records(
+        self, rows: Sequence[Mapping[str, Any]], query: Query, keys: int
+    ) -> tuple[list[Record], list[Any] | None]:
+        """A page query's rows as records, and the last row's sort keys.
+
+        Args:
+            rows: The rows :meth:`build_page_query`'s statement returned, by
+                column name.
+            query: The page's query, whose projection the records take.
+            keys: How many sort keys each row carries, as
+                :meth:`build_page_query` returned it.
+
+        Returns:
+            The records, and the sort keys to pass as the next page's
+            ``after``; ``None`` for no rows.
+        """
+        names = [f"{PAGE_KEY_PREFIX}{i}" for i in range(keys)]
+        records: list[Record] = []
+        last: list[Any] | None = None
+        for row in rows:
+            columns = dict(row)
+            last = [columns.pop(name) for name in names]
+            records.append(self.record_from_row(columns))
+        if query.fields:
+            records = [record.project(query.fields) for record in records]
+        return records, last
 
     def _values_statements(
         self,
