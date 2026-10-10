@@ -166,3 +166,24 @@ def test_the_sweep_reaches_every_type_it_claims_to(
         "type(s) recorded as unconstructible are now reachable; remove them "
         f"from UNCONSTRUCTIBLE: {sorted(UNCONSTRUCTIBLE - unreached)}"
     )
+
+
+def test_a_type_declared_unhashable_is_reported_as_such() -> None:
+    """Declaring ``__hash__`` None is an answer, not the defect this module hunts.
+
+    Reported as ``"raises"`` it would read as a type claiming the capability
+    and failing at the call, which is the opposite of what it did. Asked by
+    class rather than by instance, so it holds for a type the builder cannot
+    construct as well.
+    """
+    from collections.abc import Hashable
+    from dataclasses import dataclass, field
+
+    from dataknobs_common.structured_config import StructuredConfig
+
+    @dataclass(frozen=True)
+    class Declared(StructuredConfig):
+        tags: list[str] = field(default_factory=list)
+
+    assert not issubclass(Declared, Hashable)
+    assert SWEEP.probe_hashability(Declared)[0] == "unhashable"
