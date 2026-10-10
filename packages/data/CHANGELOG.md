@@ -1019,11 +1019,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Filter.matches` answers it. Every method that writes, creates or drops
   raises `OperationError` before it touches a connection, `connect()` runs no
   DDL, and `auto_create_table`, `ensure_database` or `vector_enabled` set true
-  is refused. A refused configuration fails at construction. The table may be
-  any relation a `SELECT` reads (a table, a view, a materialized view), and
-  `connect()` refuses one it cannot find by name, saying it is not created
-  here. The keys work in any configuration that builds a database, an
-  ontology binding's `database:` block included.
+  is refused. Left out or `null`, each is off, whether the config is read from
+  a mapping or built as a `PostgresDatabaseConfig`. A refused configuration
+  fails at construction. The table may be any relation a `SELECT` reads (a
+  table, a view, a materialized view), and `connect()` refuses one it cannot
+  find by name, saying it is not created here. The keys work in any
+  configuration that builds a database, an ontology binding's `database:`
+  block included.
 - **A Postgres `schema:` from configuration may be the declared fields.** A
   mapping or a list of field rows is read as on every other backend (with
   `sql_type` under `layout: native`); a string is still the SQL namespace.

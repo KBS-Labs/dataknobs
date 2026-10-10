@@ -297,8 +297,10 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     max_pool_size: int = 5
     table: str = "records"
     schema_name: str = "public"
-    ensure_database: bool = True
-    auto_create_table: bool = True
+    #: ``None`` until ``__post_init__`` resolves it from ``layout``; a bool after.
+    ensure_database: bool | None = None
+    #: ``None`` until ``__post_init__`` resolves it from ``layout``; a bool after.
+    auto_create_table: bool | None = None
     layout: str = "jsonb"
     id_column: str | None = None
     #: Filters or ``{field, operator, value}`` mappings; held as mappings.
@@ -371,11 +373,6 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         native = raw.get("layout") == "native"
         if native and not isinstance(raw.get("schema"), (DatabaseSchema, type(None))):
             raw["schema"] = extract_schema_from_config(raw["schema"], keys=NATIVE_FIELD_KEYS)
-        # A native table is never created: what creates one is off unless
-        # given, and refused in ``__post_init__`` if given true.
-        if native:
-            raw.setdefault("auto_create_table", False)
-            raw.setdefault("ensure_database", False)
         # ``table`` wins over the ``table_name`` alias (legacy precedence).
         if "table_name" in raw:
             if "table" not in raw:
@@ -415,9 +412,10 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         object.__setattr__(self, "table", validate_pg_identifier(self.table, "table"))
         object.__setattr__(self, "schema_name", validate_pg_identifier(self.schema_name, "schema"))
         object.__setattr__(self, "port", int(self.port))
-        # A key given with no value (YAML's ``null``) means the default, which
-        # under ``layout: native`` is off: ``_normalize_dict``'s ``setdefault``
-        # cannot supply it for a key that is present.
+        # Unset -- left out, or given with no value (YAML's ``null``) -- means
+        # the layout's default: a native table is never created, so off; and
+        # refused below if given true. Resolved here rather than when a mapping
+        # is read, so a config built directly gets the same default.
         creates_by_default = self.layout != "native"
         object.__setattr__(
             self,

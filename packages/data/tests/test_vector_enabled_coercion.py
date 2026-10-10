@@ -14,9 +14,12 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import ConfigurationError
+
 from dataknobs_data.backends import config as backend_config
 from dataknobs_data.backends.config import PostgresDatabaseConfig, VectorBackendConfig
 from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_data.schema import DatabaseSchema
 
 #: What a concrete config needs beyond the flag to construct at all.
 REQUIRED: dict[str, dict[str, Any]] = {"bucket": {"bucket": "b"}}
@@ -70,3 +73,22 @@ def test_a_native_table_told_false_or_nothing_is_not_refused(key: str, given: An
     """
     config = PostgresDatabaseConfig.from_dict({**NATIVE, key: given})
     assert getattr(config, key) is False
+
+
+def test_a_native_config_built_directly_creates_nothing() -> None:
+    """Bug: the native default, off, was supplied only when a mapping was read.
+
+    A config built directly kept the declared defaults, ``True``, so
+    ``PostgresDatabaseConfig(layout="native", ...)`` was refused for an
+    ``ensure_database: true`` its caller never wrote. The default is resolved
+    from the layout however the config was built.
+    """
+    schema = DatabaseSchema.from_dict({"fields": {"id": "string"}})
+    native = PostgresDatabaseConfig(layout="native", id_column="id", schema=schema)
+    assert (native.ensure_database, native.auto_create_table) == (False, False)
+
+    jsonb = PostgresDatabaseConfig()
+    assert (jsonb.ensure_database, jsonb.auto_create_table) == (True, True)
+
+    with pytest.raises(ConfigurationError, match="ensure_database: true"):
+        PostgresDatabaseConfig(layout="native", id_column="id", schema=schema, ensure_database=True)
