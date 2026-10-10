@@ -27,7 +27,9 @@ The kinds are :func:`~dataknobs_data.query.value_kind`'s names, ``"string"``,
 
 from __future__ import annotations
 
+import enum
 import math
+import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -41,7 +43,7 @@ from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.registry import Registry
 
 from ..fields import FieldType
-from ..query import read_timestamp
+from ..query import Operator, read_timestamp
 
 #: A time held with no zone, compared by its own clock. The name is
 #: :func:`~dataknobs_data.query.value_kind`'s for a time, which a naive one keeps.
@@ -57,6 +59,14 @@ ZONED_WALL_CLOCK = "zoned wall-clock timestamp"
 
 #: Every reading of a time.
 TIME_READINGS = frozenset({NAIVE_TIME, ZONED_INSTANT, ZONED_WALL_CLOCK})
+
+#: A number written as an integer literal, read as the integer it is. A layout
+#: whose engine has no one type holding every number exactly reads a number
+#: bound under this and :data:`REAL_NUMBER`, one part for each.
+INTEGER_NUMBER: Final = "integer number"
+
+#: Any other number, read as a double.
+REAL_NUMBER: Final = "real number"
 
 #: The reading of a bound no value relates to: ``None`` or NaN, which equal
 #: nothing and order against nothing (:func:`~dataknobs_data.query.value_kind`'s
@@ -262,6 +272,140 @@ def _integer_comparand(value: Any, dialect: str) -> Any:
             context={"bound": str(value), "dialect": dialect},
         )
     return float(halfway)
+
+
+class Constant(enum.Enum):
+    """A comparison that every value of a domain answers alike (see :func:`comparand`)."""
+
+    #: No value of the domain meets the comparison.
+    MATCHES_NONE = "matches none"
+    #: Every value of the domain meets the comparison.
+    MATCHES_ALL = "matches all"
+
+
+#: No value of the domain meets the comparison.
+MATCHES_NONE: Final = Constant.MATCHES_NONE
+
+#: Every value of the domain meets the comparison.
+MATCHES_ALL: Final = Constant.MATCHES_ALL
+
+
+@dataclass(frozen=True)
+class NumberDomain:
+    """The numbers a reading of a stored value can be, and so what can be compared with it.
+
+    Attributes:
+        integers: The integers it can be, or ``None`` for none.
+        doubles: Whether it can be any finite IEEE double.
+    """
+
+    integers: range | None = None
+    doubles: bool = False
+
+
+#: What SQLite reads a JSON number as: a 64-bit integer, or a double.
+INT64_OR_DOUBLE: Final = NumberDomain(integers=_INT64, doubles=True)
+
+#: What DuckDB reads a JSON integer as: a ``HUGEINT``.
+HUGEINT: Final = NumberDomain(integers=range(-(2**127), 2**127))
+
+#: What DuckDB reads any other JSON number as: a ``DOUBLE``.
+DOUBLE: Final = NumberDomain(doubles=True)
+
+_MAX_DOUBLE = sys.float_info.max
+
+#: The operators one comparand answers: membership, equality and the four orderings.
+_COMPARAND_OPERATORS = frozenset(
+    {Operator.EQ, Operator.IN, Operator.GT, Operator.GTE, Operator.LT, Operator.LTE}
+)
+
+
+def _integer_neighbours(integers: range, bound: Any) -> tuple[Any, Any, Any]:
+    """The integer in ``integers`` equal to ``bound``, else the nearest each side."""
+    first, last = integers[0], integers[-1]
+    if isinstance(bound, float) and math.isinf(bound):
+        return (None, last, None) if bound > 0 else (None, None, first)
+    below, above = math.floor(bound), math.ceil(bound)
+    if below == above and below in integers:
+        return below, None, None
+    low = min(below, last) if below >= first else None
+    high = max(above, first) if above <= last else None
+    return None, low, high
+
+
+def _double_neighbours(bound: Any) -> tuple[Any, Any, Any]:
+    """The finite double equal to ``bound``, else the nearest each side."""
+    try:
+        near = float(bound)
+    except OverflowError:
+        near = math.inf if bound > 0 else -math.inf
+    if math.isinf(near) and not (isinstance(bound, float) and math.isinf(bound)):
+        # Past every double: the largest is its only neighbour.
+        return (None, _MAX_DOUBLE, None) if near > 0 else (None, None, -_MAX_DOUBLE)
+    if near == bound:
+        return near, None, None
+    if near < bound:
+        above = math.nextafter(near, math.inf)
+        return None, near, (None if math.isinf(above) else above)
+    below = math.nextafter(near, -math.inf)
+    return None, (None if math.isinf(below) else below), near
+
+
+def comparand(domain: NumberDomain, op: Operator, bound: Any) -> Any:
+    """What a number column of ``domain`` is compared with, for ``op`` and ``bound``.
+
+    A driver binds a number only of the kinds it has, and an engine compares
+    two numbers of different kinds by converting one, which can round. So a
+    bound the domain holds exactly is sent as the domain's own value, an
+    ``int`` or a ``float``, and compared as it is.
+
+    A bound the domain cannot hold lies strictly between two values it can,
+    ``low < bound < high``. Nothing equals it, and every ordering keeps its
+    operator with one of the two, since for any value ``x`` of the domain
+    ``x > bound`` exactly when ``x > low``, and ``x < bound`` exactly when
+    ``x < high``:
+
+    - ``EQ`` and ``IN`` (one membership member) match nothing.
+    - ``GT`` and ``LTE`` compare with ``low``; ``GTE`` and ``LT`` with ``high``.
+    - A ``BETWEEN`` compares its low bound as ``GTE`` and its high one as
+      ``LTE``.
+
+    A bound past every value of the domain has one neighbour, and the
+    comparison on the other side is constant.
+
+    Args:
+        domain: The numbers the column can hold.
+        op: ``EQ``, ``IN``, ``GT``, ``GTE``, ``LT`` or ``LTE``.
+        bound: A number: an ``int``, ``float``, ``Decimal``, or any other the
+            :mod:`numbers` tower holds (a numpy number, a ``Fraction``).
+
+    Returns:
+        The value to compare with, or :data:`MATCHES_NONE` /
+        :data:`MATCHES_ALL` when every value of the domain answers alike.
+    """
+    if op not in _COMPARAND_OPERATORS:
+        raise ValueError(f"No single comparand answers {op.value}; split it first")
+    found: list[tuple[Any, Any, Any]] = []
+    if domain.integers is not None:
+        found.append(_integer_neighbours(domain.integers, bound))
+    if domain.doubles:
+        found.append(_double_neighbours(bound))
+    for exact, _, _ in found:
+        if exact is not None:
+            return exact
+    lows = [low for _, low, _ in found if low is not None]
+    highs = [high for _, _, high in found if high is not None]
+    low = max(lows) if lows else None
+    high = min(highs) if highs else None
+    if op in (Operator.EQ, Operator.IN):
+        return MATCHES_NONE
+    if op in (Operator.GT, Operator.LTE):
+        if low is not None:
+            return low
+        return MATCHES_ALL if op == Operator.GT else MATCHES_NONE
+    if high is not None:
+        return high
+    return MATCHES_NONE if op == Operator.GTE else MATCHES_ALL
 
 
 def _canonical_uuid(value: Any) -> Any:
