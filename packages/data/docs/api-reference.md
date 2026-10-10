@@ -757,13 +757,26 @@ query's limit honoured and its offset skipped on the first page. The reader,
 `search_page(page, after)`, returns the page's records and its last row's
 sort keys, and the next page begins strictly after a row holding them —
 `SQLQueryBuilder.build_page_query(page, after)` writes that statement and
-`page_records` splits its rows. So a stream of a table nobody writes is
-exactly `search(query)`, and on a table somebody writes meanwhile, a row
-present for the whole stream is read once and a row written meanwhile is read
-if it sorts after the stream's position. The key must be unique: of two rows
-agreeing on every sort key and the key, the one after a page boundary is not
-read. The key is how the pages fit together, not an order the stream
+`page_records` splits its rows. So a stream of a table nobody writes reads
+the rows `search(query)` returns, ties in the sort broken by the key. On a
+table somebody writes meanwhile, a row present for the whole stream, its sort
+value unchanged, is read once; a row written meanwhile is read if it sorts
+after the stream's position; and a row whose sort value changes moves with
+it, so it can be read twice or not at all. The key must be unique: of two
+rows agreeing on every sort key and the key, the one after a page boundary is
+not read. The key is how the pages fit together, not an order the stream
 promises.
+
+The next page is placed by the keys as the driver returned them, so each key
+a layout sorts by must come back from its driver as exactly the value it is
+(`ColumnLayout.sort_keys`). A page that ends on the keys it was read after —
+a reader that ignored `after`, or a key the driver changed — raises
+`OperationError` rather than being read again forever.
+
+What a page costs depends on the sort. With no sort, a page is ordered by the
+key alone, and on a SQLite table this package created each page seeks the
+primary key's index from the last row read. A sort on a field reads every row
+the query matches, on each page.
 
 `StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):
 it loads from a plain dict via `StreamConfig.from_dict({"batch_size":

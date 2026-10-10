@@ -1089,7 +1089,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `after` begins strictly after the row holding those keys; and the split of
   its rows into records and the keys the next page starts after. Built on a
   layout's `sort_keys`, so a consumer's `ColumnLayout` pages this way with
-  nothing more: each key it returns must be a value its driver can return.
+  nothing more: each key it returns must come back from its driver as
+  exactly the value it is. `page_keys` returns a `PageKey` per key; a key
+  that cannot be missing -- the storage key of a layout setting
+  `ColumnLayout.key_never_null` -- is compared without the missing case, so
+  an index on it serves the page. `records_from_rows` turns a search's rows
+  into records, as `search` does.
+- **`PAGE_KEY_PREFIX`** (`dataknobs_data.backends.column_layout`, and
+  `sql_base`): the names a page query selects its sort keys as. A native
+  layout refuses a column beginning with it.
 - **`sqlite_regexp` and `register_regexp`**
   (`dataknobs_data.backends.sqlite_mixins`): the `REGEXP` function both
   SQLite backends register on every connection.
@@ -1663,12 +1671,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream has yet to read.** Every page after the first begins strictly after
   the last row read, by that row's sort keys as the engine computed them,
   rather than by counting the rows ahead of it. A row present for the whole
-  stream is read once, and a row written meanwhile is read if it sorts after
-  the stream's position; a row added or removed ahead of it no longer makes
-  another be read twice or skipped. No page past the first skips rows, so a
-  long stream no longer scans every row it has already read on each page. The
-  key must still be unique: on a view where two rows agree on every sort key
-  and the key, the one after a page boundary is not read.
+  stream, its sort value unchanged, is read once, and a row written
+  meanwhile is read if it sorts after the stream's position; a row added or
+  removed ahead of it no longer makes another be read twice or skipped. A
+  row whose sort value changes moves with it, and can be read twice or not
+  at all. The key must still be unique: on a view where two rows agree on
+  every sort key and the key, the one after a page boundary is not read. A
+  stream with no sort, over a SQLite table this package created, now seeks
+  the primary key's index for each page, where each page used to read every
+  row before it; a sort on a field still reads every matching row on each
+  page. A page ending on the keys it was read after raises `OperationError`
+  rather than repeating forever.
+- **A native DuckDB column sorts as its driver returns it.** A column
+  declared text that is an enum sorted by the enum's declaration, not by code
+  point as a text field sorts; it now sorts as its text, in `search` and in a
+  stream. A time column sorts as the driver returns its value -- cut to the
+  microsecond, and an infinite time, or one beyond the years Python holds, as
+  the earliest or the latest Python holds -- where a stream over a finer or
+  an infinite time began each page at the row it had just read, and never
+  ended, and a stream over an enum ended early.
 - **A backend config built in code reads its `schema` as `from_dict` does.**
   `SQLiteDatabaseConfig(schema={"fields": ...})` and its siblings kept the
   mapping as given, so `db.schema` was a `dict` and a backend that reads the
