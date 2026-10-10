@@ -763,7 +763,9 @@ class SyncElasticsearchDatabase(
                         # Likely a text field, add .keyword for sorting
                         field_path = f"data.{sort_spec.field}.keyword"
                 order = "desc" if sort_spec.order == SortOrder.DESC else "asc"
-                sort.append({field_path: {"order": order}})
+                # A record with no value sorts last in either direction, as on
+                # every backend; stated rather than left to the default.
+                sort.append({field_path: {"order": order, "missing": "_last"}})
 
         # One request inside the result window, ``search_after`` pages past
         # it or for an unbounded read; the plan is shared with the async twin.

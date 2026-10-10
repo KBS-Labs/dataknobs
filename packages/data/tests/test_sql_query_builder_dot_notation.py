@@ -382,8 +382,8 @@ class TestSortExprDotNotation:
     def test_postgres_simple_sort(self) -> None:
         b = _builder("postgres")
         assert b._build_sort_keys("name") == [
-            "CASE WHEN jsonb_typeof(data->'name') = 'string' THEN '\"\"'::jsonb"
-            " ELSE data->'name' END",
+            "CASE jsonb_typeof(data->'name') WHEN 'string' THEN '\"\"'::jsonb"
+            " WHEN 'null' THEN NULL ELSE data->'name' END",
             "(data->>'name') COLLATE \"C\"",
         ]
 

@@ -931,11 +931,15 @@ class SQLQueryBuilder:
         """
         clauses = []
         if query.sort_specs:
+            # A record with no value for a sort field sorts last, in either
+            # direction and on every engine, as the in-memory sort places it.
+            # Here, once, so a consumer's layout gets it too.
             order_parts: list[str] = []
             for sort_spec in query.sort_specs:
                 direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
                 order_parts.extend(
-                    f"{key} {direction}" for key in self._build_sort_keys(sort_spec.field)
+                    f"{key} {direction} NULLS LAST"
+                    for key in self._build_sort_keys(sort_spec.field)
                 )
             clauses.append("ORDER BY " + ", ".join(order_parts))
 
@@ -1391,7 +1395,8 @@ class SQLQueryBuilder:
             return [typed]
         text = self._build_json_field_expr(nested_path, column=column)
         return [
-            f"CASE WHEN jsonb_typeof({typed}) = 'string' THEN '\"\"'::jsonb ELSE {typed} END",
+            f"CASE jsonb_typeof({typed}) WHEN 'string' THEN '\"\"'::jsonb "
+            f"WHEN 'null' THEN NULL ELSE {typed} END",
             self.code_point_order(text),
         ]
 
