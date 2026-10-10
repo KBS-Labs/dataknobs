@@ -133,7 +133,7 @@ When updating documentation for any package:
 
 5. **Classify the pair in the doc-mirror manifest:**
    ```bash
-   python3 bin/docs-mirror-check.py
+   uv run python bin/docs-mirror-check.py
    ```
    Docs in scope must be classified in
    `.dataknobs/docs-mirror-manifest.json`, and an unclassified one fails

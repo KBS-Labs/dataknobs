@@ -253,7 +253,7 @@ a `total_seconds`, so a slow gate can be diagnosed from the artifact instead of
 from a stopwatch and an impression:
 
 ```bash
-python3 -c "
+uv run python -c "
 import json; d = json.load(open('.quality-artifacts/quality-summary.json'))
 print(f\"total {d['total_seconds']}s\")
 for name, c in sorted(d['checks'].items(), key=lambda kv: -(kv[1]['duration_seconds'] or 0)):

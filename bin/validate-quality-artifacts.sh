@@ -107,7 +107,7 @@ print_info() {
 # so that ruff and mypy check it and a test can drive it directly. A program
 # embedded in a shell string is checked by nothing until it runs.
 read_summary() {
-    python3 "$SCRIPT_DIR/read-quality-summary.py" "$1" 2>/dev/null \
+    uv run python "$SCRIPT_DIR/read-quality-summary.py" "$1" 2>/dev/null \
         || printf 'ERROR\037could not run read-quality-summary.py\n'
 }
 
@@ -189,23 +189,23 @@ print_check "Package content hashes"
 HASH_RESULT=$(uv run python "$SCRIPT_DIR/package-hashes.py" validate --json --artifacts-dir "$ARTIFACTS_DIR" 2>/dev/null) || true
 
 if [ -n "$HASH_RESULT" ]; then
-    HASH_VALID=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid', False))")
-    HASH_ERROR=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('error', ''))")
+    HASH_VALID=$(echo "$HASH_RESULT" | uv run python -c "import sys, json; print(json.load(sys.stdin).get('valid', False))")
+    HASH_ERROR=$(echo "$HASH_RESULT" | uv run python -c "import sys, json; print(json.load(sys.stdin).get('error', ''))")
 
     if [ -n "$HASH_ERROR" ]; then
         print_fail "Hash validation error: $HASH_ERROR"
         VALIDATION_FAILED=1
     elif [ "$HASH_VALID" = "True" ]; then
-        DIRTY_COUNT=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('dirty_packages', [])))")
+        DIRTY_COUNT=$(echo "$HASH_RESULT" | uv run python -c "import sys, json; print(len(json.load(sys.stdin).get('dirty_packages', [])))")
         if [ "$DIRTY_COUNT" = "0" ]; then
             print_pass "All packages unchanged since last quality run"
         else
             print_pass "All dirty packages have been tested"
         fi
     else
-        CHANGED=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_packages', [])))")
-        DIRTY=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('dirty_packages', [])))")
-        SCOPES=$(echo "$HASH_RESULT" | python3 -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_scopes', [])))")
+        CHANGED=$(echo "$HASH_RESULT" | uv run python -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_packages', [])))")
+        DIRTY=$(echo "$HASH_RESULT" | uv run python -c "import sys, json; print(', '.join(json.load(sys.stdin).get('dirty_packages', [])))")
+        SCOPES=$(echo "$HASH_RESULT" | uv run python -c "import sys, json; print(', '.join(json.load(sys.stdin).get('changed_scopes', [])))")
         print_fail "Package content has changed since quality checks were run"
         if [ -n "$CHANGED" ]; then
             print_info "Changed packages: $CHANGED"
@@ -307,7 +307,7 @@ fi
 # a failure it will not act on is how the signature check below spent its
 # entire life reporting a defect nobody could see.
 print_check "Code coverage"
-COVERAGE=$(python3 -c "
+COVERAGE=$(uv run python -c "
 import json
 try:
     with open('$ARTIFACTS_DIR/quality-summary.json') as fh:

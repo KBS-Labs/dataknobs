@@ -107,7 +107,7 @@ run_doc_check "docs-versions" "documentation versions" "docs-versions.log" \
     -- "$SCRIPT_DIR/docs-update-versions.sh" --check
 
 run_doc_check "docs-mirror" "doc mirrors (package <-> site)" "docs-mirror.log" \
-    -- python3 "$SCRIPT_DIR/docs-mirror-check.py" --check
+    -- uv run python "$SCRIPT_DIR/docs-mirror-check.py" --check
 
 # Emit machine-readable per-check status for callers (run-quality-checks.sh).
 #

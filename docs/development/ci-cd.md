@@ -244,7 +244,7 @@ blanket fix and no `--fix` flag, since a classified pair is one text at two
 paths rather than two copies to reconcile. Run it locally for the full list:
 
 ```bash
-python3 bin/docs-mirror-check.py
+uv run python bin/docs-mirror-check.py
 bin/docs-update-versions.sh --check
 ```
 
@@ -256,7 +256,7 @@ Each job is a thin wrapper over a script in `bin/`, so run the script directly:
 ./bin/validate-quality-artifacts.sh      # the pull-request gate
 uv run python bin/validate-package-references.py
 uv run mkdocs build --strict
-python3 bin/docs-mirror-check.py
+uv run python bin/docs-mirror-check.py
 ```
 
 ## Resources
