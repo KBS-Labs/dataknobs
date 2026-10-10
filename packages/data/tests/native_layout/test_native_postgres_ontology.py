@@ -240,3 +240,24 @@ async def test_an_ontology_reads_one_tenants_categories_in_place(entities: Any) 
     # no parent and no children, is a category but not in the tree.
     assert list(roots) == [str(HARDWARE)]
     assert not software_in_tree
+
+
+async def test_a_projection_column_the_block_does_not_declare_is_refused(
+    pg: tuple[dict[str, Any], str],
+) -> None:
+    """Bug: ``aliases`` listed in the binding's ``schema:`` rows but left out of
+    the native block loaded, and every entity read its aliases as ``[]``: a
+    native read selects only the columns its block declares.
+    """
+    fields = {name: CATEGORY_FIELDS[name] for name in ("id", "tenant_id", "name", "parent_id")}
+    registry = OntologyRegistry()
+    try:
+        with pytest.raises(ValidationError) as caught:
+            await registry.load(
+                document("acme_categories", block(pg, ACME, schema={"fields": fields}))
+            )
+        message = str(caught.value)
+        assert "'categories'" in message and "aliases" in message
+        assert caught.value.context.get("binding") == "categories"
+    finally:
+        await registry.close()

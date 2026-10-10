@@ -178,9 +178,10 @@ sql, params = builder.build_search_query(Query(filters=[Filter("size", Operator.
 #   WHERE "status" = $1 AND "size" >= CAST($2 AS numeric)
 ```
 
-**The PostgreSQL backends take it by configuration**
-([below](#reading-a-native-table-through-the-postgresql-backend)); SQLite and
-DuckDB do not yet. What the builder guarantees:
+**The PostgreSQL, SQLite and DuckDB backends take it by configuration**
+([PostgreSQL](#reading-a-native-table-through-the-postgresql-backend),
+[SQLite and DuckDB](#reading-a-native-table-in-a-sqlite-or-duckdb-file)).
+What the builder guarantees:
 
 - **Only declared columns.** A filter, sort or scope naming another column
   (or a dotted path) raises `ValidationError` before SQL is built, and a
@@ -325,6 +326,92 @@ columns, key and scope describe one table; hand the forms store to the
 registry as `forms_database=` instead. Where the forms are a store of their
 own, a surface-form lookup answers only the entity ids the entity store holds,
 so a form belonging to a row outside the scope is not a match.
+
+#### Reading a Native Table in a SQLite or DuckDB File
+
+Both SQLite backends and both DuckDB backends read a table in a file somebody
+else wrote -- an export, an analytics extract, another application's local
+store -- with the same keys as PostgreSQL:
+
+```python
+from dataknobs_data import Filter, Operator, Query, database_factory
+
+db = database_factory.create(
+    backend="sqlite",               # or "duckdb"
+    path="/srv/exports/catalog.db",
+    table="nodes",
+    layout="native",
+    id_column="node_id",
+    schema={"fields": {
+        "node_id": {"type": "string", "sql_type": "uuid"},
+        "name": "string",
+        "size": "integer",
+        "status": "string",
+    }},
+    scope=[{"field": "status", "operator": "=", "value": "live"}],
+)
+db.connect()
+large = db.search(Query(filters=[Filter("size", Operator.GTE, 3)]))
+```
+
+What PostgreSQL's backend adds to the layout holds here too: every read goes
+through the layout, including `count()` with no query; a refused configuration
+fails at construction; every write raises `OperationError` before it touches
+the file; and a native backend does not claim `CONDITIONAL_WRITE`. What a file
+adds:
+
+- **The file is opened read-only**, by the driver as well as by name: SQLite
+  through a `file:` URI with `mode=ro`, DuckDB with `read_only`. So a file
+  shared without write permission reads, and nothing a store does can change
+  the file: `connect()` makes no directory, no database file, no table and no
+  journal. A file that is not there is refused, naming `path`, and nothing is
+  created.
+- **A SQLite file in WAL mode is read through its `-wal` and `-shm` files**,
+  and SQLite makes them beside the file when they are not there, read-only or
+  not. They are the files the owner's own connections make and use, and hold
+  none of the store's data. Making them needs a directory this process can
+  write, unless the owner has the file open and they are there already; when
+  neither holds, `connect()` is refused, saying so.
+- **A SQLite file its owner has locked** is waited for, up to `timeout`
+  seconds, and then `connect()` is refused, saying the owner holds the file.
+- **`path` must name the file.** `":memory:"` (the default) and `""` are
+  refused: a new database holds no table somebody else made.
+- **What would change the file is refused**: `auto_create_table: true`, and on
+  SQLite `journal_mode` (the journal mode is written into the file) and
+  `vector_enabled: true`. On DuckDB `read_only` is on by default under
+  `layout: native`, and `read_only: false` is refused.
+- **A view is read in place**, as a table is.
+- **`stream_read` pages through `search`**, each page sorted by the query's
+  sort and then by the key, and the query's limit, offset and projection hold.
+  On a table nobody writes during the stream, every row is read once whatever
+  the batch size. Each page is found by its offset, so a row the owner adds or
+  removes ahead of the stream's position between two pages moves the rows
+  after it: one can then be read twice or skipped. The key settles ties only
+  if no two rows share it, which a view does not promise. No statement stays
+  open between pages: an open SQLite read would lock the file's owner out of
+  writing it, and a DuckDB result left open is cut short by the next statement
+  on its connection. As with `search`, a query with no sort promises no order.
+- **The table's name is matched whatever its case**, as both engines read it.
+- **A `json` column reads as the driver returns it.** DuckDB returns an array
+  column as a list; SQLite, which has no array type, returns the JSON text the
+  column holds.
+
+!!! note "DuckDB and a file open for writing"
+
+    DuckDB lets one process hold a file open for writing, or any number hold
+    it read-only, never both, and it waits for neither: a lock it cannot take
+    fails at once. So a native DuckDB store holds no connection: `connect()`
+    opens the file to check the table and closes it, and each read opens the
+    file for its own statement.
+
+    - The owner is kept out of its file only while a statement runs, but an
+      owner that opens the file then is refused at once, and retries.
+    - A read is refused, saying the owner holds the file, for as long as the
+      owner -- or a JSON-layout store over the same file in this process --
+      holds it open for writing. An owner that keeps one connection open for
+      its whole life keeps every native read out for that long.
+    - Each read pays for opening the file. Reads on the async store run side
+      by side, each on a connection of its own.
 
 #### A Layout of Your Own
 

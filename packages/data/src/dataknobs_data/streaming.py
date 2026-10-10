@@ -14,11 +14,12 @@ from dataknobs_common.callbacks import run_callback
 from dataknobs_common.structured_config import StructuredConfig
 
 from .exceptions import DuplicateRecordError, OperationError
+from .query import Query, SortSpec, is_storage_key_field, RESERVED_KEY_FIELD
 
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-    from .query import Query
+    from .query_logic import ComplexQuery
     from .records import Record
 
 
@@ -552,6 +553,88 @@ async def async_run_stream_write(
     return result
 
 
+def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
+    """The ``search`` that reads a stream's next page, or ``None`` when the stream is done.
+
+    For a backend that streams by paging through ``search``. Each page is a
+    search of its own, so the pages agree with one another only if each sorts
+    the rows the same way: a sort that ties -- or no sort -- leaves the order
+    of the tied rows to the engine, page by page, and a row can then be read
+    twice or never. So each page sorts by the query's own sort and then by the
+    key (:data:`~dataknobs_data.query.RESERVED_KEY_FIELD`). That is how the
+    pages are made consistent, not an order the stream promises: as with
+    ``search``, a query with no sort promises none.
+
+    Consistent, that is, while two things hold. No two rows may share the key,
+    which a table's primary key promises and a view does not. And nobody may
+    write the table during the stream: each page is found by its offset, so a
+    row added or removed ahead of the stream's position between two pages moves
+    the rows after it, and one is then read twice or skipped.
+
+    The query's offset, limit and projection hold: the stream returns what
+    ``search(query)`` would, one page at a time.
+
+    Args:
+        query: The caller's query, which is not changed.
+        streamed: How many records the stream has returned so far.
+        batch_size: The most records a page reads.
+
+    Returns:
+        The page's query, or ``None`` once the query's limit is reached.
+    """
+    limit = batch_size
+    if query.limit_value is not None:
+        remaining = query.limit_value - streamed
+        if remaining <= 0:
+            return None
+        limit = min(limit, remaining)
+    page = query.copy()
+    if not any(is_storage_key_field(spec.field) for spec in page.sort_specs):
+        page.sort_specs.append(SortSpec(RESERVED_KEY_FIELD))
+    page.offset_value = (query.offset_value or 0) + streamed
+    page.limit_value = limit
+    return page
+
+
+def iter_search_pages(
+    search: Callable[[Query], list[Record]], query: Query | None, config: StreamConfig | None
+) -> Iterator[Record]:
+    """Stream what ``search(query)`` returns, a :func:`stream_page` at a time.
+
+    No statement is held open between pages, so no read a stream left open
+    blocks a writer, and nothing run between records cuts a page short.
+    """
+    query = query if query is not None else Query()
+    batch_size = (config or StreamConfig()).batch_size
+    streamed = 0
+    while (page := stream_page(query, streamed, batch_size)) is not None:
+        records = search(page)
+        yield from records
+        streamed += len(records)
+        # A short page is the last; ``StreamConfig`` refuses a batch size of 0.
+        if page.limit_value is None or len(records) < page.limit_value:
+            return
+
+
+async def aiter_search_pages(
+    search: Callable[[Query], Awaitable[list[Record]]],
+    query: Query | None,
+    config: StreamConfig | None,
+) -> AsyncIterator[Record]:
+    """:func:`iter_search_pages` over an async ``search``."""
+    query = query if query is not None else Query()
+    batch_size = (config or StreamConfig()).batch_size
+    streamed = 0
+    while (page := stream_page(query, streamed, batch_size)) is not None:
+        records = await search(page)
+        for record in records:
+            yield record
+        streamed += len(records)
+        # A short page is the last; ``StreamConfig`` refuses a batch size of 0.
+        if page.limit_value is None or len(records) < page.limit_value:
+            return
+
+
 class StreamProcessor:
     """Base class for stream processing utilities."""
 
@@ -667,6 +750,27 @@ class StreamProcessor:
 class StreamingMixin:
     """Mixin class providing common streaming functionality for sync databases."""
 
+    if TYPE_CHECKING:
+        # The host database's surface these defaults drive, declared for the
+        # type checker only, and spelled as ``SyncDatabase`` spells it: a
+        # runtime stub here would shadow the host's body on any backend
+        # listing this mixin first.
+        def search(self, query: Query | ComplexQuery) -> list[Record]: ...
+
+        def create(self, record: Record) -> str: ...
+
+        def create_batch(self, records: list[Record]) -> list[str]: ...
+
+        def upsert(
+            self,
+            id_or_record: str | Record,
+            record: Record | None = None,
+            *,
+            expected_version: str | None = None,
+        ) -> str: ...
+
+        def upsert_batch(self, records: list[Record]) -> list[str]: ...
+
     def _default_stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
@@ -721,6 +825,24 @@ class StreamingMixin:
 
 class AsyncStreamingMixin:
     """Mixin class providing common streaming functionality for async databases."""
+
+    if TYPE_CHECKING:
+        # As on ``StreamingMixin``, spelled as ``AsyncDatabase`` spells it.
+        async def search(self, query: Query | ComplexQuery) -> list[Record]: ...
+
+        async def create(self, record: Record) -> str: ...
+
+        async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]: ...
+
+        async def upsert(
+            self,
+            id_or_record: str | Record,
+            record: Record | None = None,
+            *,
+            expected_version: str | None = None,
+        ) -> str: ...
+
+        async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]: ...
 
     async def _default_stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None

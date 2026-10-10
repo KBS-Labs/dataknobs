@@ -222,21 +222,12 @@ CASES: list[tuple[str, Operator, Any, set[str]]] = [
 )
 def test_every_answer_is_the_oracles(
     engine: Engine,
-    request: pytest.FixtureRequest,
     field: str,
     op: Operator,
     value: Any,
     expected: set[str],
 ) -> None:
     """No case raises; each selects what ``Filter.matches`` selects."""
-    if engine.name == "sqlite" and op == Operator.REGEX:
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                reason="SQLite has no REGEXP function unless the connection registers "
-                "one, and no SQLite backend does yet, under the JSON layout as here",
-            )
-        )
     layout = _layout()
     spec = Filter(field, op, value)
 

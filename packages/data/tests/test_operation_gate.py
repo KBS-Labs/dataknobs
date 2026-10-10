@@ -49,7 +49,7 @@ GATED = frozenset(
         "create", "update", "delete", "upsert", "clear",
         "create_batch", "upsert_batch", "delete_batch", "update_batch",
         "stream_write", "bulk_embed_and_store", "update_vector", "delete_from_index",
-        "transaction", "begin_transaction",
+        "add_vectors", "transaction", "begin_transaction",
         "enable_vector_support", "create_vector_index", "drop_vector_index",
         "vector_search", "hybrid_search", "get_vector_index_stats",
     }

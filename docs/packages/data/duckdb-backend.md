@@ -128,7 +128,7 @@ db = factory.create(
     # Connection timeout in seconds (default: 5.0)
     timeout=10.0,
 
-    # Open in read-only mode (default: False)
+    # Open in read-only mode (default: False, and True under layout: native)
     # Useful for querying production databases safely
     read_only=False
 )
@@ -141,9 +141,9 @@ async_db = async_factory.create(
     # Number of worker threads for async operations (default: 4)
     max_workers=8,
 
-    # Create the records table on connect if missing (default: True).
-    # Set to False when an external migration tool owns DDL.
-    # No-op when read_only=True.
+    # Create the records table on connect if missing (default: True, and
+    # False under layout: native). Set to False when an external migration
+    # tool owns DDL. No-op when read_only=True.
     auto_create_table=True
 )
 ```
@@ -173,9 +173,44 @@ When `auto_create_table` is `False`:
 - When `read_only=True`, both the DDL creation and the fail-fast existence check
   are skipped entirely — `auto_create_table` is effectively ignored. If you
   depend on `auto_create_table=False` to detect a missing table at startup,
-  do not combine it with `read_only=True`.
+  do not combine it with `read_only=True`. Under `layout: native` the check
+  always runs.
 
 The default is `True`, preserving backward compatibility with all existing consumers.
+
+## Reading a Table You Do Not Own
+
+A table in a DuckDB file somebody else wrote, with its own typed columns, is
+read with `layout: native`: the `schema:` declares the columns, `id_column`
+names the key, and `scope` fixes which rows are this store's.
+
+```python
+db = factory.create(
+    backend="duckdb",
+    path="/srv/extracts/sales.duckdb",
+    table="orders",
+    layout="native",
+    id_column="order_id",
+    schema={"fields": {
+        "order_id": {"type": "string", "sql_type": "uuid"},
+        "region": "string",
+        "total": "float",
+    }},
+    scope=[{"field": "region", "operator": "=", "value": "West"}],
+)
+db.connect()
+```
+
+The file is opened `read_only`, so nothing is written, created or changed,
+and a missing table or file is refused by name. A view is read as a table is.
+`":memory:"`, `read_only: false` and `auto_create_table: true` are refused,
+and every write raises `OperationError`. DuckDB lets one process write a file
+or any number read it, never both, and waits for neither. So the store holds
+no connection between reads: each read opens the file for its own statement.
+The owner is kept out only while a statement runs, and retries if it opens the
+file then; a read is refused, saying the owner holds the file, for as long as
+the owner holds it open for writing. See
+[Reading a Native Table in a SQLite or DuckDB File](query.md#reading-a-native-table-in-a-sqlite-or-duckdb-file).
 
 ## Advanced Features
 

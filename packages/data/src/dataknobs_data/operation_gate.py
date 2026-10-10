@@ -5,9 +5,8 @@
 
 The database bases and the vector and bulk-embed mixins hold one body for each
 write, for what creates or drops a vector index, and for the vector search
-surface, and a backend either inherits that body or defines its own. A backend
-instance that cannot perform one of them -- a Postgres table read in place,
-which nothing may write -- refuses it in one place,
+surface, and a backend either inherits that body or defines its own. A backend instance that cannot perform one of them -- a table read in
+place, which nothing may write -- refuses it in one place,
 :meth:`OperationGateMixin._refuse_operation`, however its class came by the
 body.
 
@@ -31,7 +30,7 @@ GATED_OPERATIONS: frozenset[str] = frozenset(
         "create", "update", "delete", "upsert", "clear",
         "create_batch", "upsert_batch", "delete_batch", "update_batch",
         "stream_write", "bulk_embed_and_store", "update_vector", "delete_from_index",
-        "transaction", "begin_transaction",
+        "add_vectors", "transaction", "begin_transaction",
         # what creates or drops
         "enable_vector_support", "create_vector_index", "drop_vector_index",
         # the vector search surface

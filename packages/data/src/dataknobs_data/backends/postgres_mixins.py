@@ -13,19 +13,15 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common.capabilities import Capability, CapabilityLike
-from dataknobs_common.exceptions import ConfigurationError, OperationError
+from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_utils.sql_utils import quote_ident
 
-from ..operation_gate import GATED_OPERATIONS, OperationGateMixin
 from ..records import Record
-from ..schema import DatabaseSchema
-from .column_layout import ColumnLayout, JsonbLayout, read_layout_config
-from .sql_base import SQLQueryBuilder, SQLTableManager
+from .layout_backend import ColumnLayoutMixin
+from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     from .config import PostgresDatabaseConfig
-from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
@@ -267,32 +263,19 @@ class PostgresConnectionValidator:
             raise RuntimeError("Database not connected. Call connect() first.")
 
 
-#: What a Postgres backend refuses when it reads a table through the native
-#: layout: every gated operation -- each method that writes, creates or drops
-#: something, and the vector reads, which search a JSON column a native table
-#: does not have.
-NATIVE_REFUSED: frozenset[str] = GATED_OPERATIONS
+class PostgresLayoutMixin(ColumnLayoutMixin):
+    """What reading a table through a column layout means on Postgres, for both twins.
 
-
-class PostgresLayoutMixin(OperationGateMixin):
-    """The column layout a Postgres backend reads its table through, shared by both twins.
-
-    The layout and the one query builder are made at construction, from the
-    configuration and the declared schema, so a native configuration the
-    layout refuses fails before anything connects. A schema set afterwards
-    makes a new layout, and one the layout refuses leaves the backend as it
-    was.
+    Everything but two questions is :class:`ColumnLayoutMixin`'s. Postgres
+    resolves a native table by name with ``to_regclass``, which finds every
+    relation a ``SELECT`` reads, and names the grant a role is missing when
+    that lookup is refused.
     """
 
-    #: The placeholder style of the twin's driver.
-    _PARAM_STYLE: ClassVar[str]
+    _DIALECT: ClassVar[str] = "postgres"
+    _LOCATION_KEYS: ClassVar[str] = "the table name and `schema_name`"
 
-    schema: DatabaseSchema
-    table_name: str
     schema_name: str
-    layout: ColumnLayout
-    query_builder: SQLQueryBuilder
-    table_manager: SQLTableManager
     _q_qualified: str
 
     if TYPE_CHECKING:
@@ -301,32 +284,8 @@ class PostgresLayoutMixin(OperationGateMixin):
         def config(self) -> PostgresDatabaseConfig:
             """The consumer's typed configuration."""
 
-    @property
-    def native(self) -> bool:
-        """Whether the table is read through its own columns (``layout: native``)."""
-        return not isinstance(self.layout, JsonbLayout)
-
-    def _read_layout(self, schema: DatabaseSchema) -> ColumnLayout:
-        cfg = self.config
-        return read_layout_config(
-            {"layout": cfg.layout, "id_column": cfg.id_column, "scope": cfg.scope},
-            schema,
-            origin=f"{type(self).__name__} table {self.table_name!r}",
-            context={"table": self.table_name, "schema_name": self.schema_name},
-        )
-
-    def _use_layout(self, layout: ColumnLayout) -> None:
-        self.layout = layout
-        self.query_builder = SQLQueryBuilder(
-            self.table_name,
-            self.schema_name,
-            dialect="postgres",
-            param_style=self._PARAM_STYLE,
-            layout=layout,
-        )
-
-    def _setup_layout(self) -> None:
-        self._use_layout(self._read_layout(self.schema))
+    def _namespace(self) -> str | None:
+        return self.schema_name
 
     def _relation_exists_query(self) -> tuple[str, Any]:
         """The statement and parameters asking whether the table is there, in the driver's style.
@@ -338,7 +297,7 @@ class PostgresLayoutMixin(OperationGateMixin):
         this package creates is a table, and is looked up there as before.
         """
         if not self.native:
-            return self.table_manager.get_table_exists_sql()
+            return super()._relation_exists_query()
         placeholder = "%(relation)s" if self._PARAM_STYLE == "pyformat" else "$1"
         sql = f"SELECT to_regclass({placeholder}) IS NOT NULL"
         if self._PARAM_STYLE == "pyformat":
@@ -359,46 +318,3 @@ class PostgresLayoutMixin(OperationGateMixin):
             f"through `layout: native` belongs to someone else: ask its owner to "
             f"grant USAGE on the schema and SELECT on the declared columns."
         )
-
-    def _missing_relation_error(self) -> RuntimeError:
-        """The refusal for a table that is not there, said as the layout would say it."""
-        qualified = f"{self.schema_name}.{self.table_name}"
-        if self.native:
-            return RuntimeError(
-                f"Table {qualified} does not exist. A table read through "
-                f"`layout: native` belongs to someone else and is never created "
-                f"here: check the table name and `schema_name`."
-            )
-        return RuntimeError(
-            f"Table {qualified} does not exist and auto_create_table is disabled. "
-            "Run your migrations before starting the application."
-        )
-
-    def _refuse_operation(self, operation: str) -> None:
-        """Refuse every :data:`NATIVE_REFUSED` operation on a table read through the native layout."""
-        if self.native and operation in NATIVE_REFUSED:
-            raise OperationError(
-                f"{type(self).__name__}.{operation} refused on {self.table_name!r}: a table read "
-                f"through `layout: native` is read-only, and is read only through its declared "
-                f"columns",
-                context={"table": self.table_name, "method": operation},
-            )
-        super()._refuse_operation(operation)
-
-    def instance_capabilities(self) -> frozenset[CapabilityLike]:
-        """The class's capabilities, less conditional writes on a native table."""
-        capabilities: frozenset[CapabilityLike] = super().instance_capabilities()  # type: ignore[misc]
-        if self.native:
-            return frozenset(c for c in capabilities if c != Capability.CONDITIONAL_WRITE)
-        return capabilities
-
-    def set_schema(self, schema: DatabaseSchema) -> None:
-        """Set the declared schema, and read the table through the layout it makes.
-
-        ``add_field_schema`` and ``with_schema`` come through here too, so a
-        schema whose layout is refused leaves the backend as it was, whichever
-        door it came through.
-        """
-        layout = self._read_layout(schema)
-        super().set_schema(schema)  # type: ignore[misc]
-        self._use_layout(layout)

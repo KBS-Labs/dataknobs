@@ -32,7 +32,7 @@ the other way one package over. The guard that would have caught it swept a
 tree it could not see them in.
 
 **What this module does NOT assert, and why.** There is no test here saying
-*no type is in that state*, because twenty are, and the way out is per type:
+*no type is in that state*, because twenty-one are, and the way out is per type:
 identity for a built value nobody compares field-wise, unfrozen equality for a
 record two of which really can be equal. Both are behaviour changes to
 published types and neither is a default, so the choice is a ruling rather
@@ -61,11 +61,13 @@ from dataknobs_common.testing import DataclassSweep
 #: of which really can be equal -- and there is no third correct answer.
 #: Entries leave this list as they are decided; nothing is added without one.
 #:
-#: **Seventeen of the twenty are one defect inherited seventeen times.**
+#: **Eighteen of the twenty-one are one defect inherited eighteen times.**
 #: ``DatabaseConfig`` is ``frozen=True`` with equality on and carries a
 #: ``schema: DatabaseSchema`` field; ``DatabaseSchema`` is a plain
 #: ``@dataclass``, so its ``__hash__`` is ``None`` and every config that holds
-#: a populated one raises. Sixteen backend configs inherit the field. So the
+#: a populated one raises. Sixteen backend configs inherit the field, and so
+#: does ``ColumnLayoutConfig``, the native-layout keys three of them share
+#: (its own ``scope`` list is the same shape again). So the
 #: count here overstates how many decisions are outstanding: the answer at the
 #: root settles the rest, and the two candidates differ in what they cost a
 #: consumer -- identity would stop two equal configs comparing equal, which
@@ -79,6 +81,7 @@ OPEN: frozenset[str] = frozenset(
         "backends.config.AsyncElasticsearchDatabaseConfig",
         "backends.config.AsyncS3DatabaseConfig",
         "backends.config.AsyncSQLiteDatabaseConfig",
+        "backends.config.ColumnLayoutConfig",
         "backends.config.DatabaseConfig",
         "backends.config.DuckDBDatabaseConfigBase",
         "backends.config.ElasticsearchDatabaseConfigBase",

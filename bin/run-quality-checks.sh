@@ -361,7 +361,7 @@ RECORDS_FILE="$OUTPUT_DIR/check-records.jsonl"
 record_check() {
     local name="$1" code="$2"
     shift 2
-    python3 "$SCRIPT_DIR/quality-summary.py" record \
+    uv run python "$SCRIPT_DIR/quality-summary.py" record \
         --records "$RECORDS_FILE" --name "$name" --exit-code "$code" "$@"
 }
 
@@ -1143,7 +1143,7 @@ if [ "$PR_MODE" = "yes" ] && { [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != 
     # Still fails closed on any unreadable shape — a missing or malformed
     # status file reports three failures, not three passes — and an
     # unmeasured duration reports null rather than 0.
-    DOCS_CHECK_CODES=$(python3 -c "
+    DOCS_CHECK_CODES=$(uv run python -c "
 import json
 try:
     d = json.load(open('$OUTPUT_DIR/docs-checks-status.json'))
@@ -1719,7 +1719,7 @@ fi
 # generated file that changed on nearly every run, and the single thing the
 # gate ever took from it was this number — which it reports as a warning and
 # never fails on. A float belongs in the summary; the report belongs on disk.
-COVERAGE_PERCENT=$(python3 -c "
+COVERAGE_PERCENT=$(uv run python -c "
 import xml.etree.ElementTree as ET
 try:
 root = ET.parse('$OUTPUT_DIR/coverage.xml').getroot()
@@ -1789,7 +1789,7 @@ OVERALL_STATUS=$(compute_overall_status)
 # hashes are objects, tested_packages an array, coverage_percent a float or
 # null. A quoted number reaching CI as a string is the kind of thing a shell
 # serializer got wrong by omission.
-if ! python3 "$SCRIPT_DIR/quality-summary.py" build \
+if ! uv run python "$SCRIPT_DIR/quality-summary.py" build \
     --records "$RECORDS_FILE" \
     --output "$OUTPUT_DIR/quality-summary.json" \
     --str "timestamp=$TIMESTAMP" \
@@ -1960,7 +1960,7 @@ if [ "$SKIP_PACKAGE_TESTS" = "yes" ]; then
     _render_args="--package-tests-skipped"
 fi
 # shellcheck disable=SC2086  # _render_args is an argument list, empty or one flag
-python3 "$SCRIPT_DIR/quality-summary.py" render \
+uv run python "$SCRIPT_DIR/quality-summary.py" render \
     --summary "$OUTPUT_DIR/quality-summary.json" \
     --mode "$([ "$PR_MODE" = "yes" ] && echo pr || echo dev)" $_render_args
 echo ""
@@ -2048,7 +2048,7 @@ else
         echo ""
         if [ "$EMIT_ARTIFACTS" = "yes" ]; then
             echo -e "  ${CYAN}Full artifacts in:${NC} .quality-artifacts/"
-            echo -e "  ${CYAN}View summary:${NC} cat .quality-artifacts/quality-summary.json | python -m json.tool"
+            echo -e "  ${CYAN}View summary:${NC} cat .quality-artifacts/quality-summary.json | uv run python -m json.tool"
         else
             echo -e "  ${CYAN}Full output kept in:${NC} $OUTPUT_DIR"
         fi

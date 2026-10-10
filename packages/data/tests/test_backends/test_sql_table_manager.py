@@ -158,3 +158,33 @@ class TestCoerceBool:
 
     def test_none_returns_default_false(self):
         assert SQLTableManager.coerce_bool(None, default=False) is False
+
+
+class TestTheExistenceCheckReadsANameAsTheEngineDoes:
+    """Bug: the lookup compared the name exactly, though SQLite and DuckDB read
+    a table name, quoted or not, whatever its case. A table created as
+    ``records`` and configured as ``RECORDS`` read fine with
+    ``auto_create_table`` on and was refused as missing with it off.
+    """
+
+    @pytest.mark.parametrize("backend", ["sqlite", "duckdb"])
+    def test_a_differently_cased_name_finds_the_table(self, backend, tmp_path):
+        from dataknobs_data import DatabaseFactory
+        from dataknobs_data.records import Record
+
+        if backend == "duckdb":
+            pytest.importorskip("duckdb")
+        path = str(tmp_path / f"store.{backend}")
+        made = DatabaseFactory().create(backend=backend, path=path, table="records")
+        made.connect()
+        made.create(Record({"name": "a"}))
+        made.close()
+
+        found = DatabaseFactory().create(
+            backend=backend, path=path, table="RECORDS", auto_create_table=False
+        )
+        found.connect()
+        try:
+            assert found.count() == 1
+        finally:
+            found.close()

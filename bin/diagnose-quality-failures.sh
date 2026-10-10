@@ -318,7 +318,7 @@ analyze_style_issues() {
     else
         # Fallback without jq
         echo -e "\n${YELLOW}Style Report:${NC} (install 'jq' for better formatting)"
-        python3 -c "
+        uv run python -c "
 import json
 with open('$SOURCE_DIR/style-check.json') as f:
     data = json.load(f)
@@ -361,7 +361,7 @@ analyze_coverage() {
         jq -r '.packages | to_entries | .[] | "  \(.key): \(.value.coverage) (\(.value.statements - .value.missing)/\(.value.statements) statements)"' \
             "$SOURCE_DIR/coverage-by-package.json" 2>/dev/null
     else
-        python3 -c "
+        uv run python -c "
 import json
 with open('$SOURCE_DIR/coverage-by-package.json') as f:
     data = json.load(f)
@@ -392,7 +392,7 @@ echo -e "${DIM}Analyzing artifacts from $(date -r "$SOURCE_DIR/quality-summary.j
 # that already has one — and jq being unpinned here is what made the second
 # reader necessary. Python is not optional in a repository whose toolchain is
 # Python, so there is one reader now and no branch.
-SUMMARY_PROJECTION=$(python3 "$SCRIPT_DIR/read-quality-summary.py" \
+SUMMARY_PROJECTION=$(uv run python "$SCRIPT_DIR/read-quality-summary.py" \
     "$SOURCE_DIR/quality-summary.json" 2>/dev/null \
     || printf 'ERROR\037could not run read-quality-summary.py\n')
 
@@ -443,7 +443,7 @@ LINT_STATUS=$(check_field validation status)
 LINT_CODE=$(check_field validation exit_code)
 UNIT_STATUS=$(check_field unit_tests status)
 INT_STATUS=$(check_field integration_tests status)
-STYLE_COUNT=$(python3 -c "
+STYLE_COUNT=$(uv run python -c "
 import json,sys
 try:
     with open(sys.argv[1]) as fh:

@@ -111,16 +111,17 @@ db = SyncSQLiteDatabase({
     # Connection timeout in seconds (default: 5.0)
     "timeout": 10.0,
     
-    # Journal mode for concurrency (default: "WAL" for file-based)
-    # Options: WAL, DELETE, TRUNCATE, PERSIST, MEMORY, OFF
+    # Journal mode for concurrency (default: unset; the async backend
+    # sets "WAL" on a file). Options: WAL, DELETE, TRUNCATE, PERSIST, MEMORY, OFF
     "journal_mode": "WAL",
     
-    # Synchronous mode for durability (default: "NORMAL")
-    # Options: FULL (safest), NORMAL (balanced), OFF (fastest)
+    # Synchronous mode for durability (default: unset; "NORMAL" on the
+    # async backend). Options: FULL (safest), NORMAL (balanced), OFF (fastest)
     "synchronous": "NORMAL",
     
-    # Create the records table on connect if missing (default: True).
-    # Set to False when an external migration tool owns DDL.
+    # Create the records table on connect if missing (default: True, and
+    # False under layout: native). Set to False when an external migration
+    # tool owns DDL.
     "auto_create_table": True
 })
 ```
@@ -149,6 +150,38 @@ When `auto_create_table` is `False`:
 - If the table is present, `connect()` is a no-op for DDL.
 
 The default is `True`, preserving backward compatibility with all existing consumers.
+
+## Reading a Table You Do Not Own
+
+A table in a SQLite file somebody else wrote, with its own typed columns, is
+read with `layout: native`: the `schema:` declares the columns, `id_column`
+names the key, and `scope` fixes which rows are this store's.
+
+```python
+db = SyncSQLiteDatabase({
+    "path": "/srv/exports/catalog.db",
+    "table": "nodes",
+    "layout": "native",
+    "id_column": "node_id",
+    "schema": {"fields": {
+        "node_id": {"type": "string", "sql_type": "uuid"},
+        "name": "string",
+        "status": "string",
+    }},
+    "scope": [{"field": "status", "operator": "=", "value": "live"}],
+})
+db.connect()
+```
+
+The file is opened read-only (`mode=ro`), so nothing is written to it or
+changed: no directory, no database file, no table and no journal mode. A file
+in WAL mode is the exception to "nothing created": SQLite reads it through its
+`-wal` and `-shm` files and makes them beside it when they are not there, so
+it needs a directory this process can write unless the owner has the file
+open. A file its owner has locked is waited for, up to `timeout` seconds, and
+then refused, saying the owner holds it. A view is read as a table is. `":memory:"`, `journal_mode` and `auto_create_table: true` are
+refused, and every write raises `OperationError`. See
+[Reading a Native Table in a SQLite or DuckDB File](query.md#reading-a-native-table-in-a-sqlite-or-duckdb-file).
 
 ## Advanced Features
 

@@ -578,6 +578,31 @@ def _resolve_column(name: str, field_type: Any, metadata: Mapping[str, Any]) -> 
     return _Column(name, quote_ident(name), member, sql_type, declared)
 
 
+def resolve_layout(
+    value: Any, *, prefix: str = "", context: Mapping[str, Any] | None = None
+) -> str:
+    """The layout ``layout:`` names: unset or ``None`` is ``"jsonb"``.
+
+    Args:
+        value: What ``layout:`` holds.
+        prefix: Put before the refusal's message, naming where it was read.
+        context: Carried into the refusal's ``context``.
+
+    Returns:
+        One of :data:`LAYOUTS`.
+
+    Raises:
+        ValidationError: When ``value`` names no layout.
+    """
+    layout = value or "jsonb"
+    if layout not in LAYOUTS:
+        raise ValidationError(
+            f"{prefix}`layout:` is one of {list(LAYOUTS)}, got {layout!r}",
+            context={**(context or {}), "layout": layout},
+        )
+    return str(layout)
+
+
 def read_layout_config(
     config: Mapping[str, Any],
     schema: DatabaseSchema | None,
@@ -619,9 +644,7 @@ def read_layout_config(
     def refuse(message: str, **extra: Any) -> ValidationError:
         return ValidationError(f"{prefix}{message}", context={**base, **extra})
 
-    layout = config.get("layout") or "jsonb"
-    if layout not in LAYOUTS:
-        raise refuse(f"`layout:` is one of {list(LAYOUTS)}, got {layout!r}", layout=layout)
+    layout = resolve_layout(config.get("layout"), prefix=prefix, context=base)
 
     if layout == "jsonb":
         for key in ("id_column", "scope"):

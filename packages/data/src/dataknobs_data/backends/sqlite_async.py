@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -23,12 +23,17 @@ from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncSQLiteDatabaseConfig
 from .sql_base import (
-    SQLQueryBuilder,
     SQLTableManager,
     constraint_violation_error,
     is_duplicate_key_error,
 )
-from .sqlite_mixins import SQLiteVectorSupport, sqlite_max_parameters
+from .sqlite_mixins import (
+    REGEXP_FUNCTION,
+    SQLiteLayoutMixin,
+    SQLiteVectorSupport,
+    sqlite_max_parameters,
+    sqlite_regexp,
+)
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
@@ -47,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 class AsyncSQLiteDatabase(
     StructuredConfigConsumer[AsyncSQLiteDatabaseConfig],
+    SQLiteLayoutMixin,
     AsyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
@@ -60,6 +66,10 @@ class AsyncSQLiteDatabase(
     documented config key is a typed field on that dataclass, so
     ``self.config`` is the typed config (not a dict) and the
     ``from_config`` / factory paths share one construction route.
+
+    With ``layout: native`` it reads a table in somebody else's file through
+    the table's own columns, opening the file read-only (see
+    :class:`~dataknobs_data.backends.config.SQLiteDatabaseConfigBase`).
     """
 
     CONFIG_CLS: ClassVar[type[AsyncSQLiteDatabaseConfig]] = AsyncSQLiteDatabaseConfig
@@ -72,24 +82,27 @@ class AsyncSQLiteDatabase(
         deferred to :meth:`connect`). ``journal_mode`` defaults to
         ``"WAL"`` for file-based databases; that default depends on the
         resolved ``path`` so it is computed here rather than as a static
-        config field default.
+        config field default. A native table's file is somebody else's, and
+        its journal mode is theirs: none is set.
         """
         cfg = self.config
         self.db_path = cfg.path
         self.table_name = cfg.table
         self.timeout = cfg.timeout
-        self.journal_mode = (
-            cfg.journal_mode
-            if cfg.journal_mode is not None
-            else ("WAL" if self.db_path != ":memory:" else None)
-        )
         self.synchronous = cfg.synchronous
         self.pool_size = cfg.pool_size
         self.auto_create_table = cfg.auto_create_table
 
-        # Start with standard query builder, will customize after mixins are initialized
-        self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
+        # The one query builder, made with the table's layout. It needs no
+        # connection, so a native configuration the layout refuses fails here.
+        self._setup_layout()
+        self._connect_to = self._connect_target()
+        self.journal_mode = (
+            cfg.journal_mode
+            if cfg.journal_mode is not None
+            else ("WAL" if self.db_path != ":memory:" and not self.native else None)
+        )
 
         self.db: aiosqlite.Connection | None = None
         self._connected = False
@@ -109,22 +122,35 @@ class AsyncSQLiteDatabase(
         if self._connected:
             return
 
-        # Create directory if needed for file-based database (off the loop).
-        if self.db_path != ":memory:":
-            db_file = Path(self.db_path)
-            await asyncio.to_thread(db_file.parent.mkdir, parents=True, exist_ok=True)
+        # Off the loop. A native table is in somebody else's file, opened
+        # read-only, never made.
+        directory = self._directory_to_make()
+        if directory is not None:
+            await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
 
-        # Connect to database
-        self.db = await aiosqlite.connect(self.db_path, timeout=self.timeout)
+        target, uri = self._connect_to
+        with self._refusing_unopened(sqlite3.OperationalError):
+            self.db = await aiosqlite.connect(target, timeout=self.timeout, uri=uri)
+        await self.db.create_function(*REGEXP_FUNCTION, sqlite_regexp, deterministic=True)
 
         # Enable row factory for dict-like access
         self.db.row_factory = aiosqlite.Row
 
-        # Configure SQLite for better performance
-        await self._configure_sqlite()
-
-        # Create table if it doesn't exist
-        await self._ensure_table()
+        try:
+            # The first statements to read the file: on a native table, what
+            # fails here is reading it -- a lock its owner holds, a WAL file's
+            # side files that cannot be made.
+            with self._refusing_unopened(sqlite3.OperationalError):
+                await self._configure_sqlite()
+                # Create table if it doesn't exist
+                await self._ensure_table()
+        except BaseException:
+            # Refused after opening -- a native table that is not there, a file
+            # that cannot be written -- so close what was opened: its worker
+            # thread would otherwise outlive the refusal and the process.
+            await self.db.close()
+            self.db = None
+            raise
 
         self._connected = True
         logger.info(f"Connected to async SQLite database: {self.db_path}")
@@ -171,16 +197,12 @@ class AsyncSQLiteDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         if not self.auto_create_table:
-            exists_sql, params = self.table_manager.get_table_exists_sql()
+            exists_sql, params = self._relation_exists_query()
             async with self.db.execute(exists_sql, params) as cursor:
                 row = await cursor.fetchone()
                 exists = bool(row[0]) if row else False
             if not exists:
-                raise RuntimeError(
-                    f"Table {self.table_name} does not exist and "
-                    "auto_create_table is disabled. Run your migrations "
-                    "before starting the application."
-                )
+                raise self._missing_relation_error()
             return
 
         await self.db.executescript(self.table_manager.get_create_table_sql())
@@ -223,7 +245,7 @@ class AsyncSQLiteDatabase(
             row = await cursor.fetchone()
 
             if row:
-                return SQLQueryBuilder.row_to_record(dict(row))
+                return self.query_builder.record_from_row(dict(row))
             return None
 
     async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
@@ -327,11 +349,7 @@ class AsyncSQLiteDatabase(
         async with self.db.execute(sql_query, params) as cursor:
             rows = await cursor.fetchall()
 
-            records = []
-            for row in rows:
-                row_dict = dict(row)
-                record = SQLQueryBuilder.row_to_record(row_dict)
-                records.append(record)
+            records = [self.query_builder.record_from_row(dict(row)) for row in rows]
 
             # Apply field projection if specified
             if query.fields:
@@ -542,43 +560,24 @@ class AsyncSQLiteDatabase(
         pass
 
     async def _count_all(self) -> int:
-        """Count all records in the database."""
-        self._check_connection()
-
-        async with self.db.execute(
-            f"SELECT COUNT(*) FROM {self.table_manager.qualified_table}"
-        ) as cursor:
-            result = await cursor.fetchone()
-            return result[0] if result else 0
+        """Count all records in the database: every row of a native table's scope."""
+        return await self.count()
 
     async def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
-        """Stream records from database."""
-        from ..streaming import StreamConfig
+        """Stream the records a query matches, a page of ``search`` at a time.
 
-        config = config or StreamConfig()
-        query = query or Query()
+        Each page is its own statement, sorted by the query's sort and then by
+        the key (see :func:`~dataknobs_data.streaming.stream_page`), so no
+        statement stays open between records: an open SQLite read would lock
+        the file's owner out of writing it. The query's limit, offset and
+        projection hold; with no sort the stream promises no order.
+        """
+        from ..streaming import aiter_search_pages
 
-        # Use the existing stream method's logic but yield individual records
-        offset = 0
-        while True:
-            # Fetch a batch
-            query_copy = query.copy()
-            query_copy.offset(offset).limit(config.batch_size)
-            batch = await self.search(query_copy)
-
-            if not batch:
-                break
-
-            for record in batch:
-                yield record
-
-            offset += len(batch)
-
-            # If we got less than batch_size, we're done
-            if len(batch) < config.batch_size:
-                break
+        async for record in aiter_search_pages(self.search, query, config):
+            yield record
 
     async def stream_write(
         self, records: AsyncIterator[Record], config: StreamConfig | None = None

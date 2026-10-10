@@ -100,9 +100,9 @@ detect_services() {
         # Use yq if available, otherwise fall back to basic parsing
         if command -v yq &> /dev/null; then
             services=($(yq eval '.services | keys | .[]' "$ROOT_DIR/$COMPOSE_OVERRIDE" | grep -v '^dataknobs'))
-        elif command -v python3 &> /dev/null; then
-            # Use Python as fallback for YAML parsing
-            services=($(python3 -c "
+        elif command -v uv &> /dev/null; then
+            # The workspace interpreter has PyYAML; a bare python3 may not
+            services=($(uv run python -c "
 import yaml
 import sys
 with open('$ROOT_DIR/$COMPOSE_OVERRIDE', 'r') as f:

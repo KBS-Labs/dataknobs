@@ -31,12 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from dataknobs_common import normalize_postgres_connection_config
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError
 from dataknobs_common.structured_config import StructuredConfig
 
 from ..database import extract_schema_from_config
 from ..query import Filter
-from ..schema import NATIVE_FIELD_KEYS, DatabaseSchema
+from ..schema import FIELD_KEYS, NATIVE_FIELD_KEYS, DatabaseSchema
+from .column_layout import resolve_layout
 from .postgres_mixins import validate_pg_identifier
 from .sql_base import SQLTableManager
 
@@ -46,11 +47,12 @@ class DatabaseConfig(StructuredConfig):
     """Base configuration for every ``SyncDatabase`` / ``AsyncDatabase`` backend.
 
     The ``schema`` field carries the ``DatabaseSchema`` the base
-    ``Database`` accepts today. ``_normalize_dict`` routes any other
+    ``Database`` accepts today. ``__post_init__`` routes any other
     ``schema`` value through :func:`extract_schema_from_config` so it
-    becomes a ``DatabaseSchema`` before field projection -- a mapping, or a
-    list of field rows -- or is refused by name; a ``DatabaseSchema``
-    instance passes through unchanged. This preserves the public
+    becomes a ``DatabaseSchema`` -- a mapping, or a list of field rows -- or
+    is refused by name, whether the config was read from a mapping or built
+    by calling the class; a ``DatabaseSchema`` instance passes through
+    unchanged. This preserves the public
     ``Database(config=..., schema=...)`` kwarg: the consumer mixin merges
     ``schema=`` into the dict and this field captures it.
 
@@ -78,22 +80,21 @@ class DatabaseConfig(StructuredConfig):
     #: the warning is the one case it cannot see.
     _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
 
-    @classmethod
-    def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        """Read a ``schema`` value into a ``DatabaseSchema``, or refuse it.
+    def _schema_field_keys(self) -> frozenset[str]:
+        """The keys a field declared in ``schema`` takes under this configuration."""
+        return FIELD_KEYS
 
-        A mapping or a list of field rows goes through
-        :func:`extract_schema_from_config`, which refuses any other value by
-        name; a ``DatabaseSchema`` passes through unchanged.
+    def __post_init__(self) -> None:
+        """Read ``schema`` into a ``DatabaseSchema``, or refuse it.
 
-        Subclasses that override this for backend-specific normalization
-        (e.g. Postgres connection assembly) must call
-        ``super()._normalize_dict(raw)`` so the shared schema handling
-        still runs.
+        The end of the ``__post_init__`` chain, so every subclass can call
+        ``super()``.
         """
-        if "schema" in raw and not isinstance(raw["schema"], DatabaseSchema):
-            raw["schema"] = extract_schema_from_config(raw["schema"])
-        return raw
+        object.__setattr__(
+            self,
+            "schema",
+            extract_schema_from_config(self.schema, keys=self._schema_field_keys()),
+        )
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ class VectorBackendConfig(DatabaseConfig):
     vector_metric: str = "cosine"
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         # YAML and environment substitution hand over "false" as a string,
         # which is truthy: coerced here, as every other flag on these configs
         # is, so a subclass's ``__post_init__`` must call this one.
@@ -124,6 +126,112 @@ class VectorBackendConfig(DatabaseConfig):
             "vector_enabled",
             SQLTableManager.coerce_bool(self.vector_enabled, default=False),
         )
+
+
+#: The paths that name no file: SQLite's in-memory and temporary databases.
+_NO_FILE = (":memory:", "")
+
+
+@dataclass(frozen=True)
+class ColumnLayoutConfig(DatabaseConfig):
+    """The keys a SQL backend reads a table it does not own by, shared by every such backend.
+
+    ``layout: native`` reads a table with its own typed columns rather than
+    the one this package creates. The declared fields are then the table's
+    columns, and may name a ``sql_type``; ``id_column`` names its key, and
+    ``scope`` (a list of filters) fixes which rows it is. See
+    :func:`~dataknobs_data.backends.column_layout.read_layout_config`, which
+    reads the three keys; this class only carries them.
+
+    **A native table is read-only and is never created.** Each switch a
+    backend names in :attr:`_CREATE_SWITCHES` is resolved from the layout when
+    it is left out, or given with no value: on under the JSON layout, off under
+    the native one. Set true under the native one, it is refused. A backend
+    with further switches of its own refuses them in its ``__post_init__``,
+    through :meth:`_refuse_under_native`.
+
+    Attributes:
+        layout: ``"jsonb"`` (the table this package creates, the default) or
+            ``"native"`` (a table with its own typed columns).
+        id_column: Under ``layout: native``, the column holding the key.
+        scope: Under ``layout: native``, the filters fixing which rows the
+            table is, each written as a ``{field, operator, value}`` mapping.
+    """
+
+    #: ``None`` (YAML's ``null``) is read as the default, ``"jsonb"``.
+    layout: Literal["jsonb", "native"] | None = "jsonb"
+    id_column: str | None = None
+    #: Filters or ``{field, operator, value}`` mappings; held as mappings.
+    scope: list[Any] | None = None
+
+    #: The backend's name, as a refusal says it.
+    _BACKEND: ClassVar[str] = "This backend"
+    #: The backend's switches that create or add something: resolved from the
+    #: layout when unset, and refused when set true under ``layout: native``.
+    _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ()
+    #: The field naming the file a file-backed backend's table is in, or
+    #: ``None`` for a backend that reads a server: under ``layout: native`` it
+    #: must name one, since a new database holds no table somebody else made.
+    _FILE_KEY: ClassVar[str | None] = None
+
+    @property
+    def native(self) -> bool:
+        """Whether the table is read through its own columns."""
+        return self.layout == "native"
+
+    def _schema_field_keys(self) -> frozenset[str]:
+        # A native table's fields may name a ``sql_type``, which only that
+        # layout reads; the JSON layout refuses one.
+        return NATIVE_FIELD_KEYS if self.native else super()._schema_field_keys()
+
+    def __post_init__(self) -> None:
+        # Read first: what the schema's fields may declare depends on it.
+        layout = resolve_layout(
+            self.layout,
+            prefix=f"{self._BACKEND} ",
+            context={"table": getattr(self, "table", None)},
+        )
+        object.__setattr__(self, "layout", layout)
+        super().__post_init__()
+        if self._FILE_KEY is not None and getattr(self, self._FILE_KEY) in _NO_FILE:
+            self._refuse_under_native(
+                f"`{self._FILE_KEY}: {getattr(self, self._FILE_KEY)!r}`",
+                "a new database holds no table somebody else made. Name the file that "
+                f"holds the table in `{self._FILE_KEY}`",
+                key=self._FILE_KEY,
+            )
+        # Unset -- left out, or given with no value (YAML's ``null``) -- means
+        # the layout's default: a native table is never created, so off; and
+        # refused below if given true. Resolved here rather than when a mapping
+        # is read, so a config built directly gets the same default.
+        for key in self._CREATE_SWITCHES:
+            object.__setattr__(
+                self, key, SQLTableManager.coerce_bool(getattr(self, key), default=not self.native)
+            )
+        if isinstance(self.scope, (list, tuple)):
+            # Held as mappings, so the config is what a config file holds and
+            # reads back from its own ``to_dict``.
+            object.__setattr__(
+                self,
+                "scope",
+                [spec.to_dict() if isinstance(spec, Filter) else spec for spec in self.scope],
+            )
+        for key in self._CREATE_SWITCHES:
+            if getattr(self, key):
+                self._refuse_under_native(
+                    f"`{key}: true`",
+                    "a native table belongs to someone else and is read-only, so nothing "
+                    f"creates it or adds to it. Leave `{key}` out",
+                    key=key,
+                )
+
+    def _refuse_under_native(self, setting: str, why: str, *, key: str) -> None:
+        """Refuse ``setting`` when the layout is native; say ``why``."""
+        if self.native:
+            raise ConfigurationError(
+                f"{self._BACKEND} {setting} under `layout: native`: {why}",
+                context={"table": getattr(self, "table", None), "key": key},
+            )
 
 
 @dataclass(frozen=True)
@@ -138,7 +246,7 @@ class MemoryDatabaseConfig(VectorBackendConfig):
 
 
 @dataclass(frozen=True)
-class SQLiteDatabaseConfigBase(VectorBackendConfig):
+class SQLiteDatabaseConfigBase(ColumnLayoutConfig, VectorBackendConfig):
     """Shared SQLite configuration for the sync and async backends.
 
     The two SQLite backends diverge on connection management — the sync
@@ -152,6 +260,13 @@ class SQLiteDatabaseConfigBase(VectorBackendConfig):
     :meth:`SQLTableManager.coerce_bool` in ``__post_init__`` so YAML/env
     string values (``"false"``, ``"0"``) behave as they did when the
     legacy ``__init__`` coerced them.
+
+    **A table in somebody else's file** is read with ``layout: native`` (see
+    :class:`ColumnLayoutConfig`). The file is opened read-only, so ``path``
+    must name it: an in-memory or temporary database holds no table somebody
+    else made. ``auto_create_table`` is off there, and setting it,
+    ``vector_enabled`` or ``journal_mode`` -- which is written into the file
+    -- is refused.
 
     Attributes:
         path: Database file path (``":memory:"`` for in-memory).
@@ -167,17 +282,22 @@ class SQLiteDatabaseConfigBase(VectorBackendConfig):
     timeout: float = 5.0
     journal_mode: str | None = None
     synchronous: str | None = None
-    auto_create_table: bool = True
+    #: ``None`` until ``__post_init__`` resolves it from ``layout``; a bool after.
+    auto_create_table: bool | None = None
+
+    _BACKEND: ClassVar[str] = "SQLite"
+    _FILE_KEY: ClassVar[str | None] = "path"
+    _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ("auto_create_table", "vector_enabled")
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        # Match the legacy ``__init__`` which always coerced this knob,
-        # so YAML/env string values ("false", "0", "no") behave correctly.
-        object.__setattr__(
-            self,
-            "auto_create_table",
-            SQLTableManager.coerce_bool(self.auto_create_table),
-        )
+        if self.journal_mode is not None:
+            self._refuse_under_native(
+                f"`journal_mode: {self.journal_mode}`",
+                "the journal mode is written into the file, which is somebody else's and "
+                "is opened read-only. Leave `journal_mode` out",
+                key="journal_mode",
+            )
 
 
 @dataclass(frozen=True)
@@ -223,7 +343,7 @@ _NO_NAMESPACE: Any = object()
 
 
 @dataclass(frozen=True)
-class PostgresDatabaseConfig(VectorBackendConfig):
+class PostgresDatabaseConfig(ColumnLayoutConfig, VectorBackendConfig):
     """Unified configuration for ``SyncPostgresDatabase`` / ``AsyncPostgresDatabase``.
 
     A single config class backs **both** Postgres backends — the union of
@@ -257,14 +377,11 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     Identifiers are validated in
     ``__post_init__``.
 
-    **A table this package did not create** is read with ``layout: native``.
-    The declared fields are then the table's columns, ``id_column`` names
-    its key, and ``scope`` (a list of filters) fixes which rows it is; see
-    :func:`~dataknobs_data.backends.column_layout.read_layout_config`, which
-    reads the three keys. A native table is read-only and is never created,
-    so ``auto_create_table`` and ``ensure_database`` default to ``False``
-    there, and setting either, or ``vector_enabled``, to ``True`` is
-    refused.
+    **A table this package did not create** is read with ``layout: native``
+    (see :class:`ColumnLayoutConfig`). A native table is read-only and is
+    never created, so ``auto_create_table`` and ``ensure_database`` default
+    to ``False`` there, and setting either, or ``vector_enabled``, to
+    ``True`` is refused.
 
     Attributes:
         host/port/database/user/password: Connection parameters
@@ -279,11 +396,6 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         schema_name: SQL schema name.
         ensure_database: Auto-create the database if missing.
         auto_create_table: Create the records table on connect if missing.
-        layout: ``"jsonb"`` (the table this package creates, the default) or
-            ``"native"`` (a table with its own typed columns).
-        id_column: Under ``layout: native``, the column holding the key.
-        scope: Under ``layout: native``, the filters fixing which rows the
-            table is, each written as a ``{field, operator, value}`` mapping.
     """
 
     host: str = "localhost"
@@ -301,10 +413,13 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     ensure_database: bool | None = None
     #: ``None`` until ``__post_init__`` resolves it from ``layout``; a bool after.
     auto_create_table: bool | None = None
-    layout: str = "jsonb"
-    id_column: str | None = None
-    #: Filters or ``{field, operator, value}`` mappings; held as mappings.
-    scope: list[Any] | None = None
+
+    _BACKEND: ClassVar[str] = "Postgres"
+    _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = (
+        "auto_create_table",
+        "ensure_database",
+        "vector_enabled",
+    )
 
     # Redacted from ``repr`` by the StructuredConfig base.
     _SENSITIVE_FIELDS: ClassVar[frozenset[str]] = frozenset({"password"})
@@ -361,18 +476,15 @@ class PostgresDatabaseConfig(VectorBackendConfig):
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         # Disambiguate the overloaded ``schema`` key by type. A mapping, a
         # list of rows or a ``DatabaseSchema`` is the declared fields, left for
-        # the base, which reads them through ``extract_schema_from_config``; a
-        # native table's fields may also name a ``sql_type``, which only that
-        # layout reads. ``None`` is the structural default ``to_dict`` writes.
+        # ``DatabaseConfig.__post_init__`` to read (a native table's fields may
+        # also name a ``sql_type``). ``None`` is the
+        # structural default ``to_dict`` writes.
         # Anything else is the SQL namespace: routed to ``schema_name`` (it
         # wins over an explicit ``schema_name``, matching legacy precedence),
         # where a value that is not a string fails identifier validation in
         # ``__post_init__`` with the error it always has.
         if "schema" in raw and cls._names_namespace(raw["schema"]):
             raw["schema_name"] = raw.pop("schema")
-        native = raw.get("layout") == "native"
-        if native and not isinstance(raw.get("schema"), (DatabaseSchema, type(None))):
-            raw["schema"] = extract_schema_from_config(raw["schema"], keys=NATIVE_FIELD_KEYS)
         # ``table`` wins over the ``table_name`` alias (legacy precedence).
         if "table_name" in raw:
             if "table" not in raw:
@@ -404,6 +516,14 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         return raw
 
     def __post_init__(self) -> None:
+        if self._names_namespace(self.schema):
+            # ``from_dict`` routes such a ``schema`` to ``schema_name``; a
+            # config built in code names the field, so say which one.
+            raise ValidationError(
+                f"PostgresDatabaseConfig `schema` declares fields; got "
+                f"{self.schema!r}. Give a SQL namespace as `schema_name`",
+                context={"schema": self.schema},
+            )
         super().__post_init__()
         # Validate identifiers early (a non-string ``schema``/``table`` —
         # e.g. a DatabaseSchema injected via the key collision — fails
@@ -412,38 +532,6 @@ class PostgresDatabaseConfig(VectorBackendConfig):
         object.__setattr__(self, "table", validate_pg_identifier(self.table, "table"))
         object.__setattr__(self, "schema_name", validate_pg_identifier(self.schema_name, "schema"))
         object.__setattr__(self, "port", int(self.port))
-        # Unset -- left out, or given with no value (YAML's ``null``) -- means
-        # the layout's default: a native table is never created, so off; and
-        # refused below if given true. Resolved here rather than when a mapping
-        # is read, so a config built directly gets the same default.
-        creates_by_default = self.layout != "native"
-        object.__setattr__(
-            self,
-            "ensure_database",
-            SQLTableManager.coerce_bool(self.ensure_database, default=creates_by_default),
-        )
-        object.__setattr__(
-            self,
-            "auto_create_table",
-            SQLTableManager.coerce_bool(self.auto_create_table, default=creates_by_default),
-        )
-        if isinstance(self.scope, (list, tuple)):
-            # Held as mappings, so the config is what a config file holds and
-            # reads back from its own ``to_dict``.
-            object.__setattr__(
-                self,
-                "scope",
-                [spec.to_dict() if isinstance(spec, Filter) else spec for spec in self.scope],
-            )
-        if self.layout == "native":
-            for key in ("auto_create_table", "ensure_database", "vector_enabled"):
-                if getattr(self, key):
-                    raise ConfigurationError(
-                        f"Postgres `{key}: true` under `layout: native`: a native table "
-                        f"belongs to someone else and is read-only, so nothing creates "
-                        f"it or adds to it. Leave `{key}` out",
-                        context={"table": self.table, "key": key},
-                    )
 
 
 @dataclass(frozen=True)
@@ -715,7 +803,7 @@ class AsyncS3DatabaseConfig(S3DatabaseConfigBase):
 
 
 @dataclass(frozen=True)
-class DuckDBDatabaseConfigBase(DatabaseConfig):
+class DuckDBDatabaseConfigBase(ColumnLayoutConfig):
     """Shared DuckDB configuration for the sync and async backends.
 
     DuckDB has no vector support, so this inherits :class:`DatabaseConfig`
@@ -723,31 +811,48 @@ class DuckDBDatabaseConfigBase(DatabaseConfig):
     share everything except the async-only thread-pool size, which lives
     on :class:`AsyncDuckDBDatabaseConfig`.
 
-    ``auto_create_table`` is coerced through
+    ``auto_create_table`` and ``read_only`` are coerced through
     :meth:`SQLTableManager.coerce_bool` in ``__post_init__`` so YAML/env
     string values behave as they did when the legacy ``__init__`` coerced
     them.
+
+    **A table in somebody else's file** is read with ``layout: native`` (see
+    :class:`ColumnLayoutConfig`). ``path`` must name the file, and it is
+    opened ``read_only``: unset, ``read_only`` is on there, and
+    ``read_only: false`` is refused, as is ``auto_create_table: true``.
 
     Attributes:
         path: Database file path (``":memory:"`` for in-memory).
         table: Records table name.
         timeout: Connection timeout in seconds.
-        read_only: Open the database in read-only mode.
+        read_only: Open the database in read-only mode. Off by default, and
+            on under ``layout: native``.
         auto_create_table: Create the records table on connect if missing.
     """
 
     path: str = ":memory:"
     table: str = "records"
     timeout: float = 5.0
-    read_only: bool = False
-    auto_create_table: bool = True
+    #: ``None`` until ``__post_init__`` resolves it from ``layout``; a bool after.
+    read_only: bool | None = None
+    #: ``None`` until ``__post_init__`` resolves it from ``layout``; a bool after.
+    auto_create_table: bool | None = None
+
+    _BACKEND: ClassVar[str] = "DuckDB"
+    _FILE_KEY: ClassVar[str | None] = "path"
+    _CREATE_SWITCHES: ClassVar[tuple[str, ...]] = ("auto_create_table",)
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         object.__setattr__(
-            self,
-            "auto_create_table",
-            SQLTableManager.coerce_bool(self.auto_create_table),
+            self, "read_only", SQLTableManager.coerce_bool(self.read_only, default=self.native)
         )
+        if not self.read_only:
+            self._refuse_under_native(
+                "`read_only: false`",
+                "the file is somebody else's and is only read. Leave `read_only` out",
+                key="read_only",
+            )
 
 
 @dataclass(frozen=True)
@@ -796,6 +901,7 @@ __all__ = [
     "AsyncElasticsearchDatabaseConfig",
     "AsyncS3DatabaseConfig",
     "AsyncSQLiteDatabaseConfig",
+    "ColumnLayoutConfig",
     "DatabaseConfig",
     "DuckDBDatabaseConfigBase",
     "ElasticsearchDatabaseConfigBase",
