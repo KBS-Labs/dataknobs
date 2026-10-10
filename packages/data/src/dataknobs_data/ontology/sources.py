@@ -791,14 +791,19 @@ class RecordEntitySource(DynamicCapabilityMixin):
         # one cannot read: another hierarchy's rows in a table they share, kept
         # out of the entity store by its scope. An id answered here would be
         # one `get` resolves to nothing, read by a caller as a match, so only
-        # the ids the entity store holds are answered. The check sends the
-        # forms' own values, not their text: an integer key is not equal to
-        # its text on any backend, and every id would be dropped.
-        held = await self._read_ids(sorted(named, key=str))
+        # the ids the entity store holds are answered.
+        #
+        # An entity id is text, so two stores agree on an entity when its key
+        # has one text in both, whatever type each holds it as. No backend
+        # equates an integer with its text, so the read sends each value and
+        # its text -- whichever the entity store holds is the one that matches
+        # -- and the answer compares what came back as text.
+        named_text = {str(entity_id) for entity_id in named}
+        held = await self._read_ids(sorted({*named, *named_text}, key=str))
         return frozenset(
-            str(entity_id)
-            for entity_id in (record.get_value(self._projection.id) for record in held)
-            if entity_id in named
+            text
+            for text in (str(record.get_value(self._projection.id)) for record in held)
+            if text in named_text
         )
 
     async def by_type(self, type_id: str) -> frozenset[str]:
