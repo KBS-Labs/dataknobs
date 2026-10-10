@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-10-10T17:09:51Z",
-  "overall_status": "FAIL",
+  "timestamp": "2026-10-10T17:29:50Z",
+  "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
   "packages": "bots data fsm llm",
@@ -28,10 +28,10 @@
     "toolchain": "b608e3237acaa9650a2e6ab32d7a070435e67cfb65bb66217dd8351395d3715e",
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
-    "workspace_tests": "f42472e749b12ed32c9903140a66f9014718e8440edd76d09879bee7b6760d32",
-    "docs": "7e9c408dcbbcfff5574419573b081233d16bc60bc861c011df6bc63ab8d24938"
+    "workspace_tests": "1865d6a2e2c0cf32c75933f9f1474f1772fbf5de6f60c4882fae5093ba98dbca",
+    "docs": "2e85e4698b0cd1c6fea4082fa4ca7a53c9bcccf2cba83dd4dc4f046684fcf560"
   },
-  "total_seconds": 341,
+  "total_seconds": 340,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -43,7 +43,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
@@ -56,7 +56,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 77
+      "duration_seconds": 78
     },
     "documentation": {
       "status": "pass",
@@ -73,8 +73,8 @@
       "duration_seconds": 0
     },
     "documentation_mirrors": {
-      "status": "fail",
-      "exit_code": 1,
+      "status": "pass",
+      "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
       "duration_seconds": 0
@@ -83,14 +83,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 172,
-      "workspace_guards_seconds": 95
+      "duration_seconds": 173,
+      "workspace_guards_seconds": 97
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 51
+      "duration_seconds": 48
     }
   }
 }
