@@ -288,3 +288,39 @@ class TestAHashWrittenByHandIsInherited:
             n: int = 0
 
         assert not isinstance(Mixed(), Hashable)
+
+
+class TestEqFalseMeansIdentity:
+    """``eq=False`` compares by identity, as it does on any other dataclass.
+
+    The base used to generate an ``__eq__`` over its own fields, of which it
+    has none, and an ``eq=False`` subclass inherited it: every two instances of
+    one class compared equal, whatever they held.
+    """
+
+    def test_two_instances_holding_different_values_are_unequal(self) -> None:
+        @dataclass(frozen=True, eq=False)
+        class Built(StructuredConfig):
+            n: int = 0
+
+        assert Built(n=1) != Built(n=2)
+
+    def test_an_instance_equals_itself_and_no_other(self) -> None:
+        @dataclass(frozen=True, eq=False)
+        class Built(StructuredConfig):
+            n: int = 0
+
+        built = Built(n=1)
+        assert built == built
+        assert built != Built(n=1)
+
+    def test_an_identity_hash_is_written_like_any_other(self) -> None:
+        @dataclass(frozen=True, eq=False)
+        class Built(StructuredConfig):
+            n: int = 0
+            tags: list[str] = field(default_factory=list)
+
+            __hash__ = object.__hash__
+
+        built = Built(tags=["a"])
+        assert hash(built) == object.__hash__(built)

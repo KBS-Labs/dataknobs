@@ -660,7 +660,12 @@ def _coerce_field(declared: Any, value: Any) -> Any:
     return value
 
 
-@dataclasses.dataclass(frozen=True)
+# ``eq=False``: the base has no fields, and an ``__eq__`` generated over none
+# would hand every ``eq=False`` subclass an equality under which any two
+# instances of one class compare equal. Without it such a subclass compares by
+# identity, as ``eq=False`` means on any other dataclass. Subclasses that keep
+# the default ``eq=True`` generate their own.
+@dataclasses.dataclass(frozen=True, eq=False)
 class StructuredConfig:
     """Base class for typed, dict-loadable, frozen configuration dataclasses.
 
