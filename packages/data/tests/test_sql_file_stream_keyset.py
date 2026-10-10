@@ -17,12 +17,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable, Iterator
+from itertools import islice
 from typing import Any
 
 import pytest
 
 from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
+from dataknobs_data.exceptions import OperationError
 from dataknobs_data.factory import AsyncDatabaseFactory, DatabaseFactory
 from dataknobs_data.query import (
     RESERVED_KEY_FIELD,
@@ -34,7 +36,12 @@ from dataknobs_data.query import (
     is_storage_key_field,
 )
 from dataknobs_data.records import Record
-from dataknobs_data.streaming import StreamConfig, stream_page
+from dataknobs_data.streaming import (
+    StreamConfig,
+    aiter_search_pages,
+    iter_search_pages,
+    stream_page,
+)
 
 BACKENDS = ["sqlite", "duckdb"]
 TWINS = ["sync", "async"]
@@ -170,26 +177,63 @@ def test_a_descending_stream_moves_with_its_own_direction(tens: Store) -> None:
     assert _ids(seen) == _ids(TENS[::-1])
 
 
+def test_deleting_the_row_a_page_begins_after_moves_nothing(tens: Store) -> None:
+    """The next page is placed by the last row's keys, not by the row itself."""
+    seen = tens.stream(BY_N, THREE, write_after=3, write=lambda db: db.delete("r20"))
+    assert _ids(seen) == _ids(TENS)
+
+
+def test_a_row_whose_sort_value_changes_moves_with_it(tens: Store) -> None:
+    """Not a promise a stream keeps: a row moved behind the stream's position
+    is not read, and one moved ahead of it is read again.
+    """
+
+    def move(db: Any) -> Any:
+        if inspect.iscoroutinefunction(db.read):
+            return _amove(db)
+        for record_id, n in MOVES:
+            record = db.read(record_id)
+            record["n"] = n
+            db.update(record_id, record)
+        return None
+
+    seen = tens.stream(BY_N, THREE, write_after=FOURTH, write=move)
+    unread = [r for r in _ids(TENS) if r != "r80"]
+    assert _ids(seen) == [*unread[:8], "r10", *unread[8:]]
+
+
+#: ``r80`` moves behind the stream's position, and ``r10``, already read, ahead.
+MOVES = (("r80", 5), ("r10", 85))
+
+
+async def _amove(db: Any) -> None:
+    for record_id, n in MOVES:
+        record = await db.read(record_id)
+        record["n"] = n
+        await db.update(record_id, record)
+
+
 # --- an unwritten table: the stream is the search --------------------------------------
 
 #: Ties, missing values, mixed kinds and a nested field, so every rule a key
-#: list carries meets a page boundary somewhere.
+#: list carries meets a page boundary somewhere. ``v`` holds every kind of
+#: value: a string, a number, a boolean, an array and an object.
 MIXED = [
     Record(data, storage_id=f"m{i:02d}")
     for i, data in enumerate(
         [
-            {"a": 1, "b": "x", "c": 1.5, "info": {"rank": 3}},
-            {"a": 2, "b": "y", "info": {"rank": 1}},
-            {"a": 1},
-            {"a": 3, "b": "x", "c": -2.0, "info": {"rank": 3}},
-            {"a": 2, "b": "z", "c": 10, "info": {"rank": 2}},
-            {"b": "w", "c": 0},
-            {"a": 1, "b": "x", "c": 1e30, "info": {"rank": 1}},
-            {"a": 2.5, "b": "é"},
-            {"a": 10, "b": 'a"b', "c": 2**53 + 1},
-            {"a": 2, "b": "y", "c": 2**53, "info": {"rank": 2}},
-            {"a": None, "b": "x"},
-            {"a": -1, "b": "B", "c": -0.5, "info": {"rank": 1}},
+            {"a": 1, "b": "x", "c": 1.5, "info": {"rank": 3}, "v": "s"},
+            {"a": 2, "b": "y", "info": {"rank": 1}, "v": 2},
+            {"a": 1, "v": True},
+            {"a": 3, "b": "x", "c": -2.0, "info": {"rank": 3}, "v": [1, 2]},
+            {"a": 2, "b": "z", "c": 10, "info": {"rank": 2}, "v": {"k": 1}},
+            {"b": "w", "c": 0, "v": "10"},
+            {"a": 1, "b": "x", "c": 1e30, "info": {"rank": 1}, "v": 10},
+            {"a": 2.5, "b": "é", "v": False},
+            {"a": 10, "b": 'a"b', "c": 2**53 + 1, "v": [1]},
+            {"a": 2, "b": "y", "c": 2**53, "info": {"rank": 2}, "v": -3.5},
+            {"a": None, "b": "x", "v": {"a": [1]}},
+            {"a": -1, "b": "B", "c": -0.5, "info": {"rank": 1}, "v": "S"},
             {"a": 2, "c": 2**70},
         ]
     )
@@ -198,6 +242,8 @@ MIXED = [
 QUERIES = {
     "a asc, b desc": Query(sort_specs=[SortSpec("a"), SortSpec("b", SortOrder.DESC)]),
     "b, missing in some": Query(sort_specs=[SortSpec("b")]),
+    "v, every kind": Query(sort_specs=[SortSpec("v")]),
+    "v desc, every kind": Query(sort_specs=[SortSpec("v", SortOrder.DESC)]),
     "c desc": Query(sort_specs=[SortSpec("c", SortOrder.DESC)]),
     "key desc": Query(sort_specs=[SortSpec(RESERVED_KEY_FIELD, SortOrder.DESC)]),
     "nested, then a desc": Query(sort_specs=[SortSpec("info.rank"), SortSpec("a", SortOrder.DESC)]),
@@ -243,9 +289,7 @@ def test_a_stream_reads_what_search_does(mixed: Store, name: str, batch: int) ->
 
 
 def test_no_page_after_the_first_is_counted_to() -> None:
-    """Bug: each page skipped every row the stream had read, so reading ``n``
-    rows ``b`` at a time scanned ``n**2 / 2b`` of them.
-    """
+    """Each page after the first is placed by the last row read, not by an offset."""
     sent: list[str] = []
     store = Store("sqlite", "sync", MIXED)
     try:
@@ -276,3 +320,57 @@ def test_a_page_after_a_row_has_no_offset(dialect: str) -> None:
     later, params, _ = builder.build_page_query(later_page, after=["k"] * keys)
     assert "OFFSET" not in later
     assert params == ["k"] * len(params) and params, "the last row's keys are bound, not rendered"
+
+
+@pytest.mark.parametrize("order", [SortOrder.ASC, SortOrder.DESC])
+def test_an_unsorted_sqlite_page_seeks_the_key_index(order: SortOrder) -> None:
+    """Bug: a page after a row also took the rows with no key, which the
+    primary key has none of. SQLite then read every row after the last one
+    and sorted them, on every page: reading ``n`` rows ``b`` at a time read
+    about ``n**2 / 2b`` of them.
+    """
+    store = Store("sqlite", "sync", TENS)
+    try:
+        query = Query(sort_specs=[SortSpec(RESERVED_KEY_FIELD, order)])
+        page = stream_page(query, 3, 3)
+        assert page is not None
+        sql, params, _ = store.db.query_builder.build_page_query(page, after=["r20"])
+        plan = [row[3] for row in store.db.conn.execute(f"EXPLAIN QUERY PLAN {sql}", params)]
+    finally:
+        store.close()
+    assert plan and all(step.startswith("SEARCH") for step in plan), plan
+
+
+# --- a page reader that does not move -------------------------------------------------
+
+
+def _stuck(page: Query, after: Any) -> tuple[list[Record], list[Any]]:
+    """A page reader ignoring ``after``: every page is the first."""
+    return [Record({"n": 0}, storage_id="r00")] * (page.limit_value or 1), ["r00"]
+
+
+async def _astuck(page: Query, after: Any) -> tuple[list[Record], list[Any]]:
+    return _stuck(page, after)
+
+
+def test_a_page_ending_where_it_began_is_refused() -> None:
+    """Bug: a page reader whose next page began at the row it began after
+    returned that page forever, and the stream never ended.
+    """
+    with pytest.raises(OperationError, match="did not move"):
+        list(islice(iter_search_pages(_stuck, Query(), StreamConfig(batch_size=2)), 20))
+
+
+def test_an_async_page_ending_where_it_began_is_refused() -> None:
+    async def read() -> list[Record]:
+        seen: list[Record] = []
+        pages = aiter_search_pages(_astuck, Query(), StreamConfig(batch_size=2))
+        async with aclosing_iter(pages) as records:
+            async for record in records:
+                seen.append(record)
+                if len(seen) == 20:
+                    break
+        return seen
+
+    with pytest.raises(OperationError, match="did not move"):
+        asyncio.run(read())

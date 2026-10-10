@@ -15,6 +15,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from _helpdesk import (
@@ -25,12 +26,17 @@ from _helpdesk import (
     TICKET_FIELDS,
     TICKETS,
     TWINS,
+    ZONED_COLUMN,
     Helpdesk,
+    built,
     opened,
     write_duckdb_file,
     write_sqlite_file,
 )
 
+from dataknobs_common.exceptions import ValidationError
+
+from dataknobs_data.backends.sql_base import PAGE_KEY_PREFIX
 from dataknobs_data.query import (
     RESERVED_KEY_FIELD,
     Query,
@@ -195,3 +201,82 @@ def test_a_row_tying_a_page_boundary_on_every_key_is_read_once(
         assert _ids(db.search(_with_key(BY_NUMBER))) == [str(t) for t in (T1, T2, T2, T3, T4)]
         seen = db.stream(BY_NUMBER, TWO)
     assert _ids(seen) == [str(t) for t in (T1, T2, T3, T4)]
+
+
+# --- a column the driver returns other than the engine sorts it ------------------------
+
+#: Somebody else's DuckDB table whose columns a driver returns other than the
+#: engine sorts them: an enum the engine orders by its declaration, times
+#: finer than a microsecond, and times beyond the range Python can hold.
+ODD = (
+    "CREATE TYPE mood AS ENUM ('zzz', 'aaa', 'mmm');"
+    "CREATE TABLE odd (id VARCHAR PRIMARY KEY, mood mood, fine TIMESTAMP_NS, "
+    "plain TIMESTAMP, zoned TIMESTAMPTZ);"
+    "INSERT INTO odd VALUES "
+    "('o1', 'zzz', '2020-01-01 00:00:00.000000500', 'infinity', 'infinity'), "
+    "('o2', 'aaa', '2020-01-01 00:00:00.000000700', '-infinity', '-infinity'), "
+    "('o3', 'mmm', '2020-01-01 00:00:00.000001', '9999-12-31 23:59:59.999999', "
+    "'9999-12-31 23:59:59.999999+00'), "
+    "('o4', 'zzz', NULL, '2020-01-01', '2020-01-01 00:00:00+00'), "
+    "('o5', NULL, '2020-01-01 00:00:00.000000500', '0001-01-01', NULL)"
+)
+ODD_FIELDS: dict[str, object] = {
+    "id": {"type": "string"},
+    "mood": {"type": "string"},
+    "fine": {"type": "datetime"},
+    "plain": {"type": "datetime"},
+    "zoned": ZONED_COLUMN,
+}
+
+
+@pytest.fixture
+def odd_file(tmp_path: Path) -> Path:
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "odd.duckdb"
+    conn = duckdb.connect(str(path))
+    try:
+        conn.execute(ODD)
+    finally:
+        conn.close()
+    return path
+
+
+def _odd(path: Path) -> dict[str, Any]:
+    return Helpdesk("duckdb", {"path": str(path)}).config("odd", ODD_FIELDS, scope=[])
+
+
+def test_an_enum_sorts_by_its_text(odd_file: Path, twin: str) -> None:
+    """Bug: DuckDB ordered an enum column by its declaration, not by code
+    point as a string field sorts.
+    """
+    with opened(twin, _odd(odd_file)) as db:
+        moods = [r["mood"] for r in db.search(Query(sort_specs=[SortSpec("mood")]))]
+    assert moods == ["aaa", "mmm", "zzz", "zzz", None]
+
+
+@pytest.mark.parametrize("order", [SortOrder.ASC, SortOrder.DESC])
+@pytest.mark.parametrize("field", ["mood", "fine", "plain", "zoned"])
+@pytest.mark.parametrize("batch", [1, 2])
+def test_a_stream_over_a_column_the_driver_changes_reads_what_search_does(
+    odd_file: Path, twin: str, field: str, order: SortOrder, batch: int
+) -> None:
+    """Bug: each page began after the last row's key as the driver returned
+    it. An enum compared with that text as text, so the stream ended early;
+    a time cut to the microsecond, or an infinite one returned as the largest
+    Python holds, sorted after itself, so the stream never ended.
+    """
+    query = Query(sort_specs=[SortSpec(field, order)])
+    with opened(twin, _odd(odd_file)) as db:
+        expected = db.search(_with_key(query))
+        seen = db.stream(query, StreamConfig(batch_size=batch), most=len(expected) + 1)
+    assert _ids(seen) == _ids(expected)
+
+
+def test_a_column_named_as_a_page_key_is_refused(tmp_path: Path, twin: str) -> None:
+    """A page query selects each sort key under a reserved name beside the columns."""
+    path = _write("sqlite", tmp_path)
+    config = Helpdesk("sqlite", {"path": str(path)}).config(
+        "tickets", {**TICKET_FIELDS, f"{PAGE_KEY_PREFIX}0": {"type": "string"}}
+    )
+    with pytest.raises(ValidationError, match=PAGE_KEY_PREFIX):
+        built(twin, config)

@@ -333,14 +333,21 @@ class Store:
         *,
         write_after: int | None = None,
         write: Callable[[], object] | None = None,
+        most: int | None = None,
     ) -> list[Record]:
-        """The records ``stream_read`` returns, ``write()`` run once ``write_after`` are read."""
+        """The records ``stream_read`` returns, ``write()`` run once ``write_after`` are read.
+
+        With ``most``, no more than that many are read, so a stream that
+        never ends fails an assertion rather than hanging the run.
+        """
         if self._loop is None:
             seen: list[Record] = []
             for record in self.db.stream_read(query, config):
                 seen.append(record)
                 if write is not None and len(seen) == write_after:
                     write()
+                if len(seen) == most:
+                    break
             return seen
 
         async def collect() -> list[Record]:
@@ -350,6 +357,8 @@ class Store:
                     seen.append(record)
                     if write is not None and len(seen) == write_after:
                         write()
+                    if len(seen) == most:
+                        break
             return seen
 
         return self._loop.run_until_complete(collect())
