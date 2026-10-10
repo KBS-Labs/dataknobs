@@ -310,7 +310,8 @@ What the backend adds to the layout:
 - **The table may be any relation a `SELECT` reads**: a table, a view, a
   materialized view or a foreign table. `connect()` checks that it is there
   by name (`to_regclass`), which needs `USAGE` on the schema and no privilege
-  on the relation, and refuses one it cannot find.
+  on the relation. It refuses one it cannot find, and a role without `USAGE`
+  on the schema is refused saying that grant is what is missing.
 - **`stream_read` runs the statement `search` runs**, so its sort and limit
   hold, through a server-side cursor inside a read-only transaction held for
   the life of the iterator, on a connection that iterator alone reads on. As

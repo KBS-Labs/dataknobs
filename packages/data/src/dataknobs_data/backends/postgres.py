@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import asyncpg
 import psycopg2
+from psycopg2.errors import InsufficientPrivilege
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_common.lifecycle import close_if_owned_sync
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -432,7 +433,10 @@ class SyncPostgresDatabase(
             exists_sql, params = self._relation_exists_query()
             # The query is in this twin's ``pyformat`` style, so its parameters
             # are the named dict ``PostgresDB.query_rows`` binds.
-            rows = self.db.query_rows(exists_sql, cast("dict[str, Any]", params))
+            try:
+                rows = self.db.query_rows(exists_sql, cast("dict[str, Any]", params))
+            except InsufficientPrivilege as e:
+                raise self._schema_usage_error() from e
             if not (rows and next(iter(rows[0].values()))):
                 raise self._missing_relation_error()
             return
@@ -1419,8 +1423,11 @@ class AsyncPostgresDatabase(
         """
         if not self.auto_create_table:
             exists_sql, params = self._relation_exists_query()
-            async with self._require_pool().acquire() as conn:
-                exists = await conn.fetchval(exists_sql, *params)
+            try:
+                async with self._require_pool().acquire() as conn:
+                    exists = await conn.fetchval(exists_sql, *params)
+            except asyncpg.InsufficientPrivilegeError as e:
+                raise self._schema_usage_error() from e
             if not exists:
                 raise self._missing_relation_error()
             return

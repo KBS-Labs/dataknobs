@@ -1023,9 +1023,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a mapping or built as a `PostgresDatabaseConfig`. A refused configuration
   fails at construction. The table may be any relation a `SELECT` reads (a
   table, a view, a materialized view), and `connect()` refuses one it cannot
-  find by name, saying it is not created here. The keys work in any
-  configuration that builds a database, an ontology binding's `database:`
-  block included.
+  find by name, saying it is not created here, and a role without `USAGE` on
+  the schema, naming that grant. The keys work in any configuration that
+  builds a database, an ontology binding's `database:` block included.
 - **A Postgres `schema:` from configuration may be the declared fields.** A
   mapping or a list of field rows is read as on every other backend (with
   `sql_type` under `layout: native`); a string is still the SQL namespace.

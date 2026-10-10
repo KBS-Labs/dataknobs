@@ -348,6 +348,43 @@ def test_a_missing_table_is_named_as_one_somebody_else_owns(
     assert "migrations" not in message
 
 
+def test_a_role_that_cannot_use_the_schema_is_told_so(
+    pg: tuple[dict[str, Any], str], twin: str
+) -> None:
+    """Bug: ``to_regclass`` raises for a schema the role has no ``USAGE`` on, so
+    ``connect()`` failed with the driver's bare ``permission denied for
+    schema`` rather than the refusal naming what to grant.
+
+    The table is there; what is missing is the grant, and the refusal says so.
+    """
+    psycopg2 = pytest.importorskip("psycopg2")
+    params, schema = pg
+    admin = psycopg2.connect(
+        host=params["host"], port=params["port"], user=params["user"],
+        password=params["password"], dbname=params["database"],
+    )  # fmt: skip
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute("SELECT rolcreaterole OR rolsuper FROM pg_roles WHERE rolname = current_user")
+        if not cur.fetchone()[0]:
+            admin.close()
+            pytest.skip("the connecting user cannot create a role without USAGE")
+    role, password = f"native_outsider_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex
+    try:
+        with admin.cursor() as cur:
+            cur.execute(f"CREATE ROLE {role} LOGIN PASSWORD %s", [password])
+        with pytest.raises(RuntimeError) as caught:
+            with opened(twin, tickets(pg, user=role, password=password)):
+                pass
+        message = str(caught.value)
+        assert f"USAGE on schema {schema}" in message and "layout: native" in message
+        assert "does not exist" not in message
+    finally:
+        with admin.cursor() as cur:
+            cur.execute(f"DROP ROLE {role}")
+        admin.close()
+
+
 def test_a_scope_on_an_undeclared_column_is_refused_at_construction(
     pg: tuple[dict[str, Any], str], twin: str
 ) -> None:

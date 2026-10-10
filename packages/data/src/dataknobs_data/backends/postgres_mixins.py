@@ -345,15 +345,29 @@ class PostgresLayoutMixin(OperationGateMixin):
             return sql, {"relation": self._q_qualified}
         return sql, (self._q_qualified,)
 
+    def _schema_usage_error(self) -> RuntimeError:
+        """The refusal for a schema the connecting role cannot use.
+
+        ``to_regclass`` answers NULL for a relation that is not there, but
+        raises when the role has no ``USAGE`` on the schema it names -- even for
+        a table that is there. Each twin catches its driver's privilege error
+        around the existence check and raises this instead.
+        """
+        return RuntimeError(
+            f"The connecting role has no USAGE on schema {self.schema_name}, so "
+            f"table {self.schema_name}.{self.table_name} cannot be read. A table read "
+            f"through `layout: native` belongs to someone else: ask its owner to "
+            f"grant USAGE on the schema and SELECT on the declared columns."
+        )
+
     def _missing_relation_error(self) -> RuntimeError:
         """The refusal for a table that is not there, said as the layout would say it."""
         qualified = f"{self.schema_name}.{self.table_name}"
         if self.native:
             return RuntimeError(
-                f"Table {qualified} does not exist, or this role cannot see it. A "
-                f"table read through `layout: native` belongs to someone else and is "
-                f"never created here: check the table name, `schema_name`, and that "
-                f"the connecting role has USAGE on the schema."
+                f"Table {qualified} does not exist. A table read through "
+                f"`layout: native` belongs to someone else and is never created "
+                f"here: check the table name and `schema_name`."
             )
         return RuntimeError(
             f"Table {qualified} does not exist and auto_create_table is disabled. "
