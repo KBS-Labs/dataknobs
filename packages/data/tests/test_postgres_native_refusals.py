@@ -133,14 +133,35 @@ def test_bulk_embedding_never_reports_a_record_stored(cls: type) -> None:
     assert embedded == []
 
 
+def _refused_read_only(db: Any, name: str) -> bool:
+    """Whether calling ``name`` on ``db`` is refused as a read-only table.
+
+    The backends are never connected, so a call the gate permits fails on the
+    missing connection (or on its placeholder arguments) instead -- any
+    failure but the read-only refusal is a permitted call.
+    """
+    try:
+        _call(getattr(db, name))
+    except OperationError as e:
+        return "read-only" in str(e)
+    except Exception:
+        return False
+    return False
+
+
 @pytest.mark.parametrize("cls", TWINS, ids=lambda c: c.__name__)
 def test_the_json_layout_refuses_nothing(cls: type) -> None:
-    """Writes are refused only where the layout cannot write."""
-    db = cls({"table": "records"})
-    method = db.create
-    with pytest.raises(Exception) as caught:
-        _call(method)
-    assert not isinstance(caught.value, OperationError) or "read-only" not in str(caught.value)
+    """Every operation a native table refuses, the JSON layout permits.
+
+    The native configuration over the same sweep is the positive control: the
+    same calls, refused, so the sweep can tell the two apart.
+    """
+    names = sorted(NATIVE_REFUSED & _public(cls))
+    assert len(names) >= 15, "the sweep must reach the gated surface"
+    native, json_layout = cls(CONFIG), cls({"table": "records"})
+    assert all(_refused_read_only(native, name) for name in names)
+    refused = [name for name in names if _refused_read_only(json_layout, name)]
+    assert refused == []
 
 
 @pytest.mark.parametrize("cls", TWINS, ids=lambda c: c.__name__)
