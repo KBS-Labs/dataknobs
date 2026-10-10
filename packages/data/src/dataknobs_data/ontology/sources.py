@@ -780,20 +780,26 @@ class RecordEntitySource(DynamicCapabilityMixin):
         found = await self._forms_db.search(
             Query(filters=[Filter(lookup.form, Operator.EQ, folded)])
         )
-        named = frozenset(
-            str(entity_id)
+        named = {
+            entity_id
             for entity_id in (record.get_value(lookup.entity) for record in found)
             if entity_id is not None
-        )
+        }
         if self._shared_store or not named:
-            return named
+            return frozenset(str(entity_id) for entity_id in named)
         # The forms are another store, which may hold forms for entities this
         # one cannot read: another hierarchy's rows in a table they share, kept
         # out of the entity store by its scope. An id answered here would be
         # one `get` resolves to nothing, read by a caller as a match, so only
-        # the ids the entity store holds are answered.
-        held = await self._read_ids(sorted(named))
-        return named & {str(record.get_value(self._projection.id)) for record in held}
+        # the ids the entity store holds are answered. The check sends the
+        # forms' own values, not their text: an integer key is not equal to
+        # its text on any backend, and every id would be dropped.
+        held = await self._read_ids(sorted(named, key=str))
+        return frozenset(
+            str(entity_id)
+            for entity_id in (record.get_value(self._projection.id) for record in held)
+            if entity_id in named
+        )
 
     async def by_type(self, type_id: str) -> frozenset[str]:
         """The ids of every entity of this type.

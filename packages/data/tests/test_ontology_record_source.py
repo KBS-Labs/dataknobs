@@ -1276,3 +1276,27 @@ class _CountingSearchProbe(AsyncMemoryDatabase):
     async def search(self, query: Any) -> list[Record]:
         self.searches += 1
         return await super().search(query)
+
+
+async def test_a_separate_forms_store_scopes_integer_keys_by_their_values() -> None:
+    """Bug: with the forms in a store of their own, the ids they named were
+    checked against the entity store as text. An integer key is not equal to
+    its text -- on any backend, as ``Filter.matches`` answers -- so every id
+    was dropped and every lookup answered ``frozenset()``, which a resolution
+    cascade reads as *ran and matched nothing*.
+
+    The check reads the forms' own values, so it compares like with like; the
+    answer is still the id as text, as every other member gives it. A form
+    naming a row the entity store does not hold is still dropped.
+    """
+    projection = EntityProjection.from_mapping(
+        dict(PROJECTION, surface_forms=FOLDED_LOOKUP), binding="products"
+    )
+    entities = AsyncMemoryDatabase()
+    forms = AsyncMemoryDatabase()
+    await entities.create(Record({"sku": 4471, "title": "Beagle"}))
+    await forms.create(Record({"folded_form": "beagle", "sku": 4471}))
+    await forms.create(Record({"folded_form": "beagle", "sku": 9999}))  # not an entity here
+    source = RecordEntitySource(entities, projection, source_id="products", forms_database=forms)
+
+    assert await source.by_surface_form("Beagle") == frozenset({"4471"})
