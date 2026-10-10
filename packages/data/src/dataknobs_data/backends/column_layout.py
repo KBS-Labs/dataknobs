@@ -143,7 +143,14 @@ class ColumnLayout(ABC):
 
     @abstractmethod
     def sort_keys(self, builder: SQLQueryBuilder, field: str) -> list[str]:
-        """The ``ORDER BY`` keys for one field, most significant first."""
+        """The ``ORDER BY`` keys for one field, most significant first.
+
+        A stream also selects each key and compares rows with the value the
+        driver returns for it (see
+        :meth:`~dataknobs_data.backends.sql_base.SQLQueryBuilder.build_page_query`),
+        so a key must be a value the driver can return and ``=`` must hold
+        exactly where the sort ties. A missing value is ``NULL``.
+        """
 
     @abstractmethod
     def select_list(self, builder: SQLQueryBuilder) -> str:
@@ -503,7 +510,13 @@ class NativeColumnLayout(ColumnLayout):
             # Ordered by the time a filter reads it as: on SQLite, which holds
             # the text it was given, its text orders a zoned value by wall clock.
             reading = ZONED_INSTANT if ZONED_INSTANT in times else NAIVE_TIME
-            return [self._time_expr(builder, column, reading)[1]]
+            key = self._time_expr(builder, column, reading)[1]
+            if reading == ZONED_INSTANT and builder.dialect == "duckdb":
+                # A stream reads its keys back, and DuckDB's driver needs
+                # ``pytz`` to return a zoned time: the instant's time in UTC
+                # orders the same and comes back without it.
+                key = f"timezone('UTC', {key})"
+            return [key]
         return [column.quoted]
 
     def select_list(self, builder: SQLQueryBuilder) -> str:

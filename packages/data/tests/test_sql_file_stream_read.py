@@ -110,7 +110,7 @@ def test_a_page_breaks_ties_on_the_key() -> None:
         ("group", SortOrder.ASC),
         (RESERVED_KEY_FIELD, SortOrder.ASC),
     ]
-    assert (page.offset_value, page.limit_value) == (0, BATCH)
+    assert (page.offset_value, page.limit_value) == (None, BATCH)
     assert [s.field for s in query.sort_specs] == ["group"], "the caller's query is not changed"
 
 
@@ -119,12 +119,20 @@ def test_a_page_sorted_by_the_key_is_not_given_it_twice() -> None:
     page = stream_page(query, streamed=BATCH, batch_size=BATCH)
     assert page is not None
     assert [(s.field, s.order) for s in page.sort_specs] == [(RESERVED_KEY_FIELD, SortOrder.DESC)]
-    assert page.offset_value == BATCH
+
+
+def test_only_the_first_page_skips_the_offset() -> None:
+    """A later page is found after the last row read, not counted to."""
+    query = Query(offset_value=2, limit_value=5)
+    first = stream_page(query, streamed=0, batch_size=BATCH)
+    later = stream_page(query, streamed=BATCH, batch_size=BATCH)
+    assert first is not None and later is not None
+    assert (first.offset_value, later.offset_value) == (2, None)
 
 
 def test_the_page_after_the_last_is_none() -> None:
     query = Query(offset_value=2, limit_value=5)
     assert stream_page(query, streamed=4, batch_size=BATCH) == Query(
-        sort_specs=[SortSpec(RESERVED_KEY_FIELD)], offset_value=6, limit_value=1
+        sort_specs=[SortSpec(RESERVED_KEY_FIELD)], limit_value=1
     )
     assert stream_page(query, streamed=5, batch_size=BATCH) is None

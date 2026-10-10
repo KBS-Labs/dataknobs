@@ -33,7 +33,7 @@ from .sqlite_mixins import SQLiteLayoutMixin, SQLiteVectorSupport, register_rege
 from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
     from typing import ClassVar
     from ..streaming import StreamConfig, StreamResult
     from ..vector.types import DistanceMetric, VectorSearchResult
@@ -417,6 +417,20 @@ class SyncSQLiteDatabase(
         finally:
             cursor.close()
 
+    def _search_page(
+        self, page: Query, after: Sequence[Any] | None
+    ) -> tuple[list[Record], list[Any] | None]:
+        """One page of a stream, after the row ``after`` holds the sort keys of."""
+        conn = self._require_conn()
+        sql_query, params, keys = self.query_builder.build_page_query(page, after)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql_query, params)
+            rows = [dict(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+        return self.query_builder.page_records(rows, page, keys)
+
     def count(self, query: Query | None = None) -> int:
         """Count records matching a query."""
         conn = self._require_conn()
@@ -597,17 +611,19 @@ class SyncSQLiteDatabase(
     def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
     ) -> Iterator[Record]:
-        """Stream the records a query matches, a page of ``search`` at a time.
+        """Stream the records a query matches, a page at a time.
 
         Each page is its own statement, sorted by the query's sort and then by
-        the key (see :func:`~dataknobs_data.streaming.stream_page`), so no
-        statement stays open between records: an open SQLite read would lock
-        the file's owner out of writing it. The query's limit, offset and
-        projection hold; with no sort the stream promises no order.
+        the key, and each after the first begins after the last row read (see
+        :func:`~dataknobs_data.streaming.stream_page`). So no statement stays
+        open between records -- an open SQLite read would lock the file's
+        owner out of writing it -- and a write between two pages moves no row
+        the stream has yet to read. The query's limit, offset and projection
+        hold; with no sort the stream promises no order.
         """
         from ..streaming import iter_search_pages
 
-        yield from iter_search_pages(self.search, query, config)
+        yield from iter_search_pages(self._search_page, query, config)
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None
