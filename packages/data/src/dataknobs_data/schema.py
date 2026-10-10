@@ -5,13 +5,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from dataknobs_common.exceptions import ValidationError
 
 from .fields import FieldType
+
+#: The ``metadata`` key naming a column's SQL type where ``FieldType`` names
+#: none (``uuid``, ``timestamptz``, or one a consumer registers), read by the
+#: native column layout (:mod:`dataknobs_data.backends.sql_types`).
+SQL_TYPE_KEY = "sql_type"
 
 #: The keys a field declaration takes, in either spelling. ``dimensions`` and
 #: ``source_field`` are the vector shorthands, and ``enum`` the allowed-values
@@ -24,9 +31,94 @@ FIELD_KEYS: frozenset[str] = frozenset(
     {"name", "type", "required", "default", "metadata", "dimensions", "source_field", "enum"}
 )
 
+#: The keys a field takes through a door to a table read through the native
+#: column layout: :data:`FIELD_KEYS` and ``sql_type`` (:data:`SQL_TYPE_KEY`),
+#: which folds into ``metadata``. Only that layout reads ``sql_type``, so every
+#: other door refuses it rather than loading a column type nothing honours.
+#: Every key :func:`read_field_declarations` reads.
+NATIVE_FIELD_KEYS: frozenset[str] = FIELD_KEYS | {SQL_TYPE_KEY}
+
 #: The keys that fold into a field's ``metadata`` under their own name, where an
 #: explicit ``metadata`` entry wins.
-_METADATA_SHORTHANDS: tuple[str, ...] = ("dimensions", "source_field", "enum")
+_METADATA_SHORTHANDS: tuple[str, ...] = ("dimensions", "source_field", "enum", SQL_TYPE_KEY)
+
+
+#: The JSON schema type a field's filter takes, by field type, as
+#: :meth:`~dataknobs_data.sources.database.DatabaseSource.get_schema` publishes
+#: it. A field type absent here (``binary``, the vectors) has no filter.
+FILTER_JSON_TYPES: Mapping[FieldType, str] = MappingProxyType(
+    {
+        FieldType.STRING: "string",
+        FieldType.TEXT: "string",
+        FieldType.INTEGER: "integer",
+        FieldType.FLOAT: "number",
+        FieldType.BOOLEAN: "boolean",
+        FieldType.DATETIME: "string",
+        FieldType.JSON: "object",
+    }
+)
+
+
+def _is_number(member: Any) -> bool:
+    return (
+        isinstance(member, (int, float)) and not isinstance(member, bool) and math.isfinite(member)
+    )
+
+
+#: What each JSON type an ``enum`` can be published under takes as a member,
+#: and how a refusal names it. ``object`` is not one: an allowed object is no
+#: value a model can be offered to choose.
+_ENUM_MEMBERS: Mapping[str, tuple[Callable[[Any], bool], str]] = MappingProxyType(
+    {
+        "string": (lambda member: isinstance(member, str), "strings"),
+        "integer": (
+            lambda member: isinstance(member, int) and not isinstance(member, bool),
+            "integers (a boolean is not one)",
+        ),
+        "number": (_is_number, "finite numbers (a boolean is not one)"),
+        "boolean": (lambda member: isinstance(member, bool), "booleans"),
+    }
+)
+
+
+#: No member: what a search for a stray member answers when it finds none.
+_NONE = object()
+
+
+def enum_problem(enum: Any, field_type: FieldType) -> str | None:
+    """What is wrong with a field's ``enum``, or ``None`` when it is a usable one.
+
+    One rule for every reader of the key: the schema reader, and a grounded
+    source given a schema built by hand. ``DatabaseSource`` publishes an
+    ``enum`` in its filter schema under the field's JSON type
+    (:data:`FILTER_JSON_TYPES`), so each member must be a value of that type.
+
+    - Not a list or tuple: a string is iterable, so it would reach a filter
+      schema as one allowed value per letter.
+    - Empty: it allows no value, and offers a model a field it can match with
+      nothing.
+    - A member the field's filter type does not take: strings on a ``string``,
+      ``text`` or ``datetime`` field, integers on an ``integer`` field, finite
+      numbers on a ``float`` field, booleans on a ``boolean`` one. A boolean
+      is not a number here, though Python counts it as one. A ``json``,
+      ``binary`` or vector field takes no ``enum``.
+    - A member named twice (``1`` and ``1.0`` are one number).
+    """
+    if not isinstance(enum, (list, tuple)):
+        return "it is a list of the values the field allows"
+    if not enum:
+        return "an empty list allows no value; leave `enum` out to allow any"
+    members = _ENUM_MEMBERS.get(FILTER_JSON_TYPES.get(field_type, ""))
+    if members is None:
+        return f"a {field_type.value} field has no value an enum can allow; leave `enum` out"
+    takes, named = members
+    stray = next((member for member in enum if not takes(member)), _NONE)
+    if stray is not _NONE:
+        return f"a {field_type.value} field's filter takes {named}, and {stray!r} is not one"
+    if len(set(enum)) != len(enum):
+        return "it names a value more than once"
+    return None
+
 
 #: The keys a schema declaration takes at its top level.
 SCHEMA_KEYS: frozenset[str] = frozenset({"fields", "metadata"})
@@ -386,11 +478,12 @@ def read_field_declarations(
     - **A mapping** of ``{<column>: <type name> | <field mapping>}``.
     - **A sequence of rows**, each a field mapping that carries its ``name``.
 
-    A field mapping takes the keys in ``keys`` (by default :data:`FIELD_KEYS`).
+    A field mapping takes the keys in ``keys`` (by default :data:`FIELD_KEYS`;
+    :data:`NATIVE_FIELD_KEYS` adds ``sql_type``).
     ``type`` defaults to ``string`` and is a type name in any case (``String``
     is ``string``); ``required`` is a boolean; ``enum`` is a list of the values
     a field allows, whichever of ``enum:`` and ``metadata.enum`` it is written
-    as; ``dimensions``, ``source_field`` and ``enum`` fold into
+    as; ``dimensions``, ``source_field``, ``enum`` and ``sql_type`` fold into
     ``metadata``, where an explicit ``metadata`` entry wins. A mapping entry may repeat its ``name`` (which is what
     :meth:`DatabaseSchema.to_dict` writes) and must then agree with its key. A
     key a field takes, given an explicit ``null``, reads as that key left out
@@ -406,9 +499,10 @@ def read_field_declarations(
             refusal adds, in the caller's own keys (an ontology binding's
             ``source_id``).
         keys: The keys a field takes through this door: :data:`FIELD_KEYS`,
-            or a subset of it for a door that reads less of a declaration (an
-            ontology binding reads a column's name and type), so that a key it
-            would load and discard is refused instead.
+            :data:`NATIVE_FIELD_KEYS` for a table read through the native
+            column layout, or a subset for a door that reads less of a
+            declaration (an ontology binding reads a column's name and type),
+            so that a key it would load and discard is refused instead.
 
     Returns:
         The declared fields, by name, in declaration order.
@@ -420,10 +514,10 @@ def read_field_declarations(
         ValueError: When ``keys`` names a key this reader does not read, which
             is a caller's error rather than a declaration's.
     """
-    unreadable = sorted(keys - FIELD_KEYS)
+    unreadable = sorted(keys - NATIVE_FIELD_KEYS)
     if unreadable:
         raise ValueError(
-            f"read_field_declarations reads {sorted(FIELD_KEYS)}; keys={unreadable} "
+            f"read_field_declarations reads {sorted(NATIVE_FIELD_KEYS)}; keys={unreadable} "
             f"would be admitted and then discarded"
         )
     prefix = f"{origin}: " if origin else ""
@@ -564,14 +658,22 @@ def _field_schema(
     # Checked after the merge, because the value checked has to be the one that
     # wins: an explicit `metadata.enum` takes precedence over the shorthand.
     enum = metadata.get("enum")
-    if enum is not None and not isinstance(enum, (list, tuple)):
-        # A string is iterable, so it would reach a filter schema as one
-        # allowed value per letter.
+    if enum is not None:
         spelled = "metadata.enum" if "enum" in declared_metadata else "enum"
+        problem = enum_problem(enum, field_type)
+        if problem:
+            raise ValidationError(
+                f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; {problem}",
+                context={**field_context, "enum": enum},
+            )
+
+    sql_type = metadata.get(SQL_TYPE_KEY)
+    if sql_type is not None and (not isinstance(sql_type, str) or not sql_type):
+        spelled = f"metadata.{SQL_TYPE_KEY}" if SQL_TYPE_KEY in declared_metadata else SQL_TYPE_KEY
         raise ValidationError(
-            f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; it is a list of the "
-            f"values the field allows",
-            context={**field_context, "enum": enum},
+            f"{prefix}field {name!r} declares `{spelled}: {sql_type!r}`; it is the name of a "
+            f"SQL type, such as `uuid`",
+            context={**field_context, SQL_TYPE_KEY: sql_type},
         )
 
     return FieldSchema(

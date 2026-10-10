@@ -36,6 +36,21 @@ def _source(**metadata: Any) -> DatabaseSource:
     return DatabaseSource(db=AsyncMemoryDatabase(), schema=schema, name="courses")
 
 
+@pytest.mark.parametrize(
+    ("enum", "problem"),
+    [
+        ([], "allows no value"),
+        (["CS", 5], "takes strings, and 5"),
+        (("CS", "CS"), "more than once"),
+        ([1, 2], "takes strings, and 1"),
+    ],
+)
+def test_a_hand_built_enum_that_allows_nothing_usable_is_refused(enum: Any, problem: str) -> None:
+    """The schema reader's rule, for a schema that never passed through it."""
+    with pytest.raises(ValidationError, match=problem):
+        _source(enum=enum)
+
+
 @pytest.mark.parametrize("enum", ["CS", 5, {"CS": 1}])
 def test_a_hand_built_enum_that_is_not_a_list_is_refused(enum: Any) -> None:
     """It used to reach the filter schema as `list(enum)`: `['C', 'S']` for `"CS"`."""
@@ -62,6 +77,19 @@ def test_a_valid_description_and_enum_still_reach_the_filter_schema() -> None:
     dept = _source(description="The department", enum=("CS", "Math")).get_schema().fields["dept"]
     assert dept["description"] == "The department"
     assert dept["enum"] == ["CS", "Math"]
+
+
+def test_an_integer_enum_on_an_integer_field_reaches_the_filter_schema() -> None:
+    """An integer field's allowed values are integers, as its filter schema says."""
+    schema = DatabaseSchema(
+        fields={
+            "level": FieldSchema(name="level", type=FieldType.INTEGER, metadata={"enum": [1, 2]})
+        }
+    )
+    source = DatabaseSource(db=AsyncMemoryDatabase(), schema=schema, name="courses")
+    level = source.get_schema().fields["level"]
+    assert level["type"] == "integer"
+    assert level["enum"] == [1, 2]
 
 
 def test_the_keys_a_source_field_takes_are_the_ones_it_reads() -> None:

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A field's `enum` must allow something its filter can take.** The schema
+  reader, and `DatabaseSource` for a schema built in Python, refuse an `enum`
+  that is empty, names a value twice, or holds a member the field's filter
+  type does not take, as they already refused one that is not a list.
+  `DatabaseSource` publishes an `enum` under the field's JSON type
+  (`FILTER_JSON_TYPES` in `dataknobs_data.schema`), so a `string`, `text` or
+  `datetime` field takes strings, an `integer` field integers, a `float`
+  field finite numbers, and a `boolean` field booleans; a boolean is not a
+  number here. A `json`, `binary` or vector field takes no `enum`. An empty
+  enumeration allows no value, and reached an extraction model's filter
+  schema as a field it could match with nothing. **Migration:** drop an empty
+  `enum` (to allow any value) or one on a `json`, `binary` or vector field,
+  write each member as a value of the field's type (`1`, not `"1"`, on an
+  `integer` field), and remove the repeats.
+
 - **`SQLQueryBuilder`'s batch builders return a list of statements.**
   `build_batch_create_queries`, `build_batch_upsert_queries` and
   `build_batch_update_queries` take a `max_parameters` ceiling and return
@@ -969,6 +984,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SQLQueryBuilder` reads a table through a column layout, and a table with
+  ordinary typed columns is one.** A new `layout=` argument takes a
+  `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout` is
+  the table this package creates, and is the default, so every existing
+  builder renders exactly the SQL it did. `NativeColumnLayout(schema,
+  id_column=..., scope=...)` reads a table somebody else owns: it selects and
+  filters only the columns the schema declares and refuses any other name
+  before SQL is built, routes the reserved `id` field to `id_column`, ANDs its
+  `scope` filters into every read the builder builds (search, complex search
+  with the caller's condition nested under it, count, `build_where_clause`,
+  read and exists), and refuses every statement that writes with
+  `OperationError`. Every filter answers as `Filter.matches` answers over the
+  record the layout returns: a bound of a kind the column's type cannot hold
+  matches nothing (its negation every present value) and is never sent to the
+  driver, and a numeric bound compared with a PostgreSQL column is sent as
+  `bigint`, `double precision` or `numeric`, because asyncpg otherwise types
+  it as the column and sends `3.5` to an `integer` column as `3`; an
+  `integer` column is compared with a `float` or `Decimal` bound exactly,
+  past 2**53 too, on every engine (a whole bound past every integer the driver
+  binds is sent as the infinity on its side), and a bound no engine number
+  holds exactly is refused rather than rounded: a fractional `Decimal` past
+  2**52 on SQLite, and a fraction beside an integer past 37 digits in one
+  `BETWEEN` or `IN` on DuckDB. A scope filter comparing a value its column
+  cannot hold (`size == 2.5` on an integer column) is refused, since it would match no row or, negated, exclude only the rows
+  where the column is NULL. The key is the key column's text, which is the
+  record's storage id, so a read finds a row by the key a search
+  returned; a key column is a `string`, `text`, `uuid` or `integer` column,
+  and an integer key's own text is compared in the column's type so its index
+  serves the read. A time column sorts by the time its filters read it as,
+  so SQLite orders a zoned value by its instant rather than its text. The new
+  `record_from_row` turns a row a builder selected into a record by its
+  layout, each value in its declared type's Python type on every engine. No
+  backend takes the native layout yet.
+- **SQL types a column can declare where `FieldType` names none.** A schema
+  field's `sql_type:` (or `metadata.sql_type`, `SQL_TYPE_KEY`) names an entry
+  of `sql_types`, an open `Registry[SqlType]`. The `sql_type:` key is read
+  through a door given `keys=NATIVE_FIELD_KEYS` and refused by every other,
+  as only the native layout reads it; `uuid` and `timestamptz` (a
+  zoned instant, read in UTC) ship. An `SqlType` says which kinds of value the
+  column holds, how a bound and a read value are normalised, whether it is
+  text or reads as text, which bounds a value of it can equal (`holds`), the
+  value a bound is sent as on each dialect (`own(bound, dialect)`), and the
+  type it is sent as. `SqlType`,
+  `sql_types`, `SQL_TYPE_KEY`, `NATIVE_FIELD_KEYS`, `NAIVE_TIME` and
+  `ZONED_INSTANT` are exported
+  from `dataknobs_data`. The schema reader refuses a `sql_type` that is not a
+  non-empty string; the native layout refuses one that is not registered.
+- **A table neither layout reads takes a layout of its own.** `ColumnLayout`
+  is an extension point: a subclass renders its filters, sorts and key with
+  `SQLQueryBuilder`'s public clause primitives, which answer as
+  `Filter.matches` does --- `typed_clause` (the comparison, membership, range
+  and negation, from what the layout's `expr_for` says a value is under each
+  reading of a bound), `operator_clause` and `membership_clause` (each taking
+  a `placeholder_type`), `bind_bound`, `time_reading`, `code_point_order` and
+  `param_placeholder`, with the operator sets `TYPED_OPERATORS`,
+  `ORDERED_OPERATORS` and `STRING_ONLY_OPERATORS`. The readings `expr_for` is
+  asked about are `"string"`, `"number"`, `"boolean"`, `NEVER` and
+  `TIME_READINGS` (`dataknobs_data.backends.sql_types`). `NativeColumnLayout`
+  is built on these alone. The primitives render for `NATIVE_DIALECTS`
+  (`postgres`, `sqlite`, `duckdb`), so a builder refuses a layout any other
+  dialect unless its `check_dialect` is overridden, as `JsonbLayout`'s is.
+  `bind_bound` sends a `Decimal` to DuckDB as a decimal, as to PostgreSQL,
+  rather than as a `float`. A layout reads only: `writable` defaults to
+  `False`, and a builder refuses a layout other than `JsonbLayout` that sets
+  it, since the write statements name the JSON layout's columns.
+- **`read_layout_config`**, the one reader of a backend's `layout:`
+  (`jsonb` or `native`), `id_column:` and `scope:` keys. `id_column:`,
+  `scope:` and a declared `sql_type` are refused by name under the JSON
+  layout, which reads none of them.
 - **`max_result_window` and `search_page_size` on both Elasticsearch
   backends' configs** (defaults `10000` and `1000`). The first is where a read
   stops being one `from`/`size` request; set it when an index's own

@@ -22,7 +22,7 @@ from dataknobs_common.exceptions import ValidationError
 from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.fields import FieldType
 from dataknobs_data.query import Filter, Operator, Query
-from dataknobs_data.schema import DatabaseSchema
+from dataknobs_data.schema import FILTER_JSON_TYPES, DatabaseSchema, enum_problem
 
 from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 
@@ -34,17 +34,6 @@ from .base import GroundedSource, RetrievalIntent, SourceResult, SourceSchema
 #: and never read (``required``, ``default``, the vector shorthands) is refused
 #: rather than read as honoured.
 SOURCE_FIELD_KEYS: frozenset[str] = frozenset({"name", "type", "metadata", "enum"})
-
-# FieldType → JSON schema type mapping
-_FIELD_TYPE_MAP: dict[FieldType, str] = {
-    FieldType.STRING: "string",
-    FieldType.TEXT: "string",
-    FieldType.INTEGER: "integer",
-    FieldType.FLOAT: "number",
-    FieldType.BOOLEAN: "boolean",
-    FieldType.DATETIME: "string",
-    FieldType.JSON: "object",
-}
 
 # Field types we skip in schema generation (not filterable)
 _SKIP_TYPES: set[FieldType] = {
@@ -71,11 +60,12 @@ def _check_filter_metadata(schema: DatabaseSchema, source: str) -> None:
                 context={**context, "got": type(description).__name__},
             )
         enum = field_schema.metadata.get("enum")
-        if enum is not None and not isinstance(enum, (list, tuple)):
+        problem = None if enum is None else enum_problem(enum, field_schema.type)
+        if problem:
             raise ValidationError(
-                f"source {source!r}: field {field_name!r} has a `metadata.enum` of type "
-                f"{type(enum).__name__}; it is a list of the values the field allows",
-                context={**context, "got": type(enum).__name__},
+                f"source {source!r}: field {field_name!r} has a `metadata.enum` of "
+                f"{enum!r}; {problem}",
+                context={**context, "got": type(enum).__name__, "enum": enum},
             )
 
 
@@ -103,9 +93,10 @@ class DatabaseSource(GroundedSource):
 
     Raises:
         ValidationError: When a field's ``metadata["description"]`` is not a
-            string, or its ``metadata["enum"]`` is not a list or tuple. Both
-            become part of the filter schema, and a string ``enum`` would reach
-            it as one allowed value per letter.
+            string, or its ``metadata["enum"]`` is not a usable list of
+            allowed values (see :func:`~dataknobs_data.schema.enum_problem`).
+            Both become part of the filter schema, and a string ``enum`` would
+            reach it as one allowed value per letter.
 
     Example::
 
@@ -177,7 +168,7 @@ class DatabaseSource(GroundedSource):
             if field_schema.type in _SKIP_TYPES:
                 continue
 
-            json_type = _FIELD_TYPE_MAP.get(field_schema.type)
+            json_type = FILTER_JSON_TYPES.get(field_schema.type)
             if json_type is None:
                 continue
 

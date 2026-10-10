@@ -221,6 +221,63 @@ unit = temperature_field.metadata.get("unit")
 print(f"Temperature: {temperature_field.value}°{unit[0].upper()}")
 ```
 
+## SQL Types for Tables With Their Own Columns
+
+A table read through the native column layout
+([Query System](query.md#tables-with-their-own-columns-native-layout)) has
+column types `FieldType` does not name. A schema field declares one with
+`sql_type:` (or `metadata: {sql_type: ...}`, which wins), naming an entry of
+the `sql_types` registry. Only the native layout reads it, so the `sql_type:`
+key is taken only through a door given `keys=NATIVE_FIELD_KEYS`, and every
+other door refuses it rather than load a column type nothing honours:
+
+```python
+from dataknobs_data import NATIVE_FIELD_KEYS
+from dataknobs_data.schema import DatabaseSchema
+
+schema = DatabaseSchema.from_dict({"fields": {
+    "node_id": {"type": "string", "sql_type": "uuid"},
+    "seen_at": {"type": "datetime", "sql_type": "timestamptz"},
+}}, keys=NATIVE_FIELD_KEYS)
+```
+
+Two ship:
+
+- **`uuid`**: holds strings, as the uuid's canonical lower-case text. A `UUID`
+  or a uuid string in any case compares equal to it, and an equality with
+  one is compared in the column's own type, so its index serves it. Anything
+  else, and every ordering or text operator, compares its text.
+- **`timestamptz`**: holds zoned instants. A record holds the value as an
+  aware `datetime` in UTC, and a plain `date` compares as its midnight in
+  UTC. A naive `datetime` never compares with it, as `Filter.matches` never
+  orders a naive value against an aware one.
+
+The schema reader refuses a `sql_type` that is not a non-empty string. The
+native layout refuses one that is not registered, listing those that are.
+A registration does not change the built-in types: a `sql_type` naming
+`integer` is refused as unregistered.
+
+### Registering Your Own
+
+```python
+from dataknobs_data import SqlType, sql_types
+
+# A case-insensitive text column, compared as text.
+sql_types.register("citext", SqlType(kinds=frozenset({"string"}), text="stored"))
+```
+
+An `SqlType` says:
+
+| Field | Meaning |
+|---|---|
+| `kinds` | which values the column holds: `"string"`, `"number"`, `"boolean"`, `NAIVE_TIME`, `ZONED_INSTANT`. A bound of any other kind matches nothing |
+| `bind` | a bound as a record would hold it, or `None` when no value can equal it |
+| `read` | a value the driver returned, as the record holds it |
+| `text` | `"stored"`: the column's SQL value is text, so it compares with strings, a time bound reads it as a time, and the text operators apply. `"cast"`: the column is not text, but the record holds its text, so strings and the text operators compare `CAST(column AS TEXT)`. `None` (the default): neither |
+| `holds` | whether some value of the column can equal a bound (default: any can). A scope equal to a value none holds is refused, and a `text="cast"` column is compared in its own type, keeping its index, with a bound it holds |
+| `own` | `own(bound, dialect)`: a bound compared with the column in its own type, as the value sent for it on that dialect: one every value of the column compares with as it does with the bound (default: the bound unchanged) |
+| `placeholder` | given the dialect and the bounds, the SQL type a bound is sent as |
+
 ## Best Practices
 
 1. **Always specify types explicitly** for clarity and validation

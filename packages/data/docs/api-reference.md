@@ -1206,6 +1206,45 @@ db = factory.create(
 await db.connect()
 ```
 
+### Native Column Layouts
+
+`SQLQueryBuilder` (`dataknobs_data.backends.sql_base`) reads its table through
+a `ColumnLayout` (`dataknobs_data.backends.column_layout`). `JsonbLayout`, the
+default, is the table the SQL backends create. `NativeColumnLayout` reads a
+table with ordinary typed columns: only the declared columns, a scope ANDed
+into every read, every write refused, and every filter answered as
+`Filter.matches` answers it. No backend takes it yet. See
+[the Query System](https://kbs-labs.github.io/dataknobs/packages/data/query/#tables-with-their-own-columns-native-layout).
+
+```python
+from dataknobs_data.backends.column_layout import NativeColumnLayout, read_layout_config
+from dataknobs_data.backends.sql_base import SQLQueryBuilder
+
+layout = read_layout_config(
+    {"layout": "native", "id_column": "node_id",
+     "scope": [{"field": "status", "operator": "=", "value": "live"}]},
+    schema,
+)
+builder = SQLQueryBuilder("nodes", dialect="postgres", layout=layout)
+record = builder.record_from_row(row)
+```
+
+| Name | Import | Role |
+|---|---|---|
+| `ColumnLayout` | `dataknobs_data.backends.column_layout` | how a table's rows are laid out; subclass it for a table neither layout reads (read-only: only `JsonbLayout` may set `writable`; renders for `NATIVE_DIALECTS` unless `check_dialect` is overridden) |
+| `NATIVE_DIALECTS` | the same | the dialects the clause primitives render for: `postgres`, `sqlite`, `duckdb` |
+| `SQLQueryBuilder.typed_clause`, `operator_clause`, `membership_clause`, `bind_bound`, `time_reading`, `code_point_order`, `param_placeholder` | `dataknobs_data.backends.sql_base` | the clause primitives a layout renders with |
+| `SQLQueryBuilder.TYPED_OPERATORS`, `ORDERED_OPERATORS`, `STRING_ONLY_OPERATORS` | the same | which primitive renders which operator |
+| `TIME_READINGS`, `ZONED_WALL_CLOCK`, `NEVER` | `dataknobs_data.backends.sql_types` | the readings a layout's `expr_for` is asked about, beside `"string"`, `"number"` and `"boolean"` |
+| `JsonbLayout`, `NativeColumnLayout` | `dataknobs_data.backends.column_layout` | the two layouts |
+| `read_layout_config(config, schema, *, origin=None, context=None)` | the same | reads `layout:`, `id_column:` and `scope:` |
+| `SqlType`, `sql_types` | `dataknobs_data` | what a declared SQL type holds; the registry of them (`uuid`, `timestamptz`) |
+| `SQL_TYPE_KEY` | `dataknobs_data` | `"sql_type"`, the field key naming one |
+| `NATIVE_FIELD_KEYS` | `dataknobs_data` | the field keys a native table's schema takes: `FIELD_KEYS` and `sql_type`, which every other door refuses |
+| `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
+
+See [Field Types](https://kbs-labs.github.io/dataknobs/packages/data/field-types/#sql-types-for-tables-with-their-own-columns) for registering one.
+
 ### S3 Backend
 
 AWS S3 storage:
