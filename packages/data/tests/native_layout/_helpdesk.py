@@ -326,13 +326,31 @@ class Store:
     def count(self, query: Query | None = None) -> int:
         return self.call("count", query)
 
-    def stream(self, query: Query, config: StreamConfig) -> list[Record]:
+    def stream(
+        self,
+        query: Query,
+        config: StreamConfig,
+        *,
+        write_after: int | None = None,
+        write: Callable[[], object] | None = None,
+    ) -> list[Record]:
+        """The records ``stream_read`` returns, ``write()`` run once ``write_after`` are read."""
         if self._loop is None:
-            return list(self.db.stream_read(query, config))
+            seen: list[Record] = []
+            for record in self.db.stream_read(query, config):
+                seen.append(record)
+                if write is not None and len(seen) == write_after:
+                    write()
+            return seen
 
         async def collect() -> list[Record]:
+            seen: list[Record] = []
             async with aclosing_iter(self.db.stream_read(query, config)) as records:
-                return [record async for record in records]
+                async for record in records:
+                    seen.append(record)
+                    if write is not None and len(seen) == write_after:
+                        write()
+            return seen
 
         return self._loop.run_until_complete(collect())
 
