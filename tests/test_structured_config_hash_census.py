@@ -45,7 +45,7 @@ OWN_HASH: dict[str, str] = {
 def _every_subclass(root: type) -> set[type]:
     """Every class below ``root`` that exists in this process, at any depth."""
     found: set[type] = set()
-    stack = list(root.__subclasses__())
+    stack: list[type] = list(root.__subclasses__())
     while stack:
         cls = stack.pop()
         if cls not in found:
