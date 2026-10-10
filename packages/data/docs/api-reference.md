@@ -748,16 +748,21 @@ obligation: `db.stream_write(records)` stops consuming on a failed batch, and
 
 #### Paging through `search`
 
-A backend with no server-side cursor streams one `search` per page. The
+A backend with no server-side cursor streams one statement per page. The
 SQLite and DuckDB backends do, through `iter_search_pages` /
 `aiter_search_pages` (`dataknobs_data.streaming`), which take the backend's
-`search`, the query and the config. Each page is `stream_page(query,
+page reader, the query and the config. Each page is `stream_page(query,
 streamed, batch_size)`: the query's own sort and then the key, with the
-query's offset and limit honoured. So on a table nobody writes during the
-stream, a sort that ties still pages every row once, provided no two rows
-share a key. Each page is found by its offset, so a row added or removed ahead
-of the stream's position between pages moves the rest: one can then be read
-twice or skipped. The key is how the pages agree, not an order the stream
+query's limit honoured and its offset skipped on the first page. The reader,
+`search_page(page, after)`, returns the page's records and its last row's
+sort keys, and the next page begins strictly after a row holding them —
+`SQLQueryBuilder.build_page_query(page, after)` writes that statement and
+`page_records` splits its rows. So a stream of a table nobody writes is
+exactly `search(query)`, and on a table somebody writes meanwhile, a row
+present for the whole stream is read once and a row written meanwhile is read
+if it sorts after the stream's position. The key must be unique: of two rows
+agreeing on every sort key and the key, the one after a page boundary is not
+read. The key is how the pages fit together, not an order the stream
 promises.
 
 `StreamConfig` is a frozen `StructuredConfig` (from `dataknobs-common`):

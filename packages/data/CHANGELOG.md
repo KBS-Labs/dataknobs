@@ -1079,7 +1079,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than `jsonb` or `native` is refused by the config.
 - **`stream_page`, `iter_search_pages` and `aiter_search_pages`**
   (`dataknobs_data.streaming`) stream what `search(query)` returns one page
-  at a time, for a backend with no server-side cursor.
+  at a time, for a backend with no server-side cursor. The drivers take a
+  page reader, `search_page(page, after)`, returning the page's records and
+  its last row's sort keys; `stream_page` skips the query's offset on the
+  first page only.
+- **`SQLQueryBuilder.build_page_query(query, after)`, `page_keys` and
+  `page_records`** (`dataknobs_data.backends.sql_base`): a search statement
+  that also selects each row's sort keys, under `PAGE_KEY_PREFIX`, and with
+  `after` begins strictly after the row holding those keys; and the split of
+  its rows into records and the keys the next page starts after. Built on a
+  layout's `sort_keys`, so a consumer's `ColumnLayout` pages this way with
+  nothing more: each key it returns must be a value its driver can return.
 - **`sqlite_regexp` and `register_regexp`**
   (`dataknobs_data.backends.sqlite_mixins`): the `REGEXP` function both
   SQLite backends register on every connection.
@@ -1649,6 +1659,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anyway. The pages had no order to agree on, so a row could be read twice
   or never at a page boundary; each page now sorts by the query's sort and
   then by the key. No statement is held open between pages.
+- **A write between two pages of a SQLite or DuckDB stream moves no row the
+  stream has yet to read.** Every page after the first begins strictly after
+  the last row read, by that row's sort keys as the engine computed them,
+  rather than by counting the rows ahead of it. A row present for the whole
+  stream is read once, and a row written meanwhile is read if it sorts after
+  the stream's position; a row added or removed ahead of it no longer makes
+  another be read twice or skipped. No page past the first skips rows, so a
+  long stream no longer scans every row it has already read on each page. The
+  key must still be unique: on a view where two rows agree on every sort key
+  and the key, the one after a page boundary is not read.
 - **A backend config built in code reads its `schema` as `from_dict` does.**
   `SQLiteDatabaseConfig(schema={"fields": ...})` and its siblings kept the
   mapping as given, so `db.schema` was a `dict` and a backend that reads the
