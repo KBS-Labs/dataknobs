@@ -169,3 +169,58 @@ class TestSlotsAreSupported:
                 return hash(self.n)
 
         assert hash(Slotted(n=3)) == hash(3)
+
+
+@dataclass(frozen=True, eq=False)
+class ByVersion(StructuredConfig):
+    """Identified by its version number, as a stored config version is."""
+
+    version: int = 1
+    notes: list[str] = field(default_factory=list)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, ByVersion) and other.version == self.version
+
+    def __hash__(self) -> int:
+        return hash(self.version)
+
+
+class TestAHashWrittenByHandIsInherited:
+    """A subclass of a config that writes its own hash inherits that hash.
+
+    Every subclass's dict holds either ``None`` or a hash its body wrote, so an
+    inherited hash that is not ``None`` was written by hand. Handing it on keeps
+    an undecorated subclass's equality and hash in step, since it inherits the
+    equality too. A decorated subclass compares every field, which is finer than
+    the parent's equality, so two equal instances also agree on the parent's
+    hash.
+    """
+
+    def test_an_undecorated_subclass_keeps_the_hash_and_the_equality(self) -> None:
+        class Undecorated(ByVersion):
+            pass
+
+        a, b = Undecorated(version=2, notes=["a"]), Undecorated(version=2, notes=["b"])
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_a_decorated_subclass_hashes_consistently_with_its_field_equality(self) -> None:
+        @dataclass(frozen=True)
+        class Decorated(ByVersion):
+            label: str = "x"
+
+        assert Decorated(version=2, label="y") == Decorated(version=2, label="y")
+        assert hash(Decorated(version=2, label="y")) == hash(Decorated(version=2, label="z"))
+
+    def test_a_hash_from_a_mixin_that_is_not_a_config_is_not_inherited(self) -> None:
+        """Only a hash a config wrote is the family's opt-out."""
+
+        class Keyed:
+            def __hash__(self) -> int:
+                return 0
+
+        @dataclass(frozen=True)
+        class Mixed(Keyed, StructuredConfig):
+            n: int = 0
+
+        assert not isinstance(Mixed(), Hashable)

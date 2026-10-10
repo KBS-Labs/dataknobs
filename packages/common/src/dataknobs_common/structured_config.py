@@ -346,12 +346,34 @@ def _declared_without_classvar(cls: type, name: str) -> bool:
     return annotation is not ClassVar and get_origin(annotation) is not ClassVar
 
 
+def _hash_written_by_hand_above(cls: type) -> Any:
+    """The hash a config above ``cls`` wrote by hand, or ``None``.
+
+    The first class in the MRO whose dict holds ``__hash__`` decides. Every
+    ``StructuredConfig`` subclass holds one -- ``None`` from the hook, or a
+    hash its body wrote -- so a non-``None`` value found on one was written by
+    hand, and is the family's opt-out. A hash from a class outside the family,
+    a mixin, is not: the family's answer overrides it, as the generated hash
+    used to.
+    """
+    for owner in cls.__mro__[1:]:
+        if "__hash__" in owner.__dict__:
+            if owner is StructuredConfig or not issubclass(owner, StructuredConfig):
+                return None
+            return owner.__dict__["__hash__"]
+    return None
+
+
 def _declare_unhashable(cls: type) -> None:
-    """Declare a subclass unhashable, unless its body writes ``__hash__`` itself.
+    """Declare a subclass unhashable, unless it or a config above it writes ``__hash__``.
 
     Runs before the subclass's ``@dataclass``. ``dataclasses`` treats a
     ``__hash__`` already in the class dict as explicit and does not regenerate
-    it, so ``None`` written here survives the decorator. Writing it on the base
+    it, so ``None`` written here survives the decorator. A hash a config above
+    this one wrote by hand is written instead (see
+    :func:`_hash_written_by_hand_above`). It agrees with an undecorated
+    subclass's equality, which is inherited with it, and with a decorated
+    subclass's, which compares every field and so is finer. Writing it on the base
     alone would not: each subclass's own decorator generates a hash over its
     fields, because the subclass's dict does not hold the base's ``None``.
 
@@ -372,7 +394,7 @@ def _declare_unhashable(cls: type) -> None:
     if "__hash__" not in cls.__dict__:
         # Deliberate: see the docstring. Both codes are mypy objecting to the
         # assignment itself, which is the mechanism.
-        cls.__hash__ = None  # type: ignore[method-assign,assignment]
+        cls.__hash__ = _hash_written_by_hand_above(cls)  # type: ignore[method-assign]
     elif "__eq__" in cls.__dict__ and cls.__dict__["__hash__"] is None:
         raise TypeError(
             f"{cls.__qualname__} defines __eq__ without __hash__. A frozen "
