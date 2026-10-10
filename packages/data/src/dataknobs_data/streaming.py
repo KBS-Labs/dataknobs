@@ -580,8 +580,8 @@ def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
     and is found instead by the last row's sort keys, so what it reads does
     not depend on how many rows lie ahead of the stream's position:
 
-    - A row present for the whole stream is read once, whatever is written
-      meanwhile.
+    - A row present for the whole stream, its sort value unchanged, is read
+      once, whatever else is written meanwhile.
     - A row written meanwhile is read if it sorts after the stream's position,
       and not if it sorts before. A row whose sort value changes moves with it,
       so it can be read twice or not at all.
@@ -589,8 +589,9 @@ def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
       need not. Of rows equal on every sort key and on the key, one ending a
       page is read and the rest are not; none is read twice.
 
-    The query's offset, limit and projection hold: the stream returns what
-    ``search(query)`` would, one page at a time.
+    The query's offset, limit and projection hold: over a table nobody writes,
+    the stream returns the rows ``search(query)`` would, one page at a time,
+    ties in the sort broken by the key.
 
     Args:
         query: The caller's query, which is not changed.
@@ -614,6 +615,24 @@ def stream_page(query: Query, streamed: int, batch_size: int) -> Query | None:
     return page
 
 
+def _moved_on(after: Sequence[Any] | None, last: Sequence[Any] | None) -> Sequence[Any] | None:
+    """``last``, the keys the next page is read after, once it is past ``after``.
+
+    A page begins strictly after the row ``after`` holds the keys of, so its
+    last row cannot hold them too. One that does was read by a page reader
+    that ignored ``after``, or over a key the driver did not return as it is
+    (see :meth:`~dataknobs_data.backends.column_layout.ColumnLayout.sort_keys`),
+    and every page after it would be the same page: a stream that never ends.
+    """
+    if after is not None and last is not None and list(last) == list(after):
+        raise OperationError(
+            "a stream's page did not move: it ended on the sort keys it was read after, "
+            "so every page after it would be the same page",
+            context={"after": list(after)},
+        )
+    return last
+
+
 def iter_search_pages(
     search_page: SearchPage, query: Query | None, config: StreamConfig | None
 ) -> Iterator[Record]:
@@ -624,13 +643,18 @@ def iter_search_pages(
     and its last row's sort keys, which the next page is read after. No
     statement is held open between pages, so no read a stream left open
     blocks a writer, and nothing run between records cuts a page short.
+
+    Raises:
+        OperationError: When a page ends on the sort keys it was read after,
+            so the next page would be the same one (see :func:`_moved_on`).
     """
     query = query if query is not None else Query()
     batch_size = (config or StreamConfig()).batch_size
     streamed = 0
     after: Sequence[Any] | None = None
     while (page := stream_page(query, streamed, batch_size)) is not None:
-        records, after = search_page(page, after)
+        records, last = search_page(page, after)
+        after = _moved_on(after, last)
         yield from records
         streamed += len(records)
         # A short page is the last; ``StreamConfig`` refuses a batch size of 0.
@@ -647,7 +671,8 @@ async def aiter_search_pages(
     streamed = 0
     after: Sequence[Any] | None = None
     while (page := stream_page(query, streamed, batch_size)) is not None:
-        records, after = await search_page(page, after)
+        records, last = await search_page(page, after)
+        after = _moved_on(after, last)
         for record in records:
             yield record
         streamed += len(records)

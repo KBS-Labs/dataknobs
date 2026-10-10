@@ -16,7 +16,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 from numbers import Integral
 from types import MappingProxyType
-from typing import Any, TYPE_CHECKING, TypeVar
+from typing import Any, NamedTuple, TYPE_CHECKING, TypeVar
 
 from dataknobs_utils.sql_utils import quote_ident
 
@@ -35,7 +35,7 @@ from ..query import (
     value_kind,
 )
 from ..records import Record
-from .column_layout import ColumnLayout, JsonbLayout
+from .column_layout import PAGE_KEY_PREFIX, ColumnLayout, JsonbLayout
 from .sql_types import (
     DOUBLE as _DOUBLE,
     HUGEINT as _HUGEINT,
@@ -60,8 +60,19 @@ _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # (non-storage-key) field addresses the data JSONB column.
 _METADATA_FIELD_PREFIX = "metadata."
 
-#: What a page query selects its ``i``-th sort key as: ``f"{PAGE_KEY_PREFIX}{i}"``.
-PAGE_KEY_PREFIX = "_dk_page_key_"
+
+class PageKey(NamedTuple):
+    """One ``ORDER BY`` key of a query's sort (see :meth:`SQLQueryBuilder.page_keys`)."""
+
+    #: The SQL expression sorted by.
+    expression: str
+    #: The direction of the sort field it belongs to.
+    order: SortOrder
+    #: Whether it can be ``NULL``: every key can but the storage key of a
+    #: layout whose key column holds no ``NULL``
+    #: (:attr:`~.column_layout.ColumnLayout.key_never_null`).
+    nullable: bool
+
 
 #: One statement ready to run: its SQL, and the values its placeholders bind in
 #: order.
@@ -940,8 +951,9 @@ class SQLQueryBuilder:
             clauses.append(
                 "ORDER BY "
                 + ", ".join(
-                    f"{key} {'DESC' if order == SortOrder.DESC else 'ASC'} NULLS LAST"
-                    for key, order in keys
+                    f"{key.expression} {'DESC' if key.order == SortOrder.DESC else 'ASC'} "
+                    f"NULLS LAST"
+                    for key in keys
                 )
             )
 
@@ -978,21 +990,28 @@ class SQLQueryBuilder:
 
         return " ".join(sql_parts), params
 
-    def page_keys(self, query: Query | ComplexQuery) -> list[tuple[str, SortOrder]]:
+    def page_keys(self, query: Query | ComplexQuery) -> list[PageKey]:
         """Every ``ORDER BY`` key of ``query``'s sort, with its direction, most significant first.
 
         Each sort field's keys come from the layout (:meth:`_build_sort_keys`)
         and take the field's direction. A missing value -- a ``NULL`` key --
-        sorts last in either direction.
+        sorts last in either direction. The storage key cannot be missing
+        when the layout says its key column holds no ``NULL``
+        (:attr:`~.column_layout.ColumnLayout.key_never_null`), which lets a
+        page after a row seek an index on it.
 
         Args:
             query: The query whose sort to expand.
 
         Returns:
-            ``(expression, direction)`` per key; empty when the query has no sort.
+            One :class:`PageKey` per key; empty when the query has no sort.
         """
         return [
-            (key, spec.order)
+            PageKey(
+                key,
+                spec.order,
+                not (self.layout.key_never_null and is_storage_key_field(spec.field)),
+            )
             for spec in query.sort_specs
             for key in self._build_sort_keys(spec.field)
         ]
@@ -1015,7 +1034,9 @@ class SQLQueryBuilder:
           row holding those key values: later on the first key, or equal on it
           and later on the rest. A missing value sorts after every present one
           and ties with another missing one. Each key takes its own direction,
-          which a row-value comparison cannot express.
+          which a row-value comparison cannot express. A key that cannot be
+          missing is compared without that case, so an index on it serves the
+          page.
 
         The query's filters, limit and offset are rendered as
         :meth:`build_search_query` renders them; a stream's page after the
@@ -1037,7 +1058,8 @@ class SQLQueryBuilder:
         keys = self.page_keys(query)
         selected = [self.layout.select_list(self)]
         selected.extend(
-            f"{key} AS {quote_ident(f'{PAGE_KEY_PREFIX}{i}')}" for i, (key, _) in enumerate(keys)
+            f"{key.expression} AS {quote_ident(f'{PAGE_KEY_PREFIX}{i}')}"
+            for i, key in enumerate(keys)
         )
         sql_parts = [f"SELECT {', '.join(selected)} FROM {self.qualified_table}"]
 
@@ -1058,7 +1080,7 @@ class SQLQueryBuilder:
         return " ".join(sql_parts), params, len(keys)
 
     def _after_clause(
-        self, keys: Sequence[tuple[str, SortOrder]], after: Sequence[Any], param_start: int
+        self, keys: Sequence[PageKey], after: Sequence[Any], param_start: int
     ) -> tuple[str, list[Any]]:
         """The rows sorting strictly after one whose keys hold ``after`` (see :meth:`build_page_query`).
 
@@ -1074,12 +1096,14 @@ class SQLQueryBuilder:
             return self.param_placeholder(param_start + len(params) - 1)
 
         def from_key(i: int) -> str:
-            key, order = keys[i]
+            key, order, nullable = keys[i]
             value = after[i]
             later: str | None = None
             if value is not None:
                 beyond = "<" if order == SortOrder.DESC else ">"
-                later = f"({key} {beyond} {bound(value)} OR {key} IS NULL)"
+                later = f"{key} {beyond} {bound(value)}"
+                if nullable:
+                    later = f"({later} OR {key} IS NULL)"
             if i == len(keys) - 1:
                 return later if later is not None else "FALSE"
             same = f"{key} IS NULL" if value is None else f"{key} = {bound(value)}"
@@ -1106,15 +1130,26 @@ class SQLQueryBuilder:
             ``after``; ``None`` for no rows.
         """
         names = [f"{PAGE_KEY_PREFIX}{i}" for i in range(keys)]
-        records: list[Record] = []
-        last: list[Any] | None = None
-        for row in rows:
-            columns = dict(row)
-            last = [columns.pop(name) for name in names]
-            records.append(self.record_from_row(columns))
+        columns = [dict(row) for row in rows]
+        keyed = [[row.pop(name) for name in names] for row in columns]
+        return self.records_from_rows(columns, query), (keyed[-1] if keyed else None)
+
+    def records_from_rows(
+        self, rows: Sequence[Mapping[str, Any]], query: Query | ComplexQuery
+    ) -> list[Record]:
+        """A search's rows as records, each taking ``query``'s projection.
+
+        Args:
+            rows: The rows the statement returned, by column name.
+            query: The query whose projection the records take.
+
+        Returns:
+            One record per row, in the rows' order.
+        """
+        records = [self.record_from_row(row) for row in rows]
         if query.fields:
             records = [record.project(query.fields) for record in records]
-        return records, last
+        return records
 
     def _values_statements(
         self,

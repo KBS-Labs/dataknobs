@@ -404,18 +404,11 @@ class SyncSQLiteDatabase(
 
         try:
             cursor.execute(sql_query, params)
-            rows = cursor.fetchall()
-
-            # The layout sets each record's storage id from the row's key.
-            records = [self.query_builder.record_from_row(dict(row)) for row in rows]
-
-            # Apply field projection if specified
-            if query.fields:
-                records = [r.project(query.fields) for r in records]
-
-            return records
+            rows = [dict(row) for row in cursor.fetchall()]
         finally:
             cursor.close()
+        # The layout sets each record's storage id from the row's key.
+        return self.query_builder.records_from_rows(rows, query)
 
     def _search_page(
         self, page: Query, after: Sequence[Any] | None
@@ -617,9 +610,10 @@ class SyncSQLiteDatabase(
         the key, and each after the first begins after the last row read (see
         :func:`~dataknobs_data.streaming.stream_page`). So no statement stays
         open between records -- an open SQLite read would lock the file's
-        owner out of writing it -- and a write between two pages moves no row
-        the stream has yet to read. The query's limit, offset and projection
-        hold; with no sort the stream promises no order.
+        owner out of writing it -- and a row written or removed ahead of the
+        stream's position between two pages moves no other row. The query's
+        limit, offset and projection hold; with no sort the stream promises no
+        order.
         """
         from ..streaming import iter_search_pages
 

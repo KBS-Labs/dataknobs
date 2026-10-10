@@ -219,10 +219,7 @@ class DuckDBLayoutMixin(FileLayoutMixin):
             sql, params = self.query_builder.build_complex_search_query(query)
         else:
             sql, params = self.query_builder.build_search_query(query)
-        records = [self.query_builder.record_from_row(row) for row in self._rows(sql, params)]
-        if fields := query.fields:
-            records = [record.project(fields) for record in records]
-        return records
+        return self.query_builder.records_from_rows(self._rows(sql, params), query)
 
     def _page_rows(
         self, page: Query, after: Sequence[Any] | None
@@ -852,9 +849,10 @@ class AsyncDuckDBDatabase(
         :func:`~dataknobs_data.streaming.stream_page`). Each runs under the
         connection lock as every statement here does: a DuckDB result left
         open between records is cut short, with no error, by the next
-        statement on its connection. A write between two pages moves no row
-        the stream has yet to read. The query's limit, offset and projection
-        hold; with no sort the stream promises no order.
+        statement on its connection. A row written or removed ahead of the
+        stream's position between two pages moves no other row. The query's
+        limit, offset and projection hold; with no sort the stream promises no
+        order.
         """
         from ..streaming import aiter_search_pages
 
@@ -1304,9 +1302,10 @@ class SyncDuckDBDatabase(
         the key, and each after the first begins after the last row read (see
         :func:`~dataknobs_data.streaming.stream_page`): a DuckDB result left
         open between records is cut short, with no error, by the next
-        statement on its connection. A write between two pages moves no row
-        the stream has yet to read. The query's limit, offset and projection
-        hold; with no sort the stream promises no order.
+        statement on its connection. A row written or removed ahead of the
+        stream's position between two pages moves no other row. The query's
+        limit, offset and projection hold; with no sort the stream promises no
+        order.
         """
         from ..streaming import iter_search_pages
 
