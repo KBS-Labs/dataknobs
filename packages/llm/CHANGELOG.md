@@ -257,6 +257,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `LLMConfig`, `ModelProfile`, `ModelPricing` and
+  `HistoryRedaction` are no longer hashable**, as no `StructuredConfig` now is
+  (see `dataknobs-common`). `ModelPricing` and `HistoryRedaction` hashed
+  cleanly before and can no longer be dict keys or set members. Equality is
+  unchanged.
+
 - **`OllamaProvider.embed` calls `/api/embed` instead of `/api/embeddings`,
   and every Ollama embedding identity changes with it.** The new endpoint
   returns unit-length vectors; `/api/embeddings` returned some models' at

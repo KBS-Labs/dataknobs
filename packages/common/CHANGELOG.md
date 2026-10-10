@@ -1855,6 +1855,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: a `StructuredConfig` is no longer hashable.** Every subclass
+  compares field by field, which the round-trip property
+  `from_dict(to_dict()) == cfg` depends on, and was given a hash over its
+  fields as well, because it is a frozen dataclass with equality on. So
+  `isinstance(cfg, collections.abc.Hashable)` answered True for every config,
+  and `hash(cfg)` raised `TypeError` for any that held a list or a mapping,
+  which most do. `StructuredConfig.__init_subclass__` now sets `__hash__` to
+  `None` on each subclass before its `@dataclass` runs, and the base declares
+  it too, so the check answers False across the family and `hash()` raises
+  whatever the fields hold. Equality is unchanged.
+
+  A config whose fields happened to be hashable could be used as a dict key or
+  set member before, and can't now. In this package those are
+  `EventBusConfig` and its four backend configs, `PostgresLockConfig`,
+  `PackSpec` and `RateLimit`. Key by something the config names instead, such
+  as `json.dumps(cfg.to_json_dict(), sort_keys=True)`. A subclass that writes
+  `__hash__` in its body keeps it. One that writes `__eq__` without `__hash__`
+  is refused at class definition with `TypeError`, since the dataclass would
+  otherwise generate a field hash the new equality does not agree with.
+
 - **`fields` must be a sequence of strings.** `EntitySourceIndexSource`
   refuses, with `ValidationError` naming the value given and carrying the
   ontology id in its context:

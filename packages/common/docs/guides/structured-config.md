@@ -253,6 +253,37 @@ one matters because without `ClassVar` the dataclass decorator turns a policy
 attribute into a *field*, which then shows up in `fields()`, in `to_dict()`,
 and in the accepted-key list of the errors the policy itself produces.
 
+### Equal field by field, and not hashable
+
+A config compares field by field, since that is what the round-trip property
+`type(cfg).from_dict(cfg.to_dict()) == cfg` relies on, and it is not hashable.
+`__init_subclass__` sets `__hash__` to `None` on every subclass before its
+`@dataclass` runs, so `isinstance(cfg, collections.abc.Hashable)` answers
+False and `hash(cfg)` raises `TypeError` whatever the fields hold:
+
+```python
+from collections.abc import Hashable
+
+@dataclass(frozen=True)
+class ServiceConfig(StructuredConfig):
+    host: str = "localhost"
+    tags: list[str] = field(default_factory=list)
+
+ServiceConfig() == ServiceConfig()      # True
+isinstance(ServiceConfig(), Hashable)   # False
+```
+
+Left to `@dataclass(frozen=True)`, each subclass would get a hash over its
+fields. The type would then claim to be hashable and fail at the first list
+or mapping, and most configs hold one. To key a cache or a set by a config,
+key it by something the config names, such as `cfg.to_json_dict()` serialized
+to a string.
+
+A subclass that writes `__hash__` in its body keeps it, and should write a
+matching `__eq__`. One that writes `__eq__` alone is refused at class
+definition with a `TypeError`, because the dataclass would otherwise generate
+a field hash that the new equality does not agree with.
+
 ### `accepts(key)` (classmethod)
 
 Whether `from_dict` will consume `key` rather than drop it — true for a

@@ -193,6 +193,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: bot configs are no longer hashable**, as no `StructuredConfig`
+  now is (see `dataknobs-common`). Most raised at `hash()` already. Those that
+  hashed cleanly, and can no longer be dict keys or set members, are
+  `ReasoningConfig`, `SimpleReasoningConfig`, `NavigationConfig`,
+  `NavigationCommandConfig`, `GroundedRetrievalConfig`,
+  `GroundedSynthesisConfig`, `DraftMetadata` and `SkipDefaultEntry`.
+  `ConfigVersion` keeps its own hash, by version number. Equality is
+  unchanged.
+
 - **A grounded `database` source builds its backend holding the declared
   `schema:`**, where it used to set the schema after connecting. The
   `schema:` option is now forwarded to the backend's configuration as well as

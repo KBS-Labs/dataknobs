@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: the backend, vector-store and user-state configs are no longer
+  hashable**, as no `StructuredConfig` now is (see `dataknobs-common`).
+  `isinstance(cfg, Hashable)` answered True for them while `hash()` raised for
+  most, since `DatabaseConfig` carries a `DatabaseSchema`. Now the check
+  answers False. `StreamConfig` hashed cleanly before and can no longer be a
+  dict key or set member. Equality is unchanged.
+
 - **SQLite and DuckDB resolve `auto_create_table` from the layout**, as
   Postgres does: left out or `null`, it is on under the JSON layout and off
   under `layout: native`. DuckDB's `read_only` resolves the same way, off and
