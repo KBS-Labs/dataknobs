@@ -7,32 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Fixed
-
-- **A JSON number compares and sorts as a number, exactly, on every SQL
-  engine.** DuckDB sorted a JSON field by its JSON text, so `[9, 12, 100]`
-  sorted ascending as `[100, 12, 9]`, and a string holding a quote, backslash
-  or newline sorted by its escape; it compared every number as a `DOUBLE`,
-  so `2**70` equalled `2**70 + 1`, and raised for a bound past 128 bits.
-  SQLite raised `OverflowError` for a bound past 64 bits under every operator
-  but membership. A bound an engine cannot hold is now compared through the
-  stored value nearest it on the side the operator needs. SQLite still reads
-  a stored integer past 64 bits as a double, and DuckDB one past 128 bits.
-- **A record with no value for a sorted field sorts last**, ascending and
-  descending, on every backend; a missing key and a `null` alike. The
-  in-memory sort raised `TypeError` over a sparse number field, SQLite put
-  such records first ascending, and PostgreSQL first descending.
-
-### Added
-
-- **`comparand(domain, op, bound)`** in `dataknobs_data.backends.sql_types`,
-  with `NumberDomain`, `MATCHES_NONE` and `MATCHES_ALL`, and
-  `SQLQueryBuilder.bind_comparand`: what a number column is compared with
-  where it cannot hold the bound. `typed_clause`'s `bind=` hook is now called
-  with the operator as a third argument, and a hook taking two is called as
-  before; its new `readings=` parameter lets a layout read one kind of value
-  as two populations.
-
 ### Changed
 
 - **SQLite and DuckDB resolve `auto_create_table` from the layout**, as
@@ -1041,6 +1015,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`comparand(domain, op, bound)`** in `dataknobs_data.backends.sql_types`,
+  with `NumberDomain`, `MATCHES_NONE` and `MATCHES_ALL`, and
+  `SQLQueryBuilder.bind_comparand`: what a number column is compared with
+  where it cannot hold the bound. `typed_clause`'s `bind=` hook is now called
+  with the operator as a third argument, and a hook taking two is called as
+  before; its new `readings=` parameter lets a layout read one kind of value
+  as two populations.
+
 - **The PostgreSQL, SQLite and DuckDB backends read a table they do not
   own** (`layout: native`, `id_column:`, `scope:`, on both twins of each). The
   table is read through `NativeColumnLayout`: only its declared columns, a
@@ -1621,6 +1603,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A JSON number compares and sorts as a number, exactly, on every SQL
+  engine.** DuckDB sorted a JSON field by its JSON text, so `[9, 12, 100]`
+  sorted ascending as `[100, 12, 9]`, and a string holding a quote, backslash
+  or newline sorted by its escape; it compared every number as a `DOUBLE`,
+  so `2**70` equalled `2**70 + 1`, and raised for a bound past 128 bits.
+  SQLite raised `OverflowError` for a bound past 64 bits under every operator
+  but membership. A bound an engine cannot hold is now compared through the
+  stored value nearest it on the side the operator needs. SQLite still reads
+  a stored integer past 64 bits as a double, and DuckDB one past 128 bits.
+- **A record with no value for a sorted field sorts last**, ascending and
+  descending, on every backend; a missing key and a `null` alike. The
+  in-memory sort raised `TypeError` over a sparse number field, SQLite put
+  such records first ascending, and PostgreSQL first descending.
 
 - **SQLite and DuckDB `stream_read` returns what `search` would.** Each page
   set its own `LIMIT` and `OFFSET` over the query's, so a stream asked for
