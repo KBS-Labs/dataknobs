@@ -13,6 +13,7 @@ two of them carry a hashability sweep of their own.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Iterable
 
 import pytest
 
@@ -41,6 +42,33 @@ OWN_HASH: dict[str, str] = {
 }
 
 
+def _every_subclass(root: type) -> set[type]:
+    """Every class below ``root`` that exists in this process, at any depth."""
+    found: set[type] = set()
+    stack = list(root.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls not in found:
+            found.add(cls)
+            stack.extend(cls.__subclasses__())
+    return found
+
+
+def _beyond_the_sweep(swept: Iterable[type], existing: Iterable[type]) -> list[str]:
+    """Package-defined configs that exist but that the module-level sweep missed."""
+    reached = set(swept)
+    return sorted(
+        f"{cls.__module__}.{cls.__qualname__}"
+        for cls in existing
+        if cls not in reached and cls.__module__.split(".", 1)[0] in PACKAGES
+    )
+
+
+def _hashed_by_an_own_hash(cls: type, configs: dict[str, type]) -> bool:
+    """Whether ``cls`` hashes by an ``OWN_HASH`` entry's hash, written or inherited."""
+    return any(cls.__hash__ is configs[name].__hash__ for name in OWN_HASH if name in configs)
+
+
 @pytest.fixture(scope="module")
 def configs() -> dict[str, type]:
     """Every ``StructuredConfig`` subclass the six packages define, by qualified name."""
@@ -62,9 +90,38 @@ def test_the_census_reaches_every_package(configs: dict[str, type]) -> None:
     assert reached == set(PACKAGES), f"no StructuredConfig found in {set(PACKAGES) - reached}"
 
 
+def test_the_sweep_reaches_every_config_that_exists(configs: dict[str, type]) -> None:
+    """A config the module-level walk cannot see would escape the census.
+
+    ``DataclassSweep`` reads module attributes, so a class defined inside a
+    function or another class is invisible to it. Every subclass that exists
+    once the packages are imported is listed by ``__subclasses__()``, so the
+    two are compared.
+    """
+    missed = _beyond_the_sweep(configs.values(), _every_subclass(StructuredConfig))
+    assert missed == [], f"StructuredConfig subclass(es) the census cannot see: {missed}"
+
+
+def test_the_cross_check_would_report_a_config_out_of_reach() -> None:
+    """Positive control: the comparison above is not vacuous."""
+
+    class Hidden:
+        __module__ = "dataknobs_common._out_of_reach"
+
+    class Elsewhere:
+        __module__ = "a_consumer.configs"
+
+    assert _beyond_the_sweep([], [Hidden, Elsewhere]) == [
+        "dataknobs_common._out_of_reach.test_the_cross_check_would_report_a_config_out_of_reach"
+        ".<locals>.Hidden"
+    ]
+
+
 def test_every_config_is_unhashable(configs: dict[str, type]) -> None:
     hashable = sorted(
-        name for name, cls in configs.items() if cls.__hash__ is not None and name not in OWN_HASH
+        name
+        for name, cls in configs.items()
+        if cls.__hash__ is not None and not _hashed_by_an_own_hash(cls, configs)
     )
     assert hashable == [], (
         f"StructuredConfig subclass(es) claim to be hashable: {hashable}. A config "
@@ -81,3 +138,24 @@ def test_every_own_hash_is_still_written(configs: dict[str, type]) -> None:
         if name not in configs or configs[name].__dict__.get("__hash__") is None
     )
     assert stale == [], f"OWN_HASH names a config that no longer writes __hash__: {stale}"
+
+
+def test_every_own_hash_comes_with_its_own_equality(configs: dict[str, type]) -> None:
+    """A hand-written hash is stated together with the equality it serves.
+
+    The two together say what makes two configs the same, and they agree only
+    if every pair of equal configs hashes alike. Beside a generated field
+    equality that holds only while the hash reads nothing but fields, which
+    nothing here can check. So each entry writes ``__eq__`` too, where the two
+    are read together, or declares ``eq=False`` and so compares by identity.
+    """
+    unpaired = sorted(
+        name
+        for name in OWN_HASH
+        if name in configs
+        and "__eq__" not in configs[name].__dict__
+        and configs[name].__dataclass_params__.eq  # type: ignore[attr-defined]
+    )
+    assert unpaired == [], (
+        f"OWN_HASH config(s) hash by hand beside a generated equality: {unpaired}"
+    )
