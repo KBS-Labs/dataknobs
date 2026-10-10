@@ -394,6 +394,50 @@ sqlite_db = factory.create(backend="sqlite", path="app.db")
 migrate_data(file_db, sqlite_db)
 ```
 
+## A Backend Instance That Refuses an Operation
+
+Each write, each method that creates or drops a vector index, and the vector
+search surface has one body, in the database base classes or in the vector and
+bulk-embed mixins, and a backend inherits it rather than restating it. An
+instance that cannot perform one of them therefore refuses it by overriding
+`_refuse_operation(operation)`, which every such body calls first: before a
+row is read, and before `bulk_embed_and_store` spends the caller's embedding
+function. `operation` is the public method's name, and the default permits
+everything. The PostgreSQL backend refuses this way when it reads a table
+through `layout: native`.
+
+```python
+from dataknobs_common.exceptions import OperationError
+from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_data.records import Record
+
+
+class ReadOnlyMemoryDatabase(SyncMemoryDatabase):
+    WRITES = frozenset({"create", "update", "delete", "upsert", "bulk_embed_and_store"})
+
+    def _refuse_operation(self, operation: str) -> None:
+        if operation in self.WRITES:
+            raise OperationError(f"{operation}: this database is read-only")
+        super()._refuse_operation(operation)
+
+    def create(self, record: Record) -> str:
+        # A body of the backend's own asks too, so one override covers both.
+        self._refuse_operation("create")
+        return super().create(record)
+
+
+db = ReadOnlyMemoryDatabase()
+try:
+    db.bulk_embed_and_store(
+        [Record({"text": "a"})], "text", embedding_fn=lambda texts: [[1.0]] * len(texts)
+    )
+except OperationError as e:
+    print(e)  # bulk_embed_and_store: this database is read-only
+```
+
+A body a backend defines itself does not ask unless it calls the hook, as
+`create` does above.
+
 ## Performance Tips
 
 ### Memory Backend

@@ -23,6 +23,7 @@ from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_utils.sql_utils import quote_ident
 
+from ..operation_gate import OperationGateMixin
 from ..query import Query, SortSpec
 from ..records import Record
 from ..schema import DatabaseSchema, FieldSchema
@@ -383,18 +384,19 @@ _C = TypeVar("_C", bound=type)
 
 
 def refuses_under_native(cls: _C) -> _C:
-    """Wrap each :data:`NATIVE_REFUSED` method of ``cls`` to raise under the native layout.
+    """Make each :data:`NATIVE_REFUSED` body ``cls`` defines ask the operation gate first.
 
-    The refusal is raised before the method's body runs, so no connection is
-    touched and no row is read first. Each wrapper keeps its method's flavour
-    (a coroutine function stays one, and so does an async generator), so a
-    caller that dispatches on it sees what it saw before.
+    Only the class's own bodies are wrapped. One it inherits from the database
+    bases or the vector and bulk-embed mixins asks the gate itself, and a copy
+    of it here would be the per-backend body the mixins' parity guards forbid.
+    Either way :meth:`PostgresLayoutMixin._refuse_operation` answers, before
+    the body runs, so no connection is touched and no row is read first. Each
+    wrapper keeps its method's flavour (a coroutine function stays one, and so
+    does an async generator), so a caller that dispatches on it sees what it
+    saw before.
     """
-    for name in NATIVE_REFUSED:
-        method = getattr(cls, name, None)
-        if method is None:
-            continue
-        setattr(cls, name, _refusing(name, method))
+    for name in NATIVE_REFUSED & cls.__dict__.keys():
+        setattr(cls, name, _refusing(name, cls.__dict__[name]))
     return cls
 
 
@@ -403,7 +405,7 @@ def _refusing(name: str, method: Callable[..., Any]) -> Callable[..., Any]:
 
         @functools.wraps(method)
         async def refusing_async_gen(self: PostgresLayoutMixin, *args: Any, **kwargs: Any) -> Any:
-            self._refuse_under_native(name)
+            self._refuse_operation(name)
             async for item in method(self, *args, **kwargs):
                 yield item
 
@@ -412,20 +414,20 @@ def _refusing(name: str, method: Callable[..., Any]) -> Callable[..., Any]:
 
         @functools.wraps(method)
         async def refusing_async(self: PostgresLayoutMixin, *args: Any, **kwargs: Any) -> Any:
-            self._refuse_under_native(name)
+            self._refuse_operation(name)
             return await method(self, *args, **kwargs)
 
         return refusing_async
 
     @functools.wraps(method)
     def refusing(self: PostgresLayoutMixin, *args: Any, **kwargs: Any) -> Any:
-        self._refuse_under_native(name)
+        self._refuse_operation(name)
         return method(self, *args, **kwargs)
 
     return refusing
 
 
-class PostgresLayoutMixin:
+class PostgresLayoutMixin(OperationGateMixin):
     """The column layout a Postgres backend reads its table through, shared by both twins.
 
     The layout and the one query builder are made at construction, from the
@@ -484,14 +486,16 @@ class PostgresLayoutMixin:
             return dataclasses.replace(query, sort_specs=[SortSpec(self.config.id_column)])
         return query
 
-    def _refuse_under_native(self, name: str) -> None:
-        if self.native:
+    def _refuse_operation(self, operation: str) -> None:
+        """Refuse every :data:`NATIVE_REFUSED` operation on a table read through the native layout."""
+        if self.native and operation in NATIVE_REFUSED:
             raise OperationError(
-                f"{type(self).__name__}.{name} refused on {self.table_name!r}: a table read "
+                f"{type(self).__name__}.{operation} refused on {self.table_name!r}: a table read "
                 f"through `layout: native` is read-only, and is read only through its declared "
                 f"columns",
-                context={"table": self.table_name, "method": name},
+                context={"table": self.table_name, "method": operation},
             )
+        super()._refuse_operation(operation)
 
     def instance_capabilities(self) -> frozenset[CapabilityLike]:
         """The class's capabilities, less conditional writes on a native table."""

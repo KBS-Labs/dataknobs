@@ -19,6 +19,7 @@ from dataknobs_common.exceptions import OperationError
 from dataknobs_data.backends.postgres import AsyncPostgresDatabase, SyncPostgresDatabase
 from dataknobs_data.backends.postgres_mixins import NATIVE_REFUSED
 from dataknobs_data.query import Query
+from dataknobs_data.records import Record
 
 TWINS = [AsyncPostgresDatabase, SyncPostgresDatabase]
 
@@ -110,13 +111,26 @@ def test_every_write_is_refused_before_any_io(cls: type) -> None:
 
 @pytest.mark.parametrize("cls", TWINS, ids=lambda c: c.__name__)
 def test_bulk_embedding_never_reports_a_record_stored(cls: type) -> None:
+    """Refused before the caller's embedding function is spent on records nothing may store."""
     stored: list[Any] = []
+    embedded: list[list[str]] = []
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        embedded.append(texts)
+        return [[1.0] for _ in texts]
+
     db = cls(CONFIG)
-    with pytest.raises(OperationError, match="read-only"):
-        result = db.bulk_embed_and_store([], embedding_fn=lambda texts: [], on_stored=stored.append)
+    with pytest.raises(OperationError, match=r"bulk_embed_and_store.*read-only"):
+        result = db.bulk_embed_and_store(
+            [Record({"id": "a", "status": "open"})],
+            "status",
+            embedding_fn=embed,
+            on_stored=stored.append,
+        )
         if inspect.isawaitable(result):
             asyncio.run(_await(result))
     assert stored == []
+    assert embedded == []
 
 
 @pytest.mark.parametrize("cls", TWINS, ids=lambda c: c.__name__)

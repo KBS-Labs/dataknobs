@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType, VectorField
+from ..operation_gate import OperationGateMixin
 from .bulk_embed_mixin import attach_vector_field
 from .content import (
     CONTENT_HASH_KEY,
@@ -340,7 +341,7 @@ def finish_vector_search(
     return results
 
 
-class SyncVectorOperationsMixin(ABC):
+class SyncVectorOperationsMixin(OperationGateMixin, ABC):
     """Vector operations for **synchronous** database backends.
 
     Mixed into a :class:`~dataknobs_data.database.SyncDatabase`. Its async
@@ -426,6 +427,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             List of search results ordered by similarity
         """
+        self._refuse_operation("vector_search")
         return finish_vector_search(
             self._vector_search(
                 query_vector,
@@ -525,6 +527,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             True if update was successful
         """
+        self._refuse_operation("update_vector")
         record = self.read(record_id)  # type: ignore[attr-defined]
         if not record:
             return False
@@ -546,6 +549,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             True if deletion was successful
         """
+        self._refuse_operation("delete_from_index")
         return self.delete(record_id)  # type: ignore[attr-defined,no-any-return]
 
     def create_vector_index(
@@ -580,6 +584,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             True if index was created successfully
         """
+        self._refuse_operation("create_vector_index")
         return True
 
     def drop_vector_index(self, vector_field: str = "embedding") -> bool:
@@ -591,6 +596,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             True if index was dropped successfully
         """
+        self._refuse_operation("drop_vector_index")
         return True
 
     def get_vector_index_stats(self, vector_field: str = "embedding") -> dict[str, Any]:
@@ -602,6 +608,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             Dictionary of index statistics
         """
+        self._refuse_operation("get_vector_index_stats")
         return default_vector_index_stats(vector_field)
 
     def hybrid_search(
@@ -640,6 +647,7 @@ class SyncVectorOperationsMixin(ABC):
         Returns:
             List of HybridSearchResult ordered by combined score (descending)
         """
+        self._refuse_operation("hybrid_search")
         config = resolve_hybrid_config(config, self._supports_native_hybrid())
         fetch_k = hybrid_fetch_k(k)
 
@@ -697,7 +705,7 @@ class SyncVectorOperationsMixin(ABC):
         return False
 
 
-class AsyncVectorOperationsMixin(ABC):
+class AsyncVectorOperationsMixin(OperationGateMixin, ABC):
     """Vector operations for **asynchronous** database backends.
 
     Mixed into an :class:`~dataknobs_data.database.AsyncDatabase`. Its sync
@@ -776,6 +784,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             List of search results ordered by similarity
         """
+        self._refuse_operation("vector_search")
         return finish_vector_search(
             await self._vector_search(
                 query_vector,
@@ -880,6 +889,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             True if update was successful
         """
+        self._refuse_operation("update_vector")
         record = await self.read(record_id)  # type: ignore[attr-defined]
         if not record:
             return False
@@ -901,6 +911,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             True if deletion was successful
         """
+        self._refuse_operation("delete_from_index")
         return await self.delete(record_id)  # type: ignore[attr-defined,no-any-return]
 
     async def create_vector_index(
@@ -935,6 +946,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             True if index was created successfully
         """
+        self._refuse_operation("create_vector_index")
         return True
 
     async def drop_vector_index(self, vector_field: str = "embedding") -> bool:
@@ -946,6 +958,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             True if index was dropped successfully
         """
+        self._refuse_operation("drop_vector_index")
         return True
 
     async def get_vector_index_stats(self, vector_field: str = "embedding") -> dict[str, Any]:
@@ -957,6 +970,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             Dictionary of index statistics
         """
+        self._refuse_operation("get_vector_index_stats")
         return default_vector_index_stats(vector_field)
 
     async def hybrid_search(
@@ -995,6 +1009,7 @@ class AsyncVectorOperationsMixin(ABC):
         Returns:
             List of HybridSearchResult ordered by combined score (descending)
         """
+        self._refuse_operation("hybrid_search")
         config = resolve_hybrid_config(config, await self._supports_native_hybrid())
         fetch_k = hybrid_fetch_k(k)
 
