@@ -1041,12 +1041,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A SQLite file in WAL mode is read through its `-wal` and `-shm` files,
     which SQLite makes beside it when they are not there. That needs a
     directory this process can write, unless the owner has the file open; when
-    neither holds, `connect()` is refused saying so.
+    neither holds, `connect()` is refused saying so. A file its owner has
+    locked is waited for up to `timeout` seconds, then refused saying the
+    owner holds it.
   - A native DuckDB store holds no connection between reads, since DuckDB
     locks a file against every writer for as long as a read-only connection
-    holds it. `connect()` opens the file to check the table and closes it, and
-    each read opens it for its own statement, so the owner is kept out only
-    while a statement runs.
+    holds it, and waits for no lock. `connect()` opens the file to check the
+    table and closes it, and each read opens it for its own statement, so the
+    owner is kept out only while a statement runs and retries if it opens the
+    file then. A read is refused, saying the owner holds the file, for as
+    long as the owner holds it open for writing. Reads on the async store
+    run side by side, each on a connection of its own.
 - **`ColumnLayoutConfig`** (`dataknobs_data.backends.config`) carries the
   three keys and resolves a backend's create switches from the layout, and
   **`ColumnLayoutMixin`** (`dataknobs_data.backends.layout_backend`) is what
@@ -1054,8 +1059,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NATIVE_REFUSED` operations refused, no `CONDITIONAL_WRITE`, and a schema
   set afterwards rebuilding the layout. The PostgreSQL, SQLite and DuckDB
   backends are built on both, and **`FileLayoutMixin`** (the same module)
-  adds what a table in a file shares: the refusal of a file that will not
-  open read-only, naming what the engine needs to open one. A `layout:` other
+  adds what a table in a file shares: the refusal by name of a file that
+  will not open read-only or that its owner holds, and which of the two an
+  engine's error is. A `layout:` other
   than `jsonb` or `native` is refused by the config.
 - **`stream_page`, `iter_search_pages` and `aiter_search_pages`**
   (`dataknobs_data.streaming`) stream what `search(query)` returns one page
@@ -1602,8 +1608,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared fields at construction (Postgres) raised `AttributeError`. Every
   config now reads a mapping or a list of field rows into a `DatabaseSchema`
   at construction, and refuses any other value with `ValidationError`, as its
-  docstring always said. A Postgres config given a string `schema` in code is
-  refused naming `schema_name`, the field that takes a SQL namespace there.
+  docstring always said. A Postgres config given in code a `schema` that
+  declares no fields -- a string, a number -- is refused naming
+  `schema_name`, the field that takes a SQL namespace there.
 - **`Operator.REGEX` answers on SQLite** as `Filter.matches` does. Both SQLite
   backends raised `no such function: REGEXP`; they now register one on every
   connection.
@@ -1615,6 +1622,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its worker thread kept the process from exiting. The async DuckDB backend
   also shuts down its pool's thread, off the event loop, whether the file
   would not open or its table was refused, and on `close()`.
+- **The async DuckDB backend's `close()` waits for the statement running on
+  its connection.** It closed the connection without the lock every
+  statement holds, so a read still running failed with DuckDB's `Connection
+  already closed`, and a read started during `close()` was queued onto the
+  closing connection. `close()` now refuses every operation from the moment
+  it starts.
 - **SQLite and DuckDB find a table whatever case names it.** The check run
   with `auto_create_table: false` compared the name exactly, though both
   engines read a table name whatever its case, so a table created as

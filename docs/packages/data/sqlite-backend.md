@@ -178,7 +178,8 @@ changed: no directory, no database file, no table and no journal mode. A file
 in WAL mode is the exception to "nothing created": SQLite reads it through its
 `-wal` and `-shm` files and makes them beside it when they are not there, so
 it needs a directory this process can write unless the owner has the file
-open. A view is read as a table is. `":memory:"`, `journal_mode` and `auto_create_table: true` are
+open. A file its owner has locked is waited for, up to `timeout` seconds, and
+then refused, saying the owner holds it. A view is read as a table is. `":memory:"`, `journal_mode` and `auto_create_table: true` are
 refused, and every write raises `OperationError`. See
 [Reading a Native Table in a SQLite or DuckDB File](query.md#reading-a-native-table-in-a-sqlite-or-duckdb-file).
 

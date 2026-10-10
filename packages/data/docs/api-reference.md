@@ -1269,7 +1269,7 @@ record = builder.record_from_row(row)
 | `NAIVE_TIME`, `ZONED_INSTANT` | `dataknobs_data` | the time kinds an `SqlType` declares |
 | `ColumnLayoutConfig` | `dataknobs_data.backends.config` | the `layout:`, `id_column:` and `scope:` keys a SQL backend's configuration carries, and the create switches it resolves from the layout |
 | `ColumnLayoutMixin`, `NATIVE_REFUSED` | `dataknobs_data.backends.layout_backend` | what reading through a layout means for a backend: the one builder, every `NATIVE_REFUSED` operation refused under the native layout, no `CONDITIONAL_WRITE` |
-| `FileLayoutMixin` | `dataknobs_data.backends.layout_backend` | a `ColumnLayoutMixin` for a table in a database file, shared by the SQLite and DuckDB backends: the refusal of a file that will not open read-only, naming what the engine needs to open one |
+| `FileLayoutMixin` | `dataknobs_data.backends.layout_backend` | a `ColumnLayoutMixin` for a table in a database file, shared by the SQLite and DuckDB backends: the refusal by name of a file that will not open read-only or that its owner holds, which an engine's error each is, and the directory a file is made in |
 
 See [Field Types](https://kbs-labs.github.io/dataknobs/packages/data/field-types/#sql-types-for-tables-with-their-own-columns) for registering one.
 

@@ -372,6 +372,8 @@ adds:
   none of the store's data. Making them needs a directory this process can
   write, unless the owner has the file open and they are there already; when
   neither holds, `connect()` is refused, saying so.
+- **A SQLite file its owner has locked** is waited for, up to `timeout`
+  seconds, and then `connect()` is refused, saying the owner holds the file.
 - **`path` must name the file.** `":memory:"` (the default) and `""` are
   refused: a new database holds no table somebody else made.
 - **What would change the file is refused**: `auto_create_table: true`, and on
@@ -397,12 +399,19 @@ adds:
 !!! note "DuckDB and a file open for writing"
 
     DuckDB lets one process hold a file open for writing, or any number hold
-    it read-only, never both. So a native DuckDB store holds no connection:
-    `connect()` opens the file to check the table and closes it, and each read
-    opens the file for its own statement. The owner is kept out of its file
-    only while a statement runs, and a read is refused while the owner -- or a
-    JSON-layout store over the same file in this process -- holds it open for
-    writing.
+    it read-only, never both, and it waits for neither: a lock it cannot take
+    fails at once. So a native DuckDB store holds no connection: `connect()`
+    opens the file to check the table and closes it, and each read opens the
+    file for its own statement.
+
+    - The owner is kept out of its file only while a statement runs, but an
+      owner that opens the file then is refused at once, and retries.
+    - A read is refused, saying the owner holds the file, for as long as the
+      owner -- or a JSON-layout store over the same file in this process --
+      holds it open for writing. An owner that keeps one connection open for
+      its whole life keeps every native read out for that long.
+    - Each read pays for opening the file. Reads on the async store run side
+      by side, each on a connection of its own.
 
 #### A Layout of Your Own
 

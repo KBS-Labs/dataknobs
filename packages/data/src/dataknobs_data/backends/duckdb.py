@@ -15,7 +15,6 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import duckdb
@@ -67,10 +66,17 @@ class DuckDBLayoutMixin(FileLayoutMixin):
     for as long as any connection holds it, and a read-only connection's lock
     refuses every process that opens the file for writing -- the owner's
     included. So :meth:`connect` opens the file to check the table and closes
-    it, and each read opens the file for its own statement. The owner is kept
-    out only while a statement runs, and a read is refused only while the
-    owner holds the file open for writing: DuckDB lets one process write a
-    file, or any number read it, never both.
+    it, and each read opens the file for its own statement.
+
+    DuckDB lets one process write a file, or any number read it, never both,
+    and it waits for neither: a lock it cannot take fails at once. So the owner
+    is kept out while a statement runs, and is refused if it opens the file
+    then; a read is refused as long as the owner holds the file open for
+    writing. An owner that keeps one connection open for its whole life keeps
+    every native read out for that long. Either side retries.
+
+    Each read pays for opening the file. Reads on separate connections need no
+    lock between them, so they run side by side on the async twin's pool.
     """
 
     _DIALECT: ClassVar[str] = "duckdb"
@@ -78,6 +84,9 @@ class DuckDBLayoutMixin(FileLayoutMixin):
     _READ_ONLY_NEEDS: ClassVar[str] = (
         "DuckDB also refuses a read-only connection to a file another connection holds "
         "open for writing."
+    )
+    _HELD_WHILE: ClassVar[str] = (
+        "DuckDB opens no file another process holds open for writing, and does not wait for it"
     )
 
     read_only: bool
@@ -88,12 +97,19 @@ class DuckDBLayoutMixin(FileLayoutMixin):
 
     def _open(self) -> duckdb.DuckDBPyConnection:
         """Open the file as configured; refuse by name a native table's that will not open."""
-        try:
+        with self._refusing_unopened(duckdb.IOException, duckdb.ConnectionException):
             return duckdb.connect(self.db_path, read_only=self.read_only)
-        except (duckdb.IOException, duckdb.ConnectionException) as e:
-            if self.native:
-                raise self._unopened_file_error(e) from e
-            raise
+
+    def _file_refusal(self, error: Exception) -> Exception | None:
+        """A file that opened at connect and will not open for a read is held by its owner.
+
+        DuckDB raises one ``IOException`` for a file that is not there and for
+        one whose lock it cannot take, so when it fails decides which it is.
+        At connect it may be either, and the refusal says both.
+        """
+        if self._connected:
+            return self._held_file_error(error)
+        return self._unopened_file_error(error)
 
     def _connect_file(self) -> duckdb.DuckDBPyConnection | None:
         """Open the file and check the table: the connection to hold, or ``None`` under native.
@@ -102,8 +118,9 @@ class DuckDBLayoutMixin(FileLayoutMixin):
         it on its pool. A file whose table is refused is closed before the
         refusal reaches the caller.
         """
-        if self.db_path != ":memory:" and not self.native:
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        directory = self._directory_to_make()
+        if directory is not None:
+            directory.mkdir(parents=True, exist_ok=True)
         conn = self._open()
         try:
             self._check_relation(conn)
@@ -159,9 +176,14 @@ class DuckDBLayoutMixin(FileLayoutMixin):
 
     @contextmanager
     def _reading(self) -> Iterator[duckdb.DuckDBPyConnection]:
-        """The connection a read runs on: under native, the file opened for this read alone."""
+        """The connection a read runs on.
+
+        The store's own, under the lock every statement on it holds; under
+        native, the file opened for this read alone, which needs none.
+        """
         if not self.native:
-            yield self._require_conn()
+            with self._lock:
+                yield self._require_conn()
             return
         self._check_connection()
         conn = self._open()
@@ -170,9 +192,14 @@ class DuckDBLayoutMixin(FileLayoutMixin):
         finally:
             conn.close()
 
+    def _close_held(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """Close the store's connection once no statement runs on it."""
+        with self._lock:
+            conn.close()
+
     def _rows(self, sql: str, params: Any) -> list[dict[str, Any]]:
-        """Run one read under the lock, every row as a column-to-value mapping."""
-        with self._lock, self._reading() as conn:
+        """Run one read, every row as a column-to-value mapping."""
+        with self._reading() as conn:
             result = conn.execute(sql, params)
             names = [column[0] for column in result.description]
             return [dict(zip(names, row, strict=True)) for row in result.fetchall()]
@@ -289,13 +316,17 @@ class AsyncDuckDBDatabase(
         await asyncio.to_thread(executor.shutdown, wait=True)
 
     async def close(self) -> None:
-        """Close the database connection, and the pool's threads."""
-        if self.conn:
+        """Close the database connection, and the pool's threads.
+
+        Refuses every operation from the moment it starts, and closes the
+        connection once the statement running on it, if any, is done.
+        """
+        conn, self.conn = self.conn, None
+        was_connected, self._connected = self._connected, False
+        if conn is not None:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self.executor, self.conn.close)
-            self.conn = None
-        if self._connected:
-            self._connected = False
+            await loop.run_in_executor(self.executor, self._close_held, conn)
+        if was_connected:
             logger.info(f"Disconnected from async DuckDB database: {self.db_path}")
         await self._replace_executor()
 
@@ -907,8 +938,9 @@ class SyncDuckDBDatabase(
 
         self.conn: duckdb.DuckDBPyConnection | None = None
         self._connected = False
-        # One statement at a time on a connection, as the async twin's pool
-        # needs; uncontended here unless the caller shares the store.
+        # What the read cores and ``close`` share with the async twin, whose
+        # pool needs one statement at a time on the connection. Writes here
+        # do not take it, so a store shared across threads is not serialized.
         self._lock = threading.Lock()
 
     def connect(self) -> None:
@@ -921,9 +953,9 @@ class SyncDuckDBDatabase(
 
     def close(self) -> None:
         """Close the database connection."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        conn, self.conn = self.conn, None
+        if conn is not None:
+            self._close_held(conn)
         if self._connected:
             self._connected = False
             logger.info(f"Disconnected from sync DuckDB database: {self.db_path}")

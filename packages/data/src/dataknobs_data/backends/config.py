@@ -37,7 +37,7 @@ from dataknobs_common.structured_config import StructuredConfig
 from ..database import extract_schema_from_config
 from ..query import Filter
 from ..schema import FIELD_KEYS, NATIVE_FIELD_KEYS, DatabaseSchema
-from .column_layout import LAYOUTS
+from .column_layout import resolve_layout
 from .postgres_mixins import validate_pg_identifier
 from .sql_base import SQLTableManager
 
@@ -186,12 +186,11 @@ class ColumnLayoutConfig(DatabaseConfig):
 
     def __post_init__(self) -> None:
         # Read first: what the schema's fields may declare depends on it.
-        layout = self.layout or "jsonb"
-        if layout not in LAYOUTS:
-            raise ValidationError(
-                f"{self._BACKEND} `layout:` is one of {list(LAYOUTS)}, got {self.layout!r}",
-                context={"table": getattr(self, "table", None), "layout": self.layout},
-            )
+        layout = resolve_layout(
+            self.layout,
+            prefix=f"{self._BACKEND} ",
+            context={"table": getattr(self, "table", None)},
+        )
         object.__setattr__(self, "layout", layout)
         super().__post_init__()
         if self._FILE_KEY is not None and getattr(self, self._FILE_KEY) in _NO_FILE:
@@ -517,11 +516,11 @@ class PostgresDatabaseConfig(ColumnLayoutConfig, VectorBackendConfig):
         return raw
 
     def __post_init__(self) -> None:
-        if isinstance(self.schema, str):
-            # ``from_dict`` routes a string ``schema`` to ``schema_name``; a
+        if self._names_namespace(self.schema):
+            # ``from_dict`` routes such a ``schema`` to ``schema_name``; a
             # config built in code names the field, so say which one.
             raise ValidationError(
-                f"PostgresDatabaseConfig `schema` declares fields; got the string "
+                f"PostgresDatabaseConfig `schema` declares fields; got "
                 f"{self.schema!r}. Give a SQL namespace as `schema_name`",
                 context={"schema": self.schema},
             )

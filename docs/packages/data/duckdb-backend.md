@@ -205,10 +205,11 @@ The file is opened `read_only`, so nothing is written, created or changed,
 and a missing table or file is refused by name. A view is read as a table is.
 `":memory:"`, `read_only: false` and `auto_create_table: true` are refused,
 and every write raises `OperationError`. DuckDB lets one process write a file
-or any number read it, never both, so the store holds no connection between
-reads: each read opens the file for its own statement. The owner is kept out
-only while a statement runs, and a read is refused while the owner holds the
-file open for writing. See
+or any number read it, never both, and waits for neither. So the store holds
+no connection between reads: each read opens the file for its own statement.
+The owner is kept out only while a statement runs, and retries if it opens the
+file then; a read is refused, saying the owner holds the file, for as long as
+the owner holds it open for writing. See
 [Reading a Native Table in a SQLite or DuckDB File](query.md#reading-a-native-table-in-a-sqlite-or-duckdb-file).
 
 ## Advanced Features

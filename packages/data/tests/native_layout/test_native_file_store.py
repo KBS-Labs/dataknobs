@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -234,6 +235,86 @@ def test_the_owner_writes_while_a_store_is_connected(owned: tuple[str, Path], tw
         )
         assert owner.returncode == 0, owner.stderr
         assert {record["subject"] for record in db.search()} == {"changed"}
+
+
+#: What the file's owner runs, in a process of its own, to hold the file until
+#: told to let go: DuckDB open for writing, SQLite under an exclusive lock.
+OWNER_HOLDS = {
+    "sqlite": (
+        "import sqlite3, sys; c = sqlite3.connect(sys.argv[1], isolation_level=None); "
+        "c.execute('BEGIN EXCLUSIVE'); print('held', flush=True); sys.stdin.readline(); "
+        "c.execute('COMMIT'); c.close()"
+    ),
+    "duckdb": (
+        "import duckdb, sys; c = duckdb.connect(sys.argv[1]); print('held', flush=True); "
+        "sys.stdin.readline(); c.close()"
+    ),
+}
+
+
+@contextmanager
+def _owner_holding(engine: str, path: Path) -> Iterator[None]:
+    """The owner holds ``path`` for the length of the block, from a process of its own."""
+    owner = subprocess.Popen(
+        [sys.executable, "-c", OWNER_HOLDS[engine], str(path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert owner.stdout is not None and owner.stdout.readline().strip() == "held", (
+            owner.communicate(timeout=120)[1]
+        )
+        yield
+    finally:
+        owner.communicate("\n", timeout=120)
+    assert owner.returncode == 0
+
+
+def _refused_as_held(error: BaseException, path: Path) -> None:
+    message = str(error)
+    assert str(path) in message and "layout: native" in message
+    assert "held by its owner" in message, message
+    assert "check `path`" not in message, "the file is there: it opened, or the owner has it"
+
+
+def test_a_read_while_the_owner_holds_the_file_is_refused_as_held(
+    owned: tuple[str, Path], twin: str
+) -> None:
+    """Bug: a native DuckDB store opens the file for each read, and DuckDB refuses
+    that while the owner holds the file open for writing. The refusal told the
+    reader to check `path` -- a file that had opened at connect -- rather than
+    that the owner had it.
+    """
+    engine, path = owned
+    if engine != "duckdb":
+        pytest.skip("a SQLite store holds its connection, and waits out a lock on a read")
+    with opened(twin, _desk(engine, path).config("tickets", TICKET_FIELDS)) as db:
+        with _owner_holding(engine, path):
+            with pytest.raises(RuntimeError) as caught:
+                db.count()
+        _refused_as_held(caught.value, path)
+        assert db.count() == 4, "read again once the owner lets go"
+
+
+def test_a_connect_while_the_owner_locks_the_file_is_refused_as_held(
+    owned: tuple[str, Path], twin: str
+) -> None:
+    """Bug: SQLite's first read of the file, at connect, waits `timeout` for the
+    owner's lock and then fails. Every failure there was refused as a file that
+    would not open -- check `path`, a WAL file's side files -- pointing away
+    from the lock.
+    """
+    engine, path = owned
+    if engine != "sqlite":
+        pytest.skip("DuckDB cannot tell a held file from a missing one at connect")
+    config = _desk(engine, path).config("tickets", TICKET_FIELDS, timeout=0.1)
+    with _owner_holding(engine, path):
+        with pytest.raises(RuntimeError) as caught:
+            with opened(twin, config):
+                pass
+    _refused_as_held(caught.value, path)
 
 
 @pytest.fixture

@@ -9,7 +9,6 @@ import asyncio
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -123,39 +122,34 @@ class AsyncSQLiteDatabase(
         if self._connected:
             return
 
-        # Create directory if needed for file-based database (off the loop). A
-        # native table is in somebody else's file, opened read-only, never made.
-        if self.db_path != ":memory:" and not self.native:
-            db_file = Path(self.db_path)
-            await asyncio.to_thread(db_file.parent.mkdir, parents=True, exist_ok=True)
+        # Off the loop. A native table is in somebody else's file, opened
+        # read-only, never made.
+        directory = self._directory_to_make()
+        if directory is not None:
+            await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
 
         target, uri = self._connect_to
-        try:
+        with self._refusing_unopened(sqlite3.OperationalError):
             self.db = await aiosqlite.connect(target, timeout=self.timeout, uri=uri)
-        except sqlite3.OperationalError as e:
-            if self.native:
-                raise self._unopened_file_error(e) from e
-            raise
         await self.db.create_function(*REGEXP_FUNCTION, sqlite_regexp, deterministic=True)
 
         # Enable row factory for dict-like access
         self.db.row_factory = aiosqlite.Row
 
         try:
-            await self._configure_sqlite()
-            # Create table if it doesn't exist
-            await self._ensure_table()
-        except BaseException as e:
+            # The first statements to read the file: on a native table, what
+            # fails here is reading it -- a lock its owner holds, a WAL file's
+            # side files that cannot be made.
+            with self._refusing_unopened(sqlite3.OperationalError):
+                await self._configure_sqlite()
+                # Create table if it doesn't exist
+                await self._ensure_table()
+        except BaseException:
             # Refused after opening -- a native table that is not there, a file
             # that cannot be written -- so close what was opened: its worker
             # thread would otherwise outlive the refusal and the process.
             await self.db.close()
             self.db = None
-            if self.native and isinstance(e, sqlite3.OperationalError):
-                # The first statements to read the file: what fails here on a
-                # native table is reading it, as a WAL file's side files that
-                # cannot be made.
-                raise self._unopened_file_error(e) from e
             raise
 
         self._connected = True

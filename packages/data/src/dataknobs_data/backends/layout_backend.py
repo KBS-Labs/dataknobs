@@ -14,6 +14,8 @@ style, and answers how its engine is asked whether a table is there.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from dataknobs_common.capabilities import Capability, CapabilityLike
@@ -24,6 +26,8 @@ from .column_layout import ColumnLayout, JsonbLayout, read_layout_config
 from .sql_base import SQLQueryBuilder, SQLTableManager
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from ..schema import DatabaseSchema
     from .config import ColumnLayoutConfig
 
@@ -164,15 +168,26 @@ class FileLayoutMixin(ColumnLayoutMixin):
     """The column layout of a table in a database file, shared by SQLite's and DuckDB's twins.
 
     A native table is in somebody else's file, which is opened read-only and is
-    never made. A backend names what its engine needs, beyond a readable file,
-    to open one read-only, and the refusal of a file that will not open says it.
+    never made. An engine's failure to read it is refused by name, through
+    :meth:`_refusing_unopened`: as a file that will not open, or as one its
+    owner holds. A backend names what its engine needs to open a file
+    read-only, how its owner keeps a reader out, and, through
+    :meth:`_file_refusal`, which of the two an engine's error is.
     """
 
     _LOCATION_KEYS: ClassVar[str] = "the table name and `path`"
     #: What the engine needs, beyond a readable file, to open one read-only.
     _READ_ONLY_NEEDS: ClassVar[str] = ""
+    #: How the file's owner keeps a reader out, as a refusal says it.
+    _HELD_WHILE: ClassVar[str] = ""
 
     db_path: str
+
+    def _directory_to_make(self) -> Path | None:
+        """The directory the file goes in, made on connect: none for memory or a native table."""
+        if self.db_path == ":memory:" or self.native:
+            return None
+        return Path(self.db_path).parent
 
     def _unopened_file_error(self, error: Exception) -> RuntimeError:
         """The refusal for a native table's file that cannot be read: most often, one not there."""
@@ -182,3 +197,31 @@ class FileLayoutMixin(ColumnLayoutMixin):
             f"read through `layout: native` is in a file somebody else made, and no database "
             f"file is created here: check `path`.{needs}"
         )
+
+    def _held_file_error(self, error: Exception) -> RuntimeError:
+        """The refusal for a native table's file its owner holds: there, but not to be read now."""
+        held = f": {self._HELD_WHILE}" if self._HELD_WHILE else ""
+        return RuntimeError(
+            f"Database file {self.db_path} is held by its owner ({error}){held}. A table "
+            f"read through `layout: native` is in a file somebody else writes: retry once "
+            f"the owner lets it go."
+        )
+
+    def _file_refusal(self, error: Exception) -> Exception | None:
+        """The refusal ``error`` from reading a native table's file is, or ``None`` to raise it as is.
+
+        By default every such error is a file that will not open. A backend
+        whose engine says which error is which narrows it.
+        """
+        return self._unopened_file_error(error)
+
+    @contextmanager
+    def _refusing_unopened(self, *kinds: type[Exception]) -> Iterator[None]:
+        """Under native, refuse by name an error of ``kinds`` the engine raises reading the file."""
+        try:
+            yield
+        except kinds as e:
+            refusal = self._file_refusal(e) if self.native else None
+            if refusal is None:
+                raise
+            raise refusal from e

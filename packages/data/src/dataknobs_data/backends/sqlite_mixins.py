@@ -87,6 +87,32 @@ class SQLiteLayoutMixin(FileLayoutMixin):
         "makes beside it when they are not there, so it needs a directory this process "
         "can write unless the owner has the file open."
     )
+    _HELD_WHILE: ClassVar[str] = (
+        "SQLite waited `timeout` seconds for the owner's lock on it, then gave up"
+    )
+    #: Primary result codes SQLite gives a file it cannot read as a database here.
+    _UNOPENED_CODES: ClassVar[frozenset[int]] = frozenset(
+        {
+            sqlite3.SQLITE_CANTOPEN,
+            sqlite3.SQLITE_READONLY,
+            sqlite3.SQLITE_NOTADB,
+            sqlite3.SQLITE_PERM,
+        }
+    )
+    #: Primary result codes SQLite gives a file whose owner holds a lock on it.
+    _HELD_CODES: ClassVar[frozenset[int]] = frozenset({sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+
+    def _file_refusal(self, error: Exception) -> Exception | None:
+        """Which refusal SQLite's result code makes ``error``; any other code is raised as is."""
+        code = getattr(error, "sqlite_errorcode", None)
+        if code is None:
+            return None
+        primary = code & 0xFF
+        if primary in self._HELD_CODES:
+            return self._held_file_error(error)
+        if primary in self._UNOPENED_CODES:
+            return self._unopened_file_error(error)
+        return None
 
     def _connect_target(self) -> tuple[str, bool]:
         """What the driver opens, and whether it is a URI.
