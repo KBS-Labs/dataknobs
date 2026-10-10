@@ -270,8 +270,8 @@ class SyncPostgresDatabase(
 
         The config dict is normalized up-front by
         ``normalize_postgres_connection_config`` (via
-        ``_parse_postgres_config``), so ``host``/``database``/``user``/
-        ``port`` are already populated from ``connection_string``, explicit
+        ``PostgresDatabaseConfig._normalize_dict``), so ``host``/``database``/
+        ``user``/``port`` are already populated from ``connection_string``, explicit
         keys, or ``POSTGRES_*`` env-var fallbacks. No secondary dotenv
         lookup is needed here — the normalizer is the single env-var
         contract.

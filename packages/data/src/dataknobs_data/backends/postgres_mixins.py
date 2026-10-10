@@ -13,7 +13,6 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common import normalize_postgres_connection_config
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConfigurationError, OperationError
 from dataknobs_utils.sql_utils import quote_ident
@@ -89,101 +88,12 @@ def validate_pg_identifier(value: Any, key: str) -> str:
 
 
 class PostgresBaseConfig(VectorConfigMixin):
-    """Shared configuration logic for PostgreSQL backends."""
+    """The vector configuration both PostgreSQL backends share.
 
-    def _parse_postgres_config(
-        self,
-        config: dict[str, Any],
-    ) -> tuple[str, str, dict, bool, bool]:
-        """Extract table, schema, connection configuration, and boolean flags.
-
-        Args:
-            config: Configuration dictionary
-
-        Returns:
-            Tuple of (table_name, schema_name, connection_config,
-            ensure_database, auto_create_table)
-        """
-        config = config.copy() if config else {}
-
-        # Parse vector configuration using the mixin
-        self._parse_vector_config(config)
-
-        # Extract PostgreSQL-specific configuration.  Validate both
-        # ``table`` and ``schema`` early to catch non-string or
-        # malformed identifiers before they propagate to broken DDL
-        # at first query.
-        raw_table = config.pop("table", config.pop("table_name", "records"))
-        raw_schema = config.pop("schema", config.pop("schema_name", "public"))
-        table_name = validate_pg_identifier(raw_table, "table")
-        schema_name = validate_pg_identifier(raw_schema, "schema")
-
-        # Remove vector config parameters since they've been processed
-        config.pop("vector_enabled", None)
-        config.pop("vector_metric", None)
-
-        # Extract and validate boolean flags via the shared coerce_bool helper so
-        # that string values from YAML/env ("false", "0", "no") are handled
-        # consistently across all backends (security.md §8 anti-pattern: raw
-        # truthy check treats the string "false" as True).
-        ensure_database = SQLTableManager.coerce_bool(
-            config.pop("ensure_database", None), default=True
-        )
-        auto_create_table = SQLTableManager.coerce_bool(
-            config.pop("auto_create_table", None), default=True
-        )
-
-        # Normalize connection config via the shared helper so that every
-        # downstream postgres site reads host/port/database/... from the
-        # same canonical shape.
-        #
-        # ``require=False`` is intentional here — this is an internal
-        # helper called from ``__init__``, where database-backend
-        # contracts historically defer "is the connection resolvable"
-        # to ``connect()``. Direct postgres entry points
-        # (``PgVectorStore``, ``PostgresEventBus``) use ``require=True``
-        # and fail at construction; backend ``__init__`` stays
-        # permissive so consumers can construct, inspect, and swap
-        # implementations without triggering config errors. Connection
-        # failures surface at ``connect()`` time with asyncpg's native
-        # errors.
-        normalized = normalize_postgres_connection_config(
-            config,
-            require=False,
-        )
-        if normalized is not None:
-            config.update(normalized)
-
-        return table_name, schema_name, config, ensure_database, auto_create_table
-
-    def _init_postgres_attributes(
-        self,
-        table_name: str,
-        schema_name: str,
-        ensure_database: bool = True,
-        auto_create_table: bool = True,
-    ) -> None:
-        """Initialize common PostgreSQL attributes.
-
-        Args:
-            table_name: Name of the database table
-            schema_name: Name of the database schema
-            ensure_database: Auto-create database if missing (default: True)
-            auto_create_table: Create the records table on connect if missing
-                (default: True). Set to False when an external migration tool
-                (Alembic, Flyway, etc.) owns DDL.
-        """
-        self.table_name = table_name
-        self.schema_name = schema_name
-        self._q_table = quote_ident(table_name)
-        self._q_schema = quote_ident(schema_name)
-        self._q_qualified = f"{self._q_schema}.{self._q_table}"
-        self._connected = False
-        self._ensure_database_enabled = ensure_database
-        self.auto_create_table = auto_create_table
-
-        # Initialize vector state using the mixin
-        self._init_vector_state()
+    Configuration itself is read by
+    :class:`~dataknobs_data.backends.config.PostgresDatabaseConfig`; this
+    class carries the vector state ``_apply_vector_config`` sets from it.
+    """
 
 
 class PostgresTableManager:
