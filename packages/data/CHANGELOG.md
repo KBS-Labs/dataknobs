@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A surface-form lookup answers only ids the entity store holds** when the
   forms are a store of their own (`forms_database=`), so a form left behind
   for a row the entity store cannot read is not a match.
+- **`add_field_schema` and `with_schema` go through `set_schema`** on
+  `AsyncDatabase` and `SyncDatabase`, so a backend whose state derives from
+  the schema overrides `set_schema` alone. `add_field_schema` sets a widened
+  copy rather than adding to the schema object in place, so a `set_schema`
+  that refuses it leaves the schema as it was; code holding the old schema
+  object no longer sees the added field on it.
 - **`vector_enabled` is read as a boolean on every backend.** The string
   `"false"`, which YAML and environment substitution produce, was stored as
   given and is truthy, so a backend told `vector_enabled: "false"` enabled

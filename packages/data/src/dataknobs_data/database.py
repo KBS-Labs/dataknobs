@@ -275,6 +275,14 @@ def _install_write_inspection(cls: type) -> None:
         setattr(cls, name, _wrap_write(name, fn))
 
 
+def _widened(schema: DatabaseSchema, field_schema: FieldSchema) -> DatabaseSchema:
+    """A copy of ``schema`` with ``field_schema`` added; ``schema`` is unchanged."""
+    return DatabaseSchema(
+        fields={**schema.fields, field_schema.name: field_schema},
+        metadata=dict(schema.metadata),
+    )
+
+
 def hash_record_version(record: Record) -> str:
     """Content-hash optimistic-concurrency token for a stored record.
 
@@ -763,12 +771,16 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         self.schema = schema
 
     def add_field_schema(self, field_schema: FieldSchema) -> None:
-        """Add a field to the database schema.
+        """Add a field to the database schema, through :meth:`set_schema`.
+
+        The widened schema is a new one, so a :meth:`set_schema` that refuses
+        it leaves the current schema as it was; a backend whose state derives
+        from the schema overrides :meth:`set_schema` alone.
 
         Args:
             field_schema: The field schema to add
         """
-        self.schema.add_field(field_schema)
+        self.set_schema(_widened(self.schema, field_schema))
 
     def with_schema(self, **field_definitions: Any) -> AsyncDatabase:
         """Set schema using field definitions.
@@ -781,7 +793,7 @@ class AsyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"})
             )
         """
-        self.schema = DatabaseSchema.create(**field_definitions)
+        self.set_schema(DatabaseSchema.create(**field_definitions))
         return self
 
     @abstractmethod
@@ -1576,12 +1588,16 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
         self.schema = schema
 
     def add_field_schema(self, field_schema: FieldSchema) -> None:
-        """Add a field to the database schema.
+        """Add a field to the database schema, through :meth:`set_schema`.
+
+        The widened schema is a new one, so a :meth:`set_schema` that refuses
+        it leaves the current schema as it was; a backend whose state derives
+        from the schema overrides :meth:`set_schema` alone.
 
         Args:
             field_schema: The field schema to add
         """
-        self.schema.add_field(field_schema)
+        self.set_schema(_widened(self.schema, field_schema))
 
     def with_schema(self, **field_definitions: Any) -> SyncDatabase:
         """Set schema using field definitions.
@@ -1594,7 +1610,7 @@ class SyncDatabase(RecordStorageMixin, CapabilityMixin, ABC):
                 embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"})
             )
         """
-        self.schema = DatabaseSchema.create(**field_definitions)
+        self.set_schema(DatabaseSchema.create(**field_definitions))
         return self
 
     @abstractmethod

@@ -19,7 +19,7 @@ from dataknobs_utils.sql_utils import quote_ident
 
 from ..operation_gate import GATED_OPERATIONS, OperationGateMixin
 from ..records import Record
-from ..schema import DatabaseSchema, FieldSchema
+from ..schema import DatabaseSchema
 from .column_layout import ColumnLayout, JsonbLayout, read_layout_config
 from .sql_base import SQLQueryBuilder, SQLTableManager
 
@@ -379,24 +379,12 @@ class PostgresLayoutMixin(OperationGateMixin):
         return capabilities
 
     def set_schema(self, schema: DatabaseSchema) -> None:
-        """Set the declared schema, and read the table through the layout it makes."""
+        """Set the declared schema, and read the table through the layout it makes.
+
+        ``add_field_schema`` and ``with_schema`` come through here too, so a
+        schema whose layout is refused leaves the backend as it was, whichever
+        door it came through.
+        """
         layout = self._read_layout(schema)
         super().set_schema(schema)  # type: ignore[misc]
         self._use_layout(layout)
-
-    def add_field_schema(self, field_schema: FieldSchema) -> None:
-        """Declare one more field, and read the table through the layout it makes."""
-        widened = DatabaseSchema(
-            fields={**self.schema.fields, field_schema.name: field_schema},
-            metadata=dict(self.schema.metadata),
-        )
-        layout = self._read_layout(widened)
-        super().add_field_schema(field_schema)  # type: ignore[misc]
-        self._use_layout(layout)
-
-    def with_schema(self, **field_definitions: Any) -> Any:
-        """Set the declared schema from field definitions; returns the backend."""
-        layout = self._read_layout(DatabaseSchema.create(**field_definitions))
-        result = super().with_schema(**field_definitions)  # type: ignore[misc]
-        self._use_layout(layout)
-        return result
