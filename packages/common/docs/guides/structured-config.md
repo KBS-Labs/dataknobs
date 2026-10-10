@@ -110,6 +110,46 @@ class RenamedConfig(StructuredConfig):
         return raw
 ```
 
+### `merge_inputs(cls, config, kwargs)` (classmethod, override hook)
+
+A `StructuredConfigConsumer` given both a mapping and keyword arguments
+calls this to make the one input it hands to `from_dict`. The default is a
+plain merge in which a keyword replaces the mapping's value for the same key.
+
+The merge runs **before** `_normalize_dict`, so under the default a keyword
+replaces the mapping's value even when the two would have landed on
+different fields. Override it when one key can mean two things depending on
+its value, and sort each side before merging so both are kept:
+
+```python
+@dataclass(frozen=True)
+class StoreConfig(StructuredConfig):
+    namespace: str = "public"
+    fields: tuple[str, ...] = ()
+
+    @classmethod
+    def merge_inputs(cls, config, kwargs):
+        return {**cls._sorted(config), **cls._sorted(kwargs)}
+
+    @staticmethod
+    def _sorted(side):
+        out = dict(side)
+        if isinstance(out.get("schema"), str):
+            out["namespace"] = out.pop("schema")
+        elif "schema" in out:
+            out["fields"] = tuple(out.pop("schema"))
+        return out
+
+StoreConfig.from_dict(StoreConfig.merge_inputs({"schema": "reporting"}, {"schema": ["name", "size"]}))
+# StoreConfig(namespace='reporting', fields=('name', 'size'))
+```
+
+Keep the sorting rule the same one `_normalize_dict` applies to a single
+mapping, so a value means the same thing whichever door it came through.
+`PostgresDatabaseConfig` in `dataknobs-data` is the in-tree example: its
+`schema` key is the SQL namespace when it is a string and the declared fields
+otherwise, and both of its hooks ask one predicate which it is.
+
 ### Unknown-key policy (`_UNKNOWN_KEYS`, `_INPUT_KEYS`)
 
 `from_dict` discards a key that matches no field. That is right when a
