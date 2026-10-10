@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-10-10T15:48:09Z",
+  "timestamp": "2026-10-10T16:16:17Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.12.23 (Homebrew 2026-10-03 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "native-layout-sqlite-duckdb",
-  "git_commit": "072e2bec43ad9b23674aaa56ae760b8fe5b291b5",
+  "git_commit": "bb56b1b9842b39250659e0d3bbb4055400a1dddd",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-10T15:48:09Z",
+  "timestamp": "2026-10-10T16:16:17Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -15,7 +15,7 @@
     "bots": "2af93edb611a4b9b0c2e37a882ebc267e8a820f71680eca325e889acb5b86346",
     "common": "00862b18a7be35f334ae184dd9fa3308e5266d1604b3af90577e108a99c24e82",
     "config": "3f02055f6c9306718def574167f33442748cbb7f9ade46c0c26d88c8fbcf8c41",
-    "data": "1fff594b9c7fccbddda3674fcb709d78d924d91e6892bd207333a6384795f446",
+    "data": "29978185b46ceacbe99422fa54ffdadf9de13e9d6e3d0719f3d3464e11755257",
     "fsm": "94bd9fe316b45dc5138a261c6210a9c1f6b343449ddd55d96b2111adf43c8307",
     "legacy": "a470f009ec01f5d43b3a0369900706eabe0662b8c0cfed0a8ea3d891e366da8d",
     "llm": "1fac8c7048b7d7cc4d4d7b981b80059580ff16b821d666433e6bd85dbc5a6593",
@@ -31,13 +31,13 @@
     "workspace_tests": "54ed8ee6d582468932d8254d92aa0c577c5106d70875ddfb392221da6113ef9e",
     "docs": "6e1df4f7415c73068662b7d791fa97babe0cc3390d32a0219826acea1f1ce00b"
   },
-  "total_seconds": 348,
+  "total_seconds": 343,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
@@ -49,28 +49,28 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 4
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 78
+      "duration_seconds": 81
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 28
+      "duration_seconds": 29
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -83,14 +83,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 174,
-      "workspace_guards_seconds": 97
+      "duration_seconds": 173,
+      "workspace_guards_seconds": 96
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 51
+      "duration_seconds": 48
     }
   }
 }
