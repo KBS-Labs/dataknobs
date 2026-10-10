@@ -47,12 +47,18 @@ Environment-variable substitution:
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import decimal
 import difflib
 import functools
+import hashlib
 import inspect
+import json
 import logging
+import pathlib
 import threading
 import types
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import (
@@ -312,6 +318,7 @@ _POLICY_SHAPES: Mapping[str, str] = types.MappingProxyType(
         "_SENSITIVE_FIELDS": "names",
         "_polymorphic_fields": "mapping",
         "_MAX_REDACT_DEPTH": "depth",
+        "_FINGERPRINT_EXCLUDE": "names",
     }
 )
 
@@ -660,6 +667,97 @@ def _coerce_field(declared: Any, value: Any) -> Any:
     return value
 
 
+#: Value types encoded by their text, which identifies them: a path, a moment,
+#: an exact decimal, a UUID.
+_TEXT_VALUE_TYPES: tuple[type, ...] = (
+    pathlib.PurePath,
+    datetime.date,
+    datetime.time,
+    datetime.timedelta,
+    decimal.Decimal,
+    uuid.UUID,
+)
+
+
+def _import_path(obj: Any) -> str | None:
+    """``module.qualname`` for a type or function importable by that name, else ``None``.
+
+    A name holding ``<`` -- ``<lambda>``, ``<locals>`` -- belongs to something
+    no import can reach, so two such objects could share it and differ.
+    """
+    qualname = getattr(obj, "__qualname__", None)
+    module = getattr(obj, "__module__", None)
+    if not isinstance(qualname, str) or not isinstance(module, str) or "<" in qualname:
+        return None
+    return f"{module}.{qualname}"
+
+
+def _sort_key(encoded: Any) -> str:
+    """Order encoded members by their own encoding, which every member has."""
+    return json.dumps(encoded, sort_keys=True, separators=(",", ":"))
+
+
+def _fingerprint_encode(
+    owner: StructuredConfig, value: Any, path: str, *, hook: bool = True
+) -> Any:
+    """Encode ``value`` as JSON that two values share only if they are equal.
+
+    Scalars and lists stay as JSON has them. Everything else becomes an object
+    with one tagged key, so no two kinds can meet: a mapping is its sorted
+    pairs, a set its sorted members, a tuple its members, a nested config or
+    dataclass its type and fields, an enum member its type and value, a type or
+    a module-level function its import path. Anything else goes to
+    ``owner._fingerprint_value`` once, and what that returns must encode
+    without it.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Enum):
+        return {"enum": [_import_path(type(value)), _fingerprint_encode(owner, value.value, path)]}
+    if isinstance(value, StructuredConfig):
+        return {"config": [_import_path(type(value)), value._fingerprint_fields(path)]}
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        fields = {
+            f.name: _fingerprint_encode(owner, getattr(value, f.name), f"{path}.{f.name}")
+            for f in dataclasses.fields(value)
+            if f.compare
+        }
+        return {"dataclass": [_import_path(type(value)), fields]}
+    if isinstance(value, Mapping):
+        pairs = [
+            [
+                _fingerprint_encode(owner, k, f"{path}[{k!r}]"),
+                _fingerprint_encode(owner, v, f"{path}[{k!r}]"),
+            ]
+            for k, v in value.items()
+        ]
+        return {"map": sorted(pairs, key=lambda pair: _sort_key(pair[0]))}
+    if isinstance(value, list):
+        return [_fingerprint_encode(owner, v, f"{path}[{i}]") for i, v in enumerate(value)]
+    if isinstance(value, tuple):
+        return {
+            "tuple": [_fingerprint_encode(owner, v, f"{path}[{i}]") for i, v in enumerate(value)]
+        }
+    if isinstance(value, (set, frozenset)):
+        members = [_fingerprint_encode(owner, v, f"{path}{{...}}") for v in value]
+        return {"set": sorted(members, key=_sort_key)}
+    if isinstance(value, _TEXT_VALUE_TYPES):
+        return {"text": [_import_path(type(value)), str(value)]}
+    if isinstance(value, bytes):
+        return {"bytes": value.hex()}
+    if isinstance(value, type) or inspect.isfunction(value):
+        named = _import_path(value)
+        if named is not None:
+            return {"ref": named}
+    if hook:
+        return _fingerprint_encode(owner, owner._fingerprint_value(value, path), path, hook=False)
+    raise TypeError(
+        f"{path} holds {type(value).__name__} {value!r}, which a fingerprint cannot "
+        "identify: it has no import path and no value text. Leave the field out with "
+        "_FINGERPRINT_EXCLUDE, or encode it by overriding _fingerprint_value."
+    )
+
+
 # ``eq=False``: the base has no fields, and an ``__eq__`` generated over none
 # would hand every ``eq=False`` subclass an equality under which any two
 # instances of one class compare equal. Without it such a subclass compares by
@@ -819,6 +917,12 @@ class StructuredConfig:
     #: helpful message rather than a wrongly rejected config -- the
     #: declaration is for the error text, and fails safe when it lags.
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset()
+
+    #: Fields :meth:`fingerprint` leaves out: a callback that does not change
+    #: what the config describes, say. Two configs differing only there then
+    #: share a fingerprint, which is the point and the risk, so name only
+    #: fields that do not decide what is built from the config.
+    _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset()
 
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         """Refuse a subclass whose ``__eq__`` and generated hash disagree.
@@ -1107,6 +1211,79 @@ class StructuredConfig:
         # this method is where the mapping shape is promised.
         jsonified: dict[str, Any] = jsonify(dataclasses.asdict(self))
         return jsonified
+
+    def fingerprint(self) -> str:
+        """A stable key for this config: equal configs share it, others do not.
+
+        A config is not hashable, so it cannot key a dict, a set or an
+        ``lru_cache`` itself. Key by this instead. It is the SHA-256 of a
+        canonical encoding of the config's class and fields, so it:
+
+        - is equal for configs that compare equal, set and mapping order
+          included, and differs for configs that differ, including two
+          classes holding the same values and a key against its spelling as
+          a string;
+        - is stable across processes, for the same version of this package;
+        - does not contain a credential in the config, though a digest of a
+          guessable one can be brute-forced, so it is no place to publish one.
+
+        Nested configs, plain dataclasses, containers, enum members, paths,
+        dates, decimals and UUIDs are encoded by value. Types and module-level
+        functions are encoded by import path. Anything else -- a lambda, a
+        bound method, a live client -- is refused with ``TypeError`` naming
+        the field, because nothing identifies it and two such values could
+        share a key and differ. A field equality ignores (``compare=False``)
+        is left out, as are the names in ``_FINGERPRINT_EXCLUDE``, and a
+        subclass encodes a value type of its own by overriding
+        :meth:`_fingerprint_value`.
+
+        Returns:
+            Sixty-four hex characters.
+
+        Raises:
+            TypeError: A field holds a value nothing identifies.
+            ValueError: ``_FINGERPRINT_EXCLUDE`` names something that is not a
+                field.
+        """
+        encoded = {
+            "config": [_import_path(type(self)), self._fingerprint_fields(type(self).__name__)]
+        }
+        text = json.dumps(encoded, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _fingerprint_fields(self, path: str) -> dict[str, Any]:
+        """This config's fields, encoded, without the ones its equality or policy leaves out."""
+        fields = {f.name: f for f in dataclasses.fields(self)}
+        unknown = sorted(set(self._FINGERPRINT_EXCLUDE) - fields.keys())
+        if unknown:
+            raise ValueError(
+                f"{type(self).__qualname__}._FINGERPRINT_EXCLUDE names {unknown}, "
+                f"which are not fields. Fields: {sorted(fields)}."
+            )
+        return {
+            name: _fingerprint_encode(self, getattr(self, name), f"{path}.{name}")
+            for name, f in fields.items()
+            if f.compare and name not in self._FINGERPRINT_EXCLUDE
+        }
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        """Encode a value :meth:`fingerprint` cannot identify on its own.
+
+        Override to fingerprint a value type of this config's own, returning
+        something the default encoding accepts -- usually a string that
+        identifies the value. Defer to ``super()`` for anything else. The
+        default refuses.
+
+        Args:
+            value: The value, from a field or from inside one.
+            path: Where it is, as ``Class.field[key]``, for the error message.
+        """
+        raise TypeError(
+            f"{path} holds {type(value).__name__} {value!r}, which a fingerprint "
+            "cannot identify: it has no import path and no value text. Leave the "
+            "field out with _FINGERPRINT_EXCLUDE, or encode it by overriding "
+            "_fingerprint_value."
+        )
 
     def validate(self) -> None:
         """Validate polymorphic raw-dict sections by dry-run construction.
