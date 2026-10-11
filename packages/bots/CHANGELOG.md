@@ -201,8 +201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GroundedRetrievalConfig`, `GroundedSynthesisConfig`,
   `GroundedResultProcessingConfig`, `HistoryCompactionConfig`,
   `DraftMetadata` and `SkipDefaultEntry`. Key by `fingerprint()` instead.
-  `ConfigVersion` keeps its own hash, by version number, and hands it to its
-  subclasses. A config can no longer be a dataclass field default either, since dataclasses refuses an unhashable default: write `field(default_factory=...)`. Equality is unchanged.
+  `ConfigVersion` keeps its own hash, by version number, and its equality with
+  it; a subclass inherits both when undecorated or declared `eq=False`. A config can no longer be a dataclass field default either, since dataclasses refuses an unhashable default: write `field(default_factory=...)`. Equality is unchanged.
 
 - **A grounded `database` source builds its backend holding the declared
   `schema:`**, where it used to set the schema after connecting. The

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import pytest
 
@@ -43,7 +44,12 @@ OWN_HASH: dict[str, str] = {
 
 
 def _every_subclass(root: type) -> set[type]:
-    """Every class below ``root`` that exists in this process, at any depth."""
+    """Every class below ``root`` that exists in this process, at any depth.
+
+    Less the classes ``@dataclass(slots=True)`` replaced: it builds a new
+    class from the decorated one, and the one it replaced stays registered
+    as a subclass, under the same name, though nothing can reach it.
+    """
     found: set[type] = set()
     stack: list[type] = list(root.__subclasses__())
     while stack:
@@ -51,7 +57,12 @@ def _every_subclass(root: type) -> set[type]:
         if cls not in found:
             found.add(cls)
             stack.extend(cls.__subclasses__())
-    return found
+    slotted = {(cls.__module__, cls.__qualname__) for cls in found if "__slots__" in cls.__dict__}
+    return {
+        cls
+        for cls in found
+        if "__slots__" in cls.__dict__ or (cls.__module__, cls.__qualname__) not in slotted
+    }
 
 
 def _beyond_the_sweep(swept: Iterable[type], existing: Iterable[type]) -> list[str]:
@@ -64,9 +75,27 @@ def _beyond_the_sweep(swept: Iterable[type], existing: Iterable[type]) -> list[s
     )
 
 
+def _writes_its_own_eq(cls: type) -> bool:
+    """Whether ``cls``'s body wrote its ``__eq__``, rather than its ``@dataclass``.
+
+    The decorator writes the ``__eq__`` it generates into the class dict, so
+    presence there says nothing. What it generates is compiled from a string,
+    so its code names no source file.
+    """
+    eq = cls.__dict__.get("__eq__")
+    code = getattr(eq, "__code__", None)
+    return code is not None and not code.co_filename.startswith("<")
+
+
 def _hashed_by_an_own_hash(cls: type, configs: dict[str, type]) -> bool:
     """Whether ``cls`` hashes by an ``OWN_HASH`` entry's hash, written or inherited."""
     return any(cls.__hash__ is configs[name].__hash__ for name in OWN_HASH if name in configs)
+
+
+def _hash_beside_a_generated_equality(cls: type) -> bool:
+    """Whether ``cls`` writes a hash and leaves its equality to the dataclass."""
+    params = cls.__dict__.get("__dataclass_params__")
+    return params is not None and params.eq and not _writes_its_own_eq(cls)
 
 
 @pytest.fixture(scope="module")
@@ -152,10 +181,53 @@ def test_every_own_hash_comes_with_its_own_equality(configs: dict[str, type]) ->
     unpaired = sorted(
         name
         for name in OWN_HASH
-        if name in configs
-        and "__eq__" not in configs[name].__dict__
-        and configs[name].__dataclass_params__.eq  # type: ignore[attr-defined]
+        if name in configs and _hash_beside_a_generated_equality(configs[name])
     )
     assert unpaired == [], (
         f"OWN_HASH config(s) hash by hand beside a generated equality: {unpaired}"
     )
+
+
+def test_the_pairing_check_would_report_a_hash_beside_a_generated_equality() -> None:
+    """Positive control: the check above is not vacuous."""
+
+    @dataclass(frozen=True)
+    class HashOnly(StructuredConfig):
+        version: int = 1
+
+        def __hash__(self) -> int:
+            return hash(self.version)
+
+    @dataclass(frozen=True)
+    class Paired(StructuredConfig):
+        version: int = 1
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, Paired) and other.version == self.version
+
+        def __hash__(self) -> int:
+            return hash(self.version)
+
+    @dataclass(frozen=True, eq=False)
+    class Identity(StructuredConfig):
+        version: int = 1
+
+        __hash__ = object.__hash__
+
+    assert _hash_beside_a_generated_equality(HashOnly)
+    assert not _hash_beside_a_generated_equality(Paired)
+    assert not _hash_beside_a_generated_equality(Identity)
+
+
+def test_a_class_slots_replaced_is_not_counted() -> None:
+    """Positive control: the replaced class is still registered, and is dropped."""
+
+    @dataclass(frozen=True, slots=True)
+    class Slotted(StructuredConfig):
+        n: int = 0
+
+    def named(classes: Iterable[type]) -> list[type]:
+        return [cls for cls in classes if cls.__qualname__ == Slotted.__qualname__]
+
+    assert len(named(StructuredConfig.__subclasses__())) == 2
+    assert named(_every_subclass(StructuredConfig)) == [Slotted]
