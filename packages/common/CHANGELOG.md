@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `eq=False` `StructuredConfig` compares by identity.** The base carried
+  an `__eq__` generated over its own fields, of which it has none, and a
+  subclass declaring `eq=False` inherited it, so any two instances of one class
+  compared equal whatever they held. The base is now `eq=False` itself, so such
+  a subclass compares by identity, as `eq=False` means on any other dataclass.
+
+- **`DataclassSweep.probe_hashability` reports a type whose `__hash__` is
+  `None` as `"unhashable"`**, answered from the class without building one. It
+  reported `"raises"`, the verdict for a type that claims `Hashable` and fails
+  at the call.
+
 - **`DataclassSweep` builds a set field with one member.** Its witness for a
   `set` or `frozenset` field was always empty, so a type that refuses an empty
   set of values from its vocabulary could not be built and was reported
@@ -355,6 +366,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`StructuredConfig.fingerprint()`: a stable key for a config that is not
+  hashable.** The SHA-256 of a canonical encoding of the config's class and
+  field values. Configs of one class whose fields hold equal values share it,
+  as Python compares them: set and mapping order, `1` against `1.0`, one
+  instant in two time zones. Configs whose class or field values differ do not.
+  It is stable across processes, and a credential in the config does not
+  appear in it. It follows field values, so it does not follow an `__eq__`
+  written by hand or the identity `eq=False` gives. Containers, nested configs,
+  plain dataclasses, enum members, numbers, dates, paths, UUIDs and byte
+  strings are encoded by value, and types and module-level functions by import
+  path. A value nothing identifies, such as a lambda, a bound method, a live
+  client or an instance of a class defined inside a function, is refused with
+  `TypeError` naming the field, as is a config whose own class is defined
+  inside a function; NaN and a container holding itself are refused with
+  `ValueError`. Fields with `compare=False` are left out. Two extension
+  points: `_FINGERPRINT_EXCLUDE`, a declared policy, leaves fields out, and
+  overriding `_fingerprint_value` encodes a value type of the config's own,
+  kept apart from a plain value of the same encoding.
 
 - **`StructuredConfig.merge_inputs(config, kwargs)`**, the one input a
   `StructuredConfigConsumer` makes of a configuration mapping and keyword
@@ -1854,6 +1884,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **BREAKING: a `StructuredConfig` is no longer hashable.** Every subclass
+  compares field by field, which the round-trip property
+  `from_dict(to_dict()) == cfg` depends on, and was given a hash over its
+  fields as well, because it is a frozen dataclass with equality on. So
+  `isinstance(cfg, collections.abc.Hashable)` answered True for every config,
+  and `hash(cfg)` raised `TypeError` for any that held a list or a mapping.
+  `StructuredConfig.__init_subclass__` now declares each subclass unhashable
+  before its `@dataclass` runs, and the base is declared the same, so the
+  check answers False across the family and `hash()` raises whatever the
+  fields hold. Equality is unchanged.
+
+  - A config whose values were all hashable could be a dict key, a set member
+    or an `lru_cache` argument, and can't now. Key by `cfg.fingerprint()`
+    instead (see Added). In this package that covers `EventBusConfig` and its
+    four backend configs, `PostgresLockConfig`, `PackSpec`, `RateLimit` and
+    `RetryConfig`, each always or with its defaults.
+  - A config can no longer be a dataclass field default, since dataclasses
+    refuses a default whose type is unhashable. Write
+    `field(default_factory=...)`.
+  - `@dataclass(unsafe_hash=True)` on a config is refused by dataclasses,
+    because the declaration is already in the class. Write `__hash__` instead.
+  - A subclass that writes `__hash__` in its body keeps it. One that writes
+    `__eq__` alone keeps it and stays unhashable under `eq=False`, and is
+    refused with `TypeError` at its first construction under `eq=True`, where
+    the decorator would pair that equality with a hash over every field.
+  - A hand-written hash reaches a subclass that keeps the equality it was
+    written beside: an undecorated one, or one declared `eq=False`. A subclass
+    whose `@dataclass` generates an equality of its own is refused with
+    `TypeError` at its first construction, since an identity hash, or one
+    reading a `compare=False` field, need not agree with it. Write `__hash__`
+    and `__eq__` in its body, or declare `eq=False`.
 
 - **`fields` must be a sequence of strings.** `EntitySourceIndexSource`
   refuses, with `ValidationError` naming the value given and carrying the

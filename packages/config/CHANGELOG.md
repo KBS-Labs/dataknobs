@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `examples.widgets.WidgetConfig` is no longer hashable**, as no
+  `StructuredConfig` now is (see `dataknobs-common`). It still compares field
+  by field. Key by `fingerprint()` where it keyed a dict. A config can no longer be a dataclass field default either, since dataclasses refuses an unhashable default: write `field(default_factory=...)`.
+
 - **`use_env` is a declared parameter, and `from_file`/`from_dict` forward it.**
   The switch that decides whether `DATAKNOBS_`-prefixed environment values
   reach configuration was read as `kwargs.get("use_env", True)`, so it existed

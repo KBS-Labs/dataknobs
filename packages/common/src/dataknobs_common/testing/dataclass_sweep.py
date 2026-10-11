@@ -380,7 +380,18 @@ class DataclassSweep:
             return cls(*kwargs.values())  # a hand-written __init__ taking *args
 
     def probe_hashability(self, cls: type) -> tuple[str, str]:
-        """``("hashes" | "raises" | "unconstructible", detail)`` for one type."""
+        """``("unhashable" | "hashes" | "raises" | "unconstructible", detail)`` for one type.
+
+        ``"unhashable"`` is a type whose ``__hash__`` is ``None``: it does not
+        claim the capability, so it is answered from the class and never
+        built. ``"raises"`` is the defect: a type that claims it and fails at
+        the call.
+        """
+        # Read through ``getattr``: the type checker takes ``type.__hash__`` to be
+        # a method and would call a ``None`` test of it unreachable, which a
+        # type that declares itself unhashable is not.
+        if getattr(cls, "__hash__", None) is None:
+            return "unhashable", "declares __hash__ None"
         try:
             instance = self.construct(cls)
         except UnbuildableError as exc:

@@ -253,6 +253,134 @@ one matters because without `ClassVar` the dataclass decorator turns a policy
 attribute into a *field*, which then shows up in `fields()`, in `to_dict()`,
 and in the accepted-key list of the errors the policy itself produces.
 
+### Equal field by field, and not hashable
+
+A config compares field by field, since that is what the round-trip property
+`type(cfg).from_dict(cfg.to_dict()) == cfg` relies on, and it is not hashable.
+`__init_subclass__` declares every subclass unhashable before its `@dataclass`
+runs, so `isinstance(cfg, collections.abc.Hashable)` answers False and
+`hash(cfg)` raises `TypeError` whatever the fields hold:
+
+```python
+from collections.abc import Hashable
+from dataclasses import dataclass, field
+
+@dataclass(frozen=True)
+class ServiceConfig(StructuredConfig):
+    host: str = "localhost"
+    tags: list[str] = field(default_factory=list)
+
+ServiceConfig() == ServiceConfig()      # True
+isinstance(ServiceConfig(), Hashable)   # False
+```
+
+Left to `@dataclass(frozen=True)`, each subclass would get a hash over its
+fields. The type would then claim to be hashable and fail at the first list
+or mapping, and most configs hold one.
+
+Two consequences follow from a type being unhashable:
+
+- **It cannot key a dict, a set or an `lru_cache`.** Key by
+  [`fingerprint()`](#fingerprint) instead.
+- **It cannot be a dataclass field default**, since dataclasses refuses a
+  default whose type is unhashable. Write `field(default_factory=...)`:
+
+  ```python
+  @dataclass(frozen=True)
+  class ClientConfig(StructuredConfig):
+      service: ServiceConfig = field(default_factory=ServiceConfig)
+  ```
+
+A subclass decides otherwise in its body:
+
+| The body writes | Result |
+|---|---|
+| `__hash__` | Kept. Write `__eq__` beside it, so the two agree. |
+| `__hash__ = object.__hash__`, under `eq=False` | Compared and hashed by identity. |
+| `__eq__` alone, under `eq=False` | Its own equality, still unhashable. |
+| `__eq__` alone, under the default `eq=True` | Refused with `TypeError` at the first construction: the decorator pairs that equality with a hash over every field, which it does not agree with. |
+
+A hash written by hand reaches a subclass only with the equality it was
+written beside:
+
+| The subclass below it | Result |
+|---|---|
+| Undecorated, or `@dataclass(eq=False)` | Inherits the equality and the hash together. |
+| `@dataclass` with the default `eq=True` | Refused with `TypeError` at the first construction: the decorator generates an equality over every field, which the inherited hash need not agree with. An identity hash does not, nor does one reading a `compare=False` field. Write `__hash__` and `__eq__` in its body, or declare `eq=False`. |
+
+Each class is judged once, at its first construction, because only then has
+its decorator run. A subclass `__new__` that does not call `super().__new__`
+skips the judgement, as it skips every base's construction.
+
+`@dataclass(unsafe_hash=True)` is refused by dataclasses itself, because the
+declaration is already in the class. Write `__hash__` instead.
+
+### `fingerprint()`
+
+A stable key for a config: the SHA-256 of a canonical encoding of its class
+and fields, as 64 hex characters.
+
+```python
+_clients: dict[str, Client] = {}
+
+def client_for(cfg: ServiceConfig) -> Client:
+    key = cfg.fingerprint()
+    if key not in _clients:
+        _clients[key] = Client(cfg)
+    return _clients[key]
+```
+
+- **Configs of one class whose fields hold equal values share it**, as Python
+  compares those values: set and mapping order, `1` against `1.0` against
+  `Decimal("1.00")`, one instant in two time zones. A config loaded from YAML
+  with `delay: 1` shares it with one whose default is `1.0`. Fields with
+  `compare=False` are left out, as equality leaves them out.
+- **Configs whose class or field values differ do not**, including two
+  classes holding the same values and a key against its spelling as a string.
+- **It is stable across processes** for the same version of this package, so
+  it can key something that outlives one.
+- **A credential does not appear in it.** A digest of a guessable one can
+  still be brute-forced, so it is no place to publish one.
+
+It follows field values, which is what the generated equality compares. A
+config whose `__eq__` is written by hand, or that compares by identity under
+`eq=False`, shares a fingerprint with another holding equal values though the
+two compare unequal. Nor can it follow an equality that is not transitive,
+such as an `OrderedDict`'s order against a plain `dict`.
+
+Containers, nested configs, plain dataclasses, enum members, numbers, dates,
+paths, UUIDs and byte strings are encoded by value, and types and module-level
+functions by import path. A value nothing identifies, such as a lambda, a bound
+method, a live client, or an instance of a class defined inside a function, is
+refused with `TypeError` naming the field, because two such values could share
+a key and differ. So is calling `fingerprint()` on a config whose own class is
+defined inside a function. NaN, being unequal to itself, and a container that
+holds itself are refused with `ValueError`.
+
+Two extension points. `_FINGERPRINT_EXCLUDE` leaves fields out: name only
+fields that do not decide what is built from the config, since two configs
+differing only there share a fingerprint. Overriding `_fingerprint_value`
+encodes a value type of the config's own:
+
+```python
+@dataclass(frozen=True)
+class GatewayConfig(StructuredConfig):
+    endpoint: Endpoint
+    on_token: Callable[[str], None] | None = None
+
+    _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset({"on_token"})
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        if isinstance(value, Endpoint):
+            return value.url
+        return super()._fingerprint_value(value, path)
+```
+
+What `_fingerprint_value` returns is tagged as its answer, with the value's
+type when an import reaches it, so an endpoint encoded as its URL does not share
+a key with that URL held as a string. It is encoded without consulting
+`_fingerprint_value` again.
+
 ### `accepts(key)` (classmethod)
 
 Whether `from_dict` will consume `key` rather than drop it — true for a

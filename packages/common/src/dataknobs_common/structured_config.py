@@ -47,12 +47,20 @@ Environment-variable substitution:
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import decimal
 import difflib
+import fractions
 import functools
+import hashlib
 import inspect
+import json
 import logging
+import math
+import pathlib
 import threading
 import types
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from typing import (
@@ -312,6 +320,7 @@ _POLICY_SHAPES: Mapping[str, str] = types.MappingProxyType(
         "_SENSITIVE_FIELDS": "names",
         "_polymorphic_fields": "mapping",
         "_MAX_REDACT_DEPTH": "depth",
+        "_FINGERPRINT_EXCLUDE": "names",
     }
 )
 
@@ -344,6 +353,134 @@ def _declared_without_classvar(cls: type, name: str) -> bool:
         # the two, and a false negative here only declines to complain.
         return "ClassVar" not in annotation
     return annotation is not ClassVar and get_origin(annotation) is not ClassVar
+
+
+def _hash_written_by_hand_above(cls: type) -> Any:
+    """The hash a config above ``cls`` wrote by hand, or ``None``.
+
+    The first class in the MRO whose dict holds ``__hash__`` decides. Every
+    ``StructuredConfig`` subclass holds one -- ``None`` from the hook, or a
+    hash its body wrote -- so a non-``None`` value found on one was written by
+    hand, and is the family's opt-out. A hash from a class outside the family,
+    a mixin, is not: the family's answer overrides it, as the generated hash
+    used to.
+
+    One exception: a class whose body wrote ``__eq__`` alone holds a hash only
+    if its ``@dataclass`` generated one, and is refused for it. Handing that
+    hash on would refuse the subclass under the wrong name, so the subclass is
+    declared unhashable and the refusal names the class that earned it.
+    """
+    for owner in cls.__mro__[1:]:
+        if "__hash__" in owner.__dict__:
+            if (
+                owner is StructuredConfig
+                or not issubclass(owner, StructuredConfig)
+                or owner.__dict__.get(_EQUALITY_WITHOUT_HASH)
+            ):
+                return None
+            return owner.__dict__["__hash__"]
+    return None
+
+
+def _declare_unhashable(cls: type) -> None:
+    """Declare a subclass unhashable, unless it or a config above it writes ``__hash__``.
+
+    Runs before the subclass's ``@dataclass``. ``dataclasses`` treats a
+    ``__hash__`` already in the class dict as explicit and does not regenerate
+    it, so ``None`` written here survives the decorator. Writing it on the base
+    alone would not: each subclass's own decorator generates a hash over its
+    fields, because the subclass's dict does not hold the base's ``None``.
+
+    A hash a config above this one wrote by hand is written instead (see
+    :func:`_hash_written_by_hand_above`). It agrees with the equality it was
+    written beside, which a subclass keeps when it is undecorated or decorated
+    ``eq=False``. A decorator with ``eq=True`` generates an equality over every
+    field, which that hash need not agree with -- an identity hash, or one
+    reading a ``compare=False`` field, does not -- so the class is marked for
+    :func:`_refuse_disagreeing_hash` to judge.
+
+    A body that defines ``__eq__`` and leaves ``__hash__`` ``None`` -- Python
+    writes that ``None`` itself when the body defines ``__eq__`` alone -- is
+    marked too. Under ``@dataclass`` with ``eq=True``, ``dataclasses`` reads the
+    pair as *implicit* and generates a field hash the new equality does not
+    agree with; under ``eq=False``, or with no decorator, the ``None`` stays and
+    the class is honest.
+
+    Nothing here can see which decorator follows, so both marks are judged at
+    the class's first construction, by what the decorator did.
+
+    A class whose dict already holds ``__dataclass_params__`` is a rebuild,
+    not a body: ``@dataclass(slots=True)`` recreates the decorated class from
+    its dict, which runs this hook again over the ``__eq__`` the decorator
+    generated. Its hash was settled on the first pass, and its marks are in
+    the dict it was rebuilt from, so it is left alone.
+    """
+    if "__dataclass_params__" in cls.__dict__:
+        return
+    if "__hash__" not in cls.__dict__:
+        inherited = _hash_written_by_hand_above(cls)
+        # Deliberate: see the docstring. Both codes are mypy objecting to the
+        # assignment itself, which is the mechanism.
+        cls.__hash__ = inherited  # type: ignore[method-assign]
+        if inherited is not None:
+            setattr(cls, _INHERITED_HASH, True)
+    elif "__eq__" in cls.__dict__ and cls.__dict__["__hash__"] is None:
+        setattr(cls, _EQUALITY_WITHOUT_HASH, True)
+
+
+#: Marks a class whose body defined ``__eq__`` and left ``__hash__`` ``None``.
+#: Like the two below, a plain class attribute with no annotation, so
+#: ``dataclasses`` never makes it a field, and one ``slots=True`` carries into
+#: the class it rebuilds.
+_EQUALITY_WITHOUT_HASH = "_structured_config_equality_without_hash"
+
+#: Marks a class handed a hash a config above it wrote by hand.
+_INHERITED_HASH = "_structured_config_inherited_hash"
+
+#: Records, in a class's own dict, that it and every class above it were judged
+#: and accepted, so its later constructions skip the walk.
+_JUDGED = "_structured_config_judged"
+
+
+def _refuse_disagreeing_hash(cls: type) -> None:
+    """Refuse a class whose hash and equality need not agree.
+
+    Called on each construction and paid once per class: a class judged
+    acceptable is recorded in its own dict and returns at once after that. A
+    refused class is never recorded, so it is refused each time. Every marked
+    class in the MRO is judged by its own dict, which holds what its decorator
+    did:
+
+    - marked for ``__eq__`` without a hash, and now holding a hash: the
+      decorator was ``eq=True`` and generated one over every field;
+    - marked for an inherited hash, and now holding an ``__eq__``: the
+      decorator was ``eq=True`` and generated an equality the hash was not
+      written for.
+    """
+    if cls.__dict__.get(_JUDGED):
+        return
+    for owner in cls.__mro__:
+        found = owner.__dict__
+        if found.get(_EQUALITY_WITHOUT_HASH) and found.get("__hash__") is not None:
+            raise TypeError(
+                f"{owner.__qualname__} defines __eq__ and no __hash__ of its own, "
+                "so its @dataclass generated a hash over every field, which that "
+                "__eq__ does not agree with. Define __hash__ consistent with "
+                "__eq__; or declare @dataclass(eq=False) to keep this __eq__ and "
+                "stay unhashable; or leave __eq__ to the dataclass."
+            )
+        if found.get(_INHERITED_HASH) and "__eq__" in found:
+            source = next(
+                above.__qualname__ for above in owner.__mro__[1:] if "__hash__" in above.__dict__
+            )
+            raise TypeError(
+                f"{owner.__qualname__} inherits {source}'s __hash__, written by "
+                "hand, but its @dataclass generated an __eq__ over every field, "
+                "which that hash need not agree with. Write __hash__ and __eq__ "
+                f"in its body; or declare @dataclass(eq=False) to keep {source}'s "
+                "equality and its hash together."
+            )
+    setattr(cls, _JUDGED, True)
 
 
 def _validate_policy_declaration(cls: type) -> None:
@@ -573,7 +710,179 @@ def _coerce_field(declared: Any, value: Any) -> Any:
     return value
 
 
-@dataclasses.dataclass(frozen=True)
+def _import_path(obj: Any) -> str | None:
+    """``module.qualname`` for a type or function importable by that name, else ``None``.
+
+    A name holding ``<`` -- ``<lambda>``, ``<locals>`` -- belongs to something
+    no import can reach, so two such objects could share it and differ.
+    """
+    qualname = getattr(obj, "__qualname__", None)
+    module = getattr(obj, "__module__", None)
+    if not isinstance(qualname, str) or not isinstance(module, str) or "<" in qualname:
+        return None
+    return f"{module}.{qualname}"
+
+
+def _sort_key(encoded: Any) -> str:
+    """Order encoded members by their own encoding, which every member has."""
+    return json.dumps(encoded, sort_keys=True, separators=(",", ":"))
+
+
+#: Numbers Python compares by exact value across types: ``1 == 1.0 ==
+#: Decimal("1.00") == Fraction(1) == True``.
+_NUMBER_TYPES: tuple[type, ...] = (int, float, decimal.Decimal, fractions.Fraction)
+
+
+def _encode_number(value: Any, path: str) -> Any:
+    """Encode a number by its exact value, so numbers Python calls equal meet.
+
+    An integral value is its ``int``; any other finite value is its ratio in
+    lowest terms; an infinity is its sign. NaN is refused, being unequal to
+    itself.
+    """
+    if (isinstance(value, float) and math.isnan(value)) or (
+        isinstance(value, decimal.Decimal) and value.is_nan()
+    ):
+        raise ValueError(
+            f"{path} holds NaN, which is unequal to itself, so no key can stand "
+            "for it. Leave the field out with _FINGERPRINT_EXCLUDE."
+        )
+    if isinstance(value, (float, decimal.Decimal)) and value in (math.inf, -math.inf):
+        return {"inf": 1 if value > 0 else -1}
+    numerator, denominator = value.as_integer_ratio()
+    return numerator if denominator == 1 else {"ratio": [numerator, denominator]}
+
+
+def _encode_temporal(value: Any) -> Any:
+    """Encode a date or time so moments Python calls equal meet.
+
+    Aware datetimes compare as instants and aware times by their offset-free
+    time of day, so both are reduced to that; naive ones are never equal to
+    aware ones, and keep a tag of their own.
+    """
+    if isinstance(value, datetime.datetime):
+        if value.utcoffset() is None:
+            return {"datetime": value.isoformat()}
+        return {"instant": value.astimezone(datetime.UTC).replace(tzinfo=None).isoformat()}
+    if isinstance(value, datetime.date):
+        return {"date": value.isoformat()}
+    if isinstance(value, datetime.time):
+        offset = value.utcoffset()
+        if offset is None:
+            return {"time": value.isoformat()}
+        since_midnight = datetime.timedelta(
+            hours=value.hour,
+            minutes=value.minute,
+            seconds=value.second,
+            microseconds=value.microsecond,
+        )
+        return {"time_utc": (since_midnight - offset) // datetime.timedelta(microseconds=1)}
+    delta: datetime.timedelta = value
+    return {"timedelta": [delta.days, delta.seconds, delta.microseconds]}
+
+
+def _encode_path(value: pathlib.PurePath) -> Any:
+    """Encode a path as its flavour and the text it compares by.
+
+    A pure and a concrete path of one flavour compare equal, so the class is
+    not part of it. A Windows path compares case-insensitively.
+    """
+    if isinstance(value, pathlib.PureWindowsPath):
+        return {"path": ["windows", str(value).lower()]}
+    return {"path": ["posix", str(value)]}
+
+
+def _fingerprint_encode(
+    owner: StructuredConfig,
+    value: Any,
+    path: str,
+    *,
+    hook: bool = True,
+    active: frozenset[int] = frozenset(),
+) -> Any:
+    """Encode ``value`` as JSON that two values share only if they are equal.
+
+    Strings and lists stay as JSON has them, and a number is its exact value.
+    Everything else becomes an object with one tagged key, so no two kinds can
+    meet: a mapping is its sorted pairs, a set its sorted members, a tuple its
+    members, a nested config or dataclass its type and fields, an enum member
+    its type and value, a type or a module-level function its import path, a
+    date, path, UUID or byte string the value it compares by.
+
+    Anything else goes to ``owner._fingerprint_value``, and what that returns
+    is tagged as its answer and encoded with ``hook`` off all the way down, so
+    the hook is consulted once per value. A type nothing can import is
+    anything else, since its name could be another type's. ``active`` holds
+    the containers being encoded, so one holding itself is refused rather
+    than followed for ever.
+    """
+
+    def inner(item: Any, at: str) -> Any:
+        return _fingerprint_encode(owner, item, at, hook=hook, active=active | {id(value)})
+
+    if value is None or isinstance(value, str):
+        return value
+    if isinstance(value, _NUMBER_TYPES):
+        return _encode_number(value, path)
+    if isinstance(value, (list, tuple, set, frozenset, Mapping)) or (
+        dataclasses.is_dataclass(value) and not isinstance(value, type)
+    ):
+        if id(value) in active:
+            raise ValueError(f"{path} holds itself, so it has no finite encoding.")
+    named = _import_path(type(value))
+    if isinstance(value, Enum) and named is not None:
+        return {"enum": [named, inner(value.value, path)]}
+    if isinstance(value, StructuredConfig) and named is not None:
+        return {"config": [named, value._fingerprint_fields(path, active | {id(value)})]}
+    if dataclasses.is_dataclass(value) and not isinstance(value, type) and named is not None:
+        fields = {
+            f.name: inner(getattr(value, f.name), f"{path}.{f.name}")
+            for f in dataclasses.fields(value)
+            if f.compare
+        }
+        return {"dataclass": [named, fields]}
+    if isinstance(value, Mapping):
+        pairs = [[inner(k, f"{path}[{k!r}]"), inner(v, f"{path}[{k!r}]")] for k, v in value.items()]
+        return {"map": sorted(pairs, key=lambda pair: _sort_key(pair[0]))}
+    if isinstance(value, list):
+        return [inner(v, f"{path}[{i}]") for i, v in enumerate(value)]
+    if isinstance(value, tuple):
+        return {"tuple": [inner(v, f"{path}[{i}]") for i, v in enumerate(value)]}
+    if isinstance(value, (set, frozenset)):
+        return {"set": sorted((inner(v, f"{path}{{...}}") for v in value), key=_sort_key)}
+    if isinstance(value, (datetime.date, datetime.time, datetime.timedelta)):
+        return _encode_temporal(value)
+    if isinstance(value, pathlib.PurePath):
+        return _encode_path(value)
+    if isinstance(value, uuid.UUID):
+        return {"uuid": value.hex}
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"bytes": bytes(value).hex()}
+    if isinstance(value, type) or inspect.isfunction(value):
+        ref = _import_path(value)
+        if ref is not None:
+            return {"ref": ref}
+    if hook:
+        answered = owner._fingerprint_value(value, path)
+        return {
+            "custom": [
+                named,
+                _fingerprint_encode(owner, answered, path, hook=False, active=active),
+            ]
+        }
+    raise TypeError(
+        f"{path} holds {type(value).__name__} {value!r}, which a fingerprint cannot "
+        "identify: it has no import path and no value text. Leave the field out with "
+        "_FINGERPRINT_EXCLUDE, or encode it by overriding _fingerprint_value."
+    )
+
+
+# ``eq=False``: the base has no fields, and an ``__eq__`` generated over none
+# would hand every ``eq=False`` subclass an equality under which any two
+# instances of one class compare equal. Without it such a subclass compares by
+# identity, as ``eq=False`` means on any other dataclass. Subclasses that keep
+# the default ``eq=True`` generate their own.
+@dataclasses.dataclass(frozen=True, eq=False)
 class StructuredConfig:
     """Base class for typed, dict-loadable, frozen configuration dataclasses.
 
@@ -660,6 +969,24 @@ class StructuredConfig:
     A subclass that needs a genuinely custom ``__repr__`` may still
     define one in its body; :meth:`__init_subclass__` leaves an
     explicitly-defined repr untouched.
+
+    Compared field by field, and not hashable. Equality is the base's
+    contract -- ``type(cfg).from_dict(cfg.to_dict()) == cfg`` -- and a config
+    holding a list or a mapping cannot honour a hash over its fields as well.
+    A frozen dataclass with equality on would still generate one, so the type
+    would answer :class:`collections.abc.Hashable` True and ``hash()`` would
+    raise ``TypeError`` at the first container. ``frozen=False``, the ordinary
+    spelling of *equal but not hashable*, is unavailable: a dataclass may not
+    unfreeze a frozen base. So :meth:`__init_subclass__` sets ``__hash__`` to
+    ``None`` on every subclass before its ``@dataclass`` runs, and the check
+    answers False for the whole family, whatever one value happens to hold. A
+    subclass that writes ``__hash__`` in its body keeps it and should write
+    ``__eq__`` to match. Its own subclasses inherit the two together when they
+    keep that equality, undecorated or ``eq=False``, and are refused at their
+    first construction when their decorator generates a new one. One that
+    writes ``__eq__`` alone keeps it and stays unhashable under ``eq=False``,
+    and is refused at its first construction under ``eq=True``, where the
+    decorator would pair it with a hash over every field.
     """
 
     #: Field names masked by :meth:`_redacted_repr`. Empty by default,
@@ -712,8 +1039,30 @@ class StructuredConfig:
     #: declaration is for the error text, and fails safe when it lags.
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset()
 
+    #: Fields :meth:`fingerprint` leaves out: a callback that does not change
+    #: what the config describes, say. Two configs differing only there then
+    #: share a fingerprint, which is the point and the risk, so name only
+    #: fields that do not decide what is built from the config.
+    _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset()
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
+        """Refuse a subclass whose hash and equality need not agree.
+
+        The one check that has to wait for the decorator: see
+        :func:`_refuse_disagreeing_hash`. The arguments belong to the
+        generated ``__init__``, so none is passed on.
+
+        Two things fall outside it. A subclass ``__new__`` that does not call
+        this one skips the check, as it skips every base's construction. And
+        until a class's first construction, ``issubclass(cls, Hashable)``
+        answers by the hash the decorator left, which for a class about to be
+        refused is a hash no instance will ever be built to use.
+        """
+        _refuse_disagreeing_hash(cls)
+        return super().__new__(cls)
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Install the redacting ``__repr__`` and validate the policy attributes.
+        """Install the redacting ``__repr__``, declare the subclass unhashable, and validate.
 
         Runs at class-creation time, *before* the subclass's
         ``@dataclass`` decorator is applied. Writing ``__repr__`` into the
@@ -742,6 +1091,11 @@ class StructuredConfig:
         fail together -- each is consumed directly enough that a wrong
         shape means something else instead of raising, and ``str`` being
         both iterable and ``in``-testable is the shared way that happens.
+
+        Every subclass is declared unhashable here, by the same mechanism as
+        the repr and for the same reason: its own ``@dataclass`` would
+        otherwise generate one. See :func:`_declare_unhashable`, and the class
+        docstring for why a config is not hashable.
         """
         super().__init_subclass__(**kwargs)
         if "__repr__" not in cls.__dict__:
@@ -757,6 +1111,7 @@ class StructuredConfig:
         # need this and is now one of five: each is read directly enough that
         # a misdeclaration means something else rather than failing.
         _validate_policy_declaration(cls)
+        _declare_unhashable(cls)
 
     def _redacted_repr(self) -> str:
         """Dataclass-style repr that masks sensitive values, scalar and nested.
@@ -984,6 +1339,101 @@ class StructuredConfig:
         jsonified: dict[str, Any] = jsonify(dataclasses.asdict(self))
         return jsonified
 
+    def fingerprint(self) -> str:
+        """A stable key for this config: its class and the values of its fields.
+
+        A config is not hashable, so it cannot key a dict, a set or an
+        ``lru_cache`` itself. Key by this instead. It is the SHA-256 of a
+        canonical encoding of the config's class and fields, so it:
+
+        - is shared by two configs of one class whose fields hold equal
+          values, as Python compares them: set and mapping order, ``1``
+          against ``1.0``, one instant in two time zones;
+        - differs for configs whose class or field values differ, including
+          two classes holding the same values and a key against its spelling
+          as a string;
+        - is stable across processes, for the same version of this package;
+        - does not contain a credential in the config, though a digest of a
+          guessable one can be brute-forced, so it is no place to publish one.
+
+        It follows the field values, which is what the generated equality
+        compares, and not an ``__eq__`` written by hand or the identity
+        ``eq=False`` gives: two such configs holding equal values share it
+        though they compare unequal. Nor can it follow an equality that is
+        not transitive, such as an ``OrderedDict``'s order against a plain
+        ``dict``.
+
+        Nested configs, plain dataclasses, containers, enum members, numbers,
+        dates, paths, UUIDs and byte strings are encoded by value. Types and
+        module-level functions are encoded by import path. Anything else -- a
+        lambda, a bound method, a live client, a class defined inside a
+        function -- goes to :meth:`_fingerprint_value`, which refuses it with
+        ``TypeError`` naming the field unless a subclass encodes it: nothing
+        else identifies it, and two such values could share a key and differ.
+        A field equality ignores (``compare=False``) is left out, as are the
+        names in ``_FINGERPRINT_EXCLUDE``.
+
+        Returns:
+            Sixty-four hex characters.
+
+        Raises:
+            TypeError: A field holds a value nothing identifies, or the
+                config's own class is defined inside a function.
+            ValueError: A field holds NaN or a container that holds itself, or
+                ``_FINGERPRINT_EXCLUDE`` names something that is not a field.
+        """
+        named = _import_path(type(self))
+        if named is None:
+            raise TypeError(
+                f"{type(self).__qualname__} is defined inside a function, so no "
+                "import reaches it and another class of that name could share "
+                "its fingerprint. Define it at module level."
+            )
+        encoded = {"config": [named, self._fingerprint_fields(type(self).__name__, frozenset())]}
+        text = json.dumps(encoded, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _fingerprint_fields(self, path: str, active: frozenset[int]) -> dict[str, Any]:
+        """This config's fields, encoded, without the ones its equality or policy leaves out."""
+        fields = {f.name: f for f in dataclasses.fields(self)}
+        unknown = sorted(set(self._FINGERPRINT_EXCLUDE) - fields.keys())
+        if unknown:
+            raise ValueError(
+                f"{type(self).__qualname__}._FINGERPRINT_EXCLUDE names {unknown}, "
+                f"which are not fields. Fields: {sorted(fields)}."
+            )
+        return {
+            name: _fingerprint_encode(self, getattr(self, name), f"{path}.{name}", active=active)
+            for name, f in fields.items()
+            if f.compare and name not in self._FINGERPRINT_EXCLUDE
+        }
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        """Encode a value :meth:`fingerprint` cannot identify on its own.
+
+        Override to fingerprint a value type of this config's own, returning
+        something the default encoding accepts -- usually a string that
+        identifies the value. Defer to ``super()`` for anything else. The
+        default refuses.
+
+        What this returns is kept apart from a plain value: an endpoint
+        encoded as its URL does not share a key with that URL held as a
+        string. It is tagged with the value's type when an import reaches the
+        type; when none does, as for a class defined inside a function, the
+        answer has to tell such types apart itself. It is encoded without
+        consulting this method again.
+
+        Args:
+            value: The value, from a field or from inside one.
+            path: Where it is, as ``Class.field[key]``, for the error message.
+        """
+        raise TypeError(
+            f"{path} holds {type(value).__name__} {value!r}, which a fingerprint "
+            "cannot identify: it has no import path and no value text. Leave the "
+            "field out with _FINGERPRINT_EXCLUDE, or encode it by overriding "
+            "_fingerprint_value."
+        )
+
     def validate(self) -> None:
         """Validate polymorphic raw-dict sections by dry-run construction.
 
@@ -1147,6 +1597,13 @@ class StructuredConfig:
         # round-trip and construction paths are unaffected.
         config_cls.from_dict(raw).validate()
 
+
+# The base answers the hashability check as every subclass does. Assigned here
+# rather than written in the class body, because mypy reads a body
+# ``__hash__ = None`` as the base's declared type, and every subclass that
+# writes its own ``__hash__`` would then fail ``[override]``. Same directive as
+# the assignment in ``_declare_unhashable``.
+StructuredConfig.__hash__ = None  # type: ignore[method-assign,assignment]
 
 # ``registry`` is imported above and cannot import this module back, so its
 # ``PluginConfig`` names this class as a forward reference. Handing the class
