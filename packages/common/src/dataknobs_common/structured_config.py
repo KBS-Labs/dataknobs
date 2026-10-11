@@ -362,10 +362,19 @@ def _hash_written_by_hand_above(cls: type) -> Any:
     hand, and is the family's opt-out. A hash from a class outside the family,
     a mixin, is not: the family's answer overrides it, as the generated hash
     used to.
+
+    One exception: a class whose body wrote ``__eq__`` alone holds a hash only
+    if its ``@dataclass`` generated one, and is refused for it. Handing that
+    hash on would refuse the subclass under the wrong name, so the subclass is
+    declared unhashable and the refusal names the class that earned it.
     """
     for owner in cls.__mro__[1:]:
         if "__hash__" in owner.__dict__:
-            if owner is StructuredConfig or not issubclass(owner, StructuredConfig):
+            if (
+                owner is StructuredConfig
+                or not issubclass(owner, StructuredConfig)
+                or owner.__dict__.get(_EQUALITY_WITHOUT_HASH)
+            ):
                 return None
             return owner.__dict__["__hash__"]
     return None
@@ -376,68 +385,100 @@ def _declare_unhashable(cls: type) -> None:
 
     Runs before the subclass's ``@dataclass``. ``dataclasses`` treats a
     ``__hash__`` already in the class dict as explicit and does not regenerate
-    it, so ``None`` written here survives the decorator. A hash a config above
-    this one wrote by hand is written instead (see
-    :func:`_hash_written_by_hand_above`). It agrees with an undecorated
-    subclass's equality, which is inherited with it, and with a decorated
-    subclass's, which compares every field and so is finer. Writing it on the base
+    it, so ``None`` written here survives the decorator. Writing it on the base
     alone would not: each subclass's own decorator generates a hash over its
     fields, because the subclass's dict does not hold the base's ``None``.
 
+    A hash a config above this one wrote by hand is written instead (see
+    :func:`_hash_written_by_hand_above`). It agrees with the equality it was
+    written beside, which a subclass keeps when it is undecorated or decorated
+    ``eq=False``. A decorator with ``eq=True`` generates an equality over every
+    field, which that hash need not agree with -- an identity hash, or one
+    reading a ``compare=False`` field, does not -- so the class is marked for
+    :func:`_refuse_disagreeing_hash` to judge.
+
     A body that defines ``__eq__`` and leaves ``__hash__`` ``None`` -- Python
     writes that ``None`` itself when the body defines ``__eq__`` alone -- is
-    marked rather than judged. Under ``@dataclass`` with ``eq=True``,
-    ``dataclasses`` reads the pair as *implicit* and generates a field hash the
-    new equality does not agree with; under ``eq=False``, or with no decorator,
-    the ``None`` stays and the class is honest. Nothing here can see which
-    decorator follows, so :func:`_refuse_equality_without_hash` judges the class
-    at its first construction, by what the decorator did.
+    marked too. Under ``@dataclass`` with ``eq=True``, ``dataclasses`` reads the
+    pair as *implicit* and generates a field hash the new equality does not
+    agree with; under ``eq=False``, or with no decorator, the ``None`` stays and
+    the class is honest.
+
+    Nothing here can see which decorator follows, so both marks are judged at
+    the class's first construction, by what the decorator did.
 
     A class whose dict already holds ``__dataclass_params__`` is a rebuild,
     not a body: ``@dataclass(slots=True)`` recreates the decorated class from
     its dict, which runs this hook again over the ``__eq__`` the decorator
-    generated. Its hash was settled on the first pass, so it is left alone.
+    generated. Its hash was settled on the first pass, and its marks are in
+    the dict it was rebuilt from, so it is left alone.
     """
     if "__dataclass_params__" in cls.__dict__:
         return
     if "__hash__" not in cls.__dict__:
+        inherited = _hash_written_by_hand_above(cls)
         # Deliberate: see the docstring. Both codes are mypy objecting to the
         # assignment itself, which is the mechanism.
-        cls.__hash__ = _hash_written_by_hand_above(cls)  # type: ignore[method-assign]
+        cls.__hash__ = inherited  # type: ignore[method-assign]
+        if inherited is not None:
+            setattr(cls, _INHERITED_HASH, True)
     elif "__eq__" in cls.__dict__ and cls.__dict__["__hash__"] is None:
         setattr(cls, _EQUALITY_WITHOUT_HASH, True)
 
 
-#: Marks a class whose body defined ``__eq__`` and left ``__hash__`` ``None``,
-#: until :func:`_refuse_equality_without_hash` has judged it. A plain class
-#: attribute with no annotation, so ``dataclasses`` never makes it a field, and
-#: one ``slots=True`` carries into the class it rebuilds.
+#: Marks a class whose body defined ``__eq__`` and left ``__hash__`` ``None``.
+#: Like the two below, a plain class attribute with no annotation, so
+#: ``dataclasses`` never makes it a field, and one ``slots=True`` carries into
+#: the class it rebuilds.
 _EQUALITY_WITHOUT_HASH = "_structured_config_equality_without_hash"
 
+#: Marks a class handed a hash a config above it wrote by hand.
+_INHERITED_HASH = "_structured_config_inherited_hash"
 
-def _refuse_equality_without_hash(cls: type) -> None:
-    """Refuse a class whose ``__eq__`` came with a hash it does not agree with.
+#: Records, in a class's own dict, that it and every class above it were judged
+#: and accepted, so its later constructions skip the walk.
+_JUDGED = "_structured_config_judged"
 
-    Called on each construction, and cheap after the first: every marked class
-    in the MRO is judged once, by its own dict. A marked class still holding
-    ``None`` is honest -- its own equality, unhashable -- and is unmarked. One
-    holding a hash got it from ``@dataclass`` with ``eq=True``, over every
-    field, so the class is refused, and stays marked so it is refused each
-    time.
+
+def _refuse_disagreeing_hash(cls: type) -> None:
+    """Refuse a class whose hash and equality need not agree.
+
+    Called on each construction and paid once per class: a class judged
+    acceptable is recorded in its own dict and returns at once after that. A
+    refused class is never recorded, so it is refused each time. Every marked
+    class in the MRO is judged by its own dict, which holds what its decorator
+    did:
+
+    - marked for ``__eq__`` without a hash, and now holding a hash: the
+      decorator was ``eq=True`` and generated one over every field;
+    - marked for an inherited hash, and now holding an ``__eq__``: the
+      decorator was ``eq=True`` and generated an equality the hash was not
+      written for.
     """
+    if cls.__dict__.get(_JUDGED):
+        return
     for owner in cls.__mro__:
-        if not owner.__dict__.get(_EQUALITY_WITHOUT_HASH):
-            continue
-        if owner.__dict__.get("__hash__") is None:
-            setattr(owner, _EQUALITY_WITHOUT_HASH, False)
-            continue
-        raise TypeError(
-            f"{owner.__qualname__} defines __eq__ and no __hash__ of its own, "
-            "so its @dataclass generated a hash over every field, which that "
-            "__eq__ does not agree with. Define __hash__ consistent with "
-            "__eq__; or declare @dataclass(eq=False) to keep this __eq__ and "
-            "stay unhashable; or leave __eq__ to the dataclass."
-        )
+        found = owner.__dict__
+        if found.get(_EQUALITY_WITHOUT_HASH) and found.get("__hash__") is not None:
+            raise TypeError(
+                f"{owner.__qualname__} defines __eq__ and no __hash__ of its own, "
+                "so its @dataclass generated a hash over every field, which that "
+                "__eq__ does not agree with. Define __hash__ consistent with "
+                "__eq__; or declare @dataclass(eq=False) to keep this __eq__ and "
+                "stay unhashable; or leave __eq__ to the dataclass."
+            )
+        if found.get(_INHERITED_HASH) and "__eq__" in found:
+            source = next(
+                above.__qualname__ for above in owner.__mro__[1:] if "__hash__" in above.__dict__
+            )
+            raise TypeError(
+                f"{owner.__qualname__} inherits {source}'s __hash__, written by "
+                "hand, but its @dataclass generated an __eq__ over every field, "
+                "which that hash need not agree with. Write __hash__ and __eq__ "
+                f"in its body; or declare @dataclass(eq=False) to keep {source}'s "
+                "equality and its hash together."
+            )
+    setattr(cls, _JUDGED, True)
 
 
 def _validate_policy_declaration(cls: type) -> None:
@@ -861,11 +902,13 @@ class StructuredConfig:
     unfreeze a frozen base. So :meth:`__init_subclass__` sets ``__hash__`` to
     ``None`` on every subclass before its ``@dataclass`` runs, and the check
     answers False for the whole family, whatever one value happens to hold. A
-    subclass that writes ``__hash__`` in its body keeps it, should write
-    ``__eq__`` to match, and hands it to its own subclasses. One that writes
-    ``__eq__`` alone keeps it and stays unhashable under ``eq=False``, and is
-    refused at its first construction under ``eq=True``, where the decorator
-    would pair it with a hash over every field.
+    subclass that writes ``__hash__`` in its body keeps it and should write
+    ``__eq__`` to match. Its own subclasses inherit the two together when they
+    keep that equality, undecorated or ``eq=False``, and are refused at their
+    first construction when their decorator generates a new one. One that
+    writes ``__eq__`` alone keeps it and stays unhashable under ``eq=False``,
+    and is refused at its first construction under ``eq=True``, where the
+    decorator would pair it with a hash over every field.
     """
 
     #: Field names masked by :meth:`_redacted_repr`. Empty by default,
@@ -925,13 +968,19 @@ class StructuredConfig:
     _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset()
 
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
-        """Refuse a subclass whose ``__eq__`` and generated hash disagree.
+        """Refuse a subclass whose hash and equality need not agree.
 
         The one check that has to wait for the decorator: see
-        :func:`_refuse_equality_without_hash`. The arguments belong to the
+        :func:`_refuse_disagreeing_hash`. The arguments belong to the
         generated ``__init__``, so none is passed on.
+
+        Two things fall outside it. A subclass ``__new__`` that does not call
+        this one skips the check, as it skips every base's construction. And
+        until a class's first construction, ``issubclass(cls, Hashable)``
+        answers by the hash the decorator left, which for a class about to be
+        refused is a hash no instance will ever be built to use.
         """
-        _refuse_equality_without_hash(cls)
+        _refuse_disagreeing_hash(cls)
         return super().__new__(cls)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:

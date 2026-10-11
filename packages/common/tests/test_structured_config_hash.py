@@ -1,11 +1,11 @@
 """A :class:`StructuredConfig` is compared field by field and is not hashable.
 
-The base is ``@dataclass(frozen=True)`` with equality on, and every subclass is
-the same. Left alone, ``dataclasses`` gives each one a ``__hash__`` over its
-field tuple, so the type answers :class:`collections.abc.Hashable` True whatever
-its fields hold, and ``hash()`` raises the moment one of them is a list or a
-mapping. A config holding containers is the normal case, so the check would be
-wrong for most of the family.
+Every subclass is a frozen dataclass with equality on. Left alone,
+``dataclasses`` gives each one a ``__hash__`` over its field tuple, so the type
+answers :class:`collections.abc.Hashable` True whatever its fields hold, and
+``hash()`` raises the moment one of them is a list or a mapping. A config
+holding containers is the normal case, so the check would be wrong for most of
+the family.
 
 Equality cannot be the part that gives: ``from_dict(to_dict()) == cfg`` is the
 base's own contract. So every subclass is declared unhashable, by
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from dataknobs_common.structured_config import StructuredConfig
+from dataknobs_common.structured_config import _JUDGED, StructuredConfig
 from dataknobs_common.testing import assert_structured_config_roundtrip
 
 
@@ -253,11 +253,11 @@ class TestAHashWrittenByHandIsInherited:
     """A subclass of a config that writes its own hash inherits that hash.
 
     Every subclass's dict holds either ``None`` or a hash its body wrote, so an
-    inherited hash that is not ``None`` was written by hand. Handing it on keeps
-    an undecorated subclass's equality and hash in step, since it inherits the
-    equality too. A decorated subclass compares every field, which is finer than
-    the parent's equality, so two equal instances also agree on the parent's
-    hash.
+    inherited hash that is not ``None`` was written by hand. It agrees only with
+    the equality it was written beside, so it is handed on to a subclass that
+    keeps that equality -- undecorated, or decorated ``eq=False`` -- and a
+    subclass whose ``@dataclass`` generates an equality of its own is refused at
+    its first construction, as one that writes ``__eq__`` alone is.
     """
 
     def test_an_undecorated_subclass_keeps_the_hash_and_the_equality(self) -> None:
@@ -268,13 +268,76 @@ class TestAHashWrittenByHandIsInherited:
         assert a == b
         assert hash(a) == hash(b)
 
-    def test_a_decorated_subclass_hashes_consistently_with_its_field_equality(self) -> None:
+    def test_a_subclass_decorated_eq_false_keeps_them_too(self) -> None:
+        @dataclass(frozen=True, eq=False)
+        class Labelled(ByVersion):
+            label: str = "x"
+
+        a, b = Labelled(version=2, label="y"), Labelled(version=2, label="z")
+        assert a == b
+        assert hash(a) == hash(b)
+
+    def test_a_subclass_whose_decorator_generates_equality_is_refused(self) -> None:
+        """Its field equality and the parent's hash need not agree.
+
+        Equal under the parent's identity hash is the plainest case: two
+        instances holding the same fields compare equal and hash apart.
+        """
+
+        @dataclass(frozen=True, eq=False)
+        class Handle(StructuredConfig):
+            n: int = 0
+
+            __hash__ = object.__hash__
+
+        @dataclass(frozen=True)
+        class Child(Handle):
+            pass
+
+        with pytest.raises(TypeError, match=r"Child inherits .*Handle's __hash__.*eq=False"):
+            Child()
+
+    def test_so_is_one_below_a_field_hash(self) -> None:
+        """A hash that reads only fields is no exception: nothing here can see which."""
+
         @dataclass(frozen=True)
         class Decorated(ByVersion):
             label: str = "x"
 
-        assert Decorated(version=2, label="y") == Decorated(version=2, label="y")
-        assert hash(Decorated(version=2, label="y")) == hash(Decorated(version=2, label="z"))
+        with pytest.raises(TypeError, match=r"Decorated inherits ByVersion's __hash__"):
+            Decorated()
+
+    def test_a_subclass_below_a_refused_one_is_refused_too(self) -> None:
+        @dataclass(frozen=True)
+        class Decorated(ByVersion):
+            label: str = "x"
+
+        class Below(Decorated):
+            pass
+
+        with pytest.raises(TypeError, match=r"Decorated inherits ByVersion's __hash__"):
+            Below()
+
+    def test_a_slotted_subclass_is_judged_the_same_way(self) -> None:
+        @dataclass(frozen=True, slots=True)
+        class Decorated(ByVersion):
+            label: str = "x"
+
+        with pytest.raises(TypeError, match=r"Decorated inherits ByVersion's __hash__"):
+            Decorated()
+
+    def test_a_subclass_writing_both_is_accepted(self) -> None:
+        @dataclass(frozen=True)
+        class Relabelled(ByVersion):
+            label: str = "x"
+
+            def __eq__(self, other: object) -> bool:
+                return isinstance(other, Relabelled) and other.label == self.label
+
+            def __hash__(self) -> int:
+                return hash(self.label)
+
+        assert hash(Relabelled(version=1)) == hash(Relabelled(version=2))
 
     def test_a_hash_from_a_mixin_that_is_not_a_config_is_not_inherited(self) -> None:
         """Only a hash a config wrote is the family's opt-out."""
@@ -288,6 +351,44 @@ class TestAHashWrittenByHandIsInherited:
             n: int = 0
 
         assert not isinstance(Mixed(), Hashable)
+
+
+class TestAClassIsJudgedOnce:
+    """The judgement at construction is paid by a class's first instance only."""
+
+    def test_an_accepted_class_is_recorded_as_judged(self) -> None:
+        @dataclass(frozen=True)
+        class Plain(StructuredConfig):
+            n: int = 0
+
+        assert _JUDGED not in Plain.__dict__
+        Plain()
+        assert Plain.__dict__[_JUDGED] is True
+
+    def test_a_refused_class_is_never_recorded(self) -> None:
+        @dataclass(frozen=True)
+        class Decorated(ByVersion):
+            label: str = "x"
+
+        for _ in range(2):
+            with pytest.raises(TypeError):
+                Decorated()
+        assert _JUDGED not in Decorated.__dict__
+
+    def test_a_subclass_is_judged_for_itself(self) -> None:
+        """A parent's record does not cover a child refused on its own account."""
+
+        class Undecorated(ByVersion):
+            pass
+
+        Undecorated()
+
+        @dataclass(frozen=True)
+        class Child(Undecorated):
+            pass
+
+        with pytest.raises(TypeError, match=r"Child inherits .*Undecorated's __hash__"):
+            Child()
 
 
 class TestEqFalseMeansIdentity:
