@@ -10,7 +10,10 @@ the key, and it refuses a value it cannot identify rather than guess.
 
 from __future__ import annotations
 
+import datetime
+import decimal
 import enum
+import fractions
 import pathlib
 import subprocess
 import sys
@@ -61,6 +64,74 @@ class Twin(StructuredConfig):
     """The same fields as ``Inner``, under another name."""
 
     name: str = "inner"
+
+
+@dataclass(frozen=True)
+class Streaming(StructuredConfig):
+    model: str = "m"
+    on_token: Any = None
+
+    _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset({"on_token"})
+
+
+@dataclass(frozen=True)
+class Misspelt(StructuredConfig):
+    model: str = "m"
+
+    _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset({"modle"})
+
+
+class Endpoint:
+    """A value type a config holds and knows how to identify."""
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+@dataclass(frozen=True)
+class Client(StructuredConfig):
+    endpoint: Any = None
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        if isinstance(value, Endpoint):
+            return value.url
+        return super()._fingerprint_value(value, path)
+
+
+@dataclass(frozen=True)
+class Echoing(StructuredConfig):
+    """Hands back what it was given: the encoding must refuse, not loop."""
+
+    endpoint: Any = None
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        return value
+
+
+@dataclass(frozen=True)
+class Wrapping(StructuredConfig):
+    """Wraps what it was given, which re-entering the hook would wrap forever."""
+
+    endpoint: Any = None
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        return [type(value).__name__, value]
+
+
+@dataclass(frozen=True)
+class Timed(StructuredConfig):
+    model: str = "m"
+    note: str = field(default="", compare=False)
+
+
+def a_factory_class() -> type[StructuredConfig]:
+    """A config class built inside a function: no import reaches it."""
+
+    @dataclass(frozen=True)
+    class Made(StructuredConfig):
+        n: int = 1
+
+    return Made
 
 
 def module_level_hook() -> None:
@@ -179,25 +250,12 @@ class TestTypesAndFunctionsAreNamedByImportPath:
 
 class TestExtendingIt:
     def test_excluded_fields_are_left_out(self) -> None:
-        @dataclass(frozen=True)
-        class Streaming(StructuredConfig):
-            model: str = "m"
-            on_token: Any = None
-
-            _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset({"on_token"})
-
         assert (
             Streaming(on_token=lambda t: None).fingerprint()
             == Streaming(on_token=print).fingerprint()
         )
 
     def test_an_excluded_name_that_is_no_field_is_refused(self) -> None:
-        @dataclass(frozen=True)
-        class Misspelt(StructuredConfig):
-            model: str = "m"
-
-            _FINGERPRINT_EXCLUDE: ClassVar[frozenset[str]] = frozenset({"modle"})
-
         with pytest.raises(ValueError, match=r"modle"):
             Misspelt().fingerprint()
 
@@ -211,44 +269,125 @@ class TestExtendingIt:
                 _FINGERPRINT_EXCLUDE: ClassVar[Any] = "model"
 
     def test_a_config_can_encode_a_value_type_of_its_own(self) -> None:
-        class Endpoint:
-            def __init__(self, url: str) -> None:
-                self.url = url
-
-        @dataclass(frozen=True)
-        class Client(StructuredConfig):
-            endpoint: Any = None
-
-            def _fingerprint_value(self, value: Any, path: str) -> Any:
-                if isinstance(value, Endpoint):
-                    return value.url
-                return super()._fingerprint_value(value, path)
-
         a = Client(endpoint=Endpoint("https://a"))
         assert a.fingerprint() == Client(endpoint=Endpoint("https://a")).fingerprint()
         assert a.fingerprint() != Client(endpoint=Endpoint("https://b")).fingerprint()
 
+    def test_what_the_extension_returns_is_kept_apart_from_a_plain_value(self) -> None:
+        """An endpoint encoded as its URL is not the URL held as a string."""
+        assert Client(endpoint=Endpoint("u")) != Client(endpoint="u")
+        assert Client(endpoint=Endpoint("u")).fingerprint() != Client(endpoint="u").fingerprint()
+
     def test_what_the_extension_returns_must_be_encodable(self) -> None:
-        @dataclass(frozen=True)
-        class Client(StructuredConfig):
-            endpoint: Any = None
+        with pytest.raises(TypeError, match=r"Echoing\.endpoint"):
+            Echoing(endpoint=object()).fingerprint()
 
-            def _fingerprint_value(self, value: Any, path: str) -> Any:
-                return value
-
-        with pytest.raises(TypeError, match=r"Client\.endpoint"):
-            Client(endpoint=object()).fingerprint()
+    def test_the_extension_is_consulted_once_per_value(self) -> None:
+        """What it returns is encoded without it, however deep the value sits."""
+        with pytest.raises(TypeError, match=r"Wrapping\.endpoint"):
+            Wrapping(endpoint=object()).fingerprint()
 
     def test_a_field_equality_ignores_is_ignored_too(self) -> None:
         """Equal configs share a fingerprint, so ``compare=False`` reaches it."""
-
-        @dataclass(frozen=True)
-        class Timed(StructuredConfig):
-            model: str = "m"
-            note: str = field(default="", compare=False)
-
         assert Timed(note="a") == Timed(note="b")
         assert Timed(note="a").fingerprint() == Timed(note="b").fingerprint()
+
+
+class TestATypeNoImportReachesIsRefused:
+    """A class defined inside a function shares its name with every other one.
+
+    Two calls of one factory make two classes of one name, which compare
+    unequal; a fingerprint naming them by that name would make them one key.
+    """
+
+    def test_a_config_class_built_in_a_function(self) -> None:
+        a, b = a_factory_class()(), a_factory_class()()
+        assert a != b
+        with pytest.raises(TypeError, match=r"Made.*module level"):
+            a.fingerprint()
+
+    def test_a_nested_config_of_such_a_class(self) -> None:
+        with pytest.raises(TypeError, match=r"Service\.hook"):
+            Service(hook=a_factory_class()()).fingerprint()
+
+    def test_a_dataclass_of_such_a_class(self) -> None:
+        @dataclass(frozen=True)
+        class Local:
+            n: int = 1
+
+        with pytest.raises(TypeError, match=r"Service\.hook"):
+            Service(hook=Local()).fingerprint()
+
+    def test_an_enum_of_such_a_class(self) -> None:
+        class Local(enum.Enum):
+            A = 1
+
+        with pytest.raises(TypeError, match=r"Service\.hook"):
+            Service(hook=Local.A).fingerprint()
+
+
+class TestValuesPythonCallsEqualShareOne:
+    """Equal field values encode alike, whatever type spelled them."""
+
+    def test_an_int_from_yaml_where_the_default_is_a_float(self) -> None:
+        restored = RetryConfig.from_dict({"initial_delay": 1})
+        assert restored == RetryConfig()
+        assert restored.fingerprint() == RetryConfig().fingerprint()
+
+    @pytest.mark.parametrize(
+        ("a", "b"),
+        [
+            (True, 1),
+            (1, 1.0),
+            (0.0, -0.0),
+            (decimal.Decimal("1.0"), decimal.Decimal("1.00")),
+            (decimal.Decimal("0.5"), 0.5),
+            (fractions.Fraction(1, 2), 0.5),
+            (float("inf"), decimal.Decimal("Infinity")),
+            (bytearray(b"ab"), b"ab"),
+            (pathlib.PurePosixPath("/a"), pathlib.PosixPath("/a")),
+            (
+                datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.UTC),
+                datetime.datetime(
+                    2026, 1, 1, 13, tzinfo=datetime.timezone(datetime.timedelta(hours=1))
+                ),
+            ),
+        ],
+    )
+    def test_equal_values(self, a: Any, b: Any) -> None:
+        assert Service(hook=a) == Service(hook=b)
+        assert Service(hook=a).fingerprint() == Service(hook=b).fingerprint()
+
+    @pytest.mark.parametrize(
+        ("a", "b"),
+        [
+            (decimal.Decimal("0.1"), 0.1),
+            (0.5, "0.5"),
+            (1, "1"),
+            (
+                datetime.datetime(2026, 1, 1, 12),
+                datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.UTC),
+            ),
+            (datetime.date(2026, 1, 1), datetime.datetime(2026, 1, 1)),
+            (pathlib.PurePosixPath("/a"), pathlib.PureWindowsPath("/a")),
+        ],
+    )
+    def test_unequal_values(self, a: Any, b: Any) -> None:
+        assert Service(hook=a) != Service(hook=b)
+        assert Service(hook=a).fingerprint() != Service(hook=b).fingerprint()
+
+    @pytest.mark.parametrize("nan", [float("nan"), decimal.Decimal("NaN")])
+    def test_nan_is_refused(self, nan: Any) -> None:
+        """NaN is unequal to itself, so no key can stand for it."""
+        with pytest.raises(ValueError, match=r"Service\.hook.*NaN"):
+            Service(hook=nan).fingerprint()
+
+
+def test_a_value_that_holds_itself_is_refused() -> None:
+    looped: list[Any] = []
+    looped.append(looped)
+    with pytest.raises(ValueError, match=r"Service\.tags\[0\].*holds itself"):
+        Service(tags=looped).fingerprint()
 
 
 def test_the_encoding_is_pinned() -> None:
@@ -260,4 +399,4 @@ def test_the_encoding_is_pinned() -> None:
 
 
 #: Written when the encoding was; see the test above.
-_PINNED = "9d994f75564f687abde83416e46299d64d0a94afcc5cc57e255f8c11f382c853"
+_PINNED = "48160c98eb794a0899430f7e0d5a17bf85e1d97e71d5ec6422efe37426ac87f2"
