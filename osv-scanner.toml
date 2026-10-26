@@ -1,0 +1,42 @@
+# osv-scanner configuration — accepted advisories.
+#
+# osv-scanner reads this file automatically for any lockfile in this
+# directory, so it applies to both audits in
+# .github/workflows/dependency-update.yml and to bin/audit-floor.sh.
+#
+# An entry belongs here only when ALL of these hold (policy:
+# docs/development/dependency-updates.md, "Accepting an Advisory With No Fix"):
+#
+#   1. No fixed version exists — a floor bump cannot clear it.
+#   2. The flawed code path is not reachable from this workspace.
+#   3. The declaring pyproject.toml carries the full triage as an inline
+#      comment on the dependency, and `reason` below points at it.
+#   4. `ignoreUntil` is at most 90 days out, so the scanner resurfaces the
+#      advisory for re-triage instead of hiding it indefinitely.
+#
+# When upstream ships a fix, delete the entry and bump the floor instead.
+
+# chromadb: four server-mode advisories, last_affected=1.5.9 (the latest
+# release). ChromaVectorStore builds only in-process PersistentClient /
+# Client instances; HttpClient appears nowhere in the workspace. Triage:
+# packages/data/pyproject.toml, the chromadb entry.
+
+[[IgnoredVulns]]
+id = "GHSA-f4j7-r4q5-qw2c"  # PYSEC-2026-311 / CVE-2026-45829
+ignoreUntil = 2027-01-25
+reason = "chromadb pre-auth code injection via the server collections endpoint; no fix through 1.5.9; server mode is unreachable here — see packages/data/pyproject.toml"
+
+[[IgnoredVulns]]
+id = "GHSA-36p7-vc44-83pf"  # PYSEC-2026-3814 / CVE-2026-45833
+ignoreUntil = 2027-01-25
+reason = "chromadb code injection via trust_remote_code on the server collection endpoint; no fix through 1.5.9; server mode is unreachable here — see packages/data/pyproject.toml"
+
+[[IgnoredVulns]]
+id = "GHSA-2wm9-hf6c-p5cr"  # PYSEC-2026-3813 / CVE-2026-45830
+ignoreUntil = 2027-01-25
+reason = "chromadb server missing cross-tenant authorization; no fix through 1.5.9; server mode is unreachable here — see packages/data/pyproject.toml"
+
+[[IgnoredVulns]]
+id = "GHSA-xph7-9rjv-w5fr"  # PYSEC-2026-3815 / CVE-2026-45831
+ignoreUntil = 2027-01-25
+reason = "chromadb SimpleRBACAuthorizationProvider ignores permission scope; no fix through 1.5.9; server mode is unreachable here — see packages/data/pyproject.toml"

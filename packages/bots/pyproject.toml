@@ -49,7 +49,7 @@ faiss = [
 # aiobotocore chain, or a sibling package's own extra), so no floor
 # governed the version an `HTTPRegistryBackend` user actually got.
 http = [
-    "aiohttp>=3.14.3",  # matches the dataknobs-llm / dataknobs-fsm floors: GHSA-cq5v-8q36-5273 / CVE-2026-69244 (CVSS 7.1, out-of-bounds heap read in the C response parser's malformed-chunked error path -> client-side DoS) is fixed in 3.14.3 and is reachable here, since HTTPRegistryBackend is an outbound ClientSession parsing responses from a consumer-configured registry server and the AIOHTTP_NO_EXTENSIONS=1 workaround is not set. Also sweeps the 3.14.2 fixes GHSA-mfx4-hv73-q22v (CVSS 6.3, request smuggling via WebSocket upgrade, server-side component only) and GHSA-mq44-7p77-q5h7 (CVSS 6.9, WebSocket client RSV1 decompression without negotiated permessage-deflate; no ws_connect call sites), plus the prior <=3.14.1 sweep (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf)
+    "aiohttp>=3.14.4",  # 3.14.4 sweeps eight advisories, all triaged unreachable here (no aiohttp.web server in packages/*/src, no CookieJar / cookies= use, the default C parser is in use): server-side GHSA-2g87-pp6c-29x5 (CVSS 8.7, unbounded memory/CPU on crafted requests), GHSA-5wr8-gcqf-gqf3 / CVE-2026-111064 (CVSS 8.2, no initial request/header timeout), GHSA-9xw5-w5jj-pvcg / CVE-2026-111066 (CVSS 8.2, multipart fd exhaustion via Request.post()), GHSA-f9xw-jh8m-3mwq / CVE-2026-111748 (CVSS 6.3, absolute-form Request.scheme spoof) and GHSA-pqxq-w44r-73xw / CVE-2026-111750 (CVSS 6.3, pure-Python parser request smuggling); client cookie-jar GHSA-494j-54xm-rwp3 / CVE-2026-111063 (Secure not enforced for shared cookie), GHSA-6cjc-53gc-5rqm / CVE-2026-111065 (CVSS 6.9, Max-Age overflow skips connection close) and GHSA-gx76-c99x-2c96 / CVE-2026-111749 (CVSS 2.3, subdomain strips Host-Only scope). Extends the prior 3.14.3 floor: matches the dataknobs-llm / dataknobs-fsm floors: GHSA-cq5v-8q36-5273 / CVE-2026-69244 (CVSS 7.1, out-of-bounds heap read in the C response parser's malformed-chunked error path -> client-side DoS) is fixed in 3.14.3 and is reachable here, since HTTPRegistryBackend is an outbound ClientSession parsing responses from a consumer-configured registry server and the AIOHTTP_NO_EXTENSIONS=1 workaround is not set. Also sweeps the 3.14.2 fixes GHSA-mfx4-hv73-q22v (CVSS 6.3, request smuggling via WebSocket upgrade, server-side component only) and GHSA-mq44-7p77-q5h7 (CVSS 6.9, WebSocket client RSV1 decompression without negotiated permessage-deflate; no ws_connect call sites), plus the prior <=3.14.1 sweep (highest CVSS 9.1: GHSA-63hf-3vf5-4wqf)
 ]
 # `dataknobs-bots[postgres]` covers every Postgres-backed bots feature:
 # the registry storage backends (`registry.create_registry_backend` /
@@ -123,7 +123,7 @@ dev = [
     # explicitly so those tests do not depend on aiohttp arriving
     # transitively through aioboto3 -> aiobotocore; pinned to match the
     # [http] extra's CVE floor (see the comment there).
-    "aiohttp>=3.14.3",
+    "aiohttp>=3.14.4",
     # aioboto3 backs the S3 knowledge backend's async transport. The dev
     # group needs it installed so the LocalStack-gated S3 integration
     # tests exercise the real async client path (mock_aws is incompatible

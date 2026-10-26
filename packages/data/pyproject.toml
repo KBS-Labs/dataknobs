@@ -60,7 +60,7 @@ parquet = [
 # by store also keeps `chromadb` (see its comment) out of an install that
 # only needs FAISS or pgvector.
 chroma = [
-    "chromadb>=1.0.0",  # ChromaVectorStore targets the 1.x API. Four advisories affect 1.0.0–1.5.9 with no upstream fix as of 2026-09-07 (1.5.9 is still the latest release, so no floor bump can clear any of them), and all four are server-mode findings that this package does not reach: GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311 (CVSS 9.3, pre-auth code injection via the /api/v2/... endpoint), GHSA-36p7-vc44-83pf / CVE-2026-45833 (CVSS 9.4, code injection via a malicious model repository with trust_remote_code on the collections endpoint, requiring the UPDATE_COLLECTION permission), GHSA-2wm9-hf6c-p5cr / CVE-2026-45830 (CVSS 8.8, missing authorization lets any authenticated user read/write any tenant's collection) and GHSA-xph7-9rjv-w5fr / CVE-2026-45831 (CVSS 8.8, SimpleRBACAuthorizationProvider never checks which tenant/database/collection a permission applies to). Accepted: every one requires the Chroma server's HTTP API and its tenant/RBAC layer, and ChromaVectorStore constructs only chromadb.PersistentClient / chromadb.Client — HttpClient appears nowhere in this workspace, so no server, endpoint or authorization provider is involved
+    "chromadb>=1.0.0",  # ChromaVectorStore targets the 1.x API. Four advisories affect 1.0.0–1.5.9 with no upstream fix as of 2026-10-26 (1.5.9, released 2026-05-05, is still the latest release and OSV records last_affected=1.5.9, so no floor bump can clear any of them), and all four are server-mode findings that this package does not reach: GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311 / CVE-2026-45829 (CVSS 10.0, public PoC, pre-auth code injection via the /api/v2/... endpoint), GHSA-36p7-vc44-83pf / CVE-2026-45833 (CVSS 9.4, code injection via a malicious model repository with trust_remote_code on the collections endpoint, requiring the UPDATE_COLLECTION permission), GHSA-2wm9-hf6c-p5cr / CVE-2026-45830 (CVSS 8.8, missing authorization lets any authenticated user read/write any tenant's collection) and GHSA-xph7-9rjv-w5fr / CVE-2026-45831 (CVSS 8.8, SimpleRBACAuthorizationProvider never checks which tenant/database/collection a permission applies to). Accepted: every one requires the Chroma server's HTTP API and its tenant/RBAC layer, and ChromaVectorStore constructs only chromadb.PersistentClient / chromadb.Client — HttpClient appears nowhere in this workspace, so no server, endpoint or authorization provider is involved. The acceptance is recorded in the root osv-scanner.toml with an ignoreUntil expiry, so both audits filter these four until it lapses and forces a re-triage
 ]
 faiss = [
     "faiss-cpu>=1.8.0",  # FaissVectorStore's backend; numpy is already a base dependency, so this is the whole requirement
@@ -82,7 +82,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-mock>=3.11.0",
-    "black>=26.3.1",  # PYSEC-2024-48, GHSA-3936-cmfr-pm3m (CVSS 8.7) fixed by 26.3.1
+    "black>=26.10.1",  # GHSA-cg8m-r9f2-5wm2 / CVE-2026-114134 (CVSS 8.7, the bundled GitHub Action installs an unvalidated tool.black.required-version) fixed in 26.10.1 — unreachable here (no workflow uses the Black action), but the floor moves for consumers. Extends the prior 26.3.1 floor (PYSEC-2024-48, GHSA-3936-cmfr-pm3m, CVSS 8.7)
     "ruff>=0.8.0",
     "mypy>=1.0.0",
     "moto>=4.2.0",  # For S3 testing

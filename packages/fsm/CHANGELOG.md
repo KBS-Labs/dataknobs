@@ -813,6 +813,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Bumped minimum `aiohttp` requirement in the `http` extra from
+  `>=3.14.3` to `>=3.14.4` to exclude versions affected by eight advisories
+  fixed in 3.14.4 (highest CVSS 8.7: GHSA-2g87-pp6c-29x5). Five are in the
+  server: GHSA-2g87-pp6c-29x5 (unbounded memory or CPU use on crafted
+  requests), GHSA-5wr8-gcqf-gqf3 / CVE-2026-111064 (no timeout before the
+  first request bytes arrive), GHSA-9xw5-w5jj-pvcg / CVE-2026-111066
+  (file-descriptor exhaustion through multipart `Request.post()`),
+  GHSA-f9xw-jh8m-3mwq / CVE-2026-111748 (absolute-form request targets spoof
+  `Request.scheme`) and GHSA-pqxq-w44r-73xw / CVE-2026-111750 (request
+  smuggling in the pure-Python parser). Three are in client cookie handling:
+  GHSA-494j-54xm-rwp3 / CVE-2026-111063 (`Secure` not enforced for a shared
+  cookie), GHSA-6cjc-53gc-5rqm / CVE-2026-111065 (a `Max-Age` overflow skips
+  closing a connection) and GHSA-gx76-c99x-2c96 / CVE-2026-111749 (a subdomain
+  can strip a cookie's host-only scope).
+
+  None is reachable from this package: it runs no `aiohttp.web` server, uses
+  no cookie jar and passes no `cookies=`, and runs the default C parser. The
+  extra still ships the dependency to consumers, so the floor moves. Surfaced
+  by the floor-resolve audit (`bin/audit-floor.sh`).
+
+- Bumped minimum `black` requirement in the `dev` extra from `>=26.3.1` to
+  `>=26.10.1` to exclude versions affected by GHSA-cg8m-r9f2-5wm2 /
+  CVE-2026-114134 (CVSS 8.7). Black's bundled GitHub Action installs whatever
+  version `tool.black.required-version` names in `pyproject.toml` without
+  validating it, so a crafted value runs untrusted code in the victim
+  repository's workflow. Not reachable from this package, since no workflow
+  here uses the Black action, but the `dev` extra ships the dependency to
+  consumers. Surfaced by the floor-resolve audit (`bin/audit-floor.sh`).
+
 - Bumped minimum `openai` (`>=1.0.0` → `>=1.3.8`) and `anthropic`
   (`>=0.7.0` → `>=0.7.8`) requirements in the `llm` extra. Neither package has
   an advisory of its own; both floors move because the versions below them
