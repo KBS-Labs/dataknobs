@@ -446,6 +446,12 @@ ignore = [
     "PLR0915", # [presentational] Too many statements (configured at 50)
     "PLR2004", # [presentational] Magic value used in comparison
     "PLR5501", # [presentational] Use elif instead of else-if - style preference
+               # Unsafe only where the `else:` line carries a trailing comment,
+               # which the fix deletes along with the line. Driven on both such
+               # sites: `else:  # HYBRID mode` and `else:  # close` become `elif`
+               # chains testing the same conditions in the same order and
+               # running the same bodies -- the loss is the comment, not a
+               # branch. 31 findings, 2 of them the unsafe kind.
     "PLR1714", # [behavioural] Consider merging multiple comparisons
                # ruff: "always unsafe since literal sets and tuples evaluate their
                # members eagerly whereas `or` comparisons are short-circuited",
