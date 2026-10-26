@@ -1,21 +1,10 @@
 {
-  "timestamp": "2026-10-13T16:24:09Z",
+  "timestamp": "2026-10-26T15:23:15Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [
-    "bots",
-    "common",
-    "config",
-    "data",
-    "fsm",
-    "legacy",
-    "llm",
-    "structures",
-    "utils",
-    "xization"
-  ],
+  "packages": "all",
+  "tested_packages": [],
   "coverage_percent": null,
   "package_hashes": {
     "bots": "2af93edb611a4b9b0c2e37a882ebc267e8a820f71680eca325e889acb5b86346",
@@ -34,10 +23,10 @@
     "toolchain": "b0ac6946f6fc5a494808cd13185cb3945ad90ef6d45819f6faa1600aa3bf6139",
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
-    "workspace_tests": "ea83164947a07424f49cef533e096b005e8830d95472f74e9dcfdc5fbe94fcf4",
+    "workspace_tests": "f00c4d2b6ea5001bd092047a01eb1a7b7be2e1674fb976754de8a5f54fbcdd40",
     "docs": "766281a6c883dc4a3d6dc08bc6807ffdb99dc2caabdff87cdec8c983bf143d89"
   },
-  "total_seconds": 385,
+  "total_seconds": 121,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -55,14 +44,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 7
+      "duration_seconds": 5
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 99
+      "duration_seconds": 9
     },
     "documentation": {
       "status": "pass",
@@ -89,14 +78,14 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 217,
-      "workspace_guards_seconds": 97
+      "duration_seconds": 99,
+      "workspace_guards_seconds": 99
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 52
+      "skipped": true,
+      "duration_seconds": null
     }
   }
 }
