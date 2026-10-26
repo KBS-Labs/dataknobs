@@ -180,6 +180,11 @@ Both sets of findings go into the pull request body. A finding against the floor
 resolve means a declared lower bound in some `pyproject.toml` needs raising, not
 that the lockfile needs regenerating.
 
+Advisories with no upstream fix that have been triaged as unreachable are
+accepted in the root `osv-scanner.toml`, each with an expiry date, and both
+audits filter them. See
+[Accepting an Advisory With No Fix](dependency-updates.md#accepting-an-advisory-with-no-fix).
+
 The workflow handles Python dependencies only. Updating workflow files would
 require `workflows: write`, which is intentionally not granted; GitHub Actions
 versions are Dependabot's job instead.

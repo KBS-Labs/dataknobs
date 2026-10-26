@@ -2532,24 +2532,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Recorded three further `chromadb` advisories against the existing
-  accepted-risk rationale on the `>=1.0.0` floor:
-  GHSA-36p7-vc44-83pf / CVE-2026-45833 (CVSS 9.4, code injection via a
-  malicious model repository with `trust_remote_code` on the collections
+- Bumped minimum `black` requirement in the `dev` extra from `>=26.3.1` to
+  `>=26.10.1` to exclude versions affected by GHSA-cg8m-r9f2-5wm2 /
+  CVE-2026-114134 (CVSS 8.7). Black's bundled GitHub Action installs whatever
+  version `tool.black.required-version` names in `pyproject.toml` without
+  validating it, so a crafted value runs untrusted code in the victim
+  repository's workflow. Not reachable from this package, since no workflow
+  here uses the Black action, but the `dev` extra ships the dependency to
+  consumers. Surfaced by the floor-resolve audit (`bin/audit-floor.sh`).
+
+- **Four `chromadb` advisories are accepted rather than fixed,** and the
+  acceptance is now recorded where the scanner reads it, in the root
+  `osv-scanner.toml`, with an expiry of 2027-01-25:
+  GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311 / CVE-2026-45829 (CVSS 10.0, public
+  proof of concept: pre-auth code injection via the server's collections
+  endpoint), GHSA-36p7-vc44-83pf / CVE-2026-45833 (CVSS 9.4, code injection via
+  a malicious model repository with `trust_remote_code` on the collections
   endpoint), GHSA-2wm9-hf6c-p5cr / CVE-2026-45830 (CVSS 8.8, missing
   authorization lets any authenticated user read or write any tenant's
   collection) and GHSA-xph7-9rjv-w5fr / CVE-2026-45831 (CVSS 8.8,
   `SimpleRBACAuthorizationProvider` never checks which tenant, database or
-  collection a permission applies to). They join GHSA-f4j7-r4q5-qw2c /
-  PYSEC-2026-311 (CVSS 9.3), which the floor comment already carried.
+  collection a permission applies to).
 
-  No floor bump can clear any of them: all four affect 1.0.0 through 1.5.9 and
-  1.5.9 is still the latest release. All four are accepted on the same basis
-  as the original — each requires the Chroma server's HTTP API and its
-  tenant/RBAC layer, whereas `ChromaVectorStore` constructs only
+  No floor bump can clear any of them: all four affect every release through
+  1.5.9, which is still the latest. Each requires the Chroma server's HTTP API
+  and its tenant/RBAC layer, whereas `ChromaVectorStore` constructs only
   `chromadb.PersistentClient` and `chromadb.Client`, and `HttpClient` appears
-  nowhere in this workspace. No version or dependency changed; this entry
-  records the widened basis for a decision that already stood.
+  nowhere in this workspace. The `>=1.0.0` floor and its inline rationale are
+  unchanged. Once the expiry passes, the audit reports the advisories again
+  for re-triage.
 
 ## v0.11.0 - 2026-09-02
 

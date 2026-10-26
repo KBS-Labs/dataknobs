@@ -105,6 +105,11 @@ with a security PR -- note it in the merge commit and leave it for
 a follow-up. The workflow will keep flagging it weekly until the
 floor is bumped.
 
+If the finding has **no fixed version** (`--` in the `FIXED VERSION`
+column), no floor bump can clear it. Triage it and, if it qualifies,
+accept it in `osv-scanner.toml` -- see "Accepting an Advisory With No
+Fix" below.
+
 ### Code-Quality Validation
 
 Not run by this workflow. The auto-generated PR goes through normal
@@ -309,6 +314,70 @@ for the bump type (patch/minor/major), and synchronizes
 `pyproject.toml`, `__init__.py __version__`, `.dataknobs/packages.json`,
 and the docs version table.
 
+## Accepting an Advisory With No Fix
+
+Some advisories cover every released version: the `FIXED VERSION`
+column reads `--` and the OSV record has `last_affected` set to the
+latest release. A floor bump can't clear these, and leaving them in
+the scan output means every audit fails, so a real new finding gets
+lost among the known ones.
+
+Accepted advisories live in `osv-scanner.toml` at the repository root.
+osv-scanner reads it automatically for any lockfile in that directory,
+so it applies to both audits in `dependency-update.yml` and to
+`bin/audit-floor.sh` with no extra flags.
+
+### When an Advisory Qualifies
+
+**All four** of these must hold:
+
+1. **No fix exists.** Check the OSV record, not just the scanner
+   column: `last_affected` equal to the latest PyPI release, or no
+   `fixed` event at all. If a fix exists, bump the floor instead.
+2. **It is unreachable from this workspace.** Name the vulnerable
+   code path (a server endpoint, an API, a parser mode) and show that
+   nothing in `packages/*/src` reaches it. "The dependency is
+   optional" is not a reachability argument, because the extra ships
+   the dependency to consumers.
+3. **The triage is written down where the dependency is declared.**
+   The inline comment on the `pyproject.toml` entry carries the full
+   rationale: IDs, CVSS, what each advisory needs, and why this code
+   doesn't provide it.
+4. **The acceptance expires.** Each entry sets `ignoreUntil` no more
+   than 90 days out. Once that date passes, the scanner reports the
+   advisory again and it has to be re-triaged. Renew it only after
+   checking again that no fix exists and the reachability argument
+   still holds.
+
+### Adding an Entry
+
+```toml
+[[IgnoredVulns]]
+id = "GHSA-f4j7-r4q5-qw2c"  # PYSEC-2026-311 / CVE-2026-45829
+ignoreUntil = 2027-01-25
+reason = "chromadb pre-auth code injection via the server collections endpoint; no fix through 1.5.9; server mode is unreachable here — see packages/data/pyproject.toml"
+```
+
+- Use the GHSA ID. osv-scanner filters the advisory's aliases (the
+  PYSEC record, the CVE) along with it, and the scan output confirms
+  this: `GHSA-... and 2 aliases have been filtered out because: ...`.
+- `reason` is printed in that output, so make it say what the
+  advisory is and point at the `pyproject.toml` comment that holds
+  the triage.
+- Group a package's entries under one comment that names the package,
+  its latest affected version and the reachability argument.
+
+Re-run `bin/audit-floor.sh` and confirm it exits 0 and that the scan
+reports every new entry as filtered.
+
+### Removing an Entry
+
+When upstream ships a fix, delete the entry and bump the floor as
+described in "Bumping a Security Floor". An expired entry left in
+place does no harm, because the scanner ignores it after
+`ignoreUntil`, but it misleads the next reader. Delete it or renew
+it, never just leave it.
+
 ## The `bin/audit-floor.sh` Helper
 
 The same floor-level audit the workflow runs weekly is available as
@@ -450,7 +519,9 @@ should point at where it stalled.
 
 The CVE is unpatched upstream. Options:
 
-- If the dep is optional and unused in our path, document and defer
+- If the vulnerable path is unreachable from this workspace, accept it
+  in `osv-scanner.toml` with an expiry (see "Accepting an Advisory
+  With No Fix")
 - If the CVE has a documented mitigation that doesn't require a
   version bump, apply it in our code
 - If neither applies, monitor for a fix release; the weekly workflow

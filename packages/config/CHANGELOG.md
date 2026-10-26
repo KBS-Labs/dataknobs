@@ -86,6 +86,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SPDX `Apache-2.0` header. Building the package now requires
   `hatchling>=1.27`, which is where that metadata became expressible.
 
+### Security
+
+- Bumped minimum `black` requirement in the `dev` extra from `>=26.3.1` to
+  `>=26.10.1` to exclude versions affected by GHSA-cg8m-r9f2-5wm2 /
+  CVE-2026-114134 (CVSS 8.7). Black's bundled GitHub Action installs whatever
+  version `tool.black.required-version` names in `pyproject.toml` without
+  validating it, so a crafted value runs untrusted code in the victim
+  repository's workflow. Not reachable from this package, since no workflow
+  here uses the Black action, but the `dev` extra ships the dependency to
+  consumers. Surfaced by the floor-resolve audit (`bin/audit-floor.sh`).
+
 ## v0.7.1 - 2026-09-02
 
 ### Changed
