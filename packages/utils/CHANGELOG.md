@@ -72,26 +72,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Bumped minimum `nltk` requirement from `>=3.10.2` to `>=3.10.3` to exclude
-  versions affected by 16 advisories fixed in 3.10.3 (highest CVSS 9.8:
+- Bumped minimum `nltk` requirement from `>=3.10.2` to `>=3.10.4` to exclude
+  versions affected by 17 advisories. 3.10.3 fixes sixteen (highest CVSS 9.8:
   PYSEC-2026-3749 / GHSA-m4rf-3fr8-xwx3): PYSEC-2026-3733, PYSEC-2026-3735,
   PYSEC-2026-3736, PYSEC-2026-3737, PYSEC-2026-3738, PYSEC-2026-3739,
   PYSEC-2026-3741, PYSEC-2026-3748, PYSEC-2026-3749, PYSEC-2026-3751,
   PYSEC-2026-3752, PYSEC-2026-3790, GHSA-5gh2-94qg-qppq, GHSA-6hwm-xvph-95vm,
-  GHSA-ff5c-cp5c-9wjf and GHSA-vp2x-qp44-57v7. Surfaced by the floor resolve
-  step in the `dependency-update` workflow.
-
-  One further advisory in the same batch is **not** cleared by the bump.
-  PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp / CVE-2026-81726 (CVSS 8.3) lets
-  nltk's model-artifact APIs read and write outside the roots nltk pathsec
-  allows, because they call raw `open()` on caller-controlled paths. OSV holds
-  two disagreeing records for it — the PYSEC record reports it fixed in
-  3.10.3, the GHSA record reports `last_affected: 3.10.3` and "not yet
-  patched" — and the GHSA record is the accurate one. It is accepted rather
-  than mitigated: none of the affected entry points
+  GHSA-ff5c-cp5c-9wjf and GHSA-vp2x-qp44-57v7. 3.10.4 fixes the seventeenth,
+  GHSA-8mgp-746c-j5xp / PYSEC-2026-3740 / CVE-2026-81726 (CVSS 8.3): nltk's
+  model-artifact APIs called raw `open()` on caller-controlled paths and so
+  read and wrote outside the roots nltk pathsec allows. 3.10.4 restricts model
+  save and load to data roots. OSV's PYSEC record reports this one fixed in
+  3.10.3, but the GHSA record's `last_affected: 3.10.3` is the accurate one,
+  which is why the floor goes to 3.10.4. None of the affected entry points
   (`TransitionParser.train`/`parse`, `AveragedPerceptron.save`/`load`,
-  `PerceptronTagger.save_to_json`, `save_maxent_params`) is called anywhere in
-  this workspace.
+  `PerceptronTagger.save_to_json`, `save_maxent_params`) is called in this
+  workspace. Surfaced by the floor-resolve audit.
+
+  **What nltk 3.10.4 can change for a consumer of `get_nltk_resources_dir()`
+  and `get_nltk_wordnet()`.** nltk 3.10.4 puts every file path through a
+  sandbox, and two parts of it reach the directory these functions use.
+  That directory is `NLTK_DATA` if set, otherwise
+  `$DATADIR/opt/nltk_resources`, where `DATADIR` defaults to `~/data` and
+  falls back to `/data`.
+
+  - **A data directory another account can write to is skipped**, and so is
+    one with such a directory on the way to a resource. A shared, group- or
+    world-writable `/data`, common on servers and in container images, no
+    longer yields wordnet. `get_nltk_wordnet()` still returns the corpus
+    loader, but the first lookup (`wn.synsets(...)`) raises `LookupError`,
+    after a `RuntimeWarning` that reads *"NLTK will not read data from
+    '<dir>': it is writable by, or owned by, another account"*. Fix:
+    `chmod go-w` the directory (the warning's own remedy), or point
+    `NLTK_DATA` at a private directory.
+  - **Downloaded archives are written mode `0600`**, so only the account that
+    downloaded them can read them. A directory populated by one account and
+    read by another needs extracted corpora. nltk extracts automatically when
+    the download runs as root or outside the downloading account's home
+    directory, and `nltk.download(..., extract=True)` forces it.
 
 ## v2.0.2 - 2026-08-26
 

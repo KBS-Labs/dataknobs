@@ -27,7 +27,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=0.21.0",
     "pylint>=3.3.6",
-    "black>=26.3.1",  # PYSEC-2024-48, GHSA-3936-cmfr-pm3m (CVSS 8.7) fixed by 26.3.1
+    "black>=26.10.1",  # GHSA-cg8m-r9f2-5wm2 / CVE-2026-114134 (CVSS 8.7, the bundled GitHub Action installs an unvalidated tool.black.required-version) fixed in 26.10.1 — unreachable here (no workflow uses the Black action), but the floor moves for consumers. Extends the prior 26.3.1 floor (PYSEC-2024-48, GHSA-3936-cmfr-pm3m, CVSS 8.7)
     "isort>=5.13.0",
     "ruff>=0.8.0",
     "mypy>=1.0.0",
@@ -446,6 +446,12 @@ ignore = [
     "PLR0915", # [presentational] Too many statements (configured at 50)
     "PLR2004", # [presentational] Magic value used in comparison
     "PLR5501", # [presentational] Use elif instead of else-if - style preference
+               # Unsafe only where the `else:` line carries a trailing comment,
+               # which the fix deletes along with the line. Driven on both such
+               # sites: `else:  # HYBRID mode` and `else:  # close` become `elif`
+               # chains testing the same conditions in the same order and
+               # running the same bodies -- the loss is the comment, not a
+               # branch. 31 findings, 2 of them the unsafe kind.
     "PLR1714", # [behavioural] Consider merging multiple comparisons
                # ruff: "always unsafe since literal sets and tuples evaluate their
                # members eagerly whereas `or` comparisons are short-circuited",
