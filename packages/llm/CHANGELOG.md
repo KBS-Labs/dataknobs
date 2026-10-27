@@ -101,8 +101,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama words an embedding overflow `the input length exceeds the context
   length`, which the shared overflow detection did not know; it joins the
   shared markers. The statuses read for a marker are now declared per
-  provider in `_context_length_statuses` — `{400}` by default, which is the
-  status Ollama's `/api/embed` answers an overflow with. The message stays
+  provider in `_context_length_statuses` — `{400}` by default, and
+  `{400, 413}` for `OllamaProvider`: `/api/embed` answers a text over the
+  model's trained window with a 400, and one under it but over the server's
+  micro-batch with a 413 (Ollama 0.40.11). The message stays
   free of the vendor's text, which remains on `__cause__`. **One change for
   existing code:** an `except OperationError` around `embed()` no longer
   catches an over-long text; `except ContextLengthExceededError` or

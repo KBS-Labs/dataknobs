@@ -370,12 +370,12 @@ def _embedded(prompt_eval_count: int) -> FakeResponse:
     )
 
 
-def _overflow() -> FakeResponse:
+def _overflow(status: int = 400) -> FakeResponse:
     """The server's refusal of an over-long text under ``truncate: false``."""
     return FakeResponse(
-        400,
+        status,
         text='{"error":"the input length exceeds the context length"}',
-        raise_exc=make_client_response_error(400, "Bad Request"),
+        raise_exc=make_client_response_error(status, "Bad Request"),
     )
 
 
@@ -442,6 +442,29 @@ async def test_ollama_reports_a_cut_with_no_window_known(
     [report] = _warnings(caplog)
     assert "[0]" in report
     assert "512" in report
+
+
+@pytest.mark.parametrize("status", [400, 413])
+async def test_ollama_reads_either_refusal_status_as_an_overflow(
+    status: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The same refusal arrives as a 400 or a 413 (Ollama 0.40.11).
+
+    A text over the model's trained window is a 400; one under it but over
+    the server's micro-batch (``bge-m3``, 2048 of 8192) is a 413, with the
+    same body. Read on the 400 alone, the 413 was an ``OperationError``: the
+    default no longer refused by name, and the opt-in never resent the text.
+    """
+    provider, _ = _ollama(_overflow(status))
+    with pytest.raises(ContextLengthExceededError):
+        await provider.embed("long")
+
+    provider, session = _truncating(_overflow(status), _embedded(2048))
+    with caplog.at_level(logging.WARNING):
+        await provider.embed("long")
+    assert [p["truncate"] for p in session.payloads] == [False, True]
+    [report] = _warnings(caplog)
+    assert "[0]" in report
 
 
 @pytest.mark.parametrize("texts", ["", ["text", ""]], ids=["single", "in a batch"])

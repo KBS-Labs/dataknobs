@@ -1130,9 +1130,13 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         return payload
 
     # ``/api/embed`` takes a ``truncate`` flag, so both policies are honoured.
-    # Its overflow, and ``/api/chat``'s, is a 400, so the base's status set
-    # serves; the 500 declared here was ``/api/embeddings``' alone.
     _embedding_overflow_policies = frozenset({"refuse", "truncate"})
+
+    # ``/api/embed`` refuses an over-long text with one body and two statuses
+    # (Ollama 0.40.11): a 400 past the model's trained window, a 413 under it
+    # but past the server's micro-batch (``bge-m3``: 8192 trained, 2048 cut).
+    # The marker still decides, so a 413 without it stays an ``OperationError``.
+    _context_length_statuses = frozenset({400, 413})
 
     # A schema is sent as the chat request's ``format``.
     _response_schema_supported = True
@@ -1149,7 +1153,7 @@ class OllamaProvider(ProfileDetectionMixin, AsyncLLMProvider):
         :meth:`~dataknobs_llm.llm.base.LLMProvider._dataknobs_error_for_status`:
 
         - 429 → :class:`~dataknobs_common.exceptions.RateLimitError`,
-        - a context-window overflow, on a 400 (see
+        - a context-window overflow, on a 400 or a 413 (see
           :attr:`_context_length_statuses`) →
           :class:`~dataknobs_llm.exceptions.ContextLengthExceededError`,
         - any other 400 → :class:`~dataknobs_common.exceptions.ValidationError`,
