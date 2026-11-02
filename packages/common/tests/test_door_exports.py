@@ -47,12 +47,25 @@ DOORS = [
 ]
 
 
+def _is_public(name: str) -> bool:
+    """A name a consumer can reach by attribute access and the reference renders.
+
+    **Must be an identifier, not merely un-underscored.** ``dataknobs_common``
+    ships ``pytest11`` plugins, and pytest marks every top-level package of a
+    plugin's distribution for assertion rewriting -- always for a wheel, and
+    for an editable install since pytest 9.2.0. Each rewritten module carries
+    ``@py_builtins`` and ``@pytest_ar``, which no source can bind and no
+    renderer shows, so the test run's namespace is not the shipped one.
+    """
+    return name.isidentifier() and not name.startswith("_")
+
+
 def _public_bindings(door: ModuleType) -> set[str]:
     """Every public name the door binds that the reference would render."""
     return {
         name
         for name in dir(door)
-        if not name.startswith("_") and not isinstance(getattr(door, name), ModuleType)
+        if _is_public(name) and not isinstance(getattr(door, name), ModuleType)
     }
 
 
@@ -130,7 +143,7 @@ def test_the_excluded_names_are_submodules_and_nothing_else(door: ModuleType) ->
     Subset rather than equality: a submodule nothing has imported yet is on
     disk and absent from ``dir()``, which is the stable direction to assert.
     """
-    excluded = {name for name in dir(door) if not name.startswith("_")} - _public_bindings(door)
+    excluded = {name for name in dir(door) if _is_public(name)} - _public_bindings(door)
     foreign = excluded - _own_submodules(door)
 
     assert foreign == set(), (

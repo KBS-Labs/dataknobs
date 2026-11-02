@@ -207,7 +207,11 @@ def test_the_module_publishes_every_name_it_defines_and_nothing_more() -> None:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
     }
 
-    public = {name for name in vars(tags) if not name.startswith("_")}
+    # Identifiers only: pytest rewrites this package (it ships pytest11
+    # plugins), which binds ``@py_builtins`` / ``@pytest_ar`` on the module --
+    # names no source can bind, so neither is surface. See
+    # ``test_door_exports._is_public``.
+    public = {name for name in vars(tags) if name.isidentifier() and not name.startswith("_")}
 
     assert public - imported == set(tags.__all__)
     assert set(tags.__all__) <= published | imported, (
