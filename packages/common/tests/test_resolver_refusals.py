@@ -9,7 +9,6 @@ to what was and was not reached.
 from __future__ import annotations
 
 import asyncio
-import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -166,9 +165,9 @@ def test_a_rung_that_needs_no_handle_is_still_sent_to_the_async_door(
 
     **The flavour in the stand-in is load-bearing and used not to be.** This
     mark said only ``needs_io: False``, which made it a stand-in for a
-    population of one that does not exist: the real kind reaching the
-    ``needs_io`` branch's ``else`` is ``authority``, whose mark *here*
-    declares ``flavour: "sync"`` and which this sentence is wrong for. The
+    population of one that does not exist: a kind shipped elsewhere in both
+    flavours reaches the ``needs_io`` branch's ``else`` too, its mark *here*
+    declares ``flavour: "sync"``, and this sentence is wrong for it. The
     sibling below is that case.
     """
     signal_backends.declare_unavailable(
@@ -187,48 +186,58 @@ def test_a_rung_that_needs_no_handle_is_still_sent_to_the_async_door(
     assert "OntologyRegistry" not in message
 
 
-def test_a_rung_that_ships_elsewhere_is_sent_to_the_import_and_not_to_a_door(
-    mammals_path: Path, tmp_path: Path
-) -> None:
-    """The third remedy, for the only kind that ever reached the second one.
-
-    The two-way split read ``needs_io`` and sent everything else to
-    :func:`~dataknobs_common.ontology.loader.async_build_resolver`. Measured
-    over the marks this registry actually carries, *everything else* is
-    ``authority`` and nothing more --- and that door carries the **identical**
-    mark, so an author who followed the sentence got the same refusal back
-    from the door it named. A remedy whose remedy builds nothing is the
-    failure this whole paragraph of the module exists to have fixed once.
-
-    The real remedy is the reason's own: import the module. After that this
-    door builds the kind, because ``AuthoritySignal`` has a synchronous form
-    --- which is exactly what the mark says in the one key the two flavours'
-    marks do not share, ``flavour``. So that is the discriminator now.
-
-    Skipped rather than weakened where the import has already happened, for
-    the reason the mark's own test gives: once ``xization`` is imported the
-    mark is *correctly* gone and there is no version of this that holds in
-    both worlds.
-    """
-    if "dataknobs_xization.entity_resolution" in sys.modules:
-        pytest.skip(
-            "dataknobs_xization.entity_resolution is imported in this process, so "
-            "the kind is registered and there is no refusal to read"
-        )
-    assert signal_backends.get_metadata("authority")["flavour"] == "sync", (
-        "the mark must say a synchronous form exists, or this asserts the wrong branch"
-    )
-
-    document = yaml.safe_load(mammals_path.read_text())
-    document["ontology"]["resolver"] = {"rungs": [{"kind": "authority"}]}
-    path = tmp_path / "authority.yaml"
+def _refusal(path: Path, kind: str) -> str:
+    """What the synchronous door says to a document naming *kind* as its only rung."""
+    document = yaml.safe_load(path.read_text())
+    document["ontology"]["resolver"] = {"rungs": [{"kind": kind}]}
     path.write_text(yaml.safe_dump(document))
-
     with pytest.raises(ValidationError) as raised:
         build_resolver(path, load_ontology(path))
+    return str(raised.value)
 
-    message = str(raised.value)
-    assert "dataknobs_xization.entity_resolution" in message
+
+@pytest.fixture
+def shipped_elsewhere() -> Iterator[str]:
+    """A kind a consumer's distribution ships in both flavours, marked in both registries.
+
+    The shape a distribution declares when it registers a rung at its own
+    import: both flavours exist, and neither is registered in a process that
+    has not imported it. Nothing in the workspace declares this shape today,
+    so the test declares it, and drops it afterwards so no other test sees a
+    kind it did not write.
+    """
+    key = "acme_stack"
+    reason = "AcmeStackSignal ships in acme-stack; import acme_stack.rung to register it"
+    signal_backends.declare_unavailable(key, reason=reason, metadata={"flavour": "sync"})
+    async_signal_backends.declare_unavailable(key, reason=reason, metadata={"flavour": "async"})
+    try:
+        yield key
+    finally:
+        signal_backends.unregister(key)
+        async_signal_backends.unregister(key)
+
+
+def test_a_rung_that_ships_elsewhere_is_sent_to_the_import_and_not_to_a_door(
+    mammals_path: Path, shipped_elsewhere: str
+) -> None:
+    """The third remedy: the rung exists in this flavour and ships somewhere else.
+
+    The two-way split read ``needs_io`` and sent everything else to
+    :func:`~dataknobs_common.ontology.async_build_resolver`. For a kind that
+    ships in another distribution in both flavours, that door carries the
+    **identical** mark, so an author who followed the sentence got the same
+    refusal back from the door it named. A remedy whose remedy builds nothing
+    is the failure this whole paragraph of the module exists to have fixed
+    once.
+
+    The real remedy is the reason's own: import the module. After that this
+    door builds the kind, because the rung has a synchronous form --- which is
+    exactly what the mark says in the one key the two flavours' marks do not
+    share, ``flavour``. So that is the discriminator.
+    """
+    message = _refusal(mammals_path, shipped_elsewhere)
+
+    assert "acme_stack.rung" in message
     assert "import the module that registers it" in message
     assert "async_build_resolver" not in message, (
         "that door carries the same mark, so naming it sends the author in a circle"
@@ -518,64 +527,29 @@ def test_a_loader_does_not_refuse_a_rung_it_never_builds(
     assert asynchronous.id == ontology.id
 
 
-def test_a_rung_that_ships_elsewhere_says_so_rather_than_reading_as_a_typo() -> None:
-    """The second mark, and it is marked for a different condition than the first.
+@pytest.mark.parametrize(
+    "registry", [signal_backends, async_signal_backends], ids=["sync", "async"]
+)
+def test_the_withdrawn_authority_kind_is_unknown_rather_than_uninstalled(registry: Any) -> None:
+    """``authority`` was withdrawn before release, so no registry has heard of it.
 
-    ``semantic`` is withdrawn because no synchronous form of it exists
-    anywhere. ``authority`` exists in both flavours and ships in
-    ``dataknobs-xization``, which ``dataknobs-common`` cannot import and must
-    not -- so the key is declared here and the class is not. Both registries
-    carry it, and importing ``dataknobs_xization.entity_resolution`` clears
-    both marks by registering over them.
-
-    **The pre-import state is what is asserted, so the test checks that it is
-    still the pre-import state.** ``bin/test.sh`` gives each package its own
-    pytest process and nothing in ``common`` depends on ``xization``, so under
-    the runner of record nothing here has imported it. That is a property of
-    *that runner* and not of this test, and the workspace supports another:
-    the root ``pytest.ini`` sets ``testpaths = packages tests`` -- deliberately,
-    so a bare ``pytest`` at the root does not skip the workspace guards -- and
-    under it ``xization``'s own suite imports the module and registers the kind
-    in these same process-global registries. ``pytest-randomly`` then decides
-    which suite runs first, so the assertion below held or failed by seed.
-
-    Skipping rather than asserting a weaker thing: once the module is imported
-    the mark is *correctly* gone, and there is no version of these assertions
-    that is true in both worlds. The condition is named so a reader who meets
-    the skip learns why rather than assuming the test was disabled.
-
-    The reason names the distribution *and* the import, because a reader
-    stuck on this key has two questions and a package name answers only the
-    first: registration happens at a module's import, not at a distribution's
-    presence.
+    The rung that read an authority stack shipped in no release, and its
+    removal takes the mark with it: a kind that is marked is one the registry
+    tells a reader how to install, and there is nothing to install. A
+    document naming it gets the refusal a typo gets.
     """
-    if "dataknobs_xization.entity_resolution" in sys.modules:
-        pytest.skip(
-            "dataknobs_xization.entity_resolution is imported in this process, "
-            "so it has registered over both marks -- which is the behaviour "
-            "xization's own suite asserts. The mark is only observable before "
-            "that import, and bin/test.sh is the runner that guarantees it."
-        )
+    assert not registry.is_known("authority")
+    assert registry.unavailable_reason("authority") is None
+    assert "authority" not in registry.list_known_keys()
 
-    from dataknobs_common.entity_resolution import async_signal_backends
 
-    for registry in (signal_backends, async_signal_backends):
-        assert registry.is_known("authority")
-        assert not registry.is_registered("authority")
+def test_a_document_naming_the_withdrawn_kind_is_refused_as_a_typo_is(mammals_path: Path) -> None:
+    """The same sentence, word for word, as a kind nobody ever declared."""
+    withdrawn = _refusal(mammals_path, "authority")
+    typo = _refusal(mammals_path, "authoritee")
 
-        reason = registry.unavailable_reason("authority")
-        assert reason is not None
-        assert "dataknobs-xization" in reason
-        assert "dataknobs_xization.entity_resolution" in reason
-
-        assert registry.get_metadata("authority")["requires_install"] == (
-            "pip install dataknobs-xization"
-        )
-
-    # The flavour a door refuses a composition by, which is per registry and
-    # is the one piece of this metadata the two marks do not share.
-    assert signal_backends.get_metadata("authority")["flavour"] == "sync"
-    assert async_signal_backends.get_metadata("authority")["flavour"] == "async"
+    assert withdrawn.replace("'authority'", "'authoritee'") == typo
+    assert "dataknobs-xization" not in withdrawn
 
 
 # --------------------------------------------------------------------------

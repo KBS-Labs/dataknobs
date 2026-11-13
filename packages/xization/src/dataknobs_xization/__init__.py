@@ -7,7 +7,6 @@ from dataknobs_xization import (
     annotations,
     authorities,
     content_transformer,
-    entity_resolution,
     html,
     ingestion,
     json,
@@ -71,10 +70,6 @@ from dataknobs_xization.json import (
     JSONChunkConfig,
     JSONChunker,
 )
-from dataknobs_xization.entity_resolution import (
-    AsyncAuthoritySignal,
-    AuthoritySignal,
-)
 from dataknobs_xization.ingestion import (
     DirectoryProcessor,
     FilePatternConfig,
@@ -94,12 +89,6 @@ __all__ = [
     "authorities",
     "content_transformer",
     "lexicon",
-    # Entity resolution -- the rung a cascade reaches this package for.
-    # Importing `dataknobs_xization` registers it under `kind: authority` in
-    # `dataknobs_common`'s two rung registries.
-    "AsyncAuthoritySignal",
-    "AuthoritySignal",
-    "entity_resolution",
     "masking_tokenizer",
     "normalize",
     # Content transformation

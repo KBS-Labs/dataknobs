@@ -356,11 +356,9 @@ def test_the_default_composition_still_builds_over_a_source_that_folds(
 class _BareProtocolRung:
     """A rung written against the protocol, declaring neither fact.
 
-    Not a stand-in for anything: ``AuthoritySignal`` in ``dataknobs-xization``
-    is this shape for a stated reason -- its backing is an authority stack
-    rather than a dictionary, so it subclasses no base that would supply these
-    attributes. A helper that reached them by attribute access would be
-    unusable by the one registration in the tree that is not written here.
+    The shape a rung over a backing that is not a dictionary takes: it
+    subclasses no base that would supply these attributes. A helper that
+    reached them by attribute access would be unusable by such a rung.
     """
 
     key = "bare"
@@ -412,29 +410,3 @@ def test_the_base_is_copied_so_one_base_serves_both_flavours() -> None:
     declared_signal_metadata(_ConsumerRung, base)
 
     assert base == {"flavour": "sync", "needs_io": False}
-
-
-@pytest.mark.parametrize(
-    ("registry", "flavour"),
-    [(signal_backends, "sync"), (async_signal_backends, "async")],
-    ids=["sync", "async"],
-)
-def test_a_rung_registered_from_another_distribution_declares_both_facts(
-    registry: Any, flavour: str
-) -> None:
-    """``authority`` ships in ``dataknobs-xization`` and is the live case.
-
-    It is the one registration in the tree written outside the module that
-    holds the four built-ins, so it is the one that had to restate these keys
-    by hand -- and it did not, which is what a consumer's registration would
-    also do. The keys being *present* is the assertion; their values are the
-    rung's own answer and are ``False`` because an authority stack holds no
-    folded form table.
-    """
-    pytest.importorskip("dataknobs_xization.entity_resolution")
-
-    metadata = registry.get_metadata("authority")
-
-    assert metadata["flavour"] == flavour
-    assert metadata["reads_surface_forms"] is False
-    assert metadata["bounded_by_longest_form"] is False

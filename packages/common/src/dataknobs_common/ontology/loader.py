@@ -1978,9 +1978,9 @@ def _refuse_async_only_rungs(section: Mapping[str, Any] | None) -> None:
     somewhere else*, and then **this** door builds it as soon as the module
     that registers it is imported. Sending the second case to
     :func:`async_build_resolver` names a door carrying the identical mark, so
-    the caller follows the sentence and gets the same refusal back. Measured:
-    ``authority`` was the only kind that could reach the old ``else`` at all,
-    and the sentence it got was wrong for it.
+    the caller follows the sentence and gets the same refusal back. Measured
+    when the branch was written: the only kind that could reach the old
+    ``else`` at all was of this shape, and the sentence it got was wrong for it.
 
     The fact that tells the three apart is already on the mark, and it is
     ``flavour`` rather than ``needs_io``: the flavour a mark declares is the

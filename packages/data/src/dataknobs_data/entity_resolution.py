@@ -20,8 +20,7 @@ rather than this one's twin.
 
 **Top level rather than under** ``vector/``, because this is a member of the
 *resolution* family --- whose other members are in
-``dataknobs_common.entity_resolution`` and
-``dataknobs_xization.entity_resolution`` --- and filing it under ``vector/``
+``dataknobs_common.entity_resolution`` --- and filing it under ``vector/``
 would name its backing instead of its role. The index it searches is under
 ``vector/`` for the mirror reason: that one *is* a vector construct.
 

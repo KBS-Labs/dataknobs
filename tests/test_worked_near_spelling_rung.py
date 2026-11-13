@@ -12,8 +12,7 @@ or not the door exports it, and the section's first line is
 ``from dataknobs_common.entity_resolution import ... LexicalSignal``.
 
 **It executes the fences themselves** rather than a character-identical ``.py``
-copy, as :mod:`tests.test_worked_authority_rung` does and for that file's
-reason: what is being pinned is not only that each block *runs* but that its
+copy, because what is being pinned is not only that each block *runs* but that its
 **declared output** is what running it prints, and a copy in a second file
 could not carry that. The cost is that these fences are not linted; what is
 bought is that the page cannot state a span the code does not produce.

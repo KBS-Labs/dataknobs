@@ -1023,23 +1023,6 @@ The first row is the one to read twice: a rung that merely ships elsewhere
 carries the **same** mark in both registries, so sending its author to the
 asynchronous door sends them in a circle.
 
-A rung that ships in **another distribution** is declared the same way, for a
-different reason. `kind: "authority"` reads an authority stack and lives in
-`dataknobs-xization`, which this package does not depend on and must not, so
-both registries carry the key with a sentence naming the distribution and the
-module that registers it:
-
-```python
-assert signal_backends.get_metadata("authority")["requires_install"] == (
-    "pip install dataknobs-xization"
-)
-```
-
-It matches text a vocabulary *describes* — a pattern — as well as text it
-enumerates, and it keeps less overlap than `ScanningSignal` does. Both
-directions are written up at
-<https://kbs-labs.github.io/dataknobs/packages/xization/entity-resolution/>.
-
 ### A rung built over something a document cannot write
 
 Both doors take `handles=`: live objects a rung is constructed over and a YAML

@@ -557,10 +557,6 @@
         {
           "package": "html/html-conversion.md",
           "site": "html-conversion.md"
-        },
-        {
-          "package": "entity-resolution.md",
-          "site": "entity-resolution.md"
         }
       ],
       "site_only": [

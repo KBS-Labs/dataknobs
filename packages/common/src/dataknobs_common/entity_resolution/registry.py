@@ -170,9 +170,9 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     **Read with a default rather than as an attribute**, because a rung need
     not inherit :class:`~dataknobs_common.entity_resolution.DeclaredSignal` to
-    be registered -- ``AuthoritySignal`` is written against the bare protocol,
-    for the reason its own docstring gives, and an attribute access would make
-    this helper unusable by exactly the registrations that most need it. The
+    be registered -- a rung over a backing that is not a dictionary has no
+    base to inherit, and an attribute access would make this helper unusable
+    by exactly the registrations that most need it. The
     class attribute is the one spelling either way: a base supplies it to its
     subclasses, a bare-protocol rung sets it itself, and a rung that declares
     nothing gets the reading that refuses nothing.
@@ -254,15 +254,12 @@ async_signal_backends.register(
 # rather than the rung: ``scorer`` takes a faster implementation and the
 # standard library answers the same way without one.
 #
-# Two members, and they are marked for **different** conditions, which is why
-# the reason is a sentence rather than a flag. ``semantic`` is
-# flavour-asymmetric *and* lives elsewhere, so it is the one key whose two
-# marks say different things: the synchronous side says the rung has no such
-# form to install, and the asynchronous side says where the form it does have
-# ships. ``authority`` has both flavours and ships in another distribution, so
-# both registries carry the same sentence. A consumer who writes either kind
-# and registers their own clears the mark the same way -- which is the
-# extension point, not a leak.
+# One member, and its two marks say different things, which is why the reason
+# is a sentence rather than a flag. ``semantic`` is flavour-asymmetric *and*
+# lives elsewhere: the synchronous side says the rung has no such form to
+# install, and the asynchronous side says where the form it does have ships. A
+# consumer who writes the kind and registers their own clears the mark --
+# which is the extension point, not a leak.
 #
 # The asynchronous mark used to be absent, and the comment here recorded the
 # condition for writing it: the key was *waiting on a class that does not
@@ -314,28 +311,4 @@ async_signal_backends.declare_unavailable(
     "semantic",
     reason=_SHIPS_IN_DATA,
     metadata=dict(SEMANTIC_ASYNC_MARK_METADATA),
-)
-
-# The reason names the distribution **and** the import, because they answer
-# two different questions and a reader stuck on this key has both: what do I
-# install, and -- having installed it -- why is the kind still unknown. The
-# second is the one a package name alone leaves open, since the registration
-# happens at a module's import rather than at the distribution's presence.
-_SHIPS_IN_XIZATION = (
-    "AuthoritySignal ships in dataknobs-xization; import "
-    "dataknobs_xization.entity_resolution to register it"
-)
-_XIZATION_METADATA = {
-    "needs_io": False,
-    "requires_install": "pip install dataknobs-xization",
-}
-signal_backends.declare_unavailable(
-    "authority",
-    reason=_SHIPS_IN_XIZATION,
-    metadata=dict(_XIZATION_METADATA, flavour="sync"),
-)
-async_signal_backends.declare_unavailable(
-    "authority",
-    reason=_SHIPS_IN_XIZATION,
-    metadata=dict(_XIZATION_METADATA, flavour="async"),
 )
