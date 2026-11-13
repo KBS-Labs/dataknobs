@@ -51,7 +51,13 @@ from dataknobs_common.entity_resolution.values import (
     within_axes,
     within_memberships,
 )
-from dataknobs_common.text import content_span, default_normalizer, token_spans
+from dataknobs_common.text import (
+    content_span,
+    default_normalizer,
+    probe_spans,
+    punctuation_edges,
+    token_spans,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence, Set as AbstractSet
@@ -112,7 +118,7 @@ def _candidate(
 
     That is as far as the claim goes, and this docstring used to take it
     further: it said a scan **subsumes** whole-string matching. It does not,
-    and :func:`~dataknobs_common.text.token_spans` is why -- see
+    and the boundary policy in :mod:`dataknobs_common.text` is why -- see
     :class:`ScanningSignal` for the measured cases each rung reaches and the
     other does not.
 
@@ -316,18 +322,22 @@ def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
     return tuple(FormHit(entity_id=entity_id, span=span) for entity_id in ids)
 
 
-def _probe_spans(query: str, longest: int | None) -> Iterator[tuple[int, int]]:
-    """Spans of up to ``longest`` consecutive tokens in ``query``, longest first.
+def _window_bound(
+    entities: EntitySource | AsyncEntitySource,
+    normalizer: Callable[[str], str] | None,
+    max_window: int | None,
+) -> int | None:
+    """How many tokens a probe may span, or ``None`` to enumerate every window.
 
-    The enumeration a scan runs, and ``longest`` is what keeps it affordable.
-    Unbounded it is *n(n+1)/2* spans for *n* tokens -- 21 for a six-token
-    utterance, but 500,500 for a thousand-token paste, with each probe slicing
-    a span that may be the whole query. Quadratic in the token count, and the
-    characters copied grow with the cube of it, on text a caller hands over.
+    The number :func:`~dataknobs_common.text.probe_spans` is handed, and what
+    keeps a scan affordable. Unbounded the enumeration is *n(n+1)/2* spans for
+    *n* tokens -- 21 for a six-token utterance, but 500,500 for a
+    thousand-token paste, with each probe slicing a span that may be the whole
+    query. Quadratic in the token count, and the characters copied grow with
+    the cube of it, on text a caller hands over.
 
     **A derived bound costs no answer**, which is what makes it an arithmetic
-    fix rather than a budget -- and ``longest`` is only derived when the
-    vocabulary could support it. It is how many tokens the longest form the
+    fix rather than a budget. It is how many tokens the longest form the
     vocabulary *declares* occupies -- see
     :meth:`~dataknobs_common.ontology.EntitySource.longest_form_tokens` -- and
     a window wider than that is one no declared form could fill, so every
@@ -341,41 +351,12 @@ def _probe_spans(query: str, longest: int | None) -> Iterator[tuple[int, int]]:
     the bound rests on has failed, and there is no wider number to fall back
     to. Quadratic and complete beats linear and lossy: the alternative is a
     declared form the scan silently stops finding.
-    ``max_window`` on :class:`ScanningSignal` is where a caller who knows
-    their own queries puts a number the vocabulary could not supply.
 
-    **Longest first** because the rung publishes its own order and this is
-    where the *enumeration*'s order is decided: the cascade positions by
-    arrival, and a form containing another should be proposed before the form
-    it contains. Ordering the ids found *within* one span is a different
-    question and :meth:`DeclaredSignal._order`'s.
-
-    Shared by both flavours rather than written twice, for
-    :func:`_whole_string`'s reason one rung along: the arithmetic here is the
-    half of a scan that has nothing to do with awaiting, so two copies of it
-    could drift in a direction no twin-parity check over signatures would see.
-    """
-    tokens = token_spans(query)
-    widest = len(tokens) if longest is None else min(longest, len(tokens))
-    return (
-        (tokens[first][0], tokens[first + length - 1][1])
-        for length in range(widest, 0, -1)
-        for first in range(len(tokens) - length + 1)
-    )
-
-
-def _window_bound(
-    entities: EntitySource | AsyncEntitySource,
-    normalizer: Callable[[str], str] | None,
-    max_window: int | None,
-) -> int | None:
-    """How many tokens a probe may span, or ``None`` to enumerate every window.
-
-    **Shared by both flavours**, for the reason :func:`_probe_spans` is: the
-    three-way decision below has nothing to do with awaiting, and two copies
-    of it could disagree in a direction no twin-parity check over signatures
-    would see. The twins answering identically is the property, and one
-    function is how it is held rather than asserted.
+    **Shared by both flavours**: the three-way decision below has nothing to
+    do with awaiting, and two copies of it could disagree in a direction no
+    twin-parity check over signatures would see. The twins answering
+    identically is the property, and one function is how it is held rather
+    than asserted.
 
     The source's number describes the source's own fold. A rung handed a
     ``normalizer`` folds again before the source does, so the window that
@@ -392,6 +373,42 @@ def _window_bound(
     if max_window is None:
         return derived
     return max_window if derived is None else min(derived, max_window)
+
+
+def _edge_bound(
+    entities: EntitySource | AsyncEntitySource,
+    normalizer: Callable[[str], str] | None,
+    max_edge: int | None,
+) -> int | None:
+    """How far a probe may extend over punctuation, or ``None`` for the whole run.
+
+    The second bound :func:`~dataknobs_common.text.probe_spans` is handed,
+    and :func:`_window_bound`'s sibling for every reason that one gives: the
+    vocabulary's own number where it has one, no number where a rung folds
+    for itself, and one function so the twins cannot answer differently.
+
+    Read from :attr:`~dataknobs_common.ontology.SourceDescription.form_edge`,
+    which is free -- ``describe()`` answers from configuration on both
+    flavours. ``0`` -- no declared form with punctuation at its edge -- is
+    the common case, and costs a scan nothing it did not already spend.
+
+    A rung with a ``normalizer`` does not ask, because the source measured
+    its own keys and the rung's fold is another: one that spells ``#`` out
+    makes the two-character window ``C#`` reach a key with no punctuation in
+    it, and an edge of ``0`` would never probe that window.
+
+    ``max_edge`` caps whatever that leaves, as ``max_window`` caps the token
+    bound, and for the same reason it is the one number here that can cost
+    an answer. It exists because ``None`` is not cheap on text a caller hands
+    over: one token between two runs of *r* punctuation characters is
+    ``(r + 1) ** 2 - 1`` extensions -- 90,600 for a 300-character rule on each
+    side -- and ``None`` is what a rung that folds for itself always gets, and
+    what a live table declaring no ``form_edge`` reports.
+    """
+    derived = None if normalizer is not None else entities.describe().form_edge
+    if max_edge is None:
+        return derived
+    return max_edge if derived is None else min(derived, max_edge)
 
 
 def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
@@ -499,10 +516,62 @@ def _checked_max_window(max_window: int | None) -> int | None:
     return max_window
 
 
+def _checked_max_edge(max_edge: int | None) -> int | None:
+    """``max_edge`` as given, having refused a negative one.
+
+    Shared so the twins refuse identically. Zero is legal, unlike
+    ``max_window``'s: it extends nothing, which is the scan over tokens alone
+    and still answers every form whose edges are alphanumeric.
+
+    Raises:
+        ValidationError: For a ``max_edge`` below zero.
+    """
+    if max_edge is not None and max_edge < 0:
+        raise ValidationError(
+            f"max_edge must be at least 0, got {max_edge}. It counts the "
+            f"punctuation characters a probe may be widened over on each side."
+        )
+    return max_edge
+
+
+def _narrowest(query: str, found: Sequence[FormHit]) -> list[FormHit]:
+    """One piece of evidence per entity per window: the narrowest span that reached it.
+
+    An extension widens a window over punctuation, and a fold that strips
+    punctuation makes every extension of ``beagle`` reach the key the bare
+    window reaches -- ``"(beagle)"`` would otherwise report one entity at four
+    nested places. The punctuation took no part in that match, so the
+    evidence is the narrowest span around it; where the punctuation *is* the
+    match -- ``(beagle)`` declared -- the bare window misses and the extended
+    span is the only one there is.
+
+    The window an extension came from is recovered by trimming the
+    punctuation off its ends, which is exact: a window starts and ends on a
+    token, and an extension adds only punctuation. Each kept hit stays where
+    the first hit for that entity and window arrived, so the published order
+    is the enumeration's.
+
+    Shared by both flavours for :func:`_window_bound`'s reason.
+    """
+    kept: list[FormHit] = []
+    at: dict[tuple[tuple[int, int], Any], int] = {}
+    for hit in found:
+        start, end = hit.span
+        leading, trailing = punctuation_edges(query[start:end])
+        key = ((start + leading, end - trailing), hit.entity_id)
+        index = at.get(key)
+        if index is None:
+            at[key] = len(kept)
+            kept.append(hit)
+        elif end - start < kept[index].span[1] - kept[index].span[0]:
+            kept[index] = hit
+    return kept
+
+
 def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
     """One :class:`FormHit` per id, all at the same span, in the order given.
 
-    The other half of a probe, extracted for :func:`_probe_spans`'s reason:
+    The other half of a probe, extracted for :func:`_window_bound`'s reason:
     what is left in each flavour's ``_located`` is then the loop and the
     ``await``, and nothing a twin-parity check over signatures could not see.
 
@@ -653,7 +722,7 @@ def _refuse_unfolded(entities: object, rung: str) -> None:
 def _window_chars(forms: Sequence[str], threshold: float) -> int:
     """The widest window, **in characters**, that could still clear ``threshold``.
 
-    A near-spelling rung's equivalent of :func:`_probe_spans`'s token bound,
+    A near-spelling rung's equivalent of :func:`_window_bound`'s token bound,
     and it exists because that one is **not sound here**. The scan's bound
     rests on a window of *L* tokens needing a key of *L* tokens or more; a
     rung that scores does not need the key to be there at all, so a window
@@ -698,9 +767,10 @@ def _scored_probe_spans(
 ) -> Iterator[tuple[tuple[int, int], str]]:
     """Every span of consecutive tokens whose **folded** width fits ``max_chars``.
 
-    :func:`_probe_spans`'s counterpart for a rung bounded by characters
-    rather than by tokens, and shared by both flavours for that function's
-    reason: the enumeration has nothing to do with awaiting.
+    :func:`~dataknobs_common.text.probe_spans`'s counterpart for a rung
+    bounded by characters rather than by tokens, and shared by both flavours
+    for :func:`_window_bound`'s reason: the enumeration has nothing to do
+    with awaiting.
 
     **It folds, and it measures what the fold left**, which is the unit the
     bound is stated in: :func:`_window_chars` derives it from the folded
@@ -726,7 +796,7 @@ def _scored_probe_spans(
     character-wise fold is.
 
     Shortest first within each start, which is the opposite of
-    :func:`_probe_spans`: that one publishes an order because a declared
+    :func:`~dataknobs_common.text.probe_spans`: that one publishes an order because a declared
     score carries none, and this rung's hits carry a score that does. The
     enumeration order is therefore free, and growing spans is what lets the
     loop break.
@@ -854,7 +924,8 @@ def _ranked(found: Sequence[FormHit[K]]) -> list[FormHit[K]]:
 
     Ties break on the **longer span, then the earlier one, then the id** --
     entirely for determinism, since a score is the only thing here that
-    carries meaning. Longer first for :func:`_probe_spans`'s reason: where a
+    carries meaning. Longer first for
+    :func:`~dataknobs_common.text.probe_spans`'s reason: where a
     form contains another, the containing one is proposed before the form it
     contains.
     """
@@ -1235,9 +1306,29 @@ class ScanningSignal(DeclaredSignal):
     than that unless the vocabulary declares a six-token form: the enumeration
     is cut at the longest form there is, which is what keeps the cost linear in
     the query rather than quadratic in it. See
-    :func:`_probe_spans` for the enumeration and its bound, and
+    :func:`~dataknobs_common.text.probe_spans` for the enumeration,
+    :func:`_window_bound` and :func:`_edge_bound` for its two bounds, and
     :func:`~dataknobs_common.text.token_spans` for the boundary policy that
     stops it finding ``beagle`` inside ``unbeagleable``.
+
+    **A form whose edge is punctuation is found too.** A window starts and
+    ends on a token, so on its own it never reaches the parentheses of
+    ``(beagle)`` or the last period of ``C.D.C.``. The vocabulary says how far
+    its forms' punctuation reaches --
+    :attr:`~dataknobs_common.ontology.SourceDescription.form_edge` -- and each
+    window is also probed widened over that much of the punctuation beside it
+    in the text, by every prefix of the run: ``a (beagle), here`` finds
+    ``(beagle)`` at ``(2, 10)`` although the run after it is ``),``. A
+    vocabulary with no punctuated edge says ``0`` and is probed exactly as
+    before. Where nothing states the edge -- a rung given its own
+    ``normalizer``, or a source that cannot say -- the whole run is widened
+    over, and the run is the caller's text: ``max_edge`` caps it.
+
+    **The narrowest span is the evidence.** Where a window and its extensions
+    reach one entity -- a fold that strips punctuation makes ``(beagle)``,
+    ``(beagle`` and ``beagle`` all reach ``beagle`` -- the entity is reported
+    once for that window, at the narrowest of them: the punctuation took no
+    part in the match. See :func:`_narrowest`.
 
     **Overlapping forms are all returned.** ``"my golden retriever has been
     limping"`` yields ``golden_retriever`` at ``(3, 19)`` and ``retriever`` at
@@ -1253,18 +1344,21 @@ class ScanningSignal(DeclaredSignal):
 
     **It does not subsume** :class:`ExactNormalizedSignal`, although both read
     ``by_surface_form``, so the two are worth composing together rather than
-    choosing between. A probe is a slice *between* token boundaries, so a
-    declared form whose first or last character is not alphanumeric is never
-    probed at all. Over a vocabulary declaring the aliases ``(beagle)`` and
-    ``C.D.C.``, each query being the declared form itself:
+    choosing between. A probe is a run of whole tokens, widened only over the
+    punctuation touching it, so a declared form that no such run can spell is
+    never probed. Over a vocabulary declaring the aliases ``(beagle)``,
+    ``C.D.C.``, ``( beagle )`` and ``:-)``, each query being the declared form
+    itself:
 
-    - ``"(beagle)"`` -- the whole-string rung finds it at ``(0, 8)``; this
-      rung finds **nothing**, because ``token_spans`` reports ``((1, 7),)``
-      and no probe reaches the parentheses.
-    - ``"C.D.C."`` -- found at ``(0, 6)``; this rung finds **nothing**, for
-      the trailing period.
-    - ``"K-9"`` -- found at ``(0, 3)`` by both. An interior boundary character
-      is fine; only the edges matter.
+    - ``"(beagle)"`` and ``"C.D.C."`` -- found by both, at ``(0, 8)`` and
+      ``(0, 6)``. The punctuation touches a token, so an extension reaches it.
+    - ``"K-9"`` -- found at ``(0, 3)`` by both. Interior punctuation is a
+      boundary a window already spans.
+    - ``"( beagle )"`` -- the whole-string rung finds it; this rung finds
+      **nothing**. An extension never crosses whitespace, which is what keeps
+      it from reaching into the next word.
+    - ``":-)"`` -- the whole-string rung finds it; this rung finds
+      **nothing**. There is no token for a window to start on.
     - ``"Beagles!"`` -- the whole-string rung finds **nothing**, and this one
       finds ``beagle`` at ``(0, 7)``.
 
@@ -1284,6 +1378,7 @@ class ScanningSignal(DeclaredSignal):
         *,
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
+        max_edge: int | None = None,
     ) -> None:
         """Args:
         entities: The vocabulary to match against.
@@ -1298,20 +1393,31 @@ class ScanningSignal(DeclaredSignal):
             merges token boundaries reports no bound, and a scan over one
             enumerates every window unless a caller who knows their own
             queries says how wide is worth probing.
+        max_edge: The most punctuation characters a probe is widened over on
+            each side, or ``None`` to spend whatever the vocabulary states.
+            ``max_window``'s counterpart for :func:`_edge_bound`, and like it
+            the only number that can cost an answer. It exists for the edge
+            nobody stated -- a rung with its own ``normalizer`` always
+            extends over the whole run of punctuation beside a window, and so
+            does a scan over a source that cannot say -- because that run is
+            the caller's text, and its cost grows with its square.
 
         Raises:
-            ValidationError: For a ``max_window`` below one.
+            ValidationError: For a ``max_window`` below one or a ``max_edge``
+                below zero.
         """
         super().__init__(entities, normalizer=normalizer)
         self._max_window = _checked_max_window(max_window)
+        self._max_edge = _checked_max_edge(max_edge)
 
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
         bound = _window_bound(self._entities, self._normalizer, self._max_window)
-        for span in _probe_spans(query, bound):
+        edge = _edge_bound(self._entities, self._normalizer, self._max_edge)
+        for span in probe_spans(query, bound, edge=edge):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return found
+        return _narrowest(query, found)
 
 
 class LexicalSignal(DeclaredSignal):
@@ -1706,7 +1812,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
     which is the case this family is for: the rung's contract is a dictionary
     lookup, *no store, no embedder, no network*. A source that does reach for
     data on every ``by_surface_form`` pays one round trip per probe, and the
-    bound :func:`_probe_spans` takes from the vocabulary is what keeps that a
+    bound :func:`_window_bound` takes from the vocabulary is what keeps that a
     number proportional to the query rather than to its square. If a backing
     that genuinely round-trips is wanted here, the thing to add is a batch
     member on
@@ -1725,6 +1831,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         *,
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
+        max_edge: int | None = None,
     ) -> None:
         """The same constructor as the synchronous twin's, over an asynchronous source.
 
@@ -1735,18 +1842,21 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         each argument means and for which of them can cost an answer.
 
         Raises:
-            ValidationError: For a ``max_window`` below one.
+            ValidationError: For a ``max_window`` below one or a ``max_edge``
+                below zero.
         """
         super().__init__(entities, normalizer=normalizer)
         self._max_window = _checked_max_window(max_window)
+        self._max_edge = _checked_max_edge(max_edge)
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
         bound = _window_bound(self._entities, self._normalizer, self._max_window)
-        for span in _probe_spans(query, bound):
+        edge = _edge_bound(self._entities, self._normalizer, self._max_edge)
+        for span in probe_spans(query, bound, edge=edge):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return found
+        return _narrowest(query, found)
 
 
 class AsyncLexicalSignal(AsyncDeclaredSignal):

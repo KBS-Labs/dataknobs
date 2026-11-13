@@ -276,11 +276,78 @@ def test_declares_has_no_default_so_a_source_must_answer_the_question() -> None:
     with pytest.raises(TypeError, match="declares"):
         SourceDescription("catalog", "memory", None, {}, frozenset())  # type: ignore[call-arg]
 
-    cannot_enumerate = SourceDescription("catalog", "memory", None, {}, frozenset(), None)
-    holds_none = SourceDescription("catalog", "memory", None, {}, frozenset(), frozenset())
+    cannot_enumerate = SourceDescription("catalog", "memory", None, {}, frozenset(), None, 0)
+    holds_none = SourceDescription("catalog", "memory", None, {}, frozenset(), frozenset(), 0)
 
     assert cannot_enumerate.declares is None
     assert holds_none.declares == frozenset()
     assert cannot_enumerate != holds_none, (
         "the two states must not compare equal, or the field is back to carrying one value"
     )
+
+
+def test_form_edge_has_no_default_either() -> None:
+    """How far a form's punctuation reaches is a second question with three answers.
+
+    ``0`` lets a scan extend nothing, ``None`` makes it extend over every run
+    of punctuation it meets. A default would pick one of those for every
+    source that said nothing, and either pick is wrong for some source: the
+    first silently loses ``(beagle)``, the second spends lookups a source that
+    knew better did not need.
+    """
+    import pytest
+
+    from dataknobs_common.ontology.sources import SourceDescription
+
+    with pytest.raises(TypeError, match="form_edge"):
+        SourceDescription("catalog", "memory", None, {}, frozenset(), None)  # type: ignore[call-arg]
+
+    unbounded = SourceDescription("catalog", "memory", None, {}, frozenset(), None, None)
+    none_punctuated = SourceDescription("catalog", "memory", None, {}, frozenset(), None, 0)
+    assert unbounded != none_punctuated
+
+
+def _edge_of(*aliases: str, normalizer: object = None) -> int | None:
+    entities = {
+        f"e{index}": Entity(id=f"e{index}", type="Thing", name=f"e{index}", aliases=(alias,))
+        for index, alias in enumerate(aliases)
+    }
+    source = MappingEntitySource(entities, normalizer=normalizer)  # type: ignore[arg-type]
+    return source.describe().form_edge
+
+
+def test_a_mapping_source_measures_its_widest_punctuated_edge() -> None:
+    """Measured over the folded keys, as the token bound is, and once.
+
+    The widest edge on either side of any form: ``((beagle)),`` reaches three
+    on the right. Interior punctuation is not an edge, and an id or name with
+    none -- every ``eN`` here -- contributes nothing.
+    """
+    assert _edge_of("beagle", "K-9", "AT&T") == 0
+    assert _edge_of("C.D.C.") == 1
+    assert _edge_of("C.D.C.", "((beagle)),") == 3
+    assert _edge_of() == 0
+
+
+def test_a_form_with_no_token_bounds_no_extension() -> None:
+    """``:-)`` is all edge, and no window starts on it, so no extension reaches it.
+
+    Counting it would make every punctuated window in every query pay for a
+    form the scan cannot find whatever it spends.
+    """
+    assert _edge_of(":-)", "(beagle)") == 1
+    assert _edge_of("?!?!?!") == 0
+
+
+def test_a_fold_that_merges_tokens_cannot_say_how_far_an_edge_reaches() -> None:
+    """``None`` where the token bound is ``None``, and for its reason.
+
+    A fold that deletes boundaries makes the key a spelling the query does not
+    carry, so its edge describes nothing a window can be widened over.
+    """
+    import re
+
+    def squash(form: str) -> str:
+        return re.sub(r"[^0-9a-z]", "", form.casefold())
+
+    assert _edge_of("Golden Retriever", normalizer=squash) is None

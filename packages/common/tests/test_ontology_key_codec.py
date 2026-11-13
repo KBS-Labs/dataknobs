@@ -210,8 +210,8 @@ def test_every_id_qualify_builds_localize_reads_back() -> None:
     onto = replace(
         _onto(SkuCodec()),
         describes=(
-            SourceDescription("plant_a", "memory", None, {}, frozenset(), frozenset()),
-            SourceDescription("plant_b", "memory", None, {}, frozenset(), frozenset()),
+            SourceDescription("plant_a", "memory", None, {}, frozenset(), frozenset(), 0),
+            SourceDescription("plant_b", "memory", None, {}, frozenset(), frozenset(), 0),
         ),
     )
     key = Sku("ACME", 3)

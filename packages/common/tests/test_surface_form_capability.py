@@ -114,6 +114,7 @@ class UnfoldedSource:
                 if capability is not Capability.SURFACE_FORM_LOOKUP
             ),
             declares=described.declares,
+            form_edge=described.form_edge,
         )
 
     def by_surface_form(self, form: str) -> frozenset[str]:

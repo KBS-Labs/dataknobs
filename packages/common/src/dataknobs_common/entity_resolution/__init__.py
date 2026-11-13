@@ -34,10 +34,12 @@ close a cycle through ``ontology/__init__``, which fails on import *order* --
 so a suite that happens to import one side first stays green while the other
 is broken.
 
-``content_span`` and ``token_spans`` are re-exported here, beside the rungs
-that need them, because writing a scanning rung is what they are for -- and
-they stay in ``text`` itself, which imports nothing, so the vocabulary side
-can fold with the same policy without depending on this package.
+``content_span``, ``token_spans`` and the edge rule's three functions --
+``punctuation_edges``, ``edge_extensions`` and ``probe_spans`` -- are
+re-exported here, beside the rungs that need them, because writing a scanning
+rung is what they are for -- and they stay in ``text`` itself, which imports
+nothing, so the vocabulary side can fold and measure with the same policy
+without depending on this package.
 
 A property of the module graph, not of the process: ``dataknobs_common``
 publishes the vocabulary on its own door, so importing anything from the
@@ -102,7 +104,13 @@ from dataknobs_common.entity_resolution.values import (
     within_axis_names,
     within_memberships,
 )
-from dataknobs_common.text import content_span, token_spans
+from dataknobs_common.text import (
+    content_span,
+    edge_extensions,
+    probe_spans,
+    punctuation_edges,
+    token_spans,
+)
 
 __all__ = [
     "ENTITY_TYPE_KEY",
@@ -145,8 +153,11 @@ __all__ = [
     "content_span",
     "declared_candidates",
     "declared_signal_metadata",
+    "edge_extensions",
     "finish",
     "merge_rung",
+    "probe_spans",
+    "punctuation_edges",
     "refuse_negative_k",
     "signal_backends",
     "token_spans",

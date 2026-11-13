@@ -142,9 +142,24 @@ class _CountingSource:
     def __init__(self, inner: Any) -> None:
         self._inner = inner
         self.probes = 0
+        self.forms: list[str] = []
+        self.undeclared_edge = False
 
     def describe(self) -> Any:
-        return self._inner.describe()
+        """The index's own description, or one that cannot say how far an edge reaches.
+
+        ``undeclared_edge`` is how a test builds the third state of
+        ``form_edge`` over a vocabulary whose measured edge it also has, so
+        the two can be compared on one set of forms rather than two.
+        """
+        described = self._inner.describe()
+        if self.undeclared_edge:
+            return dataclasses.replace(described, form_edge=None)
+        return described
+
+    def _probed(self, form: str) -> None:
+        self.probes += 1
+        self.forms.append(form)
 
     def longest_form_tokens(self) -> int | None:
         return self._inner.longest_form_tokens()
@@ -174,7 +189,7 @@ class CountingEntitySource(_CountingSource):
         return self._inner.fetch_origins(refs)
 
     def by_surface_form(self, form: str) -> frozenset[str]:
-        self.probes += 1
+        self._probed(form)
         return self._inner.by_surface_form(form)
 
     def by_type(self, type_id: str) -> frozenset[str]:
@@ -211,7 +226,7 @@ class AsyncCountingEntitySource(_CountingSource):
         return await self._inner.fetch_origins(refs)
 
     async def by_surface_form(self, form: str) -> frozenset[str]:
-        self.probes += 1
+        self._probed(form)
         return await self._inner.by_surface_form(form)
 
     async def by_type(self, type_id: str) -> frozenset[str]:
@@ -494,37 +509,45 @@ def test_neither_rung_subsumes_the_other() -> None:
     ``signals._candidate`` and in the design it came from: that a scan
     *subsumes* whole-string matching. It does not, and the reason is a property
     of the boundary policy rather than a bug in either rung -- every probe is a
-    slice **between** token boundaries, so a declared form whose first or last
-    character is not alphanumeric is never probed at all.
+    run of whole tokens, widened only over punctuation that touches it, so a
+    declared form no such run spells is never probed.
 
-    It survived because the sentence lived in a private function's docstring,
-    which nothing reads, and because no fixture in this repository declared a
-    form with a punctuated edge. That is the shape of defect this file now
-    carries a measurement for rather than a sentence.
+    ``(beagle)`` and ``C.D.C.`` were once on that list too: a probe started
+    and ended on a token, and nothing reached the punctuation at a form's
+    edge. They are reached now, and are kept below as the measurement of that
+    -- what remains out of reach is a form whose edge punctuation is separated
+    from its word by a space, and a form with no token at all.
     """
     punctuated = MappingEntitySource(
-        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=("(beagle)", "C.D.C."))}
+        {
+            "k9": Entity(
+                id="k9",
+                type="Thing",
+                name="K-9",
+                aliases=("(beagle)", "C.D.C.", "( beagle )", ":-)"),
+            )
+        }
     )
     scan = CascadingResolver([ScanningSignal(punctuated)], punctuated)
     whole = CascadingResolver([ExactNormalizedSignal(punctuated)], punctuated)
 
     # The whole-string rung reaches a form the scan never probes.
-    for form, span in (("(beagle)", (0, 8)), ("C.D.C.", (0, 6))):
+    for form, span in (("( beagle )", (0, 10)), (":-)", (0, 3))):
         found = whole.resolve(form, k=5)
         assert [c.entity_id for c in found.candidates] == ["k9"]
         assert found.explain("k9")[0].span == span
         assert scan.resolve(form, k=5).candidates == ()
 
-    # An interior boundary character is fine: the edges are what matter, so
-    # this is the one form in the vocabulary both rungs reach -- asserted in
-    # both directions, because "by both" is the claim and one half of it is
-    # what the two cases above are contrasted against.
+    # Both rungs reach these, the scan by extending a window over the
+    # punctuation touching it -- and an interior boundary character was
+    # always fine, which is why K-9 is the control.
     assert token_spans("(beagle)") == ((1, 7),)
     assert token_spans("K-9") == ((0, 1), (2, 3))
-    for rung in (scan, whole):
-        found = rung.resolve("K-9", k=5)
-        assert [c.entity_id for c in found.candidates] == ["k9"]
-        assert found.explain("k9")[0].span == (0, 3)
+    for form, span in (("(beagle)", (0, 8)), ("C.D.C.", (0, 6)), ("K-9", (0, 3))):
+        for rung in (scan, whole):
+            found = rung.resolve(form, k=5)
+            assert [c.entity_id for c in found.candidates] == ["k9"]
+            assert found.explain("k9")[0].span == span
 
     # And the other direction, which is why neither is the stronger rung.
     plain = MappingEntitySource(
@@ -1319,3 +1342,329 @@ def test_the_other_three_verdicts_still_answer_without_being_asked_twice(
     )
 
     assert result.ref().entity_id == "bilge_pump"
+
+
+# --------------------------------------------------------------------------
+# A declared form whose edge is punctuation
+# --------------------------------------------------------------------------
+
+
+def _forms(*aliases: str) -> dict[str, Entity]:
+    """One entity per alias, under an id no query below spells.
+
+    The id is a surface form too, so an id like ``beagle`` would be found at
+    the bare word and make every assertion about *where* a punctuated alias
+    sat ambiguous.
+    """
+    return {
+        f"e{index}": Entity(id=f"e{index}", type="Thing", name=f"e{index}", aliases=(alias,))
+        for index, alias in enumerate(aliases)
+    }
+
+
+async def _agreeing_hits(
+    entities: Mapping[str, Entity], query: str, **rung: Any
+) -> list[tuple[str, str]]:
+    """``(declared alias, matched text)`` for every piece of evidence, from both twins.
+
+    :func:`_agreeing_scan` asserts the twins agree on ids and spans; this
+    reads the spans back as the text they point at, which is what each
+    assertion below is about.
+    """
+    await _agreeing_scan(entities, query, **rung)
+    found = ScanningSignal(MappingEntitySource(entities), **rung).candidates(query, k=10)
+    return [
+        (entities[c.entity_id].aliases[0], query[e.span[0] : e.span[1]])
+        for c in found
+        for e in c.evidence
+        if e.span is not None
+    ]
+
+
+@pytest.mark.parametrize(
+    ("aliases", "query", "expected"),
+    [
+        (("C.D.C.",), "The C.D.C. said", [("C.D.C.", "C.D.C.")]),
+        (("(beagle)",), "a (beagle) here", [("(beagle)", "(beagle)")]),
+        # Only a prefix of the run `),` reaches the declared form.
+        (("(beagle)",), "a (beagle), here", [("(beagle)", "(beagle)")]),
+        # AT&T is the control: interior punctuation was always reached.
+        (
+            ("AT&T", "C.D.C."),
+            "The C.D.C. and AT&T said",
+            [("C.D.C.", "C.D.C."), ("AT&T", "AT&T")],
+        ),
+    ],
+)
+async def test_a_scan_reaches_a_form_whose_edge_is_punctuation(
+    aliases: tuple[str, ...], query: str, expected: list[tuple[str, str]]
+) -> None:
+    """A probe used to start and end on a token, so these were never probed.
+
+    ``token_spans("(beagle)")`` is ``((1, 7),)``, and no window over it reaches
+    the parentheses -- the scan reported nothing for a form the vocabulary
+    declared and the query spelled exactly. The vocabulary now says how far
+    its punctuation reaches, and the scan extends a span over that much of the
+    punctuation beside it in the text.
+    """
+    assert sorted(await _agreeing_hits(_forms(*aliases), query)) == sorted(expected)
+
+
+async def test_the_spans_are_where_the_punctuated_forms_sat() -> None:
+    """Offsets, not only texts: the evidence points at the whole declared form."""
+    entities = _forms("C.D.C.", "(beagle)")
+    await _agreeing_scan(entities, "The C.D.C. saw a (beagle), here")
+    found = ScanningSignal(MappingEntitySource(entities)).candidates(
+        "The C.D.C. saw a (beagle), here", k=5
+    )
+    assert {c.entity_id: [e.span for e in c.evidence] for c in found} == {
+        "e0": [(4, 10)],
+        "e1": [(17, 25)],
+    }
+
+
+@pytest.mark.parametrize(
+    ("aliases", "query", "expected"),
+    [
+        # A form without the trailing period is found without it, and the
+        # declared C.D.C. is not invented from it.
+        (("C.D.C", "(beagle)"), "The C.D.C. said", [("C.D.C", "C.D.C")]),
+        # The bare word is found at the word, never with the brackets around it.
+        (("beagle", "C.D.C."), "a (beagle) here", [("beagle", "beagle")]),
+        (
+            ("Mercedes-Benz", "(beagle)"),
+            "a Mercedes-Benz and a Ford",
+            [("Mercedes-Benz", "Mercedes-Benz")],
+        ),
+    ],
+)
+async def test_an_extension_matches_nothing_the_vocabulary_did_not_declare(
+    aliases: tuple[str, ...], query: str, expected: list[tuple[str, str]]
+) -> None:
+    """The controls, each beside a punctuated form so that extensions are probed.
+
+    A vocabulary with no punctuated edge probes no extension at all, which
+    would make these pass for the wrong reason. Here every query is scanned
+    with extensions, and each extension is a lookup that misses.
+    """
+    assert sorted(await _agreeing_hits(_forms(*aliases), query)) == sorted(expected)
+
+
+def test_a_vocabulary_with_no_punctuated_edge_costs_nothing_extra() -> None:
+    """Today's bound, over a query full of the punctuation that triggers extensions.
+
+    The guard above it measures a query with no punctuation in it, which a
+    rule extending over punctuation would pass however much it spent. This
+    one is the case the rule could have made expensive and does not: the
+    vocabulary declares no form with a punctuated edge, so it says ``0`` and
+    no span is extended.
+    """
+    source = CountingEntitySource(
+        {
+            "beagle": Entity(id="beagle", type="Breed", name="Beagle"),
+            "golden_retriever": Entity(
+                id="golden_retriever", type="Breed", name="Golden Retriever"
+            ),
+        }
+    )
+    query = ", ".join(["(word)."] * 38 + ["golden retriever!"])
+    tokens = len(token_spans(query))
+    assert tokens == 40
+
+    found = ScanningSignal(source).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == ["golden_retriever"]
+    assert source.describe().form_edge == 0
+    assert source.probes <= tokens * 2, (
+        f"the scan spent {source.probes} lookups on a {tokens}-token query over a "
+        f"vocabulary whose forms carry no punctuation at their edges"
+    )
+
+
+async def test_a_declared_edge_is_as_far_as_an_extension_reaches() -> None:
+    """``form_edge == 1`` and ``((beagle))``: no probe takes both parentheses."""
+    sync = CountingEntitySource(_forms("(beagle)"))
+    asynchronous = AsyncCountingEntitySource(_forms("(beagle)"))
+    query = "a ((beagle)) here"
+
+    found = ScanningSignal(sync).candidates(query, k=5)
+    awaited = await AsyncScanningSignal(asynchronous).candidates(query, k=5)
+
+    assert sync.describe().form_edge == 1
+    for source, result in ((sync, found), (asynchronous, awaited)):
+        assert [e.span for c in result for e in c.evidence] == [(3, 11)]
+        assert not [form for form in source.forms if "((" in form or "))" in form], (
+            f"a probe extended two characters past a vocabulary whose widest "
+            f"edge is one: {source.forms}"
+        )
+    assert sync.forms == asynchronous.forms
+
+
+async def test_an_undeclared_edge_loses_nothing_the_measured_one_finds() -> None:
+    """``None`` -- *cannot say* -- extends over the whole adjacent run.
+
+    The losslessness argument the token bound makes, carried to the second
+    dimension: a measured edge removes only probes that could not have
+    matched, so a scan told nothing finds exactly what a scan told the number
+    finds, and spends more to do it.
+    """
+    entities = _forms("C.D.C.", "(beagle)", "AT&T")
+    query = "Did the C.D.C. ((really)) see a (beagle), and AT&T?!"
+
+    measured = CountingEntitySource(entities)
+    undeclared = CountingEntitySource(entities)
+    undeclared.undeclared_edge = True
+    async_undeclared = AsyncCountingEntitySource(entities)
+    async_undeclared.undeclared_edge = True
+
+    with_edge = CascadingResolver([ScanningSignal(measured)], measured).resolve(query, k=5)
+    without = CascadingResolver([ScanningSignal(undeclared)], undeclared).resolve(query, k=5)
+    awaited = await AsyncCascadingResolver(
+        [AsyncScanningSignal(async_undeclared)], async_undeclared
+    ).resolve(query, k=5)
+
+    assert [c.entity_id for c in without.candidates] == [c.entity_id for c in with_edge.candidates]
+    assert without.coverage == with_edge.coverage == awaited.coverage
+    assert {c.entity_id for c in with_edge.candidates} == {"e0", "e1", "e2"}
+
+    # The control: these are two situations, not one asked twice.
+    assert measured.describe().form_edge == 1
+    assert undeclared.describe().form_edge is None
+    assert undeclared.probes > measured.probes
+
+
+def _sharp(form: str) -> str:
+    """A fold that spells a punctuation character out, as ``C#`` → ``csharp``."""
+    return default_normalizer(form).replace("#", "sharp")
+
+
+async def test_a_rung_that_folds_does_not_trust_an_edge_measured_without_it() -> None:
+    """The source measured its own keys, and the rung's fold is another.
+
+    The index holds ``csharp`` -- one token, no punctuation, so it reports an
+    edge of ``0``, correctly for itself. The rung folds with :func:`_sharp`,
+    under which the two-character window ``C#`` reaches that key; trusting
+    ``0`` would never probe it. The token bound is declined for the same
+    reason, one function along.
+    """
+    entities = {"csharp": Entity(id="csharp", type="Language", name="csharp")}
+
+    assert MappingEntitySource(entities).describe().form_edge == 0
+    assert await _agreeing_scan(entities, "I write C# daily", normalizer=_sharp) == ["csharp"]
+
+
+async def test_a_source_fold_that_spells_punctuation_out_is_measured_as_written() -> None:
+    """The edge is measured over the declared form as written, not only folded.
+
+    A source folding with :func:`_sharp` holds the key ``csharp`` for the
+    declared ``C#`` -- no punctuation in the key, so an edge measured over
+    keys alone is ``0`` and no probe ever reaches ``#``. But an extension
+    widens a window over the punctuation in the **query**, which is spelled
+    the way the form was written. Measured before this test existed: the edge
+    was ``0`` and ``"I write C# daily"`` found nothing, where an undeclared
+    edge found ``C#`` -- a derived bound that cost an answer.
+    """
+    entities = {"x": Entity(id="x", type="Language", name="x", aliases=("C#",))}
+
+    assert MappingEntitySource(entities, normalizer=_sharp).describe().form_edge == 1
+    assert await _agreeing_scan(entities, "I write C# daily", source_normalizer=_sharp) == ["x"]
+
+
+def _hostile(run: int) -> str:
+    """One token with ``run`` characters of punctuation on each side of it."""
+    return "=" * run + "beagle" + "=" * run
+
+
+async def test_max_edge_caps_an_edge_the_vocabulary_cannot_state() -> None:
+    """``None`` widens a window over the whole run, and the run is the caller's.
+
+    One token between two runs of *r* punctuation characters is
+    ``(r + 1) ** 2 - 1`` extensions -- 90,600 for ``r = 300`` -- and on a
+    live table each is a round trip. ``max_window`` counts tokens and cannot
+    reach it, so ``max_edge`` is the caller's cap on characters, and like
+    ``max_window`` it is the one number here that can cost an answer.
+    """
+    sync = CountingEntitySource({"beagle": Entity(id="beagle", type="Breed", name="Beagle")})
+    sync.undeclared_edge = True
+    asynchronous = AsyncCountingEntitySource(
+        {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    )
+    asynchronous.undeclared_edge = True
+    query = _hostile(300)
+
+    found = ScanningSignal(sync, max_edge=2).candidates(query, k=5)
+    awaited = await AsyncScanningSignal(asynchronous, max_edge=2).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == [c.entity_id for c in awaited] == ["beagle"]
+    assert sync.probes == asynchronous.probes == (2 + 1) ** 2, (
+        f"a two-character cap allows eight extensions and the window, and the "
+        f"scan spent {sync.probes}"
+    )
+
+
+async def test_max_edge_reaches_a_rung_that_folds_for_itself() -> None:
+    """The path that cannot read the vocabulary's edge at all.
+
+    A rung with its own ``normalizer`` declines the source's number, so
+    without a cap it extends over every run in full whatever the vocabulary
+    declares -- the case where the caller had no way out.
+    """
+    source = CountingEntitySource({"beagle": Entity(id="beagle", type="Breed", name="Beagle")})
+
+    ScanningSignal(source, normalizer=default_normalizer, max_edge=1).candidates(_hostile(50), k=5)
+
+    assert source.probes == (1 + 1) ** 2
+
+
+async def test_max_edge_never_widens_a_measured_edge() -> None:
+    """A cap clips; the vocabulary's own smaller number still governs."""
+    source = CountingEntitySource(_forms("(beagle)"))
+
+    ScanningSignal(source, max_edge=5).candidates("a ((beagle)) here", k=5)
+
+    assert source.describe().form_edge == 1
+    assert not [form for form in source.forms if "((" in form or "))" in form]
+
+
+async def test_both_scans_refuse_a_negative_max_edge() -> None:
+    """Zero is legal -- it extends nothing -- and below zero is refused, identically."""
+    declared = {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    for refused in (-1, -7):
+        with pytest.raises(ValidationError) as from_sync:
+            ScanningSignal(MappingEntitySource(declared), max_edge=refused)
+        with pytest.raises(ValidationError) as from_async:
+            AsyncScanningSignal(AsyncMappingEntitySource(declared), max_edge=refused)
+        assert str(refused) in str(from_sync.value)
+        assert str(from_sync.value) == str(from_async.value)
+
+    assert await _agreeing_scan(_forms("(beagle)"), "a (beagle) here", max_edge=0) == []
+
+
+def _strip_punctuation(form: str) -> str:
+    return re.sub(r"[^\w\s]", "", form).casefold()
+
+
+async def test_an_extension_that_adds_nothing_is_not_reported_as_evidence() -> None:
+    """One entity, one window: the narrowest span that reached it is the evidence.
+
+    A fold that strips punctuation makes every extension of ``beagle`` reach
+    the same key the bare window does, so ``"(beagle)"`` was reported at four
+    nested places -- ``(0, 8)``, ``(0, 7)``, ``(1, 8)`` and ``(1, 7)`` -- where
+    the scan before extensions reported one. The punctuation took no part in
+    the match, so the evidence is the window it took no part around.
+
+    A punctuated form keeps its punctuation: ``(beagle)`` declared and found
+    is reported at ``(0, 8)``, because the bare window does not reach it.
+    """
+    plain = {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    for rung in (
+        ScanningSignal(MappingEntitySource(plain), normalizer=_strip_punctuation),
+        ScanningSignal(MappingEntitySource(plain, normalizer=_strip_punctuation)),
+    ):
+        found = rung.candidates("(beagle)", k=5)
+        assert [e.span for c in found for e in c.evidence] == [(1, 7)]
+
+    await _agreeing_scan(plain, "(beagle)", normalizer=_strip_punctuation)
+    punctuated = _forms("(beagle)")
+    found = ScanningSignal(MappingEntitySource(punctuated)).candidates("x (beagle) y", k=5)
+    assert [e.span for c in found for e in c.evidence] == [(2, 10)]

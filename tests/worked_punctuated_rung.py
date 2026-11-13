@@ -13,8 +13,7 @@ same reason for it.
 Its own reason is narrower and worth stating. The call site one page up shows a
 reader what the shipped rung *answers*; this shows them what a rung they write
 themselves has to *do*, and its claims are the sharper of the two: that
-``(beagle)``, ``C.D.C.`` and ``K-9`` are reachable this way and are not
-reachable by the shipped scan. A page that made that claim while nothing ran it
+``:-)`` is reachable this way and is not reachable by the shipped scan. A page that made that claim while nothing ran it
 would be asserting the one thing a reader cannot check without writing the
 class first.
 
@@ -36,7 +35,7 @@ class PunctuatedFormRung(DeclaredSignal):
 
     def _located(self, query: str) -> list[FormHit]:
         found: list[FormHit] = []
-        for chunk in re.finditer(r"\S+", query):  # "(beagle)" is one chunk
+        for chunk in re.finditer(r"\S+", query):  # ":-)" is one chunk
             hits = self._entities.by_surface_form(self._fold(chunk.group()))
             found += [FormHit(entity_id=i, span=chunk.span()) for i in self._order(hits)]
         return found

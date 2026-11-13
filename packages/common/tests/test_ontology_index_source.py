@@ -71,7 +71,9 @@ class _Unenumerable:
         self._declares = declares
 
     def describe(self) -> SourceDescription:
-        return SourceDescription("products_table", "memory", None, {}, frozenset(), self._declares)
+        return SourceDescription(
+            "products_table", "memory", None, {}, frozenset(), self._declares, 0
+        )
 
     async def by_type(self, type_id: str) -> frozenset[str]:
         return frozenset()

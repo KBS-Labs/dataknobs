@@ -865,11 +865,22 @@ source reports that it cannot bound and the scan enumerates in full rather
 than quietly stopping short of a declared form. `max_window` is where a caller
 who knows their own queries puts a number back.
 
+The punctuation a window is widened over has a bound of its own, in
+characters: the vocabulary's `form_edge`, so `(beagle)` costs one character on
+each side. Where nothing states it — a rung given its own `normalizer`, or a
+live table that declares none — the whole run beside a window is widened over,
+and that run is the caller's text: one word between two 300-character `=====`
+rules is 90,600 extensions. `max_edge` caps it, and like `max_window` it is the
+one number that can cost an answer. A document sets both on a `kind: scan`
+rung.
+
 What is worth writing yourself is a rung that asks the index a question the
-shipped one cannot, and there is a concrete one. A probe is a slice *between*
-token boundaries, so a declared form whose first or last character is not
-alphanumeric — `(beagle)`, `C.D.C.` — is never probed at all. A vocabulary
-carrying forms like those wants a different boundary:
+shipped one cannot, and there is a concrete one. A probe is a run of whole
+tokens, widened over the punctuation touching it as far as the vocabulary's
+own forms reach — so `(beagle)` and `C.D.C.` are found, at `(2, 10)` in
+`a (beagle), here` — but a declared form with **no** alphanumeric character in
+it — `:-)`, `<3` — has no token for a probe to start on, and is never probed at
+all. A vocabulary carrying forms like those wants a different boundary:
 
 <!-- worked-rung -->
 ```python
@@ -883,7 +894,7 @@ class PunctuatedFormRung(DeclaredSignal):
 
     def _located(self, query: str) -> list[FormHit]:
         found: list[FormHit] = []
-        for chunk in re.finditer(r"\S+", query):  # "(beagle)" is one chunk
+        for chunk in re.finditer(r"\S+", query):  # ":-)" is one chunk
             hits = self._entities.by_surface_form(self._fold(chunk.group()))
             found += [FormHit(entity_id=i, span=chunk.span()) for i in self._order(hits)]
         return found
@@ -901,11 +912,12 @@ publishes — and `_order` is the hook that publishes it on both paths, the
 nothing more than that.
 
 That block is executed: `tests/worked_punctuated_rung.py` is the same text, run
-against a vocabulary declaring `(beagle)`, `C.D.C.` and `K-9`, so the three
-forms named below are measured rather than asserted here.
+against a vocabulary declaring `:-)`, `(beagle)`, `C.D.C.` and `K-9`, so the
+forms named here are measured rather than asserted: it reaches all four, and
+the shipped scan every one but `:-)`.
 
 **And note what it gives up.** A chunk is whitespace-delimited, so this rung
-reaches a form whose edges are punctuated and reaches *no multi-word form at
+reaches a form with no token in it and reaches *no multi-word form at
 all* — `golden retriever` and `domestic dog` are two chunks each, and nothing
 here ever joins two. That is the trade the boundary buys, not an oversight:
 the same test measures it, so a reader copying this block for a vocabulary
@@ -913,8 +925,9 @@ that carries both kinds of form knows before they run it. A vocabulary needing
 both composes this rung with `ScanningSignal` rather than choosing between
 them, which is what the section below is about.
 
-`token_spans` is the boundary policy the shipped scan uses, and it is a
-different question from the fold: `default_normalizer` strips and case-folds,
+`token_spans` is the boundary policy the shipped scan uses — with
+`edge_extensions` as its second half, reaching over punctuation beside a token
+— and it is a different question from the fold: `default_normalizer` strips and case-folds,
 which is what a whole-string lookup wants and is not what stops a scan finding
 `beagle` inside `unbeagleable`. Whichever boundary a rung picks, probe the
 **slice** rather than a join, so no offset ever points at a string the text does
@@ -933,8 +946,8 @@ produce the same id.
 **Compose rather than choose.** `ScanningSignal` and `ExactNormalizedSignal`
 read the same index and neither subsumes the other: the scan finds a declared
 form sitting inside a sentence, which a whole-string comparison misses, and the
-whole-string rung finds a form whose own edges are punctuated, which no scan
-probes. A cascade carrying both asks the index twice and pays two dictionary
+whole-string rung finds a form no run of tokens spells — `:-)`, or `( beagle )`
+with spaces inside its brackets, since an extension never crosses whitespace. A cascade carrying both asks the index twice and pays two dictionary
 lookups for it — which is what the default composition does, so a document
 that configures nothing already asks it both ways.
 

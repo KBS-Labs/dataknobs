@@ -1032,8 +1032,8 @@ def test_a_query_longer_than_the_cap_is_refused_rather_than_truncated(entities):
     about how *many* there are, and that count is the query's token count --
     the caller's input, not the vocabulary's. Each window costs one scorer
     call per declared form, where a scan's costs one dictionary lookup, so
-    the same paste that :func:`_probe_spans` bounds for a scan is a far
-    larger bill here. Measured: linear in the token count, and a
+    the same paste that :func:`~dataknobs_common.text.probe_spans` bounds
+    for a scan is a far larger bill here. Measured: linear in the token count, and a
     nine-hundred-token paste over a five-hundred-entity vocabulary is two
     seconds of one CPU.
 
