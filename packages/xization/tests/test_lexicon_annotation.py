@@ -21,14 +21,20 @@ already do by reading. What a reviewer cannot do is run the path.
 
 import re
 import sys
+import warnings
 
 import pandas as pd
 import pytest
 
 import dataknobs_xization.annotations as dk_anns
-import dataknobs_xization.authorities as dk_auth
-import dataknobs_xization.lexicon as dk_lex
-import dataknobs_xization.masking_tokenizer as dk_tok
+
+# The module under test is deprecated, and warns when it is imported. That
+# warning is asserted in test_stack_deprecation.py; here it is expected.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import dataknobs_xization.authorities as dk_auth
+    import dataknobs_xization.lexicon as dk_lex
+    import dataknobs_xization.masking_tokenizer as dk_tok
 
 QUERY = "my golden retriever has been limping"
 

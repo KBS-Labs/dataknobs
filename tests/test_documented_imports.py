@@ -181,6 +181,15 @@ from tests._workspace import (
     rel,
 )
 
+#: Resolving a documented name imports it, and xization's deprecated stack
+#: warns when it is imported or reached. That is expected here, where a name is
+#: resolved to see that it exists and never used; whether a document says the
+#: name is deprecated is this module's own check, through the ``deprecated``
+#: directive rather than the runtime warning.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:dataknobs_xization\.\S+ is deprecated:DeprecationWarning"
+)
+
 NAMESPACE = "dataknobs"
 #: The fence languages whose contents are read as Python.
 PYTHON_FENCE = frozenset({"python", "py"})

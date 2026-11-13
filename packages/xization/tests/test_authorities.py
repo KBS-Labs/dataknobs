@@ -1,11 +1,17 @@
 import re
+import warnings
 
 import pandas as pd
 import pytest
 
 import dataknobs_xization.annotations as dk_annots
-import dataknobs_xization.authorities as dk_auth
-import dataknobs_xization.lexicon as dk_lex
+
+# The module under test is deprecated, and warns when it is imported. That
+# warning is asserted in test_stack_deprecation.py; here it is expected.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import dataknobs_xization.authorities as dk_auth
+    import dataknobs_xization.lexicon as dk_lex
 
 
 def text_authority_annotations_metadata():

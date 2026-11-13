@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Deprecated
+
+- **`dataknobs.xization.authorities`, `.lexicon` and `.masking_tokenizer`,
+  and the shim's `CharacterFeatures` and `TextFeatures`**, with the modules
+  they mirror in `dataknobs-xization`. Importing `dataknobs.xization` imports
+  all three, so it raises their warnings as well as the package's own. They
+  are removed in the next major release of `dataknobs-xization`; see its
+  changelog for the replacements.
+
 ### Licensing
 
 - **Relicensed from MIT to Apache-2.0.** This version and every later version

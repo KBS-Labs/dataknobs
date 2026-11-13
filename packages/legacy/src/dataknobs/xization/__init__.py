@@ -1,7 +1,14 @@
 # SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
 # SPDX-License-Identifier: Apache-2.0
 
-"""Re-export xization from dataknobs-xization package."""
+"""Re-export xization from dataknobs-xization package.
+
+``authorities``, ``lexicon`` and ``masking_tokenizer`` (with ``CharacterFeatures``
+and ``TextFeatures``) are deprecated in ``dataknobs-xization`` and warn when
+imported. They are imported here anyway, eagerly, because the dotted paths this
+shim publishes resolve only for a module already in ``sys.modules``. So
+importing this package raises their warnings.
+"""
 
 from dataknobs._aliasing import alias_submodules
 

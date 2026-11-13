@@ -130,9 +130,15 @@ md = csv_to_markdown("data.csv", title_field="name")
 
 ### Text Normalization and Tokenization
 
+> **Deprecated:** `TextFeatures` and the rest of `masking_tokenizer`, and the
+> `authorities` and `lexicon` modules, are removed in the next major release,
+> and warn when imported. For token boundaries use
+> `dataknobs_common.text.token_spans`; for matching a dictionary of entity
+> names, `ScanningSignal` over an `EntitySource`. See the changelog.
+
 ```python
 from dataknobs_xization import normalize
-from dataknobs_xization.masking_tokenizer import TextFeatures
+from dataknobs_xization.masking_tokenizer import TextFeatures  # deprecated
 
 # Text normalization
 normalized = normalize.basic_normalization_fn("Hello, World!")

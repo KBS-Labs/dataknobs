@@ -106,6 +106,14 @@ from dataknobs_utils import llm_utils
 
 #### Xization Package
 
+!!! warning "Deprecated"
+    `masking_tokenizer` (with `TextFeatures` and `CharacterFeatures`),
+    `authorities` and `lexicon` are deprecated in `dataknobs-xization`, and
+    will be removed in its next major release, so
+    migrating to them moves code onto modules that are going away. See the
+    [xization changelog](https://kbs-labs.github.io/dataknobs/packages/xization/)
+    for what replaces each.
+
 ```python
 # OLD (Legacy)
 from dataknobs.xization import normalize

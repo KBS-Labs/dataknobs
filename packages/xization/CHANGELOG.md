@@ -366,6 +366,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default builder, and the annotation metadata a caller's builder carries
   (column names, the id column, anything else) silently did not apply.
 
+- **`AnnotatedText.get_text` and `get_annot_mask` work.** Both read
+  `Annotations.as_df`, which `Annotations` has never had, so each raised
+  `AttributeError` whenever it got that far. They read `df`. Along the way:
+  - `get_text` masks by the `annot_df` it is handed, as documented. It
+    ignored the argument.
+  - Both read the start and end columns the annotations' metadata names, not
+    `start_pos` and `end_pos`, so annotations with configured column names
+    can be masked.
+  - `get_annot_mask` pads with `False` at both ends, as documented. The mask
+    used to be the text's length, with the annotated positions shifted by the
+    padding. Over text with no annotations it is all `False` rather than an
+    error.
+
+- **`AnnotationsRowAccessor.get_col_value` reads a column the row carries
+  under the name asked for**, the second of the three places its docstring
+  says it looks. It checked whether the name was one of the metadata's column
+  *types*, which hold only the key types, so any other column the row had read
+  as the missing value. A key type whose column the row lacks under either
+  spelling still raises `KeyError`, which now names both: that is a row read
+  through the wrong metadata, and answering with the missing value would hide
+  it.
+
 ### Changed
 
 - **`DirectoryProcessor.process()` no longer refuses a caller already on an
@@ -422,6 +444,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TextFeatures`. Nothing changes at runtime; what changes is that a consumer
   type-checking against this package is told about the `None` it could always
   have received, instead of finding it.
+
+### Deprecated
+
+Each of the following warns with a `DeprecationWarning` and is removed in the
+next major release. The additions and fixes to `authorities` and `lexicon`
+listed above ship deprecated with them.
+
+- **`dataknobs_xization.authorities`.** Replacement, for matching a
+  dictionary of entity names in text: `ScanningSignal` over an
+  `EntitySource`, from `dataknobs_common.entity_resolution`. Regex
+  authorities and annotation validators have none yet.
+- **`dataknobs_xization.lexicon`.** Same replacement; declare each variation
+  as a form of its entity. Two defects in its matching are known and will not
+  be fixed: a form shared by several values is annotated with the first
+  value's id only, and the separators between tokens are ignored, so a form
+  with interior punctuation never matches and a multi-word form matches
+  across punctuation.
+- **`dataknobs_xization.masking_tokenizer`**, and with it the top-level
+  `CharacterFeatures` and `TextFeatures`. Replacement, for token boundaries:
+  `dataknobs_common.text.token_spans`. It does not split camelCase.
+- **Half of `dataknobs_xization.annotations`**, none of which has a
+  replacement. Each name moved to a private module and is still reached as
+  `annotations.<name>`, which warns:
+  - `RowData`, `AnnotationsGroup`, `MergeStrategy`,
+    `PositionalAnnotationsGroup`, `OverlapGroupIterator`,
+    `AnnotationsGroupList`, `AnnotatorKernel` and `CompoundAnnotator`;
+  - `merge`, `BasicAnnotator`, `SyntacticParser` and `EntityAnnotator`, which
+    do not work: each reads `Annotations.as_df`, which does not exist;
+  - `HtmlHighlighter`, which does not work: it drops the text after the last
+    highlight, repeats the text once per highlighted column, and does not
+    escape HTML.
+
+  `Annotations`, `AnnotationsBuilder`, `AnnotationsMetaData`,
+  `AnnotationsRowAccessor`, `DerivedAnnotationColumns`, `AnnotatedText`,
+  `Annotator` and the `KEY_*` constants stay.
+
+**`import dataknobs_xization` no longer imports the three modules**, so it
+does not warn. `dataknobs_xization.lexicon`, `from dataknobs_xization import
+TextFeatures` and the other deprecated names still work: the package imports
+the module when one is first reached, and warns. They are no longer in
+`__all__`, so `from dataknobs_xization import *` does not bind them. The
+deprecated half of `annotations` is likewise left out of
+`from dataknobs_xization.annotations import *`.
 
 ### Licensing
 

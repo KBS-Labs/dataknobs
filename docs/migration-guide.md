@@ -150,6 +150,15 @@ After migration, run your test suite to ensure everything works correctly.
 - `dataknobs.utils.sys_utils` → `dataknobs_utils.sys_utils`
 
 #### Xization
+
+!!! warning "Deprecated"
+    `masking_tokenizer` (with `TextFeatures` and `CharacterFeatures`),
+    `authorities` and `lexicon` are deprecated in `dataknobs-xization`, and
+    will be removed in its next major release, so
+    migrating to them moves code onto modules that are going away. See the
+    [xization changelog](https://kbs-labs.github.io/dataknobs/packages/xization/)
+    for what replaces each.
+
 - `dataknobs.xization.normalize` → `dataknobs_xization.normalize`
 - `dataknobs.xization.masking_tokenizer` → `dataknobs_xization.masking_tokenizer`
 - `dataknobs.xization.annotations` → `dataknobs_xization.annotations`

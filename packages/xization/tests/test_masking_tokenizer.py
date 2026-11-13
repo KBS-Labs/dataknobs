@@ -1,6 +1,13 @@
+import warnings
+
 import dataknobs_structures.document as dk_doc
 import dataknobs_utils.emoji_utils as dk_emoji
-import dataknobs_xization.masking_tokenizer as dk_tok
+
+# The module under test is deprecated, and warns when it is imported. That
+# warning is asserted in test_stack_deprecation.py; here it is expected.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import dataknobs_xization.masking_tokenizer as dk_tok
 
 
 def test_empty_tokenization():

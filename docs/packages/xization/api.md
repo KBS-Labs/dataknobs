@@ -118,6 +118,15 @@ hyphen_vars = normalize.get_hyphen_slash_expansions_fn("data-science")
 ```
 
 ### Character Features and Masking
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
+
 ```python
 from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 from dataknobs_structures import document as dk_doc
@@ -356,6 +365,14 @@ For complete markdown chunking documentation, see [Markdown Chunking Guide](mark
 
 ### masking_tokenizer Module
 
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
+
 **Abstract Classes:**
 ```python
 class CharacterFeatures(ABC):
@@ -389,6 +406,14 @@ class TextFeatures:
 
 ### annotations Module
 
+!!! note "Half of this module is deprecated"
+    `Annotations`, `AnnotationsMetaData`, `AnnotationsBuilder`,
+    `AnnotationsRowAccessor`, `DerivedAnnotationColumns`, `AnnotatedText` and
+    `Annotator` stay. The annotation groups, `merge`, `BasicAnnotator`,
+    `SyntacticParser`, `EntityAnnotator`, `HtmlHighlighter`, `AnnotatorKernel`
+    and `CompoundAnnotator` are deprecated, will be removed in the next major
+    release, and warn when reached.
+
 **Functions:**
 - Text annotation utilities
 - Markup processing
@@ -397,6 +422,14 @@ class TextFeatures:
 
 ### authorities Module
 
+!!! warning "Deprecated"
+    `dataknobs_xization.authorities` and `dataknobs_xization.lexicon` are
+    deprecated, and will be removed in the next major release. Importing
+    either raises a `DeprecationWarning`. For matching a dictionary of entity
+    names in text, use `ScanningSignal` over an `EntitySource`, from
+    `dataknobs_common.entity_resolution`. Regex authorities and annotation
+    validators have no replacement yet.
+
 **Functions:**
 - Authority control for names and terms
 - Standardization utilities
@@ -404,6 +437,14 @@ class TextFeatures:
 - Cross-reference resolution
 
 ### lexicon Module
+
+!!! warning "Deprecated"
+    `dataknobs_xization.authorities` and `dataknobs_xization.lexicon` are
+    deprecated, and will be removed in the next major release. Importing
+    either raises a `DeprecationWarning`. For matching a dictionary of entity
+    names in text, use `ScanningSignal` over an `EntitySource`, from
+    `dataknobs_common.entity_resolution`. Regex authorities and annotation
+    validators have no replacement yet.
 
 **Functions:**
 - Vocabulary analysis

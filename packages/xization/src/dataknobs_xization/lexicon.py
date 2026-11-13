@@ -5,6 +5,25 @@
 
 Provides classes for lexical expansion, normalization, token alignment,
 and pattern matching in text with support for variations and fuzzy matching.
+
+.. deprecated::
+    This module is deprecated and will be removed in the next major release,
+    and importing it warns. For matching a dictionary of entity names in text,
+    use ``ScanningSignal`` over an ``EntitySource``, from
+    :mod:`dataknobs_common.entity_resolution`, and declare each variation as a
+    form of its entity.
+
+    Two defects in its matching are known and will not be fixed:
+
+    * **A form shared by several values is annotated with the first value's id
+      only.** ``DataframeAuthority.find_variations`` keeps one id per matched
+      form, so an ambiguous mention is reported as unambiguous, although
+      ``AuthorityData.get_id_by_variation`` returns every id.
+    * **Separators between tokens are ignored.** ``TokenAligner`` and
+      ``TokenMatch`` compare runs of letters and digits, so a form with
+      interior punctuation (``Mercedes-Benz``) never matches, and a multi-word
+      form matches across punctuation (``golden retriever`` is found in
+      ``golden, retriever``).
 """
 
 from abc import abstractmethod
@@ -20,12 +39,20 @@ import dataknobs_xization.annotations as dk_anns
 import dataknobs_xization.authorities as dk_auth
 import dataknobs_xization.masking_tokenizer as dk_tok
 from dataknobs_utils import emoji_utils
+from dataknobs_xization import _deprecation
+
+_deprecation.warn_module("lexicon")
 
 
 class LexicalExpander:
     """A class to expand and/or normalize original lexical input terms, to
     keep back-references from generated data to corresponding original input,
     and to build consistent tokens for lexical matching.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     def __init__(
@@ -114,6 +141,11 @@ class TokenMatch:
     Matches a sequence of tokens against a lexical authority variation,
     tracking whether the match is complete and providing access to
     matched text and annotation generation.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     def __init__(
@@ -173,6 +205,11 @@ class TokenAligner:
     Processes a token stream, matching tokens against lexical authority
     variations and generating annotations for matches. Handles overlapping
     matches and tracks processed tokens.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     def __init__(self, first_token: dk_tok.Token, authority: dk_auth.LexicalAuthority):
@@ -265,7 +302,13 @@ class TokenAligner:
 
 
 class DataframeAuthority(dk_auth.LexicalAuthority):
-    """A pandas dataframe-based lexical authority."""
+    """A pandas dataframe-based lexical authority.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
+    """
 
     #: Narrowed from the base, where an authority may hold no data at all: a
     #: dataframe authority is built from its dataframe and its constructor
@@ -533,6 +576,11 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
 class CorrelatedAuthorityData(dk_auth.AuthorityData):
     """Container for authoritative data containing correlated data for multiple
     "sub" authorities.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     def __init__(self, df: pd.DataFrame, name: str):
@@ -608,6 +656,11 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 class MultiAuthorityData(CorrelatedAuthorityData):
     """Container for authoritative data containing correlated data for multiple
     "sub" authorities composed of explicit data for each component.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     @abstractmethod
@@ -788,6 +841,11 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 class SimpleMultiAuthorityData(MultiAuthorityData):
     """Data class for pulling a single column from the multi-authority data
     as a "sub" authority.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
@@ -822,6 +880,11 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
     expander, its derived field groups and its annotations validator -- are
     given to the factory and read back per name, so a subclass can vary any
     of them by authority without reimplementing the build.
+
+    .. deprecated::
+        Removed in the next major release. For matching a dictionary of entity
+        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
+        ``dataknobs_common.entity_resolution``.
     """
 
     def __init__(

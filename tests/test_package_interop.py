@@ -11,6 +11,17 @@ that reads it — the quality gate skips it in the unit step, and ``bin/test.sh`
 scans packages only. Filed there, these ran nowhere.
 """
 
+import warnings
+
+import pytest
+
+#: xization's tokenizer module is deprecated and warns when imported. The two
+#: tests below that use it as an example of one package building on another
+#: expect that warning; ``test_xization_package_imports`` asserts it.
+_TOKENIZER_DEPRECATED = (
+    "ignore:dataknobs_xization.masking_tokenizer is deprecated:DeprecationWarning"
+)
+
 
 def test_structures_package_imports():
     """Test that structures package exports are accessible."""
@@ -48,21 +59,35 @@ def test_utils_package_imports():
 
 
 def test_xization_package_imports():
-    """Test that xization package exports are accessible."""
-    from dataknobs_xization import (
-        normalize,
-        masking_tokenizer,
-        annotations,
-        authorities,
-        lexicon,
-    )
-    from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
+    """Xization's exports resolve, and its deprecated ones still do, with a warning.
 
-    # Verify modules are imported
+    The stack modules and the two tokenizer names are no longer imported with
+    the package; they are reached through its lazy door. The tokenizer names
+    are never bound on the package, so each access goes through the door and
+    warns, which is what makes this assertion independent of test order.
+    """
+    from dataknobs_xization import annotations, normalize
+
     assert normalize is not None
-    assert CharacterFeatures is not None
+    assert annotations.AnnotatedText is not None
+
+    with pytest.warns(DeprecationWarning, match="masking_tokenizer"):
+        from dataknobs_xization import CharacterFeatures, TextFeatures
+
+    # A module warns on its first import only, and an earlier test may have
+    # made it, so this asserts reachability alone. Each module's own warning is
+    # asserted in xization's test_stack_deprecation.py.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from dataknobs_xization import authorities, lexicon, masking_tokenizer
+
+    assert TextFeatures is masking_tokenizer.TextFeatures
+    assert issubclass(TextFeatures, CharacterFeatures)
+    assert authorities.Authority is not None
+    assert lexicon.LexicalExpander is not None
 
 
+@pytest.mark.filterwarnings(_TOKENIZER_DEPRECATED)
 def test_cross_package_dependencies():
     """Test that packages can work together."""
     # Utils depends on structures
@@ -148,6 +173,7 @@ def test_legacy_package_reexports():
     assert legacy_json.get_value(test_dict, "a.b") == new_json.get_value(test_dict, "a.b")
 
 
+@pytest.mark.filterwarnings(_TOKENIZER_DEPRECATED)
 def test_complex_workflow():
     """Test a complex workflow using multiple packages."""
     from dataknobs_structures import Tree, Text, TextMetaData
