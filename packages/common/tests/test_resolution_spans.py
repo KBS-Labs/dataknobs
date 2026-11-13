@@ -1551,3 +1551,120 @@ async def test_a_rung_that_folds_does_not_trust_an_edge_measured_without_it() ->
 
     assert MappingEntitySource(entities).describe().form_edge == 0
     assert await _agreeing_scan(entities, "I write C# daily", normalizer=_sharp) == ["csharp"]
+
+
+async def test_a_source_fold_that_spells_punctuation_out_is_measured_as_written() -> None:
+    """The edge is measured over the declared form as written, not only folded.
+
+    A source folding with :func:`_sharp` holds the key ``csharp`` for the
+    declared ``C#`` -- no punctuation in the key, so an edge measured over
+    keys alone is ``0`` and no probe ever reaches ``#``. But an extension
+    widens a window over the punctuation in the **query**, which is spelled
+    the way the form was written. Measured before this test existed: the edge
+    was ``0`` and ``"I write C# daily"`` found nothing, where an undeclared
+    edge found ``C#`` -- a derived bound that cost an answer.
+    """
+    entities = {"x": Entity(id="x", type="Language", name="x", aliases=("C#",))}
+
+    assert MappingEntitySource(entities, normalizer=_sharp).describe().form_edge == 1
+    assert await _agreeing_scan(entities, "I write C# daily", source_normalizer=_sharp) == ["x"]
+
+
+def _hostile(run: int) -> str:
+    """One token with ``run`` characters of punctuation on each side of it."""
+    return "=" * run + "beagle" + "=" * run
+
+
+async def test_max_edge_caps_an_edge_the_vocabulary_cannot_state() -> None:
+    """``None`` widens a window over the whole run, and the run is the caller's.
+
+    One token between two runs of *r* punctuation characters is
+    ``(r + 1) ** 2 - 1`` extensions -- 90,600 for ``r = 300`` -- and on a
+    live table each is a round trip. ``max_window`` counts tokens and cannot
+    reach it, so ``max_edge`` is the caller's cap on characters, and like
+    ``max_window`` it is the one number here that can cost an answer.
+    """
+    sync = CountingEntitySource({"beagle": Entity(id="beagle", type="Breed", name="Beagle")})
+    sync.undeclared_edge = True
+    asynchronous = AsyncCountingEntitySource(
+        {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    )
+    asynchronous.undeclared_edge = True
+    query = _hostile(300)
+
+    found = ScanningSignal(sync, max_edge=2).candidates(query, k=5)
+    awaited = await AsyncScanningSignal(asynchronous, max_edge=2).candidates(query, k=5)
+
+    assert [c.entity_id for c in found] == [c.entity_id for c in awaited] == ["beagle"]
+    assert sync.probes == asynchronous.probes == (2 + 1) ** 2, (
+        f"a two-character cap allows eight extensions and the window, and the "
+        f"scan spent {sync.probes}"
+    )
+
+
+async def test_max_edge_reaches_a_rung_that_folds_for_itself() -> None:
+    """The path that cannot read the vocabulary's edge at all.
+
+    A rung with its own ``normalizer`` declines the source's number, so
+    without a cap it extends over every run in full whatever the vocabulary
+    declares -- the case where the caller had no way out.
+    """
+    source = CountingEntitySource({"beagle": Entity(id="beagle", type="Breed", name="Beagle")})
+
+    ScanningSignal(source, normalizer=default_normalizer, max_edge=1).candidates(_hostile(50), k=5)
+
+    assert source.probes == (1 + 1) ** 2
+
+
+async def test_max_edge_never_widens_a_measured_edge() -> None:
+    """A cap clips; the vocabulary's own smaller number still governs."""
+    source = CountingEntitySource(_forms("(beagle)"))
+
+    ScanningSignal(source, max_edge=5).candidates("a ((beagle)) here", k=5)
+
+    assert source.describe().form_edge == 1
+    assert not [form for form in source.forms if "((" in form or "))" in form]
+
+
+async def test_both_scans_refuse_a_negative_max_edge() -> None:
+    """Zero is legal -- it extends nothing -- and below zero is refused, identically."""
+    declared = {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    for refused in (-1, -7):
+        with pytest.raises(ValidationError) as from_sync:
+            ScanningSignal(MappingEntitySource(declared), max_edge=refused)
+        with pytest.raises(ValidationError) as from_async:
+            AsyncScanningSignal(AsyncMappingEntitySource(declared), max_edge=refused)
+        assert str(refused) in str(from_sync.value)
+        assert str(from_sync.value) == str(from_async.value)
+
+    assert await _agreeing_scan(_forms("(beagle)"), "a (beagle) here", max_edge=0) == []
+
+
+def _strip_punctuation(form: str) -> str:
+    return re.sub(r"[^\w\s]", "", form).casefold()
+
+
+async def test_an_extension_that_adds_nothing_is_not_reported_as_evidence() -> None:
+    """One entity, one window: the narrowest span that reached it is the evidence.
+
+    A fold that strips punctuation makes every extension of ``beagle`` reach
+    the same key the bare window does, so ``"(beagle)"`` was reported at four
+    nested places -- ``(0, 8)``, ``(0, 7)``, ``(1, 8)`` and ``(1, 7)`` -- where
+    the scan before extensions reported one. The punctuation took no part in
+    the match, so the evidence is the window it took no part around.
+
+    A punctuated form keeps its punctuation: ``(beagle)`` declared and found
+    is reported at ``(0, 8)``, because the bare window does not reach it.
+    """
+    plain = {"beagle": Entity(id="beagle", type="Breed", name="Beagle")}
+    for rung in (
+        ScanningSignal(MappingEntitySource(plain), normalizer=_strip_punctuation),
+        ScanningSignal(MappingEntitySource(plain, normalizer=_strip_punctuation)),
+    ):
+        found = rung.candidates("(beagle)", k=5)
+        assert [e.span for c in found for e in c.evidence] == [(1, 7)]
+
+    await _agreeing_scan(plain, "(beagle)", normalizer=_strip_punctuation)
+    punctuated = _forms("(beagle)")
+    found = ScanningSignal(MappingEntitySource(punctuated)).candidates("x (beagle) y", k=5)
+    assert [e.span for c in found for e in c.evidence] == [(2, 10)]

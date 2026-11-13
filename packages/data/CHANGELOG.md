@@ -1555,9 +1555,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table carries — `1` for `(beagle)` or `C.D.C.`, `0` where no form has
   punctuation at either end. It is reported as the source's
   `describe().form_edge`. Absent, the source reports `None` and a scan widens a
-  window over the whole run of punctuation beside it — more reads and the same
-  answers — so its absence is not refused. A negative value or a non-integer
-  is.
+  window over the whole run of punctuation beside it: the same answers, at a
+  cost growing with the square of that run, each probe a round trip. Its
+  absence is not refused, because it costs reads rather than answers, and the
+  scan rung's `max_edge` caps it; a negative value or a non-integer is.
 
   The fold a surface-form lookup compares by is `str.casefold`, and no engine
   performs it at query time --- so the fold happens before the row is written

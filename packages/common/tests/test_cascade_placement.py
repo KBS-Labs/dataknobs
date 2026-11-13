@@ -24,6 +24,7 @@ from dataknobs_common.entity_resolution import (
     ScanningSignal,
     Scoring,
 )
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import (
     async_build_resolver,
     async_load_ontology,
@@ -201,6 +202,32 @@ def test_a_document_can_cap_the_scans_window(mammals_v11_path: Path, tmp_path: P
         "the control: without the cap the same document reaches both, so the "
         "assertion above is about max_window rather than about the vocabulary"
     )
+
+
+def test_a_document_can_cap_how_far_the_scan_widens_over_punctuation(
+    mammals_v11_path: Path, tmp_path: Path
+) -> None:
+    """``max_edge:`` reaches the rung, for ``max_window:``'s reason.
+
+    The cap is for the edge nobody stated, where a scan widens a window over
+    the whole run of punctuation beside it. Measured on the answer: the
+    vocabulary carries no punctuated form, so a cap of ``0`` changes nothing
+    a scan finds -- and a negative one is refused, which is only possible if
+    the document's value reached the constructor.
+    """
+    capped = build_resolver(
+        with_resolver(
+            mammals_v11_path, tmp_path / "edge.yaml", {"rungs": [{"kind": "scan", "max_edge": 0}]}
+        ),
+        load_ontology(mammals_v11_path),
+    ).resolve("my (golden retriever) has been limping", k=5)
+    assert [c.entity_id for c in capped.candidates] == ["golden_retriever", "retriever"]
+
+    refused = with_resolver(
+        mammals_v11_path, tmp_path / "refused.yaml", {"rungs": [{"kind": "scan", "max_edge": -1}]}
+    )
+    with pytest.raises(ValidationError, match="max_edge"):
+        build_resolver(refused, load_ontology(refused))
 
 
 #: Every query this file and the two guides ask of the default composition.

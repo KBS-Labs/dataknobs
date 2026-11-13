@@ -313,8 +313,10 @@ a token, so a form whose first or last character is punctuation — `(beagle)`,
 in the query. `form_edge` says how far: `0` when no form in the table has
 punctuation at either end, which widens nothing; `n` for at most `n`
 characters on each side. Leaving it out is not refused, because it costs reads
-rather than answers: the scan then widens a window over the whole run of
-punctuation beside it, one extra round trip per widening.
+rather than answers — but it costs them quadratically: the scan then widens a
+window over the whole run of punctuation beside it, every pair of prefixes a
+round trip, so one word between two 300-character `=====` rules is 90,600
+reads. Declare it, or set `max_edge` on the `scan` rung.
 
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:

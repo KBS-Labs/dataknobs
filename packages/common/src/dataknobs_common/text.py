@@ -259,7 +259,10 @@ def probe_spans(
     punctuated edge -- is exactly the enumeration over tokens alone, *n x
     longest* spans for *n* tokens; each window touched by punctuation adds at
     most ``(edge + 1) ** 2 - 1``. ``None`` means the vocabulary cannot say
-    and extends over the whole adjacent run: more lookups, the same answers.
+    and extends over the whole adjacent run: the same answers, at a cost that
+    grows with the **square** of that run -- 90,600 extensions for one token
+    between two 300-character rules. A caller scanning text it did not write
+    passes a number rather than ``None`` where it can.
 
     Flavour-free on purpose: it looks nothing up, so a synchronous caller, an
     asynchronous one and any other scan over a vocabulary each drive it with

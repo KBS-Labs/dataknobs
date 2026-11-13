@@ -865,6 +865,15 @@ source reports that it cannot bound and the scan enumerates in full rather
 than quietly stopping short of a declared form. `max_window` is where a caller
 who knows their own queries puts a number back.
 
+The punctuation a window is widened over has a bound of its own, in
+characters: the vocabulary's `form_edge`, so `(beagle)` costs one character on
+each side. Where nothing states it — a rung given its own `normalizer`, or a
+live table that declares none — the whole run beside a window is widened over,
+and that run is the caller's text: one word between two 300-character `=====`
+rules is 90,600 extensions. `max_edge` caps it, and like `max_window` it is the
+one number that can cost an answer. A document sets both on a `kind: scan`
+rung.
+
 What is worth writing yourself is a rung that asks the index a question the
 shipped one cannot, and there is a concrete one. A probe is a run of whole
 tokens, widened over the punctuation touching it as far as the vocabulary's

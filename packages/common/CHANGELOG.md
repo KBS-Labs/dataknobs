@@ -1202,7 +1202,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vocabulary's own forms reach (`SourceDescription.form_edge`):
   `"a (beagle), here"` finds `(beagle)` at `(2, 10)`, and `"The C.D.C. said"`
   finds `C.D.C.` at `(4, 10)`. A vocabulary with no punctuated edge reports
-  `0` and is probed exactly as it would be over tokens alone.
+  `0` and is probed exactly as it would be over tokens alone. Where a window
+  and its extensions reach one entity, the entity is reported once for that
+  window, at the narrowest span — so a rung whose fold strips punctuation
+  reports `(beagle)` as `beagle` at `(1, 7)`, not at four nested places.
 
   **It does not replace `ExactNormalizedSignal`, and the two compose.** A form
   no run of tokens spells — `:-)`, with no token at all, or `( beagle )`, whose
@@ -1210,6 +1213,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole-string rung and by no scan; a form sitting inside a longer sentence is
   reachable by the scan and by no whole-string rung. A cascade wanting both
   carries both.
+
+- **`max_edge` on `ScanningSignal` and `AsyncScanningSignal`**, forwarded by
+  the `kind: scan` factory: the most punctuation characters a window is
+  widened over on each side. The vocabulary's `form_edge` is the bound, and
+  this caps it where nothing states one — a rung with its own `normalizer`,
+  or a source reporting `None` — because the run widened over is the
+  caller's text and its cost grows with its square: 90,600 extensions for one
+  word between two 300-character rules. `0` is legal and extends nothing;
+  below zero is refused. Like `max_window`, the one number that can cost an
+  answer.
 
 - **`max_window` on `ScanningSignal` and `AsyncScanningSignal`**, forwarded by
   the `kind: scan` factory so a document can set it. The widest probe in
@@ -1893,9 +1906,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a declared form carries: `0` for none — a scan extends nothing — `n` for
   at most `n` on each side, and `None` for *cannot say*, which a scan answers
   by extending over the whole run: the same answers for more lookups.
-  `MappingEntitySource` and its async twin measure it over their folded forms,
-  as they measure `longest_form_tokens()`, and report `None` where the fold
-  merges tokens. A field on the description rather than a protocol member
+  `MappingEntitySource` and its async twin measure it over their forms as
+  written and as folded — the punctuation an extension reaches is in the
+  query, spelled as the form was written, so a fold that spells `#` out still
+  reports `1` for `C#` — and report `None` where the fold merges tokens. A field on the description rather than a protocol member
   beside `longest_form_tokens()`, because `EntitySource` is
   `@runtime_checkable` and a new member would stop every structural conformer
   from conforming.

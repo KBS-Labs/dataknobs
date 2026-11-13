@@ -146,8 +146,8 @@ class SourceDescription:
     #:   :func:`~dataknobs_common.text.punctuation_edges`. A scan extends by at
     #:   most ``n`` on each side;
     #: * ``None`` -- *cannot say*. A scan extends over the whole run of
-    #:   punctuation beside a window: the same answers, at the cost of a
-    #:   lookup per extension.
+    #:   punctuation beside a window: the same answers, at a cost growing with
+    #:   the square of that run, which the rung's ``max_edge`` caps.
     #:
     #: **Here rather than a member beside**
     #: :meth:`EntitySource.longest_form_tokens`, because that protocol is
@@ -463,18 +463,21 @@ class _EntityIndex:
         aliases: dict[str, set[str]] = {}
         types: dict[str, set[str]] = {}
         merges = False
+        edge = 0
         for entity_id, entity in self.entities.items():
             for form in (entity_id, entity.name):
                 if not form:
                     continue
                 folded = self.normalizer(form)
                 merges = merges or self._merges_tokens(form, folded)
+                edge = max(edge, self._edge(form, folded))
                 forms.setdefault(folded, set()).add(entity_id)
             for form in entity.aliases:
                 if not form:
                     continue
                 folded = self.normalizer(form)
                 merges = merges or self._merges_tokens(form, folded)
+                edge = max(edge, self._edge(form, folded))
                 forms.setdefault(folded, set()).add(entity_id)
                 aliases.setdefault(folded, set()).add(entity_id)
             types.setdefault(entity.type, set()).add(entity_id)
@@ -489,19 +492,34 @@ class _EntityIndex:
         self.longest_form = (
             None if merges else max((len(token_spans(form)) for form in self.by_form), default=0)
         )
-        # The second bound, over the same keys and for the same reasons --
-        # including ``None`` where the fold merges tokens, because then the
-        # folded key is not what the query spells and its edge says nothing
-        # about the text. A form with no token is skipped: no window starts
-        # on it, so no extension reaches it and its edge bounds nothing.
-        self.form_edge = (
-            None
-            if merges
-            else max(
-                (max(punctuation_edges(form)) for form in self.by_form if token_spans(form)),
-                default=0,
-            )
-        )
+        # The second bound, and ``None`` where the fold merges tokens for the
+        # token bound's reason: the key is then not what the query spells. See
+        # :meth:`_edge` for why it reads the form as written too.
+        self.form_edge = None if merges else edge
+
+    @staticmethod
+    def _edge(form: str, folded: str) -> int:
+        """The widest punctuated edge of one declared form, as written or folded.
+
+        **As written as well as folded**, because the two are read by different
+        halves of a lookup. The key is what a folded probe is compared with,
+        and the punctuation an extension widens over is in the *query*, which
+        is spelled the way the form was written. A fold that spells ``#`` out
+        holds ``csharp`` for ``C#`` -- no punctuation in the key, one in the
+        text -- and measuring keys alone reported ``0``, so no probe ever
+        reached ``#`` and the bound cost an answer.
+
+        ``0`` for a form with no token as written: no window starts on one, so
+        no extension reaches it, and counting ``:-)`` would make every
+        punctuated window of every query pay for a form it can never find.
+
+        **Seen, not proven**, as :meth:`_merges_tokens` is: a fold turning
+        ``+`` into ``plus`` lets a query spell ``C+`` for a form declared
+        ``Cplus``, and nothing in the declared forms shows it.
+        """
+        if not token_spans(form):
+            return 0
+        return max(*punctuation_edges(form), *punctuation_edges(folded))
 
     @staticmethod
     def _merges_tokens(form: str, folded: str) -> bool:

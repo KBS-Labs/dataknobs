@@ -71,13 +71,15 @@ def _make_alias(config: dict[str, Any]) -> MatchSignal:
 
 
 def _make_scan(config: dict[str, Any]) -> MatchSignal:
-    # ``max_window`` is forwarded because a document is where a vocabulary the
-    # source cannot bound gets its cap -- a caller reaching this factory by
-    # writing ``kind: scan`` has no other way to supply one.
+    # ``max_window`` and ``max_edge`` are forwarded because a document is
+    # where a vocabulary the source cannot bound gets its caps -- a caller
+    # reaching this factory by writing ``kind: scan`` has no other way to
+    # supply one.
     return ScanningSignal(
         config["entities"],
         normalizer=config.get("normalizer"),
         max_window=config.get("max_window"),
+        max_edge=config.get("max_edge"),
     )
 
 
@@ -118,6 +120,7 @@ def _make_async_scan(config: dict[str, Any]) -> AsyncMatchSignal:
         config["entities"],
         normalizer=config.get("normalizer"),
         max_window=config.get("max_window"),
+        max_edge=config.get("max_edge"),
     )
 
 

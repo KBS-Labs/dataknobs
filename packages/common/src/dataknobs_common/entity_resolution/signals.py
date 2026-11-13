@@ -51,7 +51,13 @@ from dataknobs_common.entity_resolution.values import (
     within_axes,
     within_memberships,
 )
-from dataknobs_common.text import content_span, default_normalizer, probe_spans, token_spans
+from dataknobs_common.text import (
+    content_span,
+    default_normalizer,
+    probe_spans,
+    punctuation_edges,
+    token_spans,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence, Set as AbstractSet
@@ -372,6 +378,7 @@ def _window_bound(
 def _edge_bound(
     entities: EntitySource | AsyncEntitySource,
     normalizer: Callable[[str], str] | None,
+    max_edge: int | None,
 ) -> int | None:
     """How far a probe may extend over punctuation, or ``None`` for the whole run.
 
@@ -388,12 +395,20 @@ def _edge_bound(
     A rung with a ``normalizer`` does not ask, because the source measured
     its own keys and the rung's fold is another: one that spells ``#`` out
     makes the two-character window ``C#`` reach a key with no punctuation in
-    it, and an edge of ``0`` would never probe that window. There is no
-    ``max_window`` counterpart: an extension adds at most a square of the
-    edge per window, and a caller who wants none declares a vocabulary
-    without punctuated edges.
+    it, and an edge of ``0`` would never probe that window.
+
+    ``max_edge`` caps whatever that leaves, as ``max_window`` caps the token
+    bound, and for the same reason it is the one number here that can cost
+    an answer. It exists because ``None`` is not cheap on text a caller hands
+    over: one token between two runs of *r* punctuation characters is
+    ``(r + 1) ** 2 - 1`` extensions -- 90,600 for a 300-character rule on each
+    side -- and ``None`` is what a rung that folds for itself always gets, and
+    what a live table declaring no ``form_edge`` reports.
     """
-    return None if normalizer is not None else entities.describe().form_edge
+    derived = None if normalizer is not None else entities.describe().form_edge
+    if max_edge is None:
+        return derived
+    return max_edge if derived is None else min(derived, max_edge)
 
 
 def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
@@ -499,6 +514,58 @@ def _checked_max_window(max_window: int | None) -> int | None:
             f"an empty result for every query."
         )
     return max_window
+
+
+def _checked_max_edge(max_edge: int | None) -> int | None:
+    """``max_edge`` as given, having refused a negative one.
+
+    Shared so the twins refuse identically. Zero is legal, unlike
+    ``max_window``'s: it extends nothing, which is the scan over tokens alone
+    and still answers every form whose edges are alphanumeric.
+
+    Raises:
+        ValidationError: For a ``max_edge`` below zero.
+    """
+    if max_edge is not None and max_edge < 0:
+        raise ValidationError(
+            f"max_edge must be at least 0, got {max_edge}. It counts the "
+            f"punctuation characters a probe may be widened over on each side."
+        )
+    return max_edge
+
+
+def _narrowest(query: str, found: Sequence[FormHit]) -> list[FormHit]:
+    """One piece of evidence per entity per window: the narrowest span that reached it.
+
+    An extension widens a window over punctuation, and a fold that strips
+    punctuation makes every extension of ``beagle`` reach the key the bare
+    window reaches -- ``"(beagle)"`` would otherwise report one entity at four
+    nested places. The punctuation took no part in that match, so the
+    evidence is the narrowest span around it; where the punctuation *is* the
+    match -- ``(beagle)`` declared -- the bare window misses and the extended
+    span is the only one there is.
+
+    The window an extension came from is recovered by trimming the
+    punctuation off its ends, which is exact: a window starts and ends on a
+    token, and an extension adds only punctuation. Each kept hit stays where
+    the first hit for that entity and window arrived, so the published order
+    is the enumeration's.
+
+    Shared by both flavours for :func:`_window_bound`'s reason.
+    """
+    kept: list[FormHit] = []
+    at: dict[tuple[tuple[int, int], Any], int] = {}
+    for hit in found:
+        start, end = hit.span
+        leading, trailing = punctuation_edges(query[start:end])
+        key = ((start + leading, end - trailing), hit.entity_id)
+        index = at.get(key)
+        if index is None:
+            at[key] = len(kept)
+            kept.append(hit)
+        elif end - start < kept[index].span[1] - kept[index].span[0]:
+            kept[index] = hit
+    return kept
 
 
 def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
@@ -1253,7 +1320,15 @@ class ScanningSignal(DeclaredSignal):
     in the text, by every prefix of the run: ``a (beagle), here`` finds
     ``(beagle)`` at ``(2, 10)`` although the run after it is ``),``. A
     vocabulary with no punctuated edge says ``0`` and is probed exactly as
-    before.
+    before. Where nothing states the edge -- a rung given its own
+    ``normalizer``, or a source that cannot say -- the whole run is widened
+    over, and the run is the caller's text: ``max_edge`` caps it.
+
+    **The narrowest span is the evidence.** Where a window and its extensions
+    reach one entity -- a fold that strips punctuation makes ``(beagle)``,
+    ``(beagle`` and ``beagle`` all reach ``beagle`` -- the entity is reported
+    once for that window, at the narrowest of them: the punctuation took no
+    part in the match. See :func:`_narrowest`.
 
     **Overlapping forms are all returned.** ``"my golden retriever has been
     limping"`` yields ``golden_retriever`` at ``(3, 19)`` and ``retriever`` at
@@ -1303,6 +1378,7 @@ class ScanningSignal(DeclaredSignal):
         *,
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
+        max_edge: int | None = None,
     ) -> None:
         """Args:
         entities: The vocabulary to match against.
@@ -1317,21 +1393,31 @@ class ScanningSignal(DeclaredSignal):
             merges token boundaries reports no bound, and a scan over one
             enumerates every window unless a caller who knows their own
             queries says how wide is worth probing.
+        max_edge: The most punctuation characters a probe is widened over on
+            each side, or ``None`` to spend whatever the vocabulary states.
+            ``max_window``'s counterpart for :func:`_edge_bound`, and like it
+            the only number that can cost an answer. It exists for the edge
+            nobody stated -- a rung with its own ``normalizer`` always
+            extends over the whole run of punctuation beside a window, and so
+            does a scan over a source that cannot say -- because that run is
+            the caller's text, and its cost grows with its square.
 
         Raises:
-            ValidationError: For a ``max_window`` below one.
+            ValidationError: For a ``max_window`` below one or a ``max_edge``
+                below zero.
         """
         super().__init__(entities, normalizer=normalizer)
         self._max_window = _checked_max_window(max_window)
+        self._max_edge = _checked_max_edge(max_edge)
 
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
         bound = _window_bound(self._entities, self._normalizer, self._max_window)
-        edge = _edge_bound(self._entities, self._normalizer)
+        edge = _edge_bound(self._entities, self._normalizer, self._max_edge)
         for span in probe_spans(query, bound, edge=edge):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return found
+        return _narrowest(query, found)
 
 
 class LexicalSignal(DeclaredSignal):
@@ -1745,6 +1831,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         *,
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
+        max_edge: int | None = None,
     ) -> None:
         """The same constructor as the synchronous twin's, over an asynchronous source.
 
@@ -1755,19 +1842,21 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         each argument means and for which of them can cost an answer.
 
         Raises:
-            ValidationError: For a ``max_window`` below one.
+            ValidationError: For a ``max_window`` below one or a ``max_edge``
+                below zero.
         """
         super().__init__(entities, normalizer=normalizer)
         self._max_window = _checked_max_window(max_window)
+        self._max_edge = _checked_max_edge(max_edge)
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
         bound = _window_bound(self._entities, self._normalizer, self._max_window)
-        edge = _edge_bound(self._entities, self._normalizer)
+        edge = _edge_bound(self._entities, self._normalizer, self._max_edge)
         for span in probe_spans(query, bound, edge=edge):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return found
+        return _narrowest(query, found)
 
 
 class AsyncLexicalSignal(AsyncDeclaredSignal):

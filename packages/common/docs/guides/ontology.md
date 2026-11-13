@@ -425,8 +425,8 @@ projection, the `capabilities` the source has, the entity types it
 edge of any declared form carries — `1` for `(beagle)` or `C.D.C.`, `0` when no
 form has punctuation at either end, `None` when the source cannot say. A
 scanning rung reads it to reach a form like `(beagle)` inside a sentence;
-`MappingEntitySource` measures it over its folded forms, and a live table
-declares it. `AUTHORED_SOURCE_ID` (`"authored"`) is the source id a hand-written
+`MappingEntitySource` measures it over its forms, as written and as folded, and
+a live table declares it. `AUTHORED_SOURCE_ID` (`"authored"`) is the source id a hand-written
 vocabulary gets, and `AUTHORED_SOURCE_KINDS` is the set of declaration shapes
 that count as authored.
 
