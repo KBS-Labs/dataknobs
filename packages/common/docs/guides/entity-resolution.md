@@ -1020,8 +1020,26 @@ them:
 | the other flavour, `needs_io: True` | a door holding a live handle: `OntologyRegistry`, or `async_build_resolver(..., handles={...})` |
 
 The first row is the one to read twice: a rung that merely ships elsewhere
-carries the **same** mark in both registries, so sending its author to the
-asynchronous door sends them in a circle.
+carries the **same reason** in both registries, so sending its author to the
+asynchronous door sends them in a circle. What tells the door which case it is
+looking at is the `flavour` each mark declares, and nothing else.
+
+So a distribution that registers its rung when its own module is imported, and
+wants the kind recognised before then, marks both registries with the flavour
+each one would hold:
+
+```python
+from dataknobs_common.entity_resolution import async_signal_backends, signal_backends
+
+reason = "AcmeSignal ships in acme-rungs; import acme_rungs.signal to register it"
+signal_backends.declare_unavailable("acme", reason=reason, metadata={"flavour": "sync"})
+async_signal_backends.declare_unavailable("acme", reason=reason, metadata={"flavour": "async"})
+```
+
+Leave `flavour` out and the mark reads as a rung with no synchronous form, so
+`build_resolver` sends the author to `async_build_resolver` — which carries the
+same mark and refuses them the same way. Importing the module that registers
+the rung clears both marks, as registering always does.
 
 ### A rung built over something a document cannot write
 

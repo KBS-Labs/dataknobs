@@ -3,9 +3,8 @@
 
 """The resolution rung that searches a semantic index.
 
-``dataknobs_common`` ships four rungs that read an entity source directly, and
-``dataknobs_xization`` ships one that reads an authority stack. This is the
-rung whose backing is a **vector store**: it proposes entities whose
+``dataknobs_common`` ships four rungs that read an entity source directly.
+This is the rung whose backing is a **vector store**: it proposes entities whose
 *description* sits near the query in embedding space, which is how a
 vocabulary answers a phrasing nobody enumerated and no near-spelling reaches.
 

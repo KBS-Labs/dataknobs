@@ -164,11 +164,11 @@ def test_a_rung_that_needs_no_handle_is_still_sent_to_the_async_door(
     the distinction necessary and cannot demonstrate its other side.
 
     **The flavour in the stand-in is load-bearing and used not to be.** This
-    mark said only ``needs_io: False``, which made it a stand-in for a
-    population of one that does not exist: a kind shipped elsewhere in both
-    flavours reaches the ``needs_io`` branch's ``else`` too, its mark *here*
-    declares ``flavour: "sync"``, and this sentence is wrong for it. The
-    sibling below is that case.
+    mark said only ``needs_io: False``, which a kind shipped elsewhere in both
+    flavours also satisfies -- and this sentence is wrong for that kind,
+    because the synchronous form exists. Its mark *here* declares
+    ``flavour: "sync"``, which is what separates the two. The sibling below is
+    that case.
     """
     signal_backends.declare_unavailable(
         "semantic",
@@ -186,10 +186,15 @@ def test_a_rung_that_needs_no_handle_is_still_sent_to_the_async_door(
     assert "OntologyRegistry" not in message
 
 
-def _refusal(path: Path, kind: str) -> str:
-    """What the synchronous door says to a document naming *kind* as its only rung."""
-    document = yaml.safe_load(path.read_text())
+def _refusal(source: Path, kind: str) -> str:
+    """What the synchronous door says to a document naming *kind* as its only rung.
+
+    Written beside *source* rather than over it, as :func:`semantic_document`
+    is, so two calls in one test each start from the vocabulary as authored.
+    """
+    document = yaml.safe_load(source.read_text())
     document["ontology"]["resolver"] = {"rungs": [{"kind": kind}]}
+    path = source.with_name(f"{kind}.yaml")
     path.write_text(yaml.safe_dump(document))
     with pytest.raises(ValidationError) as raised:
         build_resolver(path, load_ontology(path))
@@ -207,6 +212,11 @@ def shipped_elsewhere() -> Iterator[str]:
     kind it did not write.
     """
     key = "acme_stack"
+    for registry in (signal_backends, async_signal_backends):
+        assert not registry.is_known(key), (
+            f"{key!r} is already known to {registry.name}, so dropping it afterwards "
+            "would delete something this fixture did not write"
+        )
     reason = "AcmeStackSignal ships in acme-stack; import acme_stack.rung to register it"
     signal_backends.declare_unavailable(key, reason=reason, metadata={"flavour": "sync"})
     async_signal_backends.declare_unavailable(key, reason=reason, metadata={"flavour": "async"})
