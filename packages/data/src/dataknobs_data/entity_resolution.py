@@ -3,9 +3,8 @@
 
 """The resolution rung that searches a semantic index.
 
-``dataknobs_common`` ships four rungs that read an entity source directly, and
-``dataknobs_xization`` ships one that reads an authority stack. This is the
-rung whose backing is a **vector store**: it proposes entities whose
+``dataknobs_common`` ships four rungs that read an entity source directly.
+This is the rung whose backing is a **vector store**: it proposes entities whose
 *description* sits near the query in embedding space, which is how a
 vocabulary answers a phrasing nobody enumerated and no near-spelling reaches.
 
@@ -20,8 +19,7 @@ rather than this one's twin.
 
 **Top level rather than under** ``vector/``, because this is a member of the
 *resolution* family --- whose other members are in
-``dataknobs_common.entity_resolution`` and
-``dataknobs_xization.entity_resolution`` --- and filing it under ``vector/``
+``dataknobs_common.entity_resolution`` --- and filing it under ``vector/``
 would name its backing instead of its role. The index it searches is under
 ``vector/`` for the mirror reason: that one *is* a vector construct.
 

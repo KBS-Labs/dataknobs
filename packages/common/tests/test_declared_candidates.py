@@ -110,14 +110,14 @@ def test_the_evidence_is_declared_by_fiat_and_carries_the_rungs_name():
     correlate a hit back to the ``kind:`` they configured, so it is the
     caller's string and not a constant of this function.
     """
-    (candidate,) = declared_candidates(FOUND[:1], k=1, signal="authority", query=QUERY)
+    (candidate,) = declared_candidates(FOUND[:1], k=1, signal="catalogue", query=QUERY)
     (evidence,) = candidate.evidence
 
     assert candidate.score == 1.0
     assert evidence.score == 1.0
     assert evidence.kind is EvidenceKind.DECLARED
     assert evidence.scoring is Scoring.DECLARED
-    assert evidence.signal == "authority"
+    assert evidence.signal == "catalogue"
 
 
 def test_admitted_drops_an_id_a_filter_ruled_out():
