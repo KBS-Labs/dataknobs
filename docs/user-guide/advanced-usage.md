@@ -443,6 +443,14 @@ serialized = json.dumps(to_record(tree))
 
 ### Custom Tokenizers
 
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
+
 ```python
 import re
 
@@ -474,10 +482,18 @@ print(masked)
 # Note the two [NUM]s: the period is a delimiter, so "150.99" tokenizes as
 # "150" and "99". A pattern spanning a delimiter cannot match a single token,
 # which is why multi-token entities are matched over the token *sequence*
-# rather than over token text -- see the lexicon and annotations modules.
+# rather than over token text.
 ```
 
 ### Text Annotation Pipeline
+
+!!! note "Half of this module is deprecated"
+    `Annotations`, `AnnotationsMetaData`, `AnnotationsBuilder`,
+    `AnnotationsRowAccessor`, `DerivedAnnotationColumns`, `AnnotatedText` and
+    `Annotator` stay. The annotation groups, `merge`, `BasicAnnotator`,
+    `SyntacticParser`, `EntityAnnotator`, `HtmlHighlighter`, `AnnotatorKernel`
+    and `CompoundAnnotator` are deprecated, will be removed in the next major
+    release, and warn when reached.
 
 ```python
 from dataknobs_xization import annotations
@@ -501,10 +517,7 @@ class AnnotationPipeline:
 
 # There is no NamedEntityAnnotator, SentimentAnnotator or LanguageDetector.
 # What the package ships is the contract: Annotator is abstract on
-# annotate_input, and BasicAnnotator and EntityAnnotator are abstract on more
-# still, so each of them is a base you subclass rather than a class you
-# instantiate. CompoundAnnotator is the one concrete type, and it runs a
-# series of annotators through an AnnotatorKernel.
+# annotate_input, and is the base you subclass.
 class KeywordAnnotator(annotations.Annotator):
     def __init__(self, name, keywords):
         super().__init__(name)

@@ -119,6 +119,14 @@ def process_document(text, metadata=None):
 
 ### Lazy Loading
 
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
+
 ```python
 class DocumentProcessor:
     def __init__(self):
@@ -322,6 +330,14 @@ def sanitize_input(text):
 ```
 
 ### Sensitive Data Handling
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
 
 ```python
 import re

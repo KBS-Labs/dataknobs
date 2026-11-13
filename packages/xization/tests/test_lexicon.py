@@ -5,11 +5,17 @@ masks built over it. The annotation path that reads them is covered by
 ``test_lexicon_annotation.py``; extending either file is welcome.
 """
 
+import warnings
+
 import pandas as pd
 import pytest
 
-import dataknobs_xization.authorities as dk_auth
-import dataknobs_xization.lexicon as dk_lex
+# The module under test is deprecated, and warns when it is imported. That
+# warning is asserted in test_stack_deprecation.py; here it is expected.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import dataknobs_xization.authorities as dk_auth
+    import dataknobs_xization.lexicon as dk_lex
 
 
 def _unique_vals(values, dtype):

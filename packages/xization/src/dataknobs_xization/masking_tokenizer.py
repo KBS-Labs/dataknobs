@@ -5,6 +5,14 @@
 
 Provides abstract classes for extracting character-level features from text,
 building DataFrames with character features for masking and tokenization.
+
+.. deprecated::
+    This module is deprecated and will be removed in the next major release,
+    and importing it warns, as does reaching ``CharacterFeatures`` or
+    ``TextFeatures`` through ``dataknobs_xization``. For token boundaries, use
+    :func:`dataknobs_common.text.token_spans`, which yields each token's
+    ``(start, end)`` offsets without building a frame per character. It does
+    not split camelCase.
 """
 
 from abc import ABC, abstractmethod
@@ -16,11 +24,18 @@ import pandas as pd
 
 import dataknobs_structures.document as dk_doc
 from dataknobs_utils import emoji_utils
+from dataknobs_xization import _deprecation
+
+_deprecation.warn_module("masking_tokenizer")
 
 
 class CharacterFeatures(ABC):
     """Class representing features of text as a dataframe with each character
     as a row and columns representing character features.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
     """
 
     def __init__(self, doctext: Union[dk_doc.Text, str], roll_padding: int = 0):
@@ -117,6 +132,10 @@ class TextFeatures(CharacterFeatures):
     camelCase splitting, character type features (alpha, digit, upper, lower),
     and emoji handling. Builds a character DataFrame with features for
     token boundary detection.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
     """
 
     def __init__(
@@ -249,7 +268,12 @@ class TextFeatures(CharacterFeatures):
 
 
 class CharacterInputFeatures(CharacterFeatures):
-    """A wrapper that starts with a pre-built character features dataframe."""
+    """A wrapper that starts with a pre-built character features dataframe.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
+    """
 
     def __init__(
         self,
@@ -285,7 +309,12 @@ class CharacterInputFeatures(CharacterFeatures):
 
 
 class TokenLoc:
-    """Simple structure holding information about a token's location."""
+    """Simple structure holding information about a token's location.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
+    """
 
     def __init__(
         self,
@@ -359,7 +388,12 @@ class TokenLoc:
 
 
 class TokenMask(ABC):
-    """A class for accessing text characters through feature masks."""
+    """A class for accessing text characters through feature masks.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
+    """
 
     def __init__(self, text_features: CharacterFeatures):
         self.text_features = text_features
@@ -446,6 +480,10 @@ def increment(start_loc: int, mask: pd.Series) -> Tuple[int, bool]:
         end_loc Where the mask value is opposite that at start_loc.
         If unable to increment (e.g., at the end of the mask or no flips),
         then end_idx will equal start_idx.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
     """
     end_loc = start_loc
     if start_loc in mask.index:
@@ -457,7 +495,12 @@ def increment(start_loc: int, mask: pd.Series) -> Tuple[int, bool]:
 
 
 class SimpleTokenMask(TokenMask):
-    """A mask where "in" tokens are ones and "out" are zeros."""
+    """A mask where "in" tokens are ones and "out" are zeros.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
+    """
 
     def __init__(self, text_features: CharacterFeatures, token_mask: pd.Series):
         """Initialize with the text_features and token mask.
@@ -512,7 +555,12 @@ class SimpleTokenMask(TokenMask):
 
 
 class DualTokenMask(TokenMask):
-    """A mask comprised of a mask for token starts and a mask for token ends."""
+    """A mask comprised of a mask for token starts and a mask for token ends.
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
+    """
 
     def __init__(
         self,
@@ -579,6 +627,10 @@ class Token:
     NOTE: The masks in CharacterFeatures include padding, which displaces indices
     relative to positions in the original text. In this class, padded indices
     are referred to with a "p".
+
+    .. deprecated::
+        Removed in the next major release. For token boundaries, use
+        ``dataknobs_common.text.token_spans``.
     """
 
     def __init__(

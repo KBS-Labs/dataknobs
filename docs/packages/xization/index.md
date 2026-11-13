@@ -43,11 +43,11 @@ The Xization package specializes in text preprocessing and includes:
   - Pattern-based file selection with exclusions
   - Per-file type configuration
   - Config file support (JSON/YAML)
-- **Tokenization**: Advanced character-based and feature-driven tokenization
+- **Tokenization** *(deprecated)*: Advanced character-based and feature-driven tokenization
 - **Normalization**: Text normalization with camelCase expansion, symbol handling
-- **Masking**: Character-level masking and feature extraction
-- **Authorities**: Text authority and lexicon management
-- **Annotations**: Text annotation utilities
+- **Masking** *(deprecated)*: Character-level masking and feature extraction
+- **Authorities** *(deprecated)*: Text authority and lexicon management
+- **Annotations**: Text annotation utilities (half deprecated)
 
 ## Package Structure
 
@@ -152,6 +152,14 @@ print(variations)  # {"XML-HTTP-Request", "XML HTTP Request", "XML", "HTTP", "Re
 
 ### Character-Based Tokenization
 
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
+
 ```python
 from dataknobs_xization import TextFeatures
 from dataknobs_structures import Text, TextMetaData
@@ -203,6 +211,14 @@ for token in tokens:
 ```
 
 ## Core Classes
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
 
 ### TextFeatures
 
@@ -377,7 +393,7 @@ normalized_text = normalize.basic_normalization_fn(
 # Update document
 doc._text = normalized_text  # Note: direct access for example
 
-# Extract features
+# Extract features (TextFeatures is deprecated; see Core Classes)
 features = TextFeatures(doc, split_camelcase=True)
 tokens = features.get_tokens()
 ```
@@ -399,6 +415,14 @@ json_utils.stream_json_data("data.json", normalize_json_text)
 ```
 
 ## Tokenization Patterns
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
 
 ### CamelCase Tokenization
 
@@ -472,7 +496,7 @@ except (TypeError, AttributeError) as e:
 
 ## Performance Tips
 
-1. **Reuse TextFeatures**: Create once, tokenize multiple times with different normalization
+1. **Reuse TextFeatures** *(deprecated)*: Create once, tokenize multiple times with different normalization
 2. **Batch Processing**: Process similar texts together
 3. **Selective Features**: Only enable needed character features
 4. **Normalization Caching**: Cache normalization results for repeated text
@@ -480,6 +504,14 @@ except (TypeError, AttributeError) as e:
 ## Configuration Options
 
 ### Character Features
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
 
 ```python
 features = TextFeatures(

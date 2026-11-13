@@ -6,6 +6,15 @@ import warnings
 
 import pytest
 
+#: The shim mirrors dataknobs_xization's old paths, including the authority
+#: stack, which is deprecated there and warns when imported. The shim imports it
+#: eagerly to keep the dotted paths resolvable, so its tests expect the warning;
+#: xization's own suite asserts it.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:dataknobs_xization\\.(authorities|lexicon|masking_tokenizer) is deprecated"
+    ":DeprecationWarning"
+)
+
 
 def test_legacy_package_deprecation_warning():
     """Test that importing the legacy package shows a deprecation warning.

@@ -135,6 +135,14 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 
 ### masking_tokenizer
 
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
+
 #### Classes
 
 ##### CharacterFeatures
@@ -160,6 +168,14 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 
 ### annotations
 
+!!! note "Half of this module is deprecated"
+    `Annotations`, `AnnotationsMetaData`, `AnnotationsBuilder`,
+    `AnnotationsRowAccessor`, `DerivedAnnotationColumns`, `AnnotatedText` and
+    `Annotator` stay. The annotation groups, `merge`, `BasicAnnotator`,
+    `SyntacticParser`, `EntityAnnotator`, `HtmlHighlighter`, `AnnotatorKernel`
+    and `CompoundAnnotator` are deprecated, will be removed in the next major
+    release, and warn when reached.
+
 #### Functions and Classes
 
 ::: dataknobs_xization.annotations
@@ -170,6 +186,15 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 
 ### authorities
 
+!!! warning "Deprecated"
+    `dataknobs_xization.authorities` and `dataknobs_xization.lexicon` are
+    deprecated, and will be removed in the next major release. Importing
+    either raises a `DeprecationWarning`. For matching a dictionary of entity
+    names in text, use `ScanningSignal` (from
+    `dataknobs_common.entity_resolution`) over an `EntitySource` (from
+    `dataknobs_common.ontology`). Regex authorities and annotation
+    validators have no replacement yet.
+
 #### Functions and Classes
 
 ::: dataknobs_xization.authorities
@@ -179,6 +204,15 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
       show_root_toc_entry: false
 
 ### lexicon
+
+!!! warning "Deprecated"
+    `dataknobs_xization.authorities` and `dataknobs_xization.lexicon` are
+    deprecated, and will be removed in the next major release. Importing
+    either raises a `DeprecationWarning`. For matching a dictionary of entity
+    names in text, use `ScanningSignal` (from
+    `dataknobs_common.entity_resolution`) over an `EntitySource` (from
+    `dataknobs_common.ontology`). Regex authorities and annotation
+    validators have no replacement yet.
 
 #### Functions and Classes
 
@@ -230,6 +264,14 @@ print(expanded_ampersand)  # "Research and Development"
 ```
 
 ### Character Features Example
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
 
 ```python
 from dataknobs_xization.masking_tokenizer import CharacterFeatures
@@ -289,6 +331,14 @@ print(f"Padding: {cdf['is_padding'].sum()}")
 ```
 
 ### Text Masking Example
+
+!!! warning "Deprecated"
+    `TextFeatures`, `CharacterFeatures` and the rest of
+    `dataknobs_xization.masking_tokenizer` are deprecated, and will be removed
+    in the next major release. Using them raises a `DeprecationWarning`. For
+    token boundaries, use `dataknobs_common.text.token_spans`, which yields
+    each token's `(start, end)` offsets. It does not split camelCase, and
+    nothing replaces the per-character feature frame.
 
 ```python
 from dataknobs_xization.masking_tokenizer import CharacterFeatures
