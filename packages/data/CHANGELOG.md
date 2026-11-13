@@ -1550,6 +1550,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query, each one a round trip. No default is invented, because a bound
   shorter than a real form makes that form silently unfindable.
 
+  `surface_forms.form_edge:` is the second number a scan reads, and is
+  optional: how many punctuation characters the widest edge of any form in the
+  table carries — `1` for `(beagle)` or `C.D.C.`, `0` where no form has
+  punctuation at either end. It is reported as the source's
+  `describe().form_edge`. Absent, the source reports `None` and a scan widens a
+  window over the whole run of punctuation beside it — more reads and the same
+  answers — so its absence is not refused. A negative value or a non-integer
+  is.
+
   The fold a surface-form lookup compares by is `str.casefold`, and no engine
   performs it at query time --- so the fold happens before the row is written
   or it does not happen at all. A source with no declared lookup **refuses**

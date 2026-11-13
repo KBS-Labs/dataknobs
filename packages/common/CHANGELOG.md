@@ -1196,9 +1196,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the source reports that it cannot bound and keeps every answer at the cost
   of the linearity it never could have had.
 
-  **It does not replace `ExactNormalizedSignal`, and the two compose.** A probe
-  is a slice between token boundaries, so a declared form whose first or last
-  character is not alphanumeric — `(beagle)`, `C.D.C.` — is reachable by the
+  **A declared form whose edge is punctuation is found too.** A window starts
+  and ends on a token, and is also probed widened over the punctuation
+  touching it, by every prefix of that run and no further than the
+  vocabulary's own forms reach (`SourceDescription.form_edge`):
+  `"a (beagle), here"` finds `(beagle)` at `(2, 10)`, and `"The C.D.C. said"`
+  finds `C.D.C.` at `(4, 10)`. A vocabulary with no punctuated edge reports
+  `0` and is probed exactly as it would be over tokens alone.
+
+  **It does not replace `ExactNormalizedSignal`, and the two compose.** A form
+  no run of tokens spells — `:-)`, with no token at all, or `( beagle )`, whose
+  brackets an extension cannot reach across the spaces — is reachable by the
   whole-string rung and by no scan; a form sitting inside a longer sentence is
   reachable by the scan and by no whole-string rung. A cascade wanting both
   carries both.
@@ -1253,10 +1261,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 355,
-  the fifteen beyond them being the operation family, the near-spelling rung,
-  the surface-form catalogue, the index-source family, `aclosing_iter`,
-  `PluginConfig` and `naming_refusals`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
+  the resolution cascade — 134 names, taking the package's `__all__` to 358,
+  the eighteen beyond them being the operation family, the near-spelling rung,
+  the surface-form catalogue, the index-source family, the edge rule's three
+  functions, `aclosing_iter`, `PluginConfig` and `naming_refusals`, each added
+  by its own entry. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
@@ -1865,6 +1874,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   utterance. They are separate from `default_normalizer` because folding and
   bounding are different questions, and the fold that serves a whole-string
   lookup does not serve a scan unchanged.
+
+- **The edge rule, beside `token_spans` in `dataknobs_common.text`:
+  `punctuation_edges`, `edge_extensions` and `probe_spans`**, re-exported on
+  the same two doors. A token boundary alone never reaches a form that starts
+  or ends on punctuation, so the rule's second half widens a span over the
+  punctuation beside it — characters neither alphanumeric nor whitespace, by
+  every prefix of the run, so an extension never crosses a word or a space.
+  `punctuation_edges(form)` measures how far a form's own punctuation reaches
+  (`"(beagle)"` is `(1, 1)`); `edge_extensions(text, span, limit)` is one
+  span's extensions, widest first; and `probe_spans(text, longest, edge=0)` is
+  the whole enumeration a scan runs, windows longest first and each preceded
+  by its extensions. It looks nothing up, so a synchronous scan, an
+  asynchronous one and a consumer's own each drive it with their own lookup.
+
+- **`SourceDescription.form_edge: int | None`, with no default**, for the
+  reason `declares` has none. How many punctuation characters the widest edge
+  of a declared form carries: `0` for none — a scan extends nothing — `n` for
+  at most `n` on each side, and `None` for *cannot say*, which a scan answers
+  by extending over the whole run: the same answers for more lookups.
+  `MappingEntitySource` and its async twin measure it over their folded forms,
+  as they measure `longest_form_tokens()`, and report `None` where the fold
+  merges tokens. A field on the description rather than a protocol member
+  beside `longest_form_tokens()`, because `EntitySource` is
+  `@runtime_checkable` and a new member would stop every structural conformer
+  from conforming.
 
 - **`ResolutionResult.matched_text()` and `.unmatched_text()`**, which slice
   `Coverage`'s spans back out of `query`.

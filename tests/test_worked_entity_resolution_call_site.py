@@ -260,7 +260,7 @@ def test_the_executed_rung_is_the_published_one() -> None:
     The page describes itself as executed, and until this existed one block on
     it was not: the sample a reader is most likely to copy, since it is the one
     the page tells them to write themselves. Its claims are also the sharper
-    ones -- three named forms said to be reachable this way and no other -- and
+    ones -- a named form said to be reachable this way and no other -- and
     a claim a reader cannot check without first writing the class is exactly
     the kind that should not rest on prose.
     """
@@ -275,40 +275,47 @@ def test_the_executed_rung_is_the_published_one() -> None:
     )
 
 
-def test_the_published_rung_reaches_the_three_forms_the_page_names(
+def test_the_published_rung_reaches_the_forms_the_page_names(
     punctuated_rung: type,
 ) -> None:
-    """`(beagle)`, `C.D.C.` and `K-9`, and the shipped scan reaching two fewer.
+    """``:-)``, ``(beagle)``, ``C.D.C.`` and ``K-9``, and the shipped scan reaching one fewer.
 
     Both halves are the page's claim and both have to hold, because the section
-    exists to answer *what is worth writing yourself*. A rung that found the
-    three forms would still not justify the section if the shipped scan found
-    them too, so the contrast is asserted rather than described.
+    exists to answer *what is worth writing yourself*. A rung that found these
+    forms would still not justify the section if the shipped scan found them
+    all too, so the contrast is asserted rather than described.
+
+    The contrast used to be wider: the shipped scan once probed only between
+    token boundaries and missed ``(beagle)`` and ``C.D.C.`` as well. It now
+    widens a probe over the punctuation touching a token, so what is left to
+    this rung is a form with no token in it.
     """
     from dataknobs_common.entity_resolution import ScanningSignal
     from dataknobs_common.ontology import Entity, MappingEntitySource
 
     vocabulary = MappingEntitySource(
-        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=["(beagle)", "C.D.C."])}
+        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=[":-)", "(beagle)", "C.D.C."])}
     )
     written = punctuated_rung(vocabulary)
     shipped = ScanningSignal(vocabulary)
 
-    for form in ("(beagle)", "C.D.C.", "K-9"):
+    for form in (":-)", "(beagle)", "C.D.C.", "K-9"):
         found = written.candidates(form, k=5)
         assert [c.entity_id for c in found] == ["k9"], f"the published rung misses {form!r}"
         assert found[0].evidence[0].span == (0, len(form))
 
-    assert [c.entity_id for c in shipped.candidates("K-9", k=5)] == ["k9"]
-    assert shipped.candidates("(beagle)", k=5) == []
-    assert shipped.candidates("C.D.C.", k=5) == []
+    for form in ("(beagle)", "C.D.C.", "K-9"):
+        assert [c.entity_id for c in shipped.candidates(form, k=5)] == ["k9"], (
+            f"the shipped scan misses {form!r}, which the page says it reaches"
+        )
+    assert shipped.candidates(":-)", k=5) == []
 
 
 def test_the_published_rung_reaches_no_multi_word_form(punctuated_rung: type) -> None:
     """The other half of the trade, measured where the page states it.
 
     A chunk is whitespace-delimited, so the rung the page teaches cannot join
-    two of them -- it reaches ``(beagle)`` and reaches ``golden retriever``
+    two of them -- it reaches ``:-)`` and reaches ``golden retriever``
     never, for any query. That is the cost of the boundary it picks, and it is
     exactly invisible in the test above, whose vocabulary is single-chunk
     forms only: a reader with a vocabulary carrying both kinds copies the

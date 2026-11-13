@@ -291,6 +291,7 @@ surface_forms:
   form: folded_form
   entity: sku
   longest_form_tokens: 4      # the longest form in this table is four tokens
+  form_edge: 1                # the widest punctuated edge: (beagle), C.D.C.
 ```
 
 Without it, the scan enumerates every window: *n(n+1)/2* probes for *n* tokens,
@@ -305,6 +306,15 @@ in-memory vocabulary the same enumeration is a dictionary lookup per probe and
 is left alone, which is why the refusal is here rather than on the rung. Which
 kinds are bounded this way is read from what each kind declares about itself, as
 with the lookup rule above.
+
+`form_edge` is the second number, and is optional. A window starts and ends on
+a token, so a form whose first or last character is punctuation — `(beagle)`,
+`C.D.C.` — is reached only by widening a window over the punctuation beside it
+in the query. `form_edge` says how far: `0` when no form in the table has
+punctuation at either end, which widens nothing; `n` for at most `n`
+characters on each side. Leaving it out is not refused, because it costs reads
+rather than answers: the scan then widens a window over the whole run of
+punctuation beside it, one extra round trip per widening.
 
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:

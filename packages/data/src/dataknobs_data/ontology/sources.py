@@ -72,15 +72,14 @@ RECORD_SOURCE_KIND = "record"
 READ_BATCH_SIZE = 1000
 
 
-def _optional_positive_int(
+def _optional_whole_number(
     row: Mapping[str, Any], key: str, *, binding: str, section: str
 ) -> int | None:
-    """An optional whole number of at least one, or None where the key is absent.
+    """An optional ``int``, or None where the key is absent -- the type check alone.
 
-    Below one is refused rather than clamped, for the reason
-    ``_checked_max_window`` refuses it one package along: a bound of zero
-    builds a scan that probes nothing and reports the empty set for every
-    query, which is indistinguishable from a vocabulary that matches nothing.
+    Shared by the two readers below, which differ only in the least value
+    each key admits; ``bool`` is refused although it is an ``int``, because
+    ``true`` is not a count anybody meant.
     """
     value = row.get(key)
     if value is None:
@@ -91,6 +90,41 @@ def _optional_positive_int(
             f"got {type(value).__name__}",
             context={"source_id": binding, "key": key, "value": value},
         )
+    return value
+
+
+def _optional_non_negative_int(
+    row: Mapping[str, Any], key: str, *, binding: str, section: str
+) -> int | None:
+    """An optional whole number of at least zero, or None where the key is absent.
+
+    Zero is a legitimate answer for a count of characters, where it is not for
+    a count of tokens: it says the table holds no form with punctuation at its
+    edge, and a scan then extends nothing.
+    """
+    value = _optional_whole_number(row, key, binding=binding, section=section)
+    if value is not None and value < 0:
+        raise ValidationError(
+            f"binding {binding!r}: `{section}.{key}:` counts characters and "
+            f"cannot be negative, got {value}",
+            context={"source_id": binding, "key": key, "value": value},
+        )
+    return value
+
+
+def _optional_positive_int(
+    row: Mapping[str, Any], key: str, *, binding: str, section: str
+) -> int | None:
+    """An optional whole number of at least one, or None where the key is absent.
+
+    Below one is refused rather than clamped, for the reason
+    ``_checked_max_window`` refuses it one package along: a bound of zero
+    builds a scan that probes nothing and reports the empty set for every
+    query, which is indistinguishable from a vocabulary that matches nothing.
+    """
+    value = _optional_whole_number(row, key, binding=binding, section=section)
+    if value is None:
+        return None
     if value < 1:
         raise ValidationError(
             f"binding {binding!r}: `{section}.{key}:` must be at least 1, got "
@@ -125,12 +159,20 @@ class SurfaceFormLookup:
             load is stale as soon as a row is written. A scanning rung needs
             this number to stay linear in the caller's input, and is refused at
             load over a binding that declares none
+        form_edge: How many punctuation characters the widest edge of any form
+            in this table carries -- one for ``(beagle)`` or ``C.D.C.`` --
+            ``0`` where no form has punctuation at either end, or None where
+            the binding declares nothing. Declared for ``longest_form_tokens``'s
+            reason. Unlike that key, its absence is not refused: a scan told
+            nothing extends a window over every run of punctuation beside it,
+            which costs lookups and loses no answer
     """
 
     table: str
     form: str
     entity: str
     longest_form_tokens: int | None = None
+    form_edge: int | None = None
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any], *, binding: str) -> SurfaceFormLookup:
@@ -141,6 +183,9 @@ class SurfaceFormLookup:
             entity=str(_required(row, "entity", binding=binding, section="surface_forms")),
             longest_form_tokens=_optional_positive_int(
                 row, "longest_form_tokens", binding=binding, section="surface_forms"
+            ),
+            form_edge=_optional_non_negative_int(
+                row, "form_edge", binding=binding, section="surface_forms"
             ),
         )
 
@@ -704,6 +749,11 @@ class RecordEntitySource(DynamicCapabilityMixin):
         ``declares`` is a set of one: the projection's ``type:`` is a constant,
         so the vocabulary's declared types are known from configuration and no
         scan is needed to say so.
+
+        ``form_edge`` is the ``surface_forms.form_edge:`` the binding
+        declared, for the reason :meth:`longest_form_tokens` is declared
+        rather than counted -- or None where it declared none, which a scan
+        reads as *extend over the whole run* and answers in full.
         """
         return SourceDescription(
             source_id=self._source_id,
@@ -712,6 +762,11 @@ class RecordEntitySource(DynamicCapabilityMixin):
             projection=self._projection.to_mapping(),
             capabilities=self._capabilities,
             declares=frozenset({self._projection.const_type}),
+            form_edge=(
+                None
+                if self._projection.surface_forms is None
+                else self._projection.surface_forms.form_edge
+            ),
         )
 
     def _declared_capabilities(self) -> frozenset[Capability]:

@@ -1266,6 +1266,73 @@ async def test_a_declared_bound_makes_the_scan_linear_in_the_query() -> None:
     assert database.searches == sum(50 - length + 1 for length in range(1, 4))
 
 
+async def test_a_declared_form_edge_is_what_the_source_describes() -> None:
+    """``surface_forms.form_edge`` is the second number a scan reads, declared too.
+
+    ``0`` is legal here where it is not for ``longest_form_tokens``: it says
+    no form in the table has punctuation at its edge, and a scan then extends
+    nothing. Absent is ``None`` -- *cannot say* -- and is not refused, because
+    a scan told nothing extends over every run of punctuation it meets: more
+    lookups, the same answers.
+    """
+    for declared in (0, 2):
+        projection = EntityProjection.from_mapping(
+            dict(PROJECTION, surface_forms=dict(FOLDED_LOOKUP, form_edge=declared)),
+            binding="products",
+        )
+        assert projection.surface_forms is not None
+        assert projection.surface_forms.form_edge == declared
+        source = RecordEntitySource(AsyncMemoryDatabase(), projection, source_id="products")
+        assert source.describe().form_edge == declared
+
+    for absent in (dict(PROJECTION, surface_forms=FOLDED_LOOKUP), PROJECTION):
+        projection = EntityProjection.from_mapping(absent, binding="products")
+        source = RecordEntitySource(AsyncMemoryDatabase(), projection, source_id="products")
+        assert source.describe().form_edge is None
+
+
+@pytest.mark.parametrize(
+    ("value", "says"), [(-1, "negative"), (True, "whole number"), ("1", "whole number")]
+)
+def test_a_form_edge_that_is_not_a_count_is_refused(value: object, says: str) -> None:
+    with pytest.raises(ValidationError, match=says):
+        EntityProjection.from_mapping(
+            dict(PROJECTION, surface_forms=dict(FOLDED_LOOKUP, form_edge=value)),
+            binding="products",
+        )
+
+
+async def test_a_scan_over_a_live_table_reaches_a_punctuated_form() -> None:
+    """``(beagle)`` in the table and in the text, found where it sat.
+
+    The declared edge is what makes it reachable cheaply: one character on
+    each side. Counted against an edge of ``None`` over the same table, which
+    finds the same thing and spends more round trips doing it.
+    """
+    query = "a (beagle), here"
+    spent: dict[object, int] = {}
+    for declared in (1, None):
+        database = _CountingSearchProbe()
+        await database.create(Record({"sku": "sku-1", "title": "(Beagle)"}))
+        await database.create(Record({"folded_form": "(beagle)", "sku": "sku-1"}))
+        lookup: dict[str, Any] = dict(FOLDED_LOOKUP, longest_form_tokens=1)
+        if declared is not None:
+            lookup["form_edge"] = declared
+        projection = EntityProjection.from_mapping(
+            dict(PROJECTION, surface_forms=lookup), binding="products"
+        )
+        source = RecordEntitySource(database, projection, source_id="products")
+
+        database.searches = 0
+        found = await AsyncScanningSignal(source).candidates(query, 10)
+        spent[declared] = database.searches
+
+        assert [c.entity_id for c in found] == ["sku-1"]
+        assert [e.span for c in found for e in c.evidence] == [(2, 10)]
+
+    assert spent[1] < spent[None]
+
+
 class _CountingSearchProbe(AsyncMemoryDatabase):
     """A real store that counts the reads a rung drives through it."""
 

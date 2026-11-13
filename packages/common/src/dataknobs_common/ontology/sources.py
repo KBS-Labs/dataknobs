@@ -31,7 +31,7 @@ from dataknobs_common.ontology.model import (
     Term,
     relation_id,
 )
-from dataknobs_common.text import default_normalizer, token_spans
+from dataknobs_common.text import default_normalizer, punctuation_edges, token_spans
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -129,6 +129,33 @@ class SourceDescription:
     #: distinction something a source has to write down rather than something
     #: a reader has to guess, and it is why every construction names it.
     declares: frozenset[str] | None
+
+    #: How far the punctuation at a declared form's edge reaches, in
+    #: characters, or ``None`` where this source cannot say.
+    #:
+    #: What a scanning rung reads to decide whether, and how far, to extend a
+    #: window over the punctuation beside it -- see
+    #: :func:`~dataknobs_common.text.probe_spans`. A window starts and ends on
+    #: a token, so without an extension a form such as ``(beagle)`` or
+    #: ``C.D.C.`` is never probed. Three states, and no default for
+    #: ``declares``'s reason:
+    #:
+    #: * ``0`` -- no declared form has punctuation at either edge. A scan
+    #:   extends nothing and spends exactly what it spent over tokens alone;
+    #: * ``n`` -- no edge is wider than ``n`` characters, measured by
+    #:   :func:`~dataknobs_common.text.punctuation_edges`. A scan extends by at
+    #:   most ``n`` on each side;
+    #: * ``None`` -- *cannot say*. A scan extends over the whole run of
+    #:   punctuation beside a window: the same answers, at the cost of a
+    #:   lookup per extension.
+    #:
+    #: **Here rather than a member beside**
+    #: :meth:`EntitySource.longest_form_tokens`, because that protocol is
+    #: ``@runtime_checkable`` and a new member turns every structural
+    #: conformer into a non-conformer at once. A field on a value the source
+    #: already builds breaks none of them, and ``describe()`` is where a
+    #: source says what it knows about itself without reading its backend.
+    form_edge: int | None
 
 
 @runtime_checkable
@@ -429,6 +456,7 @@ class _EntityIndex:
     by_alias: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_type: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     longest_form: int | None = field(default=0, init=False)
+    form_edge: int | None = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         forms: dict[str, set[str]] = {}
@@ -460,6 +488,19 @@ class _EntityIndex:
         # number is an upper bound: see :meth:`_merges_tokens`.
         self.longest_form = (
             None if merges else max((len(token_spans(form)) for form in self.by_form), default=0)
+        )
+        # The second bound, over the same keys and for the same reasons --
+        # including ``None`` where the fold merges tokens, because then the
+        # folded key is not what the query spells and its edge says nothing
+        # about the text. A form with no token is skipped: no window starts
+        # on it, so no extension reaches it and its edge bounds nothing.
+        self.form_edge = (
+            None
+            if merges
+            else max(
+                (max(punctuation_edges(form)) for form in self.by_form if token_spans(form)),
+                default=0,
+            )
         )
 
     @staticmethod
@@ -548,6 +589,7 @@ class _EntityIndex:
             # refuses to build over it.
             capabilities=_AUTHORED_CAPABILITIES,
             declares=frozenset(self.by_type),
+            form_edge=self.form_edge,
         )
 
 
