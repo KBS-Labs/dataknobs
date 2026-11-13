@@ -9,8 +9,9 @@ and pattern matching in text with support for variations and fuzzy matching.
 .. deprecated::
     This module is deprecated and will be removed in the next major release,
     and importing it warns. For matching a dictionary of entity names in text,
-    use ``ScanningSignal`` over an ``EntitySource``, from
-    :mod:`dataknobs_common.entity_resolution`, and declare each variation as a
+    use ``ScanningSignal`` (from
+    ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+    ``dataknobs_common.ontology``), and declare each variation as a
     form of its entity.
 
     Two defects in its matching are known and will not be fixed:
@@ -18,7 +19,7 @@ and pattern matching in text with support for variations and fuzzy matching.
     * **A form shared by several values is annotated with the first value's id
       only.** ``DataframeAuthority.find_variations`` keeps one id per matched
       form, so an ambiguous mention is reported as unambiguous, although
-      ``AuthorityData.get_id_by_variation`` returns every id.
+      ``DataframeAuthority.get_id_by_variation`` returns every id.
     * **Separators between tokens are ignored.** ``TokenAligner`` and
       ``TokenMatch`` compare runs of letters and digits, so a form with
       interior punctuation (``Mercedes-Benz``) never matches, and a multi-word
@@ -51,8 +52,9 @@ class LexicalExpander:
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -144,8 +146,9 @@ class TokenMatch:
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -208,8 +211,9 @@ class TokenAligner:
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(self, first_token: dk_tok.Token, authority: dk_auth.LexicalAuthority):
@@ -306,8 +310,9 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     #: Narrowed from the base, where an authority may hold no data at all: a
@@ -579,8 +584,9 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(self, df: pd.DataFrame, name: str):
@@ -659,8 +665,9 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     @abstractmethod
@@ -844,8 +851,9 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
@@ -883,8 +891,9 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory[dk_auth.AuthorityData]):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(

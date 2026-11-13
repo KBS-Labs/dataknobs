@@ -190,8 +190,9 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
     `dataknobs_xization.authorities` and `dataknobs_xization.lexicon` are
     deprecated, and will be removed in the next major release. Importing
     either raises a `DeprecationWarning`. For matching a dictionary of entity
-    names in text, use `ScanningSignal` over an `EntitySource`, from
-    `dataknobs_common.entity_resolution`. Regex authorities and annotation
+    names in text, use `ScanningSignal` (from
+    `dataknobs_common.entity_resolution`) over an `EntitySource` (from
+    `dataknobs_common.ontology`). Regex authorities and annotation
     validators have no replacement yet.
 
 #### Functions and Classes
@@ -208,8 +209,9 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
     `dataknobs_xization.authorities` and `dataknobs_xization.lexicon` are
     deprecated, and will be removed in the next major release. Importing
     either raises a `DeprecationWarning`. For matching a dictionary of entity
-    names in text, use `ScanningSignal` over an `EntitySource`, from
-    `dataknobs_common.entity_resolution`. Regex authorities and annotation
+    names in text, use `ScanningSignal` (from
+    `dataknobs_common.entity_resolution`) over an `EntitySource` (from
+    `dataknobs_common.ontology`). Regex authorities and annotation
     validators have no replacement yet.
 
 #### Functions and Classes

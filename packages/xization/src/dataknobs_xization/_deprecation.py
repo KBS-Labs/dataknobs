@@ -13,22 +13,35 @@ is reached through it. Holding the text here is what keeps the places saying
 the same thing.
 
 Every function warns with ``stacklevel=3``: one frame for itself and one for
-the module body or ``__getattr__`` that calls it, so the warning is attributed
-to the caller's own line. That attribution is not cosmetic. Python's default
-filter shows a ``DeprecationWarning`` only when it is attributed to
-``__main__``, so one attributed to this package would never be seen outside a
-test run.
+the module body or ``__getattr__`` that calls it. For an ``import`` or ``from``
+statement and for attribute access, that attributes the warning to the
+caller's own line, because the import system's bootstrap frames are skipped.
+That attribution is not cosmetic. Python's default filter shows a
+``DeprecationWarning`` only when it is attributed to ``__main__``, so one
+attributed to this package would never be seen outside a test run.
+``importlib.import_module`` is the exception: its own frame is not skipped, so
+a module imported through it -- by a dotted-path loader, say -- warns from
+``importlib``, and the default filter hides that.
+
+When the package door imports a module, the door has already warned, so that
+module's own import-time warning is withheld (:func:`door_import`). Only that
+module's: a deprecated module it imports in turn still warns, and nothing else
+raised during the import is touched.
 """
 
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 _REMOVAL = "will be removed in the next major release"
 
 _DICTIONARY = (
-    "For matching a dictionary of entity names in text, use ScanningSignal over an "
-    "EntitySource, from dataknobs_common.entity_resolution"
+    "For matching a dictionary of entity names in text, use ScanningSignal (from "
+    "dataknobs_common.entity_resolution) over an EntitySource (from "
+    "dataknobs_common.ontology)"
 )
 
 _TOKENS = "For token boundaries, use dataknobs_common.text.token_spans."
@@ -115,8 +128,31 @@ def annotation_message(name: str) -> str:
     )
 
 
+#: The modules the package door is importing in this context, whose own
+#: import-time warning it has already given.
+_DOOR_IMPORTING: ContextVar[frozenset[str]] = ContextVar("_DOOR_IMPORTING", default=frozenset())
+
+
+@contextmanager
+def door_import(module: str) -> Iterator[None]:
+    """Withhold ``module``'s own import-time warning while the door imports it.
+
+    A context variable rather than a warnings filter: ``catch_warnings``
+    mutates process-wide filter state, and a filter broad enough to be simple
+    also swallows the warnings of the deprecated modules ``module`` imports,
+    and anything a dependency raises.
+    """
+    token = _DOOR_IMPORTING.set(_DOOR_IMPORTING.get() | {module})
+    try:
+        yield
+    finally:
+        _DOOR_IMPORTING.reset(token)
+
+
 def warn_module(module: str) -> None:
     """Warn, from a deprecated module's body, that it is deprecated."""
+    if module in _DOOR_IMPORTING.get():
+        return
     warnings.warn(module_message(module), DeprecationWarning, stacklevel=3)
 
 

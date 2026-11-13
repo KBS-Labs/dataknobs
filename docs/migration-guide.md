@@ -156,7 +156,7 @@ After migration, run your test suite to ensure everything works correctly.
     `authorities` and `lexicon` are deprecated in `dataknobs-xization`, and
     will be removed in its next major release, so
     migrating to them moves code onto modules that are going away. See the
-    [xization changelog](https://kbs-labs.github.io/dataknobs/packages/xization/)
+    [xization package docs](https://kbs-labs.github.io/dataknobs/packages/xization/)
     for what replaces each.
 
 - `dataknobs.xization.normalize` → `dataknobs_xization.normalize`

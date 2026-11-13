@@ -9,8 +9,9 @@ and derived annotation columns for structured text extraction.
 .. deprecated::
     This module is deprecated and will be removed in the next major release,
     and importing it warns. For matching a dictionary of entity names in text,
-    use ``ScanningSignal`` over an ``EntitySource``, from
-    :mod:`dataknobs_common.entity_resolution`. Regex authorities and annotation
+    use ``ScanningSignal`` (from
+    ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+    ``dataknobs_common.ontology``). Regex authorities and annotation
     validators have no replacement yet.
 """
 
@@ -57,8 +58,9 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -179,8 +181,9 @@ class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -240,8 +243,9 @@ class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -297,8 +301,9 @@ class AuthorityData:
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(self, df: pd.DataFrame, name: str):
@@ -386,8 +391,9 @@ class Authority(dk_annots.Annotator):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     #: The last answer :meth:`_validator_accepts_finder` computed, with the
@@ -755,8 +761,9 @@ class AnnotationsValidator(ABC):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __call__(
@@ -884,8 +891,9 @@ class AuthorityFactory(ABC, Generic[AuthorityDataT]):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     @abstractmethod
@@ -917,8 +925,9 @@ class LexicalAuthority(Authority):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -1031,8 +1040,9 @@ class RegexAuthority(Authority):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(
@@ -1217,8 +1227,9 @@ class AuthoritiesBundle(Authority):
 
     .. deprecated::
         Removed in the next major release. For matching a dictionary of entity
-        names in text, use ``ScanningSignal`` over an ``EntitySource``, from
-        ``dataknobs_common.entity_resolution``.
+        names in text, use ``ScanningSignal`` (from
+        ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
+        ``dataknobs_common.ontology``).
     """
 
     def __init__(

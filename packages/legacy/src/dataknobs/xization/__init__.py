@@ -7,7 +7,9 @@
 and ``TextFeatures``) are deprecated in ``dataknobs-xization`` and warn when
 imported. They are imported here anyway, eagerly, because the dotted paths this
 shim publishes resolve only for a module already in ``sys.modules``. So
-importing this package raises their warnings.
+importing this package raises all three modules' warnings, attributed to
+library code (this module, and ``lexicon``), where Python's default filter
+hides them.
 """
 
 from dataknobs._aliasing import alias_submodules

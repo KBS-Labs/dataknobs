@@ -11,8 +11,8 @@ package. Reaching one through it -- ``dataknobs_xization.lexicon``,
 ``from dataknobs_xization import TextFeatures`` -- imports it then, and warns.
 """
 
+import inspect
 import sys
-import warnings
 from typing import Any
 
 from dataknobs_xization import (
@@ -164,20 +164,45 @@ def __getattr__(name: str) -> Any:
 
     Importing the package does not import the deprecated stack, so it does not
     warn. This is the door to it: the warning is raised here, attributed to the
-    caller's line, and the module's own import-time warning is silenced so a
-    first access says it once. A module reached this way becomes an attribute
-    of the package, so later accesses of a module skip this function; the two
-    class names are never bound, so each access of one warns.
+    caller's line, and the module's own import-time warning is withheld so a
+    first access says it once. Any deprecated module *that* module imports
+    still warns. A module reached this way becomes an attribute of the
+    package, so later accesses of a module skip this function; the two class
+    names are never bound, so each access of one warns.
+
+    ``from dataknobs_xization import TextFeatures`` reaches this function
+    twice: the import system asks ``hasattr`` first, then the statement reads
+    the attribute. Only the second warns, so the statement warns once.
     """
     module_name = _deprecation.PACKAGE_DOOR.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    _deprecation.warn_door(name)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
+    if name == module_name or not _asked_by_the_import_system():
+        _deprecation.warn_door(name)
+    with _deprecation.door_import(module_name):
         _import_deprecated(module_name)
     module = sys.modules[f"{__name__}.{module_name}"]
     return module if name == module_name else getattr(module, name)
+
+
+def _asked_by_the_import_system() -> bool:
+    """Whether ``__getattr__`` was called by the import system's fromlist check.
+
+    For ``from <package> import <name>``, ``importlib._bootstrap._handle_fromlist``
+    calls ``hasattr`` on the package before the statement reads the name. A
+    module name is bound by that first call and never asked again, but a class
+    name is asked both times.
+    """
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back.f_back if frame and frame.f_back else None
+        return (
+            caller is not None
+            and caller.f_code.co_name == "_handle_fromlist"
+            and "_bootstrap" in caller.f_code.co_filename
+        )
+    finally:
+        del frame
 
 
 def _import_deprecated(module_name: str) -> None:

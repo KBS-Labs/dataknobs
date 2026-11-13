@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dataknobs.xization.authorities`, `.lexicon` and `.masking_tokenizer`,
   and the shim's `CharacterFeatures` and `TextFeatures`**, with the modules
   they mirror in `dataknobs-xization`. Importing `dataknobs.xization` imports
-  all three, so it raises their warnings as well as the package's own. They
+  all three, so it raises all three modules' warnings. They are attributed
+  to library code (the shim, and `lexicon` for the module it imports) rather
+  than to the importing code, so Python's default filter
+  hides them; they show under pytest, or with `-W default`. They
   are removed in the next major release of `dataknobs-xization`; see its
   changelog for the replacements.
 

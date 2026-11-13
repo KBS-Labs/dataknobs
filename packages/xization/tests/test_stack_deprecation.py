@@ -64,7 +64,7 @@ def fresh_stack() -> Iterator[None]:
         if name in vars(dataknobs_xization)
     }
     for name in saved:
-        if name.split(".")[1] in DEPRECATED_MODULES or name == f"{PACKAGE}._annotations_deprecated":
+        if name.split(".")[1] in DEPRECATED_MODULES:
             del sys.modules[name]
     for name in saved_attrs:
         delattr(dataknobs_xization, name)
@@ -107,6 +107,23 @@ def test_the_package_door_warns_for_a_deprecated_module(module: str, fresh_stack
     assert "next major release" in _message(record, f"{PACKAGE}.{module}")
 
 
+def test_a_deprecated_module_the_door_imports_in_turn_still_warns(fresh_stack: None) -> None:
+    """Only the reached module's own warning is withheld, not its imports'.
+
+    ``lexicon`` imports ``authorities`` and ``masking_tokenizer``, and both
+    are bound as package attributes by that import, so the door is never asked
+    for them afterwards. Withholding every warning during the door's import
+    left ``masking_tokenizer`` reachable without ever warning.
+    """
+    with pytest.warns(DeprecationWarning) as record:
+        dataknobs_xization.lexicon  # noqa: B018
+
+    for module in DEPRECATED_MODULES:
+        _message(record, f"{PACKAGE}.{module} ")
+    lexicon_warnings = [w for w in record if f"{PACKAGE}.lexicon " in str(w.message)]
+    assert len(lexicon_warnings) == 1
+
+
 def test_the_package_door_warns_on_every_access_not_only_the_first() -> None:
     """A module warns once, at import; the door warns wherever it is used."""
     for _ in range(2):
@@ -124,6 +141,48 @@ def test_the_top_level_tokenizer_names_warn_and_name_the_replacement(name: str) 
     assert reached is getattr(masking_tokenizer, name)
     message = _message(record, name)
     assert "token_spans" in message
+
+
+def test_a_from_import_of_a_top_level_tokenizer_name_warns_once() -> None:
+    """The import system asks ``hasattr`` before the statement reads the name."""
+    with pytest.warns(DeprecationWarning) as record:
+        from dataknobs_xization import TextFeatures  # noqa: F401
+
+    assert len([w for w in record if "TextFeatures" in str(w.message)]) == 1
+
+
+def _attributed_here(record: pytest.WarningsRecorder, subject: str) -> None:
+    """The warning naming ``subject`` points at this file, the caller's."""
+    files = [w.filename for w in record if subject in str(w.message)]
+    assert files == [__file__], files
+
+
+def test_an_import_statement_attributes_the_warning_to_its_line(fresh_stack: None) -> None:
+    with pytest.warns(DeprecationWarning) as record:
+        import dataknobs_xization.authorities  # noqa: F401
+
+    _attributed_here(record, f"{PACKAGE}.authorities ")
+
+
+def test_the_door_attributes_the_warning_to_the_callers_line(fresh_stack: None) -> None:
+    with pytest.warns(DeprecationWarning) as record:
+        dataknobs_xization.masking_tokenizer  # noqa: B018
+
+    _attributed_here(record, f"{PACKAGE}.masking_tokenizer ")
+
+
+def test_a_from_import_attributes_the_warning_to_its_line() -> None:
+    with pytest.warns(DeprecationWarning) as record:
+        from dataknobs_xization import CharacterFeatures  # noqa: F401
+
+    _attributed_here(record, "CharacterFeatures")
+
+
+def test_an_annotations_name_attributes_the_warning_to_the_callers_line() -> None:
+    with pytest.warns(DeprecationWarning) as record:
+        annotations.MergeStrategy  # noqa: B018
+
+    _attributed_here(record, "annotations.MergeStrategy")
 
 
 def test_the_deprecated_names_left_the_package_all() -> None:

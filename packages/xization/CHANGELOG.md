@@ -381,9 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`AnnotationsRowAccessor.get_col_value` reads a column the row carries
   under the name asked for**, the second of the three places its docstring
-  says it looks. It checked whether the name was one of the metadata's column
-  *types*, which hold only the key types, so any other column the row had read
-  as the missing value. A key type whose column the row lacks under either
+  says it looks. It answered only for a name that was one of the metadata's
+  column *types*, and otherwise went straight to the derived columns, so a
+  column the row had under any other name read as the missing value. The
+  row's own column now comes before a derived one, as the docstring orders
+  them. A key type whose column the row lacks under either
   spelling still raises `KeyError`, which now names both: that is a row read
   through the wrong metadata, and answering with the missing value would hide
   it.
@@ -452,8 +454,9 @@ next major release. The additions and fixes to `authorities` and `lexicon`
 listed above ship deprecated with them.
 
 - **`dataknobs_xization.authorities`.** Replacement, for matching a
-  dictionary of entity names in text: `ScanningSignal` over an
-  `EntitySource`, from `dataknobs_common.entity_resolution`. Regex
+  dictionary of entity names in text: `ScanningSignal`, from
+  `dataknobs_common.entity_resolution`, over an `EntitySource`, from
+  `dataknobs_common.ontology`. Regex
   authorities and annotation validators have none yet.
 - **`dataknobs_xization.lexicon`.** Same replacement; declare each variation
   as a form of its entity. Two defects in its matching are known and will not

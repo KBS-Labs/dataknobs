@@ -187,9 +187,9 @@ def test_accessor_reads_a_key_type_through_its_configured_name() -> None:
 def test_accessor_reads_a_column_the_row_carries_under_the_name_asked_for() -> None:
     """The documented second clause: ``col_type`` itself, as a column.
 
-    It was implemented as a test against the metadata's column *types*, which
-    hold only the key types, so a column the row carried under exactly the name
-    asked for read as the missing value.
+    It answered only for a name among the metadata's column *types*, and
+    otherwise went straight to the derived columns, so a column the row carried
+    under exactly the name asked for read as the missing value.
     """
     accessor = AnnotationsRowAccessor(AnnotationsMetaData())
     row = pd.Series({KEY_TEXT_COL: "07/04/1776", "date_field": "day"})
@@ -217,6 +217,14 @@ def test_accessor_derives_what_the_row_does_not_carry() -> None:
 
     assert accessor.get_col_value("upper", row) == "BEAGLE"
     assert accessor.get_col_value("absent", row, missing="?") == "?"
+
+
+def test_accessor_prefers_the_rows_own_column_to_a_derived_one() -> None:
+    """The docstring's order: ``col_type`` as a column, then derived columns."""
+    accessor = AnnotationsRowAccessor(AnnotationsMetaData(), _Upper())
+    row = pd.Series({KEY_TEXT_COL: "beagle", "upper": "carried"})
+
+    assert accessor.get_col_value("upper", row) == "carried"
 
 
 def test_accessor_returns_missing_for_an_unknown_column() -> None:
