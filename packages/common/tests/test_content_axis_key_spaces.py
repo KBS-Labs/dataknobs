@@ -107,10 +107,12 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "assemble_async_ontology", "assertions", "bound"),
     ("<module>", "assemble_async_ontology", "entities", "bound"),
     ("<module>", "assemble_async_ontology", "structures", "bound"),
+    ("<module>", "assemble_async_ontology", "variants", "bound"),
     ("<module>", "assemble_async_ontology", "->", "bound"),
     ("<module>", "assemble_ontology", "assertions", "bound"),
     ("<module>", "assemble_ontology", "entities", "bound"),
     ("<module>", "assemble_ontology", "structures", "bound"),
+    ("<module>", "assemble_ontology", "variants", "bound"),
     ("<module>", "assemble_ontology", "->", "bound"),
     ("<module>", "build_resolver", "config", "payload"),
     # The asynchronous door's channel, on the door that used to lack it. Same
@@ -198,6 +200,17 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("<module>", "within_memberships", "source", "key"),
     ("<module>", "within_memberships", "->", "schema"),
     ("<module>", "refuse_unknown_axes", "axes", "schema"),
+    # Variants admitted as aliases, before the entities are bound. `bound` for
+    # the doors' reason: what goes in is a document's entities, keyed by the ids
+    # its author typed, and what comes out is bound into a `str`-keyed source --
+    # so the two functions say `str` rather than leaving the default to. The
+    # fold is `text` for `load_ontology.normalizer`'s reason: it is the same
+    # fold, handed through so a collision is counted under it.
+    ("<module>", "apply_variants", "normalizer", "text"),
+    ("<module>", "apply_variants", "->", "bound"),
+    ("<module>", "with_variants", "entities", "bound"),
+    ("<module>", "with_variants", "normalizer", "text"),
+    ("<module>", "with_variants", "->", "bound"),
     ("AliasFormSource", "by_alias_form", "->", "key"),
     ("AliasFormSource", "by_alias_form", "form", "text"),
     ("Assertion", "<field>", "derived_from", "schema"),
@@ -288,6 +301,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncOntology", "<field>", "relation_types", "schema"),
     ("AsyncOntology", "<field>", "structures", "key"),
     ("AsyncOntology", "<field>", "taxonomies", "schema"),
+    ("AsyncOntology", "<field>", "variants", "key"),
     ("AsyncOntology", "<field>", "version", "payload"),
     ("AsyncOntology", "by_surface_form", "->", "key"),
     ("AsyncOntology", "by_surface_form", "form", "text"),
@@ -411,6 +425,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("Ontology", "<field>", "relation_types", "schema"),
     ("Ontology", "<field>", "structures", "key"),
     ("Ontology", "<field>", "taxonomies", "schema"),
+    ("Ontology", "<field>", "variants", "key"),
     ("Ontology", "<field>", "version", "payload"),
     ("Ontology", "by_surface_form", "->", "key"),
     ("Ontology", "by_surface_form", "form", "text"),
@@ -522,7 +537,7 @@ _REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 359
+_ROWS = 368
 
 
 def _modules() -> Iterator[ast.Module]:

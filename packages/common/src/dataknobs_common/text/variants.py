@@ -386,9 +386,13 @@ def generate(
     return tuple(variant for variant, _ in marked)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Declared(Generic[K]):
     """One authored form of one entity, keyed by whatever the caller's entities are keyed by.
+
+    A record two of which really can be equal, so it compares field-wise and
+    is not frozen: ``context`` is a mapping, and a frozen dataclass holding one
+    would claim to be hashable and raise at the call.
 
     Attributes:
         key: The entity the form belongs to.

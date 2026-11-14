@@ -42,11 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 def with_variants(
-    entities: Mapping[str, Entity],
+    entities: Mapping[str, Entity[str]],
     rules: Sequence[Rule] = DEFAULT_RULES,
     *,
     normalizer: Callable[[str], str] | None = None,
-) -> tuple[dict[str, Entity], Variants[str]]:
+) -> tuple[dict[str, Entity[str]], Variants[str]]:
     """The entities with every admitted variant appended to their aliases, and the report.
 
     Variants are made from each entity's name and aliases, with the entity's
@@ -78,7 +78,7 @@ def with_variants(
     added: dict[str, list[str]] = {}
     for variant in report.admitted:
         added.setdefault(variant.key, []).append(variant.form)
-    varied: dict[str, Entity] = {}
+    varied: dict[str, Entity[str]] = {}
     for entity_id, entity in entities.items():
         forms = added.get(entity_id)
         varied[entity_id] = replace(entity, aliases=[*entity.aliases, *forms]) if forms else entity
@@ -89,7 +89,7 @@ def apply_variants(
     parts: OntologyParts,
     *,
     normalizer: Callable[[str], str] | None = None,
-) -> tuple[Mapping[str, Entity], Variants[str] | None]:
+) -> tuple[Mapping[str, Entity[str]], Variants[str] | None]:
     """The entities a door binds for ``parts``, and the variants report it carries.
 
     Where the document has no ``variants:`` section this is
